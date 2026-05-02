@@ -70,7 +70,7 @@ public class AuthService {
     @Value("${app.auth.password-reset-ttl-hours:1}")
     private long passwordResetTtlHours;
 
-    @Value("${app.public.password-reset-url-prefix:http://localhost:5173/reset-password?token=}")
+    @Value("${app.public.password-reset-url-prefix:http://localhost:3000/reset-password?token=}")
     private String passwordResetUrlPrefix;
 
     @Transactional

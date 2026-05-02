@@ -1,0 +1,185 @@
+package zelisline.ub.tenancy.application;
+
+import java.util.List;
+import java.util.Locale;
+
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.application.CatalogBootstrapService;
+import zelisline.ub.tenancy.api.dto.BusinessResponse;
+import zelisline.ub.tenancy.api.dto.CreateBusinessRequest;
+import zelisline.ub.tenancy.api.dto.DomainResponse;
+import zelisline.ub.tenancy.api.dto.UpdateBusinessRequest;
+import zelisline.ub.tenancy.domain.Business;
+import zelisline.ub.tenancy.domain.DomainMapping;
+import zelisline.ub.tenancy.repository.BusinessRepository;
+import zelisline.ub.tenancy.repository.DomainMappingRepository;
+
+@Service
+@RequiredArgsConstructor
+public class TenancyService {
+
+    private final BusinessRepository businessRepository;
+    private final DomainMappingRepository domainMappingRepository;
+    private final CatalogBootstrapService catalogBootstrapService;
+
+    @Transactional
+    public BusinessResponse createBusiness(CreateBusinessRequest request) {
+        String normalizedSlug = normalizeSlug(request.slug());
+        if (businessRepository.existsBySlug(normalizedSlug)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Business slug already exists");
+        }
+
+        Business business = new Business();
+        business.setName(request.name().trim());
+        business.setSlug(normalizedSlug);
+        business.setCurrency(normalizeCode(request.currency(), "KES"));
+        business.setCountryCode(normalizeCode(request.countryCode(), "KE"));
+        business.setTimezone(fallback(request.timezone(), "Africa/Nairobi"));
+        business.setSubscriptionTier(fallback(request.subscriptionTier(), "starter").toLowerCase(Locale.ROOT));
+        business.setSettings("{}");
+        Business saved = businessRepository.save(business);
+        catalogBootstrapService.seedDefaultItemTypesIfMissing(saved.getId());
+
+        if (request.primaryDomain() != null && !request.primaryDomain().isBlank()) {
+            DomainMapping domain = new DomainMapping();
+            domain.setBusinessId(saved.getId());
+            domain.setDomain(request.primaryDomain());
+            domain.setPrimary(true);
+            domain.setActive(true);
+            domainMappingRepository.save(domain);
+        }
+
+        return toResponse(saved);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<BusinessResponse> listBusinesses(Pageable pageable) {
+        return businessRepository.findAll(pageable).map(this::toResponse);
+    }
+
+    @Transactional
+    public BusinessResponse updateBusiness(String businessId, UpdateBusinessRequest request) {
+        Business business = businessRepository.findById(businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
+
+        if (request.name() != null && !request.name().isBlank()) {
+            business.setName(request.name().trim());
+        }
+        if (request.subscriptionTier() != null && !request.subscriptionTier().isBlank()) {
+            business.setSubscriptionTier(request.subscriptionTier().trim().toLowerCase(Locale.ROOT));
+        }
+        if (request.active() != null) {
+            business.setActive(request.active());
+        }
+
+        return toResponse(businessRepository.save(business));
+    }
+
+    @Transactional(readOnly = true)
+    public List<DomainResponse> listDomains(String businessId) {
+        if (!businessRepository.existsById(businessId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found");
+        }
+        return domainMappingRepository.findByBusinessIdAndDeletedAtIsNull(businessId)
+                .stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
+    @Transactional
+    public DomainResponse addDomain(String businessId, String domainName) {
+        if (!businessRepository.existsById(businessId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found");
+        }
+
+        DomainMapping domain = new DomainMapping();
+        domain.setBusinessId(businessId);
+        domain.setDomain(domainName);
+        domain.setActive(true);
+
+        boolean hasExistingPrimary = !domainMappingRepository.findByBusinessIdAndDeletedAtIsNull(businessId).isEmpty();
+        domain.setPrimary(!hasExistingPrimary);
+
+        DomainMapping saved = domainMappingRepository.save(domain);
+        return toResponse(saved);
+    }
+
+    @Transactional
+    public DomainResponse setPrimaryDomain(String businessId, String domainId) {
+        DomainMapping toPromote = domainMappingRepository.findById(domainId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Domain not found"));
+        if (!toPromote.getBusinessId().equals(businessId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Domain not found");
+        }
+
+        List<DomainMapping> domains = domainMappingRepository.findByBusinessIdAndDeletedAtIsNull(businessId);
+        for (DomainMapping domain : domains) {
+            domain.setPrimary(domain.getId().equals(toPromote.getId()));
+        }
+        domainMappingRepository.saveAll(domains);
+        return toResponse(toPromote);
+    }
+
+    @Transactional(readOnly = true)
+    public BusinessResponse getBusinessForTenant(String tenantBusinessId) {
+        Business business = businessRepository.findByIdAndDeletedAtIsNull(tenantBusinessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
+        return toResponse(business);
+    }
+
+    @Transactional
+    public BusinessResponse updateBusinessForTenant(String tenantBusinessId, UpdateBusinessRequest request) {
+        return updateBusiness(tenantBusinessId, request);
+    }
+
+    private BusinessResponse toResponse(Business business) {
+        return new BusinessResponse(
+                business.getId(),
+                business.getName(),
+                business.getSlug(),
+                business.getCurrency(),
+                business.getCountryCode(),
+                business.getTimezone(),
+                business.isActive(),
+                business.getSubscriptionTier(),
+                business.getCreatedAt(),
+                business.getUpdatedAt()
+        );
+    }
+
+    private DomainResponse toResponse(DomainMapping domain) {
+        return new DomainResponse(
+                domain.getId(),
+                domain.getBusinessId(),
+                domain.getDomain(),
+                domain.isPrimary(),
+                domain.isActive()
+        );
+    }
+
+    private String normalizeSlug(String slug) {
+        if (slug == null || slug.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Slug is required");
+        }
+        return slug.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String normalizeCode(String value, String fallback) {
+        String source = fallback(value, fallback);
+        return source.toUpperCase(Locale.ROOT);
+    }
+
+    private String fallback(String value, String fallback) {
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        return value.trim();
+    }
+}

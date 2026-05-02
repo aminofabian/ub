@@ -1,0 +1,376 @@
+{
+  "info": {
+    "name": "Kiosk POS — UB Tenancy API",
+    "description": "Full Postman collection for the `ub` (Kiosk POS) Spring Boot service.\n\nCovers every HTTP endpoint currently exposed in the repository:\n\n- `Super Admin / Businesses` — `/api/v1/super-admin/businesses/**` (`SUPER_ADMIN` role)\n- `Business — Me (Tenant)` — `/api/v1/businesses/me` (any authenticated tenant user, requires `X-Tenant-Id` or a mapped `Host` header)\n- `Health` — `/actuator/health` (public)\n\n## How to use\n\n1. Import this collection.\n2. (Optional) Import `ub.postman_environment.json` and select it.\n3. Start the app: `./gradlew bootRun` (defaults to `http://localhost:5050`).\n4. Run the requests in order — `Create business` captures `businessId` into a collection variable, and `Add domain` captures `domainId`.\n\n## Auth note\n\nSecurityConfig requires a bearer JWT for `/api/**` (line 103: `requestMatchers(\"/api/**\").authenticated()`), but the JWT filter is currently commented out in `SecurityConfig#securityFilterChain`. Until that filter is wired up, every `/api/**` call returns `401`. The collection-level auth here is set to Bearer using `{{accessToken}}` so it works as soon as JWT is enabled.\n\n## Variables\n\n| Variable      | Default                  | Purpose                                                            |\n|---------------|--------------------------|--------------------------------------------------------------------|\n| `baseUrl`     | `http://localhost:5050`  | Server origin (matches `server.port=5050` in `application.properties`) |\n| `accessToken` | (empty)                  | Bearer token sent on every `/api/**` request                       |\n| `businessId`  | (auto-filled)            | Captured from `Create business` response                           |\n| `domainId`    | (auto-filled)            | Captured from `Add domain` response                                |\n| `tenantId`    | `{{businessId}}`         | Sent as `X-Tenant-Id` header for the `Business — Me` endpoints     |\n",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "8f1e2c40-0d6f-4a12-9d8f-ub-tenancy-collection"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "if (!pm.collectionVariables.get('baseUrl')) {",
+          "    pm.collectionVariables.set('baseUrl', 'http://localhost:5050');",
+          "}"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test('Response is JSON or empty', function () {",
+          "    var ct = pm.response.headers.get('Content-Type') || '';",
+          "    if (pm.response.responseSize === 0) return;",
+          "    pm.expect(ct.toLowerCase()).to.match(/(application\\/json|application\\/problem\\+json)/);",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:5050", "type": "string" },
+    { "key": "accessToken", "value": "", "type": "string" },
+    { "key": "businessId", "value": "", "type": "string" },
+    { "key": "domainId", "value": "", "type": "string" },
+    { "key": "tenantId", "value": "{{businessId}}", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "description": "Public probe — bypassed in `SecurityConfig` (`/actuator/health`).",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["actuator", "health"]
+            },
+            "description": "Spring Boot Actuator health endpoint. No auth required."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.test('status is UP', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.status).to.eql('UP');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Super Admin — Businesses",
+      "description": "Endpoints in `SuperAdminBusinessController` (`/api/v1/super-admin/businesses`).\n\nGated by `SecurityConfig`: `requestMatchers(\"/api/v1/super-admin/**\").hasRole(\"SUPER_ADMIN\")`.\nSet `accessToken` to a bearer token issued for a `SUPER_ADMIN` principal.",
+      "item": [
+        {
+          "name": "Create business",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}", "description": "Optional — allowed by CORS config, used by mutating endpoints once wired." }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Acme Kiosk Ltd\",\n  \"slug\": \"acme-kiosk\",\n  \"currency\": \"KES\",\n  \"countryCode\": \"KE\",\n  \"timezone\": \"Africa/Nairobi\",\n  \"subscriptionTier\": \"starter\",\n  \"primaryDomain\": \"acme.kioskpos.test\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/super-admin/businesses",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "super-admin", "businesses"]
+            },
+            "description": "Creates a new tenant (`businesses` row) and, when `primaryDomain` is set, the matching `domains` row.\n\nValidation (`CreateBusinessRequest`):\n- `name` — required, ≤ 255\n- `slug` — required, ≤ 191, regex `^[a-zA-Z0-9-]+$`\n- `currency` — exactly 3 chars (defaults to `KES` in DB)\n- `countryCode` — exactly 2 chars\n- `timezone` — ≤ 100\n- `subscriptionTier` — ≤ 64\n- `primaryDomain` — ≤ 255"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', function () { pm.response.to.have.status(201); });",
+                  "var json;",
+                  "try { json = pm.response.json(); } catch (e) { json = null; }",
+                  "if (json && json.id) {",
+                  "    pm.collectionVariables.set('businessId', json.id);",
+                  "    pm.collectionVariables.set('tenantId', json.id);",
+                  "    pm.test('captured businessId', function () {",
+                  "        pm.expect(pm.collectionVariables.get('businessId')).to.be.a('string').and.not.empty;",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "List businesses",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/super-admin/businesses?page=0&size=20&sort=createdAt,desc",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "super-admin", "businesses"],
+              "query": [
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "20" },
+                { "key": "sort", "value": "createdAt,desc" }
+              ]
+            },
+            "description": "Returns a Spring `Page<BusinessResponse>`. Standard Spring pageable params: `page`, `size`, `sort=field,(asc|desc)`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.test('paged response shape', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('content');",
+                  "    pm.expect(json.content).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Update business",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Acme Kiosk Holdings\",\n  \"subscriptionTier\": \"growth\",\n  \"active\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/super-admin/businesses/{{businessId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "super-admin", "businesses", "{{businessId}}"]
+            },
+            "description": "Patches a business as super-admin. Validation (`UpdateBusinessRequest`): all fields optional; `name` ≤ 255, `subscriptionTier` ≤ 64, `active` Boolean."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "List domains for business",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/super-admin/businesses/{{businessId}}/domains",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "super-admin", "businesses", "{{businessId}}", "domains"]
+            },
+            "description": "Returns `List<DomainResponse>` for the given business. Includes the primary domain plus any extras."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.test('array', function () { pm.expect(pm.response.json()).to.be.an('array'); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Add domain to business",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"domain\": \"acme-extra.kioskpos.test\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/super-admin/businesses/{{businessId}}/domains",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "super-admin", "businesses", "{{businessId}}", "domains"]
+            },
+            "description": "Adds a non-primary domain mapping. Validation (`AddDomainRequest`): `domain` required, ≤ 255."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', function () { pm.response.to.have.status(201); });",
+                  "var json;",
+                  "try { json = pm.response.json(); } catch (e) { json = null; }",
+                  "if (json && json.id) {",
+                  "    pm.collectionVariables.set('domainId', json.id);",
+                  "    pm.test('captured domainId', function () {",
+                  "        pm.expect(pm.collectionVariables.get('domainId')).to.be.a('string').and.not.empty;",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Set primary domain",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/super-admin/businesses/{{businessId}}/domains/{{domainId}}/primary",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "super-admin", "businesses", "{{businessId}}", "domains", "{{domainId}}", "primary"]
+            },
+            "description": "Promotes the given domain to be the primary. The DB enforces `uq_domains_primary` so only one primary per business is possible."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.test('primary flag is true', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.primary).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Business — Me (Tenant)",
+      "description": "Endpoints in `BusinessMeController` (`/api/v1/businesses/me`).\n\nThe controller resolves the tenant in this order:\n1. Request attribute `tenant.businessId` set by `DomainBusinessResolverFilter` from the `Host` header.\n2. Fallback: the `X-Tenant-Id` request header.\n\nIf neither is present the controller returns `400 Bad Request`. For local testing on `localhost`, the domain filter intentionally short-circuits, so use the `X-Tenant-Id` header below.",
+      "item": [
+        {
+          "name": "Get my business",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "X-Tenant-Id", "value": "{{tenantId}}", "description": "Falls back here when no Host→business mapping exists (e.g. localhost)." }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/businesses/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "businesses", "me"]
+            },
+            "description": "Returns the `BusinessResponse` for the current tenant."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.test('id matches tenantId', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.id).to.eql(pm.collectionVariables.get('tenantId'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Update my business",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" },
+              { "key": "X-Tenant-Id", "value": "{{tenantId}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Acme Kiosk Holdings (renamed by tenant)\",\n  \"subscriptionTier\": \"growth\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/businesses/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "businesses", "me"]
+            },
+            "description": "Patches the tenant's own business record. Validation matches `UpdateBusinessRequest` (same as the super-admin update endpoint)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    }
+  ]
+}

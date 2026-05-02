@@ -1,0 +1,2021 @@
+# UB Phase 1 — OpenAPI 3.1 contract snapshot
+# Generated: OpenApiExportIT (./gradlew test --tests zelisline.ub.platform.web.OpenApiExportIT -DexportOpenapi=true)
+#
+openapi: 3.1.0
+info:
+  title: UB — Phase 1 API
+  description: Identity, tenancy, and catalog backbone (Phase 1).
+  version: 0.0.1-SNAPSHOT
+servers:
+- url: /
+  description: Current host
+paths:
+  /api/v1/users:
+    get:
+      tags:
+      - users-controller
+      operationId: listUsers
+      parameters:
+      - name: pageable
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/Pageable'
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PageUserResponse'
+    post:
+      tags:
+      - users-controller
+      operationId: createUser
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+  /api/v1/users/{userId}/role:
+    post:
+      tags:
+      - users-controller
+      operationId: assignRole
+      parameters:
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignRoleRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+  /api/v1/users/{userId}/deactivate:
+    post:
+      tags:
+      - users-controller
+      operationId: deactivateUser
+      parameters:
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+  /api/v1/super-admin/businesses:
+    get:
+      tags:
+      - super-admin-business-controller
+      operationId: listBusinesses
+      parameters:
+      - name: pageable
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/Pageable'
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PageBusinessResponse'
+    post:
+      tags:
+      - super-admin-business-controller
+      operationId: createBusiness
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBusinessRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/BusinessResponse'
+  /api/v1/super-admin/businesses/{businessId}/domains:
+    get:
+      tags:
+      - super-admin-business-controller
+      operationId: listDomains
+      parameters:
+      - name: businessId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DomainResponse'
+    post:
+      tags:
+      - super-admin-business-controller
+      operationId: addDomain
+      parameters:
+      - name: businessId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddDomainRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/DomainResponse'
+  /api/v1/super-admin/businesses/{businessId}/domains/{domainId}/primary:
+    post:
+      tags:
+      - super-admin-business-controller
+      operationId: setPrimaryDomain
+      parameters:
+      - name: businessId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: domainId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/DomainResponse'
+  /api/v1/super-admin/auth/login:
+    post:
+      tags:
+      - super-admin-auth-controller
+      operationId: login
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SuperAdminLoginRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/SuperAdminLoginResponse'
+  /api/v1/roles:
+    get:
+      tags:
+      - roles-controller
+      operationId: listRoles
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RoleResponse'
+    post:
+      tags:
+      - roles-controller
+      operationId: createRole
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRoleRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/RoleResponse'
+  /api/v1/items:
+    get:
+      tags:
+      - items-controller
+      operationId: list
+      parameters:
+      - name: search
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: barcode
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: categoryId
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: noBarcode
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+      - name: includeInactive
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+      - name: pageable
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/Pageable'
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PageItemSummaryResponse'
+    post:
+      tags:
+      - items-controller
+      operationId: create
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateItemRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ItemResponse'
+  /api/v1/items/{id}/variants:
+    post:
+      tags:
+      - items-controller
+      operationId: createVariant
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateVariantRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ItemResponse'
+  /api/v1/items/{id}/images:
+    post:
+      tags:
+      - items-controller
+      operationId: registerItemImage
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterItemImageRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ItemImageResponse'
+  /api/v1/items/{id}/images/{imageId}:
+    delete:
+      tags:
+      - items-controller
+      operationId: deleteItemImage
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: imageId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: No Content
+  /api/v1/item-types:
+    get:
+      tags:
+      - item-types-controller
+      operationId: list_1
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ItemTypeResponse'
+    post:
+      tags:
+      - item-types-controller
+      operationId: create_1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateItemTypeRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ItemTypeResponse'
+  /api/v1/categories:
+    get:
+      tags:
+      - categories-controller
+      operationId: list_2
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CategoryResponse'
+    post:
+      tags:
+      - categories-controller
+      operationId: create_2
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCategoryRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/CategoryResponse'
+  /api/v1/auth/refresh:
+    post:
+      tags:
+      - auth-controller
+      operationId: refresh
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+  /api/v1/auth/password/reset:
+    post:
+      tags:
+      - auth-controller
+      operationId: passwordReset
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+        required: true
+      responses:
+        '204':
+          description: No Content
+  /api/v1/auth/password/forgot:
+    post:
+      tags:
+      - auth-controller
+      operationId: passwordForgot
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordForgotRequest'
+      responses:
+        '204':
+          description: No Content
+  /api/v1/auth/password/change:
+    post:
+      tags:
+      - auth-controller
+      operationId: passwordChange
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordChangeRequest'
+        required: true
+      responses:
+        '204':
+          description: No Content
+  /api/v1/auth/logout:
+    post:
+      tags:
+      - auth-controller
+      operationId: logout
+      responses:
+        '200':
+          description: OK
+  /api/v1/auth/logout-all:
+    post:
+      tags:
+      - auth-controller
+      operationId: logoutAll
+      responses:
+        '200':
+          description: OK
+  /api/v1/auth/login:
+    post:
+      tags:
+      - auth-controller
+      operationId: login_1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+  /api/v1/auth/login-pin:
+    post:
+      tags:
+      - auth-controller
+      operationId: loginPin
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginPinRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+  /api/v1/api-keys:
+    get:
+      tags:
+      - api-key-controller
+      operationId: list_3
+      parameters:
+      - name: pageable
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/Pageable'
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PageApiKeyResponse'
+    post:
+      tags:
+      - api-key-controller
+      operationId: create_3
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateApiKeyRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/CreatedApiKeyResponse'
+  /api/v1/aisles:
+    get:
+      tags:
+      - aisles-controller
+      operationId: list_4
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AisleResponse'
+    post:
+      tags:
+      - aisles-controller
+      operationId: create_4
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAisleRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/AisleResponse'
+  /api/v1/users/{userId}:
+    get:
+      tags:
+      - users-controller
+      operationId: getUser
+      parameters:
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+    patch:
+      tags:
+      - users-controller
+      operationId: updateUser
+      parameters:
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+  /api/v1/super-admin/businesses/{businessId}:
+    patch:
+      tags:
+      - super-admin-business-controller
+      operationId: updateBusiness
+      parameters:
+      - name: businessId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateBusinessRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/BusinessResponse'
+  /api/v1/roles/{roleId}:
+    patch:
+      tags:
+      - roles-controller
+      operationId: updateRole
+      parameters:
+      - name: roleId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRoleRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/RoleResponse'
+  /api/v1/me:
+    get:
+      tags:
+      - identity-me-controller
+      operationId: getMe
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+    patch:
+      tags:
+      - identity-me-controller
+      operationId: updateMe
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMeRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+  /api/v1/items/{id}:
+    get:
+      tags:
+      - items-controller
+      operationId: getById
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ItemResponse'
+    delete:
+      tags:
+      - items-controller
+      operationId: delete
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: cascadeVariants
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+      responses:
+        '204':
+          description: No Content
+    patch:
+      tags:
+      - items-controller
+      operationId: patch
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchItemRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ItemResponse'
+  /api/v1/categories/{id}:
+    patch:
+      tags:
+      - categories-controller
+      operationId: patch_1
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchCategoryRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/CategoryResponse'
+  /api/v1/businesses/me:
+    get:
+      tags:
+      - business-me-controller
+      operationId: getMyBusiness
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/BusinessResponse'
+    patch:
+      tags:
+      - business-me-controller
+      operationId: updateMyBusiness
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateBusinessRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/BusinessResponse'
+  /api/v1/permissions:
+    get:
+      tags:
+      - permissions-controller
+      operationId: listPermissions
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PermissionResponse'
+  /api/v1/__test/permission-cache-probe:
+    get:
+      tags:
+      - permission-cache-probe-controller
+      operationId: probe
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+  /api/v1/api-keys/{id}:
+    delete:
+      tags:
+      - api-key-controller
+      operationId: revoke
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: No Content
+components:
+  schemas:
+    CreateUserRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 191
+          minLength: 0
+        name:
+          type: string
+          maxLength: 255
+          minLength: 0
+        phone:
+          type: string
+          maxLength: 50
+          minLength: 0
+        roleId:
+          type: string
+          maxLength: 36
+          minLength: 0
+        branchId:
+          type: string
+          maxLength: 36
+          minLength: 0
+        status:
+          type: string
+          maxLength: 32
+          minLength: 0
+        password:
+          type: string
+          maxLength: 191
+          minLength: 8
+        pin:
+          type: string
+          pattern: \d{4,6}
+      required:
+      - email
+      - name
+      - roleId
+    RoleSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        key:
+          type: string
+        name:
+          type: string
+        system:
+          type: boolean
+    UserResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        businessId:
+          type: string
+        branchId:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        phone:
+          type: string
+        status:
+          type: string
+        role:
+          $ref: '#/components/schemas/RoleSummary'
+        permissions:
+          type: array
+          items:
+            type: string
+        lastLoginAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    AssignRoleRequest:
+      type: object
+      properties:
+        roleId:
+          type: string
+          maxLength: 36
+          minLength: 0
+      required:
+      - roleId
+    CreateBusinessRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          minLength: 0
+        slug:
+          type: string
+          maxLength: 191
+          minLength: 0
+          pattern: ^[a-zA-Z0-9-]+$
+        currency:
+          type: string
+          maxLength: 3
+          minLength: 3
+        countryCode:
+          type: string
+          maxLength: 2
+          minLength: 2
+        timezone:
+          type: string
+          maxLength: 100
+          minLength: 0
+        subscriptionTier:
+          type: string
+          maxLength: 64
+          minLength: 0
+        primaryDomain:
+          type: string
+          maxLength: 255
+          minLength: 0
+      required:
+      - name
+      - slug
+    BusinessResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        currency:
+          type: string
+        countryCode:
+          type: string
+        timezone:
+          type: string
+        active:
+          type: boolean
+        subscriptionTier:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    AddDomainRequest:
+      type: object
+      properties:
+        domain:
+          type: string
+          maxLength: 255
+          minLength: 0
+      required:
+      - domain
+    DomainResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        businessId:
+          type: string
+        domain:
+          type: string
+        primary:
+          type: boolean
+        active:
+          type: boolean
+    SuperAdminLoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 191
+          minLength: 0
+        password:
+          type: string
+          maxLength: 2048
+          minLength: 0
+      required:
+      - email
+      - password
+    SuperAdminLoginResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        superAdminId:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+    CreateRoleRequest:
+      type: object
+      properties:
+        roleKey:
+          type: string
+          maxLength: 191
+          minLength: 0
+          pattern: '[a-z0-9_.-]+'
+        name:
+          type: string
+          maxLength: 255
+          minLength: 0
+        description:
+          type: string
+          maxLength: 500
+          minLength: 0
+        permissionIds:
+          type: array
+          items:
+            type: string
+            maxLength: 36
+            minLength: 0
+      required:
+      - name
+      - roleKey
+    RoleResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        businessId:
+          type: string
+        key:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        system:
+          type: boolean
+        permissionKeys:
+          type: array
+          items:
+            type: string
+    CreateItemRequest:
+      type: object
+      properties:
+        sku:
+          type: string
+          maxLength: 191
+          minLength: 0
+        barcode:
+          type: string
+          maxLength: 191
+          minLength: 0
+        name:
+          type: string
+          maxLength: 500
+          minLength: 0
+        description:
+          type: string
+          maxLength: 10000
+          minLength: 0
+        itemTypeId:
+          type: string
+          maxLength: 36
+          minLength: 0
+        categoryId:
+          type: string
+          maxLength: 36
+          minLength: 0
+        aisleId:
+          type: string
+          maxLength: 36
+          minLength: 0
+        unitType:
+          type: string
+          maxLength: 16
+          minLength: 0
+        isWeighed:
+          type: boolean
+        isSellable:
+          type: boolean
+        isStocked:
+          type: boolean
+        packagingUnitName:
+          type: string
+          maxLength: 255
+          minLength: 0
+        packagingUnitQty:
+          type: number
+        bundleQty:
+          type: integer
+          format: int32
+        bundlePrice:
+          type: number
+        bundleName:
+          type: string
+          maxLength: 255
+          minLength: 0
+        minStockLevel:
+          type: number
+        reorderLevel:
+          type: number
+        reorderQty:
+          type: number
+        expiresAfterDays:
+          type: integer
+          format: int32
+        hasExpiry:
+          type: boolean
+        imageKey:
+          type: string
+          maxLength: 500
+          minLength: 0
+      required:
+      - itemTypeId
+      - name
+      - sku
+    ItemResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        sku:
+          type: string
+        barcode:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        variantOfItemId:
+          type: string
+        variantName:
+          type: string
+        categoryId:
+          type: string
+        aisleId:
+          type: string
+        itemTypeId:
+          type: string
+        unitType:
+          type: string
+        isWeighed:
+          type: boolean
+        isSellable:
+          type: boolean
+        isStocked:
+          type: boolean
+        packagingUnitName:
+          type: string
+        packagingUnitQty:
+          type: number
+        bundleQty:
+          type: integer
+          format: int32
+        bundlePrice:
+          type: number
+        bundleName:
+          type: string
+        minStockLevel:
+          type: number
+        reorderLevel:
+          type: number
+        reorderQty:
+          type: number
+        expiresAfterDays:
+          type: integer
+          format: int32
+        hasExpiry:
+          type: boolean
+        imageKey:
+          type: string
+        active:
+          type: boolean
+        version:
+          type: integer
+          format: int64
+        images:
+          type: array
+          items:
+            $ref: '#/components/schemas/ItemImageResponse'
+        variants:
+          type: array
+          items:
+            $ref: '#/components/schemas/ItemSummaryResponse'
+    ItemSummaryResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        sku:
+          type: string
+        barcode:
+          type: string
+        name:
+          type: string
+        variantName:
+          type: string
+        imageKey:
+          type: string
+        active:
+          type: boolean
+        variantOfItemId:
+          type: string
+    CreateVariantRequest:
+      type: object
+      properties:
+        sku:
+          type: string
+          maxLength: 191
+          minLength: 0
+        variantName:
+          type: string
+          maxLength: 255
+          minLength: 0
+        barcode:
+          type: string
+          maxLength: 191
+          minLength: 0
+        name:
+          type: string
+          maxLength: 500
+          minLength: 0
+        description:
+          type: string
+          maxLength: 10000
+          minLength: 0
+        categoryId:
+          type: string
+          maxLength: 36
+          minLength: 0
+        aisleId:
+          type: string
+          maxLength: 36
+          minLength: 0
+        unitType:
+          type: string
+          maxLength: 16
+          minLength: 0
+        isWeighed:
+          type: boolean
+        isSellable:
+          type: boolean
+        isStocked:
+          type: boolean
+        minStockLevel:
+          type: number
+        reorderLevel:
+          type: number
+        reorderQty:
+          type: number
+        imageKey:
+          type: string
+          maxLength: 500
+          minLength: 0
+      required:
+      - sku
+      - variantName
+    ItemImageResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        s3Key:
+          type: string
+        width:
+          type: integer
+          format: int32
+        height:
+          type: integer
+          format: int32
+        sortOrder:
+          type: integer
+          format: int32
+        contentType:
+          type: string
+        altText:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    RegisterItemImageRequest:
+      type: object
+      properties:
+        s3Key:
+          type: string
+          maxLength: 500
+          minLength: 1
+        sortOrder:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 9999
+        width:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 32767
+        height:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 32767
+        contentType:
+          type: string
+          maxLength: 128
+        altText:
+          type: string
+          maxLength: 500
+        primary:
+          type: boolean
+          description: When true, sets the item cover imageKey to s3Key
+      required:
+      - s3Key
+    CreateItemTypeRequest:
+      type: object
+      properties:
+        key:
+          type: string
+          maxLength: 191
+          minLength: 0
+        label:
+          type: string
+          maxLength: 255
+          minLength: 0
+        icon:
+          type: string
+          maxLength: 500
+          minLength: 0
+        color:
+          type: string
+          maxLength: 64
+          minLength: 0
+        sortOrder:
+          type: integer
+          format: int32
+      required:
+      - key
+      - label
+    ItemTypeResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        key:
+          type: string
+        label:
+          type: string
+        icon:
+          type: string
+        color:
+          type: string
+        sortOrder:
+          type: integer
+          format: int32
+        active:
+          type: boolean
+    CreateCategoryRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 500
+          minLength: 0
+        parentId:
+          type: string
+          maxLength: 36
+          minLength: 0
+        icon:
+          type: string
+          maxLength: 500
+          minLength: 0
+        position:
+          type: integer
+          format: int32
+      required:
+      - name
+    CategoryResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        position:
+          type: integer
+          format: int32
+        icon:
+          type: string
+        parentId:
+          type: string
+        active:
+          type: boolean
+    RefreshRequest:
+      type: object
+      properties:
+        refreshToken:
+          type: string
+          minLength: 1
+      required:
+      - refreshToken
+    AuthUserResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        businessId:
+          type: string
+        branchId:
+          type: string
+        roleId:
+          type: string
+        status:
+          type: string
+    LoginResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        user:
+          $ref: '#/components/schemas/AuthUserResponse'
+    PasswordResetRequest:
+      type: object
+      properties:
+        token:
+          type: string
+          maxLength: 2048
+          minLength: 0
+        newPassword:
+          type: string
+          maxLength: 191
+          minLength: 8
+      required:
+      - newPassword
+      - token
+    PasswordForgotRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 191
+          minLength: 0
+    PasswordChangeRequest:
+      type: object
+      properties:
+        currentPassword:
+          type: string
+          maxLength: 2048
+          minLength: 0
+        newPassword:
+          type: string
+          maxLength: 191
+          minLength: 8
+      required:
+      - currentPassword
+      - newPassword
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 191
+          minLength: 0
+        password:
+          type: string
+          maxLength: 2048
+          minLength: 0
+      required:
+      - email
+      - password
+    LoginPinRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 191
+          minLength: 0
+        branchId:
+          type: string
+          maxLength: 36
+          minLength: 0
+        pin:
+          type: string
+          minLength: 1
+          pattern: \d{4,6}
+      required:
+      - branchId
+      - email
+      - pin
+    CreateApiKeyRequest:
+      type: object
+      properties:
+        label:
+          type: string
+          maxLength: 255
+          minLength: 0
+        scopes:
+          type: array
+          items:
+            type: string
+            maxLength: 64
+            minLength: 0
+      required:
+      - label
+    CreatedApiKeyResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        apiKey:
+          type: string
+        tokenPrefix:
+          type: string
+        label:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+    CreateAisleRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          minLength: 0
+        code:
+          type: string
+          maxLength: 191
+          minLength: 0
+        sortOrder:
+          type: integer
+          format: int32
+      required:
+      - code
+      - name
+    AisleResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        code:
+          type: string
+        sortOrder:
+          type: integer
+          format: int32
+        active:
+          type: boolean
+    UpdateUserRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          minLength: 0
+        phone:
+          type: string
+          maxLength: 50
+          minLength: 0
+        branchId:
+          type: string
+          maxLength: 36
+          minLength: 0
+        status:
+          type: string
+          maxLength: 32
+          minLength: 0
+    UpdateBusinessRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          minLength: 0
+        subscriptionTier:
+          type: string
+          maxLength: 64
+          minLength: 0
+        active:
+          type: boolean
+    UpdateRoleRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          minLength: 0
+        description:
+          type: string
+          maxLength: 500
+          minLength: 0
+        permissionIds:
+          type: array
+          items:
+            type: string
+            maxLength: 36
+            minLength: 0
+    UpdateMeRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          minLength: 0
+        phone:
+          type: string
+          maxLength: 50
+          minLength: 0
+    PatchItemRequest:
+      type: object
+      properties:
+        barcode:
+          type: string
+          maxLength: 191
+          minLength: 0
+        name:
+          type: string
+          maxLength: 500
+          minLength: 0
+        description:
+          type: string
+          maxLength: 10000
+          minLength: 0
+        categoryId:
+          type: string
+          maxLength: 36
+          minLength: 0
+        aisleId:
+          type: string
+          maxLength: 36
+          minLength: 0
+        unitType:
+          type: string
+          maxLength: 16
+          minLength: 0
+        isWeighed:
+          type: boolean
+        isSellable:
+          type: boolean
+        isStocked:
+          type: boolean
+        packagingUnitName:
+          type: string
+          maxLength: 255
+          minLength: 0
+        packagingUnitQty:
+          type: number
+        bundleQty:
+          type: integer
+          format: int32
+        bundlePrice:
+          type: number
+        bundleName:
+          type: string
+          maxLength: 255
+          minLength: 0
+        minStockLevel:
+          type: number
+        reorderLevel:
+          type: number
+        reorderQty:
+          type: number
+        expiresAfterDays:
+          type: integer
+          format: int32
+        hasExpiry:
+          type: boolean
+        imageKey:
+          type: string
+          maxLength: 500
+          minLength: 0
+        active:
+          type: boolean
+    PatchCategoryRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 500
+          minLength: 0
+        slug:
+          type: string
+          maxLength: 191
+          minLength: 0
+        parentId:
+          type: string
+          maxLength: 36
+          minLength: 0
+        active:
+          type: boolean
+        position:
+          type: integer
+          format: int32
+        icon:
+          type: string
+          maxLength: 500
+          minLength: 0
+    Pageable:
+      type: object
+      properties:
+        page:
+          type: integer
+          format: int32
+          minimum: 0
+        size:
+          type: integer
+          format: int32
+          minimum: 1
+        sort:
+          type: array
+          items:
+            type: string
+    PageUserResponse:
+      type: object
+      properties:
+        totalPages:
+          type: integer
+          format: int32
+        totalElements:
+          type: integer
+          format: int64
+        pageable:
+          $ref: '#/components/schemas/PageableObject'
+        first:
+          type: boolean
+        last:
+          type: boolean
+        numberOfElements:
+          type: integer
+          format: int32
+        size:
+          type: integer
+          format: int32
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserResponse'
+        number:
+          type: integer
+          format: int32
+        sort:
+          $ref: '#/components/schemas/SortObject'
+        empty:
+          type: boolean
+    PageableObject:
+      type: object
+      properties:
+        paged:
+          type: boolean
+        pageNumber:
+          type: integer
+          format: int32
+        pageSize:
+          type: integer
+          format: int32
+        unpaged:
+          type: boolean
+        offset:
+          type: integer
+          format: int64
+        sort:
+          $ref: '#/components/schemas/SortObject'
+    SortObject:
+      type: object
+      properties:
+        unsorted:
+          type: boolean
+        sorted:
+          type: boolean
+        empty:
+          type: boolean
+    PageBusinessResponse:
+      type: object
+      properties:
+        totalPages:
+          type: integer
+          format: int32
+        totalElements:
+          type: integer
+          format: int64
+        pageable:
+          $ref: '#/components/schemas/PageableObject'
+        first:
+          type: boolean
+        last:
+          type: boolean
+        numberOfElements:
+          type: integer
+          format: int32
+        size:
+          type: integer
+          format: int32
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/BusinessResponse'
+        number:
+          type: integer
+          format: int32
+        sort:
+          $ref: '#/components/schemas/SortObject'
+        empty:
+          type: boolean
+    PermissionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        key:
+          type: string
+        description:
+          type: string
+    PageItemSummaryResponse:
+      type: object
+      properties:
+        totalPages:
+          type: integer
+          format: int32
+        totalElements:
+          type: integer
+          format: int64
+        pageable:
+          $ref: '#/components/schemas/PageableObject'
+        first:
+          type: boolean
+        last:
+          type: boolean
+        numberOfElements:
+          type: integer
+          format: int32
+        size:
+          type: integer
+          format: int32
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/ItemSummaryResponse'
+        number:
+          type: integer
+          format: int32
+        sort:
+          $ref: '#/components/schemas/SortObject'
+        empty:
+          type: boolean
+    ApiKeyResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        tokenPrefix:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        active:
+          type: boolean
+        lastUsedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    PageApiKeyResponse:
+      type: object
+      properties:
+        totalPages:
+          type: integer
+          format: int32
+        totalElements:
+          type: integer
+          format: int64
+        pageable:
+          $ref: '#/components/schemas/PageableObject'
+        first:
+          type: boolean
+        last:
+          type: boolean
+        numberOfElements:
+          type: integer
+          format: int32
+        size:
+          type: integer
+          format: int32
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiKeyResponse'
+        number:
+          type: integer
+          format: int32
+        sort:
+          $ref: '#/components/schemas/SortObject'
+        empty:
+          type: boolean
+  securitySchemes:
+    bearer:
+      type: http
+      description: 'Slice 3: access JWT via Authorization header.'
+      scheme: bearer
+      bearerFormat: JWT
+    apiKey:
+      type: apiKey
+      description: 'Slice 3: tenant integration key (prefix + secret; returned once
+        at create).'
+      name: X-API-Key
+      in: header
+    cookieRefresh:
+      type: apiKey
+      description: Optional HttpOnly refresh cookie; native clients may use JSON body
+        instead.
+      name: ub_refresh
+      in: cookie

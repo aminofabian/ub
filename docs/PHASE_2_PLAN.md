@@ -19,6 +19,7 @@
 - [Why this document exists](#-why-this-document-exists)
 - [What "Phase 2" means in one paragraph](#-what-phase-2-means-in-one-paragraph)
 - [Prerequisites — Phase 1 must close first](#-prerequisites--phase-1-must-close-first)
+- [Phase 1 → Phase 2 Slice 1 checklist](./PHASE_1_UNLOCK_PHASE_2_SLICE_1.md)
 - [In scope / out of scope](#-in-scope--out-of-scope)
 - [The slice plan at a glance](#-the-slice-plan-at-a-glance)
 - [Slice 1 — Supplier aggregate & item links](#-slice-1--supplier-aggregate--item-links)
@@ -57,7 +58,11 @@ What Phase 2 does **not** yet prove: FEFO/FIFO **allocation for sales** (Phase 3
 
 ## ✅ Prerequisites — Phase 1 must close first
 
-Phase 2 starts when Phase 1’s exit criteria in `PHASE_1_PLAN.md` and `docs/README.md` are **all** satisfied: tenants, users, auth, catalog (items, categories, barcodes, search). Additionally:
+Phase 2 starts when Phase 1’s exit criteria in `PHASE_1_PLAN.md` and `docs/README.md` are **all** satisfied: tenants, users, auth, catalog (items, categories, barcodes, search).
+
+**Minimal gate list before coding Slice 1** (Done / Gap / Partial, aligned to this repo): [`PHASE_1_UNLOCK_PHASE_2_SLICE_1.md`](./PHASE_1_UNLOCK_PHASE_2_SLICE_1.md).
+
+Additionally:
 
 | Phase 1 handoff | Why Phase 2 needs it |
 |---|---|

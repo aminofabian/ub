@@ -7,7 +7,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.util.Optional;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -16,6 +18,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import zelisline.ub.tenancy.domain.DomainMapping;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
 
 /**
@@ -37,6 +40,11 @@ class DomainBusinessResolverFilterIT {
     @MockitoBean
     private DomainMappingRepository domainMappingRepository;
 
+    @BeforeEach
+    void resetRepositoryMock() {
+        org.mockito.Mockito.reset(domainMappingRepository);
+    }
+
     @Test
     void unknownHostReturnsTenantNotFoundProblemJson() throws Exception {
         org.mockito.BDDMockito.given(domainMappingRepository.findByDomainAndActiveTrue("unknown.example.com"))
@@ -52,5 +60,21 @@ class DomainBusinessResolverFilterIT {
                 .andExpect(jsonPath("$.type").value("urn:problem:tenant-not-found"))
                 .andExpect(jsonPath("$.title").value("Tenant not found"))
                 .andExpect(jsonPath("$.status").value(404));
+    }
+
+    @Test
+    void bareLocalhostWithXTenantHostResolvesTenant() throws Exception {
+        DomainMapping mapping = Mockito.mock(DomainMapping.class);
+        org.mockito.BDDMockito.given(mapping.getBusinessId()).willReturn("biz-1");
+        org.mockito.BDDMockito.given(domainMappingRepository.findByDomainAndActiveTrue("pal.localhost"))
+                .willReturn(Optional.of(mapping));
+
+        mockMvc.perform(get("/api/v1/openapi")
+                        .with(request -> {
+                            request.setServerName("localhost");
+                            return request;
+                        })
+                        .header("X-Tenant-Host", "pal.localhost:3000"))
+                .andExpect(status().isOk());
     }
 }

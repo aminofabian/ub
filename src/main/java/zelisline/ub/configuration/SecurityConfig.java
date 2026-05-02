@@ -155,6 +155,15 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOrigins(allowedOrigins);
+        /*
+         * Exact CORS_ALLOWED_ORIGINS alone blocks tenant subdomains (e.g. http://pal.localhost:3000)
+         * and becomes easy to misconfigure: a single production URL in env replaces application.properties,
+         * which drops all localhost origins and makes the browser fail fetch with a generic network error.
+         */
+        config.setAllowedOriginPatterns(List.of(
+                "http://localhost:*",
+                "http://127.0.0.1:*",
+                "http://*.localhost:*"));
         config.setAllowedMethods(allowedMethods);
         config.setAllowedHeaders(List.of(
                 "Authorization",
@@ -163,6 +172,7 @@ public class SecurityConfig {
                 "Idempotency-Key",
                 "X-Request-Id",
                 "X-Tenant-Id",
+                "X-Tenant-Host",
                 TestAuthenticationFilter.HEADER_USER_ID,
                 TestAuthenticationFilter.HEADER_ROLE_ID
         ));

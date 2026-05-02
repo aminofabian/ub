@@ -57,15 +57,17 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
             HttpServletResponse response,
             FilterChain filterChain
     ) throws ServletException, IOException {
-        String host = normalizeHost(request.getServerName());
-        if (host == null || HOSTS_WITHOUT_MAPPING.contains(host)) {
+        String serverHost = TenantHostParsing.hostnameOnly(request.getServerName());
+        String lookupHost = resolveLookupHost(serverHost, request.getHeader("X-Tenant-Host"));
+
+        if (lookupHost == null || HOSTS_WITHOUT_MAPPING.contains(lookupHost)) {
             filterChain.doFilter(request, response);
             return;
         }
 
-        var mapping = domainMappingRepository.findByDomainAndActiveTrue(host);
+        var mapping = domainMappingRepository.findByDomainAndActiveTrue(lookupHost);
         if (mapping.isEmpty()) {
-            writeTenantNotFound(response, host);
+            writeTenantNotFound(response, lookupHost);
             return;
         }
 
@@ -73,11 +75,11 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
-    private String normalizeHost(String host) {
-        if (host == null || host.isBlank()) {
-            return null;
+    private static String resolveLookupHost(String serverHost, String tenantHostHeader) {
+        if (serverHost != null && !HOSTS_WITHOUT_MAPPING.contains(serverHost)) {
+            return serverHost;
         }
-        return host.trim().toLowerCase();
+        return TenantHostParsing.hostnameOnly(tenantHostHeader);
     }
 
     private void writeTenantNotFound(HttpServletResponse response, String host) throws IOException {

@@ -8,7 +8,8 @@ import zelisline.ub.tenancy.infrastructure.TenantRequestAttributes;
 
 /**
  * Resolves {@code business_id} for HTTP handlers from the domain resolver
- * attribute or {@code X-Tenant-Id} (localhost dev path).
+ * attribute (request {@code Host} or {@code X-Tenant-Host} when Host is bare
+ * localhost) or {@code X-Tenant-Id} (explicit UUID dev path).
  */
 public final class TenantRequestIds {
 

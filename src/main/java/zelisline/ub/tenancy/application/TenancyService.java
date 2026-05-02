@@ -6,6 +6,7 @@ import java.util.Locale;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -30,6 +31,9 @@ import zelisline.ub.tenancy.repository.DomainMappingRepository;
 @RequiredArgsConstructor
 public class TenancyService {
 
+    @Value("${app.tenancy.slug-domain-suffix:}")
+    private String slugDomainSuffix;
+
     private final BusinessRepository businessRepository;
     private final DomainMappingRepository domainMappingRepository;
     private final BranchRepository branchRepository;
@@ -53,10 +57,11 @@ public class TenancyService {
         Business saved = businessRepository.save(business);
         catalogBootstrapService.seedDefaultItemTypesIfMissing(saved.getId());
 
-        if (request.primaryDomain() != null && !request.primaryDomain().isBlank()) {
+        String hostname = resolvePrimaryHostname(request.primaryDomain(), normalizedSlug);
+        if (hostname != null) {
             DomainMapping domain = new DomainMapping();
             domain.setBusinessId(saved.getId());
-            domain.setDomain(request.primaryDomain());
+            domain.setDomain(hostname);
             domain.setPrimary(true);
             domain.setActive(true);
             domainMappingRepository.save(domain);
@@ -236,6 +241,22 @@ public class TenancyService {
                 domain.isPrimary(),
                 domain.isActive()
         );
+    }
+
+    private String resolvePrimaryHostname(String explicitPrimary, String normalizedSlug) {
+        String trimmed = blankToNull(explicitPrimary);
+        if (trimmed != null) {
+            return trimmed;
+        }
+        String parent = blankToNull(slugDomainSuffix);
+        if (parent == null) {
+            return null;
+        }
+        parent = parent.trim().toLowerCase(Locale.ROOT);
+        if (parent.isBlank()) {
+            return null;
+        }
+        return normalizedSlug + "." + parent;
     }
 
     private String normalizeSlug(String slug) {

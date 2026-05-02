@@ -17,6 +17,7 @@ import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.identity.repository.UserSessionRepository;
 import zelisline.ub.tenancy.domain.Business;
+import zelisline.ub.tenancy.domain.DomainMapping;
 import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
@@ -59,7 +60,7 @@ public class BusinessDeletionService {
         apiKeyRepository.deleteAllByBusinessId(businessId);
         idempotencyKeyRepository.deleteAllByBusinessId(businessId);
         branchRepository.softDeleteAllByBusinessId(businessId, now);
-        domainMappingRepository.softDeleteAllByBusinessId(businessId, now);
+        releaseAndSoftDeleteDomains(businessId, now);
         userRepository.softDeleteAllByBusinessId(businessId, now);
         roleRepository.softDeleteTenantRolesForBusiness(businessId, now);
 
@@ -72,6 +73,28 @@ public class BusinessDeletionService {
      * Appends {@code -{businessId}} so the plain slug satisfies {@code UNIQUE(slug)} and can be
      * reused by a new tenant (see {@link TenancyService#createBusiness}).
      */
+    private void releaseAndSoftDeleteDomains(String businessId, Instant now) {
+        List<DomainMapping> rows = domainMappingRepository.findByBusinessIdAndDeletedAtIsNull(businessId);
+        if (rows.isEmpty()) {
+            return;
+        }
+        for (DomainMapping row : rows) {
+            row.setDomain(archivedDomainHostname(row.getDomain(), row.getId()));
+            row.setDeletedAt(now);
+            row.setActive(false);
+        }
+        domainMappingRepository.saveAll(rows);
+    }
+
+    private static String archivedDomainHostname(String domain, String domainRowId) {
+        final int max = 255;
+        String suffix = "-" + domainRowId;
+        if (domain.length() + suffix.length() <= max) {
+            return domain + suffix;
+        }
+        return domain.substring(0, max - suffix.length()) + suffix;
+    }
+
     private static String archivedSlug(String slug, String businessId) {
         final int slugMax = 191;
         String suffix = "-" + businessId;

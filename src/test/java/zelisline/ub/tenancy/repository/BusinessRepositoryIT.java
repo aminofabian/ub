@@ -60,6 +60,19 @@ class BusinessRepositoryIT {
         assertThat(businessRepository.existsBySlug("missing-co")).isFalse();
     }
 
+    @Test
+    void existsBySlugAndDeletedAtIsNullIgnoresArchivedRows() {
+        Business first = newBusiness("First", "reuse-me");
+        businessRepository.saveAndFlush(first);
+        assertThat(businessRepository.existsBySlugAndDeletedAtIsNull("reuse-me")).isTrue();
+
+        first.setDeletedAt(java.time.Instant.now());
+        businessRepository.saveAndFlush(first);
+
+        assertThat(businessRepository.existsBySlugAndDeletedAtIsNull("reuse-me")).isFalse();
+        assertThat(businessRepository.existsBySlug("reuse-me")).isTrue();
+    }
+
     private Business newBusiness(String name, String slug) {
         Business business = new Business();
         business.setName(name);

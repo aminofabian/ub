@@ -63,7 +63,21 @@ public class BusinessDeletionService {
         userRepository.softDeleteAllByBusinessId(businessId, now);
         roleRepository.softDeleteTenantRolesForBusiness(businessId, now);
 
+        business.setSlug(archivedSlug(business.getSlug(), business.getId()));
         business.setDeletedAt(now);
         businessRepository.save(business);
+    }
+
+    /**
+     * Appends {@code -{businessId}} so the plain slug satisfies {@code UNIQUE(slug)} and can be
+     * reused by a new tenant (see {@link TenancyService#createBusiness}).
+     */
+    private static String archivedSlug(String slug, String businessId) {
+        final int slugMax = 191;
+        String suffix = "-" + businessId;
+        if (slug.length() + suffix.length() <= slugMax) {
+            return slug + suffix;
+        }
+        return slug.substring(0, slugMax - suffix.length()) + suffix;
     }
 }

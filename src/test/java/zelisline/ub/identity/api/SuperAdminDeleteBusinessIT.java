@@ -122,7 +122,9 @@ class SuperAdminDeleteBusinessIT {
                 .andExpect(status().isNoContent());
 
         assertThat(businessRepository.findById(businessId)).isPresent();
-        assertThat(businessRepository.findById(businessId).orElseThrow().getDeletedAt()).isNotNull();
+        var archived = businessRepository.findById(businessId).orElseThrow();
+        assertThat(archived.getDeletedAt()).isNotNull();
+        assertThat(archived.getSlug()).endsWith("-" + businessId);
 
         assertThat(userRepository.findByBusinessIdAndEmailAndDeletedAtIsNull(businessId, "a@delete.test"))
                 .isEmpty();
@@ -138,5 +140,27 @@ class SuperAdminDeleteBusinessIT {
         mockMvc.perform(delete("/api/v1/super-admin/businesses/{id}", businessId)
                         .header("Authorization", "Bearer " + saToken))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void afterDeleteSameSlugCanBeReused() throws Exception {
+        mockMvc.perform(delete("/api/v1/super-admin/businesses/{id}", businessId)
+                        .header("Authorization", "Bearer " + saToken))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(post("/api/v1/super-admin/businesses")
+                        .header("Authorization", "Bearer " + saToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"To Delete Inc","slug":"to-delete-inc"}
+                                """))
+                .andExpect(status().isCreated());
+
+        assertThat(
+                businessRepository.findAll().stream()
+                        .filter(b -> "to-delete-inc".equals(b.getSlug()) && b.getDeletedAt() == null)
+                        .toList()
+        )
+                .hasSize(1);
     }
 }

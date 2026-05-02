@@ -38,7 +38,7 @@ public class TenancyService {
     @Transactional
     public BusinessResponse createBusiness(CreateBusinessRequest request) {
         String normalizedSlug = normalizeSlug(request.slug());
-        if (businessRepository.existsBySlug(normalizedSlug)) {
+        if (businessRepository.existsBySlugAndDeletedAtIsNull(normalizedSlug)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Business slug already exists");
         }
 
@@ -67,12 +67,12 @@ public class TenancyService {
 
     @Transactional(readOnly = true)
     public Page<BusinessResponse> listBusinesses(Pageable pageable) {
-        return businessRepository.findAll(pageable).map(this::toResponse);
+        return businessRepository.findByDeletedAtIsNull(pageable).map(this::toResponse);
     }
 
     @Transactional
     public BusinessResponse updateBusiness(String businessId, UpdateBusinessRequest request) {
-        Business business = businessRepository.findById(businessId)
+        Business business = businessRepository.findByIdAndDeletedAtIsNull(businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
 
         if (request.name() != null && !request.name().isBlank()) {
@@ -90,7 +90,7 @@ public class TenancyService {
 
     @Transactional(readOnly = true)
     public List<DomainResponse> listDomains(String businessId) {
-        if (!businessRepository.existsById(businessId)) {
+        if (businessRepository.findByIdAndDeletedAtIsNull(businessId).isEmpty()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found");
         }
         return domainMappingRepository.findByBusinessIdAndDeletedAtIsNull(businessId)
@@ -101,7 +101,7 @@ public class TenancyService {
 
     @Transactional
     public DomainResponse addDomain(String businessId, String domainName) {
-        if (!businessRepository.existsById(businessId)) {
+        if (businessRepository.findByIdAndDeletedAtIsNull(businessId).isEmpty()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found");
         }
 

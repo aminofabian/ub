@@ -31,4 +31,15 @@ public interface UserSessionRepository extends JpaRepository<UserSession, String
            and s.revokedAt is null
         """)
     int revokeAllActiveForUser(@Param("userId") String userId, @Param("revokedAt") Instant revokedAt);
+
+    @Modifying
+    @Query("""
+        update UserSession s
+           set s.revokedAt = :revokedAt
+         where s.businessId = :businessId
+           and s.revokedAt is null
+        """)
+    int revokeAllActiveForBusiness(
+            @Param("businessId") String businessId,
+            @Param("revokedAt") Instant revokedAt);
 }

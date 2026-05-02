@@ -1,0 +1,8 @@
+UB — verify your email
+
+We received a registration for owner@example.com.
+
+Open this link to activate your account:
+http://localhost:5173/verify-email?token=abc
+
+If you did not sign up, you can ignore this message.

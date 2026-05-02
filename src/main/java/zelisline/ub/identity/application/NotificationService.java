@@ -9,4 +9,6 @@ public interface NotificationService {
     void sendPasswordResetEmail(String toEmail, String subject, String textBody);
 
     void sendTemporaryLockNotice(String toEmail);
+
+    void sendEmailVerificationEmail(String toEmail, String subject, String textBody);
 }

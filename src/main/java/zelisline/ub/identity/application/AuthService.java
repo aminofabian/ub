@@ -48,6 +48,10 @@ public class AuthService {
     private static final int HARD_WINDOW_MINUTES = 60;
     private static final int HARD_LOCK_FAILURES = 10;
 
+    /** RFC 9457 {@code detail} when user status is {@link UserStatus#INVITED}. */
+    public static final String LOGIN_EMAIL_NOT_VERIFIED_DETAIL =
+            "Email not verified. Open the link we sent you or use resend verification, then try again.";
+
     private final UserRepository userRepository;
     private final UserSessionRepository userSessionRepository;
     private final UserSessionRevocation userSessionRevocation;
@@ -297,6 +301,9 @@ public class AuthService {
     private void assertCanAuthenticate(User user) {
         if (user.getDeletedAt() != null) {
             throw invalidCredentials();
+        }
+        if (user.statusAsEnum() == UserStatus.INVITED) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, LOGIN_EMAIL_NOT_VERIFIED_DETAIL);
         }
         if (user.statusAsEnum() != UserStatus.ACTIVE) {
             throw invalidCredentials();

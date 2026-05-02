@@ -129,6 +129,30 @@ class UsersApiIT {
     }
 
     @Test
+    void listUsersWithInvalidStatusFilterReturns400() throws Exception {
+        mockMvc.perform(get("/api/v1/users")
+                        .param("size", "20")
+                        .param("status", "not-a-real-status")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, userA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void listUsersFilteredByRoleIdReturnsOnlyMatchingRows() throws Exception {
+        mockMvc.perform(get("/api/v1/users")
+                        .param("size", "20")
+                        .param("roleId", ROLE_CASHIER)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, userA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].email").value("cashier@tenant-a.test"));
+    }
+
+    @Test
     void permissionCacheProbeAllowsOwnerWithTwoPermissionChecks() throws Exception {
         mockMvc.perform(get("/api/v1/__test/permission-cache-probe")
                         .header("X-Tenant-Id", TENANT_A)

@@ -101,9 +101,31 @@ public class IdentityService {
     }
 
     @Transactional(readOnly = true)
-    public Page<UserResponse> listUsers(String businessId, Pageable pageable) {
+    public Page<UserResponse> listUsers(
+            String businessId,
+            Pageable pageable,
+            String statusFilter,
+            String roleIdFilter,
+            String branchIdFilter
+    ) {
         requireTenant(businessId);
-        Page<User> page = userRepository.pageByBusiness(businessId, pageable);
+        String statusWire = blankToNull(statusFilter);
+        if (statusWire != null) {
+            try {
+                UserStatus.fromWire(statusWire);
+            } catch (IllegalArgumentException ex) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid status filter");
+            }
+        }
+        String roleId = blankToNull(roleIdFilter);
+        String branchId = blankToNull(branchIdFilter);
+        Page<User> page = userRepository.pageByBusinessFiltered(
+                businessId,
+                statusWire,
+                roleId,
+                branchId,
+                pageable
+        );
         if (page.isEmpty()) {
             return page.map(u -> toResponse(u, null));
         }

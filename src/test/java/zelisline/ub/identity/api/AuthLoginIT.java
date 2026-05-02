@@ -21,6 +21,7 @@ import org.springframework.test.web.servlet.MvcResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jayway.jsonpath.JsonPath;
 
+import zelisline.ub.identity.application.AuthService;
 import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.domain.UserStatus;
@@ -118,6 +119,28 @@ class AuthLoginIT {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.title").value("Unauthorized"))
                 .andExpect(jsonPath("$.detail").value("Invalid credentials"));
+    }
+
+    @Test
+    void invitedUserGetsExplicitEmailNotVerifiedOnLogin() throws Exception {
+        User invited = new User();
+        invited.setBusinessId(TENANT);
+        invited.setEmail("invited@example.com");
+        invited.setName("Invited");
+        invited.setRoleId(ROLE_ID);
+        invited.setStatus(UserStatus.INVITED);
+        invited.setPasswordHash(passwordEncoder.encode("ok-password"));
+        userRepository.save(invited);
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .header("X-Tenant-Id", TENANT)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"email":"invited@example.com","password":"ok-password"}
+                                """))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.title").value("Forbidden"))
+                .andExpect(jsonPath("$.detail").value(AuthService.LOGIN_EMAIL_NOT_VERIFIED_DETAIL));
     }
 
     @Test

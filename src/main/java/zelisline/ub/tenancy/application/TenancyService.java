@@ -12,12 +12,17 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
+import zelisline.ub.tenancy.api.dto.BranchResponse;
 import zelisline.ub.tenancy.api.dto.BusinessResponse;
+import zelisline.ub.tenancy.api.dto.CreateBranchRequest;
 import zelisline.ub.tenancy.api.dto.CreateBusinessRequest;
 import zelisline.ub.tenancy.api.dto.DomainResponse;
+import zelisline.ub.tenancy.api.dto.PatchBranchRequest;
 import zelisline.ub.tenancy.api.dto.UpdateBusinessRequest;
+import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.domain.DomainMapping;
+import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
 
@@ -27,6 +32,7 @@ public class TenancyService {
 
     private final BusinessRepository businessRepository;
     private final DomainMappingRepository domainMappingRepository;
+    private final BranchRepository branchRepository;
     private final CatalogBootstrapService catalogBootstrapService;
 
     @Transactional
@@ -137,6 +143,74 @@ public class TenancyService {
     @Transactional
     public BusinessResponse updateBusinessForTenant(String tenantBusinessId, UpdateBusinessRequest request) {
         return updateBusiness(tenantBusinessId, request);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<BranchResponse> listBranches(String businessId, Pageable pageable) {
+        requireBusiness(businessId);
+        return branchRepository.findByBusinessIdAndDeletedAtIsNull(businessId, pageable)
+                .map(this::toBranchResponse);
+    }
+
+    @Transactional
+    public BranchResponse createBranch(String businessId, CreateBranchRequest request) {
+        requireBusiness(businessId);
+        String name = request.name().trim();
+        if (branchRepository.existsByBusinessIdAndNameAndDeletedAtIsNull(businessId, name)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Branch name already exists for this business");
+        }
+        Branch branch = new Branch();
+        branch.setBusinessId(businessId);
+        branch.setName(name);
+        branch.setAddress(blankToNull(request.address()));
+        branch.setActive(true);
+        return toBranchResponse(branchRepository.save(branch));
+    }
+
+    @Transactional
+    public BranchResponse patchBranch(String businessId, String branchId, PatchBranchRequest request) {
+        Branch branch = branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(branchId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Branch not found"));
+        if (request.name() != null && !request.name().isBlank()) {
+            String nextName = request.name().trim();
+            if (!nextName.equals(branch.getName())
+                    && branchRepository.existsByBusinessIdAndNameAndDeletedAtIsNull(businessId, nextName)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Branch name already exists for this business");
+            }
+            branch.setName(nextName);
+        }
+        if (request.address() != null) {
+            branch.setAddress(blankToNull(request.address()));
+        }
+        if (request.active() != null) {
+            branch.setActive(request.active());
+        }
+        return toBranchResponse(branchRepository.save(branch));
+    }
+
+    private void requireBusiness(String businessId) {
+        if (businessRepository.findByIdAndDeletedAtIsNull(businessId).isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found");
+        }
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
+    }
+
+    private BranchResponse toBranchResponse(Branch branch) {
+        return new BranchResponse(
+                branch.getId(),
+                branch.getBusinessId(),
+                branch.getName(),
+                branch.getAddress(),
+                branch.isActive(),
+                branch.getCreatedAt(),
+                branch.getUpdatedAt()
+        );
     }
 
     private BusinessResponse toResponse(Business business) {

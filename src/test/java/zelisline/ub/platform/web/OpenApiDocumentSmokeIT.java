@@ -32,6 +32,7 @@ class OpenApiDocumentSmokeIT {
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.openapi").value(Matchers.startsWith("3.")))
                 .andExpect(jsonPath("$.paths['/api/v1/users']").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/branches']").exists())
                 .andExpect(jsonPath("$.paths['/api/v1/businesses/me']").exists())
                 .andExpect(jsonPath("$.paths['/api/v1/me']").exists())
                 .andExpect(jsonPath("$.paths['/api/v1/categories']").exists())

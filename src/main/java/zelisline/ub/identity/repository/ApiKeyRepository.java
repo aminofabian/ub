@@ -13,4 +13,6 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, String> {
     Page<ApiKey> findByBusinessIdOrderByCreatedAtDesc(String businessId, Pageable pageable);
 
     Optional<ApiKey> findByIdAndBusinessId(String id, String businessId);
+
+    void deleteAllByBusinessId(String businessId);
 }

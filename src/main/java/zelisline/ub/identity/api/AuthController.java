@@ -1,6 +1,7 @@
 package zelisline.ub.identity.api;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
@@ -20,6 +21,10 @@ import zelisline.ub.identity.api.dto.PasswordChangeRequest;
 import zelisline.ub.identity.api.dto.PasswordForgotRequest;
 import zelisline.ub.identity.api.dto.PasswordResetRequest;
 import zelisline.ub.identity.api.dto.RefreshRequest;
+import zelisline.ub.identity.api.dto.RegisterRequest;
+import zelisline.ub.identity.api.dto.RegisterResponse;
+import zelisline.ub.identity.api.dto.VerifyEmailRequest;
+import zelisline.ub.identity.application.AuthRegistrationService;
 import zelisline.ub.identity.application.AuthService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 
@@ -30,6 +35,28 @@ import zelisline.ub.platform.security.CurrentTenantUser;
 public class AuthController {
 
     private final AuthService authService;
+    private final AuthRegistrationService authRegistrationService;
+
+    @PostMapping("/register")
+    @ResponseStatus(HttpStatus.CREATED)
+    public RegisterResponse register(@Valid @RequestBody RegisterRequest body, HttpServletRequest http) {
+        return authRegistrationService.register(http, body);
+    }
+
+    @PostMapping("/verify-email")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void verifyEmail(@Valid @RequestBody VerifyEmailRequest body) {
+        authRegistrationService.verifyEmail(body);
+    }
+
+    /**
+     * Same anti-enumeration contract as {@link #passwordForgot}: missing/unknown email → {@code 204}.
+     */
+    @PostMapping("/resend-verification")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void resendVerification(HttpServletRequest http, @RequestBody(required = false) PasswordForgotRequest body) {
+        authRegistrationService.resendVerification(http, body);
+    }
 
     @PostMapping("/login")
     public LoginResponse login(@Valid @RequestBody LoginRequest request, HttpServletRequest http) {

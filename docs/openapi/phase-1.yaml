@@ -21,6 +21,22 @@ paths:
         required: true
         schema:
           $ref: '#/components/schemas/Pageable'
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          description: invited|active|suspended|locked
+      - name: roleId
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: branchId
+        in: query
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           description: OK
@@ -527,6 +543,10 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/LoginResponse'
+        '403':
+          description: Email not verified (self-registered user still invited)
+        '401':
+          description: Invalid credentials
   /api/v1/auth/login-pin:
     post:
       tags:
@@ -545,6 +565,61 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/LoginResponse'
+        '403':
+          description: Email not verified (self-registered user still invited)
+        '401':
+          description: Invalid credentials
+  /api/v1/auth/register:
+    post:
+      tags:
+      - auth-controller
+      operationId: register
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+        '403':
+          description: Self-signup disabled
+        '409':
+          description: Email already registered for tenant
+  /api/v1/auth/verify-email:
+    post:
+      tags:
+      - auth-controller
+      operationId: verifyEmail
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyEmailRequest'
+        required: true
+      responses:
+        '204':
+          description: No Content
+        '401':
+          description: Invalid or expired token
+  /api/v1/auth/resend-verification:
+    post:
+      tags:
+      - auth-controller
+      operationId: resendVerification
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordForgotRequest'
+      responses:
+        '204':
+          description: No Content (always; no enumeration)
   /api/v1/api-keys:
     get:
       tags:
@@ -676,6 +751,22 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/BusinessResponse'
+    delete:
+      tags:
+      - super-admin-business-controller
+      operationId: deleteBusiness
+      summary: Soft-delete tenant, users, and related tenancy data
+      parameters:
+      - name: businessId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: No Content
+        '404':
+          description: Business not found or already deleted
   /api/v1/roles/{roleId}:
     patch:
       tags:
@@ -842,6 +933,67 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/BusinessResponse'
+  /api/v1/branches:
+    get:
+      tags:
+      - branches-controller
+      operationId: listBranches
+      parameters:
+      - name: pageable
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/Pageable'
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PageBranchResponse'
+    post:
+      tags:
+      - branches-controller
+      operationId: createBranch
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBranchRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/BranchResponse'
+        '403':
+          description: Missing business.manage_settings
+  /api/v1/branches/{branchId}:
+    patch:
+      tags:
+      - branches-controller
+      operationId: patchBranch
+      parameters:
+      - name: branchId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchBranchRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/BranchResponse'
   /api/v1/permissions:
     get:
       tags:
@@ -1585,6 +1737,45 @@ components:
       - branchId
       - email
       - pin
+    RegisterRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 191
+        name:
+          type: string
+          maxLength: 255
+          minLength: 1
+        password:
+          type: string
+          maxLength: 191
+          minLength: 8
+      required:
+      - email
+      - name
+      - password
+    RegisterResponse:
+      type: object
+      properties:
+        userId:
+          type: string
+        email:
+          type: string
+          format: email
+        status:
+          type: string
+          description: invited when email verification is required; active when verification is disabled
+    VerifyEmailRequest:
+      type: object
+      properties:
+        token:
+          type: string
+          minLength: 16
+          maxLength: 512
+      required:
+      - token
     CreateApiKeyRequest:
       type: object
       properties:
@@ -1844,6 +2035,83 @@ components:
         sort:
           $ref: '#/components/schemas/SortObject'
         empty:
+          type: boolean
+    PageBranchResponse:
+      type: object
+      properties:
+        totalPages:
+          type: integer
+          format: int32
+        totalElements:
+          type: integer
+          format: int64
+        pageable:
+          $ref: '#/components/schemas/PageableObject'
+        first:
+          type: boolean
+        last:
+          type: boolean
+        numberOfElements:
+          type: integer
+          format: int32
+        size:
+          type: integer
+          format: int32
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/BranchResponse'
+        number:
+          type: integer
+          format: int32
+        sort:
+          $ref: '#/components/schemas/SortObject'
+        empty:
+          type: boolean
+    BranchResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        businessId:
+          type: string
+        name:
+          type: string
+        address:
+          type: string
+        active:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateBranchRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          minLength: 1
+        address:
+          type: string
+          maxLength: 500
+          minLength: 0
+      required:
+      - name
+    PatchBranchRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          minLength: 0
+        address:
+          type: string
+          maxLength: 500
+          minLength: 0
+        active:
           type: boolean
     PageableObject:
       type: object

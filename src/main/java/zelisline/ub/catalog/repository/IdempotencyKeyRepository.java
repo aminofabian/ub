@@ -13,4 +13,6 @@ public interface IdempotencyKeyRepository extends JpaRepository<IdempotencyKey, 
             String keyHash,
             String route
     );
+
+    void deleteAllByBusinessId(String businessId);
 }

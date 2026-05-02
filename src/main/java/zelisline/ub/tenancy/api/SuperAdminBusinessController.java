@@ -4,6 +4,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -20,6 +21,7 @@ import zelisline.ub.tenancy.api.dto.CreateBusinessRequest;
 import zelisline.ub.tenancy.api.dto.DomainResponse;
 import zelisline.ub.tenancy.api.dto.UpdateBusinessRequest;
 import zelisline.ub.tenancy.api.dto.AddDomainRequest;
+import zelisline.ub.tenancy.application.BusinessDeletionService;
 import zelisline.ub.tenancy.application.TenancyService;
 
 @Validated
@@ -29,6 +31,7 @@ import zelisline.ub.tenancy.application.TenancyService;
 public class SuperAdminBusinessController {
 
     private final TenancyService tenancyService;
+    private final BusinessDeletionService businessDeletionService;
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -47,6 +50,12 @@ public class SuperAdminBusinessController {
             @Valid @RequestBody UpdateBusinessRequest request
     ) {
         return tenancyService.updateBusiness(businessId, request);
+    }
+
+    @DeleteMapping("/{businessId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteBusiness(@PathVariable String businessId) {
+        businessDeletionService.deleteBusinessAndUsers(businessId);
     }
 
     @GetMapping("/{businessId}/domains")

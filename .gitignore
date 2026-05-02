@@ -35,3 +35,8 @@ out/
 
 ### VS Code ###
 .vscode/
+
+# Local Mailgun / mail secrets (templates use *.example only)
+.env
+.env.local
+.env.mailgun

@@ -66,6 +66,9 @@ public class Item {
     @Column(name = "is_stocked", nullable = false)
     private boolean stocked = true;
 
+    @Column(name = "current_stock", nullable = false, precision = 14, scale = 4)
+    private BigDecimal currentStock = BigDecimal.ZERO;
+
     @Column(name = "packaging_unit_name", length = 255)
     private String packagingUnitName;
 

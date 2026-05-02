@@ -32,6 +32,7 @@ import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.platform.security.TestAuthenticationFilter;
 import zelisline.ub.tenancy.domain.Business;
+import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
 
@@ -58,6 +59,9 @@ class BranchesApiIT {
     private BusinessRepository businessRepository;
 
     @Autowired
+    private BranchRepository branchRepository;
+
+    @Autowired
     private PermissionRepository permissionRepository;
 
     @Autowired
@@ -79,9 +83,7 @@ class BranchesApiIT {
     @BeforeEach
     void seed() {
         userRepository.deleteAll();
-        rolePermissionRepository.deleteAll();
-        roleRepository.deleteAll();
-        permissionRepository.deleteAll();
+        branchRepository.deleteAll();
         businessRepository.deleteAll();
 
         Business business = new Business();

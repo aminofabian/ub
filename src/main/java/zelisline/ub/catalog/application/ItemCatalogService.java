@@ -35,6 +35,7 @@ import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.identity.application.TokenHasher;
+import zelisline.ub.suppliers.application.SupplierLinkProvisioner;
 
 @Service
 @RequiredArgsConstructor
@@ -49,6 +50,7 @@ public class ItemCatalogService {
     private final ItemTypeRepository itemTypeRepository;
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final ObjectMapper objectMapper;
+    private final SupplierLinkProvisioner supplierLinkProvisioner;
 
     @Transactional(readOnly = true)
     public Page<ItemSummaryResponse> listItems(
@@ -95,6 +97,7 @@ public class ItemCatalogService {
         } catch (DataIntegrityViolationException ex) {
             throw translateDuplicateSku(ex);
         }
+        supplierLinkProvisioner.afterItemChanged(businessId, item);
         return new ItemCreateResult(HttpStatus.CREATED.value(), toResponse(item, List.of()));
     }
 
@@ -135,6 +138,7 @@ public class ItemCatalogService {
             } catch (DataIntegrityViolationException ex) {
                 throw translateDuplicateSku(ex);
             }
+            supplierLinkProvisioner.afterItemChanged(businessId, item);
             ItemResponse body = toResponse(item, List.of());
             persistIdempotency(businessId, keyHash, bodyHash, HttpStatus.CREATED.value(), body);
             return new ItemCreateResult(HttpStatus.CREATED.value(), body);
@@ -256,6 +260,7 @@ public class ItemCatalogService {
         } catch (DataIntegrityViolationException ex) {
             throw translateDuplicateSku(ex);
         }
+        supplierLinkProvisioner.afterItemChanged(businessId, item);
         return toResponseWithVariants(businessId, item);
     }
 
@@ -333,6 +338,7 @@ public class ItemCatalogService {
         } catch (DataIntegrityViolationException ex) {
             throw translateDuplicateSku(ex);
         }
+        supplierLinkProvisioner.afterItemChanged(businessId, child);
         return toResponse(child, List.of());
     }
 

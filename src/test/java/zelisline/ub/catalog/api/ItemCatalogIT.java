@@ -48,6 +48,9 @@ import zelisline.ub.identity.repository.RolePermissionRepository;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.platform.security.TestAuthenticationFilter;
+import zelisline.ub.suppliers.repository.SupplierContactRepository;
+import zelisline.ub.suppliers.repository.SupplierProductRepository;
+import zelisline.ub.suppliers.repository.SupplierRepository;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
@@ -103,6 +106,15 @@ class ItemCatalogIT {
     @Autowired
     private ItemCatalogService itemCatalogService;
 
+    @Autowired
+    private SupplierRepository supplierRepository;
+
+    @Autowired
+    private SupplierContactRepository supplierContactRepository;
+
+    @Autowired
+    private SupplierProductRepository supplierProductRepository;
+
     @MockitoBean
     @SuppressWarnings("unused")
     private DomainMappingRepository domainMappingRepository;
@@ -112,6 +124,9 @@ class ItemCatalogIT {
     @BeforeEach
     void seed() {
         itemImageRepository.deleteAll();
+        supplierProductRepository.deleteAll();
+        supplierContactRepository.deleteAll();
+        supplierRepository.deleteAll();
         itemRepository.deleteAll();
         idempotencyKeyRepository.deleteAll();
         categoryRepository.deleteAll();

@@ -1,0 +1,107 @@
+openapi: 3.0.3
+info:
+  title: Palmart API — Phase 2 (suppliers slice 1)
+  version: 0.1.0
+servers:
+  - url: http://localhost:5050
+paths:
+  /api/v1/suppliers:
+    get:
+      summary: List suppliers
+      operationId: listSuppliers
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, default: 0 }
+        - in: query
+          name: size
+          schema: { type: integer, default: 20 }
+      responses:
+        '200':
+          description: OK
+    post:
+      summary: Create supplier
+      operationId: createSupplier
+      responses:
+        '201':
+          description: Created
+  /api/v1/suppliers/{supplierId}:
+    get:
+      summary: Get supplier
+      operationId: getSupplier
+      parameters:
+        - { name: supplierId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OK }
+    patch:
+      summary: Patch supplier
+      operationId: patchSupplier
+      parameters:
+        - { name: supplierId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OK }
+  /api/v1/suppliers/{supplierId}/contacts:
+    get:
+      summary: List contacts
+      operationId: listSupplierContacts
+      parameters:
+        - { name: supplierId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OK }
+    post:
+      summary: Add contact
+      operationId: addSupplierContact
+      parameters:
+        - { name: supplierId, in: path, required: true, schema: { type: string } }
+      responses:
+        '201': { description: Created }
+  /api/v1/suppliers/{supplierId}/contacts/{contactId}:
+    patch:
+      summary: Patch contact
+      operationId: patchSupplierContact
+      parameters:
+        - { name: supplierId, in: path, required: true, schema: { type: string } }
+        - { name: contactId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OK }
+    delete:
+      summary: Delete contact
+      operationId: deleteSupplierContact
+      parameters:
+        - { name: supplierId, in: path, required: true, schema: { type: string } }
+        - { name: contactId, in: path, required: true, schema: { type: string } }
+      responses:
+        '204': { description: No content }
+  /api/v1/items/{itemId}/supplier-links:
+    get:
+      summary: List supplier links for item
+      operationId: listItemSupplierLinks
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OK }
+    post:
+      summary: Link supplier to item
+      operationId: addItemSupplierLink
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+      responses:
+        '201': { description: Created }
+  /api/v1/items/{itemId}/supplier-links/{linkId}:
+    delete:
+      summary: Remove supplier link
+      operationId: removeItemSupplierLink
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+        - { name: linkId, in: path, required: true, schema: { type: string } }
+      responses:
+        '204': { description: No content }
+  /api/v1/items/{itemId}/supplier-links/{linkId}/set-primary:
+    post:
+      summary: Set primary supplier for item
+      operationId: setPrimaryItemSupplierLink
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+        - { name: linkId, in: path, required: true, schema: { type: string } }
+      responses:
+        '204': { description: No content }

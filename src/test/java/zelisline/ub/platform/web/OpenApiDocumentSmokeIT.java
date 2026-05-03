@@ -40,6 +40,7 @@ class OpenApiDocumentSmokeIT {
                 .andExpect(jsonPath("$.paths['/api/v1/items']").exists())
                 .andExpect(jsonPath("$.paths['/api/v1/sales']").exists())
                 .andExpect(jsonPath("$.paths['/api/v1/sales/{saleId}/receipt.pdf']").exists())
-                .andExpect(jsonPath("$.paths['/api/v1/sales/{saleId}/receipt/thermal']").exists());
+                .andExpect(jsonPath("$.paths['/api/v1/sales/{saleId}/receipt/thermal']").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/suppliers/{supplierId}/item-links']").exists());
     }
 }

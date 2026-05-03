@@ -2,6 +2,7 @@ package zelisline.ub.suppliers.application;
 
 import java.time.Instant;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.springframework.dao.DataIntegrityViolationException;
@@ -16,6 +17,7 @@ import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.suppliers.api.dto.AddItemSupplierLinkRequest;
 import zelisline.ub.suppliers.api.dto.ItemSupplierLinkResponse;
+import zelisline.ub.suppliers.api.dto.SupplierItemLinkResponse;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierProduct;
 import zelisline.ub.suppliers.repository.SupplierProductRepository;
@@ -38,6 +40,21 @@ public class ItemSupplierLinkService {
         Map<String, Supplier> byId = supplierRepository.findAllById(ids).stream()
                 .collect(Collectors.toMap(Supplier::getId, s -> s));
         return links.stream().map(sp -> toLinkResponse(sp, byId.get(sp.getSupplierId()))).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public java.util.List<SupplierItemLinkResponse> listLinksForSupplier(String businessId, String supplierId) {
+        supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(supplierId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
+        java.util.List<SupplierProduct> links = supplierProductRepository.listForSupplier(businessId, supplierId);
+        if (links.isEmpty()) {
+            return java.util.List.of();
+        }
+        Set<String> itemIds = links.stream().map(SupplierProduct::getItemId).collect(Collectors.toSet());
+        Map<String, Item> itemsById = itemRepository.findAllById(itemIds).stream()
+                .filter(i -> businessId.equals(i.getBusinessId()) && i.getDeletedAt() == null)
+                .collect(Collectors.toMap(Item::getId, i -> i, (a, b) -> a));
+        return links.stream().map(sp -> toSupplierItemLinkResponse(sp, itemsById.get(sp.getItemId()))).toList();
     }
 
     @Transactional
@@ -138,6 +155,24 @@ public class ItemSupplierLinkService {
                 sp.getId(),
                 sp.getSupplierId(),
                 name,
+                sp.isPrimaryLink(),
+                sp.getSupplierSku(),
+                sp.getDefaultCostPrice(),
+                sp.isActive(),
+                sp.getVersion(),
+                sp.getCreatedAt(),
+                sp.getUpdatedAt()
+        );
+    }
+
+    private static SupplierItemLinkResponse toSupplierItemLinkResponse(SupplierProduct sp, Item item) {
+        String itemName = item != null ? item.getName() : "";
+        String sku = item != null ? item.getSku() : "";
+        return new SupplierItemLinkResponse(
+                sp.getId(),
+                sp.getItemId(),
+                itemName,
+                sku,
                 sp.isPrimaryLink(),
                 sp.getSupplierSku(),
                 sp.getDefaultCostPrice(),

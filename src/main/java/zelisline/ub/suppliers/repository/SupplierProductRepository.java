@@ -41,4 +41,17 @@ public interface SupplierProductRepository extends JpaRepository<SupplierProduct
     boolean existsActiveByItemId(@Param("itemId") String itemId);
 
     List<SupplierProduct> findByItemIdAndDeletedAtIsNull(String itemId);
+
+    @Query("""
+            SELECT sp FROM SupplierProduct sp
+            JOIN Supplier s ON s.id = sp.supplierId
+            JOIN Item i ON i.id = sp.itemId
+            WHERE sp.supplierId = :supplierId AND s.businessId = :businessId
+              AND sp.deletedAt IS NULL AND i.deletedAt IS NULL
+            ORDER BY i.name ASC, sp.primaryLink DESC
+            """)
+    List<SupplierProduct> listForSupplier(
+            @Param("businessId") String businessId,
+            @Param("supplierId") String supplierId
+    );
 }

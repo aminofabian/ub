@@ -6,6 +6,7 @@ public record ItemSummaryResponse(
         String barcode,
         String name,
         String variantName,
+        String categoryId,
         String imageKey,
         boolean active,
         String variantOfItemId

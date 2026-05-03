@@ -156,6 +156,22 @@ class SuppliersApiIT {
     }
 
     @Test
+    void listSupplierItemLinks_returnsLinkedItems() throws Exception {
+        String supplierA = createSupplier(TENANT_A, "Stockist");
+        String itemId = createSellableItem("SKU-L1", "Linked one");
+        addLink(itemId, supplierA, true);
+
+        mockMvc.perform(get("/api/v1/suppliers/" + supplierA + "/item-links")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].itemId").value(itemId))
+                .andExpect(jsonPath("$[0].sku").value("SKU-L1"))
+                .andExpect(jsonPath("$[0].primary").value(true));
+    }
+
+    @Test
     void tenantCannotReadOtherTenantSuppliers() throws Exception {
         String supplierB = createSupplier(TENANT_B, "Vendor B Only");
         mockMvc.perform(get("/api/v1/suppliers/" + supplierB)

@@ -707,7 +707,7 @@ Use MySQL 8 `FULLTEXT` index for text search, and normal BTREE indexes for barco
 
 ## 🎨 Slice 6 — Admin UI scaffolding
 
-The Phase-1 UI is **scaffolding**, not polish. Three working CRUD screens, one auth shell, one nav. No charts, no dashboards, no theming work — all of that lands in Phase 7.
+The Phase-1 UI is **scaffolding**, not polish. Several working CRUD screens (business, users, products, categories), one auth shell, one nav. No charts, no dashboards, no theming work — all of that lands in Phase 7.
 
 ### 6.1 What "scaffolding" means here
 
@@ -720,7 +720,7 @@ The Phase-1 UI is **scaffolding**, not polish. Three working CRUD screens, one a
 | Business settings screen | ✅ | Single page, reads `/businesses/me`, PATCHes back. |
 | User CRUD screen | ✅ | List + form + role picker. |
 | Product (item) CRUD screen | ✅ | List + form + variant nested table. |
-| Category tree screen | ⬜ | Stretch; can slip to Phase 4 if needed. |
+| Categories screen (`/categories`) | ✅ | Flat list + create (optional parent) + row edit. Nav: `catalog.items.read`; POST/PATCH: `catalog.categories.write`. Drag-drop tree UX is not in scope (defer to later phase). |
 | Theming, dark mode, branding | ❌ | Phase 7. |
 | Dashboard, charts, KPIs | ❌ | Phase 7. |
 | Multi-language | ❌ | Post-GA. |

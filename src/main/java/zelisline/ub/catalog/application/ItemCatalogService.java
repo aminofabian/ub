@@ -469,6 +469,7 @@ public class ItemCatalogService {
                 i.getBarcode(),
                 i.getName(),
                 i.getVariantName(),
+                i.getCategoryId(),
                 i.getImageKey(),
                 i.isActive(),
                 i.getVariantOfItemId()

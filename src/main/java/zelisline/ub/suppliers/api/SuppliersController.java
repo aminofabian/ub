@@ -27,6 +27,8 @@ import zelisline.ub.suppliers.api.dto.PatchSupplierContactRequest;
 import zelisline.ub.suppliers.api.dto.PatchSupplierRequest;
 import zelisline.ub.suppliers.api.dto.SupplierContactResponse;
 import zelisline.ub.suppliers.api.dto.SupplierResponse;
+import zelisline.ub.suppliers.api.dto.SupplierItemLinkResponse;
+import zelisline.ub.suppliers.application.ItemSupplierLinkService;
 import zelisline.ub.suppliers.application.SupplierService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
@@ -37,6 +39,7 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class SuppliersController {
 
     private final SupplierService supplierService;
+    private final ItemSupplierLinkService itemSupplierLinkService;
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'suppliers.read')")
@@ -69,6 +72,17 @@ public class SuppliersController {
     ) {
         CurrentTenantUser.require(request);
         return supplierService.patchSupplier(TenantRequestIds.resolveBusinessId(request), supplierId, body);
+    }
+
+    @GetMapping("/{supplierId}/item-links")
+    @PreAuthorize("hasPermission(null, 'suppliers.read') and hasPermission(null, 'catalog.items.read')")
+    public List<SupplierItemLinkResponse> listItemLinks(
+            @PathVariable String supplierId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return itemSupplierLinkService.listLinksForSupplier(
+                TenantRequestIds.resolveBusinessId(request), supplierId);
     }
 
     @GetMapping("/{supplierId}/contacts")

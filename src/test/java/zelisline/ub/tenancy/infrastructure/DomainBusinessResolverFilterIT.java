@@ -1,6 +1,10 @@
 package zelisline.ub.tenancy.infrastructure;
 
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -13,6 +17,7 @@ import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -60,6 +65,42 @@ class DomainBusinessResolverFilterIT {
                 .andExpect(jsonPath("$.type").value("urn:problem:tenant-not-found"))
                 .andExpect(jsonPath("$.title").value("Tenant not found"))
                 .andExpect(jsonPath("$.status").value(404));
+    }
+
+    @Test
+    void superAdminPathBypassesTenantResolution() throws Exception {
+        mockMvc.perform(post("/api/v1/super-admin/auth/login")
+                        .with(request -> {
+                            request.setServerName("palmart.co.ke");
+                            return request;
+                        })
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"x\",\"password\":\"y\"}"))
+                .andExpect(result -> {
+                    int status = result.getResponse().getStatus();
+                    if (status == HttpStatus.NOT_FOUND.value()) {
+                        throw new AssertionError("super-admin path must bypass tenant-not-found filter");
+                    }
+                });
+
+        verify(domainMappingRepository, never()).findByDomainAndActiveTrue(anyString());
+    }
+
+    @Test
+    void actuatorHealthBypassesTenantResolution() throws Exception {
+        mockMvc.perform(get("/actuator/health")
+                        .with(request -> {
+                            request.setServerName("palmart.co.ke");
+                            return request;
+                        }))
+                .andExpect(result -> {
+                    int status = result.getResponse().getStatus();
+                    if (status == HttpStatus.NOT_FOUND.value()) {
+                        throw new AssertionError("actuator must bypass tenant-not-found filter");
+                    }
+                });
+
+        verify(domainMappingRepository, never()).findByDomainAndActiveTrue(anyString());
     }
 
     @Test

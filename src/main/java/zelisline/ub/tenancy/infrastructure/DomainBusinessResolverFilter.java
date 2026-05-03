@@ -2,11 +2,13 @@ package zelisline.ub.tenancy.infrastructure;
 
 import java.io.IOException;
 import java.net.URI;
+import java.util.List;
 import java.util.Set;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
+import org.springframework.lang.NonNull;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -25,6 +27,12 @@ import zelisline.ub.tenancy.repository.DomainMappingRepository;
  * {@code docs/PHASE_1_PLAN.md} §1.4. On unknown hosts a {@code 404
  * application/problem+json} with type {@code urn:problem:tenant-not-found} is
  * returned — a {@code 401} would leak tenant existence.
+ *
+ * <p>Paths that are definitionally <em>not</em> tenant-scoped bypass the
+ * filter entirely (super-admin platform ops, slug-in-URL public endpoints,
+ * health/docs, webhooks). Without this, a prod host that isn't a tenant
+ * mapping (e.g. {@code palmart.co.ke} on the admin app) would 404 every
+ * super-admin login and health probe.
  */
 public class DomainBusinessResolverFilter extends OncePerRequestFilter {
 
@@ -34,6 +42,16 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
             "localhost",
             "127.0.0.1",
             "::1"
+    );
+
+    private static final List<String> NON_TENANT_PATH_PREFIXES = List.of(
+            "/api/v1/super-admin/",
+            "/api/v1/public/",
+            "/actuator/",
+            "/api/v1/openapi",
+            "/v3/api-docs",
+            "/swagger-ui",
+            "/webhooks/"
     );
 
     private final DomainMappingRepository domainMappingRepository;
@@ -49,6 +67,20 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
     ) {
         this.domainMappingRepository = domainMappingRepository;
         this.objectMapper = objectMapper;
+    }
+
+    @Override
+    protected boolean shouldNotFilter(@NonNull HttpServletRequest request) {
+        String path = request.getRequestURI();
+        if (path == null) {
+            return false;
+        }
+        for (String prefix : NON_TENANT_PATH_PREFIXES) {
+            if (path.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override

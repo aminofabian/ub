@@ -25,4 +25,26 @@ public interface DomainMappingRepository extends JpaRepository<DomainMapping, St
            and d.deletedAt is null
         """)
     int softDeleteAllByBusinessId(@Param("businessId") String businessId, @Param("ts") Instant ts);
+
+    /**
+     * Clears the current primary for a business (keeps the promoted row untouched).
+     *
+     * <p>Must run before the promoted row is written so that the generated
+     * {@code primary_business_id} unique index (see {@code V1__tenancy_core.sql})
+     * does not see two rows carrying the same business id at flush time.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        update DomainMapping d
+           set d.primary = false,
+               d.updatedAt = :ts
+         where d.businessId = :businessId
+           and d.id <> :promotedId
+           and d.primary = true
+           and d.deletedAt is null
+        """)
+    int clearPrimaryForBusinessExcept(
+            @Param("businessId") String businessId,
+            @Param("promotedId") String promotedId,
+            @Param("ts") Instant ts);
 }

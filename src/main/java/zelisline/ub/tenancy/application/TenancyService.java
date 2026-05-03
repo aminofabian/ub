@@ -157,15 +157,16 @@ public class TenancyService {
     public DomainResponse setPrimaryDomain(String businessId, String domainId) {
         DomainMapping toPromote = domainMappingRepository.findById(domainId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Domain not found"));
-        if (!toPromote.getBusinessId().equals(businessId)) {
+        if (!toPromote.getBusinessId().equals(businessId) || toPromote.getDeletedAt() != null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Domain not found");
         }
 
-        List<DomainMapping> domains = domainMappingRepository.findByBusinessIdAndDeletedAtIsNull(businessId);
-        for (DomainMapping domain : domains) {
-            domain.setPrimary(domain.getId().equals(toPromote.getId()));
+        Instant now = Instant.now();
+        domainMappingRepository.clearPrimaryForBusinessExcept(businessId, toPromote.getId(), now);
+        if (!toPromote.isPrimary()) {
+            toPromote.setPrimary(true);
+            toPromote = domainMappingRepository.save(toPromote);
         }
-        domainMappingRepository.saveAll(domains);
         return toResponse(toPromote);
     }
 

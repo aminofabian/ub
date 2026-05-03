@@ -146,6 +146,26 @@ class MyDomainsIT {
     }
 
     @Test
+    void setPrimary_swapsWithoutHittingUniqueIndex() throws Exception {
+        String oldPrimaryId = domainMappingRepository.save(
+                domain(TENANT_A, "tenant-a.example.com", true)).getId();
+        String newPrimaryId = domainMappingRepository.save(
+                domain(TENANT_A, "new.acme.com", false)).getId();
+
+        mockMvc.perform(authed(post(
+                        "/api/v1/businesses/me/domains/" + newPrimaryId + "/primary")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(newPrimaryId))
+                .andExpect(jsonPath("$.primary").value(true));
+
+        mockMvc.perform(authed(get("/api/v1/businesses/me/domains")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[?(@.id=='" + newPrimaryId + "')].primary").value(true))
+                .andExpect(jsonPath("$[?(@.id=='" + oldPrimaryId + "')].primary").value(false));
+    }
+
+    @Test
     void deleteDomain_softDeletesNonPrimary() throws Exception {
         domainMappingRepository.save(domain(TENANT_A, "tenant-a.example.com", true));
         String secondaryId = domainMappingRepository.save(

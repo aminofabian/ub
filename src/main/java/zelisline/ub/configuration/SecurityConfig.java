@@ -111,7 +111,7 @@ public class SecurityConfig {
                             .hasAnyRole("OWNER", "ADMIN", "SUPER_ADMIN")
 
                         .requestMatchers("/api/v1/pos/**", "/api/v1/sales/**", "/api/v1/shifts/**")
-                            .hasAnyRole("CASHIER", "OWNER", "ADMIN", "SUPER_ADMIN")
+                            .authenticated()
 
                         // Local→cloud outbox replay (hybrid profile). Service principal only.
                         .requestMatchers("/api/v1/sync/**").hasRole("SYNC_WORKER")

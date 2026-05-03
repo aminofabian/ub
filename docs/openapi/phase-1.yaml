@@ -10,6 +10,30 @@ servers:
 - url: /
   description: Current host
 paths:
+  /api/v1/pricing/price-rules/{ruleId}:
+    put:
+      tags:
+      - pricing-controller
+      operationId: updateRule
+      parameters:
+      - name: ruleId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutPriceRuleRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PriceRuleResponse'
   /api/v1/users:
     get:
       tags:
@@ -26,7 +50,6 @@ paths:
         required: false
         schema:
           type: string
-          description: invited|active|suspended|locked
       - name: roleId
         in: query
         required: false
@@ -103,6 +126,84 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/UserResponse'
+  /api/v1/suppliers:
+    get:
+      tags:
+      - suppliers-controller
+      operationId: list
+      parameters:
+      - name: pageable
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/Pageable'
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PageSupplierResponse'
+    post:
+      tags:
+      - suppliers-controller
+      operationId: create
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSupplierRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/SupplierResponse'
+  /api/v1/suppliers/{supplierId}/contacts:
+    get:
+      tags:
+      - suppliers-controller
+      operationId: listContacts
+      parameters:
+      - name: supplierId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SupplierContactResponse'
+    post:
+      tags:
+      - suppliers-controller
+      operationId: addContact
+      parameters:
+      - name: supplierId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSupplierContactRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/SupplierContactResponse'
   /api/v1/super-admin/businesses:
     get:
       tags:
@@ -222,6 +323,126 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/SuperAdminLoginResponse'
+  /api/v1/shifts/{shiftId}/close:
+    post:
+      tags:
+      - shifts-controller
+      operationId: closeShift
+      parameters:
+      - name: shiftId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostCloseShiftRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ShiftResponse'
+  /api/v1/shifts/open:
+    post:
+      tags:
+      - shifts-controller
+      operationId: openShift
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostOpenShiftRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ShiftResponse'
+  /api/v1/sales:
+    post:
+      tags:
+      - sales-controller
+      operationId: createSale
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostSaleRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/SaleResponse'
+  /api/v1/sales/{saleId}/void:
+    post:
+      tags:
+      - sales-controller
+      operationId: voidSale
+      parameters:
+      - name: saleId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostVoidSaleRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/SaleResponse'
+  /api/v1/sales/{saleId}/refund:
+    post:
+      tags:
+      - sales-controller
+      operationId: refundSale
+      parameters:
+      - name: saleId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostRefundRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/RefundResponse'
   /api/v1/roles:
     get:
       tags:
@@ -253,11 +474,335 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/RoleResponse'
+  /api/v1/purchasing/supplier-payments:
+    post:
+      tags:
+      - supplier-payments-controller
+      operationId: postPayment
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostSupplierPaymentRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PostSupplierPaymentResponse'
+  /api/v1/purchasing/path-b/sessions:
+    post:
+      tags:
+      - path-b-purchasing-controller
+      operationId: create_1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePathBSessionRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PathBSessionDetailResponse'
+  /api/v1/purchasing/path-b/sessions/{sessionId}/post:
+    post:
+      tags:
+      - path-b-purchasing-controller
+      operationId: post
+      parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostPathBRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PostPathBResponse'
+  /api/v1/purchasing/path-b/sessions/{sessionId}/lines:
+    post:
+      tags:
+      - path-b-purchasing-controller
+      operationId: addLine
+      parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddPathBLineRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PathBLineResponse'
+  /api/v1/purchasing/path-a/purchase-orders:
+    post:
+      tags:
+      - path-a-purchasing-controller
+      operationId: createPurchaseOrder
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePathAPurchaseOrderRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PathAPurchaseOrderDetailResponse'
+  /api/v1/purchasing/path-a/purchase-orders/{purchaseOrderId}/send:
+    post:
+      tags:
+      - path-a-purchasing-controller
+      operationId: send
+      parameters:
+      - name: purchaseOrderId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PathAPurchaseOrderDetailResponse'
+  /api/v1/purchasing/path-a/purchase-orders/{purchaseOrderId}/lines:
+    post:
+      tags:
+      - path-a-purchasing-controller
+      operationId: addLine_1
+      parameters:
+      - name: purchaseOrderId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddPathAPurchaseOrderLineRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PathAPurchaseOrderLineResponse'
+  /api/v1/purchasing/path-a/purchase-orders/{purchaseOrderId}/cancel:
+    post:
+      tags:
+      - path-a-purchasing-controller
+      operationId: cancel
+      parameters:
+      - name: purchaseOrderId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PathAPurchaseOrderDetailResponse'
+  /api/v1/purchasing/path-a/goods-receipts:
+    post:
+      tags:
+      - path-a-purchasing-controller
+      operationId: postGoodsReceipt
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostGoodsReceiptRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PostGoodsReceiptResponse'
+  /api/v1/purchasing/path-a/goods-receipts/{goodsReceiptId}/supplier-invoice:
+    post:
+      tags:
+      - path-a-purchasing-controller
+      operationId: postSupplierInvoice
+      parameters:
+      - name: goodsReceiptId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostGrnSupplierInvoiceRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PostGrnSupplierInvoiceResponse'
+  /api/v1/pricing/tax-rates:
+    get:
+      tags:
+      - pricing-controller
+      operationId: listTaxRates
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TaxRateResponse'
+    post:
+      tags:
+      - pricing-controller
+      operationId: createTaxRate
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostTaxRateRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/TaxRateResponse'
+  /api/v1/pricing/selling-prices:
+    post:
+      tags:
+      - pricing-controller
+      operationId: setSellingPrice
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostSellingPriceRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/SellingPriceResponse'
+  /api/v1/pricing/price-rules:
+    get:
+      tags:
+      - pricing-controller
+      operationId: listRules
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PriceRuleResponse'
+    post:
+      tags:
+      - pricing-controller
+      operationId: createRule
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostPriceRuleRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PriceRuleResponse'
+  /api/v1/pricing/buying-prices:
+    post:
+      tags:
+      - pricing-controller
+      operationId: setBuyingPrice
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostBuyingPriceRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/BuyingPriceResponse'
   /api/v1/items:
     get:
       tags:
       - items-controller
-      operationId: list
+      operationId: list_1
       parameters:
       - name: search
         in: query
@@ -301,7 +846,7 @@ paths:
     post:
       tags:
       - items-controller
-      operationId: create
+      operationId: create_2
       parameters:
       - name: Idempotency-Key
         in: header
@@ -321,6 +866,68 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/ItemResponse'
+  /api/v1/items/{itemId}/supplier-links:
+    get:
+      tags:
+      - item-supplier-links-controller
+      operationId: list_2
+      parameters:
+      - name: itemId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ItemSupplierLinkResponse'
+    post:
+      tags:
+      - item-supplier-links-controller
+      operationId: add
+      parameters:
+      - name: itemId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddItemSupplierLinkRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ItemSupplierLinkResponse'
+  /api/v1/items/{itemId}/supplier-links/{linkId}/set-primary:
+    post:
+      tags:
+      - item-supplier-links-controller
+      operationId: setPrimary
+      parameters:
+      - name: itemId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: linkId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: No Content
   /api/v1/items/{id}/variants:
     post:
       tags:
@@ -357,11 +964,11 @@ paths:
         schema:
           type: string
       requestBody:
-        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/RegisterItemImageRequest'
+        required: true
       responses:
         '201':
           description: Created
@@ -369,30 +976,11 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/ItemImageResponse'
-  /api/v1/items/{id}/images/{imageId}:
-    delete:
-      tags:
-      - items-controller
-      operationId: deleteItemImage
-      parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: imageId
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '204':
-          description: No Content
   /api/v1/item-types:
     get:
       tags:
       - item-types-controller
-      operationId: list_1
+      operationId: list_3
       responses:
         '200':
           description: OK
@@ -405,7 +993,7 @@ paths:
     post:
       tags:
       - item-types-controller
-      operationId: create_1
+      operationId: create_3
       requestBody:
         content:
           application/json:
@@ -419,11 +1007,199 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/ItemTypeResponse'
+  /api/v1/inventory/wastage:
+    post:
+      tags:
+      - inventory-controller
+      operationId: wastage
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostStandaloneWastageRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/InventoryMutationResponse'
+  /api/v1/inventory/transfers:
+    post:
+      tags:
+      - inventory-controller
+      operationId: createTransfer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostStockTransferRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/StockTransferCreatedResponse'
+  /api/v1/inventory/transfers/{transferId}/complete:
+    post:
+      tags:
+      - inventory-controller
+      operationId: completeTransfer
+      parameters:
+      - name: transferId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: No Content
+  /api/v1/inventory/stock-take/sessions:
+    post:
+      tags:
+      - stock-take-controller
+      operationId: startSession
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostStartStockTakeSessionRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/StockTakeSessionResponse'
+  /api/v1/inventory/stock-take/sessions/{sessionId}/close:
+    post:
+      tags:
+      - stock-take-controller
+      operationId: closeSession
+      parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/StockTakeSessionResponse'
+  /api/v1/inventory/stock-take/sessions/{sessionId}/adjustment-requests/{requestId}/reject:
+    post:
+      tags:
+      - stock-take-controller
+      operationId: rejectRequest
+      parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: requestId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectStockAdjustmentRequest'
+      responses:
+        '204':
+          description: No Content
+  /api/v1/inventory/stock-take/sessions/{sessionId}/adjustment-requests/{requestId}/approve:
+    post:
+      tags:
+      - stock-take-controller
+      operationId: approveRequest
+      parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: requestId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveStockAdjustmentRequest'
+      responses:
+        '204':
+          description: No Content
+  /api/v1/inventory/stock-increase:
+    post:
+      tags:
+      - inventory-controller
+      operationId: stockIncrease
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostStockIncreaseRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/InventoryMutationResponse'
+  /api/v1/inventory/opening-balance:
+    post:
+      tags:
+      - inventory-controller
+      operationId: openingBalance
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostOpeningBalanceRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/InventoryMutationResponse'
+  /api/v1/inventory/batch-decrease:
+    post:
+      tags:
+      - inventory-controller
+      operationId: batchDecrease
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostBatchDecreaseRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/InventoryMutationResponse'
   /api/v1/categories:
     get:
       tags:
       - categories-controller
-      operationId: list_2
+      operationId: list_4
       responses:
         '200':
           description: OK
@@ -436,7 +1212,7 @@ paths:
     post:
       tags:
       - categories-controller
-      operationId: create_2
+      operationId: create_4
       requestBody:
         content:
           application/json:
@@ -450,6 +1226,86 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/CategoryResponse'
+  /api/v1/branches:
+    get:
+      tags:
+      - branches-controller
+      operationId: list_5
+      parameters:
+      - name: pageable
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/Pageable'
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PageBranchResponse'
+    post:
+      tags:
+      - branches-controller
+      operationId: create_5
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBranchRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/BranchResponse'
+  /api/v1/auth/verify-email:
+    post:
+      tags:
+      - auth-controller
+      operationId: verifyEmail
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyEmailRequest'
+        required: true
+      responses:
+        '204':
+          description: No Content
+  /api/v1/auth/resend-verification:
+    post:
+      tags:
+      - auth-controller
+      operationId: resendVerification
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordForgotRequest'
+      responses:
+        '204':
+          description: No Content
+  /api/v1/auth/register:
+    post:
+      tags:
+      - auth-controller
+      operationId: register
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
   /api/v1/auth/refresh:
     post:
       tags:
@@ -543,10 +1399,6 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/LoginResponse'
-        '403':
-          description: Email not verified (self-registered user still invited)
-        '401':
-          description: Invalid credentials
   /api/v1/auth/login-pin:
     post:
       tags:
@@ -565,66 +1417,11 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/LoginResponse'
-        '403':
-          description: Email not verified (self-registered user still invited)
-        '401':
-          description: Invalid credentials
-  /api/v1/auth/register:
-    post:
-      tags:
-      - auth-controller
-      operationId: register
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RegisterRequest'
-        required: true
-      responses:
-        '201':
-          description: Created
-          content:
-            '*/*':
-              schema:
-                $ref: '#/components/schemas/RegisterResponse'
-        '403':
-          description: Self-signup disabled
-        '409':
-          description: Email already registered for tenant
-  /api/v1/auth/verify-email:
-    post:
-      tags:
-      - auth-controller
-      operationId: verifyEmail
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/VerifyEmailRequest'
-        required: true
-      responses:
-        '204':
-          description: No Content
-        '401':
-          description: Invalid or expired token
-  /api/v1/auth/resend-verification:
-    post:
-      tags:
-      - auth-controller
-      operationId: resendVerification
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/PasswordForgotRequest'
-      responses:
-        '204':
-          description: No Content (always; no enumeration)
   /api/v1/api-keys:
     get:
       tags:
       - api-key-controller
-      operationId: list_3
+      operationId: list_6
       parameters:
       - name: pageable
         in: query
@@ -641,7 +1438,7 @@ paths:
     post:
       tags:
       - api-key-controller
-      operationId: create_3
+      operationId: create_6
       requestBody:
         content:
           application/json:
@@ -659,7 +1456,7 @@ paths:
     get:
       tags:
       - aisles-controller
-      operationId: list_4
+      operationId: list_7
       responses:
         '200':
           description: OK
@@ -672,7 +1469,7 @@ paths:
     post:
       tags:
       - aisles-controller
-      operationId: create_4
+      operationId: create_7
       requestBody:
         content:
           application/json:
@@ -727,7 +1524,108 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/UserResponse'
+  /api/v1/suppliers/{supplierId}:
+    get:
+      tags:
+      - suppliers-controller
+      operationId: get
+      parameters:
+      - name: supplierId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/SupplierResponse'
+    patch:
+      tags:
+      - suppliers-controller
+      operationId: patch
+      parameters:
+      - name: supplierId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchSupplierRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/SupplierResponse'
+  /api/v1/suppliers/{supplierId}/contacts/{contactId}:
+    delete:
+      tags:
+      - suppliers-controller
+      operationId: deleteContact
+      parameters:
+      - name: supplierId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: contactId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: No Content
+    patch:
+      tags:
+      - suppliers-controller
+      operationId: patchContact
+      parameters:
+      - name: supplierId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: contactId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchSupplierContactRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/SupplierContactResponse'
   /api/v1/super-admin/businesses/{businessId}:
+    delete:
+      tags:
+      - super-admin-business-controller
+      operationId: deleteBusiness
+      parameters:
+      - name: businessId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: No Content
     patch:
       tags:
       - super-admin-business-controller
@@ -751,22 +1649,6 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/BusinessResponse'
-    delete:
-      tags:
-      - super-admin-business-controller
-      operationId: deleteBusiness
-      summary: Soft-delete tenant, users, and related tenancy data
-      parameters:
-      - name: businessId
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '204':
-          description: No Content
-        '404':
-          description: Business not found or already deleted
   /api/v1/roles/{roleId}:
     patch:
       tags:
@@ -860,7 +1742,7 @@ paths:
     patch:
       tags:
       - items-controller
-      operationId: patch
+      operationId: patch_1
       parameters:
       - name: id
         in: path
@@ -880,11 +1762,35 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/ItemResponse'
+  /api/v1/inventory/stock-take/sessions/{sessionId}/lines:
+    patch:
+      tags:
+      - stock-take-controller
+      operationId: applyCounts
+      parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchStockTakeCountsRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/StockTakeSessionResponse'
   /api/v1/categories/{id}:
     patch:
       tags:
       - categories-controller
-      operationId: patch_1
+      operationId: patch_2
       parameters:
       - name: id
         in: path
@@ -933,48 +1839,11 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/BusinessResponse'
-  /api/v1/branches:
-    get:
-      tags:
-      - branches-controller
-      operationId: listBranches
-      parameters:
-      - name: pageable
-        in: query
-        required: true
-        schema:
-          $ref: '#/components/schemas/Pageable'
-      responses:
-        '200':
-          description: OK
-          content:
-            '*/*':
-              schema:
-                $ref: '#/components/schemas/PageBranchResponse'
-    post:
-      tags:
-      - branches-controller
-      operationId: createBranch
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreateBranchRequest'
-        required: true
-      responses:
-        '201':
-          description: Created
-          content:
-            '*/*':
-              schema:
-                $ref: '#/components/schemas/BranchResponse'
-        '403':
-          description: Missing business.manage_settings
   /api/v1/branches/{branchId}:
     patch:
       tags:
       - branches-controller
-      operationId: patchBranch
+      operationId: patch_3
       parameters:
       - name: branchId
         in: path
@@ -994,6 +1863,241 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/BranchResponse'
+  /api/v1/shifts/current:
+    get:
+      tags:
+      - shifts-controller
+      operationId: currentShift
+      parameters:
+      - name: branchId
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ShiftResponse'
+  /api/v1/sales/{saleId}/receipt/thermal:
+    get:
+      tags:
+      - sales-controller
+      operationId: receiptThermal
+      parameters:
+      - name: saleId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: widthMm
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 58
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: byte
+  /api/v1/sales/{saleId}/receipt.pdf:
+    get:
+      tags:
+      - sales-controller
+      operationId: receiptPdf
+      parameters:
+      - name: saleId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: byte
+  /api/v1/purchasing/path-b/sessions/{sessionId}:
+    get:
+      tags:
+      - path-b-purchasing-controller
+      operationId: get_1
+      parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PathBSessionDetailResponse'
+  /api/v1/purchasing/path-a/purchase-orders/{purchaseOrderId}:
+    get:
+      tags:
+      - path-a-purchasing-controller
+      operationId: getPurchaseOrder
+      parameters:
+      - name: purchaseOrderId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/PathAPurchaseOrderDetailResponse'
+  /api/v1/purchasing/open-supplier-invoices:
+    get:
+      tags:
+      - supplier-payments-controller
+      operationId: openSupplierInvoices
+      parameters:
+      - name: supplierId
+        in: query
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OpenSupplierInvoiceRow'
+  /api/v1/purchasing/intelligence/spend-by-supplier-category:
+    get:
+      tags:
+      - supplier-intelligence-controller
+      operationId: spendBySupplierCategory
+      parameters:
+      - name: from
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: to
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SpendBySupplierCategoryRow'
+  /api/v1/purchasing/intelligence/single-source-risk:
+    get:
+      tags:
+      - supplier-intelligence-controller
+      operationId: singleSourceRisk
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SingleSourceRiskRow'
+  /api/v1/purchasing/intelligence/price-competitiveness:
+    get:
+      tags:
+      - supplier-intelligence-controller
+      operationId: priceCompetitiveness
+      parameters:
+      - name: from
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: to
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PriceCompetitivenessRow'
+  /api/v1/purchasing/ap-aging:
+    get:
+      tags:
+      - supplier-payments-controller
+      operationId: apAging
+      parameters:
+      - name: asOf
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: supplierId
+        in: query
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ApAgingTotalsResponse'
+  /api/v1/pricing/suggest/sell:
+    get:
+      tags:
+      - pricing-controller
+      operationId: suggestSell
+      parameters:
+      - name: itemId
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: supplierId
+        in: query
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/SellPriceSuggestionResponse'
   /api/v1/permissions:
     get:
       tags:
@@ -1008,6 +2112,75 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/PermissionResponse'
+  /api/v1/inventory/valuation:
+    get:
+      tags:
+      - inventory-controller
+      operationId: valuation
+      parameters:
+      - name: branchId
+        in: query
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/InventoryValuationResponse'
+  /api/v1/inventory/stock-take/sessions/{sessionId}:
+    get:
+      tags:
+      - stock-take-controller
+      operationId: getSession
+      parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/StockTakeSessionResponse'
+  /api/v1/inventory/allocation-preview:
+    get:
+      tags:
+      - inventory-controller
+      operationId: allocationPreview
+      parameters:
+      - name: itemId
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+      - name: branchId
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+      - name: quantity
+        in: query
+        required: true
+        schema:
+          type: number
+          minimum: 1.0E-4
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BatchAllocationLine'
   /api/v1/__test/permission-cache-probe:
     get:
       tags:
@@ -1020,6 +2193,44 @@ paths:
             '*/*':
               schema:
                 type: string
+  /api/v1/items/{itemId}/supplier-links/{linkId}:
+    delete:
+      tags:
+      - item-supplier-links-controller
+      operationId: remove
+      parameters:
+      - name: itemId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: linkId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: No Content
+  /api/v1/items/{id}/images/{imageId}:
+    delete:
+      tags:
+      - items-controller
+      operationId: deleteItemImage
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: imageId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: No Content
   /api/v1/api-keys/{id}:
     delete:
       tags:
@@ -1036,6 +2247,36 @@ paths:
           description: No Content
 components:
   schemas:
+    PutPriceRuleRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        ruleType:
+          type: string
+          minLength: 1
+        paramsJson:
+          type: string
+        active:
+          type: boolean
+      required:
+      - name
+      - paramsJson
+      - ruleType
+    PriceRuleResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        ruleType:
+          type: string
+        paramsJson:
+          type: string
+        active:
+          type: boolean
     CreateUserRequest:
       type: object
       properties:
@@ -1127,6 +2368,131 @@ components:
           minLength: 0
       required:
       - roleId
+    CreateSupplierRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          minLength: 0
+        code:
+          type: string
+          maxLength: 64
+          minLength: 0
+        supplierType:
+          type: string
+          maxLength: 32
+          minLength: 0
+        vatPin:
+          type: string
+          maxLength: 64
+          minLength: 0
+        taxExempt:
+          type: boolean
+        creditTermsDays:
+          type: integer
+          format: int32
+        creditLimit:
+          type: number
+        status:
+          type: string
+          maxLength: 16
+          minLength: 0
+        notes:
+          type: string
+          maxLength: 5000
+          minLength: 0
+        paymentMethodPreferred:
+          type: string
+          maxLength: 32
+          minLength: 0
+        paymentDetails:
+          type: string
+          maxLength: 2000
+          minLength: 0
+      required:
+      - name
+    SupplierResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        code:
+          type: string
+        supplierType:
+          type: string
+        vatPin:
+          type: string
+        taxExempt:
+          type: boolean
+        creditTermsDays:
+          type: integer
+          format: int32
+        creditLimit:
+          type: number
+        rating:
+          type: number
+        status:
+          type: string
+        notes:
+          type: string
+        paymentMethodPreferred:
+          type: string
+        paymentDetails:
+          type: string
+        version:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateSupplierContactRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          minLength: 0
+        roleLabel:
+          type: string
+          maxLength: 128
+          minLength: 0
+        phone:
+          type: string
+          maxLength: 64
+          minLength: 0
+        email:
+          type: string
+          maxLength: 255
+          minLength: 0
+        primaryContact:
+          type: boolean
+    SupplierContactResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        roleLabel:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+        primaryContact:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
     CreateBusinessRequest:
       type: object
       properties:
@@ -1235,6 +2601,270 @@ components:
           type: string
         name:
           type: string
+    PostCloseShiftRequest:
+      type: object
+      properties:
+        countedClosingCash:
+          type: number
+          minimum: 0
+        notes:
+          type: string
+      required:
+      - countedClosingCash
+    ShiftResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        branchId:
+          type: string
+        status:
+          type: string
+        openingCash:
+          type: number
+        expectedClosingCash:
+          type: number
+        countedClosingCash:
+          type: number
+        closingVariance:
+          type: number
+        openingNotes:
+          type: string
+        closingNotes:
+          type: string
+        openedBy:
+          type: string
+        closedBy:
+          type: string
+        openedAt:
+          type: string
+          format: date-time
+        closedAt:
+          type: string
+          format: date-time
+        closeJournalEntryId:
+          type: string
+    PostOpenShiftRequest:
+      type: object
+      properties:
+        branchId:
+          type: string
+          minLength: 1
+        openingCash:
+          type: number
+          minimum: 0
+        notes:
+          type: string
+      required:
+      - branchId
+      - openingCash
+    PostSaleLineRequest:
+      type: object
+      properties:
+        itemId:
+          type: string
+          minLength: 1
+        quantity:
+          type: number
+        unitPrice:
+          type: number
+      required:
+      - itemId
+      - quantity
+      - unitPrice
+    PostSalePaymentRequest:
+      type: object
+      properties:
+        method:
+          type: string
+          minLength: 1
+        amount:
+          type: number
+        reference:
+          type: string
+      required:
+      - amount
+      - method
+    PostSaleRequest:
+      type: object
+      properties:
+        branchId:
+          type: string
+          minLength: 1
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/PostSaleLineRequest'
+          minItems: 1
+        payments:
+          type: array
+          items:
+            $ref: '#/components/schemas/PostSalePaymentRequest'
+          minItems: 1
+      required:
+      - branchId
+      - lines
+      - payments
+    SaleItemResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        lineIndex:
+          type: integer
+          format: int32
+        itemId:
+          type: string
+        batchId:
+          type: string
+        quantity:
+          type: number
+        unitPrice:
+          type: number
+        lineTotal:
+          type: number
+        unitCost:
+          type: number
+        costTotal:
+          type: number
+        profit:
+          type: number
+    SalePaymentResponse:
+      type: object
+      properties:
+        method:
+          type: string
+        amount:
+          type: number
+        reference:
+          type: string
+    SaleResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        branchId:
+          type: string
+        shiftId:
+          type: string
+        status:
+          type: string
+        grandTotal:
+          type: number
+        refundedTotal:
+          type: number
+        journalEntryId:
+          type: string
+        payments:
+          type: array
+          items:
+            $ref: '#/components/schemas/SalePaymentResponse'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SaleItemResponse'
+        voidedAt:
+          type: string
+          format: date-time
+        voidedBy:
+          type: string
+        voidJournalEntryId:
+          type: string
+        voidNotes:
+          type: string
+    PostVoidSaleRequest:
+      type: object
+      properties:
+        notes:
+          type: string
+    PostRefundLineRequest:
+      type: object
+      properties:
+        saleItemId:
+          type: string
+          minLength: 1
+        quantity:
+          type: number
+      required:
+      - quantity
+      - saleItemId
+    PostRefundPaymentRequest:
+      type: object
+      properties:
+        method:
+          type: string
+          minLength: 1
+        amount:
+          type: number
+        reference:
+          type: string
+      required:
+      - amount
+      - method
+    PostRefundRequest:
+      type: object
+      properties:
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/PostRefundLineRequest'
+          minItems: 1
+        payments:
+          type: array
+          items:
+            $ref: '#/components/schemas/PostRefundPaymentRequest'
+          minItems: 1
+        reason:
+          type: string
+          minLength: 1
+      required:
+      - lines
+      - payments
+      - reason
+    RefundLineResponse:
+      type: object
+      properties:
+        saleItemId:
+          type: string
+        quantity:
+          type: number
+        amount:
+          type: number
+    RefundPaymentResponse:
+      type: object
+      properties:
+        method:
+          type: string
+        amount:
+          type: number
+        reference:
+          type: string
+    RefundResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        saleId:
+          type: string
+        totalRefunded:
+          type: number
+        journalEntryId:
+          type: string
+        refundedAt:
+          type: string
+          format: date-time
+        reason:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/RefundLineResponse'
+        payments:
+          type: array
+          items:
+            $ref: '#/components/schemas/RefundPaymentResponse'
+        sale:
+          $ref: '#/components/schemas/SaleResponse'
     CreateRoleRequest:
       type: object
       properties:
@@ -1279,6 +2909,465 @@ components:
           type: array
           items:
             type: string
+    PostSupplierPaymentAllocationLine:
+      type: object
+      properties:
+        supplierInvoiceId:
+          type: string
+          minLength: 1
+        amount:
+          type: number
+      required:
+      - amount
+      - supplierInvoiceId
+    PostSupplierPaymentRequest:
+      type: object
+      properties:
+        supplierId:
+          type: string
+          minLength: 1
+        paidAt:
+          type: string
+          format: date-time
+        paymentMethod:
+          type: string
+          minLength: 1
+        paymentAmount:
+          type: number
+        creditApplied:
+          type: number
+        reference:
+          type: string
+        notes:
+          type: string
+        allocations:
+          type: array
+          items:
+            $ref: '#/components/schemas/PostSupplierPaymentAllocationLine'
+          minItems: 1
+      required:
+      - allocations
+      - creditApplied
+      - paidAt
+      - paymentAmount
+      - paymentMethod
+      - supplierId
+    PostSupplierPaymentResponse:
+      type: object
+      properties:
+        supplierPaymentId:
+          type: string
+        journalEntryId:
+          type: string
+        totalAllocated:
+          type: number
+        supplierPrepaymentBalanceAfter:
+          type: number
+    CreatePathBSessionRequest:
+      type: object
+      properties:
+        supplierId:
+          type: string
+          maxLength: 36
+          minLength: 0
+        branchId:
+          type: string
+          maxLength: 36
+          minLength: 0
+        receivedAt:
+          type: string
+          format: date-time
+        notes:
+          type: string
+          maxLength: 5000
+          minLength: 0
+      required:
+      - branchId
+      - receivedAt
+      - supplierId
+    PathBLineResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        sortOrder:
+          type: integer
+          format: int32
+        descriptionText:
+          type: string
+        amountMoney:
+          type: number
+        suggestedItemId:
+          type: string
+        lineStatus:
+          type: string
+    PathBSessionDetailResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        supplierId:
+          type: string
+        branchId:
+          type: string
+        receivedAt:
+          type: string
+          format: date-time
+        notes:
+          type: string
+        status:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/PathBLineResponse'
+    PostPathBLineBreakdown:
+      type: object
+      properties:
+        lineId:
+          type: string
+          maxLength: 36
+          minLength: 0
+        itemId:
+          type: string
+          maxLength: 36
+          minLength: 0
+        usableQty:
+          type: number
+        wastageQty:
+          type: number
+      required:
+      - itemId
+      - lineId
+      - usableQty
+      - wastageQty
+    PostPathBRequest:
+      type: object
+      properties:
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/PostPathBLineBreakdown'
+          minItems: 1
+      required:
+      - lines
+    PostPathBResponse:
+      type: object
+      properties:
+        supplierInvoiceId:
+          type: string
+        invoiceNumber:
+          type: string
+        journalEntryId:
+          type: string
+        grandTotal:
+          type: number
+        linesPosted:
+          type: integer
+          format: int32
+    AddPathBLineRequest:
+      type: object
+      properties:
+        description:
+          type: string
+          maxLength: 2000
+          minLength: 0
+        amountMoney:
+          type: number
+        suggestedItemId:
+          type: string
+          maxLength: 36
+          minLength: 0
+      required:
+      - amountMoney
+      - description
+    CreatePathAPurchaseOrderRequest:
+      type: object
+      properties:
+        supplierId:
+          type: string
+          minLength: 1
+        branchId:
+          type: string
+          minLength: 1
+        expectedDate:
+          type: string
+          format: date
+        poNumber:
+          type: string
+        notes:
+          type: string
+      required:
+      - branchId
+      - supplierId
+    PathAPurchaseOrderDetailResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        supplierId:
+          type: string
+        branchId:
+          type: string
+        poNumber:
+          type: string
+        expectedDate:
+          type: string
+          format: date
+        status:
+          type: string
+        notes:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/PathAPurchaseOrderLineResponse'
+    PathAPurchaseOrderLineResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        sortOrder:
+          type: integer
+          format: int32
+        itemId:
+          type: string
+        qtyOrdered:
+          type: number
+        qtyReceived:
+          type: number
+        unitEstimatedCost:
+          type: number
+    AddPathAPurchaseOrderLineRequest:
+      type: object
+      properties:
+        itemId:
+          type: string
+          minLength: 1
+        qtyOrdered:
+          type: number
+        unitEstimatedCost:
+          type: number
+      required:
+      - itemId
+      - qtyOrdered
+      - unitEstimatedCost
+    PostGoodsReceiptLineInput:
+      type: object
+      properties:
+        purchaseOrderLineId:
+          type: string
+          minLength: 1
+        qtyReceived:
+          type: number
+      required:
+      - purchaseOrderLineId
+      - qtyReceived
+    PostGoodsReceiptRequest:
+      type: object
+      properties:
+        purchaseOrderId:
+          type: string
+          minLength: 1
+        branchId:
+          type: string
+          minLength: 1
+        receivedAt:
+          type: string
+          format: date-time
+        notes:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/PostGoodsReceiptLineInput'
+          minItems: 1
+      required:
+      - branchId
+      - lines
+      - purchaseOrderId
+      - receivedAt
+    PostGoodsReceiptResponse:
+      type: object
+      properties:
+        goodsReceiptId:
+          type: string
+        grniAmount:
+          type: number
+        lineCount:
+          type: integer
+          format: int32
+    PostGrnSupplierInvoiceLineInput:
+      type: object
+      properties:
+        itemId:
+          type: string
+          minLength: 1
+        qty:
+          type: number
+        unitCost:
+          type: number
+        lineTotal:
+          type: number
+      required:
+      - itemId
+      - lineTotal
+      - qty
+      - unitCost
+    PostGrnSupplierInvoiceRequest:
+      type: object
+      properties:
+        invoiceNumber:
+          type: string
+          minLength: 1
+        invoiceDate:
+          type: string
+          format: date
+        dueDate:
+          type: string
+          format: date
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/PostGrnSupplierInvoiceLineInput'
+          minItems: 1
+      required:
+      - invoiceDate
+      - invoiceNumber
+      - lines
+    PostGrnSupplierInvoiceResponse:
+      type: object
+      properties:
+        supplierInvoiceId:
+          type: string
+        invoiceNumber:
+          type: string
+        journalEntryId:
+          type: string
+        grandTotal:
+          type: number
+    PostTaxRateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        ratePercent:
+          type: number
+          minimum: 0
+        inclusive:
+          type: boolean
+        active:
+          type: boolean
+      required:
+      - name
+      - ratePercent
+    TaxRateResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        ratePercent:
+          type: number
+        inclusive:
+          type: boolean
+    PostSellingPriceRequest:
+      type: object
+      properties:
+        itemId:
+          type: string
+          minLength: 1
+        branchId:
+          type: string
+        price:
+          type: number
+          minimum: 0.01
+        effectiveFrom:
+          type: string
+          format: date
+        notes:
+          type: string
+      required:
+      - effectiveFrom
+      - itemId
+      - price
+    SellingPriceResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        itemId:
+          type: string
+        branchId:
+          type: string
+        price:
+          type: number
+        effectiveFrom:
+          type: string
+          format: date
+        effectiveTo:
+          type: string
+          format: date
+    PostPriceRuleRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        ruleType:
+          type: string
+          minLength: 1
+        paramsJson:
+          type: string
+        active:
+          type: boolean
+      required:
+      - name
+      - paramsJson
+      - ruleType
+    PostBuyingPriceRequest:
+      type: object
+      properties:
+        itemId:
+          type: string
+          minLength: 1
+        supplierId:
+          type: string
+          minLength: 1
+        unitCost:
+          type: number
+          minimum: 1.0E-4
+        effectiveFrom:
+          type: string
+          format: date
+        sourceType:
+          type: string
+        notes:
+          type: string
+      required:
+      - effectiveFrom
+      - itemId
+      - supplierId
+      - unitCost
+    BuyingPriceResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        itemId:
+          type: string
+        supplierId:
+          type: string
+        unitCost:
+          type: number
+        effectiveFrom:
+          type: string
+          format: date
+        effectiveTo:
+          type: string
+          format: date
     CreateItemRequest:
       type: object
       properties:
@@ -1354,6 +3443,29 @@ components:
       - itemTypeId
       - name
       - sku
+    ItemImageResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        s3Key:
+          type: string
+        width:
+          type: integer
+          format: int32
+        height:
+          type: integer
+          format: int32
+        sortOrder:
+          type: integer
+          format: int32
+        contentType:
+          type: string
+        altText:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
     ItemResponse:
       type: object
       properties:
@@ -1441,6 +3553,49 @@ components:
           type: boolean
         variantOfItemId:
           type: string
+    AddItemSupplierLinkRequest:
+      type: object
+      properties:
+        supplierId:
+          type: string
+          maxLength: 36
+          minLength: 0
+        supplierSku:
+          type: string
+          maxLength: 191
+          minLength: 0
+        defaultCostPrice:
+          type: number
+        setPrimary:
+          type: boolean
+      required:
+      - supplierId
+    ItemSupplierLinkResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        supplierId:
+          type: string
+        supplierName:
+          type: string
+        primary:
+          type: boolean
+        supplierSku:
+          type: string
+        defaultCostPrice:
+          type: number
+        active:
+          type: boolean
+        version:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
     CreateVariantRequest:
       type: object
       properties:
@@ -1495,60 +3650,38 @@ components:
       required:
       - sku
       - variantName
-    ItemImageResponse:
-      type: object
-      properties:
-        id:
-          type: string
-        s3Key:
-          type: string
-        width:
-          type: integer
-          format: int32
-        height:
-          type: integer
-          format: int32
-        sortOrder:
-          type: integer
-          format: int32
-        contentType:
-          type: string
-        altText:
-          type: string
-        createdAt:
-          type: string
-          format: date-time
     RegisterItemImageRequest:
       type: object
       properties:
         s3Key:
           type: string
           maxLength: 500
-          minLength: 1
+          minLength: 0
         sortOrder:
           type: integer
           format: int32
-          minimum: 0
           maximum: 9999
+          minimum: 0
         width:
           type: integer
           format: int32
-          minimum: 1
           maximum: 32767
+          minimum: 1
         height:
           type: integer
           format: int32
-          minimum: 1
           maximum: 32767
+          minimum: 1
         contentType:
           type: string
           maxLength: 128
+          minLength: 0
         altText:
           type: string
           maxLength: 500
+          minLength: 0
         primary:
           type: boolean
-          description: When true, sets the item cover imageKey to s3Key
       required:
       - s3Key
     CreateItemTypeRequest:
@@ -1594,6 +3727,215 @@ components:
           format: int32
         active:
           type: boolean
+    PostStandaloneWastageRequest:
+      type: object
+      properties:
+        branchId:
+          type: string
+          minLength: 1
+        itemId:
+          type: string
+          minLength: 1
+        quantity:
+          type: number
+          minimum: 1.0E-4
+        unitCost:
+          type: number
+          minimum: 1.0E-4
+        reason:
+          type: string
+          maxLength: 255
+          minLength: 0
+      required:
+      - branchId
+      - itemId
+      - quantity
+      - unitCost
+    InventoryMutationResponse:
+      type: object
+      properties:
+        journalEntryId:
+          type: string
+        stockMovementId:
+          type: string
+        inventoryBatchId:
+          type: string
+    Line:
+      type: object
+      properties:
+        itemId:
+          type: string
+          minLength: 1
+        quantity:
+          type: number
+          minimum: 1.0E-4
+      required:
+      - itemId
+      - quantity
+    PostStockTransferRequest:
+      type: object
+      properties:
+        fromBranchId:
+          type: string
+          minLength: 1
+        toBranchId:
+          type: string
+          minLength: 1
+        notes:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/Line'
+          minItems: 1
+      required:
+      - fromBranchId
+      - lines
+      - toBranchId
+    StockTransferCreatedResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+    PostStartStockTakeSessionRequest:
+      type: object
+      properties:
+        branchId:
+          type: string
+          minLength: 1
+        notes:
+          type: string
+      required:
+      - branchId
+    StockAdjustmentRequestResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        stockTakeLineId:
+          type: string
+        itemId:
+          type: string
+        varianceQty:
+          type: number
+        systemQtySnapshot:
+          type: number
+        countedQty:
+          type: number
+        status:
+          type: string
+    StockTakeLineResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        itemId:
+          type: string
+        systemQtySnapshot:
+          type: number
+        countedQty:
+          type: number
+        note:
+          type: string
+    StockTakeSessionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        branchId:
+          type: string
+        status:
+          type: string
+        notes:
+          type: string
+        closedAt:
+          type: string
+          format: date-time
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/StockTakeLineResponse'
+        adjustmentRequests:
+          type: array
+          items:
+            $ref: '#/components/schemas/StockAdjustmentRequestResponse'
+    RejectStockAdjustmentRequest:
+      type: object
+      properties:
+        notes:
+          type: string
+    ApproveStockAdjustmentRequest:
+      type: object
+      properties:
+        unitCost:
+          type: number
+          minimum: 1.0E-4
+    PostStockIncreaseRequest:
+      type: object
+      properties:
+        branchId:
+          type: string
+          minLength: 1
+        itemId:
+          type: string
+          minLength: 1
+        quantity:
+          type: number
+          minimum: 1.0E-4
+        unitCost:
+          type: number
+          minimum: 1.0E-4
+        notes:
+          type: string
+          maxLength: 2000
+          minLength: 0
+      required:
+      - branchId
+      - itemId
+      - quantity
+      - unitCost
+    PostOpeningBalanceRequest:
+      type: object
+      properties:
+        branchId:
+          type: string
+          minLength: 1
+        itemId:
+          type: string
+          minLength: 1
+        quantity:
+          type: number
+          minimum: 1.0E-4
+        unitCost:
+          type: number
+          minimum: 1.0E-4
+        notes:
+          type: string
+          maxLength: 2000
+          minLength: 0
+      required:
+      - branchId
+      - itemId
+      - quantity
+      - unitCost
+    PostBatchDecreaseRequest:
+      type: object
+      properties:
+        batchId:
+          type: string
+          minLength: 1
+        quantity:
+          type: number
+          minimum: 1.0E-4
+        reason:
+          type: string
+          maxLength: 255
+          minLength: 0
+      required:
+      - batchId
+      - quantity
     CreateCategoryRequest:
       type: object
       properties:
@@ -1632,6 +3974,84 @@ components:
           type: string
         active:
           type: boolean
+    CreateBranchRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          minLength: 0
+        address:
+          type: string
+          maxLength: 500
+          minLength: 0
+      required:
+      - name
+    BranchResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        businessId:
+          type: string
+        name:
+          type: string
+        address:
+          type: string
+        active:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    VerifyEmailRequest:
+      type: object
+      properties:
+        token:
+          type: string
+          maxLength: 512
+          minLength: 16
+      required:
+      - token
+    PasswordForgotRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 191
+          minLength: 0
+    RegisterRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 191
+          minLength: 0
+        name:
+          type: string
+          maxLength: 255
+          minLength: 1
+        password:
+          type: string
+          maxLength: 191
+          minLength: 8
+      required:
+      - email
+      - name
+      - password
+    RegisterResponse:
+      type: object
+      properties:
+        userId:
+          type: string
+        email:
+          type: string
+        status:
+          type: string
     RefreshRequest:
       type: object
       properties:
@@ -1680,14 +4100,6 @@ components:
       required:
       - newPassword
       - token
-    PasswordForgotRequest:
-      type: object
-      properties:
-        email:
-          type: string
-          format: email
-          maxLength: 191
-          minLength: 0
     PasswordChangeRequest:
       type: object
       properties:
@@ -1737,45 +4149,6 @@ components:
       - branchId
       - email
       - pin
-    RegisterRequest:
-      type: object
-      properties:
-        email:
-          type: string
-          format: email
-          maxLength: 191
-        name:
-          type: string
-          maxLength: 255
-          minLength: 1
-        password:
-          type: string
-          maxLength: 191
-          minLength: 8
-      required:
-      - email
-      - name
-      - password
-    RegisterResponse:
-      type: object
-      properties:
-        userId:
-          type: string
-        email:
-          type: string
-          format: email
-        status:
-          type: string
-          description: invited when email verification is required; active when verification is disabled
-    VerifyEmailRequest:
-      type: object
-      properties:
-        token:
-          type: string
-          minLength: 16
-          maxLength: 512
-      required:
-      - token
     CreateApiKeyRequest:
       type: object
       properties:
@@ -1859,6 +4232,69 @@ components:
           type: string
           maxLength: 32
           minLength: 0
+    PatchSupplierRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          minLength: 0
+        code:
+          type: string
+          maxLength: 64
+          minLength: 0
+        supplierType:
+          type: string
+          maxLength: 32
+          minLength: 0
+        vatPin:
+          type: string
+          maxLength: 64
+          minLength: 0
+        taxExempt:
+          type: boolean
+        creditTermsDays:
+          type: integer
+          format: int32
+        creditLimit:
+          type: number
+        status:
+          type: string
+          maxLength: 16
+          minLength: 0
+        notes:
+          type: string
+          maxLength: 5000
+          minLength: 0
+        paymentMethodPreferred:
+          type: string
+          maxLength: 32
+          minLength: 0
+        paymentDetails:
+          type: string
+          maxLength: 2000
+          minLength: 0
+    PatchSupplierContactRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          minLength: 0
+        roleLabel:
+          type: string
+          maxLength: 128
+          minLength: 0
+        phone:
+          type: string
+          maxLength: 64
+          minLength: 0
+        email:
+          type: string
+          maxLength: 255
+          minLength: 0
+        primaryContact:
+          type: boolean
     UpdateBusinessRequest:
       type: object
       properties:
@@ -1965,6 +4401,28 @@ components:
           minLength: 0
         active:
           type: boolean
+    LineCounted:
+      type: object
+      properties:
+        lineId:
+          type: string
+          minLength: 1
+        countedQty:
+          type: number
+          minimum: 0
+      required:
+      - countedQty
+      - lineId
+    PatchStockTakeCountsRequest:
+      type: object
+      properties:
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/LineCounted'
+          minItems: 1
+      required:
+      - lines
     PatchCategoryRequest:
       type: object
       properties:
@@ -1989,6 +4447,19 @@ components:
           type: string
           maxLength: 500
           minLength: 0
+    PatchBranchRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          minLength: 0
+        address:
+          type: string
+          maxLength: 500
+          minLength: 0
+        active:
+          type: boolean
     Pageable:
       type: object
       properties:
@@ -2013,8 +4484,6 @@ components:
         totalElements:
           type: integer
           format: int64
-        pageable:
-          $ref: '#/components/schemas/PageableObject'
         first:
           type: boolean
         last:
@@ -2022,6 +4491,8 @@ components:
         numberOfElements:
           type: integer
           format: int32
+        pageable:
+          $ref: '#/components/schemas/PageableObject'
         size:
           type: integer
           format: int32
@@ -2035,83 +4506,6 @@ components:
         sort:
           $ref: '#/components/schemas/SortObject'
         empty:
-          type: boolean
-    PageBranchResponse:
-      type: object
-      properties:
-        totalPages:
-          type: integer
-          format: int32
-        totalElements:
-          type: integer
-          format: int64
-        pageable:
-          $ref: '#/components/schemas/PageableObject'
-        first:
-          type: boolean
-        last:
-          type: boolean
-        numberOfElements:
-          type: integer
-          format: int32
-        size:
-          type: integer
-          format: int32
-        content:
-          type: array
-          items:
-            $ref: '#/components/schemas/BranchResponse'
-        number:
-          type: integer
-          format: int32
-        sort:
-          $ref: '#/components/schemas/SortObject'
-        empty:
-          type: boolean
-    BranchResponse:
-      type: object
-      properties:
-        id:
-          type: string
-        businessId:
-          type: string
-        name:
-          type: string
-        address:
-          type: string
-        active:
-          type: boolean
-        createdAt:
-          type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
-    CreateBranchRequest:
-      type: object
-      properties:
-        name:
-          type: string
-          maxLength: 255
-          minLength: 1
-        address:
-          type: string
-          maxLength: 500
-          minLength: 0
-      required:
-      - name
-    PatchBranchRequest:
-      type: object
-      properties:
-        name:
-          type: string
-          maxLength: 255
-          minLength: 0
-        address:
-          type: string
-          maxLength: 500
-          minLength: 0
-        active:
           type: boolean
     PageableObject:
       type: object
@@ -2134,10 +4528,42 @@ components:
     SortObject:
       type: object
       properties:
-        unsorted:
-          type: boolean
         sorted:
           type: boolean
+        unsorted:
+          type: boolean
+        empty:
+          type: boolean
+    PageSupplierResponse:
+      type: object
+      properties:
+        totalPages:
+          type: integer
+          format: int32
+        totalElements:
+          type: integer
+          format: int64
+        first:
+          type: boolean
+        last:
+          type: boolean
+        numberOfElements:
+          type: integer
+          format: int32
+        pageable:
+          $ref: '#/components/schemas/PageableObject'
+        size:
+          type: integer
+          format: int32
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/SupplierResponse'
+        number:
+          type: integer
+          format: int32
+        sort:
+          $ref: '#/components/schemas/SortObject'
         empty:
           type: boolean
     PageBusinessResponse:
@@ -2149,8 +4575,6 @@ components:
         totalElements:
           type: integer
           format: int64
-        pageable:
-          $ref: '#/components/schemas/PageableObject'
         first:
           type: boolean
         last:
@@ -2158,6 +4582,8 @@ components:
         numberOfElements:
           type: integer
           format: int32
+        pageable:
+          $ref: '#/components/schemas/PageableObject'
         size:
           type: integer
           format: int32
@@ -2172,6 +4598,112 @@ components:
           $ref: '#/components/schemas/SortObject'
         empty:
           type: boolean
+    OpenSupplierInvoiceRow:
+      type: object
+      properties:
+        id:
+          type: string
+        supplierId:
+          type: string
+        invoiceNumber:
+          type: string
+        invoiceDate:
+          type: string
+          format: date
+        dueDate:
+          type: string
+          format: date
+        grandTotal:
+          type: number
+        openBalance:
+          type: number
+    SpendBySupplierCategoryRow:
+      type: object
+      properties:
+        supplierId:
+          type: string
+        supplierName:
+          type: string
+        categoryId:
+          type: string
+        categoryName:
+          type: string
+        spendTotal:
+          type: number
+    SingleSourceRiskRow:
+      type: object
+      properties:
+        itemId:
+          type: string
+        sku:
+          type: string
+        name:
+          type: string
+        soleSupplierId:
+          type: string
+        soleSupplierName:
+          type: string
+    PriceCompetitivenessRow:
+      type: object
+      properties:
+        supplierInvoiceLineId:
+          type: string
+        supplierInvoiceId:
+          type: string
+        invoicingSupplierId:
+          type: string
+        itemId:
+          type: string
+        itemSku:
+          type: string
+        paidUnitCost:
+          type: number
+        primarySupplierId:
+          type: string
+        primaryLastCostPrice:
+          type: number
+        variancePercentVsPrimary:
+          type: number
+        purchasedFromPrimarySupplier:
+          type: boolean
+    ApAgingBuckets:
+      type: object
+      properties:
+        current:
+          type: number
+        days1To30:
+          type: number
+        days31To60:
+          type: number
+        days61To90:
+          type: number
+        daysOver90:
+          type: number
+    ApAgingTotalsResponse:
+      type: object
+      properties:
+        asOf:
+          type: string
+          format: date
+        buckets:
+          $ref: '#/components/schemas/ApAgingBuckets'
+        totalOpen:
+          type: number
+        totalSupplierPrepaymentBalance:
+          type: number
+    SellPriceSuggestionResponse:
+      type: object
+      properties:
+        latestUnitCost:
+          type: number
+        marginPercent:
+          type: number
+        ruleName:
+          type: string
+        suggestedSellPrice:
+          type: number
+        note:
+          type: string
     PermissionResponse:
       type: object
       properties:
@@ -2190,8 +4722,6 @@ components:
         totalElements:
           type: integer
           format: int64
-        pageable:
-          $ref: '#/components/schemas/PageableObject'
         first:
           type: boolean
         last:
@@ -2199,6 +4729,8 @@ components:
         numberOfElements:
           type: integer
           format: int32
+        pageable:
+          $ref: '#/components/schemas/PageableObject'
         size:
           type: integer
           format: int32
@@ -2206,6 +4738,67 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ItemSummaryResponse'
+        number:
+          type: integer
+          format: int32
+        sort:
+          $ref: '#/components/schemas/SortObject'
+        empty:
+          type: boolean
+    BranchValuationLine:
+      type: object
+      properties:
+        branchId:
+          type: string
+        branchName:
+          type: string
+        extensionValue:
+          type: number
+    InventoryValuationResponse:
+      type: object
+      properties:
+        businessId:
+          type: string
+        byBranch:
+          type: array
+          items:
+            $ref: '#/components/schemas/BranchValuationLine'
+        totalExtensionValue:
+          type: number
+    BatchAllocationLine:
+      type: object
+      properties:
+        batchId:
+          type: string
+        quantity:
+          type: number
+        unitCost:
+          type: number
+    PageBranchResponse:
+      type: object
+      properties:
+        totalPages:
+          type: integer
+          format: int32
+        totalElements:
+          type: integer
+          format: int64
+        first:
+          type: boolean
+        last:
+          type: boolean
+        numberOfElements:
+          type: integer
+          format: int32
+        pageable:
+          $ref: '#/components/schemas/PageableObject'
+        size:
+          type: integer
+          format: int32
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/BranchResponse'
         number:
           type: integer
           format: int32
@@ -2246,8 +4839,6 @@ components:
         totalElements:
           type: integer
           format: int64
-        pageable:
-          $ref: '#/components/schemas/PageableObject'
         first:
           type: boolean
         last:
@@ -2255,6 +4846,8 @@ components:
         numberOfElements:
           type: integer
           format: int32
+        pageable:
+          $ref: '#/components/schemas/PageableObject'
         size:
           type: integer
           format: int32

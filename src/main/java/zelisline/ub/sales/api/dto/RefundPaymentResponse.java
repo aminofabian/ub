@@ -1,0 +1,6 @@
+package zelisline.ub.sales.api.dto;
+
+import java.math.BigDecimal;
+
+public record RefundPaymentResponse(String method, BigDecimal amount, String reference) {
+}

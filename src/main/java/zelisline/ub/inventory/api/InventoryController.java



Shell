@@ -1,0 +1,91 @@
+package zelisline.ub.inventory.api;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
+
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import zelisline.ub.inventory.api.dto.InventoryMutationResponse;
+import zelisline.ub.inventory.api.dto.PostBatchDecreaseRequest;
+import zelisline.ub.inventory.api.dto.PostOpeningBalanceRequest;
+import zelisline.ub.inventory.api.dto.PostStandaloneWastageRequest;
+import zelisline.ub.inventory.api.dto.PostStockIncreaseRequest;
+import zelisline.ub.inventory.application.InventoryLedgerService;
+import zelisline.ub.platform.security.CurrentTenantUser;
+import zelisline.ub.tenancy.api.TenantRequestIds;
+
+@Validated
+@RestController
+@RequestMapping("/api/v1/inventory")
+@RequiredArgsConstructor
+public class InventoryController {
+
+    private final InventoryLedgerService inventoryLedgerService;
+
+    @PostMapping("/opening-balance")
+    @PreAuthorize("hasPermission(null, 'inventory.write')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public InventoryMutationResponse openingBalance(
+            @Valid @RequestBody PostOpeningBalanceRequest body,
+            HttpServletRequest request
+    ) {
+        var user = CurrentTenantUser.require(request);
+        return inventoryLedgerService.recordOpeningBalance(
+                TenantRequestIds.resolveBusinessId(request),
+                body,
+                user.userId()
+        );
+    }
+
+    @PostMapping("/stock-increase")
+    @PreAuthorize("hasPermission(null, 'inventory.write')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public InventoryMutationResponse stockIncrease(
+            @Valid @RequestBody PostStockIncreaseRequest body,
+            HttpServletRequest request
+    ) {
+        var user = CurrentTenantUser.require(request);
+        return inventoryLedgerService.recordStockIncrease(
+                TenantRequestIds.resolveBusinessId(request),
+                body,
+                user.userId()
+        );
+    }
+
+    @PostMapping("/batch-decrease")
+    @PreAuthorize("hasPermission(null, 'inventory.write')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public InventoryMutationResponse batchDecrease(
+            @Valid @RequestBody PostBatchDecreaseRequest body,
+            HttpServletRequest request
+    ) {
+        var user = CurrentTenantUser.require(request);
+        return inventoryLedgerService.recordBatchDecrease(
+                TenantRequestIds.resolveBusinessId(request),
+                body,
+                user.userId()
+        );
+    }
+
+    @PostMapping("/wastage")
+    @PreAuthorize("hasPermission(null, 'inventory.write')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public InventoryMutationResponse wastage(
+            @Valid @RequestBody PostStandaloneWastageRequest body,
+            HttpServletRequest request
+    ) {
+        var user = CurrentTenantUser.require(request);
+        return inventoryLedgerService.recordStandaloneWastage(
+                TenantRequestIds.resolveBusinessId(request),
+                body,
+                user.userId()
+        );
+    }
+}

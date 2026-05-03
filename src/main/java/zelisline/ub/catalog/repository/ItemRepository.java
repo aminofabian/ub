@@ -50,4 +50,13 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("includeInactive") boolean includeInactive,
             Pageable pageable
     );
+
+    @Query("""
+            select i.id from Item i
+             where i.businessId = :businessId
+               and i.stocked = true
+               and i.deletedAt is null
+             order by i.id asc
+            """)
+    List<String> findStockedItemIdsByBusinessId(@Param("businessId") String businessId);
 }

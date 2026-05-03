@@ -34,7 +34,8 @@ public class InventoryBatch {
     @Column(name = "item_id", nullable = false, length = 36)
     private String itemId;
 
-    @Column(name = "supplier_id", nullable = false, length = 36)
+    /** Null for opening-balance and stock-gain batches (Phase 3). */
+    @Column(name = "supplier_id", length = 36)
     private String supplierId;
 
     @Column(name = "batch_number", nullable = false, length = 64)

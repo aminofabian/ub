@@ -1,6 +1,7 @@
 package zelisline.ub.tenancy.repository;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.domain.Page;
@@ -27,6 +28,8 @@ public interface BranchRepository extends JpaRepository<Branch, String> {
     Page<Branch> findByBusinessIdAndDeletedAtIsNull(String businessId, Pageable pageable);
 
     Optional<Branch> findByIdAndBusinessIdAndDeletedAtIsNull(String id, String businessId);
+
+    List<Branch> findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(String businessId);
 
     boolean existsByBusinessIdAndNameAndDeletedAtIsNull(String businessId, String name);
 }

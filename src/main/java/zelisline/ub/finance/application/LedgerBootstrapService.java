@@ -17,12 +17,27 @@ public class LedgerBootstrapService {
     @Transactional
     public void ensureStandardAccounts(String businessId) {
         ensure(businessId, LedgerAccountCodes.OPERATING_CASH, "Operating cash", "asset");
+        ensure(businessId, LedgerAccountCodes.MPESA_CLEARING, "M-Pesa / mobile money clearing", "asset");
         ensure(businessId, LedgerAccountCodes.INVENTORY, "Inventory", "asset");
+        ensure(businessId, LedgerAccountCodes.SALES_REVENUE, "Sales revenue", "revenue");
+        ensure(businessId, LedgerAccountCodes.COST_OF_GOODS_SOLD, "Cost of goods sold", "expense");
         ensure(businessId, LedgerAccountCodes.SUPPLIER_ADVANCES, "Supplier advances (prepayments)", "asset");
         ensure(businessId, LedgerAccountCodes.ACCOUNTS_PAYABLE, "Accounts Payable – Suppliers", "liability");
         ensure(businessId, LedgerAccountCodes.GOODS_RECEIVED_NOT_INVOICED, "Goods received not invoiced (GRNI)", "liability");
         ensure(businessId, LedgerAccountCodes.INVENTORY_SHRINKAGE, "Inventory shrinkage (wastage)", "expense");
         ensure(businessId, LedgerAccountCodes.PURCHASE_PRICE_VARIANCE, "Purchase price variance", "expense");
+        ensure(
+                businessId,
+                LedgerAccountCodes.OPENING_BALANCE_EQUITY,
+                "Opening balance & inventory count equity",
+                "equity"
+        );
+        ensure(
+                businessId,
+                LedgerAccountCodes.CASH_OVER_SHORT,
+                "Cash over and short (drawer)",
+                "expense"
+        );
     }
 
     private void ensure(String businessId, String code, String name, String type) {

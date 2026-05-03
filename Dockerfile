@@ -1,5 +1,5 @@
 # Coolify / container deploy — build context must be `backend/` (this directory).
-# Runtime: Java 21. Default port 5050 (override with SERVER_PORT).
+# Runtime: Java 21. Listens on 5050 (-Dserver.port in ENTRYPOINT; see comment there).
 
 FROM gradle:8.14.4-jdk21-alpine AS builder
 WORKDIR /app
@@ -16,8 +16,11 @@ RUN apk add --no-cache curl \
 COPY --from=builder /app/build/libs/*.jar app.jar
 USER spring:spring
 EXPOSE 5050
+# Spring Boot maps SERVER_PORT → server.port (overrides application.properties). Default here avoids mistaking Next.js :3000 for the API.
+ENV SERVER_PORT=5050
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=75.0"
 # Grace period covers Flyway + JPA init (~15s+ observed); path matches management.endpoints base /actuator.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=5 \
 	CMD curl -fsS http://127.0.0.1:5050/actuator/health >/dev/null || exit 1
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]
+# -Dserver.port beats PORT/SERVER_PORT from the host (Coolify often injects 3000 for generic web apps).
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -Dserver.port=5050 -jar app.jar"]

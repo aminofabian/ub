@@ -1,5 +1,6 @@
 package zelisline.ub.tenancy.application;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 
@@ -118,10 +119,14 @@ public class TenancyService {
         if (businessRepository.findByIdAndDeletedAtIsNull(businessId).isEmpty()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found");
         }
+        String normalized = normalizeHostname(domainName);
+        if (domainMappingRepository.findByDomainAndActiveTrue(normalized).isPresent()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Domain is already in use");
+        }
 
         DomainMapping domain = new DomainMapping();
         domain.setBusinessId(businessId);
-        domain.setDomain(domainName);
+        domain.setDomain(normalized);
         domain.setActive(true);
 
         boolean hasExistingPrimary = !domainMappingRepository.findByBusinessIdAndDeletedAtIsNull(businessId).isEmpty();
@@ -129,6 +134,23 @@ public class TenancyService {
 
         DomainMapping saved = domainMappingRepository.save(domain);
         return toResponse(saved);
+    }
+
+    @Transactional
+    public void deleteDomain(String businessId, String domainId) {
+        DomainMapping domain = domainMappingRepository.findById(domainId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Domain not found"));
+        if (!domain.getBusinessId().equals(businessId) || domain.getDeletedAt() != null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Domain not found");
+        }
+        if (domain.isPrimary()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Cannot delete the primary domain. Promote another domain first.");
+        }
+        domain.setActive(false);
+        domain.setDeletedAt(Instant.now());
+        domainMappingRepository.save(domain);
     }
 
     @Transactional
@@ -269,6 +291,13 @@ public class TenancyService {
             return null;
         }
         return normalizedSlug + "." + parent;
+    }
+
+    private String normalizeHostname(String raw) {
+        if (raw == null || raw.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Domain is required");
+        }
+        return raw.trim().toLowerCase(Locale.ROOT);
     }
 
     private String normalizeSlug(String slug) {

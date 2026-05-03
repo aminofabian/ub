@@ -1,5 +1,6 @@
 package zelisline.ub.configuration;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.springframework.beans.factory.ObjectProvider;
@@ -54,15 +55,22 @@ public class SecurityConfig {
 
     private final List<String> allowedOrigins;
     private final List<String> allowedMethods;
+    private final List<String> extraOriginPatterns;
 
     public SecurityConfig(
             @Value("${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}")
             List<String> allowedOrigins,
             @Value("${app.security.cors.allowed-methods:GET,POST,PUT,PATCH,DELETE,OPTIONS}")
-            List<String> allowedMethods
+            List<String> allowedMethods,
+            @Value("${app.security.cors.extra-origin-patterns:https://*.palmart.co.ke,https://*.zelisline.com}")
+            List<String> extraOriginPatterns
     ) {
         this.allowedOrigins = allowedOrigins;
         this.allowedMethods = allowedMethods;
+        this.extraOriginPatterns = extraOriginPatterns.stream()
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList();
     }
 
     @Bean
@@ -160,10 +168,12 @@ public class SecurityConfig {
          * and becomes easy to misconfigure: a single production URL in env replaces application.properties,
          * which drops all localhost origins and makes the browser fail fetch with a generic network error.
          */
-        config.setAllowedOriginPatterns(List.of(
+        List<String> originPatterns = new ArrayList<>(List.of(
                 "http://localhost:*",
                 "http://127.0.0.1:*",
                 "http://*.localhost:*"));
+        originPatterns.addAll(extraOriginPatterns);
+        config.setAllowedOriginPatterns(originPatterns);
         config.setAllowedMethods(allowedMethods);
         config.setAllowedHeaders(List.of(
                 "Authorization",

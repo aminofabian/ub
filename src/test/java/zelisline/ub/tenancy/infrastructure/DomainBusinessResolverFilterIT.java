@@ -104,6 +104,43 @@ class DomainBusinessResolverFilterIT {
     }
 
     @Test
+    void unmappedHostWithExplicitTenantIdHeaderPassesThrough() throws Exception {
+        org.mockito.BDDMockito.given(domainMappingRepository.findByDomainAndActiveTrue("palmart.co.ke"))
+                .willReturn(Optional.empty());
+
+        mockMvc.perform(get("/api/v1/businesses/me")
+                        .with(request -> {
+                            request.setServerName("palmart.co.ke");
+                            return request;
+                        })
+                        .header("X-Tenant-Id", "dda962ef-ae81-4f79-bcd7-a40aa8da5700"))
+                .andExpect(result -> {
+                    int status = result.getResponse().getStatus();
+                    if (status == HttpStatus.NOT_FOUND.value()
+                            && "urn:problem:tenant-not-found".equals(result.getResponse().getContentAsString() == null
+                                    ? null
+                                    : extractProblemType(result.getResponse().getContentAsString()))) {
+                        throw new AssertionError(
+                                "X-Tenant-Id must let the request past the host resolver filter"
+                        );
+                    }
+                });
+    }
+
+    private static String extractProblemType(String body) {
+        int idx = body.indexOf("\"type\"");
+        if (idx < 0) {
+            return null;
+        }
+        int start = body.indexOf('"', body.indexOf(':', idx) + 1);
+        int end = body.indexOf('"', start + 1);
+        if (start < 0 || end < 0) {
+            return null;
+        }
+        return body.substring(start + 1, end);
+    }
+
+    @Test
     void bareLocalhostWithXTenantHostResolvesTenant() throws Exception {
         DomainMapping mapping = Mockito.mock(DomainMapping.class);
         org.mockito.BDDMockito.given(mapping.getBusinessId()).willReturn("biz-1");

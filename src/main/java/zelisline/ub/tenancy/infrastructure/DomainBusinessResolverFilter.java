@@ -33,10 +33,17 @@ import zelisline.ub.tenancy.repository.DomainMappingRepository;
  * health/docs, webhooks). Without this, a prod host that isn't a tenant
  * mapping (e.g. {@code palmart.co.ke} on the admin app) would 404 every
  * super-admin login and health probe.
+ *
+ * <p>When the host is not mapped but the client supplies an explicit
+ * {@code X-Tenant-Id} header (platform admin host logging into a specific
+ * tenant), the filter passes through; downstream
+ * {@link zelisline.ub.tenancy.api.TenantRequestIds} already honors that
+ * header and JWT-bound endpoints enforce principal/tenant match.
  */
 public class DomainBusinessResolverFilter extends OncePerRequestFilter {
 
     private static final String PROBLEM_TYPE = "urn:problem:tenant-not-found";
+    private static final String TENANT_ID_HEADER = "X-Tenant-Id";
 
     private static final Set<String> HOSTS_WITHOUT_MAPPING = Set.of(
             "localhost",
@@ -99,6 +106,10 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
 
         var mapping = domainMappingRepository.findByDomainAndActiveTrue(lookupHost);
         if (mapping.isEmpty()) {
+            if (hasExplicitTenantIdHeader(request)) {
+                filterChain.doFilter(request, response);
+                return;
+            }
             writeTenantNotFound(response, lookupHost);
             return;
         }
@@ -112,6 +123,11 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
             return serverHost;
         }
         return TenantHostParsing.hostnameOnly(tenantHostHeader);
+    }
+
+    private static boolean hasExplicitTenantIdHeader(HttpServletRequest request) {
+        String value = request.getHeader(TENANT_ID_HEADER);
+        return value != null && !value.isBlank();
     }
 
     private void writeTenantNotFound(HttpServletResponse response, String host) throws IOException {

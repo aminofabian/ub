@@ -7,6 +7,7 @@ import java.util.List;
 public record SaleResponse(
         String id,
         String branchId,
+        String customerId,
         String shiftId,
         String status,
         BigDecimal grandTotal,

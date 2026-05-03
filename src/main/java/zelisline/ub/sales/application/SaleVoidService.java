@@ -20,6 +20,9 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.credits.application.CreditSaleDebtService;
+import zelisline.ub.credits.application.LoyaltyPointsService;
+import zelisline.ub.credits.application.WalletLedgerService;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.finance.LedgerAccountCodes;
@@ -36,6 +39,7 @@ import zelisline.ub.purchasing.domain.InventoryBatch;
 import zelisline.ub.purchasing.domain.StockMovement;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.purchasing.repository.StockMovementRepository;
+import zelisline.ub.sales.SalePaymentLedger;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.PostVoidSaleRequest;
 import zelisline.ub.sales.api.dto.SaleResponse;
@@ -70,6 +74,9 @@ public class SaleVoidService {
     private final JournalEntryRepository journalEntryRepository;
     private final JournalLineRepository journalLineRepository;
     private final RequestPermissionService requestPermissionService;
+    private final CreditSaleDebtService creditSaleDebtService;
+    private final WalletLedgerService walletLedgerService;
+    private final LoyaltyPointsService loyaltyPointsService;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -126,7 +133,15 @@ public class SaleVoidService {
 
         BigDecimal grandTotal = sale.getGrandTotal().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         BigDecimal cogs = sumItemCosts(itemRows);
-        String voidJeId = postVoidJournal(businessId, saleId, grandTotal, cogs, payments);
+        BigDecimal tenderSum = sumPaymentAmounts(payments);
+        BigDecimal overpay = tenderSum.subtract(grandTotal).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        if (overpay.signum() > 0 && (sale.getCustomerId() == null || sale.getCustomerId().isBlank())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Sale with wallet overpay missing customer linkage");
+        }
+        String voidJeId = postVoidJournal(businessId, saleId, grandTotal, cogs, payments, overpay);
+        creditSaleDebtService.reverseDebtForVoidedSale(businessId, sale, payments);
+        walletLedgerService.reverseWalletEffectsForVoidedSale(businessId, saleId, sale.getCustomerId());
+        loyaltyPointsService.reverseLoyaltyForVoidedSale(businessId, saleId, sale.getCustomerId());
 
         sale.setStatus(SalesConstants.SALE_STATUS_VOIDED);
         sale.setVoidedAt(Instant.now());
@@ -206,6 +221,14 @@ public class SaleVoidService {
         item.setCurrentStock(next);
     }
 
+    private static BigDecimal sumPaymentAmounts(List<SalePayment> payments) {
+        BigDecimal s = BigDecimal.ZERO;
+        for (SalePayment p : payments) {
+            s = s.add(p.getAmount());
+        }
+        return s.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+    }
+
     private static BigDecimal sumCashPayments(List<SalePayment> payments) {
         BigDecimal s = BigDecimal.ZERO;
         for (SalePayment p : payments) {
@@ -229,7 +252,8 @@ public class SaleVoidService {
             String saleId,
             BigDecimal grandTotal,
             BigDecimal cogs,
-            List<SalePayment> payments
+            List<SalePayment> payments,
+            BigDecimal saleOverpaymentToWallet
     ) {
         ledgerBootstrapService.ensureStandardAccounts(businessId);
         LedgerAccount revenue = ledger(businessId, LedgerAccountCodes.SALES_REVENUE);
@@ -238,9 +262,7 @@ public class SaleVoidService {
 
         Map<String, BigDecimal> tenderCr = new LinkedHashMap<>();
         for (SalePayment p : payments) {
-            String code = SalesConstants.PAYMENT_METHOD_MPESA_MANUAL.equals(p.getMethod())
-                    ? LedgerAccountCodes.MPESA_CLEARING
-                    : LedgerAccountCodes.OPERATING_CASH;
+            String code = SalePaymentLedger.ledgerCodeForPaymentMethod(p.getMethod());
             tenderCr.merge(code, p.getAmount(), BigDecimal::add);
         }
 
@@ -254,6 +276,7 @@ public class SaleVoidService {
 
         grandTotal = grandTotal.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         cogs = cogs.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal overpayWallet = saleOverpaymentToWallet.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
 
         List<JournalLine> lines = new ArrayList<>();
         for (Map.Entry<String, BigDecimal> e : tenderCr.entrySet()) {
@@ -261,6 +284,10 @@ public class SaleVoidService {
             lines.add(journalCredit(je.getId(), ledger(businessId, e.getKey()).getId(), amt));
         }
         lines.add(journalDebit(je.getId(), revenue.getId(), grandTotal));
+        if (overpayWallet.signum() > 0) {
+            LedgerAccount wl = ledger(businessId, LedgerAccountCodes.CUSTOMER_WALLET_LIABILITY);
+            lines.add(journalDebit(je.getId(), wl.getId(), overpayWallet));
+        }
         lines.add(journalCredit(je.getId(), cogsAcc.getId(), cogs));
         lines.add(journalDebit(je.getId(), inv.getId(), cogs));
         journalLineRepository.saveAll(lines);

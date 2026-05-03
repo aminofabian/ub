@@ -36,6 +36,9 @@ public class SalePayment {
     @Column(name = "sort_order", nullable = false)
     private int sortOrder;
 
+    @Column(name = "gateway_txn_id", length = 128)
+    private String gatewayTxnId;
+
     @PrePersist
     void onCreate() {
         if (id == null || id.isBlank()) {

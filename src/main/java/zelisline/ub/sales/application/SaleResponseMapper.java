@@ -38,6 +38,7 @@ public final class SaleResponseMapper {
         return new SaleResponse(
                 sale.getId(),
                 sale.getBranchId(),
+                sale.getCustomerId(),
                 sale.getShiftId(),
                 sale.getStatus(),
                 sale.getGrandTotal(),

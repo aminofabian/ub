@@ -27,6 +27,8 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.identity.repository.UserSessionRepository;
 import zelisline.ub.identity.repository.SuperAdminRepository;
+import zelisline.ub.platform.security.PublicStorefrontIpRateLimiter;
+import zelisline.ub.platform.security.PublicStorefrontRateLimitFilter;
 import zelisline.ub.platform.security.JwtAuthenticationFilter;
 import zelisline.ub.platform.security.JwtTokenService;
 import zelisline.ub.platform.security.LoginIpRateLimiter;
@@ -77,6 +79,7 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(
             HttpSecurity http,
             DomainBusinessResolverFilter domainBusinessResolverFilter,
+            PublicStorefrontRateLimitFilter publicStorefrontRateLimitFilter,
             LoginRateLimitFilter loginRateLimitFilter,
             JwtAuthenticationFilter jwtAuthenticationFilter,
             ObjectProvider<TestAuthenticationFilter> testAuthenticationFilter
@@ -113,6 +116,8 @@ public class SecurityConfig {
                         // HMAC verification happens inside the controller, not in Spring Security.
                         .requestMatchers(HttpMethod.POST, "/webhooks/**").permitAll()
 
+                        .requestMatchers("/api/v1/public/**").permitAll()
+
                         .requestMatchers("/api/v1/super-admin/**").hasRole("SUPER_ADMIN")
 
                         .requestMatchers("/api/v1/admin/**")
@@ -129,12 +134,20 @@ public class SecurityConfig {
                         .anyRequest().denyAll()
                 );
         http.addFilterBefore(domainBusinessResolverFilter, UsernamePasswordAuthenticationFilter.class);
-        http.addFilterAfter(loginRateLimitFilter, DomainBusinessResolverFilter.class);
+        http.addFilterAfter(publicStorefrontRateLimitFilter, DomainBusinessResolverFilter.class);
+        http.addFilterAfter(loginRateLimitFilter, PublicStorefrontRateLimitFilter.class);
         http.addFilterAfter(jwtAuthenticationFilter, LoginRateLimitFilter.class);
         testAuthenticationFilter.ifAvailable(filter ->
                 http.addFilterAfter(filter, JwtAuthenticationFilter.class));
 
         return http.build();
+    }
+
+    @Bean
+    public PublicStorefrontRateLimitFilter publicStorefrontRateLimitFilter(
+            PublicStorefrontIpRateLimiter publicStorefrontIpRateLimiter
+    ) {
+        return new PublicStorefrontRateLimitFilter(publicStorefrontIpRateLimiter);
     }
 
     @Bean

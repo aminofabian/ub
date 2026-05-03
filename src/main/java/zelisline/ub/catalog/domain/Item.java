@@ -99,11 +99,14 @@ public class Item {
     @Column(name = "has_expiry", nullable = false)
     private boolean hasExpiry;
 
-    @Column(name = "image_key", length = 500)
+    @Column(name = "image_key", length = 2048)
     private String imageKey;
 
     @Column(name = "active", nullable = false)
     private boolean active = true;
+
+    @Column(name = "web_published", nullable = false)
+    private boolean webPublished;
 
     @Version
     @Column(name = "version", nullable = false)

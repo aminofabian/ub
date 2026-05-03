@@ -372,13 +372,14 @@ Bundled Postgres, `jpackage` installers, mDNS, licensing, USB-update path, night
 
 **Exit criteria for GA:** Zero P1 bugs open for 14 days. p99 < 500 ms on hot paths. Backup/restore drilled. Self-onboarding under 10 minutes.
 
-### Horizon (proposed) — Phases 12–14
+### Horizon (proposed) — Phases 12–15
 
 These are **not** in `implement.md` §12 today; they are planning charters in `docs/`:
 
 - [Phase 12 — Post-GA: migration, enterprise & platform](./PHASE_12_PLAN.md) — Turso migration tool, scale, sustainment
 - [Phase 13 — International & ecosystem](./PHASE_13_README.md)
 - [Phase 14 — Electron desktop](./PHASE_14_README.md) — optional shell vs [Phase 10](./PHASE_10_PLAN.md) `jpackage`
+- [Phase 15 — Storefront window](./PHASE_15_PLAN.md) — tenant homepage shop module, catalog branch–fed public catalog (browse + PDP; checkout in a follow-on phase)
 
 ---
 

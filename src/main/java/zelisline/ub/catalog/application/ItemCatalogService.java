@@ -1,7 +1,11 @@
 package zelisline.ub.catalog.application;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.dao.DataIntegrityViolationException;
@@ -18,6 +22,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.api.dto.CreateVariantRequest;
 import zelisline.ub.catalog.api.dto.ItemImageResponse;
@@ -25,9 +31,11 @@ import zelisline.ub.catalog.api.dto.ItemResponse;
 import zelisline.ub.catalog.api.dto.ItemSummaryResponse;
 import zelisline.ub.catalog.api.dto.PatchItemRequest;
 import zelisline.ub.catalog.api.dto.RegisterItemImageRequest;
+import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.domain.IdempotencyKey;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.ItemImage;
+import zelisline.ub.catalog.domain.ItemImageStorageProvider;
 import zelisline.ub.catalog.repository.AisleRepository;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.IdempotencyKeyRepository;
@@ -35,6 +43,8 @@ import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.identity.application.TokenHasher;
+import zelisline.ub.platform.media.CloudinaryImageService;
+import zelisline.ub.platform.media.CloudinaryUploadResult;
 import zelisline.ub.suppliers.application.SupplierLinkProvisioner;
 
 @Service
@@ -42,6 +52,8 @@ import zelisline.ub.suppliers.application.SupplierLinkProvisioner;
 public class ItemCatalogService {
 
     public static final String ROUTE_POST_ITEMS = "POST /api/v1/items";
+
+    private static final Logger log = LoggerFactory.getLogger(ItemCatalogService.class);
 
     private final ItemRepository itemRepository;
     private final ItemImageRepository itemImageRepository;
@@ -51,6 +63,7 @@ public class ItemCatalogService {
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final ObjectMapper objectMapper;
     private final SupplierLinkProvisioner supplierLinkProvisioner;
+    private final CloudinaryImageService cloudinaryImageService;
 
     @Transactional(readOnly = true)
     public Page<ItemSummaryResponse> listItems(
@@ -58,6 +71,7 @@ public class ItemCatalogService {
             String search,
             String barcodeExact,
             String categoryId,
+            boolean includeCategoryDescendants,
             boolean noBarcode,
             boolean includeInactive,
             Pageable pageable
@@ -68,8 +82,19 @@ public class ItemCatalogService {
         Pageable pg = pageable.getSort().isUnsorted()
                 ? PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), Sort.by(Sort.Direction.ASC, "name"))
                 : pageable;
-        return itemRepository.search(businessId, q, bc, cat, noBarcode, includeInactive, pg)
-                .map(this::toSummary);
+        boolean catUnset = cat == null;
+        Collection<String> categoryIds = List.of("");
+        if (!catUnset) {
+            categoryIds = resolveCategorySubtreeIds(businessId, cat, includeCategoryDescendants);
+            if (categoryIds.isEmpty()) {
+                return Page.empty(pg);
+            }
+        }
+        Page<Item> page =
+                itemRepository.search(businessId, q, bc, catUnset, categoryIds, noBarcode, includeInactive, pg);
+        List<String> ids = page.getContent().stream().map(Item::getId).toList();
+        Map<String, String> thumbs = firstGalleryImageUrlByItemId(ids);
+        return page.map(item -> toSummary(item, thumbs));
     }
 
     @Transactional(readOnly = true)
@@ -78,10 +103,11 @@ public class ItemCatalogService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Item not found"));
         List<ItemSummaryResponse> variants = List.of();
         if (item.getVariantOfItemId() == null) {
-            variants = itemRepository.findByBusinessIdAndVariantOfItemIdAndDeletedAtIsNullOrderBySkuAsc(businessId, item.getId())
-                    .stream()
-                    .map(this::toSummary)
-                    .toList();
+            List<Item> variantRows = itemRepository.findByBusinessIdAndVariantOfItemIdAndDeletedAtIsNullOrderBySkuAsc(
+                    businessId, item.getId());
+            List<String> variantIds = variantRows.stream().map(Item::getId).toList();
+            Map<String, String> vthumbs = firstGalleryImageUrlByItemId(variantIds);
+            variants = variantRows.stream().map(v -> toSummary(v, vthumbs)).toList();
         }
         return toResponse(item, variants);
     }
@@ -254,6 +280,9 @@ public class ItemCatalogService {
         if (patch.active() != null) {
             item.setActive(patch.active());
         }
+        if (patch.webPublished() != null) {
+            item.setWebPublished(patch.webPublished());
+        }
 
         try {
             itemRepository.save(item);
@@ -346,20 +375,87 @@ public class ItemCatalogService {
     public ItemImageResponse registerItemImage(String businessId, String itemId, RegisterItemImageRequest request) {
         Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Item not found"));
+        String legacyKey = blankToNull(request.s3Key());
+        String pubId = blankToNull(request.cloudinaryPublicId());
+        String secure = blankToNull(request.secureUrl());
+        boolean cloudinaryMeta = pubId != null && secure != null;
+        if (!cloudinaryMeta && legacyKey == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Provide s3Key (legacy storage) or both secureUrl and cloudinaryPublicId"
+            );
+        }
+        if (cloudinaryMeta && legacyKey != null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Use either legacy s3Key or Cloudinary fields, not both"
+            );
+        }
         int sortOrder = request.sortOrder() != null
                 ? request.sortOrder()
                 : itemImageRepository.maxSortOrderForItem(itemId) + 1;
         ItemImage img = new ItemImage();
         img.setItemId(itemId);
-        img.setS3Key(request.s3Key().trim());
+        img.setSortOrder(sortOrder);
         img.setWidth(request.width());
         img.setHeight(request.height());
-        img.setSortOrder(sortOrder);
         img.setContentType(blankToNull(request.contentType()));
         img.setAltText(blankToNull(request.altText()));
+        if (cloudinaryMeta) {
+            img.setProvider(ItemImageStorageProvider.CLOUDINARY);
+            img.setCloudinaryPublicId(pubId);
+            img.setSecureUrl(secure);
+            img.setS3Key(pubId);
+            img.setBytes(request.bytes());
+            img.setFormat(blankToNull(request.format()));
+            img.setAssetSignature(blankToNull(request.assetSignature()));
+            img.setPredominantColorHex(normalizeHex(blankToNull(request.predominantColorHex())));
+            img.setPhash(blankToNull(request.phash()));
+        } else {
+            img.setProvider(ItemImageStorageProvider.LEGACY);
+            img.setS3Key(legacyKey);
+        }
         itemImageRepository.save(img);
         if (Boolean.TRUE.equals(request.primary())) {
-            item.setImageKey(img.getS3Key());
+            String cover = cloudinaryMeta ? secure : legacyKey;
+            item.setImageKey(cover);
+            itemRepository.save(item);
+        }
+        return toImageResponse(img);
+    }
+
+    @Transactional
+    public ItemImageResponse uploadItemImageCloudinary(
+            String businessId,
+            String itemId,
+            byte[] bytes,
+            String originalFilename,
+            String altText,
+            boolean primary
+    ) {
+        Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Item not found"));
+        CloudinaryUploadResult r = cloudinaryImageService.uploadImage(bytes, originalFilename, businessId, itemId);
+        int sortOrder = itemImageRepository.maxSortOrderForItem(itemId) + 1;
+        ItemImage img = new ItemImage();
+        img.setItemId(itemId);
+        img.setProvider(ItemImageStorageProvider.CLOUDINARY);
+        img.setCloudinaryPublicId(r.publicId());
+        img.setSecureUrl(r.secureUrl());
+        img.setS3Key(r.publicId());
+        img.setWidth(r.width());
+        img.setHeight(r.height());
+        img.setBytes(r.bytes());
+        img.setFormat(r.format());
+        img.setContentType(r.contentType());
+        img.setAssetSignature(r.versionSignature());
+        img.setPredominantColorHex(normalizeHex(r.predominantColorHex()));
+        img.setPhash(r.phash());
+        img.setAltText(blankToNull(altText));
+        img.setSortOrder(sortOrder);
+        itemImageRepository.save(img);
+        if (primary) {
+            item.setImageKey(r.secureUrl());
             itemRepository.save(item);
         }
         return toImageResponse(img);
@@ -371,9 +467,23 @@ public class ItemCatalogService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Item not found"));
         ItemImage img = itemImageRepository.findByIdAndItemId(imageId, itemId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Image not found"));
-        String key = img.getS3Key();
+        String matchUrl = img.getSecureUrl();
+        String matchKey = img.getS3Key();
+        if (ItemImageStorageProvider.CLOUDINARY.equals(img.getProvider())) {
+            String pid = img.getCloudinaryPublicId();
+            if (pid != null && !pid.isBlank() && cloudinaryImageService.isConfigured()) {
+                try {
+                    cloudinaryImageService.destroyImage(pid);
+                } catch (Exception ex) {
+                    log.warn("Cloudinary destroy failed for public_id={}: {}", pid, ex.toString());
+                }
+            }
+        }
         itemImageRepository.delete(img);
-        if (key != null && key.equals(item.getImageKey())) {
+        boolean matchesPrimary = item.getImageKey() != null
+                && ((matchUrl != null && matchUrl.equals(item.getImageKey()))
+                || (matchKey != null && matchKey.equals(item.getImageKey())));
+        if (matchesPrimary) {
             item.setImageKey(null);
             itemRepository.save(item);
         }
@@ -454,15 +564,56 @@ public class ItemCatalogService {
     private ItemResponse toResponseWithVariants(String businessId, Item item) {
         List<ItemSummaryResponse> variants = List.of();
         if (item.getVariantOfItemId() == null) {
-            variants = itemRepository.findByBusinessIdAndVariantOfItemIdAndDeletedAtIsNullOrderBySkuAsc(businessId, item.getId())
-                    .stream()
-                    .map(this::toSummary)
-                    .toList();
+            List<Item> variantRows = itemRepository.findByBusinessIdAndVariantOfItemIdAndDeletedAtIsNullOrderBySkuAsc(
+                    businessId, item.getId());
+            List<String> variantIds = variantRows.stream().map(Item::getId).toList();
+            Map<String, String> vthumbs = firstGalleryImageUrlByItemId(variantIds);
+            variants = variantRows.stream().map(v -> toSummary(v, vthumbs)).toList();
         }
         return toResponse(item, variants);
     }
 
-    private ItemSummaryResponse toSummary(Item i) {
+    private Map<String, String> firstGalleryImageUrlByItemId(Collection<String> itemIds) {
+        if (itemIds == null || itemIds.isEmpty()) {
+            return Map.of();
+        }
+        Sort galleryOrder = Sort.by(Sort.Order.asc("itemId"), Sort.Order.asc("sortOrder"), Sort.Order.asc("id"));
+        List<ItemImage> rows = itemImageRepository.findByItemIdIn(itemIds, galleryOrder);
+        Map<String, String> out = new LinkedHashMap<>();
+        for (ItemImage img : rows) {
+            String url = resolveImageRowPublicUrl(img);
+            if (url == null) {
+                continue;
+            }
+            out.putIfAbsent(img.getItemId(), url);
+        }
+        return out;
+    }
+
+    private static String resolveImageRowPublicUrl(ItemImage img) {
+        String secure = img.getSecureUrl();
+        if (secure != null && !secure.isBlank()) {
+            return secure.trim();
+        }
+        String key = img.getS3Key();
+        if (key != null) {
+            String k = key.trim();
+            if (k.startsWith("http://") || k.startsWith("https://")) {
+                return k;
+            }
+        }
+        return null;
+    }
+
+    private static String resolveListThumbnail(Item i, Map<String, String> galleryFirstUrlByItemId) {
+        String k = i.getImageKey();
+        if (k != null && (k.startsWith("http://") || k.startsWith("https://"))) {
+            return k.trim();
+        }
+        return galleryFirstUrlByItemId.get(i.getId());
+    }
+
+    private ItemSummaryResponse toSummary(Item i, Map<String, String> galleryFirstUrlByItemId) {
         return new ItemSummaryResponse(
                 i.getId(),
                 i.getSku(),
@@ -471,7 +622,9 @@ public class ItemCatalogService {
                 i.getVariantName(),
                 i.getCategoryId(),
                 i.getImageKey(),
+                resolveListThumbnail(i, galleryFirstUrlByItemId),
                 i.isActive(),
+                i.isWebPublished(),
                 i.getVariantOfItemId()
         );
     }
@@ -504,6 +657,7 @@ public class ItemCatalogService {
                 i.isHasExpiry(),
                 i.getImageKey(),
                 i.isActive(),
+                i.isWebPublished(),
                 i.getVersion(),
                 loadImageResponses(i.getId()),
                 variants
@@ -520,13 +674,58 @@ public class ItemCatalogService {
         return new ItemImageResponse(
                 img.getId(),
                 img.getS3Key(),
+                img.getSecureUrl(),
+                img.getCloudinaryPublicId(),
+                img.getProvider(),
                 img.getWidth(),
                 img.getHeight(),
                 img.getSortOrder(),
                 img.getContentType(),
                 img.getAltText(),
+                img.getBytes(),
+                img.getFormat(),
+                img.getAssetSignature(),
+                img.getPredominantColorHex(),
+                img.getPhash(),
                 img.getCreatedAt()
         );
+    }
+
+    private List<String> resolveCategorySubtreeIds(String businessId, String categoryId, boolean includeDescendants) {
+        if (categoryRepository.findByIdAndBusinessId(categoryId, businessId).isEmpty()) {
+            return List.of();
+        }
+        if (!includeDescendants) {
+            return List.of(categoryId);
+        }
+        List<Category> all = categoryRepository.findByBusinessIdOrderByPositionAsc(businessId);
+        Map<String, List<String>> childrenByParent = new LinkedHashMap<>();
+        for (Category c : all) {
+            String pk = c.getParentId() == null ? "" : c.getParentId();
+            childrenByParent.computeIfAbsent(pk, k -> new ArrayList<>()).add(c.getId());
+        }
+        List<String> out = new ArrayList<>();
+        ArrayDeque<String> dq = new ArrayDeque<>();
+        dq.add(categoryId);
+        while (!dq.isEmpty()) {
+            String cur = dq.poll();
+            out.add(cur);
+            for (String child : childrenByParent.getOrDefault(cur, List.of())) {
+                dq.add(child);
+            }
+        }
+        return out;
+    }
+
+    private static String normalizeHex(String hex) {
+        if (hex == null || hex.isBlank()) {
+            return null;
+        }
+        String t = hex.trim();
+        if (t.startsWith("#")) {
+            return t.length() > 9 ? t.substring(0, 7) : t;
+        }
+        return "#" + t.replace("#", "");
     }
 
     private static String blankToNull(String s) {

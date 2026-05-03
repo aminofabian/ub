@@ -1,0 +1,447 @@
+# Phase 15 — Public storefront catalog (no JWT)
+# Sessionless read API for Next.js / BFF. Rate limited: see application.properties
+# app.security.public-storefront-rate-limit-per-minute (per client IP + slug).
+#
+openapi: 3.1.0
+info:
+  title: UB — Public storefront (Phase 15)
+  description: |
+    Anonymous catalog projection for a business **slug**. Returns **404** when the storefront
+    is disabled or misconfigured. Catalog GET responses may include `Cache-Control: max-age=60`;
+    cart endpoints use `Cache-Control: no-store`.
+  version: 0.0.1-SNAPSHOT
+servers:
+  - url: /
+    description: API host
+tags:
+  - name: public-storefront
+    description: Public shop window & catalog
+paths:
+  /api/v1/public/businesses/{slug}/storefront:
+    get:
+      tags: [public-storefront]
+      operationId: getPublicStorefront
+      summary: Storefront summary + featured item cards
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicStorefrontResponse'
+        '404':
+          description: Business not found or storefront not available
+        '429':
+          description: Rate limit exceeded
+  /api/v1/public/businesses/{slug}/catalog/categories:
+    get:
+      tags: [public-storefront]
+      operationId: listPublicStorefrontCategories
+      summary: Categories that have at least one web-published item (plus active ancestors)
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicCategoryListResponse'
+        '404':
+          description: Storefront not available
+        '429':
+          description: Rate limit exceeded
+  /api/v1/public/businesses/{slug}/catalog/items:
+    get:
+      tags: [public-storefront]
+      operationId: listPublicStorefrontItems
+      summary: Paginated published catalog items (cursor by item id ascending)
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Search name / variant / description
+        - name: categoryId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Category subtree filter
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Last item id from previous page
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 24
+            maximum: 100
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicCatalogListResponse'
+        '404':
+          description: Storefront not available
+        '429':
+          description: Rate limit exceeded
+  /api/v1/public/businesses/{slug}/catalog/items/{id}:
+    get:
+      tags: [public-storefront]
+      operationId: getPublicStorefrontItem
+      summary: Product detail (gallery, price, published variants)
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicCatalogItemDetailResponse'
+        '404':
+          description: Item not found / not published / storefront off
+        '429':
+          description: Rate limit exceeded
+  /api/v1/public/businesses/{slug}/carts:
+    post:
+      tags: [public-storefront]
+      operationId: createPublicWebCart
+      summary: Create an empty guest cart (TTL server-side)
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: Created
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicCartResponse'
+        '404':
+          description: Storefront not available
+  /api/v1/public/businesses/{slug}/carts/{cartId}:
+    get:
+      tags: [public-storefront]
+      operationId: getPublicWebCart
+      summary: Load cart with branch-accurate line prices
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: cartId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicCartResponse'
+        '404':
+          description: Cart not found or expired or storefront off
+  /api/v1/public/businesses/{slug}/carts/{cartId}/lines:
+    post:
+      tags: [public-storefront]
+      operationId: upsertPublicWebCartLine
+      summary: Set line quantity; use quantity 0 to remove the line
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: cartId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublicUpsertCartLineRequest'
+      responses:
+        '200':
+          description: OK
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicCartResponse'
+        '400':
+          description: Invalid item or quantity
+        '404':
+          description: Cart not found or expired or storefront off
+  /api/v1/public/businesses/{slug}/carts/{cartId}/lines/{itemId}:
+    delete:
+      tags: [public-storefront]
+      operationId: deletePublicWebCartLine
+      summary: Remove a line from the cart
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: cartId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicCartResponse'
+        '404':
+          description: Cart not found or expired or storefront off
+components:
+  schemas:
+    PublicCatalogItemCard:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        variantName:
+          type: string
+          nullable: true
+        imageUrl:
+          type: string
+          nullable: true
+        price:
+          type: number
+          nullable: true
+    PublicStorefrontResponse:
+      type: object
+      properties:
+        businessName:
+          type: string
+        slug:
+          type: string
+        currency:
+          type: string
+        catalogBranchId:
+          type: string
+        catalogBranchName:
+          type: string
+        label:
+          type: string
+          nullable: true
+        announcement:
+          type: string
+          nullable: true
+        featured:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicCatalogItemCard'
+    PublicCategoryResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        parentId:
+          type: string
+          nullable: true
+        slug:
+          type: string
+    PublicCategoryListResponse:
+      type: object
+      properties:
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicCategoryResponse'
+    PublicCatalogListResponse:
+      type: object
+      properties:
+        currency:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicCatalogItemCard'
+        nextCursor:
+          type: string
+          nullable: true
+    PublicItemImage:
+      type: object
+      properties:
+        url:
+          type: string
+        altText:
+          type: string
+          nullable: true
+        width:
+          type: integer
+          nullable: true
+        height:
+          type: integer
+          nullable: true
+    PublicCatalogVariant:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        variantName:
+          type: string
+          nullable: true
+        imageUrl:
+          type: string
+          nullable: true
+        price:
+          type: number
+          nullable: true
+    PublicCatalogItemDetailResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        variantName:
+          type: string
+          nullable: true
+        parentItemId:
+          type: string
+          nullable: true
+        currency:
+          type: string
+        price:
+          type: number
+          nullable: true
+        images:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicItemImage'
+        variants:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicCatalogVariant'
+    PublicUpsertCartLineRequest:
+      type: object
+      required: [itemId, quantity]
+      properties:
+        itemId:
+          type: string
+        quantity:
+          type: number
+          minimum: 0
+    PublicCartLineResponse:
+      type: object
+      properties:
+        itemId:
+          type: string
+        name:
+          type: string
+        variantName:
+          type: string
+          nullable: true
+        imageUrl:
+          type: string
+          nullable: true
+        quantity:
+          type: number
+        unitPrice:
+          type: number
+          nullable: true
+        lineTotal:
+          type: number
+          nullable: true
+    PublicCartResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        currency:
+          type: string
+        catalogBranchId:
+          type: string
+        catalogBranchName:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        subtotal:
+          type: number
+          nullable: true
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicCartLineResponse'

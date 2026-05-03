@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
@@ -216,6 +218,26 @@ class ItemCatalogIT {
     }
 
     @Test
+    void patchWebPublishedRoundTrips() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        String itemId = createItemViaService(TENANT_A, gid, "SKU-WEB-PUB", "Web show");
+        mockMvc.perform(patch("/api/v1/items/" + itemId)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"webPublished\":true}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.webPublished").value(true));
+        mockMvc.perform(get("/api/v1/items/" + itemId)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.webPublished").value(true));
+    }
+
+    @Test
     void postItemsIdempotencyReplaysSameResponse() throws Exception {
         String gid = goodsTypeId(TENANT_A);
         String body = """
@@ -308,6 +330,7 @@ class ItemCatalogIT {
                         .content(req))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.s3Key").value("tenant/a/items/one.jpg"))
+                .andExpect(jsonPath("$.provider").value("legacy"))
                 .andExpect(jsonPath("$.sortOrder").value(0))
                 .andExpect(jsonPath("$.width").value(800))
                 .andExpect(jsonPath("$.height").value(600))
@@ -324,6 +347,54 @@ class ItemCatalogIT {
                 .andExpect(jsonPath("$.images.length()").value(1))
                 .andExpect(jsonPath("$.images[0].id").value(imageId))
                 .andExpect(jsonPath("$.imageKey").value("tenant/a/items/one.jpg"));
+    }
+
+    @Test
+    void registerItemImageWithCloudinaryMetadataSetsCoverToSecureUrl() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        String itemId = createItemViaService(TENANT_A, gid, "SKU-CLO", "Cloud");
+        String req = """
+                {"secureUrl":"https://res.cloudinary.com/demo/image/upload/v1/x","cloudinaryPublicId":"ub/demo/item/hero","width":100,"height":80,"primary":true}
+                """;
+        String posted = mockMvc.perform(post("/api/v1/items/" + itemId + "/images")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content(req))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.provider").value("cloudinary"))
+                .andExpect(jsonPath("$.secureUrl").value("https://res.cloudinary.com/demo/image/upload/v1/x"))
+                .andExpect(jsonPath("$.publicId").value("ub/demo/item/hero"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String imageId = JsonPath.read(posted, "$.id");
+
+        mockMvc.perform(get("/api/v1/items/" + itemId)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.images[0].id").value(imageId))
+                .andExpect(jsonPath("$.imageKey").value("https://res.cloudinary.com/demo/image/upload/v1/x"));
+    }
+
+    @Test
+    void uploadItemImageReturns503WhenCloudinaryDisabled() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        String itemId = createItemViaService(TENANT_A, gid, "SKU-UL", "Upload");
+        mockMvc.perform(multipart("/api/v1/items/" + itemId + "/images/upload")
+                        .file(new MockMultipartFile(
+                                "file",
+                                "x.png",
+                                "image/png",
+                                new byte[] {(byte) 0x89, 0x50}
+                        ))
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isServiceUnavailable());
     }
 
     @Test
@@ -437,6 +508,7 @@ class ItemCatalogIT {
     private static PatchItemRequest barcodeOnly(String barcode) {
         return new PatchItemRequest(
                 barcode,
+                null,
                 null,
                 null,
                 null,

@@ -31,6 +31,8 @@ import zelisline.ub.identity.repository.RolePermissionRepository;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.platform.security.TestAuthenticationFilter;
+import zelisline.ub.suppliers.domain.Supplier;
+import zelisline.ub.suppliers.repository.SupplierRepository;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
@@ -71,6 +73,9 @@ class CatalogTaxonomyIT {
     private CategoryRepository categoryRepository;
 
     @Autowired
+    private SupplierRepository supplierRepository;
+
+    @Autowired
     private zelisline.ub.catalog.application.CatalogBootstrapService catalogBootstrapService;
 
     @MockitoBean
@@ -82,6 +87,7 @@ class CatalogTaxonomyIT {
     @BeforeEach
     void seed() {
         categoryRepository.deleteAll();
+        supplierRepository.deleteAll();
         itemTypeRepository.deleteAll();
         userRepository.deleteAll();
         rolePermissionRepository.deleteAll();
@@ -168,6 +174,44 @@ class CatalogTaxonomyIT {
                 .getResponse()
                 .getContentAsString();
         assertThat(json).contains("goods").contains("service").contains("kit");
+    }
+
+    @Test
+    void supplierLinkShowsOnCategoryList() throws Exception {
+        String catJson = mockMvc.perform(post("/api/v1/categories")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"name\":\"Produce\"}"))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String catId = JsonPath.read(catJson, "$.id");
+
+        Supplier sup = new Supplier();
+        sup.setBusinessId(TENANT);
+        sup.setName("Farm Supply");
+        supplierRepository.save(sup);
+
+        mockMvc.perform(post("/api/v1/categories/" + catId + "/supplier-links")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"supplierId\":\"" + sup.getId() + "\"}"))
+                .andExpect(status().isCreated());
+
+        String listJson = mockMvc.perform(get("/api/v1/categories")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        assertThat(listJson).contains("Farm Supply");
     }
 
     private static Permission perm(String id, String key, String desc) {

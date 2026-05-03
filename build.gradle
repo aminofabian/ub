@@ -63,3 +63,32 @@ tasks.named('test') {
 		systemProperty 'exportOpenapi', exportOpenapi
 	}
 }
+
+def readBackendDotEnv() {
+	def map = [:]
+	def f = file('.env')
+	if (!f.exists()) {
+		return map
+	}
+	f.readLines().each { rawLine ->
+		def line = rawLine.trim()
+		if (line.isEmpty() || line.startsWith('#')) {
+			return
+		}
+		def eq = line.indexOf('=')
+		if (eq <= 0) {
+			return
+		}
+		def key = line.substring(0, eq).trim()
+		def val = line.substring(eq + 1).trim()
+		if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+			val = val.substring(1, val.length() - 1)
+		}
+		map[key] = val
+	}
+	return map
+}
+
+tasks.named('bootRun') {
+	readBackendDotEnv().each { k, v -> environment k, v }
+}

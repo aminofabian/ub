@@ -33,12 +33,25 @@ import org.springframework.test.web.servlet.MvcResult;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import zelisline.ub.credits.domain.CreditAccount;
+import zelisline.ub.credits.domain.Customer;
+import zelisline.ub.credits.domain.CustomerPhone;
+import zelisline.ub.credits.repository.BusinessCreditSettingsRepository;
+import zelisline.ub.credits.repository.CreditAccountRepository;
+import zelisline.ub.credits.repository.CreditTransactionRepository;
+import zelisline.ub.credits.repository.CustomerPhoneRepository;
+import zelisline.ub.credits.repository.CustomerRepository;
+import zelisline.ub.credits.repository.LoyaltyTransactionRepository;
+import zelisline.ub.credits.repository.MpesaStkIntentRepository;
+import zelisline.ub.credits.repository.PublicPaymentClaimRepository;
+import zelisline.ub.credits.repository.WalletTransactionRepository;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.finance.domain.JournalLine;
+import zelisline.ub.finance.domain.LedgerAccount;
 import zelisline.ub.finance.repository.JournalEntryRepository;
 import zelisline.ub.finance.repository.JournalLineRepository;
 import zelisline.ub.finance.repository.LedgerAccountRepository;
@@ -138,6 +151,24 @@ class SaleSlice2IT {
     private JournalEntryRepository journalEntryRepository;
     @Autowired
     private LedgerAccountRepository ledgerAccountRepository;
+    @Autowired
+    private CustomerRepository customerRepository;
+    @Autowired
+    private CustomerPhoneRepository customerPhoneRepository;
+    @Autowired
+    private CreditAccountRepository creditAccountRepository;
+    @Autowired
+    private CreditTransactionRepository creditTransactionRepository;
+    @Autowired
+    private WalletTransactionRepository walletTransactionRepository;
+    @Autowired
+    private LoyaltyTransactionRepository loyaltyTransactionRepository;
+    @Autowired
+    private MpesaStkIntentRepository mpesaStkIntentRepository;
+    @Autowired
+    private PublicPaymentClaimRepository publicPaymentClaimRepository;
+    @Autowired
+    private BusinessCreditSettingsRepository businessCreditSettingsRepository;
 
     @MockitoBean
     @SuppressWarnings("unused")
@@ -153,9 +184,17 @@ class SaleSlice2IT {
         refundPaymentRepository.deleteAll();
         refundLineRepository.deleteAll();
         refundRepository.deleteAll();
+        mpesaStkIntentRepository.deleteAll();
+        publicPaymentClaimRepository.deleteAll();
+        loyaltyTransactionRepository.deleteAll();
+        walletTransactionRepository.deleteAll();
+        creditTransactionRepository.deleteAll();
         salePaymentRepository.deleteAll();
         saleItemRepository.deleteAll();
         saleRepository.deleteAll();
+        creditAccountRepository.deleteAll();
+        customerPhoneRepository.deleteAll();
+        customerRepository.deleteAll();
         journalLineRepository.deleteAll();
         journalEntryRepository.deleteAll();
         ledgerAccountRepository.deleteAll();
@@ -169,6 +208,7 @@ class SaleSlice2IT {
         roleRepository.deleteAll();
         permissionRepository.deleteAll();
         branchRepository.deleteAll();
+        businessCreditSettingsRepository.deleteAll();
         businessRepository.deleteAll();
 
         Business b = new Business();
@@ -309,6 +349,160 @@ class SaleSlice2IT {
 
         InventoryBatch early = inventoryBatchRepository.findById("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1").orElseThrow();
         assertThat(early.getQuantityRemaining()).isEqualByComparingTo(new BigDecimal("3"));
+    }
+
+    @Test
+    void postSale_customerCredit_raisesBalanceAndPostsArDebit() throws Exception {
+        String customerId = seedCustomerWithCreditAccount(new BigDecimal("1000.00"));
+        openShift(new BigDecimal("50.00"));
+
+        String body = """
+                {"branchId":"%s","customerId":"%s","lines":[{"itemId":"%s","quantity":1,"unitPrice":10}],"payments":[{"method":"customer_credit","amount":10}]}
+                """.formatted(branchId, customerId, itemId);
+
+        MvcResult r = mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("Idempotency-Key", "tab-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        String saleId = objectMapper.readTree(r.getResponse().getContentAsString()).get("id").asText();
+        CreditAccount acc = creditAccountRepository.findByCustomerIdAndBusinessId(customerId, TENANT).orElseThrow();
+        assertThat(acc.getBalanceOwed()).isEqualByComparingTo(new BigDecimal("10.00"));
+        assertThat(creditTransactionRepository.findAll()).hasSize(1);
+
+        Sale sale = saleRepository.findById(saleId).orElseThrow();
+        assertThat(sale.getCustomerId()).isEqualTo(customerId);
+        LedgerAccount ar = ledgerAccountRepository.findByBusinessIdAndCode(TENANT, "1100").orElseThrow();
+        List<JournalLine> lines = journalLineRepository.findByJournalEntryId(sale.getJournalEntryId());
+        assertJournalBalanced(lines);
+        assertThat(lines).hasSize(4);
+        boolean hasArDebit = lines.stream().anyMatch(l -> ar.getId().equals(l.getLedgerAccountId())
+                && l.getDebit().compareTo(new BigDecimal("10.00")) == 0);
+        assertThat(hasArDebit).isTrue();
+    }
+
+    @Test
+    void voidSale_reversesCustomerCreditDebt() throws Exception {
+        String customerId = seedCustomerWithCreditAccount(new BigDecimal("1000.00"));
+        openShift(new BigDecimal("50.00"));
+
+        String body = """
+                {"branchId":"%s","customerId":"%s","lines":[{"itemId":"%s","quantity":1,"unitPrice":10}],"payments":[{"method":"customer_credit","amount":10}]}
+                """.formatted(branchId, customerId, itemId);
+
+        MvcResult r = mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("Idempotency-Key", "tab-void-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        String saleId = objectMapper.readTree(r.getResponse().getContentAsString()).get("id").asText();
+
+        mockMvc.perform(post("/api/v1/sales/{saleId}/void", saleId)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"notes\":\"wrong items\"}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isOk());
+
+        CreditAccount acc = creditAccountRepository.findByCustomerIdAndBusinessId(customerId, TENANT).orElseThrow();
+        assertThat(acc.getBalanceOwed()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(creditTransactionRepository.findAll()).hasSize(2);
+    }
+
+    @Test
+    void postRefund_fullTabSale_reducesDebtAndKeepsDrawer() throws Exception {
+        String customerId = seedCustomerWithCreditAccount(new BigDecimal("1000.00"));
+        openShift(new BigDecimal("100.00"));
+
+        String saleBody = """
+                {"branchId":"%s","customerId":"%s","lines":[{"itemId":"%s","quantity":2,"unitPrice":5}],"payments":[{"method":"customer_credit","amount":10}]}
+                """.formatted(branchId, customerId, itemId);
+
+        MvcResult saleRes = mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(saleBody)
+                        .header("Idempotency-Key", "tab-before-refund-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        JsonNode saleJson = objectMapper.readTree(saleRes.getResponse().getContentAsString());
+        String saleId = saleJson.get("id").asText();
+        String saleItemId = saleJson.get("items").get(0).get("id").asText();
+
+        assertThat(creditAccountRepository.findByCustomerIdAndBusinessId(customerId, TENANT).orElseThrow().getBalanceOwed())
+                .isEqualByComparingTo(new BigDecimal("10.00"));
+        assertThat(creditTransactionRepository.findAll()).hasSize(1);
+
+        String idem = "refund-tab-" + UUID.randomUUID();
+        String refundBody = """
+                {"lines":[{"saleItemId":"%s","quantity":2.0}],"payments":[{"method":"customer_credit","amount":10}],"reason":"return"}
+                """.formatted(saleItemId);
+
+        mockMvc.perform(post("/api/v1/sales/{saleId}/refund", saleId)
+                        .contentType(APPLICATION_JSON)
+                        .content(refundBody)
+                        .header("Idempotency-Key", idem)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isOk());
+
+        CreditAccount acc = creditAccountRepository.findByCustomerIdAndBusinessId(customerId, TENANT).orElseThrow();
+        assertThat(acc.getBalanceOwed()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(creditTransactionRepository.findAll()).hasSize(2);
+
+        Sale sale = saleRepository.findById(saleId).orElseThrow();
+        assertThat(sale.getStatus()).isEqualTo(SalesConstants.SALE_STATUS_REFUNDED);
+        assertThat(sale.getRefundedTotal()).isEqualByComparingTo(new BigDecimal("10.00"));
+
+        MvcResult cur = mockMvc.perform(get("/api/v1/shifts/current")
+                        .param("branchId", branchId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(objectMapper.readTree(cur.getResponse().getContentAsString())
+                .get("expectedClosingCash")
+                .decimalValue()).isEqualByComparingTo(new BigDecimal("100.00"));
+
+        var ref = refundRepository.findByBusinessIdAndIdempotencyKey(TENANT, idem).orElseThrow();
+        assertJournalBalanced(journalLineRepository.findByJournalEntryId(ref.getJournalEntryId()));
+    }
+
+    private String seedCustomerWithCreditAccount(BigDecimal creditLimit) {
+        Customer c = new Customer();
+        c.setBusinessId(TENANT);
+        c.setName("Credit buyer");
+        customerRepository.save(c);
+
+        CustomerPhone ph = new CustomerPhone();
+        ph.setBusinessId(TENANT);
+        ph.setCustomerId(c.getId());
+        ph.setPhone("0700990001");
+        ph.setPrimary(true);
+        customerPhoneRepository.save(ph);
+
+        CreditAccount a = new CreditAccount();
+        a.setBusinessId(TENANT);
+        a.setCustomerId(c.getId());
+        a.setCreditLimit(creditLimit);
+        creditAccountRepository.save(a);
+        return c.getId();
     }
 
     @Test

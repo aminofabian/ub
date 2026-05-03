@@ -12,6 +12,7 @@ public record BusinessResponse(
         boolean active,
         String subscriptionTier,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        StorefrontSettingsResponse storefront
 ) {
 }

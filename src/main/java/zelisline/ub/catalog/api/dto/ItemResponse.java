@@ -30,6 +30,7 @@ public record ItemResponse(
         boolean hasExpiry,
         String imageKey,
         boolean active,
+        boolean webPublished,
         long version,
         List<ItemImageResponse> images,
         List<ItemSummaryResponse> variants

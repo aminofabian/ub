@@ -1,5 +1,6 @@
 package zelisline.ub.catalog.domain;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -28,6 +29,9 @@ public class Category {
     @Column(name = "name", nullable = false, length = 500)
     private String name;
 
+    @Column(name = "description", columnDefinition = "TEXT")
+    private String description;
+
     @Column(name = "slug", nullable = false, length = 191)
     private String slug;
 
@@ -36,6 +40,15 @@ public class Category {
 
     @Column(name = "icon", length = 500)
     private String icon;
+
+    @Column(name = "image_key", length = 2048)
+    private String imageKey;
+
+    @Column(name = "default_markup_pct", precision = 9, scale = 4)
+    private BigDecimal defaultMarkupPct;
+
+    @Column(name = "default_tax_rate_id", length = 36)
+    private String defaultTaxRateId;
 
     @Column(name = "parent_id", length = 36)
     private String parentId;

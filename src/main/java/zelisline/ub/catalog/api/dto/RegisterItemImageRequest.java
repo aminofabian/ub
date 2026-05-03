@@ -2,12 +2,10 @@ package zelisline.ub.catalog.api.dto;
 
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
 public record RegisterItemImageRequest(
-        @NotBlank
-        @Size(max = 500)
+        @Size(max = 512)
         String s3Key,
 
         @Min(0)
@@ -28,7 +26,27 @@ public record RegisterItemImageRequest(
         @Size(max = 500)
         String altText,
 
-        /** When true, sets the item's {@code imageKey} to {@code s3Key} (cover / listing thumbnail). */
-        Boolean primary
+        Boolean primary,
+
+        /** Cloudinary HTTPS delivery URL; use with {@code cloudinaryPublicId}. */
+        @Size(max = 2048)
+        String secureUrl,
+
+        @Size(max = 512)
+        String cloudinaryPublicId,
+
+        Long bytes,
+
+        @Size(max = 32)
+        String format,
+
+        @Size(max = 80)
+        String assetSignature,
+
+        @Size(max = 16)
+        String predominantColorHex,
+
+        @Size(max = 64)
+        String phash
 ) {
 }

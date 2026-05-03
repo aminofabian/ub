@@ -19,6 +19,7 @@ import zelisline.ub.tenancy.api.dto.CreateBranchRequest;
 import zelisline.ub.tenancy.api.dto.CreateBusinessRequest;
 import zelisline.ub.tenancy.api.dto.DomainResponse;
 import zelisline.ub.tenancy.api.dto.PatchBranchRequest;
+import zelisline.ub.tenancy.api.dto.StorefrontSettingsResponse;
 import zelisline.ub.tenancy.api.dto.UpdateBusinessRequest;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.domain.Business;
@@ -38,6 +39,7 @@ public class TenancyService {
     private final DomainMappingRepository domainMappingRepository;
     private final BranchRepository branchRepository;
     private final CatalogBootstrapService catalogBootstrapService;
+    private final StorefrontSettingsService storefrontSettingsService;
 
     @Transactional
     public BusinessResponse createBusiness(CreateBusinessRequest request) {
@@ -88,6 +90,13 @@ public class TenancyService {
         }
         if (request.active() != null) {
             business.setActive(request.active());
+        }
+        if (request.storefront() != null) {
+            String merged = storefrontSettingsService.mergeAndValidate(
+                    business.getId(),
+                    business.getSettings(),
+                    request.storefront());
+            business.setSettings(merged);
         }
 
         return toResponse(businessRepository.save(business));
@@ -219,6 +228,8 @@ public class TenancyService {
     }
 
     private BusinessResponse toResponse(Business business) {
+        StorefrontSettingsResponse storefront =
+                storefrontSettingsService.readFromSettingsJson(business.getSettings());
         return new BusinessResponse(
                 business.getId(),
                 business.getName(),
@@ -229,7 +240,8 @@ public class TenancyService {
                 business.isActive(),
                 business.getSubscriptionTier(),
                 business.getCreatedAt(),
-                business.getUpdatedAt()
+                business.getUpdatedAt(),
+                storefront
         );
     }
 

@@ -97,6 +97,13 @@ public class GlobalExceptionHandler {
             body.setDetail("SKU already in use");
             return problem(body, HttpStatus.CONFLICT);
         }
+        if (m.contains("uq_customer_phones_business_phone")) {
+            ProblemDetail body = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+            body.setTitle("Conflict");
+            body.setType(URI.create(PROBLEM_BASE + "duplicate-customer-phone"));
+            body.setDetail("Phone already in use for this business");
+            return problem(body, HttpStatus.CONFLICT);
+        }
         ProblemDetail body = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
         body.setTitle("Invalid data");
         body.setType(URI.create(PROBLEM_BASE + "data-integrity"));

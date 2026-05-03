@@ -24,6 +24,9 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.credits.application.CreditSaleDebtService;
+import zelisline.ub.credits.application.LoyaltyPointsService;
+import zelisline.ub.credits.application.WalletLedgerService;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.finance.LedgerAccountCodes;
@@ -39,6 +42,7 @@ import zelisline.ub.purchasing.domain.InventoryBatch;
 import zelisline.ub.purchasing.domain.StockMovement;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.purchasing.repository.StockMovementRepository;
+import zelisline.ub.sales.SalePaymentLedger;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.PostRefundRequest;
 import zelisline.ub.sales.api.dto.RefundLineResponse;
@@ -80,6 +84,9 @@ public class SaleRefundService {
     private final LedgerAccountRepository ledgerAccountRepository;
     private final JournalEntryRepository journalEntryRepository;
     private final JournalLineRepository journalLineRepository;
+    private final CreditSaleDebtService creditSaleDebtService;
+    private final WalletLedgerService walletLedgerService;
+    private final LoyaltyPointsService loyaltyPointsService;
     @PersistenceContext
     private EntityManager entityManager;
 
@@ -103,6 +110,9 @@ public class SaleRefundService {
 
         RefundComputation comp = computeRefund(sale, req);
         List<NormalizedPay> pays = normalizeRefundPayments(req.payments(), comp.totalMoney());
+        BigDecimal walletRefundShare = sumPayMethod(pays, SalesConstants.PAYMENT_METHOD_CUSTOMER_WALLET);
+        assertWalletRefundAllowed(sale, walletRefundShare);
+        assertCreditRefundAllowed(sale, pays);
 
         Shift shift = shiftRepository
                 .findByBusinessIdAndBranchIdAndStatusForUpdate(
@@ -115,6 +125,11 @@ public class SaleRefundService {
         applyDrawerRefund(shift, pays);
 
         String jeId = postRefundJournal(businessId, refundId, comp.totalMoney(), comp.totalCogs(), pays);
+        creditSaleDebtService.reduceDebtForCreditRefund(
+                businessId, saleId, sale.getCustomerId(), sumCustomerCreditPay(pays));
+        walletLedgerService.refundToWallet(businessId, saleId, sale.getCustomerId(), walletRefundShare);
+        loyaltyPointsService.proportionallyAdjustAfterRefund(
+                businessId, saleId, sale.getCustomerId(), sale.getGrandTotal(), comp.totalMoney());
 
         Refund refund = persistRefundAggregate(
                 businessId,
@@ -311,9 +326,7 @@ public class SaleRefundService {
 
         Map<String, BigDecimal> tenderCr = new LinkedHashMap<>();
         for (NormalizedPay p : pays) {
-            String code = SalesConstants.PAYMENT_METHOD_MPESA_MANUAL.equals(p.method())
-                    ? LedgerAccountCodes.MPESA_CLEARING
-                    : LedgerAccountCodes.OPERATING_CASH;
+            String code = SalePaymentLedger.ledgerCodeForPaymentMethod(p.method());
             tenderCr.merge(code, p.amount(), BigDecimal::add);
         }
 
@@ -468,10 +481,10 @@ public class SaleRefundService {
             BigDecimal amt = p.amount().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
             String ref = blankToNull(p.reference());
             if (SalesConstants.PAYMENT_METHOD_MPESA_MANUAL.equals(m) && ref == null) {
-                throw new ResponseStatusException(
-                        HttpStatus.BAD_REQUEST,
-                        "M-Pesa manual refunds require a reference"
-                );
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "M-Pesa manual refunds require a reference");
+            }
+            if (refNotAllowed(m) && ref != null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Refund tender does not use a payment reference");
             }
             sum = sum.add(amt);
             out.add(new NormalizedPay(m, amt, ref));
@@ -480,6 +493,22 @@ public class SaleRefundService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Refund payments must sum to line totals");
         }
         return out;
+    }
+
+    private static boolean refNotAllowed(String m) {
+        return SalesConstants.PAYMENT_METHOD_CUSTOMER_CREDIT.equals(m)
+                || SalesConstants.PAYMENT_METHOD_CUSTOMER_WALLET.equals(m)
+                || SalesConstants.PAYMENT_METHOD_LOYALTY_REDEEM.equals(m);
+    }
+
+    private static BigDecimal sumPayMethod(List<NormalizedPay> pays, String method) {
+        BigDecimal s = BigDecimal.ZERO;
+        for (NormalizedPay p : pays) {
+            if (method.equals(p.method())) {
+                s = s.add(p.amount());
+            }
+        }
+        return s.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
     }
 
     private static BigDecimal sumCash(List<NormalizedPay> pays) {
@@ -498,10 +527,41 @@ public class SaleRefundService {
         }
         String m = raw.trim().toLowerCase(Locale.ROOT);
         if (!SalesConstants.PAYMENT_METHOD_CASH.equals(m)
-                && !SalesConstants.PAYMENT_METHOD_MPESA_MANUAL.equals(m)) {
+                && !SalesConstants.PAYMENT_METHOD_MPESA_MANUAL.equals(m)
+                && !SalesConstants.PAYMENT_METHOD_CUSTOMER_CREDIT.equals(m)
+                && !SalesConstants.PAYMENT_METHOD_CUSTOMER_WALLET.equals(m)
+                && !SalesConstants.PAYMENT_METHOD_LOYALTY_REDEEM.equals(m)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported payment method");
         }
         return m;
+    }
+
+    private static void assertWalletRefundAllowed(Sale sale, BigDecimal walletPortion) {
+        if (walletPortion.signum() <= 0) {
+            return;
+        }
+        if (sale.getCustomerId() == null || sale.getCustomerId().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customer required for wallet refund tender");
+        }
+    }
+
+    private static void assertCreditRefundAllowed(Sale sale, List<NormalizedPay> pays) {
+        if (sumCustomerCreditPay(pays).signum() <= 0) {
+            return;
+        }
+        if (sale.getCustomerId() == null || sale.getCustomerId().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customer required for tab refund");
+        }
+    }
+
+    private static BigDecimal sumCustomerCreditPay(List<NormalizedPay> pays) {
+        BigDecimal s = BigDecimal.ZERO;
+        for (NormalizedPay p : pays) {
+            if (SalesConstants.PAYMENT_METHOD_CUSTOMER_CREDIT.equals(p.method())) {
+                s = s.add(p.amount());
+            }
+        }
+        return s.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
     }
 
     private static String normalizeIdempotencyKey(String raw) {

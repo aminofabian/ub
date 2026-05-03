@@ -55,6 +55,9 @@ public class Sale {
     @Column(name = "sold_by", nullable = false, length = 36)
     private String soldBy;
 
+    @Column(name = "customer_id", length = 36)
+    private String customerId;
+
     @Column(name = "sold_at", nullable = false)
     private Instant soldAt;
 

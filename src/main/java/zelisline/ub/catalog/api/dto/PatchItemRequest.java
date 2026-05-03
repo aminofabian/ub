@@ -24,7 +24,8 @@ public record PatchItemRequest(
         BigDecimal reorderQty,
         Integer expiresAfterDays,
         Boolean hasExpiry,
-        @Size(max = 500) String imageKey,
-        Boolean active
+        @Size(max = 2048) String imageKey,
+        Boolean active,
+        Boolean webPublished
 ) {
 }

@@ -15,6 +15,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.finance.LedgerAccountCodes;
+import zelisline.ub.finance.application.CashDrawerSummaryService;
 import zelisline.ub.finance.application.LedgerBootstrapService;
 import zelisline.ub.finance.domain.JournalEntry;
 import zelisline.ub.finance.domain.JournalLine;
@@ -39,6 +40,7 @@ public class ShiftService {
     private final ShiftRepository shiftRepository;
     private final BranchRepository branchRepository;
     private final LedgerBootstrapService ledgerBootstrapService;
+    private final CashDrawerSummaryService cashDrawerSummaryService;
     private final LedgerAccountRepository ledgerAccountRepository;
     private final JournalEntryRepository journalEntryRepository;
     private final JournalLineRepository journalLineRepository;
@@ -93,6 +95,7 @@ public class ShiftService {
             s.setCloseJournalEntryId(postVarianceJournal(businessId, s.getId(), variance));
         }
         shiftRepository.save(s);
+        cashDrawerSummaryService.upsertForClosedShift(s);
         return toDto(s);
     }
 

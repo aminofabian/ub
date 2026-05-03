@@ -1,6 +1,7 @@
 package zelisline.ub.pricing.repository;
 
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -23,6 +24,19 @@ public interface SellingPriceRepository extends JpaRepository<SellingPrice, Stri
             @Param("businessId") String businessId,
             @Param("itemId") String itemId,
             @Param("branchId") String branchId
+    );
+
+    @Query("""
+            select sp from SellingPrice sp
+             where sp.businessId = :businessId
+               and sp.itemId in :itemIds
+               and ((:branchId is null and sp.branchId is null) or sp.branchId = :branchId)
+               and sp.effectiveTo is null
+            """)
+    List<SellingPrice> findOpenEndedForBranchAndItemIds(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("itemIds") Collection<String> itemIds
     );
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)

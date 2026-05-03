@@ -30,6 +30,11 @@ import zelisline.ub.finance.repository.LedgerAccountRepository;
 import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.inventory.api.dto.BatchAllocationLine;
 import zelisline.ub.inventory.application.InventoryBatchPickerService;
+import zelisline.ub.credits.application.BusinessCreditSettingsService;
+import zelisline.ub.credits.application.CreditSaleDebtService;
+import zelisline.ub.credits.application.LoyaltyPointsService;
+import zelisline.ub.credits.application.WalletLedgerService;
+import zelisline.ub.sales.SalePaymentLedger;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.PostSaleLineRequest;
 import zelisline.ub.sales.api.dto.PostSalePaymentRequest;
@@ -64,6 +69,10 @@ public class SaleService {
     private final LedgerAccountRepository ledgerAccountRepository;
     private final JournalEntryRepository journalEntryRepository;
     private final JournalLineRepository journalLineRepository;
+    private final CreditSaleDebtService creditSaleDebtService;
+    private final WalletLedgerService walletLedgerService;
+    private final LoyaltyPointsService loyaltyPointsService;
+    private final BusinessCreditSettingsService businessCreditSettingsService;
 
     @Transactional
     public SaleCreationOutcome createSale(String businessId, String rawIdempotencyKey, PostSaleRequest req, String userId) {
@@ -76,10 +85,20 @@ public class SaleService {
     }
 
     private SaleResponse completeNewSale(String businessId, String idempotencyKey, PostSaleRequest req, String userId) {
+        var creditSettingsResolved = businessCreditSettingsService.resolveForBusiness(businessId);
         requireBranch(businessId, req.branchId());
         BigDecimal grandTotal = computeCartTotal(req.lines());
         validatePositiveMoney(grandTotal);
-        List<NormalizedPayment> paymentsNorm = normalizeAndValidatePayments(req.payments(), grandTotal);
+        ResolvedPayments resolved = normalizeAndResolvePayments(req.payments(), grandTotal);
+        BigDecimal creditTenderTotal = sumPaymentMethod(resolved.normalized(), SalesConstants.PAYMENT_METHOD_CUSTOMER_CREDIT);
+        BigDecimal walletTenderTotal = sumPaymentMethod(resolved.normalized(), SalesConstants.PAYMENT_METHOD_CUSTOMER_WALLET);
+        BigDecimal redeemTenderTotal = sumPaymentMethod(resolved.normalized(), SalesConstants.PAYMENT_METHOD_LOYALTY_REDEEM);
+
+        String customerId = blankToNull(req.customerId());
+        enforceCustomerLinkage(customerId, creditTenderTotal, walletTenderTotal, redeemTenderTotal, resolved.overpay());
+        validateCustomerForCreditSale(businessId, customerId, creditTenderTotal);
+        loyaltyPointsService.validateRedeemTender(businessId, customerId, grandTotal, redeemTenderTotal,
+                creditSettingsResolved);
 
         shiftRepository
                 .findByBusinessIdAndBranchIdAndStatus(businessId, req.branchId(), SalesConstants.SHIFT_STATUS_OPEN)
@@ -93,41 +112,71 @@ public class SaleService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Shift closed before sale completed"));
 
         BigDecimal cogsTotal = sumCost(saleItems);
-        String journalId = postSaleJournal(businessId, saleId, grandTotal, cogsTotal, paymentsNorm);
-
-        BigDecimal cashIn = sumCashTender(paymentsNorm);
-        if (cashIn.signum() > 0) {
-            applyDrawerCash(shift, cashIn);
-        }
-        shiftRepository.save(shift);
-
         Instant effectiveSoldAt = resolveEffectiveSoldAt(req.clientSoldAt());
-        persistSaleAggregate(
+
+        saveNewSaleAndPayments(
                 businessId,
                 req.branchId(),
                 shift.getId(),
                 idempotencyKey,
                 saleId,
                 grandTotal,
-                journalId,
                 userId,
-                paymentsNorm,
-                effectiveSoldAt);
+                resolved.normalized(),
+                effectiveSoldAt,
+                customerId
+        );
         saleItemRepository.saveAll(saleItems);
+
+        String journalId = postSaleJournal(businessId, saleId, grandTotal, cogsTotal,
+                resolved.normalized(), resolved.overpay());
+        attachJournalToSale(saleId, businessId, journalId);
+        creditSaleDebtService.applyDebtForNewSale(businessId, saleId, customerId, creditTenderTotal);
+        walletLedgerService.applyWalletForCompletedSale(
+                businessId, saleId, customerId, walletTenderTotal, resolved.overpay());
+        loyaltyPointsService.applyAfterCompletedSale(
+                businessId, customerId, saleId, grandTotal, redeemTenderTotal, creditSettingsResolved);
+
+        BigDecimal cashIn = sumCashTender(resolved.normalized());
+        if (cashIn.signum() > 0) {
+            applyDrawerCash(shift, cashIn);
+        }
+        shiftRepository.save(shift);
+
         return toResponse(loadSaleOrThrow(saleId, businessId));
     }
 
-    private void persistSaleAggregate(
+    private void enforceCustomerLinkage(
+            String customerId,
+            BigDecimal creditTenderTotal,
+            BigDecimal walletTenderTotal,
+            BigDecimal redeemTenderTotal,
+            BigDecimal overpay
+    ) {
+        boolean walletNeed = walletTenderTotal.signum() > 0 || overpay.signum() > 0;
+        boolean need = creditTenderTotal.signum() > 0 || walletNeed || redeemTenderTotal.signum() > 0;
+        if (!need) {
+            return;
+        }
+        if (customerId == null || customerId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customer required for this tender mix");
+        }
+    }
+
+    private record ResolvedPayments(List<NormalizedPayment> normalized, BigDecimal overpay) {
+    }
+
+    private void saveNewSaleAndPayments(
             String businessId,
             String branchId,
             String shiftId,
             String idempotencyKey,
             String saleId,
             BigDecimal grandTotal,
-            String journalId,
             String userId,
             List<NormalizedPayment> paymentsNorm,
-            Instant soldAt
+            Instant soldAt,
+            String customerIdOrNull
     ) {
         Sale sale = new Sale();
         sale.setId(saleId);
@@ -137,9 +186,12 @@ public class SaleService {
         sale.setStatus(SalesConstants.SALE_STATUS_COMPLETED);
         sale.setIdempotencyKey(idempotencyKey);
         sale.setGrandTotal(grandTotal);
-        sale.setJournalEntryId(journalId);
+        sale.setJournalEntryId(null);
         sale.setSoldBy(userId);
         sale.setSoldAt(soldAt);
+        if (customerIdOrNull != null) {
+            sale.setCustomerId(customerIdOrNull);
+        }
         saleRepository.save(sale);
 
         int order = 0;
@@ -152,6 +204,22 @@ public class SaleService {
             row.setSortOrder(order++);
             salePaymentRepository.save(row);
         }
+    }
+
+    private void attachJournalToSale(String saleId, String businessId, String journalId) {
+        Sale sale = loadSaleOrThrow(saleId, businessId);
+        sale.setJournalEntryId(journalId);
+        saleRepository.save(sale);
+    }
+
+    private void validateCustomerForCreditSale(String businessId, String customerId, BigDecimal creditTenderTotal) {
+        if (creditTenderTotal.signum() <= 0) {
+            return;
+        }
+        if (customerId == null || customerId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customer required for tab tender");
+        }
+        creditSaleDebtService.assertCustomerExists(businessId, customerId);
     }
 
     private Sale loadSaleOrThrow(String saleId, String businessId) {
@@ -261,7 +329,8 @@ public class SaleService {
             String saleId,
             BigDecimal grandTotal,
             BigDecimal cogs,
-            List<NormalizedPayment> paymentsNorm
+            List<NormalizedPayment> paymentsNorm,
+            BigDecimal overpayToWallet
     ) {
         ledgerBootstrapService.ensureStandardAccounts(businessId);
         LedgerAccount revenue = ledger(businessId, LedgerAccountCodes.SALES_REVENUE);
@@ -270,9 +339,7 @@ public class SaleService {
 
         Map<String, BigDecimal> tenderDr = new LinkedHashMap<>();
         for (NormalizedPayment p : paymentsNorm) {
-            String code = SalesConstants.PAYMENT_METHOD_MPESA_MANUAL.equals(p.method())
-                    ? LedgerAccountCodes.MPESA_CLEARING
-                    : LedgerAccountCodes.OPERATING_CASH;
+            String code = SalePaymentLedger.ledgerCodeForPaymentMethod(p.method());
             tenderDr.merge(code, p.amount(), BigDecimal::add);
         }
 
@@ -286,6 +353,7 @@ public class SaleService {
 
         grandTotal = grandTotal.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         cogs = cogs.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal overpay = overpayToWallet.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
 
         List<JournalLine> lines = new ArrayList<>();
         for (Map.Entry<String, BigDecimal> e : tenderDr.entrySet()) {
@@ -293,6 +361,10 @@ public class SaleService {
             lines.add(journalDebit(je.getId(), ledger(businessId, e.getKey()).getId(), amt));
         }
         lines.add(journalCredit(je.getId(), revenue.getId(), grandTotal));
+        if (overpay.signum() > 0) {
+            LedgerAccount wl = ledger(businessId, LedgerAccountCodes.CUSTOMER_WALLET_LIABILITY);
+            lines.add(journalCredit(je.getId(), wl.getId(), overpay));
+        }
         lines.add(journalDebit(je.getId(), cogsAcc.getId(), cogs));
         lines.add(journalCredit(je.getId(), inv.getId(), cogs));
         journalLineRepository.saveAll(lines);
@@ -358,29 +430,51 @@ public class SaleService {
         }
     }
 
-    private List<NormalizedPayment> normalizeAndValidatePayments(
+    private ResolvedPayments normalizeAndResolvePayments(
             List<PostSalePaymentRequest> payments,
             BigDecimal grandTotal
     ) {
         List<NormalizedPayment> out = new ArrayList<>();
         BigDecimal sum = BigDecimal.ZERO;
+        BigDecimal gp = grandTotal.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         for (PostSalePaymentRequest p : payments) {
             String m = normalizePaymentMethod(p.method());
             BigDecimal amt = p.amount().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
             String ref = blankToNull(p.reference());
             if (SalesConstants.PAYMENT_METHOD_MPESA_MANUAL.equals(m) && ref == null) {
-                throw new ResponseStatusException(
-                        HttpStatus.BAD_REQUEST,
-                        "M-Pesa manual payments require a reference"
-                );
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "M-Pesa manual payments require a reference");
             }
+            forbidReferenceOnNonReferenceTender(m, ref);
             sum = sum.add(amt);
             out.add(new NormalizedPayment(m, amt, ref));
         }
-        if (sum.setScale(MONEY_SCALE, RoundingMode.HALF_UP).compareTo(grandTotal) != 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Payments must sum to line totals");
+        sum = sum.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        if (sum.compareTo(gp) < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Payments must cover line totals");
         }
-        return out;
+        BigDecimal overpay = sum.subtract(gp).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        return new ResolvedPayments(out, overpay);
+    }
+
+    private static void forbidReferenceOnNonReferenceTender(String method, String ref) {
+        if (ref == null) {
+            return;
+        }
+        if (SalesConstants.PAYMENT_METHOD_CUSTOMER_CREDIT.equals(method)
+                || SalesConstants.PAYMENT_METHOD_CUSTOMER_WALLET.equals(method)
+                || SalesConstants.PAYMENT_METHOD_LOYALTY_REDEEM.equals(method)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "This tender does not use a payment reference");
+        }
+    }
+
+    private static BigDecimal sumPaymentMethod(List<NormalizedPayment> paymentsNorm, String method) {
+        BigDecimal s = BigDecimal.ZERO;
+        for (NormalizedPayment p : paymentsNorm) {
+            if (method.equals(p.method())) {
+                s = s.add(p.amount());
+            }
+        }
+        return s.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
     }
 
     private static BigDecimal sumCashTender(List<NormalizedPayment> paymentsNorm) {
@@ -402,7 +496,10 @@ public class SaleService {
         }
         String m = raw.trim().toLowerCase(Locale.ROOT);
         if (!SalesConstants.PAYMENT_METHOD_CASH.equals(m)
-                && !SalesConstants.PAYMENT_METHOD_MPESA_MANUAL.equals(m)) {
+                && !SalesConstants.PAYMENT_METHOD_MPESA_MANUAL.equals(m)
+                && !SalesConstants.PAYMENT_METHOD_CUSTOMER_CREDIT.equals(m)
+                && !SalesConstants.PAYMENT_METHOD_CUSTOMER_WALLET.equals(m)
+                && !SalesConstants.PAYMENT_METHOD_LOYALTY_REDEEM.equals(m)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported payment method");
         }
         return m;

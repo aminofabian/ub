@@ -24,8 +24,17 @@ public class ItemImage {
     @Column(name = "item_id", nullable = false, length = 36)
     private String itemId;
 
-    @Column(name = "s3_key", nullable = false, length = 500)
+    @Column(name = "s3_key", length = 512)
     private String s3Key;
+
+    @Column(name = "provider", nullable = false, length = 32)
+    private String provider = ItemImageStorageProvider.LEGACY;
+
+    @Column(name = "cloudinary_public_id", length = 512)
+    private String cloudinaryPublicId;
+
+    @Column(name = "secure_url", length = 2048)
+    private String secureUrl;
 
     @Column(name = "width")
     private Integer width;
@@ -41,6 +50,21 @@ public class ItemImage {
 
     @Column(name = "sort_order", nullable = false)
     private int sortOrder;
+
+    @Column(name = "bytes")
+    private Long bytes;
+
+    @Column(name = "format", length = 32)
+    private String format;
+
+    @Column(name = "asset_signature", length = 80)
+    private String assetSignature;
+
+    @Column(name = "predominant_color_hex", length = 16)
+    private String predominantColorHex;
+
+    @Column(name = "phash", length = 64)
+    private String phash;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

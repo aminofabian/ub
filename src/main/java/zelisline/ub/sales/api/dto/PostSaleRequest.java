@@ -12,6 +12,8 @@ public record PostSaleRequest(
         @NotEmpty @Valid List<PostSaleLineRequest> lines,
         @NotEmpty @Valid List<PostSalePaymentRequest> payments,
         /** When set (e.g. offline POS), may be replaced by server time if skew exceeds policy. */
-        Instant clientSoldAt
+        Instant clientSoldAt,
+        /** Required when any payment uses {@code customer_credit} (tab / AR). */
+        String customerId
 ) {
 }

@@ -390,6 +390,33 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/SaleResponse'
+  /api/v1/sales/intelligence/revenue-by-category:
+    get:
+      tags:
+      - sales-intelligence-controller
+      operationId: revenueByCategory
+      parameters:
+      - name: from
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: to
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RevenueByCategoryRow'
   /api/v1/sales/{saleId}/void:
     post:
       tags:
@@ -819,6 +846,12 @@ paths:
         required: false
         schema:
           type: string
+      - name: includeCategoryDescendants
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
       - name: noBarcode
         in: query
         required: false
@@ -976,6 +1009,47 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/ItemImageResponse'
+  /api/v1/items/{id}/images/upload:
+    post:
+      tags:
+      - items-controller
+      operationId: uploadItemImageCloudinary
+      summary: Upload a product image to Cloudinary (stores URL + metadata only in DB)
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Image bytes (JPEG, PNG, WebP, GIF, …)
+                altText:
+                  type: string
+                  maxLength: 500
+                primary:
+                  type: boolean
+                  default: true
+                  description: When true, sets item cover imageKey to the new secure URL
+              required:
+              - file
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ItemImageResponse'
+        '503':
+          description: Cloudinary not configured on this server
   /api/v1/item-types:
     get:
       tags:
@@ -1226,6 +1300,173 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/CategoryResponse'
+  /api/v1/categories/tree:
+    get:
+      tags:
+      - categories-controller
+      operationId: categoryTree
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CategoryTreeNodeResponse'
+  /api/v1/categories/{id}/children:
+    get:
+      tags:
+      - categories-controller
+      operationId: categoryChildren
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CategoryResponse'
+  /api/v1/categories/{id}/price-rules:
+    get:
+      tags:
+      - categories-controller
+      operationId: listCategoryPriceRules
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CategoryLinkedPriceRuleResponse'
+    post:
+      tags:
+      - categories-controller
+      operationId: linkCategoryPriceRule
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostCategoryPriceRuleRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/CategoryLinkedPriceRuleResponse'
+  /api/v1/categories/{id}/price-rules/{ruleId}:
+    delete:
+      tags:
+      - categories-controller
+      operationId: unlinkCategoryPriceRule
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: ruleId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: No Content
+  /api/v1/categories/{id}/supplier-links:
+    post:
+      tags:
+      - categories-controller
+      operationId: addCategorySupplierLink
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCategorySupplierLinkRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/CategorySupplierSummaryResponse'
+  /api/v1/categories/{id}/supplier-links/{supplierId}:
+    patch:
+      tags:
+      - categories-controller
+      operationId: patchCategorySupplierLink
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: supplierId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchCategorySupplierLinkRequest'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/CategorySupplierSummaryResponse'
+    delete:
+      tags:
+      - categories-controller
+      operationId: removeCategorySupplierLink
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: supplierId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: No Content
   /api/v1/branches:
     get:
       tags:
@@ -1702,6 +1943,24 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/UserResponse'
+  /api/v1/items/{id}/pricing-context:
+    get:
+      tags:
+      - items-controller
+      operationId: getItemPricingContext
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/EffectivePricingContextResponse'
   /api/v1/items/{id}:
     get:
       tags:
@@ -3440,7 +3699,7 @@ components:
           type: boolean
         imageKey:
           type: string
-          maxLength: 500
+          maxLength: 2048
           minLength: 0
       required:
       - itemTypeId
@@ -3453,6 +3712,16 @@ components:
           type: string
         s3Key:
           type: string
+          description: Legacy storage key; Cloudinary rows often duplicate publicId here
+        secureUrl:
+          type: string
+          maxLength: 2048
+        publicId:
+          type: string
+          maxLength: 512
+        provider:
+          type: string
+          description: legacy | cloudinary
         width:
           type: integer
           format: int32
@@ -3466,6 +3735,20 @@ components:
           type: string
         altText:
           type: string
+        bytes:
+          type: integer
+          format: int64
+        format:
+          type: string
+        assetSignature:
+          type: string
+          description: Provider version / etag string
+        predominantColorHex:
+          type: string
+          description: Dominant color from Cloudinary colors analysis
+        phash:
+          type: string
+          description: Perceptual hash for deduplication workflows
         createdAt:
           type: string
           format: date-time
@@ -3524,6 +3807,7 @@ components:
           type: boolean
         imageKey:
           type: string
+          maxLength: 2048
         active:
           type: boolean
         version:
@@ -3550,8 +3834,15 @@ components:
           type: string
         variantName:
           type: string
+        categoryId:
+          type: string
         imageKey:
           type: string
+          maxLength: 2048
+        thumbnailUrl:
+          type: string
+          description: HTTPS URL for list thumbnails; first gallery image when imageKey is not a delivery URL
+          maxLength: 2048
         active:
           type: boolean
         variantOfItemId:
@@ -3648,18 +3939,18 @@ components:
           type: number
         imageKey:
           type: string
-          maxLength: 500
+          maxLength: 2048
           minLength: 0
       required:
       - sku
       - variantName
     RegisterItemImageRequest:
       type: object
+      description: Register already-uploaded image metadata. Provide either legacy s3Key or Cloudinary secureUrl + cloudinaryPublicId.
       properties:
         s3Key:
           type: string
-          maxLength: 500
-          minLength: 0
+          maxLength: 512
         sortOrder:
           type: integer
           format: int32
@@ -3678,15 +3969,32 @@ components:
         contentType:
           type: string
           maxLength: 128
-          minLength: 0
         altText:
           type: string
           maxLength: 500
-          minLength: 0
         primary:
           type: boolean
-      required:
-      - s3Key
+        secureUrl:
+          type: string
+          maxLength: 2048
+        cloudinaryPublicId:
+          type: string
+          maxLength: 512
+        bytes:
+          type: integer
+          format: int64
+        format:
+          type: string
+          maxLength: 32
+        assetSignature:
+          type: string
+          maxLength: 80
+        predominantColorHex:
+          type: string
+          maxLength: 16
+        phash:
+          type: string
+          maxLength: 64
     CreateItemTypeRequest:
       type: object
       properties:
@@ -3957,6 +4265,15 @@ components:
         position:
           type: integer
           format: int32
+        description:
+          type: string
+          maxLength: 10000
+        defaultMarkupPct:
+          type: number
+        defaultTaxRateId:
+          type: string
+          maxLength: 36
+          minLength: 0
       required:
       - name
     CategoryResponse:
@@ -3973,10 +4290,181 @@ components:
           format: int32
         icon:
           type: string
+          nullable: true
         parentId:
           type: string
+          nullable: true
         active:
           type: boolean
+        description:
+          type: string
+          nullable: true
+        defaultMarkupPct:
+          type: number
+          nullable: true
+        defaultTaxRateId:
+          type: string
+          nullable: true
+        defaultTaxRate:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/TaxRateSummaryResponse'
+        imageKey:
+          type: string
+          nullable: true
+        thumbnailUrl:
+          type: string
+          nullable: true
+        linkedSuppliers:
+          type: array
+          items:
+            $ref: '#/components/schemas/CategorySupplierSummaryResponse'
+    TaxRateSummaryResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        ratePercent:
+          type: number
+        inclusive:
+          type: boolean
+    CategorySupplierSummaryResponse:
+      type: object
+      properties:
+        supplierId:
+          type: string
+        supplierName:
+          type: string
+        sortOrder:
+          type: integer
+          format: int32
+        primary:
+          type: boolean
+    CategoryTreeNodeResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        parentId:
+          type: string
+          nullable: true
+        position:
+          type: integer
+          format: int32
+        depth:
+          type: integer
+          format: int32
+        active:
+          type: boolean
+        thumbnailUrl:
+          type: string
+          nullable: true
+        description:
+          type: string
+        childCount:
+          type: integer
+          format: int32
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/CategoryTreeNodeResponse'
+    CategoryLinkedPriceRuleResponse:
+      type: object
+      properties:
+        ruleId:
+          type: string
+        ruleName:
+          type: string
+        precedence:
+          type: integer
+          format: int32
+    PostCategoryPriceRuleRequest:
+      type: object
+      properties:
+        ruleId:
+          type: string
+          maxLength: 36
+          minLength: 1
+        precedence:
+          type: integer
+          format: int32
+      required:
+      - ruleId
+    PatchCategorySupplierLinkRequest:
+      type: object
+      properties:
+        primary:
+          type: boolean
+      required:
+      - primary
+    CreateCategorySupplierLinkRequest:
+      type: object
+      properties:
+        supplierId:
+          type: string
+          maxLength: 36
+          minLength: 1
+        sortOrder:
+          type: integer
+          format: int32
+        primary:
+          type: boolean
+      required:
+      - supplierId
+    LinkedPriceRuleRef:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        precedence:
+          type: integer
+          format: int32
+      required:
+      - id
+      - name
+      - precedence
+    EffectivePricingContextResponse:
+      type: object
+      properties:
+        itemId:
+          type: string
+        categoryId:
+          type: string
+          nullable: true
+        categoryName:
+          type: string
+          nullable: true
+        inheritedMarkupPercent:
+          type: number
+          nullable: true
+        markupSourceKey:
+          type: string
+        resolvedTaxRateId:
+          type: string
+          nullable: true
+        resolvedTaxRateName:
+          type: string
+          nullable: true
+        resolvedTaxRatePercent:
+          type: number
+          nullable: true
+        taxInclusive:
+          type: boolean
+          nullable: true
+        taxSourceKey:
+          type: string
+        linkedPriceRules:
+          type: array
+          items:
+            $ref: '#/components/schemas/LinkedPriceRuleRef'
     CreateBranchRequest:
       type: object
       properties:
@@ -4400,7 +4888,7 @@ components:
           type: boolean
         imageKey:
           type: string
-          maxLength: 500
+          maxLength: 2048
           minLength: 0
         active:
           type: boolean
@@ -4441,6 +4929,9 @@ components:
           type: string
           maxLength: 36
           minLength: 0
+        root:
+          type: boolean
+          description: When true, clears parent (top-level category). Takes precedence over parentId.
         active:
           type: boolean
         position:
@@ -4450,6 +4941,21 @@ components:
           type: string
           maxLength: 500
           minLength: 0
+        description:
+          type: string
+          maxLength: 10000
+        clearDescription:
+          type: boolean
+        defaultMarkupPct:
+          type: number
+        clearDefaultMarkup:
+          type: boolean
+        defaultTaxRateId:
+          type: string
+          maxLength: 36
+          minLength: 0
+        clearDefaultTaxRate:
+          type: boolean
     PatchBranchRequest:
       type: object
       properties:
@@ -4632,6 +5138,15 @@ components:
         categoryName:
           type: string
         spendTotal:
+          type: number
+    RevenueByCategoryRow:
+      type: object
+      properties:
+        categoryId:
+          type: string
+        categoryName:
+          type: string
+        netRevenue:
           type: number
     SingleSourceRiskRow:
       type: object

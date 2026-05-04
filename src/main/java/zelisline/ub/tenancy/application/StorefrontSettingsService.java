@@ -1,7 +1,9 @@
 package zelisline.ub.tenancy.application;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
@@ -17,6 +19,10 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.tenancy.api.dto.StorefrontPatchRequest;
 import zelisline.ub.tenancy.api.dto.StorefrontSettingsResponse;
+import zelisline.ub.tenancy.api.dto.TenantAuthConfigDto;
+import zelisline.ub.tenancy.api.dto.TenantBrandingDto;
+import zelisline.ub.tenancy.api.dto.TenantConfigBundle;
+import zelisline.ub.tenancy.api.dto.TenantPasswordPolicyDto;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.repository.BranchRepository;
 
@@ -25,6 +31,11 @@ import zelisline.ub.tenancy.repository.BranchRepository;
 public class StorefrontSettingsService {
 
     private static final String KEY_STOREFRONT = "storefront";
+    private static final String KEY_BRANDING = "branding";
+    private static final String KEY_AUTH = "authConfig";
+    private static final String KEY_FEATURES = "featureFlags";
+
+    private static final List<String> SUPPORTED_AUTH_METHODS = List.of("password", "google", "microsoft", "saml");
 
     private final ObjectMapper objectMapper;
     private final BranchRepository branchRepository;
@@ -52,6 +63,105 @@ public class StorefrontSettingsService {
         } catch (Exception e) {
             return StorefrontSettingsResponse.defaults();
         }
+    }
+
+    public TenantConfigBundle readTenantConfig(String settingsJson, String fallbackDisplayName) {
+        if (settingsJson == null || settingsJson.isBlank()) {
+            return TenantConfigBundle.defaults(fallbackDisplayName);
+        }
+        try {
+            JsonNode root = parseSettingsDocument(settingsJson);
+            if (!root.isObject()) {
+                return TenantConfigBundle.defaults(fallbackDisplayName);
+            }
+            return new TenantConfigBundle(
+                    readBranding(root.path(KEY_BRANDING), fallbackDisplayName),
+                    readAuthConfig(root.path(KEY_AUTH)),
+                    readFeatureFlags(root.path(KEY_FEATURES))
+            );
+        } catch (Exception e) {
+            return TenantConfigBundle.defaults(fallbackDisplayName);
+        }
+    }
+
+    private static TenantBrandingDto readBranding(JsonNode node, String fallbackDisplayName) {
+        if (node.isMissingNode() || !node.isObject()) {
+            return TenantBrandingDto.defaults(fallbackDisplayName);
+        }
+        String display = textOrNull(node.get("displayName"));
+        return new TenantBrandingDto(
+                display != null ? display : fallbackDisplayName,
+                textOrNull(node.get("logoUrl")),
+                textOrNull(node.get("faviconUrl")),
+                textOrNull(node.get("primaryColor")),
+                textOrNull(node.get("accentColor"))
+        );
+    }
+
+    private static TenantAuthConfigDto readAuthConfig(JsonNode node) {
+        if (node.isMissingNode() || !node.isObject()) {
+            return TenantAuthConfigDto.defaults();
+        }
+        List<String> methods = readAuthMethods(node.get("methods"));
+        List<String> sso = readStringList(node.get("ssoProviders"));
+        TenantPasswordPolicyDto policy = readPasswordPolicy(node.get("passwordPolicy"));
+        return new TenantAuthConfigDto(methods, sso, policy);
+    }
+
+    private static List<String> readAuthMethods(JsonNode arrayNode) {
+        List<String> raw = readStringList(arrayNode);
+        if (raw.isEmpty()) {
+            return TenantAuthConfigDto.defaults().methods();
+        }
+        List<String> filtered = new ArrayList<>();
+        for (String m : raw) {
+            String lc = m.toLowerCase();
+            if (SUPPORTED_AUTH_METHODS.contains(lc) && !filtered.contains(lc)) {
+                filtered.add(lc);
+            }
+        }
+        return filtered.isEmpty() ? TenantAuthConfigDto.defaults().methods() : List.copyOf(filtered);
+    }
+
+    private static TenantPasswordPolicyDto readPasswordPolicy(JsonNode node) {
+        if (node == null || node.isMissingNode() || !node.isObject()) {
+            return TenantPasswordPolicyDto.defaults();
+        }
+        TenantPasswordPolicyDto def = TenantPasswordPolicyDto.defaults();
+        int minLength = node.path("minLength").asInt(def.minLength());
+        boolean requireNumber = node.path("requireNumber").asBoolean(def.requireNumber());
+        boolean requireSymbol = node.path("requireSymbol").asBoolean(def.requireSymbol());
+        return new TenantPasswordPolicyDto(Math.max(minLength, 1), requireNumber, requireSymbol);
+    }
+
+    private static Map<String, Boolean> readFeatureFlags(JsonNode node) {
+        if (node.isMissingNode() || !node.isObject()) {
+            return Map.of();
+        }
+        Map<String, Boolean> out = new LinkedHashMap<>();
+        node.fields().forEachRemaining(entry -> {
+            JsonNode value = entry.getValue();
+            if (value.isBoolean()) {
+                out.put(entry.getKey(), value.booleanValue());
+            }
+        });
+        return Map.copyOf(out);
+    }
+
+    private static List<String> readStringList(JsonNode arrayNode) {
+        if (arrayNode == null || !arrayNode.isArray()) {
+            return List.of();
+        }
+        List<String> out = new ArrayList<>();
+        for (JsonNode n : arrayNode) {
+            if (n.isTextual()) {
+                String s = n.asText().trim();
+                if (!s.isEmpty()) {
+                    out.add(s);
+                }
+            }
+        }
+        return List.copyOf(out);
     }
 
     public String mergeAndValidate(String businessId, String currentSettings, StorefrontPatchRequest patch) {

@@ -216,9 +216,11 @@ public class SecurityConfig {
 
     @Bean
     public DomainBusinessResolverFilter domainBusinessResolverFilter(
-            DomainMappingRepository domainMappingRepository
+            DomainMappingRepository domainMappingRepository,
+            zelisline.ub.tenancy.repository.BusinessRepository businessRepository,
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper
     ) {
-        return new DomainBusinessResolverFilter(domainMappingRepository);
+        return new DomainBusinessResolverFilter(domainMappingRepository, businessRepository, objectMapper);
     }
 
     @Bean

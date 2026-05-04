@@ -3,6 +3,7 @@ package zelisline.ub.tenancy.api;
 import java.time.Duration;
 
 import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -29,7 +30,7 @@ import zelisline.ub.tenancy.application.PublicHostResolverService;
 @RequiredArgsConstructor
 public class PublicHostResolveController {
 
-    private static final Duration CACHE_TTL = Duration.ofSeconds(30);
+    private static final Duration CACHE_TTL = Duration.ofSeconds(60);
 
     private final PublicHostResolverService publicHostResolverService;
 
@@ -40,7 +41,8 @@ public class PublicHostResolveController {
                         HttpStatus.NOT_FOUND,
                         "No active tenant mapping for host"));
         return ResponseEntity.ok()
-                .cacheControl(CacheControl.maxAge(CACHE_TTL))
+                .cacheControl(CacheControl.maxAge(CACHE_TTL).cachePublic())
+                .header(HttpHeaders.VARY, "host")
                 .body(body);
     }
 }

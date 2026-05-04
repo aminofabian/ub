@@ -5,6 +5,8 @@ import java.util.UUID;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
@@ -43,6 +45,10 @@ public class Business {
     @Column(name = "subscription_tier", nullable = false, length = 64)
     private String subscriptionTier = "starter";
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "tenant_status", nullable = false, length = 16)
+    private TenantStatus tenantStatus = TenantStatus.ACTIVE;
+
     @Column(name = "settings", nullable = false, columnDefinition = "json")
     private String settings = "{}";
 
@@ -67,6 +73,9 @@ public class Business {
         updatedAt = now;
         if (settings == null || settings.isBlank()) {
             settings = "{}";
+        }
+        if (tenantStatus == null) {
+            tenantStatus = TenantStatus.ACTIVE;
         }
         slug = normalize(slug);
         currency = normalizeCode(currency, "KES");

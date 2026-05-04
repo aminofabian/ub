@@ -24,6 +24,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import zelisline.ub.tenancy.domain.DomainMapping;
+import zelisline.ub.tenancy.domain.TenantStatus;
+import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
 
 /**
@@ -45,9 +47,12 @@ class DomainBusinessResolverFilterIT {
     @MockitoBean
     private DomainMappingRepository domainMappingRepository;
 
+    @MockitoBean
+    private BusinessRepository businessRepository;
+
     @BeforeEach
     void resetRepositoryMock() {
-        org.mockito.Mockito.reset(domainMappingRepository);
+        org.mockito.Mockito.reset(domainMappingRepository, businessRepository);
     }
 
     @Test
@@ -134,6 +139,8 @@ class DomainBusinessResolverFilterIT {
         org.mockito.BDDMockito.given(mapping.getBusinessId()).willReturn("biz-1");
         org.mockito.BDDMockito.given(domainMappingRepository.findByDomainAndActiveTrue("pal.localhost"))
                 .willReturn(Optional.of(mapping));
+        org.mockito.BDDMockito.given(businessRepository.findTenantStatusById("biz-1"))
+                .willReturn(Optional.of(TenantStatus.ACTIVE));
 
         mockMvc.perform(get("/api/v1/openapi")
                         .with(request -> {
@@ -142,5 +149,25 @@ class DomainBusinessResolverFilterIT {
                         })
                         .header("X-Tenant-Host", "pal.localhost:3000"))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void suspendedTenantOnMappedHostReturnsLocked() throws Exception {
+        DomainMapping mapping = Mockito.mock(DomainMapping.class);
+        org.mockito.BDDMockito.given(mapping.getBusinessId()).willReturn("biz-suspended");
+        org.mockito.BDDMockito.given(domainMappingRepository.findByDomainAndActiveTrue("acme.palmart.co.ke"))
+                .willReturn(Optional.of(mapping));
+        org.mockito.BDDMockito.given(businessRepository.findTenantStatusById("biz-suspended"))
+                .willReturn(Optional.of(TenantStatus.SUSPENDED));
+
+        mockMvc.perform(get("/api/v1/businesses/me")
+                        .with(request -> {
+                            request.setServerName("acme.palmart.co.ke");
+                            return request;
+                        }))
+                .andExpect(status().isLocked())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.type").value("urn:problem:tenant-not-active"))
+                .andExpect(jsonPath("$.tenantStatus").value("SUSPENDED"));
     }
 }

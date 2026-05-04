@@ -9,10 +9,18 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import zelisline.ub.tenancy.domain.Business;
+import zelisline.ub.tenancy.domain.TenantStatus;
 
 public interface BusinessRepository extends JpaRepository<Business, String> {
     @Query(value = "SELECT settings FROM businesses WHERE id = :id", nativeQuery = true)
     Optional<String> findSettingsJsonById(@Param("id") String id);
+
+    /**
+     * Light-weight projection used by the host-resolver filter to gate
+     * SUSPENDED/INACTIVE tenants without loading the full {@link Business}.
+     */
+    @Query("select b.tenantStatus from Business b where b.id = :id and b.deletedAt is null")
+    Optional<TenantStatus> findTenantStatusById(@Param("id") String id);
 
     boolean existsBySlug(String slug);
 

@@ -1,13 +1,13 @@
 package zelisline.ub.tenancy.infrastructure;
 
 import java.io.IOException;
-import java.net.URI;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
-import org.springframework.http.ProblemDetail;
 import org.springframework.lang.NonNull;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -17,6 +17,8 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import zelisline.ub.tenancy.domain.TenantStatus;
+import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
 
 /**
@@ -43,6 +45,7 @@ import zelisline.ub.tenancy.repository.DomainMappingRepository;
 public class DomainBusinessResolverFilter extends OncePerRequestFilter {
 
     private static final String PROBLEM_TYPE = "urn:problem:tenant-not-found";
+    private static final String PROBLEM_TYPE_NOT_ACTIVE = "urn:problem:tenant-not-active";
 
     private static final String X_TENANT_ID_HEADER = "X-Tenant-Id";
 
@@ -63,17 +66,23 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
     );
 
     private final DomainMappingRepository domainMappingRepository;
+    private final BusinessRepository businessRepository;
     private final ObjectMapper objectMapper;
 
-    public DomainBusinessResolverFilter(DomainMappingRepository domainMappingRepository) {
-        this(domainMappingRepository, new ObjectMapper());
+    public DomainBusinessResolverFilter(
+            DomainMappingRepository domainMappingRepository,
+            BusinessRepository businessRepository
+    ) {
+        this(domainMappingRepository, businessRepository, new ObjectMapper());
     }
 
-    DomainBusinessResolverFilter(
+    public DomainBusinessResolverFilter(
             DomainMappingRepository domainMappingRepository,
+            BusinessRepository businessRepository,
             ObjectMapper objectMapper
     ) {
         this.domainMappingRepository = domainMappingRepository;
+        this.businessRepository = businessRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -107,7 +116,14 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
 
         var mapping = domainMappingRepository.findByDomainAndActiveTrue(lookupHost);
         if (mapping.isPresent()) {
-            request.setAttribute(TenantRequestAttributes.BUSINESS_ID, mapping.get().getBusinessId());
+            String businessId = mapping.get().getBusinessId();
+            TenantStatus status = businessRepository.findTenantStatusById(businessId)
+                    .orElse(TenantStatus.ACTIVE);
+            if (status != TenantStatus.ACTIVE) {
+                writeTenantNotActive(response, status);
+                return;
+            }
+            request.setAttribute(TenantRequestAttributes.BUSINESS_ID, businessId);
             filterChain.doFilter(request, response);
             return;
         }
@@ -133,12 +149,29 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
     }
 
     private void writeTenantNotFound(HttpServletResponse response, String host) throws IOException {
-        ProblemDetail body = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
-        body.setTitle("Tenant not found");
-        body.setType(URI.create(PROBLEM_TYPE));
-        body.setDetail("No active tenant mapping found for host: " + host);
+        Map<String, Object> body = problemBody(HttpStatus.NOT_FOUND, PROBLEM_TYPE, "Tenant not found",
+                "No active tenant mapping found for host: " + host);
+        writeProblem(response, HttpStatus.NOT_FOUND, body);
+    }
 
-        response.setStatus(HttpStatus.NOT_FOUND.value());
+    private void writeTenantNotActive(HttpServletResponse response, TenantStatus status) throws IOException {
+        Map<String, Object> body = problemBody(HttpStatus.LOCKED, PROBLEM_TYPE_NOT_ACTIVE, "Tenant not active",
+                "Tenant is " + status.name().toLowerCase() + " and cannot accept authenticated traffic");
+        body.put("tenantStatus", status.name());
+        writeProblem(response, HttpStatus.LOCKED, body);
+    }
+
+    private static Map<String, Object> problemBody(HttpStatus status, String type, String title, String detail) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("type", type);
+        body.put("title", title);
+        body.put("status", status.value());
+        body.put("detail", detail);
+        return body;
+    }
+
+    private void writeProblem(HttpServletResponse response, HttpStatus status, Map<String, Object> body) throws IOException {
+        response.setStatus(status.value());
         response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
         response.setCharacterEncoding("UTF-8");
         response.getWriter().write(objectMapper.writeValueAsString(body));

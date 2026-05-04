@@ -17,6 +17,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.tenancy.api.dto.BrandingPatchRequest;
 import zelisline.ub.tenancy.api.dto.StorefrontPatchRequest;
 import zelisline.ub.tenancy.api.dto.StorefrontSettingsResponse;
 import zelisline.ub.tenancy.api.dto.TenantAuthConfigDto;
@@ -162,6 +163,96 @@ public class StorefrontSettingsService {
             }
         }
         return List.copyOf(out);
+    }
+
+    public String mergeBranding(String currentSettings, BrandingPatchRequest patch) {
+        ObjectNode root = parseRoot(currentSettings);
+        ObjectNode branding = copyNamespace(root, KEY_BRANDING);
+        applyBrandingPatch(branding, patch);
+        root.set(KEY_BRANDING, branding);
+        return writeRoot(root);
+    }
+
+    /**
+     * Replaces the {@code branding.logoUrl}/{@code logoPublicId} fields after a
+     * Cloudinary upload. Returns the merged settings JSON.
+     */
+    public String mergeBrandingLogo(String currentSettings, String secureUrl, String publicId) {
+        ObjectNode root = parseRoot(currentSettings);
+        ObjectNode branding = copyNamespace(root, KEY_BRANDING);
+        if (secureUrl == null || secureUrl.isBlank()) {
+            branding.remove("logoUrl");
+            branding.remove("logoPublicId");
+        } else {
+            branding.put("logoUrl", secureUrl);
+            if (publicId != null && !publicId.isBlank()) {
+                branding.put("logoPublicId", publicId.trim());
+            } else {
+                branding.remove("logoPublicId");
+            }
+        }
+        root.set(KEY_BRANDING, branding);
+        return writeRoot(root);
+    }
+
+    public String readBrandingLogoPublicId(String currentSettings) {
+        if (currentSettings == null || currentSettings.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode root = parseSettingsDocument(currentSettings);
+            JsonNode branding = root.path(KEY_BRANDING);
+            if (!branding.isObject()) {
+                return null;
+            }
+            return textOrNull(branding.get("logoPublicId"));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static void applyBrandingPatch(ObjectNode branding, BrandingPatchRequest patch) {
+        putOrRemoveString(branding, "displayName", patch.displayName());
+        putOrRemoveString(branding, "logoUrl", patch.logoUrl());
+        putOrRemoveString(branding, "logoPublicId", patch.logoPublicId());
+        putOrRemoveString(branding, "faviconUrl", patch.faviconUrl());
+        putOrRemoveString(branding, "primaryColor", patch.primaryColor());
+        putOrRemoveString(branding, "accentColor", patch.accentColor());
+    }
+
+    /**
+     * "{@code null} ignores the field, empty string clears it" semantics that
+     * the rest of the patch surface relies on. Trimming is intentional so users
+     * can't accidentally smuggle whitespace into branding values.
+     */
+    private static void putOrRemoveString(ObjectNode node, String key, String value) {
+        if (value == null) {
+            return;
+        }
+        String trimmed = value.trim();
+        if (trimmed.isEmpty()) {
+            node.remove(key);
+        } else {
+            node.put(key, trimmed);
+        }
+    }
+
+    private ObjectNode copyNamespace(ObjectNode root, String key) {
+        if (root.has(key) && root.get(key).isObject()) {
+            return (ObjectNode) root.get(key).deepCopy();
+        }
+        return objectMapper.createObjectNode();
+    }
+
+    private String writeRoot(ObjectNode root) {
+        try {
+            return objectMapper.writeValueAsString(root);
+        } catch (Exception e) {
+            throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Could not save settings"
+            );
+        }
     }
 
     public String mergeAndValidate(String businessId, String currentSettings, StorefrontPatchRequest patch) {

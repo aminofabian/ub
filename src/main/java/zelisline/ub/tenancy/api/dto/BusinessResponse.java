@@ -13,6 +13,7 @@ public record BusinessResponse(
         String subscriptionTier,
         Instant createdAt,
         Instant updatedAt,
-        StorefrontSettingsResponse storefront
+        StorefrontSettingsResponse storefront,
+        TenantBrandingDto branding
 ) {
 }

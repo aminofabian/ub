@@ -14,6 +14,9 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
+import zelisline.ub.platform.media.CloudinaryImageService;
+import zelisline.ub.platform.media.CloudinaryUploadResult;
+import zelisline.ub.tenancy.api.dto.BrandingPatchRequest;
 import zelisline.ub.tenancy.api.dto.BranchResponse;
 import zelisline.ub.tenancy.api.dto.BusinessResponse;
 import zelisline.ub.tenancy.api.dto.CreateBranchRequest;
@@ -41,6 +44,7 @@ public class TenancyService {
     private final BranchRepository branchRepository;
     private final CatalogBootstrapService catalogBootstrapService;
     private final StorefrontSettingsService storefrontSettingsService;
+    private final CloudinaryImageService cloudinaryImageService;
 
     @Transactional
     public BusinessResponse createBusiness(CreateBusinessRequest request) {
@@ -100,6 +104,13 @@ public class TenancyService {
             business.setSettings(merged);
         }
 
+        return toResponse(businessRepository.save(business));
+    }
+
+    @Transactional
+    public BusinessResponse updateBrandingForTenant(String tenantBusinessId, BrandingPatchRequest patch) {
+        Business business = requireTenantBusiness(tenantBusinessId);
+        business.setSettings(storefrontSettingsService.mergeBranding(business.getSettings(), patch));
         return toResponse(businessRepository.save(business));
     }
 
@@ -182,6 +193,39 @@ public class TenancyService {
         return updateBusiness(tenantBusinessId, request);
     }
 
+    @Transactional
+    public BusinessResponse uploadBrandingLogo(String tenantBusinessId, byte[] fileBytes, String originalFilename) {
+        Business business = requireTenantBusiness(tenantBusinessId);
+        String previousPublicId = storefrontSettingsService.readBrandingLogoPublicId(business.getSettings());
+        String folder = "ub/" + tenantBusinessId + "/branding/logo";
+        CloudinaryUploadResult uploaded = cloudinaryImageService.uploadImageToFolder(
+                fileBytes, originalFilename, folder);
+        business.setSettings(storefrontSettingsService.mergeBrandingLogo(
+                business.getSettings(), uploaded.secureUrl(), uploaded.publicId()));
+        BusinessResponse out = toResponse(businessRepository.save(business));
+        if (previousPublicId != null && !previousPublicId.equals(uploaded.publicId())) {
+            cloudinaryImageService.destroyImage(previousPublicId);
+        }
+        return out;
+    }
+
+    @Transactional
+    public BusinessResponse clearBrandingLogo(String tenantBusinessId) {
+        Business business = requireTenantBusiness(tenantBusinessId);
+        String previousPublicId = storefrontSettingsService.readBrandingLogoPublicId(business.getSettings());
+        business.setSettings(storefrontSettingsService.mergeBrandingLogo(business.getSettings(), null, null));
+        BusinessResponse out = toResponse(businessRepository.save(business));
+        if (previousPublicId != null) {
+            cloudinaryImageService.destroyImage(previousPublicId);
+        }
+        return out;
+    }
+
+    private Business requireTenantBusiness(String tenantBusinessId) {
+        return businessRepository.findByIdAndDeletedAtIsNull(tenantBusinessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
+    }
+
     @Transactional(readOnly = true)
     public Page<BranchResponse> listBranches(String businessId, Pageable pageable) {
         requireBusiness(businessId);
@@ -253,6 +297,7 @@ public class TenancyService {
     private BusinessResponse toResponse(Business business) {
         StorefrontSettingsResponse storefront =
                 storefrontSettingsService.readFromSettingsJson(business.getSettings());
+        var bundle = storefrontSettingsService.readTenantConfig(business.getSettings(), business.getName());
         return new BusinessResponse(
                 business.getId(),
                 business.getName(),
@@ -264,7 +309,8 @@ public class TenancyService {
                 business.getSubscriptionTier(),
                 business.getCreatedAt(),
                 business.getUpdatedAt(),
-                storefront
+                storefront,
+                bundle.branding()
         );
     }
 

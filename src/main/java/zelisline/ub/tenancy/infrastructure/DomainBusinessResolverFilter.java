@@ -34,16 +34,17 @@ import zelisline.ub.tenancy.repository.DomainMappingRepository;
  * mapping (e.g. {@code palmart.co.ke} on the admin app) would 404 every
  * super-admin login and health probe.
  *
- * <p>When the host is not mapped but the client supplies an explicit
- * {@code X-Tenant-Id} header (platform admin host logging into a specific
- * tenant), the filter passes through; downstream
- * {@link zelisline.ub.tenancy.api.TenantRequestIds} already honors that
- * header and JWT-bound endpoints enforce principal/tenant match.
+ * <p>Tenant requests reaching the platform apex (e.g. {@code palmart.co.ke}
+ * with no domain mapping) are forwarded when the client asserts a tenant
+ * via {@code X-Tenant-Id}. Auth controllers re-resolve the tenant from that
+ * header, so this preserves "no host enumeration" while letting tenants log
+ * in from the platform login form.
  */
 public class DomainBusinessResolverFilter extends OncePerRequestFilter {
 
     private static final String PROBLEM_TYPE = "urn:problem:tenant-not-found";
-    private static final String TENANT_ID_HEADER = "X-Tenant-Id";
+
+    private static final String X_TENANT_ID_HEADER = "X-Tenant-Id";
 
     private static final Set<String> HOSTS_WITHOUT_MAPPING = Set.of(
             "localhost",
@@ -105,17 +106,23 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
         }
 
         var mapping = domainMappingRepository.findByDomainAndActiveTrue(lookupHost);
-        if (mapping.isEmpty()) {
-            if (hasExplicitTenantIdHeader(request)) {
-                filterChain.doFilter(request, response);
-                return;
-            }
-            writeTenantNotFound(response, lookupHost);
+        if (mapping.isPresent()) {
+            request.setAttribute(TenantRequestAttributes.BUSINESS_ID, mapping.get().getBusinessId());
+            filterChain.doFilter(request, response);
             return;
         }
 
-        request.setAttribute(TenantRequestAttributes.BUSINESS_ID, mapping.get().getBusinessId());
-        filterChain.doFilter(request, response);
+        if (hasExplicitTenantId(request)) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
+        writeTenantNotFound(response, lookupHost);
+    }
+
+    private static boolean hasExplicitTenantId(HttpServletRequest request) {
+        String value = request.getHeader(X_TENANT_ID_HEADER);
+        return value != null && !value.isBlank();
     }
 
     private static String resolveLookupHost(String serverHost, String tenantHostHeader) {
@@ -123,11 +130,6 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
             return serverHost;
         }
         return TenantHostParsing.hostnameOnly(tenantHostHeader);
-    }
-
-    private static boolean hasExplicitTenantIdHeader(HttpServletRequest request) {
-        String value = request.getHeader(TENANT_ID_HEADER);
-        return value != null && !value.isBlank();
     }
 
     private void writeTenantNotFound(HttpServletResponse response, String host) throws IOException {

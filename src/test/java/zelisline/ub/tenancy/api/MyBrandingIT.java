@@ -213,6 +213,53 @@ class MyBrandingIT {
         verify(cloudinaryImageService, times(1)).destroyImage("ub/" + TENANT + "/branding/logo/abc");
     }
 
+    @Test
+    void uploadFaviconPersistsSecureUrlAndDestroysPrevious() throws Exception {
+        when(cloudinaryImageService.uploadImageToFolder(any(), anyString(), anyString()))
+                .thenReturn(uploadResult("ub/" + TENANT + "/branding/favicon/a", "https://res.cloudinary.com/x/a.png"))
+                .thenReturn(uploadResult("ub/" + TENANT + "/branding/favicon/b", "https://res.cloudinary.com/x/b.png"));
+
+        mockMvc.perform(multipart("/api/v1/businesses/me/branding/favicon")
+                        .file(new MockMultipartFile("file", "favicon.png", "image/png", new byte[]{1, 2}))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.branding.faviconUrl").value("https://res.cloudinary.com/x/a.png"));
+
+        mockMvc.perform(multipart("/api/v1/businesses/me/branding/favicon")
+                        .file(new MockMultipartFile("file", "f2.png", "image/png", new byte[]{3, 4}))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.branding.faviconUrl").value("https://res.cloudinary.com/x/b.png"));
+
+        verify(cloudinaryImageService, atLeastOnce()).destroyImage("ub/" + TENANT + "/branding/favicon/a");
+    }
+
+    @Test
+    void deleteFaviconClearsUrlAndDestroysAsset() throws Exception {
+        when(cloudinaryImageService.uploadImageToFolder(any(), anyString(), anyString()))
+                .thenReturn(uploadResult("ub/" + TENANT + "/branding/favicon/x", "https://res.cloudinary.com/x/fav.png"));
+
+        mockMvc.perform(multipart("/api/v1/businesses/me/branding/favicon")
+                        .file(new MockMultipartFile("file", "favicon.png", "image/png", new byte[]{9}))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(delete("/api/v1/businesses/me/branding/favicon")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.branding.faviconUrl").doesNotExist());
+
+        verify(cloudinaryImageService, times(1)).destroyImage("ub/" + TENANT + "/branding/favicon/x");
+    }
+
     private static CloudinaryUploadResult uploadResult(String publicId, String secureUrl) {
         return new CloudinaryUploadResult(
                 publicId,

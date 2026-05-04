@@ -221,6 +221,34 @@ public class TenancyService {
         return out;
     }
 
+    @Transactional
+    public BusinessResponse uploadBrandingFavicon(String tenantBusinessId, byte[] fileBytes, String originalFilename) {
+        Business business = requireTenantBusiness(tenantBusinessId);
+        String previousPublicId = storefrontSettingsService.readBrandingFaviconPublicId(business.getSettings());
+        String folder = "ub/" + tenantBusinessId + "/branding/favicon";
+        CloudinaryUploadResult uploaded = cloudinaryImageService.uploadImageToFolder(
+                fileBytes, originalFilename, folder);
+        business.setSettings(storefrontSettingsService.mergeBrandingFavicon(
+                business.getSettings(), uploaded.secureUrl(), uploaded.publicId()));
+        BusinessResponse out = toResponse(businessRepository.save(business));
+        if (previousPublicId != null && !previousPublicId.equals(uploaded.publicId())) {
+            cloudinaryImageService.destroyImage(previousPublicId);
+        }
+        return out;
+    }
+
+    @Transactional
+    public BusinessResponse clearBrandingFavicon(String tenantBusinessId) {
+        Business business = requireTenantBusiness(tenantBusinessId);
+        String previousPublicId = storefrontSettingsService.readBrandingFaviconPublicId(business.getSettings());
+        business.setSettings(storefrontSettingsService.mergeBrandingFavicon(business.getSettings(), null, null));
+        BusinessResponse out = toResponse(businessRepository.save(business));
+        if (previousPublicId != null) {
+            cloudinaryImageService.destroyImage(previousPublicId);
+        }
+        return out;
+    }
+
     private Business requireTenantBusiness(String tenantBusinessId) {
         return businessRepository.findByIdAndDeletedAtIsNull(tenantBusinessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));

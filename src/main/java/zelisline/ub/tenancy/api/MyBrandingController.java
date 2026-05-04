@@ -58,7 +58,7 @@ public class MyBrandingController {
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        byte[] bytes = readBytes(file);
+        byte[] bytes = readUploadBytes(file, "logo");
         BusinessResponse body = tenancyService.uploadBrandingLogo(
                 TenantRequestIds.resolveBusinessId(request),
                 bytes,
@@ -74,9 +74,32 @@ public class MyBrandingController {
         return tenancyService.clearBrandingLogo(TenantRequestIds.resolveBusinessId(request));
     }
 
-    private static byte[] readBytes(MultipartFile file) {
+    @PostMapping(value = "/favicon", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize(MANAGE_SETTINGS)
+    public ResponseEntity<BusinessResponse> uploadFavicon(
+            @RequestPart("file") MultipartFile file,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        byte[] bytes = readUploadBytes(file, "favicon");
+        BusinessResponse body = tenancyService.uploadBrandingFavicon(
+                TenantRequestIds.resolveBusinessId(request),
+                bytes,
+                file.getOriginalFilename()
+        );
+        return ResponseEntity.status(HttpStatus.CREATED).body(body);
+    }
+
+    @DeleteMapping("/favicon")
+    @PreAuthorize(MANAGE_SETTINGS)
+    public BusinessResponse clearFavicon(HttpServletRequest request) {
+        CurrentTenantUser.require(request);
+        return tenancyService.clearBrandingFavicon(TenantRequestIds.resolveBusinessId(request));
+    }
+
+    private static byte[] readUploadBytes(MultipartFile file, String label) {
         if (file == null || file.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Empty logo file");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Empty " + label + " file");
         }
         try {
             return file.getBytes();

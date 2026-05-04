@@ -211,11 +211,52 @@ public class StorefrontSettingsService {
         }
     }
 
+    /**
+     * Replaces {@code branding.faviconUrl}/{@code faviconPublicId} after a
+     * Cloudinary upload. Returns the merged settings JSON.
+     */
+    public String mergeBrandingFavicon(String currentSettings, String secureUrl, String publicId) {
+        ObjectNode root = parseRoot(currentSettings);
+        ObjectNode branding = copyNamespace(root, KEY_BRANDING);
+        if (secureUrl == null || secureUrl.isBlank()) {
+            branding.remove("faviconUrl");
+            branding.remove("faviconPublicId");
+        } else {
+            branding.put("faviconUrl", secureUrl);
+            if (publicId != null && !publicId.isBlank()) {
+                branding.put("faviconPublicId", publicId.trim());
+            } else {
+                branding.remove("faviconPublicId");
+            }
+        }
+        root.set(KEY_BRANDING, branding);
+        return writeRoot(root);
+    }
+
+    public String readBrandingFaviconPublicId(String currentSettings) {
+        if (currentSettings == null || currentSettings.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode root = parseSettingsDocument(currentSettings);
+            JsonNode branding = root.path(KEY_BRANDING);
+            if (!branding.isObject()) {
+                return null;
+            }
+            return textOrNull(branding.get("faviconPublicId"));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private static void applyBrandingPatch(ObjectNode branding, BrandingPatchRequest patch) {
         putOrRemoveString(branding, "displayName", patch.displayName());
         putOrRemoveString(branding, "logoUrl", patch.logoUrl());
         putOrRemoveString(branding, "logoPublicId", patch.logoPublicId());
         putOrRemoveString(branding, "faviconUrl", patch.faviconUrl());
+        if (patch.faviconUrl() != null && patch.faviconUrl().trim().isEmpty()) {
+            branding.remove("faviconPublicId");
+        }
         putOrRemoveString(branding, "primaryColor", patch.primaryColor());
         putOrRemoveString(branding, "accentColor", patch.accentColor());
     }

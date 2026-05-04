@@ -11,7 +11,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.identity.application.NotificationService;
 
 /**
- * Sends via {@link JavaMailSender} when configured, else Mailgun HTTP API when configured,
+ * Sends via {@link JavaMailSender} when configured, else Resend HTTP API, else Mailgun HTTP API,
  * else logs (local dev only).
  */
 @Service
@@ -21,6 +21,7 @@ public class LoggingNotificationService implements NotificationService {
     private static final Logger log = LoggerFactory.getLogger(LoggingNotificationService.class);
 
     private final ObjectProvider<JavaMailSender> javaMailSender;
+    private final ResendMailClient resendMailClient;
     private final MailgunMailClient mailgunMailClient;
 
     @Override
@@ -43,11 +44,16 @@ public class LoggingNotificationService implements NotificationService {
         if (trySendSmtp(toEmail, subject, textBody, kind)) {
             return;
         }
+        if (trySendResend(toEmail, subject, textBody, kind)) {
+            return;
+        }
         if (trySendMailgun(toEmail, subject, textBody, kind)) {
             return;
         }
         log.warn(
-                "No outbound mail: {} not delivered. Set MAILGUN_PRIVATE_API_KEY + MAILGUN_DOMAIN (Mailgun API), or profile `{}` + MAILGUN_SMTP_*; else copy the link from the INFO log below.",
+                "No outbound mail: {} not delivered. Set RESEND_API_KEY + RESEND_DOMAIN or RESEND_FROM (Resend), "
+                        + "or MAILGUN_PRIVATE_API_KEY + MAILGUN_DOMAIN (Mailgun), or profile `{}` + MAILGUN_SMTP_*; "
+                        + "else copy the link from the INFO log below.",
                 kind,
                 "smtp");
         log.info("[notification] {} to={} subject={}\n{}", kind, toEmail, subject, textBody);
@@ -67,6 +73,20 @@ public class LoggingNotificationService implements NotificationService {
             return true;
         } catch (RuntimeException ex) {
             log.warn("Failed to send {} email via SMTP to={}", kind, toEmail, ex);
+            return false;
+        }
+    }
+
+    private boolean trySendResend(String toEmail, String subject, String textBody, String kind) {
+        if (!resendMailClient.isConfigured()) {
+            return false;
+        }
+        try {
+            resendMailClient.sendPlainText(toEmail, subject, textBody);
+            log.info("Sent {} via Resend to={}", kind, toEmail);
+            return true;
+        } catch (RuntimeException ex) {
+            log.warn("Resend failed for {} to={}", kind, toEmail, ex);
             return false;
         }
     }

@@ -5,6 +5,8 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.http.HttpStatus;
@@ -41,6 +43,8 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
 @Service
 @RequiredArgsConstructor
 public class AuthRegistrationService {
+
+    private static final Logger log = LoggerFactory.getLogger(AuthRegistrationService.class);
 
     private final BusinessRepository businessRepository;
     private final UserRepository userRepository;
@@ -119,23 +123,36 @@ public class AuthRegistrationService {
         emailVerificationTokenRepository.save(row);
     }
 
-    /** Always completes with {@code 204} when email is missing; no user enumeration. */
+    /** Always completes with {@code 204} when email is missing; no user enumeration.
+     * Server-side INFO logs explain why nothing was sent (response stays silent). */
     @Transactional
     public void resendVerification(HttpServletRequest http, PasswordForgotRequest request) {
         if (!selfSignupEnabled) {
+            log.info("[resend-verification] skipped: self-signup disabled");
             return;
         }
         if (request == null || request.email() == null || request.email().isBlank()) {
+            log.info("[resend-verification] skipped: missing email in request body");
             return;
         }
         String businessId = TenantRequestIds.resolveBusinessId(http);
         String email = normaliseEmail(request.email());
-        userRepository.findByBusinessIdAndEmailAndDeletedAtIsNull(businessId, email).ifPresent(user -> {
-            if (user.statusAsEnum() != UserStatus.INVITED || user.getPasswordHash() == null) {
-                return;
-            }
-            issueVerificationEmail(user);
-        });
+        var found = userRepository.findByBusinessIdAndEmailAndDeletedAtIsNull(businessId, email);
+        if (found.isEmpty()) {
+            log.info("[resend-verification] skipped: no user for businessId={} email={}", businessId, email);
+            return;
+        }
+        User user = found.get();
+        if (user.statusAsEnum() != UserStatus.INVITED) {
+            log.info("[resend-verification] skipped: user status={} (only INVITED users get re-sent) email={}",
+                    user.statusAsEnum(), email);
+            return;
+        }
+        if (user.getPasswordHash() == null) {
+            log.info("[resend-verification] skipped: user has no passwordHash yet email={}", email);
+            return;
+        }
+        issueVerificationEmail(user);
     }
 
     private void assertSignupEnabled() {

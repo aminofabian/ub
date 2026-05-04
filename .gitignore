@@ -40,3 +40,4 @@ out/
 .env
 .env.local
 .env.mailgun
+.env.resend

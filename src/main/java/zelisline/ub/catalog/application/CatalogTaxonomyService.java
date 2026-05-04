@@ -282,7 +282,8 @@ public class CatalogTaxonomyService {
         CloudinaryUploadResult r = cloudinaryImageService.uploadImageToFolder(
                 bytes,
                 originalFilename,
-                CloudinaryImageService.folderCategories(businessId, categoryId));
+                CloudinaryImageService.folderCategories(businessId, categoryId),
+                true);
         int sortOrder = categoryImageRepository.maxSortOrderForCategory(categoryId) + 1;
         CategoryImage img = new CategoryImage();
         img.setCategoryId(categoryId);

@@ -199,7 +199,7 @@ public class TenancyService {
         String previousPublicId = storefrontSettingsService.readBrandingLogoPublicId(business.getSettings());
         String folder = "ub/" + tenantBusinessId + "/branding/logo";
         CloudinaryUploadResult uploaded = cloudinaryImageService.uploadImageToFolder(
-                fileBytes, originalFilename, folder);
+                fileBytes, originalFilename, folder, true);
         business.setSettings(storefrontSettingsService.mergeBrandingLogo(
                 business.getSettings(), uploaded.secureUrl(), uploaded.publicId()));
         BusinessResponse out = toResponse(businessRepository.save(business));
@@ -227,7 +227,7 @@ public class TenancyService {
         String previousPublicId = storefrontSettingsService.readBrandingFaviconPublicId(business.getSettings());
         String folder = "ub/" + tenantBusinessId + "/branding/favicon";
         CloudinaryUploadResult uploaded = cloudinaryImageService.uploadImageToFolder(
-                fileBytes, originalFilename, folder);
+                fileBytes, originalFilename, folder, false);
         business.setSettings(storefrontSettingsService.mergeBrandingFavicon(
                 business.getSettings(), uploaded.secureUrl(), uploaded.publicId()));
         BusinessResponse out = toResponse(businessRepository.save(business));

@@ -1,6 +1,7 @@
 package zelisline.ub.tenancy.api;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.times;
@@ -164,7 +165,7 @@ class MyBrandingIT {
 
     @Test
     void uploadLogoPersistsSecureUrlAndDestroysPrevious() throws Exception {
-        when(cloudinaryImageService.uploadImageToFolder(any(), anyString(), anyString()))
+        when(cloudinaryImageService.uploadImageToFolder(any(), anyString(), anyString(), anyBoolean()))
                 .thenReturn(uploadResult("ub/" + TENANT + "/branding/logo/abc", "https://res.cloudinary.com/x/abc.png"))
                 .thenReturn(uploadResult("ub/" + TENANT + "/branding/logo/xyz", "https://res.cloudinary.com/x/xyz.png"));
 
@@ -193,7 +194,7 @@ class MyBrandingIT {
 
     @Test
     void deleteLogoClearsUrlAndDestroysAsset() throws Exception {
-        when(cloudinaryImageService.uploadImageToFolder(any(), anyString(), anyString()))
+        when(cloudinaryImageService.uploadImageToFolder(any(), anyString(), anyString(), anyBoolean()))
                 .thenReturn(uploadResult("ub/" + TENANT + "/branding/logo/abc", "https://res.cloudinary.com/x/abc.png"));
 
         mockMvc.perform(multipart("/api/v1/businesses/me/branding/logo")
@@ -215,7 +216,7 @@ class MyBrandingIT {
 
     @Test
     void uploadFaviconPersistsSecureUrlAndDestroysPrevious() throws Exception {
-        when(cloudinaryImageService.uploadImageToFolder(any(), anyString(), anyString()))
+        when(cloudinaryImageService.uploadImageToFolder(any(), anyString(), anyString(), anyBoolean()))
                 .thenReturn(uploadResult("ub/" + TENANT + "/branding/favicon/a", "https://res.cloudinary.com/x/a.png"))
                 .thenReturn(uploadResult("ub/" + TENANT + "/branding/favicon/b", "https://res.cloudinary.com/x/b.png"));
 
@@ -240,7 +241,7 @@ class MyBrandingIT {
 
     @Test
     void deleteFaviconClearsUrlAndDestroysAsset() throws Exception {
-        when(cloudinaryImageService.uploadImageToFolder(any(), anyString(), anyString()))
+        when(cloudinaryImageService.uploadImageToFolder(any(), anyString(), anyString(), anyBoolean()))
                 .thenReturn(uploadResult("ub/" + TENANT + "/branding/favicon/x", "https://res.cloudinary.com/x/fav.png"));
 
         mockMvc.perform(multipart("/api/v1/businesses/me/branding/favicon")

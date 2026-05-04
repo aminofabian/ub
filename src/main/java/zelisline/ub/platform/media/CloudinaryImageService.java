@@ -40,14 +40,33 @@ public class CloudinaryImageService {
             String businessId,
             String itemId
     ) {
-        return uploadImageToFolder(fileBytes, originalFilename, folderItems(businessId, itemId));
+        return uploadImageToFolder(fileBytes, originalFilename, folderItems(businessId, itemId), true);
     }
 
-    /** Folder path under the Cloudinary account (e.g. {@code ub/{businessId}/categories/{id}}). */
+    /**
+     * Same as {@link #uploadImageToFolder(byte[], String, String, boolean)} with
+     * {@code requestImageFingerprinting = true} (phash + predominant colors).
+     */
     public CloudinaryUploadResult uploadImageToFolder(
             byte[] fileBytes,
             String originalFilename,
             String folderPath
+    ) {
+        return uploadImageToFolder(fileBytes, originalFilename, folderPath, true);
+    }
+
+    /**
+     * Folder path under the Cloudinary account (e.g. {@code ub/{businessId}/categories/{id}}).
+     *
+     * @param requestImageFingerprinting when {@code true}, sends {@code phash} and {@code colors}
+     *        to Cloudinary (useful for catalog images). When {@code false}, omits them — favicons
+     *        and multi-resolution {@code .ico} files often fail or time out when those analyses run.
+     */
+    public CloudinaryUploadResult uploadImageToFolder(
+            byte[] fileBytes,
+            String originalFilename,
+            String folderPath,
+            boolean requestImageFingerprinting
     ) {
         if (!isConfigured()) {
             throw new ResponseStatusException(
@@ -69,14 +88,23 @@ public class CloudinaryImageService {
                 : folderPath.trim();
 
         String url = "https://api.cloudinary.com/v1_1/" + properties.getCloudName() + "/image/upload";
-        HttpResponse<String> raw = Unirest.post(url)
+        var req = Unirest.post(url)
                 .basicAuth(properties.getApiKey(), properties.getApiSecret())
                 .field("file", new ByteArrayInputStream(fileBytes), kong.unirest.ContentType.APPLICATION_OCTET_STREAM, safeName)
                 .field("folder", folder)
-                .field("overwrite", "false")
-                .field("phash", "true")
-                .field("colors", "true")
-                .asString();
+                .field("overwrite", "false");
+        if (requestImageFingerprinting) {
+            req = req.field("phash", "true").field("colors", "true");
+        }
+        final HttpResponse<String> raw;
+        try {
+            raw = req.asString();
+        } catch (Exception e) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Could not reach Cloudinary: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName())
+            );
+        }
 
         if (raw.getStatus() != 200) {
             throw new ResponseStatusException(
@@ -86,7 +114,10 @@ public class CloudinaryImageService {
         try {
             return parseUpload(raw.getBody());
         } catch (Exception e) {
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Could not parse Cloudinary response");
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Could not parse Cloudinary response: " + e.getMessage()
+            );
         }
     }
 
@@ -103,10 +134,19 @@ public class CloudinaryImageService {
             return;
         }
         String url = "https://api.cloudinary.com/v1_1/" + properties.getCloudName() + "/image/destroy";
-        HttpResponse<String> raw = Unirest.post(url)
-                .basicAuth(properties.getApiKey(), properties.getApiSecret())
-                .field("public_id", publicId)
-                .asString();
+        final HttpResponse<String> raw;
+        try {
+            raw = Unirest.post(url)
+                    .basicAuth(properties.getApiKey(), properties.getApiSecret())
+                    .field("public_id", publicId)
+                    .asString();
+        } catch (Exception e) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Could not reach Cloudinary (destroy): "
+                            + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName())
+            );
+        }
         if (raw.getStatus() != 200) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_GATEWAY,
@@ -192,6 +232,9 @@ public class CloudinaryImageService {
         }
         if ("gif".equals(f)) {
             return "image/gif";
+        }
+        if ("ico".equals(f)) {
+            return "image/x-icon";
         }
         return "image/" + f;
     }

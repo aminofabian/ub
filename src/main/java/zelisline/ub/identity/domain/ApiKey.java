@@ -1,7 +1,12 @@
 package zelisline.ub.identity.domain;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
+
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -36,8 +41,9 @@ public class ApiKey {
     @Column(name = "token_prefix", nullable = false, length = 8)
     private String tokenPrefix;
 
-    @Column(name = "scopes", nullable = false, columnDefinition = "json")
-    private String scopes = "[]";
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "scopes", nullable = false)
+    private List<String> scopes = new ArrayList<>();
 
     @Column(name = "active", nullable = false)
     private boolean active = true;
@@ -53,6 +59,9 @@ public class ApiKey {
 
     @PrePersist
     void onCreate() {
+        if (scopes == null) {
+            scopes = new ArrayList<>();
+        }
         if (id == null || id.isBlank()) {
             id = UUID.randomUUID().toString();
         }

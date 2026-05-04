@@ -35,14 +35,14 @@ public class ShiftsController {
     @PreAuthorize("hasPermission(null, 'shifts.open')")
     @ResponseStatus(HttpStatus.CREATED)
     public ShiftResponse openShift(@Valid @RequestBody PostOpenShiftRequest body, HttpServletRequest request) {
-        var user = CurrentTenantUser.require(request);
+        var user = CurrentTenantUser.requireHuman(request);
         return shiftService.openShift(TenantRequestIds.resolveBusinessId(request), body, user.userId());
     }
 
     @GetMapping("/current")
     @PreAuthorize("hasPermission(null, 'shifts.read')")
     public ShiftResponse currentShift(@RequestParam @NotBlank String branchId, HttpServletRequest request) {
-        CurrentTenantUser.require(request);
+        CurrentTenantUser.requireHuman(request);
         return shiftService.getCurrentOpenShift(
                 TenantRequestIds.resolveBusinessId(request),
                 branchId
@@ -56,7 +56,7 @@ public class ShiftsController {
             @Valid @RequestBody PostCloseShiftRequest body,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.require(request);
+        var user = CurrentTenantUser.requireHuman(request);
         return shiftService.closeShift(
                 TenantRequestIds.resolveBusinessId(request),
                 shiftId,

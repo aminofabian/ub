@@ -1077,14 +1077,14 @@ part-time designer/PM. Double for solo.
 
 **Exit criteria:** Owner can answer “did I make money today?” in one click.
 
-### Phase 7 — Reporting + Analytics (Week 16–17)
+### Phase 7 — Reporting + Analytics (Week 16–18)
 
-- Materialized views for daily sales, monthly supplier, daily inventory.
-- All dashboard queries sub-200ms p95.
-- Export engine: CSV/Excel/PDF, async for large.
-- Notification pipeline (low stock, expiring, overdue bills, shift variance).
+- Materialized views for daily sales, monthly supplier, daily inventory (scheduled full `REFRESH MATERIALIZED VIEW CONCURRENTLY` in v1; outbox-driven incremental refresh deferred until a transactional outbox ships — see `docs/PHASE_7_PLAN.md`).
+- Dashboard query **p95 baseline** published at a documented reference seed; CI fail-on-regression deferred to Phase 11.
+- Export engine: CSV/XLSX for the v1 report set; PDF for a locked subset (P&L, balance sheet, daily cash summary); async for large.
+- Notification pipeline (overdue AP, overdue AR, shift variance required; low-stock and expiring batches as stretch / Phase 7.1 if upstream emitters not in place).
 
-**Exit criteria:** 10 canonical reports pass acceptance (see §9).
+**Exit criteria:** Phase 6 close-out (pulse + simple P&L/BS) green, **plus** the **six** Phase 7 v1 canonical reports green in CI; the remaining **four** reports complete in Phase 7.1 in the same release or a stated follow-on milestone (see `docs/PHASE_7_PLAN.md` ADR).
 
 ### Phase 8 — Integrations & Hardening (Week 18–19)
 
@@ -1791,7 +1791,7 @@ When the rebuild is complete, the deliverables are:
 4. An OpenAPI 3.1 spec served at `/api/v1/openapi.json`, a hosted Swagger UI, and a Postman collection.
 5. Developer docs under `docs/` (ADRs for every major decision in §11 and §14).
 6. Operator docs for owners, admins, cashiers, and super-admins under `docs/ops/`.
-7. A test suite covering: all domain invariants (§4.1), all edge cases (§14), and smoke-testing the 10 canonical reports (§9.6).
+7. A test suite covering: all domain invariants (§4.1), all edge cases (§14), and smoke-testing the 10 canonical reports (§9.6) — Phase 7 ships **six** as v1 acceptance and **four** as Phase 7.1 (see `docs/PHASE_7_PLAN.md`).
 8. A pilot deployment at one real shop, run for 30 days in parallel with the existing system, with a documented migration playbook.
 
 This is the whole blueprint. Build it in the order of §12 and stop at no

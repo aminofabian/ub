@@ -78,6 +78,12 @@ class MyDomainsIT {
     void seed() {
         userRepository.deleteAll();
         domainMappingRepository.deleteAll();
+        // Permission/role tables share the in-memory DB across cached Spring contexts; reset them
+        // before re-inserting so the unique key on permission_key never trips when other suites
+        // (or this suite itself, on its second @BeforeEach) leave a row behind.
+        rolePermissionRepository.deleteAll();
+        roleRepository.deleteAll();
+        permissionRepository.deleteAll();
         businessRepository.deleteAll();
 
         businessRepository.save(business(TENANT_A, "tenant-a"));

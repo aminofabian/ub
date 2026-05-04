@@ -13,5 +13,7 @@ public interface ItemTypeRepository extends JpaRepository<ItemType, String> {
 
     Optional<ItemType> findByIdAndBusinessId(String id, String businessId);
 
+    Optional<ItemType> findByBusinessIdAndTypeKey(String businessId, String typeKey);
+
     boolean existsByBusinessIdAndTypeKey(String businessId, String typeKey);
 }

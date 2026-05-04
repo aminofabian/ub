@@ -61,24 +61,68 @@ public class CreditsJournalService {
     /** Customer paid money (M-Pesa) toward open AR — clears receivable asset. */
     @Transactional
     public String postInboundMpesaTowardAr(String businessId, BigDecimal amount, String sourceId, String memo) {
-        ledgerBootstrapService.ensureStandardAccounts(businessId);
-        BigDecimal amt = amount.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
-        LedgerAccount mpesa = ledger(businessId, LedgerAccountCodes.MPESA_CLEARING);
-        LedgerAccount ar = ledger(businessId, LedgerAccountCodes.ACCOUNTS_RECEIVABLE_CUSTOMERS);
+        return postBalancedTwoLine(
+                businessId,
+                SalesConstants.JOURNAL_SOURCE_PUBLIC_PAYMENT_CLAIM,
+                sourceId,
+                memo,
+                LedgerAccountCodes.MPESA_CLEARING,
+                LedgerAccountCodes.ACCOUNTS_RECEIVABLE_CUSTOMERS,
+                amount
+        );
+    }
 
-        JournalEntry je = new JournalEntry();
-        je.setBusinessId(businessId);
-        je.setEntryDate(LocalDate.now(ZoneOffset.UTC));
-        je.setSourceType(SalesConstants.JOURNAL_SOURCE_PUBLIC_PAYMENT_CLAIM);
-        je.setSourceId(sourceId);
-        je.setMemo(memo);
-        journalEntryRepository.save(je);
+    /** Customer paid cash at the counter to clear AR — alternate settlement channel for public claims. */
+    @Transactional
+    public String postInboundCashTowardAr(String businessId, BigDecimal amount, String sourceId, String memo) {
+        return postBalancedTwoLine(
+                businessId,
+                SalesConstants.JOURNAL_SOURCE_PUBLIC_PAYMENT_CLAIM,
+                sourceId,
+                memo,
+                LedgerAccountCodes.OPERATING_CASH,
+                LedgerAccountCodes.ACCOUNTS_RECEIVABLE_CUSTOMERS,
+                amount
+        );
+    }
 
-        List<JournalLine> lines = List.of(journalDebit(je.getId(), mpesa.getId(), amt),
-                journalCredit(je.getId(), ar.getId(), amt));
-        journalLineRepository.saveAll(lines);
-        assertBalanced(lines);
-        return je.getId();
+    /**
+     * Loyalty earn accrual: Dr {@code 5310 LOYALTY_MARKETING_EXPENSE} / Cr {@code 2196 LOYALTY_REDEMPTION_LIABILITY}
+     * for the KES value of newly issued points (ADR-0009). Skips when amount is non-positive.
+     */
+    @Transactional
+    public String postLoyaltyEarnAccrual(String businessId, BigDecimal amount, String sourceId, String memo) {
+        BigDecimal amt = amount == null ? BigDecimal.ZERO : amount.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        if (amt.signum() <= 0) {
+            return null;
+        }
+        return postBalancedTwoLine(
+                businessId,
+                SalesConstants.JOURNAL_SOURCE_LOYALTY_EARN_ACCRUAL,
+                sourceId,
+                memo,
+                LedgerAccountCodes.LOYALTY_MARKETING_EXPENSE,
+                LedgerAccountCodes.LOYALTY_REDEMPTION_LIABILITY,
+                amt
+        );
+    }
+
+    /** Reverse a previously accrued earn (void or partial refund). Skips when amount is non-positive. */
+    @Transactional
+    public String postLoyaltyEarnReversal(String businessId, BigDecimal amount, String sourceId, String memo) {
+        BigDecimal amt = amount == null ? BigDecimal.ZERO : amount.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        if (amt.signum() <= 0) {
+            return null;
+        }
+        return postBalancedTwoLine(
+                businessId,
+                SalesConstants.JOURNAL_SOURCE_LOYALTY_EARN_REVERSAL,
+                sourceId,
+                memo,
+                LedgerAccountCodes.LOYALTY_REDEMPTION_LIABILITY,
+                LedgerAccountCodes.LOYALTY_MARKETING_EXPENSE,
+                amt
+        );
     }
 
     private String postBalancedTwoLine(

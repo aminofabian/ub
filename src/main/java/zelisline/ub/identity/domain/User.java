@@ -104,6 +104,10 @@ public class User {
     @Column(name = "deleted_at")
     private Instant deletedAt;
 
+    /** Erasure: login identifiers scrubbed; legal review Phase 8 (GDPR/DPA tooling). */
+    @Column(name = "anonymised_at")
+    private Instant anonymisedAt;
+
     public UserStatus statusAsEnum() {
         return UserStatus.fromWire(status);
     }

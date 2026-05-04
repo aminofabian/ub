@@ -44,7 +44,7 @@ public class LoginRateLimitFilter extends OncePerRequestFilter {
             return;
         }
 
-        String ip = clientIp(request);
+        String ip = ClientIpResolver.resolve(request);
         if (!rateLimiter.tryConsume(ip)) {
             ProblemDetail body = ProblemDetail.forStatus(HttpStatus.TOO_MANY_REQUESTS.value());
             body.setTitle("Too many login attempts");
@@ -58,13 +58,5 @@ public class LoginRateLimitFilter extends OncePerRequestFilter {
         }
 
         filterChain.doFilter(request, response);
-    }
-
-    private static String clientIp(HttpServletRequest request) {
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            return forwarded.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
     }
 }

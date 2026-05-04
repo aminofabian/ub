@@ -65,6 +65,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
             return;
         }
+        if (token.startsWith("kpos_")) {
+            filterChain.doFilter(request, response);
+            return;
+        }
 
         final Claims claims;
         try {

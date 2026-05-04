@@ -21,6 +21,8 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     boolean existsByBusinessIdAndSkuAndDeletedAtIsNull(String businessId, String sku);
 
+    Optional<Item> findByBusinessIdAndSkuAndDeletedAtIsNull(String businessId, String sku);
+
     Optional<Item> findByBusinessIdAndBarcodeAndDeletedAtIsNull(String businessId, String barcode);
 
     boolean existsByBusinessIdAndVariantOfItemIdAndDeletedAtIsNull(String businessId, String variantOfItemId);

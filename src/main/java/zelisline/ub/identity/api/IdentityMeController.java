@@ -28,7 +28,7 @@ public class IdentityMeController {
     @GetMapping
     @PreAuthorize("isAuthenticated()")
     public UserResponse getMe(HttpServletRequest request) {
-        var principal = CurrentTenantUser.require(request);
+        var principal = CurrentTenantUser.requireHuman(request);
         return identityService.getMe(TenantRequestIds.resolveBusinessId(request), principal.userId());
     }
 
@@ -38,7 +38,7 @@ public class IdentityMeController {
             @Valid @RequestBody UpdateMeRequest body,
             HttpServletRequest request
     ) {
-        var principal = CurrentTenantUser.require(request);
+        var principal = CurrentTenantUser.requireHuman(request);
         return identityService.updateMe(TenantRequestIds.resolveBusinessId(request), principal.userId(), body);
     }
 }

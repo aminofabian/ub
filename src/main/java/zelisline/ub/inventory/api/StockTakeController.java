@@ -39,7 +39,7 @@ public class StockTakeController {
             @Valid @RequestBody PostStartStockTakeSessionRequest body,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.require(request);
+        var user = CurrentTenantUser.requireHuman(request);
         return stockTakeService.startSession(
                 TenantRequestIds.resolveBusinessId(request),
                 body,
@@ -53,7 +53,7 @@ public class StockTakeController {
             @PathVariable String sessionId,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.require(request);
+        CurrentTenantUser.requireHuman(request);
         return stockTakeService.getSession(
                 TenantRequestIds.resolveBusinessId(request),
                 sessionId
@@ -67,7 +67,7 @@ public class StockTakeController {
             @Valid @RequestBody PatchStockTakeCountsRequest body,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.require(request);
+        CurrentTenantUser.requireHuman(request);
         return stockTakeService.applyCounts(
                 TenantRequestIds.resolveBusinessId(request),
                 sessionId,
@@ -81,7 +81,7 @@ public class StockTakeController {
             @PathVariable String sessionId,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.require(request);
+        var user = CurrentTenantUser.requireHuman(request);
         return stockTakeService.closeSession(
                 TenantRequestIds.resolveBusinessId(request),
                 sessionId,
@@ -98,7 +98,7 @@ public class StockTakeController {
             @RequestBody(required = false) ApproveStockAdjustmentRequest body,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.require(request);
+        var user = CurrentTenantUser.requireHuman(request);
         stockTakeService.approveAdjustmentRequest(
                 TenantRequestIds.resolveBusinessId(request),
                 sessionId,
@@ -117,7 +117,7 @@ public class StockTakeController {
             @RequestBody(required = false) RejectStockAdjustmentRequest body,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.require(request);
+        var user = CurrentTenantUser.requireHuman(request);
         String notes = body == null ? null : body.notes();
         stockTakeService.rejectAdjustmentRequest(
                 TenantRequestIds.resolveBusinessId(request),

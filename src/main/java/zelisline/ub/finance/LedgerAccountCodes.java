@@ -16,8 +16,13 @@ public final class LedgerAccountCodes {
     public static final String CUSTOMER_WALLET_LIABILITY = "1175";
     /** Till-side M-Pesa / mobile money clearing (manual reference in Phase 4). */
     public static final String MPESA_CLEARING = "1020";
-    /** Points redeemed at POS — contra-revenue via liability bucket (Phase 5 MVP). */
+    /** Points redeemed at POS clear this liability (paired with {@link #LOYALTY_MARKETING_EXPENSE} on earn). */
     public static final String LOYALTY_REDEMPTION_LIABILITY = "2196";
+    /**
+     * Loyalty earn marketing expense — paired credit goes to {@link #LOYALTY_REDEMPTION_LIABILITY}
+     * so books carry a real obligation until the customer redeems (ADR-0009).
+     */
+    public static final String LOYALTY_MARKETING_EXPENSE = "5310";
 
     public static final String ACCOUNTS_PAYABLE = "2100";
     public static final String GOODS_RECEIVED_NOT_INVOICED = "2150";

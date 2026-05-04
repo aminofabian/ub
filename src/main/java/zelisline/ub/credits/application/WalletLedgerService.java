@@ -119,8 +119,11 @@ public class WalletLedgerService {
     @Transactional
     public void refundToWallet(String businessId, String saleId, String customerId, BigDecimal amount) {
         BigDecimal amt = n(amount);
-        if (amt.signum() <= 0 || blank(customerId)) {
+        if (amt.signum() <= 0) {
             return;
+        }
+        if (blank(customerId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customer required for wallet refund");
         }
         creditWallet(businessId, customerId, saleId, WalletTxnTypes.CREDIT_REFUND, amt, null);
     }

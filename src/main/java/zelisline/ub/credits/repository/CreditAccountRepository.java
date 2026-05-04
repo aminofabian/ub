@@ -1,5 +1,7 @@
 package zelisline.ub.credits.repository;
 
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -32,5 +34,22 @@ public interface CreditAccountRepository extends JpaRepository<CreditAccount, St
     Optional<CreditAccount> findByCustomerIdAndBusinessIdForUpdate(
             @Param("customerId") String customerId,
             @Param("businessId") String businessId
+    );
+
+    /**
+     * Accounts considered "overdue" by the reminder sweep: a positive open balance, no activity
+     * since {@code staleBefore}, opted-in to reminders. Falls back to {@code createdAt} for
+     * accounts that have never seen movement so the sweep covers freshly-funded tabs too.
+     */
+    @Query("""
+            select c from CreditAccount c
+            where c.balanceOwed > :minOwed
+              and c.remindersOptOut = false
+              and coalesce(c.lastActivityAt, c.createdAt) < :staleBefore
+            order by coalesce(c.lastActivityAt, c.createdAt) asc
+            """)
+    List<CreditAccount> findOverdueForReminder(
+            @Param("minOwed") BigDecimal minOwed,
+            @Param("staleBefore") Instant staleBefore
     );
 }

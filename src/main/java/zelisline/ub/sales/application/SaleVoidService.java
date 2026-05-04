@@ -20,6 +20,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.credits.application.BusinessCreditSettingsService;
 import zelisline.ub.credits.application.CreditSaleDebtService;
 import zelisline.ub.credits.application.LoyaltyPointsService;
 import zelisline.ub.credits.application.WalletLedgerService;
@@ -77,6 +78,7 @@ public class SaleVoidService {
     private final CreditSaleDebtService creditSaleDebtService;
     private final WalletLedgerService walletLedgerService;
     private final LoyaltyPointsService loyaltyPointsService;
+    private final BusinessCreditSettingsService businessCreditSettingsService;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -141,7 +143,11 @@ public class SaleVoidService {
         String voidJeId = postVoidJournal(businessId, saleId, grandTotal, cogs, payments, overpay);
         creditSaleDebtService.reverseDebtForVoidedSale(businessId, sale, payments);
         walletLedgerService.reverseWalletEffectsForVoidedSale(businessId, saleId, sale.getCustomerId());
-        loyaltyPointsService.reverseLoyaltyForVoidedSale(businessId, saleId, sale.getCustomerId());
+        loyaltyPointsService.reverseLoyaltyForVoidedSale(
+                businessId,
+                saleId,
+                sale.getCustomerId(),
+                businessCreditSettingsService.resolveForBusiness(businessId));
 
         sale.setStatus(SalesConstants.SALE_STATUS_VOIDED);
         sale.setVoidedAt(Instant.now());

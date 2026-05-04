@@ -1,6 +1,7 @@
 package zelisline.ub.purchasing.repository;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
@@ -94,5 +95,21 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
             @Param("businessId") String businessId,
             @Param("status") String status,
             @Param("branchId") String branchId
+    );
+
+    @Query("""
+            select b from InventoryBatch b
+             where b.businessId = :businessId
+               and b.status = 'active'
+               and b.quantityRemaining > 0
+               and b.expiryDate is not null
+               and b.expiryDate <= :until
+               and (:branchId is null or b.branchId = :branchId)
+             order by b.expiryDate asc, b.id asc
+            """)
+    List<InventoryBatch> findExpiringOnOrBefore(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("until") LocalDate until
     );
 }

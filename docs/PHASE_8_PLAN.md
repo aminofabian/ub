@@ -64,8 +64,8 @@ After Phase 8 closes, **tenant admins** (and **super-admin** where required) can
 | Phase 7 handoff | Why Phase 8 needs it |
 |---|---|
 | **Stable read/report** endpoints | External API often **wraps** the same facades with **narrower** DTOs |
-| **Outbox + event catalogue** | Webhook dispatcher **subscribes** to **known** event types (`implement.md` Appendix B) |
-| **`platform-storage` (S3)** | Backup artefacts + GDPR export **zip** delivery |
+| **Domain event catalogue** (`implement.md` Appendix B names) | Webhook dispatcher names match emitted events. **Note:** the **transactional outbox** itself is **not** a Phase 7 v1 deliverable (see `docs/PHASE_7_PLAN.md` Locked ADRs / Risks #6); **Phase 8 Slice 2** must ship the outbox **or** start with a **scheduled-scan webhook delivery** mode and migrate later. |
+| **Object-storage port + v1 adapter** (Cloudinary `raw`/authenticated **or** local FS + signed token) | GDPR + backup artefacts can plug into the same port; **Phase 8 hardens** the adapter to **S3/MinIO** (or RDS snapshots) — explicit work item, not assumed delivered. |
 | **Async export pipeline** | GDPR **large** exports reuse **job + URL** patterns |
 | **`integrations.*` permissions** (`implement.md` §6.1) | `api_keys.manage`, `webhooks.manage` |
 
@@ -152,6 +152,7 @@ gantt
 
 ### Deliverables
 
+- **Event sourcing path (ADR):** if a **transactional outbox** is not yet in the repo at start of Slice 2, ship one here (table + relay) **or** drive deliveries from **scheduled scans** of the same predicates that feed Phase 7 v1 notifications. Pick **one** and document; don't ship both half-built.
 - **Subscription** entity: `url`, `secret`, `events[]`, `active`, `failure_count`.
 - **Delivery** worker: async; **signature** header (`X-Kiosk-Signature` + timestamp); **idempotency-Key** per delivery attempt optional.
 - **DLQ** table or **dead** status + admin replay.
@@ -159,7 +160,7 @@ gantt
 ### Tests
 
 - **Invalid** signature on subscriber **mock** → retries then pause.
-- **Event** fan-out does **not** block **OLTP** (outbox consumer).
+- **Event** fan-out does **not** block **OLTP** (outbox consumer **or** scheduled scanner — per chosen ADR).
 
 ---
 

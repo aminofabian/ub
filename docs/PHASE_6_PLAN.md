@@ -238,7 +238,9 @@ gantt
 | **Correct** P&L/BS from **transactional** queries | **MVs** pre-aggregate same figures for **speed** |
 | **Daily drawer snapshot** rows | **Notification** “shift variance” digests |
 | **Expense categories** stable in CoA | **Supplier P&L**, **tax summary** reports drill-down |
-| Inline CSV caps | **Async export** + **S3** URL pattern (`implement.md` §9.6) |
+| Inline CSV caps | **Async export** + **signed-URL** pattern (`implement.md` §9.6; v1 storage adapter per `docs/PHASE_7_PLAN.md` Locked ADRs) |
+
+> **Gate note (added in Phase 7 plan revision).** Phase 7 [Slice 0](./PHASE_7_PLAN.md#-slice-0--phase-6-close-out-gate) treats Phase 6 **Slices 4–6** (owner pulse, simple P&L, simple balance sheet) as a **hard precondition** for Phase 7 Slice 5 (dashboard SLO). If Phase 6 ships earlier slices (1–3) but not 4–6, Phase 7 Slice 0 absorbs the remainder before MV optimisation begins.
 
 Phase 7 **does not** redefine **expense posting** — **refreshes read models** and **broadens** report catalogue.
 

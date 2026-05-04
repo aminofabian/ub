@@ -316,6 +316,10 @@ components:
           nullable: true
         slug:
           type: string
+        icon:
+          type: string
+          nullable: true
+          description: Emoji / icon key, or HTTPS URL for a custom tile image (e.g. Cloudinary).
     PublicCategoryListResponse:
       type: object
       properties:

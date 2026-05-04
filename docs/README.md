@@ -338,11 +338,11 @@ The skeleton and the rails. Nothing ships to users; everything after this stands
 ### Phase 7 — Reporting + Analytics `🔲 Planned`
 
 - 🔲 Materialized views (`mv_sales_daily`, `mv_supplier_monthly`, `mv_inventory_snapshot`)
-- 🔲 All dashboard queries sub-200ms p95
+- 🔲 Dashboard query p95 baseline published (sub-200ms target; CI fail-on-regression deferred to Phase 11)
 - 🔲 Async export engine (CSV/XLSX/PDF)
 - 🔲 Notification pipeline (low stock, expiring, overdue, shift variance)
 
-**Exit criteria:** 10 canonical reports pass acceptance tests.
+**Exit criteria:** [Phase 6 close-out](PHASE_7_PLAN.md#-slice-0--phase-6-close-out-gate) (pulse + simple P&L/BS) **plus** **six** [v1 canonical reports](PHASE_7_PLAN.md#-canonical-reports--v1-vs-phase-71) pass acceptance; **four** [Phase 7.1](PHASE_7_PLAN.md#-canonical-reports--v1-vs-phase-71) reports follow in the same release or a stated follow-on milestone (see `PHASE_7_PLAN.md` ADR).
 
 ### Phase 8 — Integrations & Hardening `🔲 Planned`
 
@@ -563,7 +563,7 @@ A full `.env.example` ships with Phase 0. Never commit real secrets.
 | Layering + package rules  | ArchUnit                                        | Breaking = red build |
 | Concurrency (last-unit-sold) | `jcstress` or Testcontainers-driven threaded test | Hard fail on any lost update |
 | Tenant isolation          | Login as tenant A, request tenant B's ID — expect 404 | Breaking = red build |
-| Reports                   | Golden-file tests for 10 canonical reports      | 1:1 expected output |
+| Reports                   | Golden-file tests for **Phase 7 v1** (six) + optional **7.1** (four) | 1:1 expected output |
 
 ### What's explicitly not tested by us
 

@@ -47,7 +47,7 @@ public class PricingController {
             @Valid @RequestBody PostSellingPriceRequest body,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.require(request);
+        var user = CurrentTenantUser.requireHuman(request);
         return pricingService.setSellingPrice(
                 TenantRequestIds.resolveBusinessId(request),
                 body,
@@ -62,7 +62,7 @@ public class PricingController {
             @Valid @RequestBody PostBuyingPriceRequest body,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.require(request);
+        var user = CurrentTenantUser.requireHuman(request);
         return pricingService.setBuyingPrice(
                 TenantRequestIds.resolveBusinessId(request),
                 body,
@@ -77,7 +77,7 @@ public class PricingController {
             @RequestParam(required = false) String supplierId,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.require(request);
+        CurrentTenantUser.requireHuman(request);
         return pricingService.suggestSellPrice(
                 TenantRequestIds.resolveBusinessId(request),
                 itemId,
@@ -88,7 +88,7 @@ public class PricingController {
     @GetMapping("/price-rules")
     @PreAuthorize("hasPermission(null, 'pricing.read')")
     public List<PriceRuleResponse> listRules(HttpServletRequest request) {
-        CurrentTenantUser.require(request);
+        CurrentTenantUser.requireHuman(request);
         return pricingService.listPriceRules(TenantRequestIds.resolveBusinessId(request));
     }
 
@@ -99,7 +99,7 @@ public class PricingController {
             @Valid @RequestBody PostPriceRuleRequest body,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.require(request);
+        CurrentTenantUser.requireHuman(request);
         return pricingService.createPriceRule(TenantRequestIds.resolveBusinessId(request), body);
     }
 
@@ -110,7 +110,7 @@ public class PricingController {
             @Valid @RequestBody PutPriceRuleRequest body,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.require(request);
+        CurrentTenantUser.requireHuman(request);
         return pricingService.updatePriceRule(
                 TenantRequestIds.resolveBusinessId(request),
                 ruleId,
@@ -121,7 +121,7 @@ public class PricingController {
     @GetMapping("/tax-rates")
     @PreAuthorize("hasPermission(null, 'pricing.read')")
     public List<TaxRateResponse> listTaxRates(HttpServletRequest request) {
-        CurrentTenantUser.require(request);
+        CurrentTenantUser.requireHuman(request);
         return pricingService.listTaxRates(TenantRequestIds.resolveBusinessId(request));
     }
 
@@ -132,7 +132,7 @@ public class PricingController {
             @Valid @RequestBody PostTaxRateRequest body,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.require(request);
+        CurrentTenantUser.requireHuman(request);
         return pricingService.createTaxRate(TenantRequestIds.resolveBusinessId(request), body);
     }
 }

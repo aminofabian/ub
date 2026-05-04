@@ -34,19 +34,19 @@ public class ApiKeyController {
     @GetMapping
     @PreAuthorize("hasPermission(null, 'integrations.api_keys.manage')")
     public Page<ApiKeyResponse> list(Pageable pageable, HttpServletRequest http) {
-        return apiKeyService.list(http, CurrentTenantUser.require(http), pageable);
+        return apiKeyService.list(http, CurrentTenantUser.requireHuman(http), pageable);
     }
 
     @PostMapping
     @PreAuthorize("hasPermission(null, 'integrations.api_keys.manage')")
     public CreatedApiKeyResponse create(@Valid @RequestBody CreateApiKeyRequest request, HttpServletRequest http) {
-        return apiKeyService.create(http, CurrentTenantUser.require(http), request);
+        return apiKeyService.create(http, CurrentTenantUser.requireHuman(http), request);
     }
 
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     @PreAuthorize("hasPermission(null, 'integrations.api_keys.manage')")
     public void revoke(@PathVariable("id") String id, HttpServletRequest http) {
-        apiKeyService.revoke(http, CurrentTenantUser.require(http), id);
+        apiKeyService.revoke(http, CurrentTenantUser.requireHuman(http), id);
     }
 }

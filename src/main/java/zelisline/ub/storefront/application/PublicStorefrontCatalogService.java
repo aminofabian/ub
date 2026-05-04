@@ -164,7 +164,8 @@ public class PublicStorefrontCatalogService {
                         c.getId(),
                         c.getName(),
                         blankToNull(c.getParentId()),
-                        c.getSlug()))
+                        c.getSlug(),
+                        blankToNull(c.getIcon())))
                 .toList();
         return new PublicCategoryListResponse(rows);
     }

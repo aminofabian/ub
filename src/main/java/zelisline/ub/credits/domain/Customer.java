@@ -48,6 +48,10 @@ public class Customer {
     @Column(name = "deleted_at")
     private Instant deletedAt;
 
+    /** When set, direct identifiers were scrubbed for erasure requests (Phase 8 Slice 5). */
+    @Column(name = "anonymised_at")
+    private Instant anonymisedAt;
+
     @PrePersist
     void onCreate() {
         Instant now = Instant.now();

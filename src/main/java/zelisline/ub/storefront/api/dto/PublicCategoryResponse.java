@@ -7,6 +7,8 @@ public record PublicCategoryResponse(
         String id,
         String name,
         String parentId,
-        String slug
+        String slug,
+        /** Emoji / icon key, or HTTPS URL for a custom kiosk icon image. */
+        String icon
 ) {
 }

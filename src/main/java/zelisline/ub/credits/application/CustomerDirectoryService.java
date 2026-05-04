@@ -147,6 +147,9 @@ public class CustomerDirectoryService {
             CreditAccount account = creditAccountRepository
                     .findByCustomerIdAndBusinessId(customerId, businessId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Credit account not found"));
+            if (patch.creditAccountVersion() != null && patch.creditAccountVersion() != account.getVersion()) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Stale credit account version");
+            }
             account.setCreditLimit(patch.creditLimit());
             creditAccountRepository.save(account);
         }

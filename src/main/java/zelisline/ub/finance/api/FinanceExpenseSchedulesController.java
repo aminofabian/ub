@@ -40,7 +40,7 @@ public class FinanceExpenseSchedulesController {
             @Valid @RequestBody PostExpenseScheduleRequest body,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.require(request);
+        var user = CurrentTenantUser.requireHuman(request);
         return expenseScheduleService.create(
                 TenantRequestIds.resolveBusinessId(request),
                 body,
@@ -55,21 +55,21 @@ public class FinanceExpenseSchedulesController {
             @RequestBody PatchExpenseScheduleRequest body,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.require(request);
+        CurrentTenantUser.requireHuman(request);
         return expenseScheduleService.update(TenantRequestIds.resolveBusinessId(request), scheduleId, body);
     }
 
     @DeleteMapping("/{scheduleId}")
     @PreAuthorize("hasPermission(null, 'finance.expenses.write')")
     public ExpenseScheduleResponse deactivate(@PathVariable String scheduleId, HttpServletRequest request) {
-        CurrentTenantUser.require(request);
+        CurrentTenantUser.requireHuman(request);
         return expenseScheduleService.deactivate(TenantRequestIds.resolveBusinessId(request), scheduleId);
     }
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'finance.expenses.read')")
     public List<ExpenseScheduleResponse> list(HttpServletRequest request) {
-        CurrentTenantUser.require(request);
+        CurrentTenantUser.requireHuman(request);
         return expenseScheduleService.listActive(TenantRequestIds.resolveBusinessId(request));
     }
 }

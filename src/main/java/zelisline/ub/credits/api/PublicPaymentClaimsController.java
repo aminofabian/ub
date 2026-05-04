@@ -23,7 +23,9 @@ public class PublicPaymentClaimsController {
     private final PublicPaymentClaimService publicPaymentClaimService;
 
     /**
-     * Unauthenticated submission — token authenticity is possession of plaintext token minted internally.
+     * Unauthenticated submission — token authenticity is possession of plaintext token minted internally
+     * by an admin. The phone-only fallback was deliberately removed (ADR-0010): un-tokened paths are an
+     * abuse vector and provide no defense beyond the public phone directory.
      */
     @PostMapping("/{plaintextToken}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
@@ -32,18 +34,5 @@ public class PublicPaymentClaimsController {
             @Valid @RequestBody SubmitPublicClaimRequest body
     ) {
         publicPaymentClaimService.submitByTokenPlain(plaintextToken, body.amount(), body.reference());
-    }
-
-    /**
-     * Unauthenticated fallback submission when the payer only has business id + customer phone.
-     */
-    @PostMapping("/by-phone/{businessId}/{phone}")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void submitByPhone(
-            @PathVariable String businessId,
-            @PathVariable String phone,
-            @Valid @RequestBody SubmitPublicClaimRequest body
-    ) {
-        publicPaymentClaimService.submitByBusinessAndPhone(businessId, phone, body.amount(), body.reference());
     }
 }

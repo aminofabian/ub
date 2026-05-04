@@ -25,7 +25,12 @@ public class LoyaltyPointsService {
 
     private final LoyaltyTransactionRepository loyaltyTransactionRepository;
     private final CreditAccountRepository creditAccountRepository;
+    private final CreditsJournalService creditsJournalService;
 
+    /**
+     * Cheap pre-flight done before locks are taken. Final correctness is re-checked under the
+     * pessimistic account lock in {@link #applyAfterCompletedSale}.
+     */
     public void validateRedeemTender(
             String businessId,
             String customerId,
@@ -38,17 +43,12 @@ public class LoyaltyPointsService {
             return;
         }
         requireCustomer(customerId);
-        CreditAccount acc = loadAccount(customerId, businessId);
-        int maxBps = settings.getLoyaltyMaxRedeemBps();
-        BigDecimal ceiling = nz(basketTotal)
-                .multiply(BigDecimal.valueOf(maxBps))
-                .divide(BigDecimal.valueOf(10_000L), MONEY_SCALE, RoundingMode.HALF_UP);
-        if (redeem.compareTo(ceiling) > 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Loyalty redemption exceeds configured cap");
-        }
         BigDecimal kp = kesPerPoint(settings);
-        int ptsCost = redeem.divide(kp, 0, RoundingMode.UP).intValueExact();
-        if (ptsCost <= 0 || acc.getLoyaltyPoints() < ptsCost) {
+        assertDivisibleByKesPerPoint(redeem, kp);
+        assertWithinCap(redeem, basketTotal, settings.getLoyaltyMaxRedeemBps());
+        CreditAccount acc = loadAccount(customerId, businessId);
+        int ptsCost = exactPointCost(redeem, kp);
+        if (acc.getLoyaltyPoints() < ptsCost) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Insufficient loyalty points");
         }
     }
@@ -72,7 +72,12 @@ public class LoyaltyPointsService {
         redeemTenderTotal = nz(redeemTenderTotal);
         if (redeemTenderTotal.signum() > 0) {
             BigDecimal kp = kesPerPoint(settings);
-            int spendPts = redeemTenderTotal.divide(kp, 0, RoundingMode.UP).intValueExact();
+            assertDivisibleByKesPerPoint(redeemTenderTotal, kp);
+            assertWithinCap(redeemTenderTotal, grandTotal, settings.getLoyaltyMaxRedeemBps());
+            int spendPts = exactPointCost(redeemTenderTotal, kp);
+            if (acc.getLoyaltyPoints() < spendPts) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Insufficient loyalty points");
+            }
             acc.setLoyaltyPoints(acc.getLoyaltyPoints() - spendPts);
             acc.setLastActivityAt(Instant.now());
             loyaltyTransactionRepository.save(tx(businessId, acc.getId(), saleId, LoyaltyTxnTypes.REDEEM, spendPts));
@@ -82,6 +87,11 @@ public class LoyaltyPointsService {
             acc.setLoyaltyPoints(acc.getLoyaltyPoints() + earnPts);
             acc.setLastActivityAt(Instant.now());
             loyaltyTransactionRepository.save(tx(businessId, acc.getId(), saleId, LoyaltyTxnTypes.EARN, earnPts));
+            creditsJournalService.postLoyaltyEarnAccrual(
+                    businessId,
+                    pointsToKes(earnPts, settings),
+                    saleId,
+                    "Loyalty earn accrual " + saleId);
         }
         creditAccountRepository.save(acc);
         if (acc.getLoyaltyPoints() < 0) {
@@ -90,7 +100,12 @@ public class LoyaltyPointsService {
     }
 
     @Transactional
-    public void reverseLoyaltyForVoidedSale(String businessId, String saleId, String customerId) {
+    public void reverseLoyaltyForVoidedSale(
+            String businessId,
+            String saleId,
+            String customerId,
+            BusinessCreditSettings settings
+    ) {
         if (blank(customerId)) {
             return;
         }
@@ -107,6 +122,13 @@ public class LoyaltyPointsService {
         acc.setLastActivityAt(Instant.now());
         creditAccountRepository.save(acc);
         loyaltyTransactionRepository.save(tx(businessId, acc.getId(), saleId, LoyaltyTxnTypes.ADJUST_CLAW_VOID, redeemed - earn));
+        if (earn > 0) {
+            creditsJournalService.postLoyaltyEarnReversal(
+                    businessId,
+                    pointsToKes(earn, settings),
+                    saleId,
+                    "Loyalty earn reversal (void) " + saleId);
+        }
     }
 
     @Transactional
@@ -115,7 +137,8 @@ public class LoyaltyPointsService {
             String saleId,
             String customerId,
             BigDecimal saleGrandOriginal,
-            BigDecimal refundMoneyThisBatch
+            BigDecimal refundMoneyThisBatch,
+            BusinessCreditSettings settings
     ) {
         if (blank(customerId) || refundMoneyThisBatch.signum() <= 0 || saleGrandOriginal.signum() <= 0) {
             return;
@@ -140,6 +163,13 @@ public class LoyaltyPointsService {
         acc.setLastActivityAt(Instant.now());
         creditAccountRepository.save(acc);
         loyaltyTransactionRepository.save(tx(businessId, acc.getId(), saleId, LoyaltyTxnTypes.ADJUST_REFUND, netRestore));
+        if (clawEarn > 0) {
+            creditsJournalService.postLoyaltyEarnReversal(
+                    businessId,
+                    pointsToKes(clawEarn, settings),
+                    saleId,
+                    "Loyalty earn reversal (refund) " + saleId);
+        }
         if (acc.getLoyaltyPoints() < 0) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Loyalty balance went negative after refund clawback");
         }
@@ -151,6 +181,48 @@ public class LoyaltyPointsService {
             return 0;
         }
         return nz(basket).multiply(rate).setScale(0, RoundingMode.FLOOR).intValueExact();
+    }
+
+    /**
+     * Reject any redeem amount that isn't a clean multiple of {@code kesPerPoint} so the
+     * customer is never silently rounded up (cost) or down (benefit). Mirrors ADR-0009.
+     */
+    private static void assertDivisibleByKesPerPoint(BigDecimal redeemKes, BigDecimal kesPerPoint) {
+        BigDecimal remainder = redeemKes.remainder(kesPerPoint);
+        if (remainder.compareTo(BigDecimal.ZERO) != 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Redeem amount must be a multiple of " + kesPerPoint.stripTrailingZeros().toPlainString() + " KES");
+        }
+    }
+
+    private static int exactPointCost(BigDecimal redeemKes, BigDecimal kesPerPoint) {
+        return redeemKes.divide(kesPerPoint, 0, RoundingMode.UNNECESSARY).intValueExact();
+    }
+
+    private static void assertWithinCap(BigDecimal redeemKes, BigDecimal basketTotal, int maxBps) {
+        if (maxBps <= 0) {
+            return;
+        }
+        BigDecimal ceiling = nz(basketTotal)
+                .multiply(BigDecimal.valueOf(maxBps))
+                .divide(BigDecimal.valueOf(10_000L), MONEY_SCALE, RoundingMode.HALF_UP);
+        if (redeemKes.compareTo(ceiling) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Loyalty redemption exceeds configured cap");
+        }
+    }
+
+    private static BigDecimal pointsToKes(int points, BusinessCreditSettings settings) {
+        if (points <= 0) {
+            return BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        }
+        BigDecimal kp = settings.getLoyaltyKesPerPoint();
+        if (kp == null || kp.signum() <= 0) {
+            return BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        }
+        return BigDecimal.valueOf(points)
+                .multiply(kp)
+                .setScale(MONEY_SCALE, RoundingMode.HALF_UP);
     }
 
     private static LoyaltyTransaction tx(String businessId, String accountId, String saleId, String type, int pts) {

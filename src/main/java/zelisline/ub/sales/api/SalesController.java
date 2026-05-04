@@ -49,7 +49,7 @@ public class SalesController {
             @Valid @RequestBody PostSaleRequest body,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.require(request);
+        var user = CurrentTenantUser.requireHuman(request);
         var out = saleService.createSale(
                 TenantRequestIds.resolveBusinessId(request),
                 idempotencyKey,
@@ -67,7 +67,7 @@ public class SalesController {
             @Valid @RequestBody(required = false) PostVoidSaleRequest body,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.require(request);
+        var user = CurrentTenantUser.requireHuman(request);
         PostVoidSaleRequest payload = body != null ? body : new PostVoidSaleRequest(null);
         return saleVoidService.voidSale(
                 TenantRequestIds.resolveBusinessId(request),
@@ -86,7 +86,7 @@ public class SalesController {
             @Valid @RequestBody PostRefundRequest body,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.require(request);
+        var user = CurrentTenantUser.requireHuman(request);
         return saleRefundService.createRefund(
                 TenantRequestIds.resolveBusinessId(request),
                 saleId,
@@ -99,7 +99,7 @@ public class SalesController {
     @GetMapping("/{saleId}/receipt.pdf")
     @PreAuthorize("hasPermission(null, 'sales.sell')")
     public ResponseEntity<byte[]> receiptPdf(@PathVariable String saleId, HttpServletRequest request) {
-        CurrentTenantUser.require(request);
+        CurrentTenantUser.requireHuman(request);
         byte[] body = saleReceiptService.buildPdf(
                 TenantRequestIds.resolveBusinessId(request),
                 saleId
@@ -117,7 +117,7 @@ public class SalesController {
             @RequestParam(defaultValue = "58") int widthMm,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.require(request);
+        CurrentTenantUser.requireHuman(request);
         byte[] body = saleReceiptService.buildEscPos(
                 TenantRequestIds.resolveBusinessId(request),
                 saleId,

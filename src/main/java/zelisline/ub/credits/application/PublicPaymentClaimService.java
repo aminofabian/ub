@@ -16,12 +16,11 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.credits.CreditClaimChannels;
 import zelisline.ub.credits.CreditClaimStatuses;
 import zelisline.ub.credits.domain.CreditAccount;
-import zelisline.ub.credits.domain.CustomerPhoneNormalizer;
 import zelisline.ub.credits.domain.PublicPaymentClaim;
 import zelisline.ub.credits.repository.CreditAccountRepository;
-import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.credits.repository.PublicPaymentClaimRepository;
 
 @Service
@@ -33,7 +32,6 @@ public class PublicPaymentClaimService {
 
     private final PublicPaymentClaimRepository publicPaymentClaimRepository;
     private final CreditAccountRepository creditAccountRepository;
-    private final CustomerRepository customerRepository;
     private final CreditSaleDebtService creditSaleDebtService;
     private final CreditsJournalService creditsJournalService;
 
@@ -70,36 +68,6 @@ public class PublicPaymentClaimService {
         applySubmission(row, amount, referenceRaw);
     }
 
-    /**
-     * Public fallback path where caller identifies the customer by business + phone instead of plaintext token.
-     * Uses the latest claim in ISSUED/SUBMITTED for that customer account.
-     */
-    @Transactional
-    public void submitByBusinessAndPhone(String businessId, String phoneRaw, BigDecimal amount, String referenceRaw) {
-        String normalized = CustomerPhoneNormalizer.normalize(phoneRaw);
-        if (normalized.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Phone search requires digits");
-        }
-        var matches = customerRepository.findByBusinessIdAndPhoneNormalized(
-                businessId, normalized, org.springframework.data.domain.PageRequest.of(0, 2));
-        if (matches.getContent().isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Customer not found");
-        }
-        if (matches.getContent().size() > 1) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Phone matches multiple customers");
-        }
-        String customerId = matches.getContent().getFirst().getId();
-        CreditAccount account = creditAccountRepository.findByCustomerIdAndBusinessId(customerId, businessId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Credit account not found"));
-        PublicPaymentClaim row = publicPaymentClaimRepository
-                .findFirstByBusinessIdAndCreditAccountIdAndStatusInOrderByCreatedAtDesc(
-                        businessId,
-                        account.getId(),
-                        List.of(CreditClaimStatuses.ISSUED, CreditClaimStatuses.SUBMITTED))
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No active claim for this customer"));
-        applySubmission(row, amount, referenceRaw);
-    }
-
     private void applySubmission(PublicPaymentClaim row, BigDecimal amount, String referenceRaw) {
         BigDecimal amt = amount.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         if (amt.signum() <= 0) {
@@ -116,14 +84,20 @@ public class PublicPaymentClaimService {
         publicPaymentClaimRepository.save(row);
     }
 
-    /** Idempotent: second approve is a silent no-op. */
+    /** Idempotent: second approve with the same channel is a silent no-op (§14.8). */
     @Transactional
-    public void approve(String businessId, String claimId) {
+    public void approve(String businessId, String claimId, String channel) {
+        if (!CreditClaimChannels.isValid(channel)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Channel must be 'cash' or 'mpesa'");
+        }
         PublicPaymentClaim row = publicPaymentClaimRepository.findById(claimId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Claim not found"));
         assertBusiness(row, businessId);
         if (CreditClaimStatuses.APPROVED.equals(row.getStatus())) {
             return;
+        }
+        if (CreditClaimStatuses.REJECTED.equals(row.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Rejected claims cannot be approved");
         }
         if (!CreditClaimStatuses.SUBMITTED.equals(row.getStatus())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Claim cannot be approved in this state");
@@ -133,10 +107,34 @@ public class PublicPaymentClaimService {
         }
         BigDecimal pay = row.getSubmittedAmount().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         creditSaleDebtService.applyInboundArPayment(businessId, row.getCreditAccountId(), pay);
-        String je = creditsJournalService.postInboundMpesaTowardAr(
-                businessId, pay, claimId, "Public payment claim " + claimId);
+        String memo = "Public payment claim " + claimId + " (" + channel + ")";
+        String je = CreditClaimChannels.CASH.equals(channel)
+                ? creditsJournalService.postInboundCashTowardAr(businessId, pay, claimId, memo)
+                : creditsJournalService.postInboundMpesaTowardAr(businessId, pay, claimId, memo);
         row.setStatus(CreditClaimStatuses.APPROVED);
         row.setApprovedJournalId(je);
+        row.setUpdatedAt(Instant.now());
+        publicPaymentClaimRepository.save(row);
+    }
+
+    /** Idempotent: second reject is a silent no-op. */
+    @Transactional
+    public void reject(String businessId, String claimId, String reasonRaw) {
+        PublicPaymentClaim row = publicPaymentClaimRepository.findById(claimId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Claim not found"));
+        assertBusiness(row, businessId);
+        if (CreditClaimStatuses.REJECTED.equals(row.getStatus())) {
+            return;
+        }
+        if (CreditClaimStatuses.APPROVED.equals(row.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Approved claims cannot be rejected");
+        }
+        if (!CreditClaimStatuses.SUBMITTED.equals(row.getStatus())
+                && !CreditClaimStatuses.ISSUED.equals(row.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Claim cannot be rejected in this state");
+        }
+        row.setStatus(CreditClaimStatuses.REJECTED);
+        row.setRejectionReason(trimOrNullLong(reasonRaw, 500));
         row.setUpdatedAt(Instant.now());
         publicPaymentClaimRepository.save(row);
     }
@@ -148,11 +146,15 @@ public class PublicPaymentClaimService {
     }
 
     private static String trimOrNull(String raw) {
+        return trimOrNullLong(raw, 128);
+    }
+
+    private static String trimOrNullLong(String raw, int maxLen) {
         if (raw == null || raw.isBlank()) {
             return null;
         }
         String t = raw.trim();
-        int cap = Math.min(128, t.length());
+        int cap = Math.min(maxLen, t.length());
         return t.substring(0, cap);
     }
 

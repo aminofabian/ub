@@ -41,7 +41,7 @@ public class FinanceExpensesController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.require(request);
+        var user = CurrentTenantUser.requireHuman(request);
         return expenseService.recordExpense(
                 TenantRequestIds.resolveBusinessId(request),
                 body,
@@ -53,7 +53,7 @@ public class FinanceExpensesController {
     @GetMapping("/{expenseId}")
     @PreAuthorize("hasPermission(null, 'finance.expenses.read')")
     public ExpenseResponse getExpense(@PathVariable String expenseId, HttpServletRequest request) {
-        CurrentTenantUser.require(request);
+        CurrentTenantUser.requireHuman(request);
         return expenseService.getExpense(TenantRequestIds.resolveBusinessId(request), expenseId);
     }
 
@@ -63,7 +63,7 @@ public class FinanceExpensesController {
             @RequestParam(required = false) LocalDate date,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.require(request);
+        CurrentTenantUser.requireHuman(request);
         return expenseService.listExpensesForDate(TenantRequestIds.resolveBusinessId(request), date);
     }
 }

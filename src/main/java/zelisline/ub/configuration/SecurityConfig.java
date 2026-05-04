@@ -10,6 +10,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -20,13 +21,21 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import zelisline.ub.identity.application.ApiKeyAuthService;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.identity.repository.UserSessionRepository;
 import zelisline.ub.identity.repository.SuperAdminRepository;
+import zelisline.ub.platform.security.ApiKeyAuthenticationFilter;
+import zelisline.ub.platform.security.ApiKeyRateLimitFilter;
+import zelisline.ub.platform.security.ApiKeyRateLimiter;
+import zelisline.ub.platform.security.InvalidApiKeyIpRateLimiter;
+import zelisline.ub.platform.security.PublicCreditClaimRateLimitFilter;
+import zelisline.ub.platform.security.PublicCreditClaimRateLimiter;
 import zelisline.ub.platform.security.PublicStorefrontIpRateLimiter;
 import zelisline.ub.platform.security.PublicStorefrontRateLimitFilter;
 import zelisline.ub.platform.security.JwtAuthenticationFilter;
@@ -80,12 +89,24 @@ public class SecurityConfig {
             HttpSecurity http,
             DomainBusinessResolverFilter domainBusinessResolverFilter,
             PublicStorefrontRateLimitFilter publicStorefrontRateLimitFilter,
+            PublicCreditClaimRateLimitFilter publicCreditClaimRateLimitFilter,
             LoginRateLimitFilter loginRateLimitFilter,
             JwtAuthenticationFilter jwtAuthenticationFilter,
+            ApiKeyAuthenticationFilter apiKeyAuthenticationFilter,
+            ApiKeyRateLimitFilter apiKeyRateLimitFilter,
             ObjectProvider<TestAuthenticationFilter> testAuthenticationFilter
     ) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
+                .headers(headers -> {
+                    headers.frameOptions(frame -> frame.deny());
+                    headers.contentTypeOptions(Customizer.withDefaults());
+                    headers.referrerPolicy(referrer -> referrer.policy(
+                            ReferrerPolicyHeaderWriter.ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN));
+                    headers.contentSecurityPolicy(csp -> csp.policyDirectives(
+                            "default-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"));
+                    headers.httpStrictTransportSecurity(hsts -> hsts.disable());
+                })
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .httpBasic(AbstractHttpConfigurer::disable)
@@ -135,10 +156,13 @@ public class SecurityConfig {
                 );
         http.addFilterBefore(domainBusinessResolverFilter, UsernamePasswordAuthenticationFilter.class);
         http.addFilterAfter(publicStorefrontRateLimitFilter, DomainBusinessResolverFilter.class);
-        http.addFilterAfter(loginRateLimitFilter, PublicStorefrontRateLimitFilter.class);
+        http.addFilterAfter(publicCreditClaimRateLimitFilter, PublicStorefrontRateLimitFilter.class);
+        http.addFilterAfter(loginRateLimitFilter, PublicCreditClaimRateLimitFilter.class);
         http.addFilterAfter(jwtAuthenticationFilter, LoginRateLimitFilter.class);
+        http.addFilterAfter(apiKeyAuthenticationFilter, JwtAuthenticationFilter.class);
+        http.addFilterAfter(apiKeyRateLimitFilter, ApiKeyAuthenticationFilter.class);
         testAuthenticationFilter.ifAvailable(filter ->
-                http.addFilterAfter(filter, JwtAuthenticationFilter.class));
+                http.addFilterAfter(filter, ApiKeyRateLimitFilter.class));
 
         return http.build();
     }
@@ -148,6 +172,13 @@ public class SecurityConfig {
             PublicStorefrontIpRateLimiter publicStorefrontIpRateLimiter
     ) {
         return new PublicStorefrontRateLimitFilter(publicStorefrontIpRateLimiter);
+    }
+
+    @Bean
+    public PublicCreditClaimRateLimitFilter publicCreditClaimRateLimitFilter(
+            PublicCreditClaimRateLimiter publicCreditClaimRateLimiter
+    ) {
+        return new PublicCreditClaimRateLimitFilter(publicCreditClaimRateLimiter);
     }
 
     @Bean
@@ -164,6 +195,18 @@ public class SecurityConfig {
     ) {
         return new JwtAuthenticationFilter(
                 jwtTokenService, userSessionRepository, userRepository, superAdminRepository);
+    }
+
+    @Bean
+    public ApiKeyAuthenticationFilter apiKeyAuthenticationFilter(
+            ApiKeyAuthService apiKeyAuthService,
+            InvalidApiKeyIpRateLimiter invalidApiKeyIpRateLimiter) {
+        return new ApiKeyAuthenticationFilter(apiKeyAuthService, invalidApiKeyIpRateLimiter);
+    }
+
+    @Bean
+    public ApiKeyRateLimitFilter apiKeyRateLimitFilter(ApiKeyRateLimiter apiKeyRateLimiter) {
+        return new ApiKeyRateLimitFilter(apiKeyRateLimiter);
     }
 
     @Bean
@@ -193,6 +236,7 @@ public class SecurityConfig {
                 "Content-Type",
                 "Accept",
                 "Idempotency-Key",
+                "X-API-Key",
                 "X-Request-Id",
                 "X-Tenant-Id",
                 "X-Tenant-Host",

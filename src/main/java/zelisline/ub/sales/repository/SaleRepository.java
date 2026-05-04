@@ -1,5 +1,6 @@
 package zelisline.ub.sales.repository;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -15,6 +16,10 @@ public interface SaleRepository extends JpaRepository<Sale, String> {
     Optional<Sale> findByBusinessIdAndIdempotencyKey(String businessId, String idempotencyKey);
 
     Optional<Sale> findByIdAndBusinessId(String id, String businessId);
+
+    List<Sale> findByBusinessIdAndCustomerIdOrderBySoldAtDesc(String businessId, String customerId);
+
+    List<Sale> findByBusinessIdAndSoldByOrderBySoldAtDesc(String businessId, String soldBy);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select s from Sale s where s.id = :id and s.businessId = :businessId")

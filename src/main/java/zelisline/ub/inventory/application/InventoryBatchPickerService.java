@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -18,6 +19,8 @@ import jakarta.persistence.LockModeType;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.integrations.webhook.WebhookEventTypes;
+import zelisline.ub.integrations.webhook.application.WebhookEnqueueService;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.inventory.CostMethod;
 import zelisline.ub.inventory.InventoryConstants;
@@ -49,6 +52,7 @@ public class InventoryBatchPickerService {
     private final BranchRepository branchRepository;
     private final BusinessRepository businessRepository;
     private final BusinessInventorySettingsReader businessInventorySettingsReader;
+    private final WebhookEnqueueService webhookEnqueueService;
 
     @Transactional(readOnly = true)
     public List<BatchAllocationLine> previewAllocation(
@@ -158,7 +162,9 @@ public class InventoryBatchPickerService {
             stockMovementRepository.save(sm);
         }
 
+        BigDecimal stockBefore = item.getCurrentStock() == null ? BigDecimal.ZERO : item.getCurrentStock();
         applyStockDelta(item, quantity.negate());
+        maybeEnqueueLowStockWebhook(businessId, branchId, itemId, item, stockBefore);
         return lines;
     }
 
@@ -204,5 +210,28 @@ public class InventoryBatchPickerService {
         }
         item.setCurrentStock(next);
         itemRepository.save(item);
+    }
+
+    /** Fire once when on-hand quantity crosses from above reorder level to at-or-below (same txn as pick). */
+    private void maybeEnqueueLowStockWebhook(
+            String businessId,
+            String branchId,
+            String itemId,
+            Item item,
+            BigDecimal stockBeforePick
+    ) {
+        BigDecimal reorder = item.getReorderLevel();
+        if (reorder == null) {
+            return;
+        }
+        BigDecimal after = item.getCurrentStock() == null ? BigDecimal.ZERO : item.getCurrentStock();
+        if (stockBeforePick.compareTo(reorder) > 0 && after.compareTo(reorder) <= 0) {
+            var data = new LinkedHashMap<String, Object>();
+            data.put("itemId", itemId);
+            data.put("branchId", branchId);
+            data.put("currentStock", after.toPlainString());
+            data.put("reorderLevel", reorder.toPlainString());
+            webhookEnqueueService.enqueue(businessId, WebhookEventTypes.STOCK_LOW_STOCK, data, null);
+        }
     }
 }

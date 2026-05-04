@@ -2,6 +2,7 @@ package zelisline.ub.identity.application;
 
 import java.security.SecureRandom;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 
@@ -11,9 +12,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
-
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -33,7 +31,6 @@ public class ApiKeyService {
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private final ApiKeyRepository apiKeyRepository;
-    private final ObjectMapper objectMapper;
 
     @Transactional(readOnly = true)
     public Page<ApiKeyResponse> list(HttpServletRequest http, TenantPrincipal principal, Pageable pageable) {
@@ -58,7 +55,7 @@ public class ApiKeyService {
         entity.setLabel(request.label().trim());
         entity.setTokenHash(hash);
         entity.setTokenPrefix(tokenPrefix);
-        entity.setScopes(writeScopes(request.scopes()));
+        entity.setScopes(new ArrayList<>(request.scopes()));
         entity.setActive(true);
         apiKeyRepository.save(entity);
 
@@ -67,7 +64,7 @@ public class ApiKeyService {
                 fullToken,
                 tokenPrefix,
                 entity.getLabel(),
-                readScopes(entity.getScopes()),
+                copyScopeList(entity.getScopes()),
                 entity.getCreatedAt()
         );
     }
@@ -86,7 +83,7 @@ public class ApiKeyService {
                 entity.getId(),
                 entity.getLabel(),
                 entity.getTokenPrefix(),
-                readScopes(entity.getScopes()),
+                copyScopeList(entity.getScopes()),
                 entity.isActive(),
                 entity.getLastUsedAt(),
                 entity.getExpiresAt(),
@@ -94,23 +91,8 @@ public class ApiKeyService {
         );
     }
 
-    private String writeScopes(List<String> scopes) {
-        try {
-            return objectMapper.writeValueAsString(scopes);
-        } catch (Exception e) {
-            return "[]";
-        }
-    }
-
-    private List<String> readScopes(String json) {
-        if (json == null || json.isBlank()) {
-            return List.of();
-        }
-        try {
-            return objectMapper.readValue(json, new TypeReference<>() {});
-        } catch (Exception e) {
-            return List.of();
-        }
+    private static List<String> copyScopeList(List<String> scopes) {
+        return scopes == null || scopes.isEmpty() ? List.of() : List.copyOf(scopes);
     }
 
     private static String randomAlphanumeric(int len) {

@@ -34,6 +34,8 @@ import zelisline.ub.credits.application.BusinessCreditSettingsService;
 import zelisline.ub.credits.application.CreditSaleDebtService;
 import zelisline.ub.credits.application.LoyaltyPointsService;
 import zelisline.ub.credits.application.WalletLedgerService;
+import zelisline.ub.integrations.webhook.WebhookEventTypes;
+import zelisline.ub.integrations.webhook.application.WebhookEnqueueService;
 import zelisline.ub.sales.SalePaymentLedger;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.PostSaleLineRequest;
@@ -73,6 +75,7 @@ public class SaleService {
     private final WalletLedgerService walletLedgerService;
     private final LoyaltyPointsService loyaltyPointsService;
     private final BusinessCreditSettingsService businessCreditSettingsService;
+    private final WebhookEnqueueService webhookEnqueueService;
 
     @Transactional
     public SaleCreationOutcome createSale(String businessId, String rawIdempotencyKey, PostSaleRequest req, String userId) {
@@ -143,7 +146,25 @@ public class SaleService {
         }
         shiftRepository.save(shift);
 
-        return toResponse(loadSaleOrThrow(saleId, businessId));
+        SaleResponse completed = toResponse(loadSaleOrThrow(saleId, businessId));
+        enqueueSaleCompletedWebhook(businessId, completed, effectiveSoldAt);
+        return completed;
+    }
+
+    private void enqueueSaleCompletedWebhook(String businessId, SaleResponse sale, Instant soldAt) {
+        var data = new LinkedHashMap<String, Object>();
+        data.put("saleId", sale.id());
+        data.put("branchId", sale.branchId());
+        data.put("customerId", sale.customerId());
+        data.put("grandTotal", sale.grandTotal().toPlainString());
+        if (soldAt != null) {
+            data.put("soldAt", soldAt.toString());
+        }
+        webhookEnqueueService.enqueue(
+                businessId,
+                WebhookEventTypes.SALE_COMPLETED,
+                data,
+                "sale.completed:" + sale.id());
     }
 
     private void enforceCustomerLinkage(

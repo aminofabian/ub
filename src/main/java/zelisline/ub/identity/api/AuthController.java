@@ -86,14 +86,14 @@ public class AuthController {
     @PostMapping("/logout")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<Void> logout(HttpServletRequest http) {
-        authService.logout(CurrentTenantUser.require(http));
+        authService.logout(CurrentTenantUser.requireHuman(http));
         return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/logout-all")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<Void> logoutAll(HttpServletRequest http) {
-        authService.logoutAll(CurrentTenantUser.require(http));
+        authService.logoutAll(CurrentTenantUser.requireHuman(http));
         return ResponseEntity.noContent().build();
     }
 
@@ -120,6 +120,6 @@ public class AuthController {
     @PreAuthorize("isAuthenticated()")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void passwordChange(@Valid @RequestBody PasswordChangeRequest request, HttpServletRequest http) {
-        authService.passwordChange(http, CurrentTenantUser.require(http), request);
+        authService.passwordChange(http, CurrentTenantUser.requireHuman(http), request);
     }
 }

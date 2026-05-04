@@ -24,6 +24,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.credits.application.BusinessCreditSettingsService;
 import zelisline.ub.credits.application.CreditSaleDebtService;
 import zelisline.ub.credits.application.LoyaltyPointsService;
 import zelisline.ub.credits.application.WalletLedgerService;
@@ -87,6 +88,7 @@ public class SaleRefundService {
     private final CreditSaleDebtService creditSaleDebtService;
     private final WalletLedgerService walletLedgerService;
     private final LoyaltyPointsService loyaltyPointsService;
+    private final BusinessCreditSettingsService businessCreditSettingsService;
     @PersistenceContext
     private EntityManager entityManager;
 
@@ -129,7 +131,12 @@ public class SaleRefundService {
                 businessId, saleId, sale.getCustomerId(), sumCustomerCreditPay(pays));
         walletLedgerService.refundToWallet(businessId, saleId, sale.getCustomerId(), walletRefundShare);
         loyaltyPointsService.proportionallyAdjustAfterRefund(
-                businessId, saleId, sale.getCustomerId(), sale.getGrandTotal(), comp.totalMoney());
+                businessId,
+                saleId,
+                sale.getCustomerId(),
+                sale.getGrandTotal(),
+                comp.totalMoney(),
+                businessCreditSettingsService.resolveForBusiness(businessId));
 
         Refund refund = persistRefundAggregate(
                 businessId,

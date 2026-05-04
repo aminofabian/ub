@@ -45,6 +45,9 @@ public class CreditAccount {
     @Column(name = "last_activity_at")
     private Instant lastActivityAt;
 
+    @Column(name = "reminders_opt_out", nullable = false)
+    private boolean remindersOptOut;
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;

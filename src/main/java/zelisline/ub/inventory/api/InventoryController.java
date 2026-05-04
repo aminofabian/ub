@@ -57,7 +57,7 @@ public class InventoryController {
             @RequestParam @NotNull @DecimalMin(value = "0.0001", inclusive = true) BigDecimal quantity,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.require(request);
+        CurrentTenantUser.requireHuman(request);
         return inventoryBatchPickerService.previewAllocation(
                 TenantRequestIds.resolveBusinessId(request),
                 itemId,
@@ -73,7 +73,7 @@ public class InventoryController {
             @Valid @RequestBody PostOpeningBalanceRequest body,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.require(request);
+        var user = CurrentTenantUser.requireHuman(request);
         return inventoryLedgerService.recordOpeningBalance(
                 TenantRequestIds.resolveBusinessId(request),
                 body,
@@ -88,7 +88,7 @@ public class InventoryController {
             @Valid @RequestBody PostStockIncreaseRequest body,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.require(request);
+        var user = CurrentTenantUser.requireHuman(request);
         return inventoryLedgerService.recordStockIncrease(
                 TenantRequestIds.resolveBusinessId(request),
                 body,
@@ -103,7 +103,7 @@ public class InventoryController {
             @Valid @RequestBody PostBatchDecreaseRequest body,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.require(request);
+        var user = CurrentTenantUser.requireHuman(request);
         return inventoryLedgerService.recordBatchDecrease(
                 TenantRequestIds.resolveBusinessId(request),
                 body,
@@ -118,7 +118,7 @@ public class InventoryController {
             @Valid @RequestBody PostStandaloneWastageRequest body,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.require(request);
+        var user = CurrentTenantUser.requireHuman(request);
         return inventoryLedgerService.recordStandaloneWastage(
                 TenantRequestIds.resolveBusinessId(request),
                 body,
@@ -133,7 +133,7 @@ public class InventoryController {
             @Valid @RequestBody PostStockTransferRequest body,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.require(request);
+        var user = CurrentTenantUser.requireHuman(request);
         return inventoryTransferService.createDraft(
                 TenantRequestIds.resolveBusinessId(request),
                 body,
@@ -148,7 +148,7 @@ public class InventoryController {
             @PathVariable String transferId,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.require(request);
+        var user = CurrentTenantUser.requireHuman(request);
         inventoryTransferService.completeTransfer(
                 TenantRequestIds.resolveBusinessId(request),
                 transferId,
@@ -162,7 +162,7 @@ public class InventoryController {
             @RequestParam(required = false) String branchId,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.require(request);
+        CurrentTenantUser.requireHuman(request);
         return inventoryValuationService.valuation(
                 TenantRequestIds.resolveBusinessId(request),
                 branchId

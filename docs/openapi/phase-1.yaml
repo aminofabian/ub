@@ -305,6 +305,28 @@ paths:
             '*/*':
               schema:
                 $ref: '#/components/schemas/DomainResponse'
+  /api/v1/super-admin/businesses/{businessId}/domains/{domainId}:
+    delete:
+      tags:
+      - super-admin-business-controller
+      operationId: deleteSuperAdminDomain
+      description: |
+        Soft-deletes a tenant domain mapping. Returns 409 if the targeted
+        mapping is currently the primary — promote another mapping first.
+      parameters:
+      - name: businessId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: domainId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: No Content
   /api/v1/super-admin/auth/login:
     post:
       tags:
@@ -1527,6 +1549,12 @@ paths:
             schema:
               $ref: '#/components/schemas/PasswordForgotRequest'
       responses:
+        '200':
+          description: OK — when APP_AUTH_RETURN_VERIFICATION_LINK=true and a new verification link was issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResendVerificationLinkResponse'
         '204':
           description: No Content
   /api/v1/auth/register:
@@ -2812,6 +2840,14 @@ components:
         updatedAt:
           type: string
           format: date-time
+        primaryDomain:
+          type: string
+          nullable: true
+          description: |
+            Hostname of the active primary domain mapping for this tenant, if
+            one is set. Used by the app shell so cross-origin redirects (e.g.
+            login handoff) target the tenant's chosen primary host instead of
+            a slug-derived fallback.
     AddDomainRequest:
       type: object
       properties:
@@ -4542,6 +4578,16 @@ components:
         email:
           type: string
         status:
+          type: string
+        verificationUrl:
+          type: string
+          description: Present only when APP_AUTH_RETURN_VERIFICATION_LINK=true and status is invited
+    ResendVerificationLinkResponse:
+      type: object
+      required:
+      - verificationUrl
+      properties:
+        verificationUrl:
           type: string
     RefreshRequest:
       type: object

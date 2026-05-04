@@ -76,4 +76,10 @@ public class SuperAdminBusinessController {
     public DomainResponse setPrimaryDomain(@PathVariable String businessId, @PathVariable String domainId) {
         return tenancyService.setPrimaryDomain(businessId, domainId);
     }
+
+    @DeleteMapping("/{businessId}/domains/{domainId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteDomain(@PathVariable String businessId, @PathVariable String domainId) {
+        tenancyService.deleteDomain(businessId, domainId);
+    }
 }

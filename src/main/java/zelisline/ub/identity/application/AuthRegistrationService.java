@@ -4,6 +4,7 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
+import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,6 +68,9 @@ public class AuthRegistrationService {
     @Value("${app.public.email-verification-url-prefix:http://localhost:3000/verify-email?token=}")
     private String emailVerificationUrlPrefix;
 
+    @Value("${app.auth.return-verification-link-in-register-response:false}")
+    private boolean returnVerificationLinkInRegisterResponse;
+
     @Transactional
     public RegisterResponse register(HttpServletRequest http, RegisterRequest request) {
         assertSignupEnabled();
@@ -91,12 +95,16 @@ public class AuthRegistrationService {
         if (isEmailVerificationRequired()) {
             user.setStatus(UserStatus.INVITED);
             User saved = userRepository.save(user);
-            issueVerificationEmail(saved);
-            return new RegisterResponse(saved.getId(), saved.getEmail(), UserStatus.INVITED.wire());
+            String link = issueVerificationEmail(saved);
+            return new RegisterResponse(
+                    saved.getId(),
+                    saved.getEmail(),
+                    UserStatus.INVITED.wire(),
+                    returnVerificationLinkInRegisterResponse ? link : null);
         }
         user.setStatus(UserStatus.ACTIVE);
         User saved = userRepository.save(user);
-        return new RegisterResponse(saved.getId(), saved.getEmail(), UserStatus.ACTIVE.wire());
+        return new RegisterResponse(saved.getId(), saved.getEmail(), UserStatus.ACTIVE.wire(), null);
     }
 
     @Transactional
@@ -123,36 +131,38 @@ public class AuthRegistrationService {
         emailVerificationTokenRepository.save(row);
     }
 
-    /** Always completes with {@code 204} when email is missing; no user enumeration.
-     * Server-side INFO logs explain why nothing was sent (response stays silent). */
+    /**
+     * Same anti-enumeration contract as before: missing/unknown/ineligible email → {@link Optional#empty()}.
+     * When a new link is issued, returns it (caller may expose in JSON only when configured).
+     */
     @Transactional
-    public void resendVerification(HttpServletRequest http, PasswordForgotRequest request) {
+    public Optional<String> resendVerification(HttpServletRequest http, PasswordForgotRequest request) {
         if (!selfSignupEnabled) {
             log.info("[resend-verification] skipped: self-signup disabled");
-            return;
+            return Optional.empty();
         }
         if (request == null || request.email() == null || request.email().isBlank()) {
             log.info("[resend-verification] skipped: missing email in request body");
-            return;
+            return Optional.empty();
         }
         String businessId = TenantRequestIds.resolveBusinessId(http);
         String email = normaliseEmail(request.email());
         var found = userRepository.findByBusinessIdAndEmailAndDeletedAtIsNull(businessId, email);
         if (found.isEmpty()) {
             log.info("[resend-verification] skipped: no user for businessId={} email={}", businessId, email);
-            return;
+            return Optional.empty();
         }
         User user = found.get();
         if (user.statusAsEnum() != UserStatus.INVITED) {
             log.info("[resend-verification] skipped: user status={} (only INVITED users get re-sent) email={}",
                     user.statusAsEnum(), email);
-            return;
+            return Optional.empty();
         }
         if (user.getPasswordHash() == null) {
             log.info("[resend-verification] skipped: user has no passwordHash yet email={}", email);
-            return;
+            return Optional.empty();
         }
-        issueVerificationEmail(user);
+        return Optional.of(issueVerificationEmail(user));
     }
 
     private void assertSignupEnabled() {
@@ -179,7 +189,8 @@ public class AuthRegistrationService {
                 ));
     }
 
-    private void issueVerificationEmail(User user) {
+    /** @return full verification URL (for optional UI exposure when mail is unavailable). */
+    private String issueVerificationEmail(User user) {
         emailVerificationTokenRepository.deleteUnusedByUserId(user.getId());
         String raw = newRawToken();
         EmailVerificationToken token = new EmailVerificationToken();
@@ -190,6 +201,7 @@ public class AuthRegistrationService {
         String link = emailVerificationUrlPrefix + raw;
         String body = emailVerificationEmailRenderer.renderBody(user.getEmail(), link);
         notificationService.sendEmailVerificationEmail(user.getEmail(), "Verify your UB account", body);
+        return link;
     }
 
     private static String normaliseEmail(String email) {

@@ -298,6 +298,13 @@ public class TenancyService {
         StorefrontSettingsResponse storefront =
                 storefrontSettingsService.readFromSettingsJson(business.getSettings());
         var bundle = storefrontSettingsService.readTenantConfig(business.getSettings(), business.getName());
+        String primaryDomain = domainMappingRepository
+                .findByBusinessIdAndDeletedAtIsNull(business.getId())
+                .stream()
+                .filter(d -> d.isPrimary() && d.isActive())
+                .map(DomainMapping::getDomain)
+                .findFirst()
+                .orElse(null);
         return new BusinessResponse(
                 business.getId(),
                 business.getName(),
@@ -310,7 +317,8 @@ public class TenancyService {
                 business.getCreatedAt(),
                 business.getUpdatedAt(),
                 storefront,
-                bundle.branding()
+                bundle.branding(),
+                primaryDomain
         );
     }
 

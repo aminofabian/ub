@@ -14,6 +14,11 @@ public record BusinessResponse(
         Instant createdAt,
         Instant updatedAt,
         StorefrontSettingsResponse storefront,
-        TenantBrandingDto branding
+        TenantBrandingDto branding,
+        // Hostname of the active primary domain mapping, if any. Used by the
+        // app shell to keep cross-origin redirects (login handoff, share
+        // links) anchored to the tenant's chosen primary host instead of a
+        // slug-derived fallback.
+        String primaryDomain
 ) {
 }

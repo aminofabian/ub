@@ -218,9 +218,11 @@ public class SecurityConfig {
     public DomainBusinessResolverFilter domainBusinessResolverFilter(
             DomainMappingRepository domainMappingRepository,
             zelisline.ub.tenancy.repository.BusinessRepository businessRepository,
-            com.fasterxml.jackson.databind.ObjectMapper objectMapper
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper,
+            @Value("${app.tenancy.platform-hosts:}") List<String> platformHosts
     ) {
-        return new DomainBusinessResolverFilter(domainMappingRepository, businessRepository, objectMapper);
+        return new DomainBusinessResolverFilter(
+                domainMappingRepository, businessRepository, objectMapper, platformHosts);
     }
 
     @Bean

@@ -1,7 +1,6 @@
 package zelisline.ub.identity.api;
 
 import org.springframework.http.HttpStatus;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
@@ -14,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import zelisline.ub.identity.api.dto.LoginPinRequest;
 import zelisline.ub.identity.api.dto.LoginRequest;
 import zelisline.ub.identity.api.dto.LoginResponse;
@@ -23,6 +23,7 @@ import zelisline.ub.identity.api.dto.PasswordResetRequest;
 import zelisline.ub.identity.api.dto.RefreshRequest;
 import zelisline.ub.identity.api.dto.RegisterRequest;
 import zelisline.ub.identity.api.dto.RegisterResponse;
+import zelisline.ub.identity.api.dto.ResendVerificationLinkResponse;
 import zelisline.ub.identity.api.dto.VerifyEmailRequest;
 import zelisline.ub.identity.application.AuthRegistrationService;
 import zelisline.ub.identity.application.AuthService;
@@ -36,6 +37,9 @@ public class AuthController {
 
     private final AuthService authService;
     private final AuthRegistrationService authRegistrationService;
+
+    @Value("${app.auth.return-verification-link-in-register-response:false}")
+    private boolean returnVerificationLinkInRegisterResponse;
 
     @PostMapping("/register")
     @ResponseStatus(HttpStatus.CREATED)
@@ -51,11 +55,17 @@ public class AuthController {
 
     /**
      * Same anti-enumeration contract as {@link #passwordForgot}: missing/unknown email → {@code 204}.
+     * When {@code app.auth.return-verification-link-in-register-response} is true and a new token is issued,
+     * returns {@code 200} with {@link ResendVerificationLinkResponse} so the UI can show the link without mail.
      */
     @PostMapping("/resend-verification")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void resendVerification(HttpServletRequest http, @RequestBody(required = false) PasswordForgotRequest body) {
-        authRegistrationService.resendVerification(http, body);
+    public ResponseEntity<?> resendVerification(HttpServletRequest http, @RequestBody(required = false) PasswordForgotRequest body) {
+        var link = authRegistrationService.resendVerification(http, body);
+        if (returnVerificationLinkInRegisterResponse) {
+            return link.<ResponseEntity<?>>map(url -> ResponseEntity.ok(new ResendVerificationLinkResponse(url)))
+                    .orElse(ResponseEntity.noContent().build());
+        }
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/login")

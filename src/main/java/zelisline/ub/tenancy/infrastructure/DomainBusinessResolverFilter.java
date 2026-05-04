@@ -1,8 +1,11 @@
 package zelisline.ub.tenancy.infrastructure;
 
 import java.io.IOException;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -49,7 +52,7 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
 
     private static final String X_TENANT_ID_HEADER = "X-Tenant-Id";
 
-    private static final Set<String> HOSTS_WITHOUT_MAPPING = Set.of(
+    private static final Set<String> BUILTIN_HOSTS_WITHOUT_MAPPING = Set.of(
             "localhost",
             "127.0.0.1",
             "::1"
@@ -68,12 +71,13 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
     private final DomainMappingRepository domainMappingRepository;
     private final BusinessRepository businessRepository;
     private final ObjectMapper objectMapper;
+    private final Set<String> hostsWithoutMapping;
 
     public DomainBusinessResolverFilter(
             DomainMappingRepository domainMappingRepository,
             BusinessRepository businessRepository
     ) {
-        this(domainMappingRepository, businessRepository, new ObjectMapper());
+        this(domainMappingRepository, businessRepository, new ObjectMapper(), List.of());
     }
 
     public DomainBusinessResolverFilter(
@@ -81,9 +85,36 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
             BusinessRepository businessRepository,
             ObjectMapper objectMapper
     ) {
+        this(domainMappingRepository, businessRepository, objectMapper, List.of());
+    }
+
+    /**
+     * @param platformHosts hostnames that host the platform itself (e.g. the
+     *     API base URL like {@code kiosk.zelisline.com}, or the admin login
+     *     apex). Treated like {@code localhost}: the filter forwards the
+     *     request without a resolved tenant, leaving controllers to honour
+     *     {@code X-Tenant-Id} or fall back to public/non-tenant routes.
+     */
+    public DomainBusinessResolverFilter(
+            DomainMappingRepository domainMappingRepository,
+            BusinessRepository businessRepository,
+            ObjectMapper objectMapper,
+            Collection<String> platformHosts
+    ) {
         this.domainMappingRepository = domainMappingRepository;
         this.businessRepository = businessRepository;
         this.objectMapper = objectMapper;
+        Set<String> merged = new HashSet<>(BUILTIN_HOSTS_WITHOUT_MAPPING);
+        if (platformHosts != null) {
+            for (String h : platformHosts) {
+                if (h == null) continue;
+                String normalized = TenantHostParsing.hostnameOnly(h);
+                if (normalized != null && !normalized.isBlank()) {
+                    merged.add(normalized.toLowerCase(Locale.ROOT));
+                }
+            }
+        }
+        this.hostsWithoutMapping = Set.copyOf(merged);
     }
 
     @Override
@@ -109,7 +140,7 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
         String serverHost = TenantHostParsing.hostnameOnly(request.getServerName());
         String lookupHost = resolveLookupHost(serverHost, request.getHeader("X-Tenant-Host"));
 
-        if (lookupHost == null || HOSTS_WITHOUT_MAPPING.contains(lookupHost)) {
+        if (lookupHost == null || hostsWithoutMapping.contains(lookupHost.toLowerCase(Locale.ROOT))) {
             filterChain.doFilter(request, response);
             return;
         }
@@ -141,8 +172,8 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
         return value != null && !value.isBlank();
     }
 
-    private static String resolveLookupHost(String serverHost, String tenantHostHeader) {
-        if (serverHost != null && !HOSTS_WITHOUT_MAPPING.contains(serverHost)) {
+    private String resolveLookupHost(String serverHost, String tenantHostHeader) {
+        if (serverHost != null && !hostsWithoutMapping.contains(serverHost.toLowerCase(Locale.ROOT))) {
             return serverHost;
         }
         return TenantHostParsing.hostnameOnly(tenantHostHeader);

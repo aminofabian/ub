@@ -7,6 +7,7 @@ import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
 
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.identity.application.NotificationService;
 
@@ -23,6 +24,27 @@ public class LoggingNotificationService implements NotificationService {
     private final ObjectProvider<JavaMailSender> javaMailSender;
     private final ResendMailClient resendMailClient;
     private final MailgunMailClient mailgunMailClient;
+
+    /** Boot-time report so misconfig is obvious in dev and prod logs. */
+    @PostConstruct
+    public void reportProvider() {
+        boolean smtp = javaMailSender.getIfAvailable() != null;
+        boolean resend = resendMailClient.isConfigured();
+        boolean mailgun = mailgunMailClient.isConfigured();
+        if (smtp) {
+            log.info("[mail] active provider: SMTP (JavaMailSender). Resend configured={} Mailgun configured={}",
+                    resend, mailgun);
+        } else if (resend) {
+            log.info("[mail] active provider: Resend. Mailgun configured={}", mailgun);
+        } else if (mailgun) {
+            log.info("[mail] active provider: Mailgun");
+        } else {
+            log.warn(
+                    "[mail] NO MAIL PROVIDER ACTIVE — emails will only be logged. "
+                            + "Set RESEND_API_KEY (+ RESEND_DOMAIN or RESEND_FROM), or MAILGUN_PRIVATE_API_KEY (+ MAILGUN_DOMAIN), "
+                            + "or activate the `smtp` profile with MAILGUN_SMTP_*. RESTART the JVM after changing env vars.");
+        }
+    }
 
     @Override
     public void sendPasswordResetEmail(String toEmail, String subject, String textBody) {

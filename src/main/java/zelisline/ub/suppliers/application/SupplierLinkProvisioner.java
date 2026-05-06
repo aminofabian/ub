@@ -43,12 +43,22 @@ public class SupplierLinkProvisioner {
             return;
         }
         Supplier sys = getOrCreateSystemSupplier(businessId);
-        SupplierProduct sp = new SupplierProduct();
-        sp.setSupplierId(sys.getId());
-        sp.setItemId(item.getId());
-        sp.setPrimaryLink(true);
-        sp.setActive(true);
-        supplierProductRepository.save(sp);
+        Optional<SupplierProduct> existingPair =
+                supplierProductRepository.findBySupplierIdAndItemId(sys.getId(), item.getId());
+        if (existingPair.isPresent()) {
+            SupplierProduct sp = existingPair.get();
+            sp.setDeletedAt(null);
+            sp.setActive(true);
+            sp.setPrimaryLink(true);
+            supplierProductRepository.save(sp);
+        } else {
+            SupplierProduct sp = new SupplierProduct();
+            sp.setSupplierId(sys.getId());
+            sp.setItemId(item.getId());
+            sp.setPrimaryLink(true);
+            sp.setActive(true);
+            supplierProductRepository.save(sp);
+        }
         primaryService.normalizeAfterChange(businessId, item.getId());
     }
 

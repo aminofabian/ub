@@ -79,6 +79,10 @@ public class Supplier {
     @Column(name = "deleted_at")
     private Instant deletedAt;
 
+    /** Legacy export id for mapping imported buying prices to this supplier. */
+    @Column(name = "legacy_import_source_id", length = 36)
+    private String legacyImportSourceId;
+
     @PrePersist
     void onCreate() {
         Instant now = Instant.now();

@@ -564,6 +564,38 @@ public class CatalogTaxonomyService {
         return buildCategoryResponse(businessId, entity);
     }
 
+    /**
+     * Ensures a category row exists with the given primary key for legacy imports. Only call when
+     * {@code categoryRepository.findById(categoryId)} is empty (no global id collision).
+     */
+    @Transactional
+    public void ensureImportedPlaceholderCategory(String businessId, String categoryId, String preferredName) {
+        if (categoryId == null || categoryId.isBlank()) {
+            return;
+        }
+        String cid = categoryId.trim();
+        if (categoryRepository.findByIdAndBusinessId(cid, businessId).isPresent()) {
+            return;
+        }
+        if (categoryRepository.findById(cid).isPresent()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "category id already exists globally; cannot claim for import: " + cid);
+        }
+        Category entity = new Category();
+        entity.setId(cid);
+        entity.setBusinessId(businessId);
+        String name =
+                (preferredName == null || preferredName.isBlank()) ? "Imported category" : preferredName.trim();
+        entity.setName(name);
+        entity.setSlug(uniqueSlug(businessId, TaxonomySlug.fromName(name)));
+        List<Category> all = categoryRepository.findByBusinessIdOrderByPositionAsc(businessId);
+        int position = all.isEmpty() ? 0 : all.get(all.size() - 1).getPosition() + 1;
+        entity.setPosition(position);
+        entity.setActive(true);
+        categoryRepository.save(entity);
+    }
+
     @Transactional
     public CategoryResponse patchCategory(String businessId, String categoryId, PatchCategoryRequest request) {
         Category category = categoryRepository.findByIdAndBusinessId(categoryId, businessId)

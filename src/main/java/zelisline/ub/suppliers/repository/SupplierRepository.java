@@ -33,6 +33,11 @@ public interface SupplierRepository extends JpaRepository<Supplier, String> {
 
     Optional<Supplier> findByIdAndBusinessIdAndDeletedAtIsNull(String id, String businessId);
 
+    Optional<Supplier> findByBusinessIdAndLegacyImportSourceIdAndDeletedAtIsNull(
+            String businessId,
+            String legacyImportSourceId
+    );
+
     Optional<Supplier> findByBusinessIdAndCodeAndDeletedAtIsNull(String businessId, String code);
 
     @Query("""

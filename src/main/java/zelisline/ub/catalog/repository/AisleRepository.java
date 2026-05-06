@@ -13,5 +13,7 @@ public interface AisleRepository extends JpaRepository<Aisle, String> {
 
     Optional<Aisle> findByIdAndBusinessId(String id, String businessId);
 
+    Optional<Aisle> findByBusinessIdAndCode(String businessId, String code);
+
     boolean existsByBusinessIdAndCode(String businessId, String code);
 }

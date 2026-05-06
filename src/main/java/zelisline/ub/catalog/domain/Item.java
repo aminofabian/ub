@@ -121,6 +121,10 @@ public class Item {
     @Column(name = "deleted_at")
     private Instant deletedAt;
 
+    /** Legacy export id (e.g. product UUID) for mapping imported pricing rows to this item. */
+    @Column(name = "legacy_import_source_id", length = 36)
+    private String legacyImportSourceId;
+
     @PrePersist
     void onCreate() {
         Instant now = Instant.now();

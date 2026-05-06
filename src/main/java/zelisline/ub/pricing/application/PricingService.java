@@ -3,7 +3,10 @@ package zelisline.ub.pricing.application;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -15,6 +18,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.pricing.PricingConstants;
 import zelisline.ub.pricing.api.dto.BuyingPriceResponse;
@@ -193,6 +197,97 @@ public class PricingService {
                 BigDecimal.ONE.add(margin.movePointLeft(2)))
                 .setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         return new SellPriceSuggestionResponse(cost, margin, marginRule.getName(), suggested, null, currentSell);
+    }
+
+    /**
+     * Active open-ended selling price (shelf price) for the item, optionally scoped to a branch.
+     * When {@code branchId} is set, resolves the branch-specific open row first, then falls back to a
+     * business-wide row ({@code branch_id} null) so POS still sees a price after "Pick branch".
+     * If no open {@link SellingPrice} row exists, falls back to the item's {@code bundlePrice} when
+     * that field is set (products UI uses it as quick "shelf" price).
+     * Returns {@code null} when no price can be resolved.
+     */
+    @Transactional(readOnly = true)
+    public BigDecimal getCurrentOpenSellingPrice(String businessId, String itemId, String branchId) {
+        requireItem(businessId, itemId);
+        String brId = blankToNull(branchId);
+        if (brId != null) {
+            requireBranch(businessId, brId);
+            BigDecimal atBranch = resolveCurrentOpenSellPrice(businessId, itemId, brId);
+            if (atBranch != null) {
+                return atBranch;
+            }
+        }
+        BigDecimal businessWide = resolveCurrentOpenSellPrice(businessId, itemId, null);
+        if (businessWide != null) {
+            return businessWide;
+        }
+        return itemBundlePriceFallback(businessId, itemId);
+    }
+
+    /**
+     * Batch equivalent of {@link #getCurrentOpenSellingPrice}: for each item id, prefers an open-ended
+     * selling price on {@code branchId}, then a business-wide row ({@code branch_id} null), then the
+     * item's {@code bundlePrice}.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, BigDecimal> getCurrentOpenSellingPricesForItems(
+            String businessId,
+            String branchId,
+            Collection<String> itemIds
+    ) {
+        if (itemIds == null || itemIds.isEmpty()) {
+            return Map.of();
+        }
+        List<String> ids = itemIds.stream()
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, BigDecimal> out = new HashMap<>();
+        String brId = blankToNull(branchId);
+        if (brId != null) {
+            requireBranch(businessId, brId);
+            List<SellingPrice> atBranch = sellingPriceRepository.findOpenEndedForBranchAndItemIds(
+                    businessId, brId, ids);
+            for (SellingPrice sp : atBranch) {
+                out.putIfAbsent(sp.getItemId(), sp.getPrice().setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+            }
+        }
+        List<String> missingBranch = ids.stream().filter(id -> !out.containsKey(id)).toList();
+        if (!missingBranch.isEmpty()) {
+            List<SellingPrice> wide =
+                    sellingPriceRepository.findOpenEndedBusinessWideForItemIds(businessId, missingBranch);
+            for (SellingPrice sp : wide) {
+                out.putIfAbsent(sp.getItemId(), sp.getPrice().setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+            }
+        }
+        List<String> missingSellingRows = ids.stream().filter(id -> !out.containsKey(id)).toList();
+        if (!missingSellingRows.isEmpty()) {
+            List<Item> rows =
+                    itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(missingSellingRows, businessId);
+            for (Item it : rows) {
+                BigDecimal bp = it.getBundlePrice();
+                if (bp != null && bp.signum() > 0) {
+                    out.putIfAbsent(it.getId(), bp.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+                }
+            }
+        }
+        return out;
+    }
+
+    private BigDecimal itemBundlePriceFallback(String businessId, String itemId) {
+        return itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
+                .map(row -> {
+                    BigDecimal bp = row.getBundlePrice();
+                    if (bp == null || bp.signum() <= 0) {
+                        return null;
+                    }
+                    return bp.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+                })
+                .orElse(null);
     }
 
     private BigDecimal resolveCurrentOpenSellPrice(String businessId, String itemId, String branchId) {

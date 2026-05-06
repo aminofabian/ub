@@ -14,6 +14,7 @@ public record PublicCatalogItemDetailResponse(
         String parentItemId,
         String currency,
         BigDecimal price,
+        BigDecimal qtyOnHand,
         List<PublicItemImageResponse> images,
         List<PublicCatalogVariantResponse> variants
 ) {

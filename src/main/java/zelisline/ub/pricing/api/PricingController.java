@@ -20,6 +20,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.pricing.api.dto.BuyingPriceResponse;
+import zelisline.ub.pricing.api.dto.CurrentSellingPriceResponse;
 import zelisline.ub.pricing.api.dto.PostBuyingPriceRequest;
 import zelisline.ub.pricing.api.dto.PostPriceRuleRequest;
 import zelisline.ub.pricing.api.dto.PostSellingPriceRequest;
@@ -69,6 +70,22 @@ public class PricingController {
                 body,
                 user.userId()
         );
+    }
+
+    @GetMapping("/current-selling-price")
+    @PreAuthorize("hasPermission(null, 'pricing.read') or hasPermission(null, 'sales.sell')")
+    public CurrentSellingPriceResponse getCurrentSellingPrice(
+            @RequestParam String itemId,
+            @RequestParam(required = false) String branchId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        var price = pricingService.getCurrentOpenSellingPrice(
+                TenantRequestIds.resolveBusinessId(request),
+                itemId,
+                branchId
+        );
+        return new CurrentSellingPriceResponse(price);
     }
 
     @GetMapping("/suggest/sell")

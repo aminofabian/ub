@@ -6,7 +6,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
+import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,6 +35,8 @@ import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.pricing.domain.SellingPrice;
 import zelisline.ub.pricing.repository.SellingPriceRepository;
+import zelisline.ub.purchasing.domain.InventoryBatch;
+import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.storefront.WebOrderStatuses;
 import zelisline.ub.storefront.repository.WebCartLineRepository;
 import zelisline.ub.storefront.repository.WebCartRepository;
@@ -77,6 +82,9 @@ class PublicWebCheckoutIT {
     private SellingPriceRepository sellingPriceRepository;
 
     @Autowired
+    private InventoryBatchRepository inventoryBatchRepository;
+
+    @Autowired
     private WebCartRepository webCartRepository;
 
     @Autowired
@@ -109,6 +117,7 @@ class PublicWebCheckoutIT {
         webCartLineRepository.deleteAll();
         webCartRepository.deleteAll();
         sellingPriceRepository.deleteAll();
+        inventoryBatchRepository.deleteAll();
         itemRepository.deleteAll();
         categoryRepository.deleteAll();
         itemTypeRepository.deleteAll();
@@ -173,6 +182,23 @@ class PublicWebCheckoutIT {
         sp.setPrice(new BigDecimal("10.00"));
         sp.setEffectiveFrom(LocalDate.of(2026, 1, 1));
         sellingPriceRepository.save(sp);
+
+        for (String itemId : List.of(pricedItemId, unpricedPublishedItemId)) {
+            InventoryBatch batch = new InventoryBatch();
+            batch.setBusinessId(TENANT);
+            batch.setBranchId(branchId);
+            batch.setItemId(itemId);
+            batch.setBatchNumber("CO-" + itemId.substring(0, 8));
+            batch.setSourceType("test");
+            batch.setSourceId(UUID.randomUUID().toString());
+            BigDecimal stockQty = new BigDecimal("100");
+            batch.setInitialQuantity(stockQty);
+            batch.setQuantityRemaining(stockQty);
+            batch.setUnitCost(new BigDecimal("1.0000"));
+            batch.setReceivedAt(Instant.parse("2026-01-01T12:00:00Z"));
+            batch.setStatus("active");
+            inventoryBatchRepository.save(batch);
+        }
     }
 
     private void patchWebPublished(String itemId, boolean on) {

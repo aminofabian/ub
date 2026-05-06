@@ -65,7 +65,9 @@ class PricingSlice5IT {
     private static final String P_PR_SELL = "11111111-0000-0000-0000-000000000061";
     private static final String P_PR_COST = "11111111-0000-0000-0000-000000000062";
     private static final String P_PR_RULE = "11111111-0000-0000-0000-000000000063";
+    private static final String P_SALES_SELL = "11111111-0000-0000-0000-000000000067";
     private static final String ROLE_OWNER = "22222222-0000-0000-0000-000000000055";
+    private static final String ROLE_CASHIER_LIKE = "22222222-0000-0000-0000-000000000056";
 
     @Autowired
     private MockMvc mockMvc;
@@ -325,6 +327,155 @@ class PricingSlice5IT {
                 .isEqualByComparingTo("10.00");
         assertThat(body.get("currentSellPrice").decimalValue().setScale(2, RoundingMode.HALF_UP))
                 .isEqualByComparingTo("55.50");
+    }
+
+    @Test
+    void currentSellingPrice_returnsOpenPrice() throws Exception {
+        postSelling(LocalDate.of(2026, 4, 1), new BigDecimal("19.99"));
+
+        MvcResult res = mockMvc.perform(get("/api/v1/pricing/current-selling-price")
+                        .param("itemId", itemId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        var body = objectMapper.readTree(res.getResponse().getContentAsString());
+        assertThat(body.get("price").decimalValue().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("19.99");
+    }
+
+    @Test
+    void currentSellingPrice_fallsBackToItemBundlePriceWhenNoSellingRow() throws Exception {
+        var row = itemRepository.findById(itemId).orElseThrow();
+        row.setBundlePrice(new BigDecimal("33.25"));
+        itemRepository.save(row);
+
+        MvcResult res = mockMvc.perform(get("/api/v1/pricing/current-selling-price")
+                        .param("itemId", itemId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        var body = objectMapper.readTree(res.getResponse().getContentAsString());
+        assertThat(body.get("price").decimalValue().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("33.25");
+    }
+
+    @Test
+    void currentSellingPrice_openSellingRowOverridesBundlePrice() throws Exception {
+        var row = itemRepository.findById(itemId).orElseThrow();
+        row.setBundlePrice(new BigDecimal("5.00"));
+        itemRepository.save(row);
+        postSelling(LocalDate.of(2026, 8, 1), new BigDecimal("88.00"));
+
+        MvcResult res = mockMvc.perform(get("/api/v1/pricing/current-selling-price")
+                        .param("itemId", itemId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        var body = objectMapper.readTree(res.getResponse().getContentAsString());
+        assertThat(body.get("price").decimalValue().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("88.00");
+    }
+
+    @Test
+    void currentSellingPrice_fallsBackToBusinessWideWhenBranchHasNoRow() throws Exception {
+        postSelling(LocalDate.of(2026, 7, 1), new BigDecimal("10.00"));
+
+        MvcResult res = mockMvc.perform(get("/api/v1/pricing/current-selling-price")
+                        .param("itemId", itemId)
+                        .param("branchId", branchId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        var body = objectMapper.readTree(res.getResponse().getContentAsString());
+        assertThat(body.get("price").decimalValue().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("10.00");
+    }
+
+    @Test
+    void currentSellingPrice_branchScopedRow() throws Exception {
+        mockMvc.perform(post("/api/v1/pricing/selling-prices")
+                        .contentType(APPLICATION_JSON)
+                        .content(("{\"itemId\":\"" + itemId + "\",\"branchId\":\"" + branchId + "\",\"price\":"
+                                + "42.00,\"effectiveFrom\":\"2026-05-01\",\"notes\":null}"))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated());
+
+        MvcResult withBranch = mockMvc.perform(get("/api/v1/pricing/current-selling-price")
+                        .param("itemId", itemId)
+                        .param("branchId", branchId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(objectMapper.readTree(withBranch.getResponse().getContentAsString())
+                .get("price").decimalValue().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("42.00");
+
+        MvcResult noBranch = mockMvc.perform(get("/api/v1/pricing/current-selling-price")
+                        .param("itemId", itemId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(objectMapper.readTree(noBranch.getResponse().getContentAsString()).get("price").isNull())
+                .isTrue();
+    }
+
+    @Test
+    void currentSellingPrice_allowedForSalesSellWithoutPricingRead() throws Exception {
+        permissionRepository.save(perm(P_SALES_SELL, "sales.sell", "POS sell"));
+
+        Role cashierRole = new Role();
+        cashierRole.setId(ROLE_CASHIER_LIKE);
+        cashierRole.setBusinessId(null);
+        cashierRole.setRoleKey("pos-tester");
+        cashierRole.setName("POS tester");
+        cashierRole.setSystem(true);
+        roleRepository.save(cashierRole);
+        for (String pid : List.of(P_READ, P_SALES_SELL)) {
+            RolePermission rp = new RolePermission();
+            rp.setId(new RolePermission.Id(ROLE_CASHIER_LIKE, pid));
+            rolePermissionRepository.save(rp);
+        }
+
+        User cashierUser = new User();
+        cashierUser.setBusinessId(TENANT);
+        cashierUser.setEmail("pos-price@test");
+        cashierUser.setName("POS");
+        cashierUser.setRoleId(ROLE_CASHIER_LIKE);
+        cashierUser.setStatus(UserStatus.ACTIVE);
+        cashierUser.setPasswordHash("$2a$10$stubstubstubstubstubstubstubstubst");
+        userRepository.save(cashierUser);
+
+        postSelling(LocalDate.of(2026, 6, 1), new BigDecimal("7.50"));
+
+        MvcResult res = mockMvc.perform(get("/api/v1/pricing/current-selling-price")
+                        .param("itemId", itemId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashierUser.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_CASHIER_LIKE))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        var body = objectMapper.readTree(res.getResponse().getContentAsString());
+        assertThat(body.get("price").decimalValue().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("7.50");
     }
 
     @Test

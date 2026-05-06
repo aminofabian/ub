@@ -7,7 +7,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,6 +36,8 @@ import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.pricing.domain.SellingPrice;
 import zelisline.ub.pricing.repository.SellingPriceRepository;
+import zelisline.ub.purchasing.domain.InventoryBatch;
+import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.storefront.repository.WebCartLineRepository;
 import zelisline.ub.storefront.repository.WebCartRepository;
 import zelisline.ub.tenancy.domain.Branch;
@@ -76,6 +80,9 @@ class PublicWebCartIT {
     private SellingPriceRepository sellingPriceRepository;
 
     @Autowired
+    private InventoryBatchRepository inventoryBatchRepository;
+
+    @Autowired
     private WebCartRepository webCartRepository;
 
     @Autowired
@@ -100,6 +107,7 @@ class PublicWebCartIT {
         webCartLineRepository.deleteAll();
         webCartRepository.deleteAll();
         sellingPriceRepository.deleteAll();
+        inventoryBatchRepository.deleteAll();
         itemRepository.deleteAll();
         categoryRepository.deleteAll();
         itemTypeRepository.deleteAll();
@@ -165,6 +173,21 @@ class PublicWebCartIT {
         sp.setPrice(new BigDecimal("99.50"));
         sp.setEffectiveFrom(LocalDate.of(2026, 1, 1));
         sellingPriceRepository.save(sp);
+
+        InventoryBatch batch = new InventoryBatch();
+        batch.setBusinessId(TENANT);
+        batch.setBranchId(branchId);
+        batch.setItemId(publishedItemId);
+        batch.setBatchNumber("CART-SEED-1");
+        batch.setSourceType("test");
+        batch.setSourceId(UUID.randomUUID().toString());
+        BigDecimal stockQty = new BigDecimal("100");
+        batch.setInitialQuantity(stockQty);
+        batch.setQuantityRemaining(stockQty);
+        batch.setUnitCost(new BigDecimal("1.0000"));
+        batch.setReceivedAt(Instant.parse("2026-01-01T12:00:00Z"));
+        batch.setStatus("active");
+        inventoryBatchRepository.save(batch);
     }
 
     private void patchWebPublished(String itemId, boolean on) {
@@ -201,6 +224,17 @@ class PublicWebCartIT {
         mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/carts/" + cartId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.lines.length()").value(1));
+    }
+
+    @Test
+    void upsert_quantityAboveAvailableStock_returns400() throws Exception {
+        String cartId = createCartId();
+        mockMvc.perform(
+                        post("/api/v1/public/businesses/" + SLUG + "/carts/" + cartId + "/lines")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(
+                                        "{\"itemId\":\"%s\",\"quantity\":101}".formatted(publishedItemId)))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

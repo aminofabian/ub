@@ -62,6 +62,7 @@ public class ItemsController {
             @RequestParam(required = false, defaultValue = "false") boolean includeInactive,
             @RequestParam(required = false, defaultValue = "ALL") CatalogListScope catalogScope,
             @RequestParam(required = false) String excludeLinkedSupplierId,
+            @RequestParam(required = false) String branchId,
             Pageable pageable,
             HttpServletRequest request
     ) {
@@ -76,6 +77,7 @@ public class ItemsController {
                 includeInactive,
                 catalogScope,
                 excludeLinkedSupplierId,
+                branchId,
                 pageable
         );
     }

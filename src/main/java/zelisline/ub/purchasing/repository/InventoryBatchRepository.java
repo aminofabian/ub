@@ -2,6 +2,7 @@ package zelisline.ub.purchasing.repository;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -65,6 +66,22 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
             @Param("businessId") String businessId,
             @Param("branchId") String branchId,
             @Param("status") String status
+    );
+
+    @Query("""
+            select b.itemId, coalesce(sum(b.quantityRemaining), 0)
+             from InventoryBatch b
+             where b.businessId = :businessId
+               and b.branchId = :branchId
+               and b.status = :status
+               and b.itemId in :itemIds
+             group by b.itemId
+            """)
+    List<Object[]> sumQuantityRemainingForItemsAtBranch(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("status") String status,
+            @Param("itemIds") Collection<String> itemIds
     );
 
     @Query("""

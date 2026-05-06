@@ -1,8 +1,10 @@
 package zelisline.ub.catalog.application;
 
+import java.math.BigDecimal;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -51,7 +53,9 @@ import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.identity.application.TokenHasher;
 import zelisline.ub.platform.media.CloudinaryImageService;
 import zelisline.ub.platform.media.CloudinaryUploadResult;
+import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.suppliers.application.SupplierLinkProvisioner;
+import zelisline.ub.tenancy.repository.BranchRepository;
 
 @Service
 @RequiredArgsConstructor
@@ -70,6 +74,8 @@ public class ItemCatalogService {
     private final ObjectMapper objectMapper;
     private final SupplierLinkProvisioner supplierLinkProvisioner;
     private final CloudinaryImageService cloudinaryImageService;
+    private final BranchRepository branchRepository;
+    private final InventoryBatchRepository inventoryBatchRepository;
 
     @Transactional(readOnly = true)
     public Page<ItemSummaryResponse> listItems(
@@ -82,6 +88,7 @@ public class ItemCatalogService {
             boolean includeInactive,
             CatalogListScope catalogListScope,
             String excludeLinkedSupplierId,
+            String branchIdForStock,
             Pageable pageable
     ) {
         String q = blankToNull(search);
@@ -107,6 +114,7 @@ public class ItemCatalogService {
                 return Page.empty(pg);
             }
         }
+        boolean squashParentGroupsForSearch = includeAllScopes && q != null;
         Page<Item> page = itemRepository.search(
                 businessId,
                 q,
@@ -120,6 +128,7 @@ public class ItemCatalogService {
                 variantsOnly,
                 skusOnly,
                 blankToNull(excludeLinkedSupplierId),
+                squashParentGroupsForSearch,
                 pg);
         List<String> ids = page.getContent().stream().map(Item::getId).toList();
         Map<String, String> thumbs = firstGalleryImageUrlByItemId(ids);
@@ -135,11 +144,27 @@ public class ItemCatalogService {
         Set<String> parentsWithChildren = parentIdsOnPage.isEmpty()
                 ? Set.of()
                 : new HashSet<>(itemRepository.findParentIdsHavingVariants(businessId, parentIdsOnPage));
+        String stockBranch = blankToNull(branchIdForStock);
+        Map<String, BigDecimal> stockByItemId = Map.of();
+        if (stockBranch != null) {
+            branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(stockBranch, businessId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Branch not found"));
+            if (!ids.isEmpty()) {
+                stockByItemId = new HashMap<>();
+                for (Object[] row : inventoryBatchRepository.sumQuantityRemainingForItemsAtBranch(
+                        businessId, stockBranch, "active", ids)) {
+                    stockByItemId.put((String) row[0], (BigDecimal) row[1]);
+                }
+            }
+        }
+        final Map<String, BigDecimal> stockMap = stockByItemId;
+        final boolean includeStock = stockBranch != null;
         return page.map(item -> toSummary(
                 item,
                 thumbs,
                 categoryNameFor(catNames, item.getCategoryId()),
-                item.getVariantOfItemId() == null && parentsWithChildren.contains(item.getId())));
+                item.getVariantOfItemId() == null && parentsWithChildren.contains(item.getId()),
+                includeStock ? stockMap.getOrDefault(item.getId(), BigDecimal.ZERO) : null));
     }
 
     @Transactional(readOnly = true)
@@ -157,7 +182,7 @@ public class ItemCatalogService {
             forCat.addAll(variantRows);
             Map<String, String> catMap = categoryNamesById(forCat.stream().map(Item::getCategoryId).toList());
             variants = variantRows.stream()
-                    .map(v -> toSummary(v, vthumbs, categoryNameFor(catMap, v.getCategoryId()), false))
+                    .map(v -> toSummary(v, vthumbs, categoryNameFor(catMap, v.getCategoryId()), false, null))
                     .toList();
         }
         return toResponse(item, variants);
@@ -807,7 +832,7 @@ public class ItemCatalogService {
             forCat.addAll(variantRows);
             Map<String, String> catMap = categoryNamesById(forCat.stream().map(Item::getCategoryId).toList());
             variants = variantRows.stream()
-                    .map(v -> toSummary(v, vthumbs, categoryNameFor(catMap, v.getCategoryId()), false))
+                    .map(v -> toSummary(v, vthumbs, categoryNameFor(catMap, v.getCategoryId()), false, null))
                     .toList();
         }
         return toResponse(item, variants);
@@ -882,7 +907,8 @@ public class ItemCatalogService {
             Item i,
             Map<String, String> galleryFirstUrlByItemId,
             String categoryName,
-            boolean groupLabelOnly
+            boolean groupLabelOnly,
+            BigDecimal stockQty
     ) {
         return new ItemSummaryResponse(
                 i.getId(),
@@ -897,7 +923,8 @@ public class ItemCatalogService {
                 i.isActive(),
                 i.isWebPublished(),
                 i.getVariantOfItemId(),
-                groupLabelOnly
+                groupLabelOnly,
+                stockQty
         );
     }
 

@@ -10,6 +10,8 @@ public record PublicCatalogItemCardResponse(
         String name,
         String variantName,
         String imageUrl,
-        BigDecimal price
+        BigDecimal price,
+        /** On-hand quantity at the storefront catalog branch (active inventory batches). */
+        BigDecimal qtyOnHand
 ) {
 }

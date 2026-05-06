@@ -76,6 +76,14 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                          and s.businessId = i.businessId
                          and sp.deletedAt is null
                     ))
+               and ((:squashParentGroupsForSearch = false)
+                    or (i.variantOfItemId is not null
+                        or not exists (
+                          select 1 from Item ch
+                          where ch.variantOfItemId = i.id
+                            and ch.businessId = i.businessId
+                            and ch.deletedAt is null
+                        )))
             """)
     Page<Item> search(
             @Param("businessId") String businessId,
@@ -90,6 +98,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("variantsOnly") boolean variantsOnly,
             @Param("skusOnly") boolean skusOnly,
             @Param("excludeLinkedSupplierId") String excludeLinkedSupplierId,
+            @Param("squashParentGroupsForSearch") boolean squashParentGroupsForSearch,
             Pageable pageable
     );
 
@@ -135,7 +144,21 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                     or lower(i.name) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.variantName, '')) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.description, '')) like lower(concat('%', :q, '%')))
+               and ((:q is null or :q = '')
+                    or i.variantOfItemId is not null
+                    or not exists (
+                      select 1 from Item ch
+                      where ch.variantOfItemId = i.id
+                        and ch.businessId = i.businessId
+                        and ch.deletedAt is null
+                    ))
                and (:cursor is null or :cursor = '' or i.id > :cursor)
+               and (select coalesce(sum(b.quantityRemaining), 0)
+                      from InventoryBatch b
+                     where b.itemId = i.id
+                       and b.businessId = i.businessId
+                       and b.branchId = :catalogBranchId
+                       and b.status = 'active') > 0
              order by i.id asc
             """)
     Slice<Item> searchStorefrontCatalog(
@@ -144,6 +167,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("catUnset") boolean catUnset,
             @Param("categoryIds") Collection<String> categoryIds,
             @Param("cursor") String cursor,
+            @Param("catalogBranchId") String catalogBranchId,
             Pageable pageable
     );
 }

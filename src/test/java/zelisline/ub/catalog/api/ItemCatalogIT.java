@@ -372,9 +372,8 @@ class ItemCatalogIT {
                         .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content.length()").value(2))
-                .andExpect(jsonPath("$.content[0].sku").value("SKU-TREE-P"))
-                .andExpect(jsonPath("$.content[1].sku").value("SKU-TREE-V"));
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].sku").value("SKU-TREE-V"));
     }
 
     @Test

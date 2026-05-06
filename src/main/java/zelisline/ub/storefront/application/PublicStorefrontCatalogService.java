@@ -1,6 +1,7 @@
 package zelisline.ub.storefront.application;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -26,8 +27,9 @@ import zelisline.ub.catalog.domain.ItemImage;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
-import zelisline.ub.pricing.domain.SellingPrice;
-import zelisline.ub.pricing.repository.SellingPriceRepository;
+import zelisline.ub.inventory.InventoryConstants;
+import zelisline.ub.pricing.application.PricingService;
+import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.storefront.api.dto.PublicCatalogItemCardResponse;
 import zelisline.ub.storefront.api.dto.PublicCatalogItemDetailResponse;
 import zelisline.ub.storefront.api.dto.PublicCatalogListResponse;
@@ -46,20 +48,23 @@ public class PublicStorefrontCatalogService {
 
     private final PublicStorefrontContextService storefrontContextService;
     private final ItemRepository itemRepository;
-    private final SellingPriceRepository sellingPriceRepository;
+    private final PricingService pricingService;
+    private final InventoryBatchRepository inventoryBatchRepository;
     private final ItemImageRepository itemImageRepository;
     private final CategoryRepository categoryRepository;
 
     public PublicStorefrontCatalogService(
             PublicStorefrontContextService storefrontContextService,
             ItemRepository itemRepository,
-            SellingPriceRepository sellingPriceRepository,
+            PricingService pricingService,
+            InventoryBatchRepository inventoryBatchRepository,
             ItemImageRepository itemImageRepository,
             CategoryRepository categoryRepository
     ) {
         this.storefrontContextService = storefrontContextService;
         this.itemRepository = itemRepository;
-        this.sellingPriceRepository = sellingPriceRepository;
+        this.pricingService = pricingService;
+        this.inventoryBatchRepository = inventoryBatchRepository;
         this.itemImageRepository = itemImageRepository;
         this.categoryRepository = categoryRepository;
     }
@@ -96,7 +101,13 @@ public class PublicStorefrontCatalogService {
         }
         Pageable pg = PageRequest.of(0, sz, Sort.by(Sort.Direction.ASC, "id"));
         Slice<Item> slice = itemRepository.searchStorefrontCatalog(
-                ctx.business().getId(), qq, catUnset, categoryIds, blankToNull(cursor), pg);
+                ctx.business().getId(),
+                qq,
+                catUnset,
+                categoryIds,
+                blankToNull(cursor),
+                ctx.catalogBranch().getId(),
+                pg);
         List<Item> items = slice.getContent();
         String next = slice.hasNext() && !items.isEmpty() ? items.getLast().getId() : null;
         return new PublicCatalogListResponse(ctx.business().getCurrency(), toCards(ctx, items), next);
@@ -110,6 +121,11 @@ public class PublicStorefrontCatalogService {
         if (!item.isWebPublished() || !item.isActive()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found");
         }
+        Map<String, BigDecimal> detailQty = loadQtyOnHand(ctx, List.of(item.getId()));
+        BigDecimal onHand = detailQty.getOrDefault(item.getId(), BigDecimal.ZERO);
+        if (onHand.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found");
+        }
         String parentId = item.getVariantOfItemId() != null ? item.getVariantOfItemId() : item.getId();
         return new PublicCatalogItemDetailResponse(
                 item.getId(),
@@ -118,7 +134,9 @@ public class PublicStorefrontCatalogService {
                 blankToNull(item.getVariantName()),
                 item.getVariantOfItemId(),
                 ctx.business().getCurrency(),
-                singlePrice(ctx, item.getId()),
+                pricingService.getCurrentOpenSellingPrice(
+                        ctx.business().getId(), item.getId(), ctx.catalogBranch().getId()),
+                onHand,
                 listImagesForItem(itemId),
                 listPublishedVariants(ctx, parentId)
         );
@@ -201,7 +219,15 @@ public class PublicStorefrontCatalogService {
                     .filter(i -> i.isWebPublished() && i.isActive())
                     .ifPresent(ordered::add);
         }
-        return toCards(ctx, ordered);
+        if (ordered.isEmpty()) {
+            return List.of();
+        }
+        List<String> featuredIds = ordered.stream().map(Item::getId).toList();
+        Map<String, BigDecimal> qtyMap = loadQtyOnHand(ctx, featuredIds);
+        List<Item> inStock = ordered.stream()
+                .filter(i -> qtyMap.getOrDefault(i.getId(), BigDecimal.ZERO).compareTo(BigDecimal.ZERO) > 0)
+                .toList();
+        return toCards(ctx, inStock);
     }
 
     private List<PublicCatalogItemCardResponse> toCards(PublicStorefrontContext ctx, List<Item> items) {
@@ -209,7 +235,8 @@ public class PublicStorefrontCatalogService {
             return List.of();
         }
         List<String> itemIds = items.stream().map(Item::getId).toList();
-        Map<String, BigDecimal> prices = loadPrices(ctx.business().getId(), ctx.catalogBranch().getId(), itemIds);
+        Map<String, BigDecimal> prices = loadPrices(ctx, itemIds);
+        Map<String, BigDecimal> qty = loadQtyOnHand(ctx, itemIds);
         Map<String, String> thumbs = firstGalleryUrlByItemIds(itemIds);
         return items.stream()
                 .map(i -> new PublicCatalogItemCardResponse(
@@ -217,27 +244,34 @@ public class PublicStorefrontCatalogService {
                         i.getName(),
                         blankToNull(i.getVariantName()),
                         thumbs.get(i.getId()),
-                        prices.get(i.getId())
+                        prices.get(i.getId()),
+                        qty.getOrDefault(i.getId(), BigDecimal.ZERO).setScale(4, RoundingMode.HALF_UP)
                 ))
                 .toList();
     }
 
-    private Map<String, BigDecimal> loadPrices(String businessId, String branchId, List<String> itemIds) {
+    private Map<String, BigDecimal> loadQtyOnHand(PublicStorefrontContext ctx, List<String> itemIds) {
         if (itemIds.isEmpty()) {
             return Map.of();
         }
-        List<SellingPrice> rows = sellingPriceRepository.findOpenEndedForBranchAndItemIds(businessId, branchId, itemIds);
         Map<String, BigDecimal> out = new HashMap<>();
-        for (SellingPrice sp : rows) {
-            out.putIfAbsent(sp.getItemId(), sp.getPrice());
+        List<Object[]> rows = inventoryBatchRepository.sumQuantityRemainingForItemsAtBranch(
+                ctx.business().getId(),
+                ctx.catalogBranch().getId(),
+                InventoryConstants.BATCH_STATUS_ACTIVE,
+                itemIds);
+        for (Object[] row : rows) {
+            String id = (String) row[0];
+            Object q = row[1];
+            BigDecimal qty = q instanceof BigDecimal bd ? bd : BigDecimal.ZERO;
+            out.put(id, qty);
         }
         return out;
     }
 
-    private BigDecimal singlePrice(PublicStorefrontContext ctx, String itemId) {
-        List<SellingPrice> rows = sellingPriceRepository.findOpenEndedForBranchAndItemIds(
-                ctx.business().getId(), ctx.catalogBranch().getId(), List.of(itemId));
-        return rows.isEmpty() ? null : rows.getFirst().getPrice();
+    private Map<String, BigDecimal> loadPrices(PublicStorefrontContext ctx, List<String> itemIds) {
+        return pricingService.getCurrentOpenSellingPricesForItems(
+                ctx.business().getId(), ctx.catalogBranch().getId(), itemIds);
     }
 
     private List<PublicItemImageResponse> listImagesForItem(String itemId) {
@@ -261,15 +295,24 @@ public class PublicStorefrontCatalogService {
             return List.of();
         }
         List<String> ids = published.stream().map(Item::getId).toList();
-        Map<String, BigDecimal> prices = loadPrices(ctx.business().getId(), ctx.catalogBranch().getId(), ids);
-        Map<String, String> thumbs = firstGalleryUrlByItemIds(ids);
-        return published.stream()
+        Map<String, BigDecimal> qtyByItem = loadQtyOnHand(ctx, ids);
+        List<Item> publishedInStock = published.stream()
+                .filter(v -> qtyByItem.getOrDefault(v.getId(), BigDecimal.ZERO).compareTo(BigDecimal.ZERO) > 0)
+                .toList();
+        if (publishedInStock.isEmpty()) {
+            return List.of();
+        }
+        List<String> inStockIds = publishedInStock.stream().map(Item::getId).toList();
+        Map<String, BigDecimal> prices = loadPrices(ctx, inStockIds);
+        Map<String, String> thumbs = firstGalleryUrlByItemIds(inStockIds);
+        return publishedInStock.stream()
                 .map(v -> new PublicCatalogVariantResponse(
                         v.getId(),
                         v.getName(),
                         blankToNull(v.getVariantName()),
                         thumbs.get(v.getId()),
-                        prices.get(v.getId())
+                        prices.get(v.getId()),
+                        qtyByItem.getOrDefault(v.getId(), BigDecimal.ZERO).setScale(4, RoundingMode.HALF_UP)
                 ))
                 .toList();
     }

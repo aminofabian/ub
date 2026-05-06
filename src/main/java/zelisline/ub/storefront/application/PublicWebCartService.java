@@ -23,8 +23,9 @@ import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.ItemImage;
 import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
-import zelisline.ub.pricing.domain.SellingPrice;
-import zelisline.ub.pricing.repository.SellingPriceRepository;
+import zelisline.ub.inventory.InventoryConstants;
+import zelisline.ub.pricing.application.PricingService;
+import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.storefront.api.dto.PublicCartLineResponse;
 import zelisline.ub.storefront.api.dto.PublicCartResponse;
 import zelisline.ub.storefront.api.dto.PublicUpsertCartLineRequest;
@@ -45,7 +46,8 @@ public class PublicWebCartService {
     private final WebCartRepository webCartRepository;
     private final WebCartLineRepository webCartLineRepository;
     private final ItemRepository itemRepository;
-    private final SellingPriceRepository sellingPriceRepository;
+    private final PricingService pricingService;
+    private final InventoryBatchRepository inventoryBatchRepository;
     private final ItemImageRepository itemImageRepository;
 
     public PublicWebCartService(
@@ -53,14 +55,16 @@ public class PublicWebCartService {
             WebCartRepository webCartRepository,
             WebCartLineRepository webCartLineRepository,
             ItemRepository itemRepository,
-            SellingPriceRepository sellingPriceRepository,
+            PricingService pricingService,
+            InventoryBatchRepository inventoryBatchRepository,
             ItemImageRepository itemImageRepository
     ) {
         this.storefrontContextService = storefrontContextService;
         this.webCartRepository = webCartRepository;
         this.webCartLineRepository = webCartLineRepository;
         this.itemRepository = itemRepository;
-        this.sellingPriceRepository = sellingPriceRepository;
+        this.pricingService = pricingService;
+        this.inventoryBatchRepository = inventoryBatchRepository;
         this.itemImageRepository = itemImageRepository;
     }
 
@@ -99,6 +103,15 @@ public class PublicWebCartService {
             return buildResponse(ctx, cart, webCartLineRepository.findByCartIdOrderByCreatedAtAsc(cartId));
         }
         requireWebItem(ctx, itemId);
+        BigDecimal available = availableQtyAtCatalogBranch(ctx, itemId);
+        if (available.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "This item is out of stock at this store");
+        }
+        if (q.compareTo(available) > 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Only " + available.stripTrailingZeros().toPlainString() + " available at this store");
+        }
         Optional<WebCartLine> row = webCartLineRepository.findByCartIdAndItemId(cartId, itemId);
         if (row.isEmpty() && webCartLineRepository.countByCartId(cartId) >= MAX_DISTINCT_LINES) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cart is full");
@@ -153,6 +166,22 @@ public class PublicWebCartService {
         }
     }
 
+    private BigDecimal availableQtyAtCatalogBranch(PublicStorefrontContext ctx, String itemId) {
+        List<Object[]> rows = inventoryBatchRepository.sumQuantityRemainingForItemsAtBranch(
+                ctx.business().getId(),
+                ctx.catalogBranch().getId(),
+                InventoryConstants.BATCH_STATUS_ACTIVE,
+                List.of(itemId));
+        if (rows.isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        Object q = rows.getFirst()[1];
+        if (q instanceof BigDecimal bd) {
+            return bd;
+        }
+        return BigDecimal.ZERO;
+    }
+
     private static BigDecimal normalizeQty(BigDecimal q) {
         if (q == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "quantity required");
@@ -188,6 +217,14 @@ public class PublicWebCartService {
             Item it = itemsById.get(row.getItemId());
             if (it == null || !it.isWebPublished() || !it.isActive()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item no longer available");
+            }
+            BigDecimal avail = availableQtyAtCatalogBranch(ctx, row.getItemId());
+            if (row.getQuantity().compareTo(avail) > 0) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Insufficient stock for one or more items (only "
+                                + avail.stripTrailingZeros().toPlainString()
+                                + " left at this store for an item in your cart)");
             }
             BigDecimal unit = prices.get(row.getItemId());
             if (unit == null) {
@@ -275,15 +312,7 @@ public class PublicWebCartService {
     }
 
     private Map<String, BigDecimal> loadPrices(String businessId, String branchId, List<String> itemIds) {
-        if (itemIds.isEmpty()) {
-            return Map.of();
-        }
-        List<SellingPrice> rows = sellingPriceRepository.findOpenEndedForBranchAndItemIds(businessId, branchId, itemIds);
-        Map<String, BigDecimal> out = new HashMap<>();
-        for (SellingPrice sp : rows) {
-            out.putIfAbsent(sp.getItemId(), sp.getPrice());
-        }
-        return out;
+        return pricingService.getCurrentOpenSellingPricesForItems(businessId, branchId, itemIds);
     }
 
     private Map<String, String> firstGalleryUrlByItemIds(List<String> itemIds) {

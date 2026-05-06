@@ -5,7 +5,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,6 +29,8 @@ import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.pricing.domain.SellingPrice;
 import zelisline.ub.pricing.repository.SellingPriceRepository;
+import zelisline.ub.purchasing.domain.InventoryBatch;
+import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BranchRepository;
@@ -64,6 +68,9 @@ class PublicStorefrontCatalogIT {
     private SellingPriceRepository sellingPriceRepository;
 
     @Autowired
+    private InventoryBatchRepository inventoryBatchRepository;
+
+    @Autowired
     private CatalogBootstrapService catalogBootstrapService;
 
     @Autowired
@@ -80,6 +87,7 @@ class PublicStorefrontCatalogIT {
     @BeforeEach
     void seed() {
         sellingPriceRepository.deleteAll();
+        inventoryBatchRepository.deleteAll();
         itemRepository.deleteAll();
         categoryRepository.deleteAll();
         itemTypeRepository.deleteAll();
@@ -145,6 +153,21 @@ class PublicStorefrontCatalogIT {
         sp.setPrice(new BigDecimal("99.50"));
         sp.setEffectiveFrom(LocalDate.of(2026, 1, 1));
         sellingPriceRepository.save(sp);
+
+        InventoryBatch batch = new InventoryBatch();
+        batch.setBusinessId(TENANT);
+        batch.setBranchId(branchId);
+        batch.setItemId(publishedItemId);
+        batch.setBatchNumber("IT-SEED-1");
+        batch.setSourceType("test");
+        batch.setSourceId(UUID.randomUUID().toString());
+        BigDecimal stockQty = new BigDecimal("10");
+        batch.setInitialQuantity(stockQty);
+        batch.setQuantityRemaining(stockQty);
+        batch.setUnitCost(new BigDecimal("1.0000"));
+        batch.setReceivedAt(Instant.parse("2026-01-01T12:00:00Z"));
+        batch.setStatus("active");
+        inventoryBatchRepository.save(batch);
     }
 
     private void patchWebPublished(String itemId, boolean on) {
@@ -179,7 +202,8 @@ class PublicStorefrontCatalogIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items.length()").value(1))
                 .andExpect(jsonPath("$.items[0].id").value(publishedItemId))
-                .andExpect(jsonPath("$.items[0].price").value(99.5));
+                .andExpect(jsonPath("$.items[0].price").value(99.5))
+                .andExpect(jsonPath("$.items[0].qtyOnHand").value(10));
     }
 
     @Test
@@ -187,7 +211,8 @@ class PublicStorefrontCatalogIT {
         mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/catalog/items/" + publishedItemId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.name").value("Published Item"))
-                .andExpect(jsonPath("$.price").value(99.5));
+                .andExpect(jsonPath("$.price").value(99.5))
+                .andExpect(jsonPath("$.qtyOnHand").value(10));
     }
 
     @Test
@@ -210,5 +235,72 @@ class PublicStorefrontCatalogIT {
 
         mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/catalog/items"))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void itemDetail_resolvesBusinessWideSellingPriceWhenBranchPriceMissing() throws Exception {
+        String goodsTypeId = itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(TENANT).getFirst().getId();
+        String categoryId =
+                categoryRepository.findByBusinessIdOrderByPositionAsc(TENANT).getFirst().getId();
+
+        String wideOnlyId = itemCatalogService
+                .createItem(
+                        TENANT,
+                        new CreateItemRequest(
+                                "SKU-WIDE",
+                                null,
+                                "Wide Price Item",
+                                null,
+                                goodsTypeId,
+                                categoryId,
+                                null,
+                                null,
+                                false,
+                                true,
+                                true,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                false,
+                                null),
+                        null)
+                .body()
+                .id();
+
+        patchWebPublished(wideOnlyId, true);
+
+        SellingPrice wide = new SellingPrice();
+        wide.setBusinessId(TENANT);
+        wide.setItemId(wideOnlyId);
+        wide.setBranchId(null);
+        wide.setPrice(new BigDecimal("42.00"));
+        wide.setEffectiveFrom(LocalDate.of(2026, 1, 1));
+        sellingPriceRepository.save(wide);
+
+        InventoryBatch wideBatch = new InventoryBatch();
+        wideBatch.setBusinessId(TENANT);
+        wideBatch.setBranchId(branchId);
+        wideBatch.setItemId(wideOnlyId);
+        wideBatch.setBatchNumber("IT-WIDE-1");
+        wideBatch.setSourceType("test");
+        wideBatch.setSourceId(UUID.randomUUID().toString());
+        BigDecimal wideQty = new BigDecimal("3");
+        wideBatch.setInitialQuantity(wideQty);
+        wideBatch.setQuantityRemaining(wideQty);
+        wideBatch.setUnitCost(new BigDecimal("1.0000"));
+        wideBatch.setReceivedAt(Instant.parse("2026-01-02T12:00:00Z"));
+        wideBatch.setStatus("active");
+        inventoryBatchRepository.save(wideBatch);
+
+        mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/catalog/items/" + wideOnlyId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.price").value(42.0))
+                .andExpect(jsonPath("$.qtyOnHand").value(3));
     }
 }

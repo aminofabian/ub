@@ -1,16 +1,15 @@
 package zelisline.ub.identity.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentMatchers;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -29,15 +28,19 @@ import zelisline.ub.tenancy.repository.DomainMappingRepository;
         properties = {
                 "spring.jpa.hibernate.ddl-auto=create-drop",
                 "app.auth.email-verification-required=false",
+                "app.auth.signup-role-key=buyer",
+                "app.auth.staff-signup-token=fixture-invite-secret",
+                "app.auth.staff-signup-role-key=viewer",
         }
 )
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-class AuthRegistrationVerificationDisabledIT {
+class AuthStaffInviteRegistrationIT {
 
     private static final String TENANT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
     private static final String OWNER_ROLE_ID = "22222222-0000-0000-0000-000000000001";
     private static final String BUYER_ROLE_ID = "22222222-0000-0000-0000-000000000006";
+    private static final String VIEWER_ROLE_ID = "22222222-0000-0000-0000-000000000005";
 
     @Autowired
     private MockMvc mockMvc;
@@ -67,7 +70,7 @@ class AuthRegistrationVerificationDisabledIT {
         Business business = new Business();
         business.setId(TENANT);
         business.setName("Tenant A");
-        business.setSlug("tenant-a-reg-novfy");
+        business.setSlug("tenant-a-staff-inv");
         businessRepository.save(business);
 
         Role owner = new Role();
@@ -85,46 +88,23 @@ class AuthRegistrationVerificationDisabledIT {
         buyer.setName("Buyer");
         buyer.setSystem(true);
         roleRepository.save(buyer);
+
+        Role viewer = new Role();
+        viewer.setId(VIEWER_ROLE_ID);
+        viewer.setBusinessId(null);
+        viewer.setRoleKey("viewer");
+        viewer.setName("Viewer");
+        viewer.setSystem(true);
+        roleRepository.save(viewer);
     }
 
     @Test
-    void registerIsActiveAndLoginWorksWithoutVerifyEmail() throws Exception {
+    void staffSignupWithWrongTokenFails() throws Exception {
         mockMvc.perform(post("/api/v1/auth/register")
                         .header("X-Tenant-Id", TENANT)
                         .contentType(APPLICATION_JSON)
                         .content("""
-                                {"email":"direct@example.com","name":"Direct","password":"secretpass"}
-                                """))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.email").value("direct@example.com"))
-                .andExpect(jsonPath("$.status").value("active"));
-
-        verify(notificationService, never()).sendEmailVerificationEmail(anyString(), anyString(), anyString());
-
-        assertThat(
-                userRepository
-                        .findByBusinessIdAndEmailAndDeletedAtIsNull(TENANT, "direct@example.com")
-                        .orElseThrow()
-                        .getRoleId()
-        ).isEqualTo(OWNER_ROLE_ID);
-
-        mockMvc.perform(post("/api/v1/auth/login")
-                        .header("X-Tenant-Id", TENANT)
-                        .contentType(APPLICATION_JSON)
-                        .content("""
-                                {"email":"direct@example.com","password":"secretpass"}
-                                """))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.accessToken").isString());
-    }
-
-    @Test
-    void secondSelfSignupGetsConfiguredDefaultRole() throws Exception {
-        mockMvc.perform(post("/api/v1/auth/register")
-                        .header("X-Tenant-Id", TENANT)
-                        .contentType(APPLICATION_JSON)
-                        .content("""
-                                {"email":"first@example.com","name":"First","password":"secretpass"}
+                                {"email":"bootstrap@example.com","name":"A","password":"secretpass"}
                                 """))
                 .andExpect(status().isCreated());
 
@@ -132,21 +112,37 @@ class AuthRegistrationVerificationDisabledIT {
                         .header("X-Tenant-Id", TENANT)
                         .contentType(APPLICATION_JSON)
                         .content("""
-                                {"email":"second@example.com","name":"Second","password":"secretpass"}
+                                {"email":"bad-invite@example.com","name":"B","password":"secretpass","staffInviteToken":"wrong"}
+                                """))
+                .andExpect(status().isForbidden());
+
+        verify(notificationService, never()).sendEmailVerificationEmail(
+                ArgumentMatchers.anyString(), ArgumentMatchers.anyString(), ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void staffSignupWithValidTokenGetsStaffRole() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .header("X-Tenant-Id", TENANT)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"email":"one@example.com","name":"One","password":"secretpass"}
+                                """))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .header("X-Tenant-Id", TENANT)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"email":"staff@example.com","name":"Staff","password":"secretpass","staffInviteToken":"fixture-invite-secret"}
                                 """))
                 .andExpect(status().isCreated());
 
         assertThat(
                 userRepository
-                        .findByBusinessIdAndEmailAndDeletedAtIsNull(TENANT, "first@example.com")
+                        .findByBusinessIdAndEmailAndDeletedAtIsNull(TENANT, "staff@example.com")
                         .orElseThrow()
                         .getRoleId()
-        ).isEqualTo(OWNER_ROLE_ID);
-        assertThat(
-                userRepository
-                        .findByBusinessIdAndEmailAndDeletedAtIsNull(TENANT, "second@example.com")
-                        .orElseThrow()
-                        .getRoleId()
-        ).isEqualTo(BUYER_ROLE_ID);
+        ).isEqualTo(VIEWER_ROLE_ID);
     }
 }

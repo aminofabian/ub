@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -31,9 +32,11 @@ public class SupplierService {
     private final SupplierContactRepository supplierContactRepository;
 
     @Transactional(readOnly = true)
-    public Page<SupplierResponse> listSuppliers(String businessId, Pageable pageable) {
-        return supplierRepository.findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(businessId, pageable)
-                .map(SupplierService::toResponse);
+    public Page<SupplierResponse> listSuppliers(String businessId, String searchRaw, String statusRaw, Pageable pageable) {
+        String q = blankToNull(searchRaw);
+        String st = blankToNull(statusRaw);
+        Pageable pg = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize());
+        return supplierRepository.searchSuppliers(businessId, q, st, pg).map(SupplierService::toResponse);
     }
 
     @Transactional(readOnly = true)

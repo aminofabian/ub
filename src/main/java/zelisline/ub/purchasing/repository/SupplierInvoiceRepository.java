@@ -11,7 +11,17 @@ public interface SupplierInvoiceRepository extends JpaRepository<SupplierInvoice
 
     boolean existsByGoodsReceiptId(String goodsReceiptId);
 
+    boolean existsByBusinessIdAndInvoiceNumberAndIdNot(String businessId, String invoiceNumber, String id);
+
     Optional<SupplierInvoice> findByIdAndBusinessId(String id, String businessId);
 
     List<SupplierInvoice> findByBusinessIdAndStatus(String businessId, String status);
+
+    /**
+     * Path B (direct) receipts that produced supplier invoices — supplies listing.
+     */
+    List<SupplierInvoice> findByBusinessIdAndStatusAndRawPurchaseSessionIdIsNotNullOrderByCreatedAtDescIdDesc(
+            String businessId,
+            String status
+    );
 }

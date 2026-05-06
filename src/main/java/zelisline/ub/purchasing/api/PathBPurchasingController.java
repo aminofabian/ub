@@ -3,7 +3,9 @@ package zelisline.ub.purchasing.api;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -64,6 +66,39 @@ public class PathBPurchasingController {
     ) {
         CurrentTenantUser.require(request);
         return pathBPurchaseService.addLine(TenantRequestIds.resolveBusinessId(request), sessionId, body);
+    }
+
+    @PatchMapping("/{sessionId}/lines/{lineId}")
+    @PreAuthorize("hasPermission(null, 'purchasing.path_b.write')")
+    public PathBLineResponse patchLine(
+            @PathVariable String sessionId,
+            @PathVariable String lineId,
+            @Valid @RequestBody AddPathBLineRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return pathBPurchaseService.patchLine(
+                TenantRequestIds.resolveBusinessId(request),
+                sessionId,
+                lineId,
+                body
+        );
+    }
+
+    @DeleteMapping("/{sessionId}/lines/{lineId}")
+    @PreAuthorize("hasPermission(null, 'purchasing.path_b.write')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteLine(
+            @PathVariable String sessionId,
+            @PathVariable String lineId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        pathBPurchaseService.deleteLine(
+                TenantRequestIds.resolveBusinessId(request),
+                sessionId,
+                lineId
+        );
     }
 
     @PostMapping("/{sessionId}/post")

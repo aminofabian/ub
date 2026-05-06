@@ -1,6 +1,7 @@
 package zelisline.ub.storefront.application;
 
 import java.util.List;
+import java.util.Locale;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -34,10 +35,38 @@ public class WebOrderAdminService {
     }
 
     @Transactional(readOnly = true)
+    public Page<WebOrderSummaryResponse> pageOrdersForShopperEmail(
+            String businessId,
+            String customerEmailNormalized,
+            Pageable pageable
+    ) {
+        String key = safeEmailKey(customerEmailNormalized);
+        return webOrderRepository.findShopperOrdersByBusinessIdAndNormalizedEmail(businessId, key, pageable)
+                .map(o -> toSummary(businessId, o));
+    }
+
+    @Transactional(readOnly = true)
+    public WebOrderDetailResponse getOrderForShopperEmail(
+            String businessId,
+            String orderId,
+            String customerEmailNormalized
+    ) {
+        WebOrder o = webOrderRepository
+                .findByIdAndBusinessId(orderId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found"));
+        assertEmailOwnership(o.getCustomerEmail(), customerEmailNormalized);
+        return buildDetail(businessId, o);
+    }
+
+    @Transactional(readOnly = true)
     public WebOrderDetailResponse getOrder(String businessId, String orderId) {
         WebOrder o = webOrderRepository
                 .findByIdAndBusinessId(orderId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found"));
+        return buildDetail(businessId, o);
+    }
+
+    private WebOrderDetailResponse buildDetail(String businessId, WebOrder o) {
         List<WebOrderLine> raw = webOrderLineRepository.findByOrderIdOrderByLineIndexAsc(o.getId());
         List<WebOrderLineSnapshotResponse> lines = raw.stream()
                 .map(l -> new WebOrderLineSnapshotResponse(
@@ -84,5 +113,23 @@ public class WebOrderAdminService {
                 o.getCatalogBranchId(),
                 branchName,
                 o.getCreatedAt());
+    }
+
+    private static String safeEmailKey(String raw) {
+        return raw == null ? "" : raw.trim();
+    }
+
+    /** Normalised lowercase email for JPQL compares (must match callers). */
+    private static String lowerTrim(String s) {
+        return s == null ? "" : s.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static void assertEmailOwnership(String orderCustomerEmail, String signedInEmailNormalizedKey) {
+        if (orderCustomerEmail == null || orderCustomerEmail.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+        }
+        if (!lowerTrim(orderCustomerEmail).equals(lowerTrim(signedInEmailNormalizedKey))) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+        }
     }
 }

@@ -8,6 +8,8 @@ public record SupplierItemLinkResponse(
         String itemId,
         String itemName,
         String sku,
+        String barcode,
+        BigDecimal currentStock,
         boolean primary,
         String supplierSku,
         BigDecimal defaultCostPrice,

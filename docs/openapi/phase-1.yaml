@@ -2378,6 +2378,17 @@ paths:
         required: false
         schema:
           type: string
+      - name: branchId
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: unitCost
+        in: query
+        required: false
+        description: Draft line buying cost for margin suggestion when historical cost is missing or overridden.
+        schema:
+          type: number
       responses:
         '200':
           description: OK
@@ -5268,6 +5279,8 @@ components:
           type: number
         note:
           type: string
+        currentSellPrice:
+          type: number
     PermissionResponse:
       type: object
       properties:

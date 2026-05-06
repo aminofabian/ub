@@ -3,6 +3,7 @@ package zelisline.ub.purchasing.api;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -49,6 +50,7 @@ import zelisline.ub.purchasing.repository.RawPurchaseSessionRepository;
 import zelisline.ub.purchasing.repository.StockMovementRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
+import zelisline.ub.purchasing.domain.SupplierInvoiceLine;
 import zelisline.ub.finance.repository.JournalEntryRepository;
 import zelisline.ub.finance.repository.LedgerAccountRepository;
 import zelisline.ub.suppliers.domain.Supplier;
@@ -262,6 +264,115 @@ class PathBPurchaseIT {
         assertThat(invDr).isEqualByComparingTo(new BigDecimal("100.00"));
 
         assertThat(supplierInvoiceRepository.count()).isEqualTo(1);
+
+        MvcResult list = mockMvc.perform(get("/api/v1/purchasing/supplies")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode arr = objectMapper.readTree(list.getResponse().getContentAsString());
+        assertThat(arr.isArray()).isTrue();
+        assertThat(arr.size()).isEqualTo(1);
+        assertThat(arr.get(0).get("paymentStatus").asText()).isEqualTo("UNPAID");
+        assertThat(arr.get(0).get("lineCount").asInt()).isEqualTo(1);
+    }
+
+    @Test
+    void patchPathBSupplyInvoice_updatesBillHeader() throws Exception {
+        String sessionId = createSession();
+        String lineId = addLine(sessionId, "Beans", "33.00");
+        String postBody = """
+                {"lines":[{"lineId":"%s","itemId":"%s","usableQty":33,"wastageQty":0}]}
+                """.formatted(lineId, itemId);
+
+        MvcResult r = mockMvc.perform(post("/api/v1/purchasing/path-b/sessions/" + sessionId + "/post")
+                        .contentType(APPLICATION_JSON)
+                        .content(postBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        String invId = objectMapper.readTree(r.getResponse().getContentAsString()).get("supplierInvoiceId").asText();
+
+        String patchJson = """
+                {"invoiceNumber":"INV-SUP-001","invoiceDate":"2026-05-02","dueDate":"2026-06-01","notes":"Vendor DN 99"}
+                """;
+        MvcResult patched = mockMvc.perform(patch("/api/v1/purchasing/supplies/" + invId)
+                        .contentType(APPLICATION_JSON)
+                        .content(patchJson)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode body = objectMapper.readTree(patched.getResponse().getContentAsString());
+        assertThat(body.get("invoiceNumber").asText()).isEqualTo("INV-SUP-001");
+        assertThat(body.get("invoiceDate").asText()).isEqualTo("2026-05-02");
+        assertThat(body.get("dueDate").asText()).isEqualTo("2026-06-01");
+        assertThat(body.get("notes").asText()).isEqualTo("Vendor DN 99");
+        assertThat(body.get("lines").isArray()).isTrue();
+        assertThat(body.get("lines").size()).isEqualTo(1);
+
+        MvcResult list = mockMvc.perform(get("/api/v1/purchasing/supplies")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode arr = objectMapper.readTree(list.getResponse().getContentAsString());
+        assertThat(arr.get(0).get("invoiceNumber").asText()).isEqualTo("INV-SUP-001");
+    }
+
+    @Test
+    void patchPathBSupplyInvoice_rebalancesLinesWhenUnpaid() throws Exception {
+        String sessionId = createSession();
+        String lineId = addLine(sessionId, "Beans", "100.00");
+        String postBody = """
+                {"lines":[{"lineId":"%s","itemId":"%s","usableQty":80,"wastageQty":20}]}
+                """.formatted(lineId, itemId);
+
+        MvcResult r = mockMvc.perform(post("/api/v1/purchasing/path-b/sessions/" + sessionId + "/post")
+                        .contentType(APPLICATION_JSON)
+                        .content(postBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        String invId = objectMapper.readTree(r.getResponse().getContentAsString()).get("supplierInvoiceId").asText();
+
+        MvcResult detailRes = mockMvc.perform(get("/api/v1/purchasing/supplies/" + invId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode detail = objectMapper.readTree(detailRes.getResponse().getContentAsString());
+        String silId = detail.get("lines").get(0).get("id").asText();
+        JsonNode invNode = detail.get("invoiceNumber");
+        String currentInvNo = invNode.isNull() ? "" : invNode.asText();
+
+        String patchJson = """
+                {"invoiceNumber":"%s","invoiceDate":"2026-05-03","dueDate":null,"notes":null,
+                 "lines":[{"supplierInvoiceLineId":"%s","usableQty":70,"wastageQty":30,"lineTotal":120.00,"description":"Beans fixed"}]}
+                """.formatted(currentInvNo, silId);
+
+        mockMvc.perform(patch("/api/v1/purchasing/supplies/" + invId)
+                        .contentType(APPLICATION_JSON)
+                        .content(patchJson)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        var item = itemRepository.findById(itemId).orElseThrow();
+        assertThat(item.getCurrentStock().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo(new BigDecimal("70.00"));
+
+        List<SupplierInvoiceLine> sils =
+                supplierInvoiceLineRepository.findByInvoiceIdOrderBySortOrderAsc(invId);
+        assertThat(sils.getFirst().getLineTotal()).isEqualByComparingTo(new BigDecimal("120.00"));
     }
 
     @Test

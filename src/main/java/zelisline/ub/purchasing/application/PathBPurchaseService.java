@@ -8,6 +8,8 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -44,6 +46,7 @@ import zelisline.ub.purchasing.api.dto.PathBSessionDetailResponse;
 import zelisline.ub.purchasing.api.dto.PostPathBLineBreakdown;
 import zelisline.ub.purchasing.api.dto.PostPathBRequest;
 import zelisline.ub.purchasing.api.dto.PostPathBResponse;
+import zelisline.ub.purchasing.api.dto.PatchPathBSupplyInvoiceLineRequest;
 import zelisline.ub.purchasing.domain.InventoryBatch;
 import zelisline.ub.purchasing.domain.RawPurchaseLine;
 import zelisline.ub.purchasing.domain.RawPurchaseSession;
@@ -56,6 +59,7 @@ import zelisline.ub.purchasing.repository.RawPurchaseSessionRepository;
 import zelisline.ub.purchasing.repository.StockMovementRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
+import zelisline.ub.purchasing.repository.SupplierPaymentAllocationRepository;
 import zelisline.ub.suppliers.domain.SupplierProduct;
 import zelisline.ub.suppliers.repository.SupplierProductRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
@@ -84,6 +88,7 @@ public class PathBPurchaseService {
     private final BranchRepository branchRepository;
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final ObjectMapper objectMapper;
+    private final SupplierPaymentAllocationRepository allocationRepository;
 
     public static String postRoute(String sessionId) {
         return "POST /api/v1/purchasing/path-b/sessions/%s/post".formatted(sessionId);
@@ -123,6 +128,45 @@ public class PathBPurchaseService {
         line.setLineStatus(PurchasingConstants.LINE_PENDING);
         lineRepository.save(line);
         return toLineResponse(line);
+    }
+
+    @Transactional
+    public PathBLineResponse patchLine(
+            String businessId,
+            String sessionId,
+            String lineId,
+            AddPathBLineRequest req
+    ) {
+        RawPurchaseSession s = loadSession(businessId, sessionId);
+        assertDraft(s);
+        RawPurchaseLine line = lineRepository.findById(lineId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Line not found"));
+        if (!sessionId.equals(line.getSessionId())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Line does not belong to session");
+        }
+        if (!PurchasingConstants.LINE_PENDING.equals(line.getLineStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Line cannot be edited");
+        }
+        line.setDescriptionText(req.description().trim());
+        line.setAmountMoney(req.amountMoney().setScale(2, RoundingMode.HALF_UP));
+        line.setSuggestedItemId(blankToNull(req.suggestedItemId()));
+        lineRepository.save(line);
+        return toLineResponse(line);
+    }
+
+    @Transactional
+    public void deleteLine(String businessId, String sessionId, String lineId) {
+        RawPurchaseSession s = loadSession(businessId, sessionId);
+        assertDraft(s);
+        RawPurchaseLine line = lineRepository.findById(lineId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Line not found"));
+        if (!sessionId.equals(line.getSessionId())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Line does not belong to session");
+        }
+        if (!PurchasingConstants.LINE_PENDING.equals(line.getLineStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Line cannot be deleted");
+        }
+        lineRepository.delete(line);
     }
 
     @Transactional
@@ -225,7 +269,7 @@ public class PathBPurchaseService {
             Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(br.itemId(), businessId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
             CostSplit split = splitLine(line.getAmountMoney(), br.usableQty(), br.wastageQty());
-            plans.add(new LinePostPlan(line, item, br.itemId(), br.usableQty(), br.wastageQty(), split));
+            plans.add(new LinePostPlan(line, item, br.itemId(), br.usableQty(), br.wastageQty(), split, br.expiryDate()));
             sumInv = sumInv.add(split.inventoryMoney());
             sumWaste = sumWaste.add(split.wastageMoney());
             apTotal = apTotal.add(line.getAmountMoney());
@@ -344,6 +388,9 @@ public class PathBPurchaseService {
             b.setQuantityRemaining(p.usableQty());
             b.setUnitCost(unitCost);
             b.setReceivedAt(session.getReceivedAt());
+            if (p.expiryDate() != null) {
+                b.setExpiryDate(p.expiryDate());
+            }
             inventoryBatchRepository.save(b);
 
             StockMovement sm = new StockMovement();
@@ -410,13 +457,19 @@ public class PathBPurchaseService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Breakdown must include every line");
         }
         Set<String> ids = dbLines.stream().map(RawPurchaseLine::getId).collect(Collectors.toCollection(HashSet::new));
-        Set<String> seen = new HashSet<>();
+        Set<String> seenLineIds = new HashSet<>();
+        Set<String> seenItemIds = new HashSet<>();
         for (PostPathBLineBreakdown b : req.lines()) {
             if (!ids.contains(b.lineId())) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown line id");
             }
-            if (!seen.add(b.lineId())) {
+            if (!seenLineIds.add(b.lineId())) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Duplicate line in breakdown");
+            }
+            if (!seenItemIds.add(b.itemId())) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Duplicate item on multiple lines — combine quantities or use a separate receipt");
             }
         }
     }
@@ -438,7 +491,8 @@ public class PathBPurchaseService {
             String itemId,
             BigDecimal usableQty,
             BigDecimal wastageQty,
-            CostSplit split
+            CostSplit split,
+            LocalDate expiryDate
     ) {
     }
 
@@ -487,6 +541,205 @@ public class PathBPurchaseService {
                 l.getSuggestedItemId(),
                 l.getLineStatus()
         );
+    }
+
+    /**
+     * Reverse inventory effect for a posted Path B line (becomes {@link PurchasingConstants#LINE_PENDING}).
+     */
+    public void reversePostedPathBLine(String businessId, RawPurchaseLine line) {
+        if (!PurchasingConstants.LINE_POSTED.equals(line.getLineStatus())) {
+            return;
+        }
+        List<StockMovement> moves = stockMovementRepository.findByBusinessIdAndReferenceTypeAndReferenceId(
+                businessId,
+                PurchasingConstants.STOCK_REF_RAW_LINE,
+                line.getId()
+        );
+        for (StockMovement sm : moves) {
+            Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(sm.getItemId(), businessId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
+            if (PurchasingConstants.MOVEMENT_RECEIPT.equals(sm.getMovementType())) {
+                BigDecimal delta = sm.getQuantityDelta();
+                BigDecimal base = item.getCurrentStock() == null ? BigDecimal.ZERO : item.getCurrentStock();
+                item.setCurrentStock(base.subtract(delta));
+                itemRepository.save(item);
+            }
+            stockMovementRepository.delete(sm);
+        }
+        if (line.getInventoryBatchId() != null) {
+            inventoryBatchRepository.findByIdAndBusinessId(line.getInventoryBatchId(), businessId)
+                    .ifPresent(inventoryBatchRepository::delete);
+        }
+        line.setInventoryBatchId(null);
+        line.setPostedItemId(null);
+        line.setUsableQty(null);
+        line.setWastageQty(null);
+        line.setLineStatus(PurchasingConstants.LINE_PENDING);
+        lineRepository.save(line);
+    }
+
+    public void reapplyPostedPathBLine(
+            String businessId,
+            RawPurchaseSession session,
+            RawPurchaseLine line,
+            String itemId,
+            BigDecimal usableQty,
+            BigDecimal wastageQty,
+            LocalDate expiryDate
+    ) {
+        Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
+        if (usableQty.signum() <= 0 && wastageQty.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Each line needs usable or wastage quantity");
+        }
+        CostSplit split = splitLine(line.getAmountMoney(), usableQty, wastageQty);
+        LinePostPlan p = new LinePostPlan(line, item, itemId, usableQty, wastageQty, split, expiryDate);
+        applyLinePost(businessId, session, p);
+    }
+
+    @Transactional
+    public void rebalancePostedSupplyInvoiceLines(
+            String businessId,
+            String invoiceId,
+            List<PatchPathBSupplyInvoiceLineRequest> lineInputs
+    ) {
+        SupplierInvoice inv = supplierInvoiceRepository.findByIdAndBusinessId(invoiceId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Invoice not found"));
+        if (inv.getRawPurchaseSessionId() == null || inv.getRawPurchaseSessionId().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Not a Path B invoice");
+        }
+        BigDecimal paid = allocationRepository.sumAmountBySupplierInvoiceId(invoiceId);
+        if (paid != null && paid.compareTo(MONEY_SCALE) >= 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Cannot edit line quantities or amounts while the invoice has payments");
+        }
+        String sessionId = inv.getRawPurchaseSessionId();
+        RawPurchaseSession session = sessionRepository.findByIdAndBusinessId(sessionId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Purchase session not found"));
+        if (!PurchasingConstants.SESSION_POSTED.equals(session.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Session is not posted");
+        }
+        List<SupplierInvoiceLine> sils = supplierInvoiceLineRepository.findByInvoiceIdOrderBySortOrderAsc(invoiceId);
+        if (lineInputs.size() != sils.size()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Provide exactly one entry per invoice line (expected " + sils.size() + ")");
+        }
+        Map<String, PatchPathBSupplyInvoiceLineRequest> byId = new HashMap<>();
+        for (PatchPathBSupplyInvoiceLineRequest in : lineInputs) {
+            if (byId.put(in.supplierInvoiceLineId(), in) != null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Duplicate supplier invoice line id");
+            }
+        }
+        for (SupplierInvoiceLine sil : sils) {
+            if (!byId.containsKey(sil.getId())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Missing line " + sil.getId());
+            }
+            if (sil.getRawLineId() == null || sil.getRawLineId().isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice line is not linked to a receipt");
+            }
+        }
+        Map<String, LocalDate> expiryByRawLine = new HashMap<>();
+        for (SupplierInvoiceLine sil : sils) {
+            RawPurchaseLine rl = lineRepository.findById(sil.getRawLineId())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Raw line not found"));
+            if (rl.getInventoryBatchId() != null) {
+                inventoryBatchRepository.findByIdAndBusinessId(rl.getInventoryBatchId(), businessId)
+                        .ifPresent(b -> expiryByRawLine.put(rl.getId(), b.getExpiryDate()));
+            }
+        }
+        for (SupplierInvoiceLine sil : sils) {
+            RawPurchaseLine rl = lineRepository.findById(sil.getRawLineId()).orElseThrow();
+            reversePostedPathBLine(businessId, rl);
+        }
+        BigDecimal sumTotals = BigDecimal.ZERO;
+        for (SupplierInvoiceLine sil : sils) {
+            PatchPathBSupplyInvoiceLineRequest in = byId.get(sil.getId());
+            RawPurchaseLine rl = lineRepository.findById(sil.getRawLineId()).orElseThrow();
+            BigDecimal lineTotal = in.lineTotal().setScale(2, RoundingMode.HALF_UP);
+            BigDecimal usable = in.usableQty().setScale(4, RoundingMode.HALF_UP);
+            BigDecimal wastage = in.wastageQty().setScale(4, RoundingMode.HALF_UP);
+            if (usable.signum() <= 0 && wastage.signum() <= 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Each line needs usable or wastage quantity");
+            }
+            rl.setAmountMoney(lineTotal);
+            if (in.description() != null && !in.description().isBlank()) {
+                rl.setDescriptionText(in.description().trim());
+            }
+            lineRepository.save(rl);
+            BigDecimal qty = usable.add(wastage);
+            BigDecimal unit = lineTotal.divide(qty, UNIT_SCALE, RoundingMode.HALF_UP);
+            sil.setQty(qty);
+            sil.setUnitCost(unit);
+            sil.setLineTotal(lineTotal);
+            if (in.description() != null && !in.description().isBlank()) {
+                sil.setDescription(in.description().trim());
+            }
+            supplierInvoiceLineRepository.save(sil);
+            sumTotals = sumTotals.add(lineTotal);
+        }
+        inv.setSubtotal(sumTotals.setScale(2, RoundingMode.HALF_UP));
+        inv.setGrandTotal(sumTotals.setScale(2, RoundingMode.HALF_UP));
+        inv.setTaxTotal(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
+        supplierInvoiceRepository.save(inv);
+
+        BigDecimal sumInv = BigDecimal.ZERO;
+        BigDecimal sumWaste = BigDecimal.ZERO;
+        BigDecimal apTotal = BigDecimal.ZERO;
+        for (SupplierInvoiceLine sil : sils) {
+            PatchPathBSupplyInvoiceLineRequest in = byId.get(sil.getId());
+            RawPurchaseLine rl = lineRepository.findById(sil.getRawLineId()).orElseThrow();
+            LocalDate exp = expiryByRawLine.get(rl.getId());
+            reapplyPostedPathBLine(businessId, session, rl, sil.getItemId(), in.usableQty(), in.wastageQty(), exp);
+            rl = lineRepository.findById(sil.getRawLineId()).orElseThrow();
+            CostSplit sp = splitLine(rl.getAmountMoney(), in.usableQty(), in.wastageQty());
+            sumInv = sumInv.add(sp.inventoryMoney());
+            sumWaste = sumWaste.add(sp.wastageMoney());
+            apTotal = apTotal.add(rl.getAmountMoney());
+        }
+        if (sumInv.add(sumWaste).setScale(2, RoundingMode.HALF_UP).compareTo(apTotal.setScale(2, RoundingMode.HALF_UP))
+                != 0) {
+            throw new IllegalStateException("Journal allocation rounding drift");
+        }
+        replacePathBJournalForSession(businessId, session, sumInv, sumWaste, apTotal);
+    }
+
+    private void replacePathBJournalForSession(
+            String businessId,
+            RawPurchaseSession session,
+            BigDecimal sumInv,
+            BigDecimal sumWaste,
+            BigDecimal apTotal
+    ) {
+        JournalEntry je = journalEntryRepository
+                .findByBusinessIdAndSourceTypeAndSourceId(
+                        businessId,
+                        PurchasingConstants.JOURNAL_SOURCE_PATH_B,
+                        session.getId()
+                )
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Path B journal entry not found"));
+        journalLineRepository.deleteAll(journalLineRepository.findByJournalEntryId(je.getId()));
+        LocalDate invoiceDate = LocalDate.ofInstant(session.getReceivedAt(), ZoneOffset.UTC);
+        je.setEntryDate(invoiceDate);
+        journalEntryRepository.save(je);
+        ledgerBootstrapService.ensureStandardAccounts(businessId);
+        LedgerAccount invAcc = ledger(businessId, LedgerAccountCodes.INVENTORY);
+        LedgerAccount apAcc = ledger(businessId, LedgerAccountCodes.ACCOUNTS_PAYABLE);
+        LedgerAccount wasteAcc = ledger(businessId, LedgerAccountCodes.INVENTORY_SHRINKAGE);
+        BigDecimal sumInv2 = sumInv.setScale(2, RoundingMode.HALF_UP);
+        BigDecimal sumWaste2 = sumWaste.setScale(2, RoundingMode.HALF_UP);
+        BigDecimal ap2 = apTotal.setScale(2, RoundingMode.HALF_UP);
+        List<JournalLine> jl = new ArrayList<>();
+        if (sumInv2.signum() > 0) {
+            jl.add(journalDebit(je.getId(), invAcc.getId(), sumInv2));
+        }
+        if (sumWaste2.signum() > 0) {
+            jl.add(journalDebit(je.getId(), wasteAcc.getId(), sumWaste2));
+        }
+        jl.add(journalCredit(je.getId(), apAcc.getId(), ap2));
+        journalLineRepository.saveAll(jl);
+        assertJournalBalanced(jl);
     }
 
     private static String blankToNull(String s) {

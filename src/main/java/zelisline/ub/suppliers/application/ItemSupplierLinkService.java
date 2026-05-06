@@ -1,5 +1,6 @@
 package zelisline.ub.suppliers.application;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Set;
@@ -168,11 +169,17 @@ public class ItemSupplierLinkService {
     private static SupplierItemLinkResponse toSupplierItemLinkResponse(SupplierProduct sp, Item item) {
         String itemName = item != null ? item.getName() : "";
         String sku = item != null ? item.getSku() : "";
+        String barcode = item != null && item.getBarcode() != null && !item.getBarcode().isBlank()
+                ? item.getBarcode().trim()
+                : null;
+        BigDecimal stock = item != null ? item.getCurrentStock() : null;
         return new SupplierItemLinkResponse(
                 sp.getId(),
                 sp.getItemId(),
                 itemName,
                 sku,
+                barcode,
+                stock,
                 sp.isPrimaryLink(),
                 sp.getSupplierSku(),
                 sp.getDefaultCostPrice(),

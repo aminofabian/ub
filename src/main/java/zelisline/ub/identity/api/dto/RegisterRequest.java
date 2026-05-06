@@ -8,6 +8,8 @@ import jakarta.validation.constraints.Size;
 public record RegisterRequest(
         @NotBlank @Email @Size(max = 191) String email,
         @NotBlank @Size(min = 1, max = 255) String name,
-        @NotBlank @Size(min = 8, max = 191) String password
+        @NotBlank @Size(min = 8, max = 191) String password,
+        /** When it matches {@code app.auth.staff-signup-token}, assigns {@code app.auth.staff-signup-role-key}. */
+        @Size(max = 512) String staffInviteToken
 ) {
 }

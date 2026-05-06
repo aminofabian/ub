@@ -3,10 +3,15 @@ package zelisline.ub.catalog.application;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -24,6 +29,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import zelisline.ub.catalog.api.dto.CatalogListScope;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.api.dto.CreateVariantRequest;
 import zelisline.ub.catalog.api.dto.ItemImageResponse;
@@ -74,14 +80,25 @@ public class ItemCatalogService {
             boolean includeCategoryDescendants,
             boolean noBarcode,
             boolean includeInactive,
+            CatalogListScope catalogListScope,
+            String excludeLinkedSupplierId,
             Pageable pageable
     ) {
         String q = blankToNull(search);
         String bc = blankToNull(barcodeExact);
         String cat = blankToNull(categoryId);
-        Pageable pg = pageable.getSort().isUnsorted()
-                ? PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), Sort.by(Sort.Direction.ASC, "name"))
-                : pageable;
+        CatalogListScope scope = catalogListScope != null ? catalogListScope : CatalogListScope.ALL;
+        boolean includeAllScopes = scope == CatalogListScope.ALL;
+        boolean parentsOnly = scope == CatalogListScope.PARENTS_ONLY;
+        boolean variantsOnly = scope == CatalogListScope.VARIANTS_ONLY;
+        boolean skusOnly = scope == CatalogListScope.SKUS_ONLY;
+        Sort defaultSort = Sort.by(
+                Sort.Order.asc("name").ignoreCase(),
+                Sort.Order.asc("sku").ignoreCase());
+        Pageable pg = PageRequest.of(
+                pageable.getPageNumber(),
+                pageable.getPageSize(),
+                pageable.getSort().isSorted() ? pageable.getSort() : defaultSort);
         boolean catUnset = cat == null;
         Collection<String> categoryIds = List.of("");
         if (!catUnset) {
@@ -90,11 +107,39 @@ public class ItemCatalogService {
                 return Page.empty(pg);
             }
         }
-        Page<Item> page =
-                itemRepository.search(businessId, q, bc, catUnset, categoryIds, noBarcode, includeInactive, pg);
+        Page<Item> page = itemRepository.search(
+                businessId,
+                q,
+                bc,
+                catUnset,
+                categoryIds,
+                noBarcode,
+                includeInactive,
+                includeAllScopes,
+                parentsOnly,
+                variantsOnly,
+                skusOnly,
+                blankToNull(excludeLinkedSupplierId),
+                pg);
         List<String> ids = page.getContent().stream().map(Item::getId).toList();
         Map<String, String> thumbs = firstGalleryImageUrlByItemId(ids);
-        return page.map(item -> toSummary(item, thumbs));
+        Set<String> catIds = page.getContent().stream()
+                .map(Item::getCategoryId)
+                .filter(id -> id != null && !id.isBlank())
+                .collect(Collectors.toCollection(HashSet::new));
+        Map<String, String> catNames = categoryNamesById(catIds);
+        Set<String> parentIdsOnPage = page.getContent().stream()
+                .filter(i -> i.getVariantOfItemId() == null)
+                .map(Item::getId)
+                .collect(Collectors.toCollection(HashSet::new));
+        Set<String> parentsWithChildren = parentIdsOnPage.isEmpty()
+                ? Set.of()
+                : new HashSet<>(itemRepository.findParentIdsHavingVariants(businessId, parentIdsOnPage));
+        return page.map(item -> toSummary(
+                item,
+                thumbs,
+                categoryNameFor(catNames, item.getCategoryId()),
+                item.getVariantOfItemId() == null && parentsWithChildren.contains(item.getId())));
     }
 
     @Transactional(readOnly = true)
@@ -107,7 +152,13 @@ public class ItemCatalogService {
                     businessId, item.getId());
             List<String> variantIds = variantRows.stream().map(Item::getId).toList();
             Map<String, String> vthumbs = firstGalleryImageUrlByItemId(variantIds);
-            variants = variantRows.stream().map(v -> toSummary(v, vthumbs)).toList();
+            List<Item> forCat = new ArrayList<>();
+            forCat.add(item);
+            forCat.addAll(variantRows);
+            Map<String, String> catMap = categoryNamesById(forCat.stream().map(Item::getCategoryId).toList());
+            variants = variantRows.stream()
+                    .map(v -> toSummary(v, vthumbs, categoryNameFor(catMap, v.getCategoryId()), false))
+                    .toList();
         }
         return toResponse(item, variants);
     }
@@ -322,7 +373,8 @@ public class ItemCatalogService {
         if (parent.getVariantOfItemId() != null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cannot create a variant of a variant");
         }
-        String sku = request.sku().trim();
+        String rawSku = request.sku() == null ? "" : request.sku().trim();
+        String sku = rawSku.isEmpty() ? allocateVariantSku(businessId, parent.getSku(), request.variantName()) : rawSku;
         if (itemRepository.existsByBusinessIdAndSkuAndDeletedAtIsNull(businessId, sku)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "SKU already in use");
         }
@@ -509,14 +561,187 @@ public class ItemCatalogService {
         itemRepository.saveAll(batch);
     }
 
-    private Item newItemFromCreate(String businessId, CreateItemRequest request) {
-        String sku = request.sku().trim();
-        if (itemRepository.existsByBusinessIdAndSkuAndDeletedAtIsNull(businessId, sku)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "SKU already in use");
+    @Transactional(readOnly = true)
+    public String suggestNextSku(
+            String businessId,
+            String categoryIdRaw,
+            String parentItemIdRaw,
+            String variantNameRaw
+    ) {
+        String pid = blankToNull(parentItemIdRaw);
+        if (pid != null) {
+            Item parent = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(pid, businessId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Parent item not found"));
+            if (parent.getVariantOfItemId() != null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "parentItemId must be a parent product");
+            }
+            return firstAvailableVariantSku(businessId, parent.getSku(), variantNameRaw);
         }
-        String barcode = normalizeBarcode(request.barcode());
-        assertBarcodeAvailable(businessId, barcode, null);
+        String cid = blankToNull(categoryIdRaw);
+        return peekNextStructuredParentSku(businessId, cid);
+    }
 
+    private static final long STRUCTURED_SEQ_START = 10_001L;
+    private static final int MAX_CATEGORY_PREFIX_CHARS = 6;
+    private static final int MAX_VARIANT_SEGMENT_CHARS = 20;
+    private static final int MAX_SKU_LEN = 191;
+    private static final int MAX_VARIANT_SKU_TARGET = 180;
+
+    private String peekNextStructuredParentSku(String businessId, String categoryId) {
+        String prefix = categoryPrefixFromCategoryId(businessId, categoryId);
+        return nextSequenceSkuForPrefix(businessId, prefix, false);
+    }
+
+    private String allocateStructuredParentSku(String businessId, String categoryId) {
+        String prefix = categoryPrefixFromCategoryId(businessId, categoryId);
+        return nextSequenceSkuForPrefix(businessId, prefix, true);
+    }
+
+    private String categoryPrefixFromCategoryId(String businessId, String categoryId) {
+        if (categoryId == null || categoryId.isBlank()) {
+            return "SKU";
+        }
+        return categoryRepository.findByIdAndBusinessId(categoryId, businessId)
+                .map(c -> slugToCategoryPrefix(c.getSlug()))
+                .orElse("SKU");
+    }
+
+    private static String slugToCategoryPrefix(String slug) {
+        if (slug == null || slug.isBlank()) {
+            return "SKU";
+        }
+        String u = slug.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]", "");
+        if (u.length() < 3) {
+            u = ("CAT" + u).toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]", "");
+        }
+        if (u.isEmpty()) {
+            return "SKU";
+        }
+        return u.length() > MAX_CATEGORY_PREFIX_CHARS
+                ? u.substring(0, MAX_CATEGORY_PREFIX_CHARS)
+                : u;
+    }
+
+    private String nextSequenceSkuForPrefix(String businessId, String prefix, boolean claim) {
+        String pfx = prefix.toUpperCase(Locale.ROOT) + "-";
+        long max = 0;
+        boolean any = false;
+        for (String sku : itemRepository.findSkusByBusinessIdActive(businessId)) {
+            if (sku == null || sku.isBlank() || !sku.startsWith(pfx)) {
+                continue;
+            }
+            String tail = sku.substring(pfx.length());
+            if (!isAllAsciiDigits(tail)) {
+                continue;
+            }
+            try {
+                long v = Long.parseLong(tail);
+                if (v > max) {
+                    max = v;
+                }
+                any = true;
+            } catch (NumberFormatException ignored) {
+                // skip
+            }
+        }
+        long candidate = any ? max + 1 : STRUCTURED_SEQ_START;
+        if (candidate < STRUCTURED_SEQ_START) {
+            candidate = STRUCTURED_SEQ_START;
+        }
+        if (!claim) {
+            return pfx + candidate;
+        }
+        int guard = 0;
+        while (itemRepository.existsByBusinessIdAndSkuAndDeletedAtIsNull(businessId, pfx + candidate)) {
+            candidate++;
+            if (++guard > 10_000) {
+                throw new ResponseStatusException(
+                        HttpStatus.INTERNAL_SERVER_ERROR,
+                        "Could not allocate a unique SKU for prefix " + prefix
+                );
+            }
+        }
+        return pfx + candidate;
+    }
+
+    private String firstAvailableVariantSku(String businessId, String parentSku, String variantNameRaw) {
+        String segment = variantNameToSkuSegment(variantNameRaw);
+        String base = buildVariantSkuBase(parentSku, segment);
+        for (int i = 0; i < 5000; i++) {
+            String candidate = i == 0 ? base : base + "-" + (i + 1);
+            if (candidate.length() > MAX_SKU_LEN) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Variant SKU would exceed max length; shorten the parent SKU or the option label."
+                );
+            }
+            if (!itemRepository.existsByBusinessIdAndSkuAndDeletedAtIsNull(businessId, candidate)) {
+                return candidate;
+            }
+        }
+        throw new ResponseStatusException(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "Could not allocate a unique variant SKU"
+        );
+    }
+
+    private String allocateVariantSku(String businessId, String parentSku, String variantName) {
+        return firstAvailableVariantSku(businessId, parentSku, variantName);
+    }
+
+    private static String variantNameToSkuSegment(String variantName) {
+        if (variantName == null || variantName.isBlank()) {
+            return "OPT";
+        }
+        String s = variantName.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]+", "-");
+        s = s.replaceAll("-+", "-");
+        if (s.startsWith("-")) {
+            s = s.substring(1);
+        }
+        if (s.endsWith("-")) {
+            s = s.substring(0, s.length() - 1);
+        }
+        if (s.isBlank()) {
+            return "OPT";
+        }
+        if (s.length() > MAX_VARIANT_SEGMENT_CHARS) {
+            return s.substring(0, MAX_VARIANT_SEGMENT_CHARS);
+        }
+        return s;
+    }
+
+    private static String buildVariantSkuBase(String parentSku, String segment) {
+        String ps = parentSku == null ? "" : parentSku.trim();
+        if (ps.isEmpty()) {
+            ps = "PARENT";
+        }
+        String sep = "-";
+        String candidate = ps + sep + segment;
+        if (candidate.length() <= MAX_VARIANT_SKU_TARGET) {
+            return candidate;
+        }
+        int budget = MAX_VARIANT_SKU_TARGET - sep.length() - segment.length();
+        if (budget < 4) {
+            budget = 4;
+        }
+        String p = ps.length() <= budget ? ps : ps.substring(0, budget);
+        return p + sep + segment;
+    }
+
+    private static boolean isAllAsciiDigits(String s) {
+        if (s.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c < '0' || c > '9') {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private Item newItemFromCreate(String businessId, CreateItemRequest request) {
         String itemTypeId = request.itemTypeId().trim();
         itemTypeRepository.findByIdAndBusinessId(itemTypeId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item type not found"));
@@ -526,6 +751,15 @@ public class ItemCatalogService {
             categoryRepository.findByIdAndBusinessId(categoryId, businessId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Category not found"));
         }
+
+        String rawSku = request.sku() == null ? "" : request.sku().trim();
+        String sku = rawSku.isEmpty() ? allocateStructuredParentSku(businessId, categoryId) : rawSku;
+        if (itemRepository.existsByBusinessIdAndSkuAndDeletedAtIsNull(businessId, sku)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "SKU already in use");
+        }
+        String barcode = normalizeBarcode(request.barcode());
+        assertBarcodeAvailable(businessId, barcode, null);
+
         String aisleId = blankToNull(request.aisleId());
         if (aisleId != null) {
             aisleRepository.findByIdAndBusinessId(aisleId, businessId)
@@ -568,7 +802,13 @@ public class ItemCatalogService {
                     businessId, item.getId());
             List<String> variantIds = variantRows.stream().map(Item::getId).toList();
             Map<String, String> vthumbs = firstGalleryImageUrlByItemId(variantIds);
-            variants = variantRows.stream().map(v -> toSummary(v, vthumbs)).toList();
+            List<Item> forCat = new ArrayList<>();
+            forCat.add(item);
+            forCat.addAll(variantRows);
+            Map<String, String> catMap = categoryNamesById(forCat.stream().map(Item::getCategoryId).toList());
+            variants = variantRows.stream()
+                    .map(v -> toSummary(v, vthumbs, categoryNameFor(catMap, v.getCategoryId()), false))
+                    .toList();
         }
         return toResponse(item, variants);
     }
@@ -613,7 +853,37 @@ public class ItemCatalogService {
         return galleryFirstUrlByItemId.get(i.getId());
     }
 
-    private ItemSummaryResponse toSummary(Item i, Map<String, String> galleryFirstUrlByItemId) {
+    private Map<String, String> categoryNamesById(Collection<String> categoryIds) {
+        if (categoryIds == null || categoryIds.isEmpty()) {
+            return Map.of();
+        }
+        List<String> distinct = categoryIds.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .distinct()
+                .toList();
+        if (distinct.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> out = new LinkedHashMap<>();
+        categoryRepository.findAllById(distinct).forEach(c -> out.put(c.getId(), c.getName()));
+        return out;
+    }
+
+    private static String categoryNameFor(Map<String, String> namesById, String categoryId) {
+        if (categoryId == null || categoryId.isBlank()) {
+            return null;
+        }
+        return namesById.get(categoryId);
+    }
+
+    private ItemSummaryResponse toSummary(
+            Item i,
+            Map<String, String> galleryFirstUrlByItemId,
+            String categoryName,
+            boolean groupLabelOnly
+    ) {
         return new ItemSummaryResponse(
                 i.getId(),
                 i.getSku(),
@@ -621,11 +891,13 @@ public class ItemCatalogService {
                 i.getName(),
                 i.getVariantName(),
                 i.getCategoryId(),
+                categoryName,
                 i.getImageKey(),
                 resolveListThumbnail(i, galleryFirstUrlByItemId),
                 i.isActive(),
                 i.isWebPublished(),
-                i.getVariantOfItemId()
+                i.getVariantOfItemId(),
+                groupLabelOnly
         );
     }
 
@@ -645,6 +917,7 @@ public class ItemCatalogService {
                 i.isWeighed(),
                 i.isSellable(),
                 i.isStocked(),
+                i.getCurrentStock(),
                 i.getPackagingUnitName(),
                 i.getPackagingUnitQty(),
                 i.getBundleQty(),

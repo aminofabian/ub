@@ -2,12 +2,16 @@ package zelisline.ub.catalog.api.dto;
 
 import java.math.BigDecimal;
 
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 public record CreateItemRequest(
-        @NotBlank @Size(max = 191) String sku,
+        /** When null or blank, a structured SKU is allocated from the category prefix sequence (e.g. PREFIX-10001). */
+        @JsonDeserialize(using = EmptyToNullStringDeserializer.class)
+        @Size(max = 191) String sku,
         @Size(max = 191) String barcode,
         @NotBlank @Size(max = 500) String name,
         @Size(max = 10_000) String description,

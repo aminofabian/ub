@@ -35,6 +35,7 @@ import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.api.dto.PatchItemRequest;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.application.ItemCatalogService;
+import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.IdempotencyKeyRepository;
 import zelisline.ub.catalog.repository.ItemImageRepository;
@@ -187,6 +188,108 @@ class ItemCatalogIT {
     }
 
     @Test
+    void nextSkuEndpointReflectsSequenceForDefaultPrefix() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        mockMvc.perform(get("/api/v1/items/next-sku")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.suggestedSku").value("SKU-10001"));
+
+        itemCatalogService.createItem(TENANT_A, minimalItem("SKU-10050", "Num", gid), null);
+
+        mockMvc.perform(get("/api/v1/items/next-sku")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.suggestedSku").value("SKU-10051"));
+    }
+
+    @Test
+    void nextSkuEndpointUsesCategorySlugPrefix() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        Category cat = new Category();
+        cat.setBusinessId(TENANT_A);
+        cat.setName("Beverages");
+        cat.setSlug("beverages");
+        cat.setPosition(0);
+        String catId = categoryRepository.save(cat).getId();
+
+        mockMvc.perform(get("/api/v1/items/next-sku")
+                        .param("categoryId", catId)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.suggestedSku").value("BEVERA-10001"));
+
+        itemCatalogService.createItem(
+                TENANT_A,
+                new CreateItemRequest(
+                        "BEVERA-10010",
+                        null,
+                        "Cola",
+                        null,
+                        gid,
+                        catId,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null
+                ),
+                null);
+
+        mockMvc.perform(get("/api/v1/items/next-sku")
+                        .param("categoryId", catId)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.suggestedSku").value("BEVERA-10011"));
+    }
+
+    @Test
+    void createItemWithoutSkuAllocatesNumericSku() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        mockMvc.perform(post("/api/v1/items")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"name\":\"Auto SKU Parent\",\"itemTypeId\":\"" + gid + "\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.sku").value("SKU-10001"));
+    }
+
+    @Test
+    void createVariantWithoutSkuAllocatesStructuredVariantSku() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        String parent = createItemViaService(TENANT_A, gid, "SKU-P-AUTO", "Parent auto");
+        mockMvc.perform(post("/api/v1/items/" + parent + "/variants")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"variantName\":\"Size M\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.sku").value("SKU-P-AUTO-SIZE-M"));
+    }
+
+    @Test
     void concurrentPatchesEventuallyProduceOptimisticConflict() throws Exception {
         String gid = goodsTypeId(TENANT_A);
         boolean ok = false;
@@ -215,6 +318,63 @@ class ItemCatalogIT {
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content.length()").value(0));
+    }
+
+    @Test
+    void listItemsCatalogScopeFiltersParentsAndVariants() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        String parent = createItemViaService(TENANT_A, gid, "SKU-SCOPE-P", "Scope parent unique");
+        mockMvc.perform(post("/api/v1/items/" + parent + "/variants")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"sku\":\"SKU-SCOPE-V\",\"variantName\":\"Opt\"}"))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(get("/api/v1/items")
+                        .param("catalogScope", "PARENTS_ONLY")
+                        .param("search", "Scope parent unique")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].sku").value("SKU-SCOPE-P"));
+
+        mockMvc.perform(get("/api/v1/items")
+                        .param("catalogScope", "VARIANTS_ONLY")
+                        .param("search", "Scope parent unique")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].sku").value("SKU-SCOPE-V"));
+    }
+
+    @Test
+    void listItemsAllScopeGroupsVariantsUnderParent() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        String parent = createItemViaService(TENANT_A, gid, "SKU-TREE-P", "Tree parent alpha");
+        mockMvc.perform(post("/api/v1/items/" + parent + "/variants")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"sku\":\"SKU-TREE-V\",\"variantName\":\"Zebra option\"}"))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(get("/api/v1/items")
+                        .param("catalogScope", "ALL")
+                        .param("search", "Tree parent alpha")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(2))
+                .andExpect(jsonPath("$.content[0].sku").value("SKU-TREE-P"))
+                .andExpect(jsonPath("$.content[1].sku").value("SKU-TREE-V"));
     }
 
     @Test
@@ -288,6 +448,19 @@ class ItemCatalogIT {
                         .contentType(APPLICATION_JSON)
                         .content("{\"sku\":\"SKU-B\",\"name\":\"B\",\"itemTypeId\":\"" + gid + "\"}"))
                 .andExpect(status().isConflict());
+    }
+
+    @Test
+    void createItemWithEmptyStringSkuAllocatesNumericSku() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        mockMvc.perform(post("/api/v1/items")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"sku\":\"\",\"name\":\"Empty str SKU\",\"itemTypeId\":\"" + gid + "\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.sku").value("SKU-10001"));
     }
 
     @Test

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -153,6 +154,38 @@ class SuppliersApiIT {
         ownerA = user("owner-a@sup", TENANT_A);
         userRepository.save(ownerA);
         userRepository.save(user("owner-b@sup", TENANT_B));
+    }
+
+    @Test
+    void listSuppliers_searchAndStatusFilter() throws Exception {
+        createSupplier(TENANT_A, "Acme Foods Ltd");
+        createSupplier(TENANT_A, "Beta Wholesale");
+        String inactiveId = createSupplier(TENANT_A, "Quiet Co");
+        mockMvc.perform(patch("/api/v1/suppliers/" + inactiveId)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"status\":\"inactive\"}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/suppliers")
+                        .param("search", "acme")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].name").value("Acme Foods Ltd"));
+
+        mockMvc.perform(get("/api/v1/suppliers")
+                        .param("status", "inactive")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].name").value("Quiet Co"));
     }
 
     @Test

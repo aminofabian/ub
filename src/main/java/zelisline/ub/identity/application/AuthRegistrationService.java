@@ -1,5 +1,7 @@
 package zelisline.ub.identity.application;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -39,7 +41,8 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
  *
  * <p>The first user in a tenant (no other non-deleted users) receives the system
  * {@link IdentityService#OWNER_ROLE_KEY} role so an empty business has a clear
- * bootstrap path. Later self-signups use {@code app.auth.signup-role-key}.
+ * bootstrap path. Later self-signups use {@code app.auth.signup-role-key} — by default {@code buyer}
+ * — unless a matching {@link RegisterRequest#staffInviteToken()} is supplied (staff-only link flow).
  */
 @Service
 @RequiredArgsConstructor
@@ -59,8 +62,14 @@ public class AuthRegistrationService {
     @Value("${app.auth.self-signup-enabled:true}")
     private boolean selfSignupEnabled;
 
-    @Value("${app.auth.signup-role-key:viewer}")
+    @Value("${app.auth.signup-role-key:buyer}")
     private String signupRoleKey;
+
+    @Value("${app.auth.staff-signup-token:}")
+    private String staffSignupTokenConfigured;
+
+    @Value("${app.auth.staff-signup-role-key:viewer}")
+    private String staffSignupRoleKey;
 
     @Value("${app.auth.email-verification-ttl-hours:48}")
     private long emailVerificationTtlHours;
@@ -85,7 +94,7 @@ public class AuthRegistrationService {
                     "An account with this email already exists for this business"
             );
         });
-        var role = resolveSignupRole(businessId);
+        var role = resolveSignupRole(businessId, request);
         User user = new User();
         user.setBusinessId(businessId);
         user.setEmail(email);
@@ -171,13 +180,31 @@ public class AuthRegistrationService {
         }
     }
 
-    private Role resolveSignupRole(String businessId) {
+    private Role resolveSignupRole(String businessId, RegisterRequest request) {
         if (userRepository.countByBusinessIdAndDeletedAtIsNull(businessId) == 0) {
             return roleRepository
                     .findSystemRoleByKey(IdentityService.OWNER_ROLE_KEY)
                     .orElseThrow(() -> new ResponseStatusException(
                             HttpStatus.SERVICE_UNAVAILABLE,
                             "Signup is not available: owner role is not configured"
+                    ));
+        }
+        String staffToken = blankToNull(request.staffInviteToken());
+        if (staffToken != null) {
+            if (staffSignupTokenConfigured.isBlank()) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Staff self-signup is not enabled");
+            }
+            byte[] configured = staffSignupTokenConfigured.strip().getBytes(StandardCharsets.UTF_8);
+            byte[] supplied = staffToken.strip().getBytes(StandardCharsets.UTF_8);
+            if (!MessageDigest.isEqual(configured, supplied)) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Invalid staff invitation");
+            }
+            String staffKey = staffSignupRoleKey.trim().toLowerCase();
+            return roleRepository
+                    .findSystemRoleByKey(staffKey)
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.SERVICE_UNAVAILABLE,
+                            "Signup is not available: staff role '" + staffKey + "' is not configured"
                     ));
         }
         String key = signupRoleKey.trim().toLowerCase();
@@ -187,6 +214,14 @@ public class AuthRegistrationService {
                         HttpStatus.SERVICE_UNAVAILABLE,
                         "Signup is not available: role '" + key + "' is not configured"
                 ));
+    }
+
+    private static String blankToNull(String s) {
+        if (s == null) {
+            return null;
+        }
+        String t = s.strip();
+        return t.isEmpty() ? null : t;
     }
 
     /** @return full verification URL (for optional UI exposure when mail is unavailable). */

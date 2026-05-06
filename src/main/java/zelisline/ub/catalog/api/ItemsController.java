@@ -27,6 +27,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
 import zelisline.ub.catalog.api.dto.EffectivePricingContextResponse;
+import zelisline.ub.catalog.api.dto.CatalogListScope;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.api.dto.CreateVariantRequest;
 import zelisline.ub.catalog.api.dto.ItemImageResponse;
@@ -34,6 +35,7 @@ import zelisline.ub.catalog.api.dto.ItemResponse;
 import zelisline.ub.catalog.api.dto.ItemSummaryResponse;
 import zelisline.ub.catalog.api.dto.PatchItemRequest;
 import zelisline.ub.catalog.api.dto.RegisterItemImageRequest;
+import zelisline.ub.catalog.api.dto.SuggestedSkuResponse;
 import zelisline.ub.catalog.application.CategoryPricingResolutionService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.application.ItemCreateResult;
@@ -58,6 +60,8 @@ public class ItemsController {
             @RequestParam(required = false, defaultValue = "false") boolean includeCategoryDescendants,
             @RequestParam(required = false, defaultValue = "false") boolean noBarcode,
             @RequestParam(required = false, defaultValue = "false") boolean includeInactive,
+            @RequestParam(required = false, defaultValue = "ALL") CatalogListScope catalogScope,
+            @RequestParam(required = false) String excludeLinkedSupplierId,
             Pageable pageable,
             HttpServletRequest request
     ) {
@@ -70,8 +74,24 @@ public class ItemsController {
                 includeCategoryDescendants,
                 noBarcode,
                 includeInactive,
+                catalogScope,
+                excludeLinkedSupplierId,
                 pageable
         );
+    }
+
+    @GetMapping("/next-sku")
+    @PreAuthorize("hasPermission(null, 'catalog.items.read')")
+    public SuggestedSkuResponse nextSku(
+            @RequestParam(required = false) String categoryId,
+            @RequestParam(required = false) String parentItemId,
+            @RequestParam(required = false) String variantName,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return new SuggestedSkuResponse(
+                itemCatalogService.suggestNextSku(businessId, categoryId, parentItemId, variantName));
     }
 
     @GetMapping("/{id}/pricing-context")

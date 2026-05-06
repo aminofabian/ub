@@ -21,6 +21,9 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     boolean existsByBusinessIdAndSkuAndDeletedAtIsNull(String businessId, String sku);
 
+    @Query("select i.sku from Item i where i.businessId = :businessId and i.deletedAt is null")
+    List<String> findSkusByBusinessIdActive(@Param("businessId") String businessId);
+
     Optional<Item> findByBusinessIdAndSkuAndDeletedAtIsNull(String businessId, String sku);
 
     Optional<Item> findByBusinessIdAndBarcodeAndDeletedAtIsNull(String businessId, String barcode);
@@ -34,18 +37,40 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     @Query("""
             select i from Item i
+             left join Item p on p.id = i.variantOfItemId and p.businessId = i.businessId and p.deletedAt is null
              where i.businessId = :businessId
                and i.deletedAt is null
                and (:includeInactive = true or i.active = true)
                and (:catUnset = true or i.categoryId in :categoryIds)
                and (:noBarcode = false or i.barcode is null or i.barcode = '')
                and (:barcodeExact is null or :barcodeExact = '' or i.barcode = :barcodeExact)
+               and (:includeAllScopes = true
+                    or (:parentsOnly = true and i.variantOfItemId is null)
+                    or (:variantsOnly = true and i.variantOfItemId is not null)
+                    or (:skusOnly = true and (
+                         i.variantOfItemId is not null
+                         or not exists (
+                           select 1 from Item ch
+                           where ch.variantOfItemId = i.id
+                             and ch.businessId = i.businessId
+                             and ch.deletedAt is null
+                         )
+                       )))
                and (:q is null or :q = ''
                     or lower(i.name) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.variantName, '')) like lower(concat('%', :q, '%'))
                     or lower(i.sku) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.barcode, '')) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.description, '')) like lower(concat('%', :q, '%')))
+               and (:excludeLinkedSupplierId is null
+                    or not exists (
+                      select 1 from SupplierProduct sp
+                       inner join Supplier s on s.id = sp.supplierId
+                       where sp.itemId = i.id
+                         and sp.supplierId = :excludeLinkedSupplierId
+                         and s.businessId = i.businessId
+                         and sp.deletedAt is null
+                    ))
             """)
     Page<Item> search(
             @Param("businessId") String businessId,
@@ -55,7 +80,23 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("categoryIds") Collection<String> categoryIds,
             @Param("noBarcode") boolean noBarcode,
             @Param("includeInactive") boolean includeInactive,
+            @Param("includeAllScopes") boolean includeAllScopes,
+            @Param("parentsOnly") boolean parentsOnly,
+            @Param("variantsOnly") boolean variantsOnly,
+            @Param("skusOnly") boolean skusOnly,
+            @Param("excludeLinkedSupplierId") String excludeLinkedSupplierId,
             Pageable pageable
+    );
+
+    @Query("""
+            select distinct i.variantOfItemId from Item i
+             where i.businessId = :businessId
+               and i.deletedAt is null
+               and i.variantOfItemId in :parentIds
+            """)
+    List<String> findParentIdsHavingVariants(
+            @Param("businessId") String businessId,
+            @Param("parentIds") Collection<String> parentIds
     );
 
     @Query("""

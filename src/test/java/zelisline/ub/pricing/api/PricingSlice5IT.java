@@ -109,6 +109,7 @@ class PricingSlice5IT {
     private User owner;
     private String itemId;
     private String supplierId;
+    private String branchId;
 
     @BeforeEach
     void seed() {
@@ -137,6 +138,7 @@ class PricingSlice5IT {
         br.setBusinessId(TENANT);
         br.setName("Main");
         branchRepository.save(br);
+        branchId = br.getId();
 
         catalogBootstrapService.seedDefaultItemTypesIfMissing(TENANT);
         String goodsTypeId = itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(TENANT).getFirst().getId();
@@ -253,6 +255,76 @@ class PricingSlice5IT {
                 .isEqualByComparingTo("8.00");
         assertThat(body.get("suggestedSellPrice").decimalValue().setScale(2, RoundingMode.HALF_UP))
                 .isEqualByComparingTo("10.00");
+        assertThat(body.get("currentSellPrice").isNull()).isTrue();
+    }
+
+    @Test
+    void suggestSell_usesDraftUnitCostWhenNoBuyingHistory() throws Exception {
+        mockMvc.perform(post("/api/v1/pricing/price-rules")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"name":"Default margin","ruleType":"MARGIN_PERCENT",
+                                 "paramsJson":"{\\"marginPercent\\":25}","active":true}
+                                """)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated());
+
+        MvcResult res = mockMvc.perform(get("/api/v1/pricing/suggest/sell")
+                        .param("itemId", itemId)
+                        .param("supplierId", supplierId)
+                        .param("unitCost", "12")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        var body = objectMapper.readTree(res.getResponse().getContentAsString());
+        assertThat(body.get("latestUnitCost").decimalValue().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("12.00");
+        assertThat(body.get("suggestedSellPrice").decimalValue().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("15.00");
+    }
+
+    @Test
+    void suggestSell_includesCurrentOpenSellingPrice_forBranch() throws Exception {
+        postBuying(LocalDate.of(2026, 1, 10), new BigDecimal("8.0000"));
+        mockMvc.perform(post("/api/v1/pricing/price-rules")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"name":"Default margin","ruleType":"MARGIN_PERCENT",
+                                 "paramsJson":"{\\"marginPercent\\":25}","active":true}
+                                """)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated());
+        mockMvc.perform(post("/api/v1/pricing/selling-prices")
+                        .contentType(APPLICATION_JSON)
+                        .content(("{\"itemId\":\"" + itemId + "\",\"branchId\":\"" + branchId + "\",\"price\":"
+                                + "55.50,\"effectiveFrom\":\"2026-01-05\",\"notes\":null}"))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated());
+
+        MvcResult res = mockMvc.perform(get("/api/v1/pricing/suggest/sell")
+                        .param("itemId", itemId)
+                        .param("supplierId", supplierId)
+                        .param("branchId", branchId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        var body = objectMapper.readTree(res.getResponse().getContentAsString());
+        assertThat(body.get("suggestedSellPrice").decimalValue().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("10.00");
+        assertThat(body.get("currentSellPrice").decimalValue().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("55.50");
     }
 
     @Test

@@ -7,6 +7,7 @@ public record SellPriceSuggestionResponse(
         BigDecimal marginPercent,
         String ruleName,
         BigDecimal suggestedSellPrice,
-        String note
+        String note,
+        BigDecimal currentSellPrice
 ) {
 }

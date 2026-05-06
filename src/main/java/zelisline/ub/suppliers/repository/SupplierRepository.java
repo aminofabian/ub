@@ -14,7 +14,22 @@ import zelisline.ub.suppliers.domain.Supplier;
 
 public interface SupplierRepository extends JpaRepository<Supplier, String> {
 
-    Page<Supplier> findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(String businessId, Pageable pageable);
+    @Query("""
+            select s from Supplier s
+             where s.businessId = :businessId
+               and s.deletedAt is null
+               and (:q is null or :q = ''
+                    or lower(s.name) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(s.code, '')) like lower(concat('%', :q, '%')))
+               and (:status is null or :status = '' or s.status = :status)
+             order by s.name asc
+            """)
+    Page<Supplier> searchSuppliers(
+            @Param("businessId") String businessId,
+            @Param("q") String q,
+            @Param("status") String status,
+            Pageable pageable
+    );
 
     Optional<Supplier> findByIdAndBusinessIdAndDeletedAtIsNull(String id, String businessId);
 

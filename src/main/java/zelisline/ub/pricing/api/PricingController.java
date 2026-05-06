@@ -1,5 +1,6 @@
 package zelisline.ub.pricing.api;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 import org.springframework.http.HttpStatus;
@@ -75,13 +76,17 @@ public class PricingController {
     public SellPriceSuggestionResponse suggestSell(
             @RequestParam String itemId,
             @RequestParam(required = false) String supplierId,
+            @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) BigDecimal unitCost,
             HttpServletRequest request
     ) {
         CurrentTenantUser.requireHuman(request);
         return pricingService.suggestSellPrice(
                 TenantRequestIds.resolveBusinessId(request),
                 itemId,
-                supplierId
+                supplierId,
+                branchId,
+                unitCost
         );
     }
 

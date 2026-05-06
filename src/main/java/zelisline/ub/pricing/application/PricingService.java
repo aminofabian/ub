@@ -148,11 +148,26 @@ public class PricingService {
     }
 
     @Transactional(readOnly = true)
-    public SellPriceSuggestionResponse suggestSellPrice(String businessId, String itemId, String supplierId) {
+    public SellPriceSuggestionResponse suggestSellPrice(
+            String businessId,
+            String itemId,
+            String supplierId,
+            String branchId,
+            BigDecimal draftUnitCost
+    ) {
         requireItem(businessId, itemId);
         String supId = blankToNull(supplierId);
         if (supId != null) {
             requireSupplier(businessId, supId);
+        }
+        String brId = blankToNull(branchId);
+        if (brId != null) {
+            requireBranch(businessId, brId);
+        }
+        BigDecimal currentSell = resolveCurrentOpenSellPrice(businessId, itemId, brId);
+        BigDecimal costFromDraft = draftUnitCost == null ? null : draftUnitCost.setScale(4, RoundingMode.HALF_UP);
+        if (costFromDraft != null && costFromDraft.signum() <= 0) {
+            costFromDraft = null;
         }
         List<BuyingPrice> latest = buyingPriceRepository.findLatestRows(
                 businessId,
@@ -160,19 +175,32 @@ public class PricingService {
                 supId,
                 PageRequest.of(0, 1)
         );
-        if (latest.isEmpty()) {
-            return new SellPriceSuggestionResponse(null, null, null, null, "No buying price history for this item");
+        BigDecimal cost = costFromDraft;
+        if (cost == null && !latest.isEmpty()) {
+            cost = latest.getFirst().getUnitCost();
         }
-        BigDecimal cost = latest.getFirst().getUnitCost();
+        if (cost == null) {
+            return new SellPriceSuggestionResponse(
+                    null, null, null, null, "No buying price history for this item", currentSell);
+        }
         PriceRule marginRule = firstActiveMarginRule(businessId);
         if (marginRule == null) {
-            return new SellPriceSuggestionResponse(cost, null, null, null, "No active margin price rule");
+            return new SellPriceSuggestionResponse(
+                    cost, null, null, null, "No active margin price rule", currentSell);
         }
         BigDecimal margin = readMarginPercent(marginRule.getParamsJson());
         BigDecimal suggested = cost.multiply(
                 BigDecimal.ONE.add(margin.movePointLeft(2)))
                 .setScale(MONEY_SCALE, RoundingMode.HALF_UP);
-        return new SellPriceSuggestionResponse(cost, margin, marginRule.getName(), suggested, null);
+        return new SellPriceSuggestionResponse(cost, margin, marginRule.getName(), suggested, null, currentSell);
+    }
+
+    private BigDecimal resolveCurrentOpenSellPrice(String businessId, String itemId, String branchId) {
+        List<SellingPrice> open = sellingPriceRepository.findOpenEnded(businessId, itemId, branchId);
+        if (open.isEmpty()) {
+            return null;
+        }
+        return open.getFirst().getPrice().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
     }
 
     @Transactional

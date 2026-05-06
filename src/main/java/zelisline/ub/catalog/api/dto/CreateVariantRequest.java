@@ -2,11 +2,15 @@ package zelisline.ub.catalog.api.dto;
 
 import java.math.BigDecimal;
 
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
 public record CreateVariantRequest(
-        @NotBlank @Size(max = 191) String sku,
+        /** When null or blank, a unique numeric SKU is allocated (same rules as parent create). */
+        @JsonDeserialize(using = EmptyToNullStringDeserializer.class)
+        @Size(max = 191) String sku,
         @NotBlank @Size(max = 255) String variantName,
         @Size(max = 191) String barcode,
         @Size(max = 500) String name,

@@ -18,6 +18,7 @@ public record ItemResponse(
         boolean isWeighed,
         boolean isSellable,
         boolean isStocked,
+        BigDecimal currentStock,
         String packagingUnitName,
         BigDecimal packagingUnitQty,
         Integer bundleQty,

@@ -1,5 +1,6 @@
 package zelisline.ub.credits.repository;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.domain.Page;
@@ -13,6 +14,21 @@ import zelisline.ub.credits.domain.Customer;
 public interface CustomerRepository extends JpaRepository<Customer, String> {
 
     Optional<Customer> findByIdAndBusinessIdAndDeletedAtIsNull(String id, String businessId);
+
+    @Query(
+            """
+                    select c from Customer c
+                     where c.businessId = :businessId
+                       and c.deletedAt is null
+                       and c.anonymisedAt is null
+                       and c.email is not null
+                       and lower(trim(c.email)) = lower(trim(:emailNorm))
+                     order by c.updatedAt desc""")
+    List<Customer> findActiveByBusinessIdAndNormalizedEmail(
+            @Param("businessId") String businessId,
+            @Param("emailNorm") String emailNormNormalized,
+            Pageable pageable
+    );
 
     Page<Customer> findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(String businessId, Pageable pageable);
 

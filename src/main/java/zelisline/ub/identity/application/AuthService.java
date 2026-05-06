@@ -216,7 +216,7 @@ public class AuthService {
         TenantRequestIds.requireMatchingTenant(http, principal.businessId());
         if (user.getPasswordHash() == null
                 || !passwordEncoder.matches(request.currentPassword(), user.getPasswordHash())) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials");
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Current password is incorrect.");
         }
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
         userRepository.save(user);
@@ -347,7 +347,7 @@ public class AuthService {
     }
 
     private ResponseStatusException invalidCredentials() {
-        return new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials");
+        return new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Incorrect email or password.");
     }
 
     private record SessionBundle(LoginResponse tokens, UserSession session) {

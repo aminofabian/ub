@@ -118,7 +118,7 @@ class AuthLoginIT {
                                 """))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.title").value("Unauthorized"))
-                .andExpect(jsonPath("$.detail").value("Invalid credentials"));
+                .andExpect(jsonPath("$.detail").value("Incorrect email or password."));
     }
 
     @Test

@@ -53,6 +53,6 @@ public class SuperAdminAuthService {
     }
 
     private ResponseStatusException invalidCredentials() {
-        return new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials");
+        return new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Incorrect email or password.");
     }
 }

@@ -2,6 +2,7 @@ package zelisline.ub.suppliers.application;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -166,8 +167,43 @@ public class ItemSupplierLinkService {
         );
     }
 
+    /**
+     * Matches frontend {@code itemCatalogDisplayTitle}: parent name plus variant label, or SKU when variant label is absent
+     * or a placeholder string from imports (e.g. {@code "Variant"}).
+     */
+    private static boolean isGenericVariantLabel(String variantName) {
+        if (variantName == null || variantName.isBlank()) {
+            return true;
+        }
+        String t = variantName.trim().toLowerCase(Locale.ROOT);
+        return t.equals("variant")
+                || t.equals("option")
+                || t.equals("variation")
+                || t.equals("default");
+    }
+
+    private static String supplierLinkItemDisplayName(Item item) {
+        if (item == null) {
+            return "";
+        }
+        String name = item.getName() != null ? item.getName().trim() : "Item";
+        String variantOf = item.getVariantOfItemId();
+        if (variantOf == null || variantOf.isBlank()) {
+            return name;
+        }
+        String vn = item.getVariantName();
+        if (vn != null && !vn.isBlank() && !isGenericVariantLabel(vn)) {
+            return name + " · " + vn.trim();
+        }
+        String sku = item.getSku();
+        if (sku != null && !sku.isBlank()) {
+            return name + " · " + sku.trim();
+        }
+        return name;
+    }
+
     private static SupplierItemLinkResponse toSupplierItemLinkResponse(SupplierProduct sp, Item item) {
-        String itemName = item != null ? item.getName() : "";
+        String itemName = supplierLinkItemDisplayName(item);
         String sku = item != null ? item.getSku() : "";
         String barcode = item != null && item.getBarcode() != null && !item.getBarcode().isBlank()
                 ? item.getBarcode().trim()

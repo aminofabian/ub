@@ -34,9 +34,11 @@ public class CloudinarySignatureService {
         long timestamp = Instant.now().getEpochSecond();
 
         Map<String, String> params = new TreeMap<>();
+        params.put("colors", "true");
         if (folder != null && !folder.isBlank()) {
             params.put("folder", folder.trim());
         }
+        params.put("phash", "true");
         params.put("timestamp", String.valueOf(timestamp));
 
         StringBuilder sb = new StringBuilder();

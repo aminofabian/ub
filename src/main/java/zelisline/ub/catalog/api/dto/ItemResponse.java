@@ -23,6 +23,7 @@ public record ItemResponse(
         BigDecimal packagingUnitQty,
         Integer bundleQty,
         BigDecimal bundlePrice,
+        BigDecimal buyingPrice,
         String bundleName,
         BigDecimal minStockLevel,
         BigDecimal reorderLevel,

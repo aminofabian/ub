@@ -11,4 +11,6 @@ public interface NotificationService {
     void sendTemporaryLockNotice(String toEmail);
 
     void sendEmailVerificationEmail(String toEmail, String subject, String textBody);
+
+    void sendOrderConfirmationHtml(String toEmail, String subject, String htmlBody);
 }

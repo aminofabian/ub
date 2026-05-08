@@ -26,6 +26,7 @@ public record CreateItemRequest(
         BigDecimal packagingUnitQty,
         Integer bundleQty,
         BigDecimal bundlePrice,
+        BigDecimal buyingPrice,
         @Size(max = 255) String bundleName,
         BigDecimal minStockLevel,
         BigDecimal reorderLevel,

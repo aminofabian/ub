@@ -281,6 +281,15 @@ public class ItemCatalogService {
         Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Item not found"));
 
+        if (patch.sku() != null) {
+            String next = patch.sku().trim();
+            if (!next.isEmpty() && !next.equals(item.getSku())) {
+                if (itemRepository.existsByBusinessIdAndSkuAndDeletedAtIsNull(businessId, next)) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, "SKU already in use");
+                }
+                item.setSku(next);
+            }
+        }
         if (patch.barcode() != null) {
             String next = normalizeBarcode(patch.barcode());
             assertBarcodeAvailable(businessId, next, item.getId());
@@ -331,6 +340,9 @@ public class ItemCatalogService {
         }
         if (patch.bundlePrice() != null) {
             item.setBundlePrice(patch.bundlePrice());
+        }
+        if (patch.buyingPrice() != null) {
+            item.setBuyingPrice(patch.buyingPrice());
         }
         if (patch.bundleName() != null) {
             item.setBundleName(blankToNull(patch.bundleName()));
@@ -425,6 +437,7 @@ public class ItemCatalogService {
         child.setPackagingUnitQty(parent.getPackagingUnitQty());
         child.setBundleQty(parent.getBundleQty());
         child.setBundlePrice(parent.getBundlePrice());
+        child.setBuyingPrice(parent.getBuyingPrice());
         child.setBundleName(parent.getBundleName());
         if (request.minStockLevel() != null) {
             child.setMinStockLevel(request.minStockLevel());
@@ -810,6 +823,7 @@ public class ItemCatalogService {
         item.setPackagingUnitQty(request.packagingUnitQty());
         item.setBundleQty(request.bundleQty());
         item.setBundlePrice(request.bundlePrice());
+        item.setBuyingPrice(request.buyingPrice());
         item.setBundleName(blankToNull(request.bundleName()));
         item.setMinStockLevel(request.minStockLevel());
         item.setReorderLevel(request.reorderLevel());
@@ -949,6 +963,7 @@ public class ItemCatalogService {
                 i.getPackagingUnitQty(),
                 i.getBundleQty(),
                 i.getBundlePrice(),
+                i.getBuyingPrice(),
                 i.getBundleName(),
                 i.getMinStockLevel(),
                 i.getReorderLevel(),

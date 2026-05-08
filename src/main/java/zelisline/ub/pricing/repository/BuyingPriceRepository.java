@@ -40,6 +40,17 @@ public interface BuyingPriceRepository extends JpaRepository<BuyingPrice, String
             @Param("supplierId") String supplierId
     );
 
+    @Query("""
+            select bp from BuyingPrice bp
+             where bp.businessId = :businessId
+               and bp.itemId in :itemIds
+             order by bp.itemId asc, bp.effectiveFrom desc, bp.id desc
+            """)
+    List<BuyingPrice> findForItems(
+            @Param("businessId") String businessId,
+            @Param("itemIds") java.util.Collection<String> itemIds
+    );
+
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             update BuyingPrice bp

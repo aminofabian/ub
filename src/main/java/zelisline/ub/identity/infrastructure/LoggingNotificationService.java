@@ -5,9 +5,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
+import jakarta.mail.internet.MimeMessage;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.identity.application.NotificationService;
 
@@ -60,6 +62,80 @@ public class LoggingNotificationService implements NotificationService {
     @Override
     public void sendEmailVerificationEmail(String toEmail, String subject, String textBody) {
         sendOrLog(toEmail, subject, textBody, "email verification");
+    }
+
+    @Override
+    public void sendOrderConfirmationHtml(String toEmail, String subject, String htmlBody) {
+        sendOrLogHtml(toEmail, subject, htmlBody, "order confirmation");
+    }
+
+    private void sendOrLogHtml(String toEmail, String subject, String htmlBody, String kind) {
+        if (trySendSmtpHtml(toEmail, subject, htmlBody, kind)) {
+            return;
+        }
+        if (trySendResendHtml(toEmail, subject, htmlBody, kind)) {
+            return;
+        }
+        if (trySendMailgunHtml(toEmail, subject, htmlBody, kind)) {
+            return;
+        }
+        log.warn(
+                "No outbound mail: {} not delivered. Set RESEND_API_KEY + RESEND_DOMAIN or RESEND_FROM (Resend), "
+                        + "or MAILGUN_PRIVATE_API_KEY + MAILGUN_DOMAIN (Mailgun), or profile `{}` + MAILGUN_SMTP_*; "
+                        + "else copy the link from the INFO log below.",
+                kind,
+                "smtp");
+        String truncated = htmlBody != null && htmlBody.length() > 500
+                ? htmlBody.substring(0, 500) + "..."
+                : htmlBody;
+        log.info("[notification-html] {} to={} subject={}\n{}", kind, toEmail, subject, truncated);
+    }
+
+    private boolean trySendSmtpHtml(String toEmail, String subject, String htmlBody, String kind) {
+        JavaMailSender sender = javaMailSender.getIfAvailable();
+        if (sender == null) {
+            return false;
+        }
+        try {
+            MimeMessage message = sender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
+            helper.setTo(toEmail);
+            helper.setSubject(subject);
+            helper.setText(htmlBody, true);
+            sender.send(message);
+            return true;
+        } catch (RuntimeException ex) {
+            log.warn("Failed to send {} HTML email via SMTP to={}", kind, toEmail, ex);
+            return false;
+        }
+    }
+
+    private boolean trySendResendHtml(String toEmail, String subject, String htmlBody, String kind) {
+        if (!resendMailClient.isConfigured()) {
+            return false;
+        }
+        try {
+            resendMailClient.sendHtml(toEmail, subject, htmlBody);
+            log.info("Sent {} HTML via Resend to={}", kind, toEmail);
+            return true;
+        } catch (RuntimeException ex) {
+            log.warn("Resend HTML failed for {} to={}", kind, toEmail, ex);
+            return false;
+        }
+    }
+
+    private boolean trySendMailgunHtml(String toEmail, String subject, String htmlBody, String kind) {
+        if (!mailgunMailClient.isConfigured()) {
+            return false;
+        }
+        try {
+            mailgunMailClient.sendHtml(toEmail, subject, htmlBody);
+            log.info("Sent {} HTML via Mailgun to={}", kind, toEmail);
+            return true;
+        } catch (RuntimeException ex) {
+            log.warn("Mailgun HTML failed for {} to={}", kind, toEmail, ex);
+            return false;
+        }
     }
 
     private void sendOrLog(String toEmail, String subject, String textBody, String kind) {

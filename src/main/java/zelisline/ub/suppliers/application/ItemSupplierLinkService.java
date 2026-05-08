@@ -128,6 +128,23 @@ public class ItemSupplierLinkService {
         primaryService.normalizeAfterChange(businessId, itemId);
     }
 
+    @Transactional
+    public ItemSupplierLinkResponse patchLink(String businessId, String itemId, String linkId, zelisline.ub.suppliers.api.dto.PatchItemSupplierLinkRequest body) {
+        assertItemInBusiness(businessId, itemId);
+        SupplierProduct sp = supplierProductRepository.findLinkForBusiness(businessId, itemId, linkId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier link not found"));
+        if (body.supplierSku() != null) {
+            sp.setSupplierSku(blankToNull(body.supplierSku()));
+        }
+        if (body.defaultCostPrice() != null) {
+            sp.setDefaultCostPrice(body.defaultCostPrice());
+        }
+        supplierProductRepository.save(sp);
+        Supplier supplier = supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(sp.getSupplierId(), businessId)
+                .orElse(null);
+        return toLinkResponse(sp, supplier);
+    }
+
     private Item assertItemInBusiness(String businessId, String itemId) {
         return itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Item not found"));

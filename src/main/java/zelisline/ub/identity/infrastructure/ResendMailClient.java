@@ -43,6 +43,19 @@ public class ResendMailClient {
 
     /** @throws IllegalStateException when Resend returns a non-2xx status or JSON serialization fails */
     public void sendPlainText(String toEmail, String subject, String textBody) {
+        Map<String, Object> payload = buildBasePayload(toEmail, subject);
+        payload.put("text", textBody);
+        doSend(payload);
+    }
+
+    /** @throws IllegalStateException when Resend returns a non-2xx status or JSON serialization fails */
+    public void sendHtml(String toEmail, String subject, String htmlBody) {
+        Map<String, Object> payload = buildBasePayload(toEmail, subject);
+        payload.put("html", htmlBody);
+        doSend(payload);
+    }
+
+    private Map<String, Object> buildBasePayload(String toEmail, String subject) {
         if (!isConfigured()) {
             throw new IllegalStateException("Resend is not configured");
         }
@@ -50,13 +63,14 @@ public class ResendMailClient {
         if (from == null) {
             throw new IllegalStateException("Resend is not configured: set RESEND_FROM or RESEND_DOMAIN");
         }
-
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("from", from);
         payload.put("to", toEmail);
         payload.put("subject", subject);
-        payload.put("text", textBody);
+        return payload;
+    }
 
+    private void doSend(Map<String, Object> payload) {
         final String json;
         try {
             json = objectMapper.writeValueAsString(payload);

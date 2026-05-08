@@ -7,6 +7,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -20,6 +21,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.suppliers.api.dto.AddItemSupplierLinkRequest;
 import zelisline.ub.suppliers.api.dto.ItemSupplierLinkResponse;
+import zelisline.ub.suppliers.api.dto.PatchItemSupplierLinkRequest;
 import zelisline.ub.suppliers.application.ItemSupplierLinkService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
@@ -72,5 +74,17 @@ public class ItemSupplierLinksController {
     ) {
         CurrentTenantUser.require(request);
         itemSupplierLinkService.setPrimaryLink(TenantRequestIds.resolveBusinessId(request), itemId, linkId);
+    }
+
+    @PatchMapping("/{linkId}")
+    @PreAuthorize("hasPermission(null, 'catalog.items.link_suppliers')")
+    public ItemSupplierLinkResponse patch(
+            @PathVariable String itemId,
+            @PathVariable String linkId,
+            @Valid @RequestBody PatchItemSupplierLinkRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return itemSupplierLinkService.patchLink(TenantRequestIds.resolveBusinessId(request), itemId, linkId, body);
     }
 }

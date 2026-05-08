@@ -81,6 +81,9 @@ public class Item {
     @Column(name = "bundle_price", precision = 14, scale = 2)
     private BigDecimal bundlePrice;
 
+    @Column(name = "buying_price", precision = 14, scale = 2)
+    private BigDecimal buyingPrice;
+
     @Column(name = "bundle_name", length = 255)
     private String bundleName;
 

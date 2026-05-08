@@ -278,6 +278,33 @@ public class PricingService {
         return out;
     }
 
+    /**
+     * For each item id, returns the most recent buying price (latest effectiveFrom,
+     * tie-broken by id desc) across all suppliers. Returns empty map when none exist.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, BigDecimal> getLatestBuyingPricesForItems(
+            String businessId,
+            Collection<String> itemIds
+    ) {
+        if (itemIds == null || itemIds.isEmpty()) {
+            return Map.of();
+        }
+        List<String> ids = itemIds.stream()
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        List<BuyingPrice> rows = buyingPriceRepository.findForItems(businessId, ids);
+        Map<String, BigDecimal> out = new HashMap<>();
+        for (BuyingPrice bp : rows) {
+            out.putIfAbsent(bp.getItemId(), bp.getUnitCost());
+        }
+        return out;
+    }
+
     private BigDecimal itemBundlePriceFallback(String businessId, String itemId) {
         return itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
                 .map(row -> {

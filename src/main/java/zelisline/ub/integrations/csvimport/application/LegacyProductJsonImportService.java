@@ -365,10 +365,12 @@ public class LegacyProductJsonImportService {
                         null,
                         null,
                         null,
+                        null,
                         safePackagingUnitName(r.packagingUnitName()),
                         sanitizeQty14_4(r.packagingUnitQty()),
                         sanitizeBundleQty(r.bundleQty()),
                         sanitizeMoney14_2(r.bundlePrice()),
+                        null,
                         safeBundleName(r.bundleName()),
                         null,
                         null,
@@ -395,9 +397,9 @@ public class LegacyProductJsonImportService {
                     businessId,
                     newItemId,
                     new PatchItemRequest(
-                            null, null, null, null, null, null, null, null, null,
-                            null, null, null, null, null, null, null, null,
-                            null, null, null, false, null));
+                            null, null, null, null, null, null, null, null, null, null,
+                            null, null, null, null, null, null, null, null, null, null,
+                            null, null, false, null));
         }
         BigDecimal sell = sanitizeMoney14_2(r.sellPrice());
         if (sell != null && sell.compareTo(new BigDecimal("0.01")) >= 0) {
@@ -497,6 +499,7 @@ public class LegacyProductJsonImportService {
                 sanitizeQty14_4(r.packagingUnitQty()),
                 sanitizeBundleQty(r.bundleQty()),
                 sanitizeMoney14_2(r.bundlePrice()),
+                null,
                 safeBundleName(r.bundleName()),
                 sanitizeQty14_4(r.minStockLevel()),
                 null,

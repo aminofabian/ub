@@ -5,6 +5,7 @@ import java.math.BigDecimal;
 import jakarta.validation.constraints.Size;
 
 public record PatchItemRequest(
+        @Size(max = 191) String sku,
         @Size(max = 191) String barcode,
         @Size(max = 500) String name,
         @Size(max = 10_000) String description,
@@ -18,6 +19,7 @@ public record PatchItemRequest(
         BigDecimal packagingUnitQty,
         Integer bundleQty,
         BigDecimal bundlePrice,
+        BigDecimal buyingPrice,
         @Size(max = 255) String bundleName,
         BigDecimal minStockLevel,
         BigDecimal reorderLevel,

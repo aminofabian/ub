@@ -45,6 +45,18 @@ public class MailgunMailClient {
      * @throws IllegalStateException when Mailgun returns a non-2xx status
      */
     public void sendPlainText(String toEmail, String subject, String textBody) {
+        doSend(toEmail, subject, "text", textBody);
+    }
+
+    /**
+     * @throws UnirestException on transport errors
+     * @throws IllegalStateException when Mailgun returns a non-2xx status
+     */
+    public void sendHtml(String toEmail, String subject, String htmlBody) {
+        doSend(toEmail, subject, "html", htmlBody);
+    }
+
+    private void doSend(String toEmail, String subject, String bodyFieldName, String body) {
         if (!isConfigured()) {
             throw new IllegalStateException("Mailgun is not configured");
         }
@@ -56,7 +68,7 @@ public class MailgunMailClient {
                 .field("from", resolveFrom())
                 .field("to", toEmail)
                 .field("subject", subject)
-                .field("text", textBody)
+                .field(bodyFieldName, body)
                 .asString();
 
         if (response.getStatus() < 200 || response.getStatus() >= 300) {

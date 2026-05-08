@@ -5,18 +5,20 @@ import java.math.RoundingMode;
 import java.util.List;
 import java.util.regex.Pattern;
 
-import zelisline.ub.catalog.domain.Item;
-import zelisline.ub.catalog.repository.ItemRepository;
-import zelisline.ub.inventory.InventoryConstants;
-import zelisline.ub.inventory.application.InventoryBatchPickerService;
-import zelisline.ub.purchasing.repository.InventoryBatchRepository;
-import zelisline.ub.sales.SalesConstants;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.identity.application.NotificationService;
+import zelisline.ub.inventory.InventoryConstants;
+import zelisline.ub.inventory.application.InventoryBatchPickerService;
+import zelisline.ub.purchasing.repository.InventoryBatchRepository;
+import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.storefront.WebOrderStatuses;
 import zelisline.ub.storefront.api.dto.PublicCheckoutRequest;
 import zelisline.ub.storefront.api.dto.PublicCheckoutResponse;
@@ -29,6 +31,8 @@ import zelisline.ub.storefront.repository.WebOrderRepository;
 @Service
 public class PublicWebCheckoutService {
 
+    private static final Logger log = LoggerFactory.getLogger(PublicWebCheckoutService.class);
+
     private static final Pattern EMAIL = Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
     private static final int QTY_SCALE = 4;
 
@@ -39,6 +43,8 @@ public class PublicWebCheckoutService {
     private final WebOrderRepository webOrderRepository;
     private final WebOrderLineRepository webOrderLineRepository;
     private final WebCartRepository webCartRepository;
+    private final OrderConfirmationEmailRenderer orderConfirmationEmailRenderer;
+    private final NotificationService notificationService;
 
     public PublicWebCheckoutService(
             PublicWebCartService publicWebCartService,
@@ -47,7 +53,9 @@ public class PublicWebCheckoutService {
             InventoryBatchRepository inventoryBatchRepository,
             WebOrderRepository webOrderRepository,
             WebOrderLineRepository webOrderLineRepository,
-            WebCartRepository webCartRepository
+            WebCartRepository webCartRepository,
+            OrderConfirmationEmailRenderer orderConfirmationEmailRenderer,
+            NotificationService notificationService
     ) {
         this.publicWebCartService = publicWebCartService;
         this.inventoryBatchPickerService = inventoryBatchPickerService;
@@ -56,6 +64,8 @@ public class PublicWebCheckoutService {
         this.webOrderRepository = webOrderRepository;
         this.webOrderLineRepository = webOrderLineRepository;
         this.webCartRepository = webCartRepository;
+        this.orderConfirmationEmailRenderer = orderConfirmationEmailRenderer;
+        this.notificationService = notificationService;
     }
 
     @Transactional
@@ -114,6 +124,24 @@ public class PublicWebCheckoutService {
             ol.setLineTotal(line.lineTotal());
             ol.setLineIndex(line.lineIndex());
             webOrderLineRepository.save(ol);
+        }
+
+        // ── send order confirmation email (best-effort, must not roll back the order) ──
+        String customerEmail = order.getCustomerEmail();
+        if (customerEmail != null && !customerEmail.isBlank()) {
+            try {
+                List<WebOrderLine> orderLines =
+                        webOrderLineRepository.findByOrderIdOrderByLineIndexAsc(order.getId());
+                String branchName = elig.ctx().catalogBranch().getName();
+                String businessName = elig.ctx().business().getName();
+                String htmlBody = orderConfirmationEmailRenderer.renderHtml(
+                        order, orderLines, branchName, businessName);
+                String subject = "Order Confirmed \u2014 " + order.getId();
+                notificationService.sendOrderConfirmationHtml(customerEmail, subject, htmlBody);
+            } catch (Exception e) {
+                log.warn("Failed to send order confirmation email for order {} to {}: {}",
+                        order.getId(), customerEmail, e.getMessage());
+            }
         }
 
         webCartRepository.deleteById(elig.cart().getId());

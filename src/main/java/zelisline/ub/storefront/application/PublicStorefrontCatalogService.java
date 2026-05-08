@@ -237,16 +237,23 @@ public class PublicStorefrontCatalogService {
         List<String> itemIds = items.stream().map(Item::getId).toList();
         Map<String, BigDecimal> prices = loadPrices(ctx, itemIds);
         Map<String, BigDecimal> qty = loadQtyOnHand(ctx, itemIds);
+        Map<String, BigDecimal> buyingPrices = pricingService.getLatestBuyingPricesForItems(
+                ctx.business().getId(), itemIds);
         Map<String, String> thumbs = firstGalleryUrlByItemIds(itemIds);
         return items.stream()
-                .map(i -> new PublicCatalogItemCardResponse(
-                        i.getId(),
-                        i.getName(),
-                        blankToNull(i.getVariantName()),
-                        thumbs.get(i.getId()),
-                        prices.get(i.getId()),
-                        qty.getOrDefault(i.getId(), BigDecimal.ZERO).setScale(4, RoundingMode.HALF_UP)
-                ))
+                .map(i -> {
+                    BigDecimal latestBuying = buyingPrices.get(i.getId());
+                    BigDecimal fallbackBuying = latestBuying != null ? latestBuying : i.getBuyingPrice();
+                    return new PublicCatalogItemCardResponse(
+                            i.getId(),
+                            i.getName(),
+                            blankToNull(i.getVariantName()),
+                            thumbs.get(i.getId()),
+                            prices.get(i.getId()),
+                            qty.getOrDefault(i.getId(), BigDecimal.ZERO).setScale(4, RoundingMode.HALF_UP),
+                            fallbackBuying
+                    );
+                })
                 .toList();
     }
 

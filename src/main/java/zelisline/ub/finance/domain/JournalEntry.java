@@ -1,7 +1,10 @@
 package zelisline.ub.finance.domain;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 import jakarta.persistence.Column;
@@ -10,6 +13,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import jakarta.persistence.Version;
 import lombok.Getter;
 import lombok.Setter;
@@ -49,6 +53,9 @@ public class JournalEntry {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    @Transient
+    private List<JournalLine> lines = new ArrayList<>();
+
     @PrePersist
     void onCreate() {
         Instant now = Instant.now();
@@ -64,5 +71,39 @@ public class JournalEntry {
     @PreUpdate
     void onUpdate() {
         updatedAt = Instant.now();
+    }
+
+    public void debit(String ledgerAccountId, BigDecimal amount) {
+        lines.add(JournalLine.debit(ledgerAccountId, amount));
+    }
+
+    public void credit(String ledgerAccountId, BigDecimal amount) {
+        lines.add(JournalLine.credit(ledgerAccountId, amount));
+    }
+
+    public void assertBalanced() {
+        BigDecimal dr = BigDecimal.ZERO;
+        BigDecimal cr = BigDecimal.ZERO;
+        for (JournalLine l : lines) {
+            dr = dr.add(l.getDebit());
+            cr = cr.add(l.getCredit());
+        }
+        if (dr.compareTo(cr) != 0) {
+            throw new IllegalStateException("Unbalanced journal: dr=" + dr + " cr=" + cr);
+        }
+    }
+
+    public boolean isBalanced() {
+        BigDecimal dr = BigDecimal.ZERO;
+        BigDecimal cr = BigDecimal.ZERO;
+        for (JournalLine l : lines) {
+            dr = dr.add(l.getDebit());
+            cr = cr.add(l.getCredit());
+        }
+        return dr.compareTo(cr) == 0;
+    }
+
+    public List<JournalLine> getLines() {
+        return lines;
     }
 }

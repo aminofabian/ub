@@ -31,13 +31,9 @@ import zelisline.ub.credits.application.WalletLedgerService;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.finance.LedgerAccountCodes;
-import zelisline.ub.finance.application.LedgerBootstrapService;
+import zelisline.ub.finance.application.LedgerAccountResolver;
+import zelisline.ub.finance.application.LedgerPostingPort;
 import zelisline.ub.finance.domain.JournalEntry;
-import zelisline.ub.finance.domain.JournalLine;
-import zelisline.ub.finance.domain.LedgerAccount;
-import zelisline.ub.finance.repository.JournalEntryRepository;
-import zelisline.ub.finance.repository.JournalLineRepository;
-import zelisline.ub.finance.repository.LedgerAccountRepository;
 import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.purchasing.domain.InventoryBatch;
 import zelisline.ub.purchasing.domain.StockMovement;
@@ -81,10 +77,8 @@ public class SaleRefundService {
     private final InventoryBatchRepository inventoryBatchRepository;
     private final StockMovementRepository stockMovementRepository;
     private final ItemRepository itemRepository;
-    private final LedgerBootstrapService ledgerBootstrapService;
-    private final LedgerAccountRepository ledgerAccountRepository;
-    private final JournalEntryRepository journalEntryRepository;
-    private final JournalLineRepository journalLineRepository;
+    private final LedgerPostingPort ledgerPostingPort;
+    private final LedgerAccountResolver ledgerAccountResolver;
     private final CreditSaleDebtService creditSaleDebtService;
     private final WalletLedgerService walletLedgerService;
     private final LoyaltyPointsService loyaltyPointsService;
@@ -326,39 +320,28 @@ public class SaleRefundService {
             BigDecimal cogs,
             List<NormalizedPay> pays
     ) {
-        ledgerBootstrapService.ensureStandardAccounts(businessId);
-        LedgerAccount revenue = ledger(businessId, LedgerAccountCodes.SALES_REVENUE);
-        LedgerAccount cogsAcc = ledger(businessId, LedgerAccountCodes.COST_OF_GOODS_SOLD);
-        LedgerAccount inv = ledger(businessId, LedgerAccountCodes.INVENTORY);
-
         Map<String, BigDecimal> tenderCr = new LinkedHashMap<>();
         for (NormalizedPay p : pays) {
             String code = SalePaymentLedger.ledgerCodeForPaymentMethod(p.method());
             tenderCr.merge(code, p.amount(), BigDecimal::add);
         }
 
-        JournalEntry je = new JournalEntry();
-        je.setBusinessId(businessId);
-        je.setEntryDate(LocalDate.now(ZoneOffset.UTC));
-        je.setSourceType(SalesConstants.JOURNAL_SOURCE_SALE_REFUND);
-        je.setSourceId(refundId);
-        je.setMemo("Refund " + refundId);
-        journalEntryRepository.save(je);
+        JournalEntry entry = new JournalEntry();
+        entry.setBusinessId(businessId);
+        entry.setEntryDate(LocalDate.now(ZoneOffset.UTC));
+        entry.setSourceType(SalesConstants.JOURNAL_SOURCE_SALE_REFUND);
+        entry.setSourceId(refundId);
+        entry.setMemo("Refund " + refundId);
 
-        grandRefund = grandRefund.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
-        cogs = cogs.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
-
-        List<JournalLine> lines = new ArrayList<>();
         for (Map.Entry<String, BigDecimal> e : tenderCr.entrySet()) {
             BigDecimal amt = e.getValue().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
-            lines.add(journalCredit(je.getId(), ledger(businessId, e.getKey()).getId(), amt));
+            entry.credit(ledgerAccountResolver.resolveId(businessId, e.getKey()), amt);
         }
-        lines.add(journalDebit(je.getId(), revenue.getId(), grandRefund));
-        lines.add(journalCredit(je.getId(), cogsAcc.getId(), cogs));
-        lines.add(journalDebit(je.getId(), inv.getId(), cogs));
-        journalLineRepository.saveAll(lines);
-        assertBalanced(lines);
-        return je.getId();
+        entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SALES_REVENUE), grandRefund);
+        entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.COST_OF_GOODS_SOLD), cogs);
+        entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY), cogs);
+
+        return ledgerPostingPort.post(entry);
     }
 
     private Refund persistRefundAggregate(
@@ -442,40 +425,7 @@ public class SaleRefundService {
         );
     }
 
-    private LedgerAccount ledger(String businessId, String code) {
-        return ledgerAccountRepository.findByBusinessIdAndCode(businessId, code)
-                .orElseThrow(() -> new IllegalStateException("Missing ledger account " + code));
-    }
 
-    private static void assertBalanced(List<JournalLine> lines) {
-        BigDecimal dr = BigDecimal.ZERO;
-        BigDecimal cr = BigDecimal.ZERO;
-        for (JournalLine l : lines) {
-            dr = dr.add(l.getDebit());
-            cr = cr.add(l.getCredit());
-        }
-        if (dr.subtract(cr).abs().compareTo(TOLERANCE) > 0) {
-            throw new IllegalStateException("Unbalanced refund journal");
-        }
-    }
-
-    private static JournalLine journalDebit(String entryId, String accId, BigDecimal amount) {
-        JournalLine l = new JournalLine();
-        l.setJournalEntryId(entryId);
-        l.setLedgerAccountId(accId);
-        l.setDebit(amount.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
-        l.setCredit(BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
-        return l;
-    }
-
-    private static JournalLine journalCredit(String entryId, String accId, BigDecimal amount) {
-        JournalLine l = new JournalLine();
-        l.setJournalEntryId(entryId);
-        l.setLedgerAccountId(accId);
-        l.setDebit(BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
-        l.setCredit(amount.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
-        return l;
-    }
 
     private static List<NormalizedPay> normalizeRefundPayments(
             List<PostRefundRequest.PostRefundPaymentRequest> payments,

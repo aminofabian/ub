@@ -18,13 +18,9 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.finance.LedgerAccountCodes;
-import zelisline.ub.finance.application.LedgerBootstrapService;
+import zelisline.ub.finance.application.LedgerAccountResolver;
+import zelisline.ub.finance.application.LedgerPostingPort;
 import zelisline.ub.finance.domain.JournalEntry;
-import zelisline.ub.finance.domain.JournalLine;
-import zelisline.ub.finance.domain.LedgerAccount;
-import zelisline.ub.finance.repository.JournalEntryRepository;
-import zelisline.ub.finance.repository.JournalLineRepository;
-import zelisline.ub.finance.repository.LedgerAccountRepository;
 import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.inventory.api.dto.InventoryMutationResponse;
 import zelisline.ub.inventory.api.dto.PostBatchDecreaseRequest;
@@ -45,10 +41,8 @@ public class InventoryLedgerService {
     private static final BigDecimal TOLERANCE = new BigDecimal("0.01");
     private static final int QTY_SCALE = 4;
 
-    private final LedgerBootstrapService ledgerBootstrapService;
-    private final LedgerAccountRepository ledgerAccountRepository;
-    private final JournalEntryRepository journalEntryRepository;
-    private final JournalLineRepository journalLineRepository;
+    private final LedgerPostingPort ledgerPostingPort;
+    private final LedgerAccountResolver ledgerAccountResolver;
     private final InventoryBatchRepository inventoryBatchRepository;
     private final StockMovementRepository stockMovementRepository;
     private final ItemRepository itemRepository;
@@ -60,7 +54,6 @@ public class InventoryLedgerService {
             PostOpeningBalanceRequest req,
             String userId
     ) {
-        ledgerBootstrapService.ensureStandardAccounts(businessId);
         requireBranch(businessId, req.branchId());
         Item item = requireStockedItem(businessId, req.itemId());
         String opId = UUID.randomUUID().toString();
@@ -105,7 +98,6 @@ public class InventoryLedgerService {
             PostStockIncreaseRequest req,
             String userId
     ) {
-        ledgerBootstrapService.ensureStandardAccounts(businessId);
         requireBranch(businessId, req.branchId());
         Item item = requireStockedItem(businessId, req.itemId());
         String opId = UUID.randomUUID().toString();
@@ -150,7 +142,6 @@ public class InventoryLedgerService {
             PostBatchDecreaseRequest req,
             String userId
     ) {
-        ledgerBootstrapService.ensureStandardAccounts(businessId);
         InventoryBatch batch = inventoryBatchRepository.findByIdAndBusinessId(req.batchId(), businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Batch not found"));
         if (!InventoryConstants.BATCH_STATUS_ACTIVE.equals(batch.getStatus())) {
@@ -195,7 +186,6 @@ public class InventoryLedgerService {
             PostStandaloneWastageRequest req,
             String userId
     ) {
-        ledgerBootstrapService.ensureStandardAccounts(businessId);
         requireBranch(businessId, req.branchId());
         Item item = requireStockedItem(businessId, req.itemId());
         String opId = UUID.randomUUID().toString();
@@ -290,64 +280,21 @@ public class InventoryLedgerService {
         if (extensionValue.signum() <= 0) {
             throw new IllegalStateException("Journal amount must be positive");
         }
-        LedgerAccount inv = ledger(businessId, LedgerAccountCodes.INVENTORY);
-        JournalEntry je = new JournalEntry();
-        je.setBusinessId(businessId);
-        je.setEntryDate(LocalDate.ofInstant(Instant.now(), ZoneOffset.UTC));
-        je.setSourceType(sourceType);
-        je.setSourceId(sourceId);
-        je.setMemo(memo);
-        journalEntryRepository.save(je);
-
-        List<JournalLine> lines = new ArrayList<>(2);
+        JournalEntry entry = new JournalEntry();
+        entry.setBusinessId(businessId);
+        entry.setEntryDate(LocalDate.ofInstant(Instant.now(), ZoneOffset.UTC));
+        entry.setSourceType(sourceType);
+        entry.setSourceId(sourceId);
+        entry.setMemo(memo);
         BigDecimal v = extensionValue.setScale(2, RoundingMode.HALF_UP);
         if (isInboundInventory) {
-            LedgerAccount obe = ledger(businessId, LedgerAccountCodes.OPENING_BALANCE_EQUITY);
-            lines.add(lineDebit(je.getId(), inv.getId(), v));
-            lines.add(lineCredit(je.getId(), obe.getId(), v));
+            entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY), v);
+            entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.OPENING_BALANCE_EQUITY), v);
         } else {
-            LedgerAccount shrink = ledger(businessId, LedgerAccountCodes.INVENTORY_SHRINKAGE);
-            lines.add(lineDebit(je.getId(), shrink.getId(), v));
-            lines.add(lineCredit(je.getId(), inv.getId(), v));
+            entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY_SHRINKAGE), v);
+            entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY), v);
         }
-        journalLineRepository.saveAll(lines);
-        assertBalanced(lines);
-        return je.getId();
-    }
-
-    private void assertBalanced(List<JournalLine> lines) {
-        BigDecimal dr = BigDecimal.ZERO;
-        BigDecimal cr = BigDecimal.ZERO;
-        for (JournalLine l : lines) {
-            dr = dr.add(l.getDebit());
-            cr = cr.add(l.getCredit());
-        }
-        if (dr.subtract(cr).abs().compareTo(TOLERANCE) > 0) {
-            throw new IllegalStateException("Unbalanced journal");
-        }
-    }
-
-    private static JournalLine lineDebit(String entryId, String accId, BigDecimal amount) {
-        JournalLine l = new JournalLine();
-        l.setJournalEntryId(entryId);
-        l.setLedgerAccountId(accId);
-        l.setDebit(amount);
-        l.setCredit(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
-        return l;
-    }
-
-    private static JournalLine lineCredit(String entryId, String accId, BigDecimal amount) {
-        JournalLine l = new JournalLine();
-        l.setJournalEntryId(entryId);
-        l.setLedgerAccountId(accId);
-        l.setDebit(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
-        l.setCredit(amount);
-        return l;
-    }
-
-    private LedgerAccount ledger(String businessId, String code) {
-        return ledgerAccountRepository.findByBusinessIdAndCode(businessId, code)
-                .orElseThrow(() -> new IllegalStateException("Missing ledger account " + code));
+        return ledgerPostingPort.post(entry);
     }
 
     private void requireBranch(String businessId, String branchId) {

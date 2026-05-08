@@ -30,13 +30,9 @@ import zelisline.ub.catalog.domain.IdempotencyKey;
 import zelisline.ub.catalog.repository.IdempotencyKeyRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.finance.LedgerAccountCodes;
-import zelisline.ub.finance.application.LedgerBootstrapService;
+import zelisline.ub.finance.application.LedgerAccountResolver;
+import zelisline.ub.finance.application.LedgerPostingPort;
 import zelisline.ub.finance.domain.JournalEntry;
-import zelisline.ub.finance.domain.JournalLine;
-import zelisline.ub.finance.domain.LedgerAccount;
-import zelisline.ub.finance.repository.JournalEntryRepository;
-import zelisline.ub.finance.repository.JournalLineRepository;
-import zelisline.ub.finance.repository.LedgerAccountRepository;
 import zelisline.ub.identity.application.TokenHasher;
 import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.api.dto.AddPathBLineRequest;
@@ -78,10 +74,8 @@ public class PathBPurchaseService {
     private final StockMovementRepository stockMovementRepository;
     private final SupplierInvoiceRepository supplierInvoiceRepository;
     private final SupplierInvoiceLineRepository supplierInvoiceLineRepository;
-    private final JournalEntryRepository journalEntryRepository;
-    private final JournalLineRepository journalLineRepository;
-    private final LedgerAccountRepository ledgerAccountRepository;
-    private final LedgerBootstrapService ledgerBootstrapService;
+    private final LedgerPostingPort ledgerPostingPort;
+    private final LedgerAccountResolver ledgerAccountResolver;
     private final ItemRepository itemRepository;
     private final SupplierRepository supplierRepository;
     private final SupplierProductRepository supplierProductRepository;
@@ -249,10 +243,7 @@ public class PathBPurchaseService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Session has no lines");
         }
         validateBreakdown(dbLines, req);
-        ledgerBootstrapService.ensureStandardAccounts(businessId);
-        LedgerAccount invAcc = ledger(businessId, LedgerAccountCodes.INVENTORY);
-        LedgerAccount apAcc = ledger(businessId, LedgerAccountCodes.ACCOUNTS_PAYABLE);
-        LedgerAccount wasteAcc = ledger(businessId, LedgerAccountCodes.INVENTORY_SHRINKAGE);
+        LedgerAccountResolver lar = ledgerAccountResolver; // local alias for brevity
 
         BigDecimal sumInv = BigDecimal.ZERO;
         BigDecimal sumWaste = BigDecimal.ZERO;
@@ -313,63 +304,31 @@ public class PathBPurchaseService {
             supplierInvoiceLineRepository.save(sil);
         }
 
-        JournalEntry je = new JournalEntry();
-        je.setBusinessId(businessId);
-        je.setEntryDate(invoiceDate);
-        je.setSourceType(PurchasingConstants.JOURNAL_SOURCE_PATH_B);
-        je.setSourceId(session.getId());
-        je.setMemo("Path B purchase " + invoiceNumber);
-        journalEntryRepository.save(je);
-
+        JournalEntry entry = new JournalEntry();
+        entry.setBusinessId(businessId);
+        entry.setEntryDate(invoiceDate);
+        entry.setSourceType(PurchasingConstants.JOURNAL_SOURCE_PATH_B);
+        entry.setSourceId(session.getId());
+        entry.setMemo("Path B purchase " + invoiceNumber);
         BigDecimal sumInv2 = sumInv.setScale(2, RoundingMode.HALF_UP);
         BigDecimal sumWaste2 = sumWaste.setScale(2, RoundingMode.HALF_UP);
         BigDecimal ap2 = apTotal.setScale(2, RoundingMode.HALF_UP);
-        List<JournalLine> jl = new ArrayList<>();
         if (sumInv2.signum() > 0) {
-            jl.add(journalDebit(je.getId(), invAcc.getId(), sumInv2));
+            entry.debit(lar.resolveId(businessId, LedgerAccountCodes.INVENTORY), sumInv2);
         }
         if (sumWaste2.signum() > 0) {
-            jl.add(journalDebit(je.getId(), wasteAcc.getId(), sumWaste2));
+            entry.debit(lar.resolveId(businessId, LedgerAccountCodes.INVENTORY_SHRINKAGE), sumWaste2);
         }
-        jl.add(journalCredit(je.getId(), apAcc.getId(), ap2));
-        journalLineRepository.saveAll(jl);
-        assertJournalBalanced(jl);
+        entry.credit(lar.resolveId(businessId, LedgerAccountCodes.ACCOUNTS_PAYABLE), ap2);
+        String jeId = ledgerPostingPort.post(entry);
 
         session.setStatus(PurchasingConstants.SESSION_POSTED);
         sessionRepository.save(session);
 
-        return new PostPathBResponse(inv.getId(), invoiceNumber, je.getId(), ap2, dbLines.size());
+        return new PostPathBResponse(inv.getId(), invoiceNumber, jeId, ap2, dbLines.size());
     }
 
-    private void assertJournalBalanced(List<JournalLine> lines) {
-        BigDecimal dr = BigDecimal.ZERO;
-        BigDecimal cr = BigDecimal.ZERO;
-        for (JournalLine l : lines) {
-            dr = dr.add(l.getDebit());
-            cr = cr.add(l.getCredit());
-        }
-        if (dr.subtract(cr).abs().compareTo(MONEY_SCALE) > 0) {
-            throw new IllegalStateException("Unbalanced journal");
-        }
-    }
 
-    private static JournalLine journalDebit(String entryId, String accId, BigDecimal amount) {
-        JournalLine l = new JournalLine();
-        l.setJournalEntryId(entryId);
-        l.setLedgerAccountId(accId);
-        l.setDebit(amount.setScale(2, RoundingMode.HALF_UP));
-        l.setCredit(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
-        return l;
-    }
-
-    private static JournalLine journalCredit(String entryId, String accId, BigDecimal amount) {
-        JournalLine l = new JournalLine();
-        l.setJournalEntryId(entryId);
-        l.setLedgerAccountId(accId);
-        l.setDebit(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
-        l.setCredit(amount.setScale(2, RoundingMode.HALF_UP));
-        return l;
-    }
 
     private void applyLinePost(String businessId, RawPurchaseSession session, LinePostPlan p) {
         RawPurchaseLine line = p.line();
@@ -445,11 +404,6 @@ public class PathBPurchaseService {
             sp.setLastPurchaseAt(Instant.now());
             supplierProductRepository.save(sp);
         });
-    }
-
-    private LedgerAccount ledger(String businessId, String code) {
-        return ledgerAccountRepository.findByBusinessIdAndCode(businessId, code)
-                .orElseThrow(() -> new IllegalStateException("Missing ledger account " + code));
     }
 
     private static void validateBreakdown(List<RawPurchaseLine> dbLines, PostPathBRequest req) {
@@ -712,34 +666,24 @@ public class PathBPurchaseService {
             BigDecimal sumWaste,
             BigDecimal apTotal
     ) {
-        JournalEntry je = journalEntryRepository
-                .findByBusinessIdAndSourceTypeAndSourceId(
-                        businessId,
-                        PurchasingConstants.JOURNAL_SOURCE_PATH_B,
-                        session.getId()
-                )
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Path B journal entry not found"));
-        journalLineRepository.deleteAll(journalLineRepository.findByJournalEntryId(je.getId()));
+        JournalEntry entry = new JournalEntry();
         LocalDate invoiceDate = LocalDate.ofInstant(session.getReceivedAt(), ZoneOffset.UTC);
-        je.setEntryDate(invoiceDate);
-        journalEntryRepository.save(je);
-        ledgerBootstrapService.ensureStandardAccounts(businessId);
-        LedgerAccount invAcc = ledger(businessId, LedgerAccountCodes.INVENTORY);
-        LedgerAccount apAcc = ledger(businessId, LedgerAccountCodes.ACCOUNTS_PAYABLE);
-        LedgerAccount wasteAcc = ledger(businessId, LedgerAccountCodes.INVENTORY_SHRINKAGE);
+        entry.setBusinessId(businessId);
+        entry.setEntryDate(invoiceDate);
+        entry.setSourceType(PurchasingConstants.JOURNAL_SOURCE_PATH_B);
+        entry.setSourceId(session.getId());
+        entry.setMemo("Path B purchase rebalance " + session.getId());
         BigDecimal sumInv2 = sumInv.setScale(2, RoundingMode.HALF_UP);
         BigDecimal sumWaste2 = sumWaste.setScale(2, RoundingMode.HALF_UP);
         BigDecimal ap2 = apTotal.setScale(2, RoundingMode.HALF_UP);
-        List<JournalLine> jl = new ArrayList<>();
         if (sumInv2.signum() > 0) {
-            jl.add(journalDebit(je.getId(), invAcc.getId(), sumInv2));
+            entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY), sumInv2);
         }
         if (sumWaste2.signum() > 0) {
-            jl.add(journalDebit(je.getId(), wasteAcc.getId(), sumWaste2));
+            entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY_SHRINKAGE), sumWaste2);
         }
-        jl.add(journalCredit(je.getId(), apAcc.getId(), ap2));
-        journalLineRepository.saveAll(jl);
-        assertJournalBalanced(jl);
+        entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.ACCOUNTS_PAYABLE), ap2);
+        ledgerPostingPort.replace(businessId, PurchasingConstants.JOURNAL_SOURCE_PATH_B, session.getId(), entry);
     }
 
     private static String blankToNull(String s) {

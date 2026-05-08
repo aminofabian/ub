@@ -20,13 +20,9 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.finance.LedgerAccountCodes;
-import zelisline.ub.finance.application.LedgerBootstrapService;
+import zelisline.ub.finance.application.LedgerAccountResolver;
+import zelisline.ub.finance.application.LedgerPostingPort;
 import zelisline.ub.finance.domain.JournalEntry;
-import zelisline.ub.finance.domain.JournalLine;
-import zelisline.ub.finance.domain.LedgerAccount;
-import zelisline.ub.finance.repository.JournalEntryRepository;
-import zelisline.ub.finance.repository.JournalLineRepository;
-import zelisline.ub.finance.repository.LedgerAccountRepository;
 import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.inventory.api.dto.BatchAllocationLine;
 import zelisline.ub.inventory.application.InventoryBatchPickerService;
@@ -67,10 +63,8 @@ public class SaleService {
     private final ShiftRepository shiftRepository;
     private final BranchRepository branchRepository;
     private final InventoryBatchPickerService inventoryBatchPickerService;
-    private final LedgerBootstrapService ledgerBootstrapService;
-    private final LedgerAccountRepository ledgerAccountRepository;
-    private final JournalEntryRepository journalEntryRepository;
-    private final JournalLineRepository journalLineRepository;
+    private final LedgerPostingPort ledgerPostingPort;
+    private final LedgerAccountResolver ledgerAccountResolver;
     private final CreditSaleDebtService creditSaleDebtService;
     private final WalletLedgerService walletLedgerService;
     private final LoyaltyPointsService loyaltyPointsService;
@@ -353,79 +347,31 @@ public class SaleService {
             List<NormalizedPayment> paymentsNorm,
             BigDecimal overpayToWallet
     ) {
-        ledgerBootstrapService.ensureStandardAccounts(businessId);
-        LedgerAccount revenue = ledger(businessId, LedgerAccountCodes.SALES_REVENUE);
-        LedgerAccount cogsAcc = ledger(businessId, LedgerAccountCodes.COST_OF_GOODS_SOLD);
-        LedgerAccount inv = ledger(businessId, LedgerAccountCodes.INVENTORY);
-
         Map<String, BigDecimal> tenderDr = new LinkedHashMap<>();
         for (NormalizedPayment p : paymentsNorm) {
             String code = SalePaymentLedger.ledgerCodeForPaymentMethod(p.method());
             tenderDr.merge(code, p.amount(), BigDecimal::add);
         }
 
-        JournalEntry je = new JournalEntry();
-        je.setBusinessId(businessId);
-        je.setEntryDate(LocalDate.now(ZoneOffset.UTC));
-        je.setSourceType(SalesConstants.JOURNAL_SOURCE_SALE);
-        je.setSourceId(saleId);
-        je.setMemo("POS sale " + saleId);
-        journalEntryRepository.save(je);
+        JournalEntry entry = new JournalEntry();
+        entry.setBusinessId(businessId);
+        entry.setEntryDate(LocalDate.now(ZoneOffset.UTC));
+        entry.setSourceType(SalesConstants.JOURNAL_SOURCE_SALE);
+        entry.setSourceId(saleId);
+        entry.setMemo("POS sale " + saleId);
 
-        grandTotal = grandTotal.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
-        cogs = cogs.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
-        BigDecimal overpay = overpayToWallet.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
-
-        List<JournalLine> lines = new ArrayList<>();
         for (Map.Entry<String, BigDecimal> e : tenderDr.entrySet()) {
             BigDecimal amt = e.getValue().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
-            lines.add(journalDebit(je.getId(), ledger(businessId, e.getKey()).getId(), amt));
+            entry.debit(ledgerAccountResolver.resolveId(businessId, e.getKey()), amt);
         }
-        lines.add(journalCredit(je.getId(), revenue.getId(), grandTotal));
-        if (overpay.signum() > 0) {
-            LedgerAccount wl = ledger(businessId, LedgerAccountCodes.CUSTOMER_WALLET_LIABILITY);
-            lines.add(journalCredit(je.getId(), wl.getId(), overpay));
+        entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SALES_REVENUE), grandTotal);
+        if (overpayToWallet.signum() > 0) {
+            entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.CUSTOMER_WALLET_LIABILITY), overpayToWallet);
         }
-        lines.add(journalDebit(je.getId(), cogsAcc.getId(), cogs));
-        lines.add(journalCredit(je.getId(), inv.getId(), cogs));
-        journalLineRepository.saveAll(lines);
-        assertBalanced(lines);
-        return je.getId();
-    }
+        entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.COST_OF_GOODS_SOLD), cogs);
+        entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY), cogs);
 
-    private LedgerAccount ledger(String businessId, String code) {
-        return ledgerAccountRepository.findByBusinessIdAndCode(businessId, code)
-                .orElseThrow(() -> new IllegalStateException("Missing ledger account " + code));
-    }
-
-    private static void assertBalanced(List<JournalLine> lines) {
-        BigDecimal dr = BigDecimal.ZERO;
-        BigDecimal cr = BigDecimal.ZERO;
-        for (JournalLine l : lines) {
-            dr = dr.add(l.getDebit());
-            cr = cr.add(l.getCredit());
-        }
-        if (dr.subtract(cr).abs().compareTo(TOLERANCE) > 0) {
-            throw new IllegalStateException("Unbalanced journal");
-        }
-    }
-
-    private static JournalLine journalDebit(String entryId, String accId, BigDecimal amount) {
-        JournalLine l = new JournalLine();
-        l.setJournalEntryId(entryId);
-        l.setLedgerAccountId(accId);
-        l.setDebit(amount.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
-        l.setCredit(BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
-        return l;
-    }
-
-    private static JournalLine journalCredit(String entryId, String accId, BigDecimal amount) {
-        JournalLine l = new JournalLine();
-        l.setJournalEntryId(entryId);
-        l.setLedgerAccountId(accId);
-        l.setDebit(BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
-        l.setCredit(amount.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
-        return l;
+        return ledgerPostingPort.post(entry);
     }
 
     private SaleResponse toResponse(Sale sale) {

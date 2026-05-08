@@ -1,6 +1,7 @@
 package zelisline.ub.finance.domain;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.UUID;
 
 import jakarta.persistence.Column;
@@ -38,5 +39,21 @@ public class JournalLine {
         if (id == null || id.isBlank()) {
             id = UUID.randomUUID().toString();
         }
+    }
+
+    public static JournalLine debit(String ledgerAccountId, BigDecimal amount) {
+        JournalLine l = new JournalLine();
+        l.setLedgerAccountId(ledgerAccountId);
+        l.setDebit(amount.setScale(2, RoundingMode.HALF_UP));
+        l.setCredit(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
+        return l;
+    }
+
+    public static JournalLine credit(String ledgerAccountId, BigDecimal amount) {
+        JournalLine l = new JournalLine();
+        l.setLedgerAccountId(ledgerAccountId);
+        l.setDebit(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
+        l.setCredit(amount.setScale(2, RoundingMode.HALF_UP));
+        return l;
     }
 }

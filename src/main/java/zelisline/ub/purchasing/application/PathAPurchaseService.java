@@ -28,13 +28,9 @@ import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.IdempotencyKeyRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.finance.LedgerAccountCodes;
-import zelisline.ub.finance.application.LedgerBootstrapService;
+import zelisline.ub.finance.application.LedgerAccountResolver;
+import zelisline.ub.finance.application.LedgerPostingPort;
 import zelisline.ub.finance.domain.JournalEntry;
-import zelisline.ub.finance.domain.JournalLine;
-import zelisline.ub.finance.domain.LedgerAccount;
-import zelisline.ub.finance.repository.JournalEntryRepository;
-import zelisline.ub.finance.repository.JournalLineRepository;
-import zelisline.ub.finance.repository.LedgerAccountRepository;
 import zelisline.ub.identity.application.TokenHasher;
 import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.api.dto.AddPathAPurchaseOrderLineRequest;
@@ -84,10 +80,8 @@ public class PathAPurchaseService {
     private final StockMovementRepository stockMovementRepository;
     private final SupplierInvoiceRepository supplierInvoiceRepository;
     private final SupplierInvoiceLineRepository supplierInvoiceLineRepository;
-    private final JournalEntryRepository journalEntryRepository;
-    private final JournalLineRepository journalLineRepository;
-    private final LedgerAccountRepository ledgerAccountRepository;
-    private final LedgerBootstrapService ledgerBootstrapService;
+    private final LedgerPostingPort ledgerPostingPort;
+    private final LedgerAccountResolver ledgerAccountResolver;
     private final ItemRepository itemRepository;
     private final SupplierRepository supplierRepository;
     private final SupplierProductRepository supplierProductRepository;
@@ -257,9 +251,6 @@ public class PathAPurchaseService {
         }
         assertBranchInBusiness(businessId, req.branchId());
         validateGrnLineIds(req);
-        ledgerBootstrapService.ensureStandardAccounts(businessId);
-        LedgerAccount invAcc = ledger(businessId, LedgerAccountCodes.INVENTORY);
-        LedgerAccount grniAcc = ledger(businessId, LedgerAccountCodes.GOODS_RECEIVED_NOT_INVOICED);
 
         GoodsReceipt grn = new GoodsReceipt();
         grn.setBusinessId(businessId);
@@ -336,22 +327,18 @@ public class PathAPurchaseService {
         }
 
         LocalDate entryDate = LocalDate.ofInstant(grn.getReceivedAt(), ZoneOffset.UTC);
-        JournalEntry je = new JournalEntry();
-        je.setBusinessId(businessId);
-        je.setEntryDate(entryDate);
-        je.setSourceType(PurchasingConstants.JOURNAL_SOURCE_PATH_A_GRN);
-        je.setSourceId(grn.getId());
-        je.setMemo("Path A GRN " + grn.getId());
-        journalEntryRepository.save(je);
-
+        JournalEntry entry = new JournalEntry();
+        entry.setBusinessId(businessId);
+        entry.setEntryDate(entryDate);
+        entry.setSourceType(PurchasingConstants.JOURNAL_SOURCE_PATH_A_GRN);
+        entry.setSourceId(grn.getId());
+        entry.setMemo("Path A GRN " + grn.getId());
         BigDecimal grniScaled = grniTotal.setScale(2, RoundingMode.HALF_UP);
-        List<JournalLine> jl = new ArrayList<>();
         if (grniScaled.signum() > 0) {
-            jl.add(journalDebit(je.getId(), invAcc.getId(), grniScaled));
-            jl.add(journalCredit(je.getId(), grniAcc.getId(), grniScaled));
+            entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY), grniScaled);
+            entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.GOODS_RECEIVED_NOT_INVOICED), grniScaled);
         }
-        journalLineRepository.saveAll(jl);
-        assertJournalBalanced(jl);
+        String jeId = ledgerPostingPort.post(entry);
 
         grn.setGrniAmount(grniScaled);
         grn.setStatus(PurchasingConstants.GRN_POSTED);
@@ -500,10 +487,7 @@ public class PathAPurchaseService {
             }
         }
 
-        ledgerBootstrapService.ensureStandardAccounts(businessId);
-        LedgerAccount grniAcc = ledger(businessId, LedgerAccountCodes.GOODS_RECEIVED_NOT_INVOICED);
-        LedgerAccount apAcc = ledger(businessId, LedgerAccountCodes.ACCOUNTS_PAYABLE);
-        LedgerAccount ppvAcc = ledger(businessId, LedgerAccountCodes.PURCHASE_PRICE_VARIANCE);
+        LedgerAccountResolver lar = ledgerAccountResolver;
 
         LocalDate invoiceDate = req.invoiceDate();
         LocalDate due = req.dueDate() != null ? req.dueDate() : invoiceDate.plusDays(30);
@@ -538,28 +522,24 @@ public class PathAPurchaseService {
             supplierInvoiceLineRepository.save(sil);
         }
 
-        JournalEntry je = new JournalEntry();
-        je.setBusinessId(businessId);
-        je.setEntryDate(invoiceDate);
-        je.setSourceType(PurchasingConstants.JOURNAL_SOURCE_PATH_A_INVOICE);
-        je.setSourceId(inv.getId());
-        je.setMemo("Path A supplier invoice " + inv.getInvoiceNumber());
-        journalEntryRepository.save(je);
-
+        JournalEntry entry = new JournalEntry();
+        entry.setBusinessId(businessId);
+        entry.setEntryDate(invoiceDate);
+        entry.setSourceType(PurchasingConstants.JOURNAL_SOURCE_PATH_A_INVOICE);
+        entry.setSourceId(inv.getId());
+        entry.setMemo("Path A supplier invoice " + inv.getInvoiceNumber());
         BigDecimal ap = invoiceSum;
         BigDecimal diff = ap.subtract(grni);
-        List<JournalLine> jl = new ArrayList<>();
-        jl.add(journalDebit(je.getId(), grniAcc.getId(), grni));
+        entry.debit(lar.resolveId(businessId, LedgerAccountCodes.GOODS_RECEIVED_NOT_INVOICED), grni);
         if (diff.compareTo(MONEY_SCALE) > 0) {
-            jl.add(journalDebit(je.getId(), ppvAcc.getId(), diff));
+            entry.debit(lar.resolveId(businessId, LedgerAccountCodes.PURCHASE_PRICE_VARIANCE), diff);
         } else if (diff.compareTo(MONEY_SCALE.negate()) < 0) {
-            jl.add(journalCredit(je.getId(), ppvAcc.getId(), diff.negate()));
+            entry.credit(lar.resolveId(businessId, LedgerAccountCodes.PURCHASE_PRICE_VARIANCE), diff.negate());
         }
-        jl.add(journalCredit(je.getId(), apAcc.getId(), ap));
-        journalLineRepository.saveAll(jl);
-        assertJournalBalanced(jl);
+        entry.credit(lar.resolveId(businessId, LedgerAccountCodes.ACCOUNTS_PAYABLE), ap);
+        String jeId = ledgerPostingPort.post(entry);
 
-        return new PostGrnSupplierInvoiceResponse(inv.getId(), inv.getInvoiceNumber(), je.getId(), ap);
+        return new PostGrnSupplierInvoiceResponse(inv.getId(), inv.getInvoiceNumber(), jeId, ap);
     }
 
     private String threeWayMatchMode(String businessId) {
@@ -591,43 +571,7 @@ public class PathAPurchaseService {
         });
     }
 
-    private void assertJournalBalanced(List<JournalLine> lines) {
-        BigDecimal dr = BigDecimal.ZERO;
-        BigDecimal cr = BigDecimal.ZERO;
-        for (JournalLine l : lines) {
-            dr = dr.add(l.getDebit());
-            cr = cr.add(l.getCredit());
-        }
-        if (lines.isEmpty()) {
-            return;
-        }
-        if (dr.subtract(cr).abs().compareTo(MONEY_SCALE) > 0) {
-            throw new IllegalStateException("Unbalanced journal");
-        }
-    }
 
-    private static JournalLine journalDebit(String entryId, String accId, BigDecimal amount) {
-        JournalLine l = new JournalLine();
-        l.setJournalEntryId(entryId);
-        l.setLedgerAccountId(accId);
-        l.setDebit(amount.setScale(2, RoundingMode.HALF_UP));
-        l.setCredit(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
-        return l;
-    }
-
-    private static JournalLine journalCredit(String entryId, String accId, BigDecimal amount) {
-        JournalLine l = new JournalLine();
-        l.setJournalEntryId(entryId);
-        l.setLedgerAccountId(accId);
-        l.setDebit(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
-        l.setCredit(amount.setScale(2, RoundingMode.HALF_UP));
-        return l;
-    }
-
-    private LedgerAccount ledger(String businessId, String code) {
-        return ledgerAccountRepository.findByBusinessIdAndCode(businessId, code)
-                .orElseThrow(() -> new IllegalStateException("Missing ledger account " + code));
-    }
 
     private PurchaseOrder loadPo(String businessId, String id) {
         return purchaseOrderRepository.findByIdAndBusinessId(id, businessId)

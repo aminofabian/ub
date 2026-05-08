@@ -25,13 +25,9 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.domain.IdempotencyKey;
 import zelisline.ub.catalog.repository.IdempotencyKeyRepository;
 import zelisline.ub.finance.LedgerAccountCodes;
-import zelisline.ub.finance.application.LedgerBootstrapService;
+import zelisline.ub.finance.application.LedgerAccountResolver;
+import zelisline.ub.finance.application.LedgerPostingPort;
 import zelisline.ub.finance.domain.JournalEntry;
-import zelisline.ub.finance.domain.JournalLine;
-import zelisline.ub.finance.domain.LedgerAccount;
-import zelisline.ub.finance.repository.JournalEntryRepository;
-import zelisline.ub.finance.repository.JournalLineRepository;
-import zelisline.ub.finance.repository.LedgerAccountRepository;
 import zelisline.ub.identity.application.TokenHasher;
 import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.api.dto.ApAgingBuckets;
@@ -59,10 +55,8 @@ public class SupplierPaymentService {
     private final SupplierPaymentAllocationRepository allocationRepository;
     private final SupplierInvoiceRepository supplierInvoiceRepository;
     private final SupplierRepository supplierRepository;
-    private final JournalEntryRepository journalEntryRepository;
-    private final JournalLineRepository journalLineRepository;
-    private final LedgerAccountRepository ledgerAccountRepository;
-    private final LedgerBootstrapService ledgerBootstrapService;
+    private final LedgerPostingPort ledgerPostingPort;
+    private final LedgerAccountResolver ledgerAccountResolver;
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final ObjectMapper objectMapper;
 
@@ -265,10 +259,6 @@ public class SupplierPaymentService {
                 }
             }
 
-            ledgerBootstrapService.ensureStandardAccounts(businessId);
-            LedgerAccount ap = ledger(businessId, LedgerAccountCodes.ACCOUNTS_PAYABLE);
-            LedgerAccount cashAcc = ledger(businessId, LedgerAccountCodes.OPERATING_CASH);
-            LedgerAccount adv = ledger(businessId, LedgerAccountCodes.SUPPLIER_ADVANCES);
             BigDecimal surplus = totalIn.subtract(allocSum);
             LocalDate entryDate = LocalDate.ofInstant(req.paidAt(), ZoneOffset.UTC);
 
@@ -285,25 +275,21 @@ public class SupplierPaymentService {
             payment.setStatus(PurchasingConstants.PAYMENT_POSTED);
             supplierPaymentRepository.save(payment);
 
-            JournalEntry je = new JournalEntry();
-            je.setBusinessId(businessId);
-            je.setEntryDate(entryDate);
-            je.setSourceType(PurchasingConstants.JOURNAL_SOURCE_SUPPLIER_PAYMENT);
-            je.setSourceId(payment.getId());
-            je.setMemo("Supplier payment " + payment.getId());
-            journalEntryRepository.save(je);
-
-            List<JournalLine> jl = new ArrayList<>();
-            jl.add(journalDebit(je.getId(), ap.getId(), allocSum));
+            JournalEntry entry = new JournalEntry();
+            entry.setBusinessId(businessId);
+            entry.setEntryDate(entryDate);
+            entry.setSourceType(PurchasingConstants.JOURNAL_SOURCE_SUPPLIER_PAYMENT);
+            entry.setSourceId(payment.getId());
+            entry.setMemo("Supplier payment " + payment.getId());
+            entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.ACCOUNTS_PAYABLE), allocSum);
             if (surplus.compareTo(MONEY) > 0) {
-                jl.add(journalDebit(je.getId(), adv.getId(), surplus));
+                entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SUPPLIER_ADVANCES), surplus);
             }
-            jl.add(journalCredit(je.getId(), cashAcc.getId(), cash));
+            entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.OPERATING_CASH), cash);
             if (credit.compareTo(MONEY) > 0) {
-                jl.add(journalCredit(je.getId(), adv.getId(), credit));
+                entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SUPPLIER_ADVANCES), credit);
             }
-            journalLineRepository.saveAll(jl);
-            assertJournalBalanced(jl);
+            String jeId = ledgerPostingPort.post(entry);
 
             BigDecimal prepayAfter = prepayStart.add(cash).subtract(allocSum).setScale(2, RoundingMode.HALF_UP);
             if (prepayAfter.signum() < 0 && prepayAfter.abs().compareTo(MONEY) > 0) {
@@ -320,7 +306,7 @@ public class SupplierPaymentService {
                 allocationRepository.save(a);
             }
 
-            return new PostSupplierPaymentResponse(payment.getId(), je.getId(), allocSum, prepayAfter);
+            return new PostSupplierPaymentResponse(payment.getId(), jeId, allocSum, prepayAfter);
         }
     }
 
@@ -347,40 +333,7 @@ public class SupplierPaymentService {
         }
     }
 
-    private void assertJournalBalanced(List<JournalLine> lines) {
-        BigDecimal dr = BigDecimal.ZERO;
-        BigDecimal cr = BigDecimal.ZERO;
-        for (JournalLine l : lines) {
-            dr = dr.add(l.getDebit());
-            cr = cr.add(l.getCredit());
-        }
-        if (dr.subtract(cr).abs().compareTo(MONEY) > 0) {
-            throw new IllegalStateException("Unbalanced journal");
-        }
-    }
 
-    private static JournalLine journalDebit(String entryId, String accId, BigDecimal amount) {
-        JournalLine l = new JournalLine();
-        l.setJournalEntryId(entryId);
-        l.setLedgerAccountId(accId);
-        l.setDebit(amount.setScale(2, RoundingMode.HALF_UP));
-        l.setCredit(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
-        return l;
-    }
-
-    private static JournalLine journalCredit(String entryId, String accId, BigDecimal amount) {
-        JournalLine l = new JournalLine();
-        l.setJournalEntryId(entryId);
-        l.setLedgerAccountId(accId);
-        l.setDebit(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
-        l.setCredit(amount.setScale(2, RoundingMode.HALF_UP));
-        return l;
-    }
-
-    private LedgerAccount ledger(String businessId, String code) {
-        return ledgerAccountRepository.findByBusinessIdAndCode(businessId, code)
-                .orElseThrow(() -> new IllegalStateException("Missing ledger account " + code));
-    }
 
     private static BigDecimal nz(BigDecimal v) {
         return v == null ? BigDecimal.ZERO : v;

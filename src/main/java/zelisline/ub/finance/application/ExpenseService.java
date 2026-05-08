@@ -28,12 +28,8 @@ import zelisline.ub.finance.api.dto.ExpenseResponse;
 import zelisline.ub.finance.api.dto.PostExpenseRequest;
 import zelisline.ub.finance.domain.Expense;
 import zelisline.ub.finance.domain.JournalEntry;
-import zelisline.ub.finance.domain.JournalLine;
 import zelisline.ub.finance.domain.LedgerAccount;
 import zelisline.ub.finance.repository.ExpenseRepository;
-import zelisline.ub.finance.repository.JournalEntryRepository;
-import zelisline.ub.finance.repository.JournalLineRepository;
-import zelisline.ub.finance.repository.LedgerAccountRepository;
 import zelisline.ub.identity.application.TokenHasher;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.domain.Shift;
@@ -44,12 +40,8 @@ import zelisline.ub.tenancy.repository.BranchRepository;
 @RequiredArgsConstructor
 public class ExpenseService {
 
-    private static final BigDecimal MONEY_TOL = new BigDecimal("0.01");
-
-    private final LedgerBootstrapService ledgerBootstrapService;
-    private final LedgerAccountRepository ledgerAccountRepository;
-    private final JournalEntryRepository journalEntryRepository;
-    private final JournalLineRepository journalLineRepository;
+    private final LedgerPostingPort ledgerPostingPort;
+    private final LedgerAccountResolver ledgerAccountResolver;
     private final ExpenseRepository expenseRepository;
     private final ShiftRepository shiftRepository;
     private final BranchRepository branchRepository;
@@ -161,7 +153,6 @@ public class ExpenseService {
     }
 
     private Expense executeRecordExpense(String businessId, PostExpenseRequest req, String userId) {
-        ledgerBootstrapService.ensureStandardAccounts(businessId);
         LocalDate expenseDate = req.expenseDate();
         if (expenseDate == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "expenseDate is required");
@@ -197,19 +188,15 @@ public class ExpenseService {
         LedgerAccount creditAcc = resolvePaymentLedger(businessId, payMethod);
 
         String expenseId = UUID.randomUUID().toString();
-        JournalEntry je = new JournalEntry();
-        je.setBusinessId(businessId);
-        je.setEntryDate(expenseDate);
-        je.setSourceType(FinanceConstants.JOURNAL_SOURCE_EXPENSE);
-        je.setSourceId(expenseId);
-        je.setMemo("Expense " + expenseId);
-        journalEntryRepository.save(je);
-
-        List<JournalLine> lines = new ArrayList<>(2);
-        lines.add(journalDebit(je.getId(), expenseAcc.getId(), amount));
-        lines.add(journalCredit(je.getId(), creditAcc.getId(), amount));
-        journalLineRepository.saveAll(lines);
-        assertBalanced(lines);
+        JournalEntry entry = new JournalEntry();
+        entry.setBusinessId(businessId);
+        entry.setEntryDate(expenseDate);
+        entry.setSourceType(FinanceConstants.JOURNAL_SOURCE_EXPENSE);
+        entry.setSourceId(expenseId);
+        entry.setMemo("Expense " + expenseId);
+        entry.debit(expenseAcc.getId(), amount);
+        entry.credit(creditAcc.getId(), amount);
+        String jeId = ledgerPostingPort.post(entry);
 
         if (includeInDrawer && FinanceConstants.EXPENSE_PAY_METHOD_CASH.equals(payMethod) && branchId != null) {
             Optional<Shift> open = shiftRepository.findByBusinessIdAndBranchIdAndStatusForUpdate(
@@ -236,7 +223,7 @@ public class ExpenseService {
         e.setIncludeInCashDrawer(includeInDrawer);
         e.setReceiptS3Key(blankToNull(req.receiptS3Key()));
         e.setExpenseLedgerAccountId(expenseAcc.getId());
-        e.setJournalEntryId(je.getId());
+        e.setJournalEntryId(jeId);
         e.setCreatedBy(userId);
         expenseRepository.save(e);
         return e;
@@ -244,10 +231,9 @@ public class ExpenseService {
 
     private LedgerAccount resolveExpenseAccount(String businessId, String expenseLedgerAccountId) {
         if (expenseLedgerAccountId == null || expenseLedgerAccountId.isBlank()) {
-            return ledgerByCode(businessId, LedgerAccountCodes.OPERATING_EXPENSES);
+            return ledgerAccountResolver.resolve(businessId, LedgerAccountCodes.OPERATING_EXPENSES);
         }
-        LedgerAccount a = ledgerAccountRepository.findById(expenseLedgerAccountId.trim())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Expense ledger account not found"));
+        LedgerAccount a = ledgerAccountResolver.findById(expenseLedgerAccountId.trim());
         if (!businessId.equals(a.getBusinessId())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Expense ledger account not in business");
         }
@@ -259,47 +245,12 @@ public class ExpenseService {
 
     private LedgerAccount resolvePaymentLedger(String businessId, String paymentMethod) {
         if (FinanceConstants.EXPENSE_PAY_METHOD_CASH.equals(paymentMethod)) {
-            return ledgerByCode(businessId, LedgerAccountCodes.OPERATING_CASH);
+            return ledgerAccountResolver.resolve(businessId, LedgerAccountCodes.OPERATING_CASH);
         }
         if (FinanceConstants.EXPENSE_PAY_METHOD_MPESA_MANUAL.equals(paymentMethod)) {
-            return ledgerByCode(businessId, LedgerAccountCodes.MPESA_CLEARING);
+            return ledgerAccountResolver.resolve(businessId, LedgerAccountCodes.MPESA_CLEARING);
         }
-        return ledgerByCode(businessId, LedgerAccountCodes.BANK_ACCOUNT);
-    }
-
-    private LedgerAccount ledgerByCode(String businessId, String code) {
-        return ledgerAccountRepository.findByBusinessIdAndCode(businessId, code)
-                .orElseThrow(() -> new IllegalStateException("Missing ledger account " + code));
-    }
-
-    private static void assertBalanced(List<JournalLine> lines) {
-        BigDecimal dr = BigDecimal.ZERO;
-        BigDecimal cr = BigDecimal.ZERO;
-        for (JournalLine l : lines) {
-            dr = dr.add(l.getDebit());
-            cr = cr.add(l.getCredit());
-        }
-        if (dr.subtract(cr).abs().compareTo(MONEY_TOL) > 0) {
-            throw new IllegalStateException("Unbalanced journal");
-        }
-    }
-
-    private static JournalLine journalDebit(String entryId, String accId, BigDecimal amount) {
-        JournalLine l = new JournalLine();
-        l.setJournalEntryId(entryId);
-        l.setLedgerAccountId(accId);
-        l.setDebit(amount.setScale(2, RoundingMode.HALF_UP));
-        l.setCredit(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
-        return l;
-    }
-
-    private static JournalLine journalCredit(String entryId, String accId, BigDecimal amount) {
-        JournalLine l = new JournalLine();
-        l.setJournalEntryId(entryId);
-        l.setLedgerAccountId(accId);
-        l.setDebit(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
-        l.setCredit(amount.setScale(2, RoundingMode.HALF_UP));
-        return l;
+        return ledgerAccountResolver.resolve(businessId, LedgerAccountCodes.BANK_ACCOUNT);
     }
 
     private static ExpenseResponse toDto(Expense e) {

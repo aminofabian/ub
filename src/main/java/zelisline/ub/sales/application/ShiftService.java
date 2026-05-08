@@ -16,13 +16,9 @@ import org.springframework.web.server.ResponseStatusException;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.finance.LedgerAccountCodes;
 import zelisline.ub.finance.application.CashDrawerSummaryService;
-import zelisline.ub.finance.application.LedgerBootstrapService;
+import zelisline.ub.finance.application.LedgerAccountResolver;
+import zelisline.ub.finance.application.LedgerPostingPort;
 import zelisline.ub.finance.domain.JournalEntry;
-import zelisline.ub.finance.domain.JournalLine;
-import zelisline.ub.finance.domain.LedgerAccount;
-import zelisline.ub.finance.repository.JournalEntryRepository;
-import zelisline.ub.finance.repository.JournalLineRepository;
-import zelisline.ub.finance.repository.LedgerAccountRepository;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.PostCloseShiftRequest;
 import zelisline.ub.sales.api.dto.PostOpenShiftRequest;
@@ -39,11 +35,9 @@ public class ShiftService {
 
     private final ShiftRepository shiftRepository;
     private final BranchRepository branchRepository;
-    private final LedgerBootstrapService ledgerBootstrapService;
     private final CashDrawerSummaryService cashDrawerSummaryService;
-    private final LedgerAccountRepository ledgerAccountRepository;
-    private final JournalEntryRepository journalEntryRepository;
-    private final JournalLineRepository journalLineRepository;
+    private final LedgerPostingPort ledgerPostingPort;
+    private final LedgerAccountResolver ledgerAccountResolver;
 
     @Transactional
     public ShiftResponse openShift(String businessId, PostOpenShiftRequest req, String userId) {
@@ -100,33 +94,21 @@ public class ShiftService {
     }
 
     private String postVarianceJournal(String businessId, String shiftId, BigDecimal variance) {
-        ledgerBootstrapService.ensureStandardAccounts(businessId);
-        LedgerAccount cash = ledger(businessId, LedgerAccountCodes.OPERATING_CASH);
-        LedgerAccount oos = ledger(businessId, LedgerAccountCodes.CASH_OVER_SHORT);
         BigDecimal amt = variance.abs().setScale(2, RoundingMode.HALF_UP);
-        JournalEntry je = new JournalEntry();
-        je.setBusinessId(businessId);
-        je.setEntryDate(LocalDate.now(ZoneOffset.UTC));
-        je.setSourceType(SalesConstants.JOURNAL_SOURCE_SHIFT_CLOSE);
-        je.setSourceId(shiftId);
-        je.setMemo("Shift close variance " + shiftId);
-        journalEntryRepository.save(je);
-        List<JournalLine> lines = new ArrayList<>();
+        JournalEntry entry = new JournalEntry();
+        entry.setBusinessId(businessId);
+        entry.setEntryDate(LocalDate.now(ZoneOffset.UTC));
+        entry.setSourceType(SalesConstants.JOURNAL_SOURCE_SHIFT_CLOSE);
+        entry.setSourceId(shiftId);
+        entry.setMemo("Shift close variance " + shiftId);
         if (variance.signum() < 0) {
-            lines.add(journalDebit(je.getId(), oos.getId(), amt));
-            lines.add(journalCredit(je.getId(), cash.getId(), amt));
+            entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.CASH_OVER_SHORT), amt);
+            entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.OPERATING_CASH), amt);
         } else {
-            lines.add(journalDebit(je.getId(), cash.getId(), amt));
-            lines.add(journalCredit(je.getId(), oos.getId(), amt));
+            entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.OPERATING_CASH), amt);
+            entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.CASH_OVER_SHORT), amt);
         }
-        journalLineRepository.saveAll(lines);
-        assertBalanced(lines);
-        return je.getId();
-    }
-
-    private LedgerAccount ledger(String businessId, String code) {
-        return ledgerAccountRepository.findByBusinessIdAndCode(businessId, code)
-                .orElseThrow(() -> new IllegalStateException("Missing ledger account " + code));
+        return ledgerPostingPort.post(entry);
     }
 
     private void requireBranch(String businessId, String branchId) {
@@ -158,35 +140,5 @@ public class ShiftService {
             return null;
         }
         return raw.trim();
-    }
-
-    private static void assertBalanced(List<JournalLine> lines) {
-        BigDecimal dr = BigDecimal.ZERO;
-        BigDecimal cr = BigDecimal.ZERO;
-        for (JournalLine l : lines) {
-            dr = dr.add(l.getDebit());
-            cr = cr.add(l.getCredit());
-        }
-        if (dr.subtract(cr).abs().compareTo(MONEY_TOLERANCE) > 0) {
-            throw new IllegalStateException("Unbalanced journal");
-        }
-    }
-
-    private static JournalLine journalDebit(String entryId, String accId, BigDecimal amount) {
-        JournalLine l = new JournalLine();
-        l.setJournalEntryId(entryId);
-        l.setLedgerAccountId(accId);
-        l.setDebit(amount.setScale(2, RoundingMode.HALF_UP));
-        l.setCredit(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
-        return l;
-    }
-
-    private static JournalLine journalCredit(String entryId, String accId, BigDecimal amount) {
-        JournalLine l = new JournalLine();
-        l.setJournalEntryId(entryId);
-        l.setLedgerAccountId(accId);
-        l.setDebit(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
-        l.setCredit(amount.setScale(2, RoundingMode.HALF_UP));
-        return l;
     }
 }

@@ -5,5 +5,6 @@ import java.math.BigDecimal;
 public record RevenueByCategoryRow(
         String categoryId,
         String categoryName,
-        BigDecimal netRevenue
+        BigDecimal netRevenue,
+        BigDecimal netProfit
 ) {}

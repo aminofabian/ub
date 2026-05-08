@@ -261,7 +261,7 @@ class SalesIntelligenceIT {
                         new CreateItemRequest(
                                 "SKU-DRINK", null, "Cola", null, goodsTypeId, categoryDrinksId, null, null,
                                 false, true, true,
-                                null, null, null, null, null, null, null, null, null, true, null),
+                                null, null, null, null, null, null, null, null, null, null, true, null),
                         null)
                 .body()
                 .id();
@@ -271,7 +271,7 @@ class SalesIntelligenceIT {
                         new CreateItemRequest(
                                 "SKU-SNACK", null, "Chips", null, goodsTypeId, categorySnacksId, null, null,
                                 false, true, true,
-                                null, null, null, null, null, null, null, null, null, true, null),
+                                null, null, null, null, null, null, null, null, null, null, true, null),
                         null)
                 .body()
                 .id();
@@ -326,8 +326,10 @@ class SalesIntelligenceIT {
         assertThat(rows).hasSize(2);
         assertThat(rows.getFirst().categoryName()).isEqualTo("Drinks");
         assertThat(rows.getFirst().netRevenue()).isEqualByComparingTo(new BigDecimal("60.00"));
+        assertThat(rows.getFirst().netProfit()).isEqualByComparingTo(new BigDecimal("57.00"));
         assertThat(rows.get(1).categoryName()).isEqualTo("Snacks");
         assertThat(rows.get(1).netRevenue()).isEqualByComparingTo(new BigDecimal("40.00"));
+        assertThat(rows.get(1).netProfit()).isEqualByComparingTo(new BigDecimal("34.00"));
     }
 
     @Test
@@ -386,6 +388,7 @@ class SalesIntelligenceIT {
         assertThat(rows).hasSize(1);
         assertThat(rows.getFirst().categoryId()).isEqualTo(categoryDrinksId);
         assertThat(rows.getFirst().netRevenue()).isEqualByComparingTo(new BigDecimal("60.00"));
+        assertThat(rows.getFirst().netProfit()).isEqualByComparingTo(new BigDecimal("42.00"));
     }
 
     private void openShift(BigDecimal openingCash) throws Exception {

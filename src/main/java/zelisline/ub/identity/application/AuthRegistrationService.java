@@ -104,7 +104,7 @@ public class AuthRegistrationService {
         if (isEmailVerificationRequired()) {
             user.setStatus(UserStatus.INVITED);
             User saved = userRepository.save(user);
-            String link = issueVerificationEmail(saved);
+            String link = issueVerificationEmail(saved, http);
             return new RegisterResponse(
                     saved.getId(),
                     saved.getEmail(),
@@ -171,7 +171,7 @@ public class AuthRegistrationService {
             log.info("[resend-verification] skipped: user has no passwordHash yet email={}", email);
             return Optional.empty();
         }
-        return Optional.of(issueVerificationEmail(user));
+        return Optional.of(issueVerificationEmail(user, http));
     }
 
     private void assertSignupEnabled() {
@@ -225,7 +225,7 @@ public class AuthRegistrationService {
     }
 
     /** @return full verification URL (for optional UI exposure when mail is unavailable). */
-    private String issueVerificationEmail(User user) {
+    private String issueVerificationEmail(User user, HttpServletRequest http) {
         emailVerificationTokenRepository.deleteUnusedByUserId(user.getId());
         String raw = newRawToken();
         EmailVerificationToken token = new EmailVerificationToken();
@@ -233,10 +233,64 @@ public class AuthRegistrationService {
         token.setTokenHash(TokenHasher.sha256Hex(raw));
         token.setExpiresAt(Instant.now().plus(emailVerificationTtlHours, ChronoUnit.HOURS));
         emailVerificationTokenRepository.save(token);
-        String link = emailVerificationUrlPrefix + raw;
+        String link = buildVerificationUrlPrefix(http) + raw;
         String body = emailVerificationEmailRenderer.renderBody(user.getEmail(), link);
         notificationService.sendEmailVerificationEmail(user.getEmail(), "Verify your UB account", body);
         return link;
+    }
+
+    /**
+     * Builds the verification URL prefix ({scheme}://{host}/verify-email?token=) dynamically
+     * from the incoming request so that subdomain tenants (e.g. barakia.palmart.co.ke)
+     * receive links pointing to their own frontend origin, not the platform apex.
+     *
+     * <p>Priority:
+     * <ol>
+     *   <li>{@code X-Tenant-Host} header — sent by the frontend for tenant-aware routing</li>
+     *   <li>{@code Host} header (when it differs from the configured platform hosts)</li>
+     *   <li>Configured {@code emailVerificationUrlPrefix} (static fallback)</li>
+     * </ol>
+     *
+     * <p>The scheme is read from {@code X-Forwarded-Proto} (for reverse-proxy deployments)
+     * then from {@link HttpServletRequest#getScheme()}.
+     */
+    private String buildVerificationUrlPrefix(HttpServletRequest http) {
+        // 1. Determine the frontend hostname
+        String frontendHost = http.getHeader("X-Tenant-Host");
+        if (frontendHost == null || frontendHost.isBlank()) {
+            String serverName = http.getServerName();
+            if (serverName != null && !serverName.isBlank()
+                    && !"localhost".equalsIgnoreCase(serverName)
+                    && !"127.0.0.1".equals(serverName)
+                    && !"::1".equals(serverName)) {
+                frontendHost = serverName;
+            }
+        }
+
+        if (frontendHost == null || frontendHost.isBlank()) {
+            // Ultimate fallback: use the statically configured prefix
+            return emailVerificationUrlPrefix;
+        }
+
+        // 2. Determine the scheme (respect reverse-proxy headers)
+        String scheme = http.getHeader("X-Forwarded-Proto");
+        if (scheme == null || scheme.isBlank()) {
+            scheme = http.getScheme();
+        }
+
+        // 3. Determine the port (only include non-default ports)
+        int port = http.getServerPort();
+        boolean defaultPort = (port == 80 && "http".equals(scheme))
+                || (port == 443 && "https".equals(scheme));
+
+        StringBuilder prefix = new StringBuilder(scheme)
+                .append("://")
+                .append(frontendHost.trim());
+        if (!defaultPort) {
+            prefix.append(":").append(port);
+        }
+        prefix.append("/verify-email?token=");
+        return prefix.toString();
     }
 
     private static String normaliseEmail(String email) {

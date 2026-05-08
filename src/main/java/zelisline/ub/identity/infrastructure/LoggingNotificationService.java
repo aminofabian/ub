@@ -9,6 +9,7 @@ import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
+import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeMessage;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.identity.application.NotificationService;
@@ -104,7 +105,7 @@ public class LoggingNotificationService implements NotificationService {
             helper.setText(htmlBody, true);
             sender.send(message);
             return true;
-        } catch (RuntimeException ex) {
+        } catch (MessagingException | RuntimeException ex) {
             log.warn("Failed to send {} HTML email via SMTP to={}", kind, toEmail, ex);
             return false;
         }

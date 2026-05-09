@@ -64,7 +64,21 @@ public class PricingService {
         if (branchId != null) {
             requireBranch(businessId, branchId);
         }
-        assertOpenEndedCompatibleForSelling(businessId, req.itemId(), branchId, req.effectiveFrom());
+        // If an open-ended row already exists for this date, update its price instead of throwing
+        for (SellingPrice existing : sellingPriceRepository.findOpenEnded(businessId, req.itemId(), branchId)) {
+            if (existing.getEffectiveFrom().equals(req.effectiveFrom())) {
+                existing.setPrice(req.price().setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+                if (req.notes() != null && !req.notes().isBlank()) {
+                    existing.setNotes(req.notes());
+                }
+                existing.setSetBy(userId);
+                sellingPriceRepository.save(existing);
+                return toSellingDto(existing);
+            }
+            if (!existing.getEffectiveFrom().isBefore(req.effectiveFrom())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A later open-ended selling price exists");
+            }
+        }
         sellingPriceRepository.closeOpenRowsEffectiveBefore(
                 businessId,
                 req.itemId(),
@@ -88,7 +102,21 @@ public class PricingService {
     public BuyingPriceResponse setBuyingPrice(String businessId, PostBuyingPriceRequest req, String userId) {
         requireItem(businessId, req.itemId());
         requireSupplier(businessId, req.supplierId());
-        assertOpenEndedCompatibleForBuying(businessId, req.itemId(), req.supplierId(), req.effectiveFrom());
+        // If an open-ended row already exists for this date, update it instead of throwing
+        for (BuyingPrice existing : buyingPriceRepository.findOpenEnded(businessId, req.itemId(), req.supplierId())) {
+            if (existing.getEffectiveFrom().equals(req.effectiveFrom())) {
+                existing.setUnitCost(req.unitCost().setScale(4, RoundingMode.HALF_UP));
+                if (req.notes() != null && !req.notes().isBlank()) {
+                    existing.setNotes(req.notes());
+                }
+                existing.setSetBy(userId);
+                buyingPriceRepository.save(existing);
+                return toBuyingDto(existing);
+            }
+            if (!existing.getEffectiveFrom().isBefore(req.effectiveFrom())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A later open-ended buying price exists");
+            }
+        }
         buyingPriceRepository.closeOpenRowsEffectiveBefore(
                 businessId,
                 req.itemId(),

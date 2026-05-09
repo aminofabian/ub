@@ -157,7 +157,7 @@ class PublicWebCheckoutIT {
                         new CreateItemRequest(
                                 "SKU-P", null, "Priced Item", null, goodsTypeId, categoryId, null, null,
                                 false, true, true,
-                                null, null, null, null, null, null, null, null, null, false, null),
+                                null, null, null, null, null, null, null, null, null, null, false, null, null, null),
                         null)
                 .body()
                 .id();
@@ -167,7 +167,7 @@ class PublicWebCheckoutIT {
                         new CreateItemRequest(
                                 "SKU-U", null, "Unpriced Item", null, goodsTypeId, categoryId, null, null,
                                 false, true, true,
-                                null, null, null, null, null, null, null, null, null, false, null),
+                                null, null, null, null, null, null, null, null, null, null, false, null, null, null),
                         null)
                 .body()
                 .id();

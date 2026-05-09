@@ -29,7 +29,16 @@ public final class InventoryConstants {
     public static final String JOURNAL_ADJUSTMENT_DOWN = "inventory_adjustment_down";
     public static final String JOURNAL_STANDALONE_WASTAGE = "inventory_wastage";
     public static final String BATCH_STATUS_ACTIVE = "active";
+    public static final String BATCH_STATUS_DEPLETED = "depleted";
     public static final String BATCH_SOURCE_REFUND_RETURN = "refund_return";
+
+    public static final String SUPPLY_BATCH_STATUS_ACTIVE = "active";
+    public static final String SUPPLY_BATCH_STATUS_SOLDOUT = "soldout";
+    public static final String SUPPLY_BATCH_STATUS_CLEARING = "clearing";
+    public static final String SUPPLY_BATCH_STATUS_CLOSED = "closed";
+
+    public static final String MOVEMENT_BATCH_CLEARANCE = "batch_clearance";
+    public static final String JOURNAL_BATCH_CLEARANCE = "batch_clearance";
 
     private InventoryConstants() {
     }

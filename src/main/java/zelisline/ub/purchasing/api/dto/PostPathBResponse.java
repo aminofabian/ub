@@ -7,6 +7,7 @@ public record PostPathBResponse(
         String invoiceNumber,
         String journalEntryId,
         BigDecimal grandTotal,
-        int linesPosted
+        int linesPosted,
+        String supplyBatchId
 ) {
 }

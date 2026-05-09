@@ -24,6 +24,8 @@ public record ItemSummaryResponse(
         /**
          * On-hand quantity at the branch when {@code branchId} was passed to the list endpoint; otherwise null.
          */
-        BigDecimal stockQty
+        BigDecimal stockQty,
+        String brand,
+        String size
 ) {
 }

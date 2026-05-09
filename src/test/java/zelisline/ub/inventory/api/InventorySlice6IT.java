@@ -161,8 +161,7 @@ class InventorySlice6IT {
                 new CreateItemRequest(
                         "SKU-VAL", null, "Val Item", null, goodsTypeId, null, null, null,
                         false, true, true,
-                        null, null, null, null, null, null, null, null, null, false, null
-                ),
+                        null, null, null, null, null, null, null, null, null, null, false, null, null, null),
                 null
         ).body().id();
 

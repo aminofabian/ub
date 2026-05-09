@@ -18,8 +18,19 @@ import zelisline.ub.purchasing.domain.InventoryBatch;
 public final class BatchAllocationPlanner {
 
     private static final int QTY_SCALE = 4;
+    private static final LocalDate TODAY = LocalDate.now();
 
     private BatchAllocationPlanner() {
+    }
+
+    /**
+     * Filters out batches that have passed their expiry date.
+     * Call this BEFORE sorting/allocating.
+     */
+    public static List<InventoryBatch> excludeExpired(List<InventoryBatch> batches) {
+        return batches.stream()
+                .filter(b -> b.getExpiryDate() == null || !b.getExpiryDate().isBefore(TODAY))
+                .toList();
     }
 
     public static void sortBatchesForPick(List<InventoryBatch> batches, Item item, CostMethod costMethod) {
@@ -48,7 +59,14 @@ public final class BatchAllocationPlanner {
 
     private static Comparator<InventoryBatch> fefoComparator() {
         return Comparator
-                .comparing((InventoryBatch b) -> b.getExpiryDate() != null ? b.getExpiryDate() : LocalDate.MAX)
+                .comparing((InventoryBatch b) -> {
+                    // Expired batches sort to the END (they should already be filtered,
+                    // but this is defense-in-depth)
+                    if (b.getExpiryDate() != null && b.getExpiryDate().isBefore(TODAY)) {
+                        return LocalDate.MAX;
+                    }
+                    return b.getExpiryDate() != null ? b.getExpiryDate() : LocalDate.MAX;
+                })
                 .thenComparing(InventoryBatch::getReceivedAt);
     }
 

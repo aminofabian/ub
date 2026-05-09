@@ -275,8 +275,7 @@ class SaleSlice2IT {
                 new CreateItemRequest(
                         "SKU-SALE", null, "Sale Item", null, goodsTypeId, null, null, null,
                         false, true, true,
-                        null, null, null, null, null, null, null, null, null, true, null
-                ),
+                        null, null, null, null, null, null, null, null, null, null, true, null, null, null),
                 null
         ).body().id();
 

@@ -11,4 +11,6 @@ public interface SaleItemRepository extends JpaRepository<SaleItem, String> {
     List<SaleItem> findBySaleIdOrderByLineIndexAsc(String saleId);
 
     java.util.Optional<SaleItem> findByIdAndSaleId(String id, String saleId);
+
+    List<SaleItem> findByBatchId(String batchId);
 }

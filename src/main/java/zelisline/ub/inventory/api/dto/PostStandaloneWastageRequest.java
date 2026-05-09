@@ -12,6 +12,11 @@ public record PostStandaloneWastageRequest(
         @NotBlank String itemId,
         @NotNull @DecimalMin(value = "0.0001", inclusive = true) BigDecimal quantity,
         @NotNull @DecimalMin(value = "0.0001", inclusive = true) BigDecimal unitCost,
-        @Size(max = 255) String reason
+        @Size(max = 255) String reason,
+        // NEW — if provided, deplete this specific batch.
+        // If null, the system auto-picks the most eligible batch (FEFO → FIFO).
+        String batchId,
+        // NEW — enum value: SPOILAGE, BREAKAGE, THEFT, etc.
+        String wastageReason
 ) {
 }

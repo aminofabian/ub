@@ -217,8 +217,7 @@ class PathBPurchaseIT {
                 new CreateItemRequest(
                         "SKU-TOM", null, "Tomatoes", null, goodsTypeId, null, null, null,
                         false, true, true,
-                        null, null, null, null, null, null, null, null, null, null, null
-                ),
+                        null, null, null, null, null, null, null, null, null, null, null, null, null, null),
                 null
         ).body().id();
     }

@@ -128,6 +128,12 @@ public class Item {
     @Column(name = "legacy_import_source_id", length = 36)
     private String legacyImportSourceId;
 
+    @Column(name = "brand", length = 255)
+    private String brand;
+
+    @Column(name = "size", length = 50)
+    private String size;
+
     @PrePersist
     void onCreate() {
         Instant now = Instant.now();

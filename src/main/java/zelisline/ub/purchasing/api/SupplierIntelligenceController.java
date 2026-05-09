@@ -15,6 +15,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.purchasing.api.dto.PriceCompetitivenessRow;
+import zelisline.ub.purchasing.api.dto.PurchasingIntelligenceDashboardResponse;
 import zelisline.ub.purchasing.api.dto.SingleSourceRiskRow;
 import zelisline.ub.purchasing.api.dto.SpendBySupplierCategoryRow;
 import zelisline.ub.purchasing.application.SupplierIntelligenceService;
@@ -57,5 +58,17 @@ public class SupplierIntelligenceController {
     public List<SingleSourceRiskRow> singleSourceRisk(HttpServletRequest request) {
         CurrentTenantUser.require(request);
         return supplierIntelligenceService.singleSourceRiskItems(TenantRequestIds.resolveBusinessId(request));
+    }
+
+    @GetMapping("/dashboard")
+    @PreAuthorize("hasPermission(null, 'purchasing.intelligence.read')")
+    public PurchasingIntelligenceDashboardResponse dashboard(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return supplierIntelligenceService.getDashboard(
+                TenantRequestIds.resolveBusinessId(request), from, to);
     }
 }

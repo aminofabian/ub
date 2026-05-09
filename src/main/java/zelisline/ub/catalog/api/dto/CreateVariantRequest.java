@@ -24,6 +24,8 @@ public record CreateVariantRequest(
         BigDecimal minStockLevel,
         BigDecimal reorderLevel,
         BigDecimal reorderQty,
-        @Size(max = 2048) String imageKey
+        @Size(max = 2048) String imageKey,
+        @Size(max = 255) String brand,
+        @Size(max = 50) String size
 ) {
 }

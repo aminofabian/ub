@@ -33,6 +33,8 @@ public record CreateItemRequest(
         BigDecimal reorderQty,
         Integer expiresAfterDays,
         Boolean hasExpiry,
-        @Size(max = 2048) String imageKey
+        @Size(max = 2048) String imageKey,
+        @Size(max = 255) String brand,
+        @Size(max = 50) String size
 ) {
 }

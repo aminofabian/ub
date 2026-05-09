@@ -53,6 +53,7 @@ public class InventoryBatchPickerService {
     private final BusinessRepository businessRepository;
     private final BusinessInventorySettingsReader businessInventorySettingsReader;
     private final WebhookEnqueueService webhookEnqueueService;
+    private final SupplyBatchLifecycleService supplyBatchLifecycleService;
 
     @Transactional(readOnly = true)
     public List<BatchAllocationLine> previewAllocation(
@@ -65,6 +66,14 @@ public class InventoryBatchPickerService {
         Item item = requireStockedItem(businessId, itemId);
         List<InventoryBatch> batches = loadActiveBatchesReadOnly(businessId, itemId, branchId);
         List<InventoryBatch> working = new ArrayList<>(batches);
+        // ── Exclude expired batches BEFORE sorting ────────────────────────
+        working = new ArrayList<>(BatchAllocationPlanner.excludeExpired(working));
+        if (working.isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "No non-expired stock available for this item"
+            );
+        }
         BatchAllocationPlanner.sortBatchesForPick(
                 working,
                 item,
@@ -123,6 +132,14 @@ public class InventoryBatchPickerService {
                 BigDecimal.ZERO
         );
         List<InventoryBatch> working = new ArrayList<>(locked);
+        // ── Exclude expired batches BEFORE sorting ────────────────────────
+        working = new ArrayList<>(BatchAllocationPlanner.excludeExpired(working));
+        if (working.isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "No non-expired stock available for this item"
+            );
+        }
         BatchAllocationPlanner.sortBatchesForPick(
                 working,
                 item,
@@ -146,6 +163,10 @@ public class InventoryBatchPickerService {
             }
             batch.setQuantityRemaining(next);
             inventoryBatchRepository.save(batch);
+
+            // Auto-detect sold-out on parent supply batch
+            supplyBatchLifecycleService.checkAndTransitionToSoldoutIfNeeded(
+                    businessId, batch.getSupplyBatchId());
 
             StockMovement sm = new StockMovement();
             sm.setBusinessId(businessId);
@@ -179,7 +200,7 @@ public class InventoryBatchPickerService {
 
     private List<InventoryBatch> loadActiveBatchesReadOnly(String businessId, String itemId, String branchId) {
         return inventoryBatchRepository
-                .findByBusinessIdAndItemIdAndBranchIdAndStatusAndQuantityRemainingGreaterThanOrderByIdAsc(
+                .findActiveBatchesForPreview(
                         businessId,
                         itemId,
                         branchId,

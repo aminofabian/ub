@@ -35,6 +35,8 @@ public record ItemResponse(
         boolean webPublished,
         long version,
         List<ItemImageResponse> images,
-        List<ItemSummaryResponse> variants
+        List<ItemSummaryResponse> variants,
+        String brand,
+        String size
 ) {
 }

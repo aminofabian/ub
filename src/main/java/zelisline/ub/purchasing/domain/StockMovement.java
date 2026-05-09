@@ -52,6 +52,9 @@ public class StockMovement {
     @Column(name = "reason", length = 255)
     private String reason;
 
+    @Column(name = "wastage_reason", length = 32)
+    private String wastageReason;
+
     @Column(name = "notes", length = 2000)
     private String notes;
 

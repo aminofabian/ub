@@ -18,6 +18,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.inventory.application.BatchNumberGenerator;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.inventory.CostMethod;
@@ -28,6 +29,8 @@ import zelisline.ub.inventory.api.dto.StockTransferCreatedResponse;
 import zelisline.ub.inventory.domain.StockTransfer;
 import zelisline.ub.inventory.domain.StockTransferLine;
 import zelisline.ub.inventory.repository.StockTransferRepository;
+import zelisline.ub.inventory.domain.SupplyBatch;
+import zelisline.ub.inventory.repository.SupplyBatchRepository;
 import zelisline.ub.purchasing.domain.InventoryBatch;
 import zelisline.ub.purchasing.domain.StockMovement;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
@@ -45,6 +48,8 @@ public class InventoryTransferService {
     @PersistenceContext
     private EntityManager entityManager;
 
+    private final BatchNumberGenerator batchNumberGenerator;
+
     private final StockTransferRepository stockTransferRepository;
     private final BranchRepository branchRepository;
     private final ItemRepository itemRepository;
@@ -52,6 +57,8 @@ public class InventoryTransferService {
     private final StockMovementRepository stockMovementRepository;
     private final BusinessRepository businessRepository;
     private final BusinessInventorySettingsReader businessInventorySettingsReader;
+    private final SupplyBatchRepository supplyBatchRepository;
+    private final SupplyBatchLifecycleService supplyBatchLifecycleService;
 
     @Transactional
     public StockTransferCreatedResponse createDraft(
@@ -155,6 +162,7 @@ public class InventoryTransferService {
             String businessId
     ) {
         inventoryBatchRepository.save(src);
+        supplyBatchLifecycleService.checkAndTransitionToSoldoutIfNeeded(businessId, src.getSupplyBatchId());
         StockMovement outMv = new StockMovement();
         outMv.setBusinessId(businessId);
         outMv.setBranchId(t.getFromBranchId());
@@ -199,10 +207,26 @@ public class InventoryTransferService {
             InventoryBatch src,
             BatchAllocationLine pick
     ) {
+        SupplyBatch sb = new SupplyBatch();
+        sb.setBusinessId(t.getBusinessId());
+        sb.setBranchId(t.getToBranchId());
+        sb.setSupplierId(src.getSupplierId());
+        sb.setBatchNumber(batchNumberGenerator.next(null, null, Instant.now(), t.getBusinessId()));
+        sb.setBatchName(null);
+        sb.setSourceType(InventoryConstants.BATCH_SOURCE_STOCK_TRANSFER);
+        sb.setSourceId(line.getId());
+        sb.setItemCount(1);
+        sb.setTotalInitialQuantity(pick.quantity());
+        sb.setTotalRemainingQuantity(pick.quantity());
+        sb.setReceivedAt(Instant.now());
+        sb.setStatus("active");
+        supplyBatchRepository.save(sb);
+
         InventoryBatch dest = new InventoryBatch();
         dest.setBusinessId(t.getBusinessId());
         dest.setBranchId(t.getToBranchId());
         dest.setItemId(line.getItemId());
+        dest.setSupplyBatchId(sb.getId());
         dest.setSupplierId(src.getSupplierId());
         dest.setBatchNumber(batchNumberForSlice(line, pick));
         dest.setSourceType(InventoryConstants.BATCH_SOURCE_STOCK_TRANSFER);

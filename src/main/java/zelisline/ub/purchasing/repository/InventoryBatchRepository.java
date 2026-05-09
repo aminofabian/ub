@@ -28,12 +28,24 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
             @Param("businessId") String businessId
     );
 
-    List<InventoryBatch> findByBusinessIdAndItemIdAndBranchIdAndStatusAndQuantityRemainingGreaterThanOrderByIdAsc(
-            String businessId,
-            String itemId,
-            String branchId,
-            String status,
-            BigDecimal minRemaining
+    @Query("""
+            select b from InventoryBatch b
+             where b.businessId = :businessId
+               and b.itemId = :itemId
+               and b.branchId = :branchId
+               and b.status = :status
+               and b.quantityRemaining > :minRemaining
+               and (b.supplyBatchId is null or b.supplyBatchId not in (
+                   select sb.id from zelisline.ub.inventory.domain.SupplyBatch sb where sb.status = 'closed'
+               ))
+             order by b.id asc
+            """)
+    List<InventoryBatch> findActiveBatchesForPreview(
+            @Param("businessId") String businessId,
+            @Param("itemId") String itemId,
+            @Param("branchId") String branchId,
+            @Param("status") String status,
+            @Param("minRemaining") BigDecimal minRemaining
     );
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
@@ -44,6 +56,9 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
                and b.branchId = :branchId
                and b.status = :status
                and b.quantityRemaining > :minRemaining
+               and (b.supplyBatchId is null or b.supplyBatchId not in (
+                   select sb.id from zelisline.ub.inventory.domain.SupplyBatch sb where sb.status = 'closed'
+               ))
              order by b.id asc
             """)
     List<InventoryBatch> lockActiveBatchesForPick(
@@ -128,5 +143,35 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
             @Param("businessId") String businessId,
             @Param("branchId") String branchId,
             @Param("until") LocalDate until
+    );
+
+    List<InventoryBatch> findBySupplyBatchId(String supplyBatchId);
+
+    List<InventoryBatch> findBySupplyBatchIdAndStatus(String supplyBatchId, String status);
+
+    List<InventoryBatch> findBySupplyBatchIdAndStatusAndQuantityRemainingGreaterThan(
+            String supplyBatchId, String status, BigDecimal minRemaining);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select b from InventoryBatch b
+             where b.businessId = :businessId
+               and b.itemId = :itemId
+               and b.branchId = :branchId
+               and b.status = :status
+               and b.quantityRemaining > :minRemaining
+               and (b.expiryDate is null or b.expiryDate >= :today)
+               and (b.supplyBatchId is null or b.supplyBatchId not in (
+                   select sb.id from zelisline.ub.inventory.domain.SupplyBatch sb where sb.status = 'closed'
+               ))
+             order by b.id asc
+            """)
+    List<InventoryBatch> lockActiveNonExpiredBatchesForPick(
+            @Param("businessId") String businessId,
+            @Param("itemId") String itemId,
+            @Param("branchId") String branchId,
+            @Param("status") String status,
+            @Param("minRemaining") BigDecimal minRemaining,
+            @Param("today") LocalDate today
     );
 }

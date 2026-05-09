@@ -182,8 +182,7 @@ class PricingSlice5IT {
                 new CreateItemRequest(
                         "SKU-PRC", null, "Pricing Item", null, goodsTypeId, null, null, null,
                         false, true, true,
-                        null, null, null, null, null, null, null, null, null, false, null
-                ),
+                        null, null, null, null, null, null, null, null, null, null, false, null, null, null),
                 null
         ).body().id();
 

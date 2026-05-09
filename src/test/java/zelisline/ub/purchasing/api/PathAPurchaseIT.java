@@ -225,8 +225,7 @@ class PathAPurchaseIT {
                 new CreateItemRequest(
                         "SKU-RICE", null, "Rice 50kg", null, goodsTypeId, null, null, null,
                         false, true, true,
-                        null, null, null, null, null, null, null, null, null, null, null
-                ),
+                        null, null, null, null, null, null, null, null, null, null, null, null, null, null),
                 null
         ).body().id();
     }

@@ -16,6 +16,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.purchasing.api.dto.PriceCompetitivenessRow;
+import zelisline.ub.purchasing.api.dto.PurchasingIntelligenceDashboardResponse;
 import zelisline.ub.purchasing.api.dto.SingleSourceRiskRow;
 import zelisline.ub.purchasing.api.dto.SpendBySupplierCategoryRow;
 
@@ -165,5 +166,191 @@ public class SupplierIntelligenceService {
                         rs.getString("sole_supplier_id"),
                         rs.getString("sole_supplier_name")),
                 businessId);
+    }
+
+    @Transactional(readOnly = true)
+    public PurchasingIntelligenceDashboardResponse getDashboard(
+            String businessId,
+            LocalDate fromInclusive,
+            LocalDate toInclusive
+    ) {
+        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
+        Date fromDate = Date.valueOf(w[0]);
+        Date toDate = Date.valueOf(w[1]);
+
+        // Summary
+        var summaryRow = jdbc.queryForMap("""
+                SELECT COALESCE(SUM(sil.line_total), 0) AS total_spend,
+                       COUNT(DISTINCT si.supplier_id) AS supplier_count,
+                       COUNT(*) AS line_count,
+                       COUNT(DISTINCT sil.item_id) AS item_count
+                  FROM supplier_invoice_lines sil
+                  JOIN supplier_invoices si ON si.id = sil.invoice_id
+                  JOIN suppliers s ON s.id = si.supplier_id AND s.business_id = si.business_id
+                 WHERE si.business_id = ?
+                   AND si.status = 'posted'
+                   AND si.invoice_date >= ?
+                   AND si.invoice_date <= ?
+                   AND s.deleted_at IS NULL
+                """, businessId, fromDate, toDate);
+
+        BigDecimal totalSpend = ((Number) summaryRow.get("total_spend")).doubleValue() == 0.0
+                ? BigDecimal.ZERO
+                : new BigDecimal(summaryRow.get("total_spend").toString()).setScale(2, RoundingMode.HALF_UP);
+        int supplierCount = ((Number) summaryRow.get("supplier_count")).intValue();
+        int lineCount = ((Number) summaryRow.get("line_count")).intValue();
+        int itemCount = ((Number) summaryRow.get("item_count")).intValue();
+
+        // Price variance data for alerts + summary
+        List<PurchasingIntelligenceDashboardResponse.PriceVarianceAlert> priceAlerts = new ArrayList<>();
+        BigDecimal[] totalVariance = { BigDecimal.ZERO };
+        int[] varianceCount = { 0 };
+        int[] abovePrimary = { 0 };
+        int[] belowPrimary = { 0 };
+
+        jdbc.query(Q_PRICE, rs -> {
+            BigDecimal paid = rs.getBigDecimal("paid_unit_cost");
+            BigDecimal primaryCost = rs.getBigDecimal("primary_last_cost");
+            BigDecimal variance = null;
+            if (primaryCost != null && primaryCost.signum() > 0) {
+                variance = paid.subtract(primaryCost)
+                        .divide(primaryCost, 4, RoundingMode.HALF_UP)
+                        .multiply(new BigDecimal("100"))
+                        .setScale(2, RoundingMode.HALF_UP);
+            }
+            if (variance != null) {
+                totalVariance[0] = totalVariance[0].add(variance);
+                varianceCount[0]++;
+                if (variance.compareTo(BigDecimal.ZERO) > 0) abovePrimary[0]++;
+                if (variance.compareTo(BigDecimal.ZERO) < 0) belowPrimary[0]++;
+            }
+            // Only include non-primary purchases with meaningful variance
+            String invSupplier = rs.getString("invoicing_supplier_id");
+            String primarySupplier = rs.getString("primary_supplier_id");
+            boolean fromPrimary = invSupplier != null && invSupplier.equals(primarySupplier);
+            if (!fromPrimary && variance != null && variance.abs().compareTo(new BigDecimal("5")) > 0) {
+                priceAlerts.add(new PurchasingIntelligenceDashboardResponse.PriceVarianceAlert(
+                        rs.getString("item_id"),
+                        rs.getString("item_sku"),
+                        rs.getString("invoice_id"),
+                        paid,
+                        primaryCost,
+                        variance,
+                        fromPrimary));
+            }
+        }, businessId, fromDate, toDate);
+
+        // Sort price alerts by absolute variance descending and limit
+        priceAlerts.sort((a, b) -> b.variancePercent().abs().compareTo(a.variancePercent().abs()));
+        List<PurchasingIntelligenceDashboardResponse.PriceVarianceAlert> limitedPriceAlerts =
+                priceAlerts.size() > 20 ? priceAlerts.subList(0, 20) : priceAlerts;
+
+        BigDecimal avgVariance = varianceCount[0] > 0
+                ? totalVariance[0].divide(new BigDecimal(varianceCount[0]), 2, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+
+        // Spend trend by week
+        List<PurchasingIntelligenceDashboardResponse.SpendTrendPoint> spendTrend = jdbc.query("""
+                SELECT DATE_FORMAT(si.invoice_date, '%Y-%m-%d') AS dt,
+                       COALESCE(SUM(sil.line_total), 0) AS spend
+                  FROM supplier_invoice_lines sil
+                  JOIN supplier_invoices si ON si.id = sil.invoice_id
+                 WHERE si.business_id = ?
+                   AND si.status = 'posted'
+                   AND si.invoice_date >= ?
+                   AND si.invoice_date <= ?
+                 GROUP BY DATE_FORMAT(si.invoice_date, '%Y-%m-%d')
+                 ORDER BY dt
+                """,
+                (rs, rowNum) -> new PurchasingIntelligenceDashboardResponse.SpendTrendPoint(
+                        rs.getString("dt"),
+                        new BigDecimal(rs.getString("spend")).setScale(2, RoundingMode.HALF_UP)),
+                businessId, fromDate, toDate);
+
+        // Top suppliers
+        List<PurchasingIntelligenceDashboardResponse.SupplierSpendPoint> topSuppliers = jdbc.query("""
+                SELECT si.supplier_id,
+                       s.name AS supplier_name,
+                       COALESCE(SUM(sil.line_total), 0) AS spend,
+                       COUNT(*) AS line_count
+                  FROM supplier_invoice_lines sil
+                  JOIN supplier_invoices si ON si.id = sil.invoice_id
+                  JOIN suppliers s ON s.id = si.supplier_id AND s.business_id = si.business_id
+                 WHERE si.business_id = ?
+                   AND si.status = 'posted'
+                   AND si.invoice_date >= ?
+                   AND si.invoice_date <= ?
+                   AND s.deleted_at IS NULL
+                 GROUP BY si.supplier_id, s.name
+                 ORDER BY spend DESC
+                 LIMIT 10
+                """,
+                (rs, rowNum) -> new PurchasingIntelligenceDashboardResponse.SupplierSpendPoint(
+                        rs.getString("supplier_id"),
+                        rs.getString("supplier_name"),
+                        new BigDecimal(rs.getString("spend")).setScale(2, RoundingMode.HALF_UP),
+                        rs.getInt("line_count")),
+                businessId, fromDate, toDate);
+
+        // Top categories
+        List<PurchasingIntelligenceDashboardResponse.CategorySpendPoint> topCategories = jdbc.query("""
+                SELECT COALESCE(i.category_id, '_none') AS category_id,
+                       COALESCE(c.name, 'Uncategorised') AS category_name,
+                       COALESCE(SUM(sil.line_total), 0) AS spend,
+                       COUNT(*) AS line_count
+                  FROM supplier_invoice_lines sil
+                  JOIN supplier_invoices si ON si.id = sil.invoice_id
+             LEFT JOIN items i ON i.id = sil.item_id AND i.business_id = si.business_id AND i.deleted_at IS NULL
+             LEFT JOIN categories c ON c.id = i.category_id AND c.business_id = si.business_id
+                  JOIN suppliers s ON s.id = si.supplier_id AND s.business_id = si.business_id
+                 WHERE si.business_id = ?
+                   AND si.status = 'posted'
+                   AND si.invoice_date >= ?
+                   AND si.invoice_date <= ?
+                   AND s.deleted_at IS NULL
+                 GROUP BY COALESCE(i.category_id, '_none'), COALESCE(c.name, 'Uncategorised')
+                 ORDER BY spend DESC
+                 LIMIT 10
+                """,
+                (rs, rowNum) -> new PurchasingIntelligenceDashboardResponse.CategorySpendPoint(
+                        rs.getString("category_id"),
+                        rs.getString("category_name"),
+                        new BigDecimal(rs.getString("spend")).setScale(2, RoundingMode.HALF_UP),
+                        rs.getInt("line_count")),
+                businessId, fromDate, toDate);
+
+        // Single source risks
+        List<SingleSourceRiskRow> risks = singleSourceRiskItems(businessId);
+
+        // Insights
+        List<PurchasingIntelligenceDashboardResponse.Insight> insights = new ArrayList<>();
+        if (totalSpend.signum() > 0) {
+            insights.add(new PurchasingIntelligenceDashboardResponse.Insight("info",
+                    "Total spend of " + totalSpend.toPlainString() + " across " + supplierCount + " supplier" + (supplierCount == 1 ? "" : "s") + "."));
+        }
+        if (abovePrimary[0] > 0) {
+            insights.add(new PurchasingIntelligenceDashboardResponse.Insight("warning",
+                    abovePrimary[0] + " purchase line" + (abovePrimary[0] == 1 ? "" : "s") + " above primary supplier cost."));
+        }
+        if (belowPrimary[0] > 0) {
+            insights.add(new PurchasingIntelligenceDashboardResponse.Insight("success",
+                    belowPrimary[0] + " purchase line" + (belowPrimary[0] == 1 ? "" : "s") + " below primary supplier cost."));
+        }
+        if (!risks.isEmpty()) {
+            insights.add(new PurchasingIntelligenceDashboardResponse.Insight("danger",
+                    risks.size() + " sellable item" + (risks.size() == 1 ? "" : "s") + " with single-source supplier risk."));
+        }
+
+        return new PurchasingIntelligenceDashboardResponse(
+                new PurchasingIntelligenceDashboardResponse.Summary(
+                        totalSpend, supplierCount, lineCount, itemCount,
+                        avgVariance, abovePrimary[0], belowPrimary[0], risks.size()),
+                spendTrend,
+                topSuppliers,
+                topCategories,
+                limitedPriceAlerts,
+                risks,
+                insights
+        );
     }
 }

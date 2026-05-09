@@ -28,6 +28,8 @@ public record PatchItemRequest(
         Boolean hasExpiry,
         @Size(max = 2048) String imageKey,
         Boolean active,
-        Boolean webPublished
+        Boolean webPublished,
+        @Size(max = 255) String brand,
+        @Size(max = 50) String size
 ) {
 }

@@ -25,6 +25,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.inventory.application.BatchNumberGenerator;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.IdempotencyKey;
 import zelisline.ub.catalog.repository.IdempotencyKeyRepository;
@@ -34,6 +35,9 @@ import zelisline.ub.finance.application.LedgerAccountResolver;
 import zelisline.ub.finance.application.LedgerPostingPort;
 import zelisline.ub.finance.domain.JournalEntry;
 import zelisline.ub.identity.application.TokenHasher;
+import zelisline.ub.inventory.WastageReason;
+import zelisline.ub.inventory.domain.SupplyBatch;
+import zelisline.ub.inventory.repository.SupplyBatchRepository;
 import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.api.dto.AddPathBLineRequest;
 import zelisline.ub.purchasing.api.dto.CreatePathBSessionRequest;
@@ -68,6 +72,8 @@ public class PathBPurchaseService {
     private static final BigDecimal MONEY_SCALE = new BigDecimal("0.01");
     private static final int UNIT_SCALE = 4;
 
+    private final BatchNumberGenerator batchNumberGenerator;
+
     private final RawPurchaseSessionRepository sessionRepository;
     private final RawPurchaseLineRepository lineRepository;
     private final InventoryBatchRepository inventoryBatchRepository;
@@ -83,6 +89,7 @@ public class PathBPurchaseService {
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final ObjectMapper objectMapper;
     private final SupplierPaymentAllocationRepository allocationRepository;
+    private final SupplyBatchRepository supplyBatchRepository;
 
     public static String postRoute(String sessionId) {
         return "POST /api/v1/purchasing/path-b/sessions/%s/post".formatted(sessionId);
@@ -269,9 +276,36 @@ public class PathBPurchaseService {
             throw new IllegalStateException("Journal allocation rounding drift");
         }
 
+        SupplyBatch sb = new SupplyBatch();
+        sb.setBusinessId(businessId);
+        sb.setBranchId(session.getBranchId());
+        sb.setSupplierId(session.getSupplierId());
+        sb.setBatchNumber(batchNumberGenerator.next(session.getSupplierId(), supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(session.getSupplierId(), businessId).map(zelisline.ub.suppliers.domain.Supplier::getName).orElse(null), session.getReceivedAt(), businessId));
+        sb.setBatchName(null);
+        sb.setSourceType(PurchasingConstants.BATCH_SOURCE_PATH_B);
+        sb.setSourceId(session.getId());
+        sb.setItemCount(0);
+        sb.setTotalInitialQuantity(BigDecimal.ZERO);
+        sb.setTotalRemainingQuantity(BigDecimal.ZERO);
+        sb.setReceivedAt(session.getReceivedAt());
+        sb.setStatus("active");
+        supplyBatchRepository.save(sb);
+
+        int itemCount = 0;
+        BigDecimal totalInitial = BigDecimal.ZERO;
+        BigDecimal totalRemaining = BigDecimal.ZERO;
         for (LinePostPlan plan : plans) {
-            applyLinePost(businessId, session, plan);
+            applyLinePost(businessId, session, plan, sb);
+            if (plan.usableQty().signum() > 0) {
+                itemCount++;
+                totalInitial = totalInitial.add(plan.usableQty());
+                totalRemaining = totalRemaining.add(plan.usableQty());
+            }
         }
+        sb.setItemCount(itemCount);
+        sb.setTotalInitialQuantity(totalInitial);
+        sb.setTotalRemainingQuantity(totalRemaining);
+        supplyBatchRepository.save(sb);
 
         LocalDate invoiceDate = LocalDate.ofInstant(session.getReceivedAt(), ZoneOffset.UTC);
         String invoiceNumber = "PB-" + session.getId().replace("-", "").substring(0, 8).toUpperCase();
@@ -325,12 +359,12 @@ public class PathBPurchaseService {
         session.setStatus(PurchasingConstants.SESSION_POSTED);
         sessionRepository.save(session);
 
-        return new PostPathBResponse(inv.getId(), invoiceNumber, jeId, ap2, dbLines.size());
+        return new PostPathBResponse(inv.getId(), invoiceNumber, jeId, ap2, dbLines.size(), sb.getId());
     }
 
 
 
-    private void applyLinePost(String businessId, RawPurchaseSession session, LinePostPlan p) {
+    private void applyLinePost(String businessId, RawPurchaseSession session, LinePostPlan p, SupplyBatch sb) {
         RawPurchaseLine line = p.line();
         CostSplit s = p.split();
         if (p.usableQty().signum() > 0) {
@@ -339,6 +373,7 @@ public class PathBPurchaseService {
             b.setBusinessId(businessId);
             b.setBranchId(session.getBranchId());
             b.setItemId(p.itemId());
+            b.setSupplyBatchId(sb.getId());
             b.setSupplierId(session.getSupplierId());
             b.setBatchNumber("B-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
             b.setSourceType(PurchasingConstants.BATCH_SOURCE_PATH_B);
@@ -374,17 +409,36 @@ public class PathBPurchaseService {
         }
         if (p.wastageQty().signum() > 0) {
             BigDecimal wUnit = s.wastageMoney().divide(p.wastageQty(), UNIT_SCALE, RoundingMode.HALF_UP);
+
+            // ── Create a wastage batch to hold the "wasted" stock record ──
+            InventoryBatch wasteBatch = new InventoryBatch();
+            wasteBatch.setBusinessId(businessId);
+            wasteBatch.setBranchId(session.getBranchId());
+            wasteBatch.setItemId(p.itemId());
+            wasteBatch.setSupplierId(session.getSupplierId());
+            wasteBatch.setBatchNumber("W-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+            wasteBatch.setSourceType("path_b_wastage");
+            wasteBatch.setSourceId(line.getId());
+            wasteBatch.setInitialQuantity(p.wastageQty());
+            wasteBatch.setQuantityRemaining(BigDecimal.ZERO);  // fully depleted
+            wasteBatch.setUnitCost(wUnit);
+            wasteBatch.setReceivedAt(session.getReceivedAt());
+            wasteBatch.setStatus("depleted");                  // not pickable
+            inventoryBatchRepository.save(wasteBatch);
+
+            // ── Record movement linked to the wastage batch ───────────────
             StockMovement wm = new StockMovement();
             wm.setBusinessId(businessId);
             wm.setBranchId(session.getBranchId());
             wm.setItemId(p.itemId());
-            wm.setBatchId(null);
+            wm.setBatchId(wasteBatch.getId());
             wm.setMovementType(PurchasingConstants.MOVEMENT_WASTAGE);
             wm.setReferenceType(PurchasingConstants.STOCK_REF_RAW_LINE);
             wm.setReferenceId(line.getId());
             wm.setQuantityDelta(p.wastageQty().negate());
             wm.setUnitCost(wUnit);
-            wm.setReason("Path B wastage");
+            wm.setReason(WastageReason.SPOILAGE.name() + " — Path B breakdown");
+            wm.setWastageReason(WastageReason.SPOILAGE.name());
             stockMovementRepository.save(wm);
         }
         line.setPostedItemId(p.itemId());
@@ -548,7 +602,25 @@ public class PathBPurchaseService {
         }
         CostSplit split = splitLine(line.getAmountMoney(), usableQty, wastageQty);
         LinePostPlan p = new LinePostPlan(line, item, itemId, usableQty, wastageQty, split, expiryDate);
-        applyLinePost(businessId, session, p);
+        SupplyBatch sb = supplyBatchRepository
+                .findByBusinessIdAndSourceTypeAndSourceId(businessId, PurchasingConstants.BATCH_SOURCE_PATH_B, session.getId())
+                .orElseGet(() -> {
+                    SupplyBatch fresh = new SupplyBatch();
+                    fresh.setBusinessId(businessId);
+                    fresh.setBranchId(session.getBranchId());
+                    fresh.setSupplierId(session.getSupplierId());
+                    fresh.setBatchNumber(batchNumberGenerator.next(session.getSupplierId(), supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(session.getSupplierId(), businessId).map(zelisline.ub.suppliers.domain.Supplier::getName).orElse(null), session.getReceivedAt(), businessId));
+                    fresh.setBatchName(null);
+                    fresh.setSourceType(PurchasingConstants.BATCH_SOURCE_PATH_B);
+                    fresh.setSourceId(session.getId());
+                    fresh.setItemCount(0);
+                    fresh.setTotalInitialQuantity(BigDecimal.ZERO);
+                    fresh.setTotalRemainingQuantity(BigDecimal.ZERO);
+                    fresh.setReceivedAt(session.getReceivedAt());
+                    fresh.setStatus("active");
+                    return supplyBatchRepository.save(fresh);
+                });
+        applyLinePost(businessId, session, p, sb);
     }
 
     @Transactional

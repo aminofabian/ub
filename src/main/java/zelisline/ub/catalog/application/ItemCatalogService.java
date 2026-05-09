@@ -76,6 +76,7 @@ public class ItemCatalogService {
     private final CloudinaryImageService cloudinaryImageService;
     private final BranchRepository branchRepository;
     private final InventoryBatchRepository inventoryBatchRepository;
+    private final SkuGenerationService skuGenerationService;
 
     @Transactional(readOnly = true)
     public Page<ItemSummaryResponse> listItems(
@@ -371,6 +372,12 @@ public class ItemCatalogService {
         if (patch.webPublished() != null) {
             item.setWebPublished(patch.webPublished());
         }
+        if (patch.brand() != null) {
+            item.setBrand(blankToNull(patch.brand()));
+        }
+        if (patch.size() != null) {
+            item.setSize(blankToNull(patch.size()));
+        }
 
         try {
             itemRepository.save(item);
@@ -411,7 +418,24 @@ public class ItemCatalogService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cannot create a variant of a variant");
         }
         String rawSku = request.sku() == null ? "" : request.sku().trim();
-        String sku = rawSku.isEmpty() ? allocateVariantSku(businessId, parent.getSku(), request.variantName()) : rawSku;
+        String sku;
+        if (rawSku.isEmpty()) {
+            if (parent.getSku() != null && !parent.getSku().isBlank()) {
+                sku = allocateVariantSku(businessId, parent.getSku(), request.variantName());
+            } else {
+                // Parent is a group/label — generate standalone SKU for variant
+                String cid = blankToNull(parent.getCategoryId());
+                String vBrand = firstNonBlank(request.brand(), parent.getBrand());
+                String vSize = firstNonBlank(request.size(), request.variantName());
+                if (vBrand != null && !vBrand.isBlank() && vSize != null && !vSize.isBlank()) {
+                    sku = skuGenerationService.generateSku(businessId, cid, vBrand, vSize, null);
+                } else {
+                    sku = peekNextStructuredParentSku(businessId, cid);
+                }
+            }
+        } else {
+            sku = rawSku;
+        }
         if (itemRepository.existsByBusinessIdAndSkuAndDeletedAtIsNull(businessId, sku)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "SKU already in use");
         }
@@ -431,7 +455,7 @@ public class ItemCatalogService {
         child.setAisleId(resolveOptionalAisle(businessId, request.aisleId(), parent.getAisleId()));
         child.setUnitType(firstNonBlank(request.unitType(), parent.getUnitType()));
         child.setWeighed(request.isWeighed() != null ? request.isWeighed() : parent.isWeighed());
-        child.setSellable(request.isSellable() != null ? request.isSellable() : parent.isSellable());
+        child.setSellable(request.isSellable() != null ? request.isSellable() : true);
         child.setStocked(request.isStocked() != null ? request.isStocked() : parent.isStocked());
         child.setPackagingUnitName(parent.getPackagingUnitName());
         child.setPackagingUnitQty(parent.getPackagingUnitQty());
@@ -451,6 +475,8 @@ public class ItemCatalogService {
         child.setExpiresAfterDays(parent.getExpiresAfterDays());
         child.setHasExpiry(parent.isHasExpiry());
         child.setImageKey(firstNonBlank(request.imageKey(), parent.getImageKey()));
+        child.setBrand(firstNonBlank(request.brand(), parent.getBrand()));
+        child.setSize(firstNonBlank(request.size(), parent.getSize()));
 
         try {
             itemRepository.save(child);
@@ -604,7 +630,9 @@ public class ItemCatalogService {
             String businessId,
             String categoryIdRaw,
             String parentItemIdRaw,
-            String variantNameRaw
+            String variantNameRaw,
+            String brand,
+            String size
     ) {
         String pid = blankToNull(parentItemIdRaw);
         if (pid != null) {
@@ -613,9 +641,30 @@ public class ItemCatalogService {
             if (parent.getVariantOfItemId() != null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "parentItemId must be a parent product");
             }
-            return firstAvailableVariantSku(businessId, parent.getSku(), variantNameRaw);
+            if (parent.getSku() != null && !parent.getSku().isBlank()) {
+                String variantSku = skuGenerationService.generateVariantSku(businessId, parent.getSku(), variantNameRaw);
+                if (variantSku != null) {
+                    return variantSku;
+                }
+                return firstAvailableVariantSku(businessId, parent.getSku(), variantNameRaw);
+            }
+            // Parent has no SKU (group/label) — generate standalone SKU for variant
+            String cid = blankToNull(parent.getCategoryId());
+            String vBrand = firstNonBlank(brand, parent.getBrand());
+            String vSize = firstNonBlank(size, variantNameRaw);
+            if (vBrand != null && !vBrand.isBlank() && vSize != null && !vSize.isBlank()) {
+                String structured = skuGenerationService.generateSku(businessId, cid, vBrand, vSize, null);
+                if (structured != null) {
+                    return structured;
+                }
+            }
+            return peekNextStructuredParentSku(businessId, cid);
         }
         String cid = blankToNull(categoryIdRaw);
+        String structuredSku = skuGenerationService.generateSku(businessId, cid, brand, size, null);
+        if (structuredSku != null) {
+            return structuredSku;
+        }
         return peekNextStructuredParentSku(businessId, cid);
     }
 
@@ -724,6 +773,10 @@ public class ItemCatalogService {
     }
 
     private String allocateVariantSku(String businessId, String parentSku, String variantName) {
+        String structured = skuGenerationService.generateVariantSku(businessId, parentSku, variantName);
+        if (structured != null) {
+            return structured;
+        }
         return firstAvailableVariantSku(businessId, parentSku, variantName);
     }
 
@@ -791,7 +844,13 @@ public class ItemCatalogService {
         }
 
         String rawSku = request.sku() == null ? "" : request.sku().trim();
-        String sku = rawSku.isEmpty() ? allocateStructuredParentSku(businessId, categoryId) : rawSku;
+        String sku;
+        if (rawSku.isEmpty()) {
+            String generated = skuGenerationService.generateSku(businessId, categoryId, request.brand(), request.size(), null);
+            sku = generated != null ? generated : allocateStructuredParentSku(businessId, categoryId);
+        } else {
+            sku = rawSku;
+        }
         if (itemRepository.existsByBusinessIdAndSkuAndDeletedAtIsNull(businessId, sku)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "SKU already in use");
         }
@@ -831,6 +890,8 @@ public class ItemCatalogService {
         item.setExpiresAfterDays(request.expiresAfterDays());
         item.setHasExpiry(Boolean.TRUE.equals(request.hasExpiry()));
         item.setImageKey(blankToNull(request.imageKey()));
+        item.setBrand(blankToNull(request.brand()));
+        item.setSize(blankToNull(request.size()));
         return item;
     }
 
@@ -938,7 +999,9 @@ public class ItemCatalogService {
                 i.isWebPublished(),
                 i.getVariantOfItemId(),
                 groupLabelOnly,
-                stockQty
+                stockQty,
+                i.getBrand(),
+                i.getSize()
         );
     }
 
@@ -975,7 +1038,9 @@ public class ItemCatalogService {
                 i.isWebPublished(),
                 i.getVersion(),
                 loadImageResponses(i.getId()),
-                variants
+                variants,
+                i.getBrand(),
+                i.getSize()
         );
     }
 

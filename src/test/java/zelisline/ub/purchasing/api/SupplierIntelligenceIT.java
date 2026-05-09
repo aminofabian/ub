@@ -193,8 +193,7 @@ class SupplierIntelligenceIT {
                 new CreateItemRequest(
                         "SKU-SPEND", null, "Cola", null, goodsTypeId, categoryId, null, null,
                         false, true, true,
-                        null, null, null, null, null, null, null, null, null, null, null
-                ),
+                        null, null, null, null, null, null, null, null, null, null, null, null, null, null),
                 null
         ).body().id();
 

@@ -34,6 +34,10 @@ public class InventoryBatch {
     @Column(name = "item_id", nullable = false, length = 36)
     private String itemId;
 
+    /** Links this line-level batch to its parent SupplyBatch header. */
+    @Column(name = "supply_batch_id", length = 36)
+    private String supplyBatchId;
+
     /** Null for opening-balance and stock-gain batches (Phase 3). */
     @Column(name = "supplier_id", length = 36)
     private String supplierId;

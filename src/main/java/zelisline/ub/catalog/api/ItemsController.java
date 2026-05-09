@@ -88,12 +88,14 @@ public class ItemsController {
             @RequestParam(required = false) String categoryId,
             @RequestParam(required = false) String parentItemId,
             @RequestParam(required = false) String variantName,
+            @RequestParam(required = false) String brand,
+            @RequestParam(required = false) String size,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         return new SuggestedSkuResponse(
-                itemCatalogService.suggestNextSku(businessId, categoryId, parentItemId, variantName));
+                itemCatalogService.suggestNextSku(businessId, categoryId, parentItemId, variantName, brand, size));
     }
 
     @GetMapping("/{id}/pricing-context")

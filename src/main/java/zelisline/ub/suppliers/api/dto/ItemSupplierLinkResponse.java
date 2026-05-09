@@ -10,6 +10,7 @@ public record ItemSupplierLinkResponse(
         boolean primary,
         String supplierSku,
         BigDecimal defaultCostPrice,
+        BigDecimal lastCostPrice,
         boolean active,
         long version,
         Instant createdAt,

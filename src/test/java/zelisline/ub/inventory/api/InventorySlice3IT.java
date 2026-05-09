@@ -188,8 +188,7 @@ class InventorySlice3IT {
                 new CreateItemRequest(
                         "SKU-XFER", null, "Xfer Item", null, goodsTypeId, null, null, null,
                         false, true, true,
-                        null, null, null, null, null, null, null, null, null, false, null
-                ),
+                        null, null, null, null, null, null, null, null, null, null, false, null, null, null),
                 null
         ).body().id();
 
@@ -216,7 +215,7 @@ class InventorySlice3IT {
         assertThat(src.getQuantityRemaining().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("6");
 
         List<InventoryBatch> atB = inventoryBatchRepository
-                .findByBusinessIdAndItemIdAndBranchIdAndStatusAndQuantityRemainingGreaterThanOrderByIdAsc(
+                .findActiveBatchesForPreview(
                         TENANT,
                         itemId,
                         branchBId,

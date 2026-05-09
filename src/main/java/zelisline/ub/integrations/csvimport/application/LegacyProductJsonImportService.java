@@ -194,7 +194,9 @@ public class LegacyProductJsonImportService {
                         sanitizeQty14_4(r.minStockLevel()),
                         null,
                         null,
-                        imageKeyOrNull(r.imageUrl())
+                        imageKeyOrNull(r.imageUrl()),
+                        null,
+                        null
                 );
                 ItemResponse created = itemCatalogService.createVariant(businessId, resolvedParent, vr);
                 legacyIdToNewItemId.put(r.legacyId(), created.id());
@@ -379,6 +381,8 @@ public class LegacyProductJsonImportService {
                         r.hasExpiryOverride(),
                         imageKeyOrNull(r.imageUrl()),
                         r.active(),
+                        null,
+                        null,
                         null
                 )
         );
@@ -399,7 +403,7 @@ public class LegacyProductJsonImportService {
                     new PatchItemRequest(
                             null, null, null, null, null, null, null, null, null, null,
                             null, null, null, null, null, null, null, null, null, null,
-                            null, null, false, null));
+                            null, null, false, null, null, null));
         }
         BigDecimal sell = sanitizeMoney14_2(r.sellPrice());
         if (sell != null && sell.compareTo(new BigDecimal("0.01")) >= 0) {
@@ -506,8 +510,7 @@ public class LegacyProductJsonImportService {
                 null,
                 sanitizeExpiresDays(r.expiresAfterDays()),
                 r.hasExpiryOverride(),
-                imageKeyOrNull(r.imageUrl())
-        );
+                imageKeyOrNull(r.imageUrl()), null, null);
     }
 
     private String resolveItemTypeId(String businessId, String itemTypeRaw) {

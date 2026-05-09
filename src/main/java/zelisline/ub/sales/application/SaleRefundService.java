@@ -24,6 +24,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.inventory.application.BatchNumberGenerator;
 import zelisline.ub.credits.application.BusinessCreditSettingsService;
 import zelisline.ub.credits.application.CreditSaleDebtService;
 import zelisline.ub.credits.application.LoyaltyPointsService;
@@ -35,6 +36,8 @@ import zelisline.ub.finance.application.LedgerAccountResolver;
 import zelisline.ub.finance.application.LedgerPostingPort;
 import zelisline.ub.finance.domain.JournalEntry;
 import zelisline.ub.inventory.InventoryConstants;
+import zelisline.ub.inventory.domain.SupplyBatch;
+import zelisline.ub.inventory.repository.SupplyBatchRepository;
 import zelisline.ub.purchasing.domain.InventoryBatch;
 import zelisline.ub.purchasing.domain.StockMovement;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
@@ -67,6 +70,8 @@ public class SaleRefundService {
     private static final int MONEY_SCALE = 2;
     private static final int QTY_SCALE = 4;
 
+    private final BatchNumberGenerator batchNumberGenerator;
+
     private final SaleRepository saleRepository;
     private final SaleItemRepository saleItemRepository;
     private final SalePaymentRepository salePaymentRepository;
@@ -77,6 +82,7 @@ public class SaleRefundService {
     private final InventoryBatchRepository inventoryBatchRepository;
     private final StockMovementRepository stockMovementRepository;
     private final ItemRepository itemRepository;
+    private final SupplyBatchRepository supplyBatchRepository;
     private final LedgerPostingPort ledgerPostingPort;
     private final LedgerAccountResolver ledgerAccountResolver;
     private final CreditSaleDebtService creditSaleDebtService;
@@ -291,11 +297,30 @@ public class SaleRefundService {
                 && InventoryConstants.BATCH_STATUS_ACTIVE.equals(orig.getStatus())) {
             return new StockTarget(orig);
         }
+        // ── Resolve supplier from the ORIGINAL sale item's batch ──────
+        String supplierId = resolveSupplierFromOriginalBatch(businessId, si);
+
+        SupplyBatch sb = new SupplyBatch();
+        sb.setBusinessId(businessId);
+        sb.setBranchId(sale.getBranchId());
+        sb.setSupplierId(supplierId);
+        sb.setBatchNumber(batchNumberGenerator.next(null, null, Instant.now(), businessId));
+        sb.setBatchName("Return from sale " + sale.getId().substring(0, 8));
+        sb.setSourceType(InventoryConstants.BATCH_SOURCE_REFUND_RETURN);
+        sb.setSourceId(refundId);
+        sb.setItemCount(1);
+        sb.setTotalInitialQuantity(quantity);
+        sb.setTotalRemainingQuantity(quantity);
+        sb.setReceivedAt(Instant.now());
+        sb.setStatus("active");
+        supplyBatchRepository.save(sb);
+
         InventoryBatch b = new InventoryBatch();
         b.setBusinessId(businessId);
         b.setBranchId(sale.getBranchId());
         b.setItemId(si.getItemId());
-        b.setSupplierId(null);
+        b.setSupplyBatchId(sb.getId());
+        b.setSupplierId(supplierId);
         b.setBatchNumber("RR-" + refundId.replace("-", "").substring(0, 12));
         b.setSourceType(InventoryConstants.BATCH_SOURCE_REFUND_RETURN);
         b.setSourceId(refundId);
@@ -306,6 +331,17 @@ public class SaleRefundService {
         b.setStatus(InventoryConstants.BATCH_STATUS_ACTIVE);
         inventoryBatchRepository.save(b);
         return new StockTarget(b);
+    }
+
+    /**
+     * Traces the supplier from the original batch that the sale item was sold from.
+     * Reads the batch WITHOUT locking (read-only lookup).
+     */
+    private String resolveSupplierFromOriginalBatch(String businessId, SaleItem si) {
+        return inventoryBatchRepository
+                .findByIdAndBusinessId(si.getBatchId(), businessId)
+                .map(InventoryBatch::getSupplierId)
+                .orElse(null);
     }
 
     private static void applyItemStock(Item item, BigDecimal delta) {

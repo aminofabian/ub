@@ -249,8 +249,7 @@ class ItemCatalogIT {
                         null,
                         null,
                         null,
-                        null
-                ),
+                        null, null, null, null),
                 null);
 
         mockMvc.perform(get("/api/v1/items/next-sku")
@@ -672,8 +671,7 @@ class ItemCatalogIT {
                 null,
                 null,
                 null,
-                null
-        );
+                null, null, null, null);
         return itemCatalogService.createItem(tenant, req, null).body().id();
     }
 
@@ -700,8 +698,7 @@ class ItemCatalogIT {
                 null,
                 null,
                 null,
-                null
-        );
+                null, null, null, null, null);
     }
 
     private static CreateItemRequest minimalItem(String sku, String name, String itemTypeId) {
@@ -727,8 +724,7 @@ class ItemCatalogIT {
                 null,
                 null,
                 null,
-                null
-        );
+                null, null, null, null);
     }
 
     private String goodsTypeId(String tenant) {

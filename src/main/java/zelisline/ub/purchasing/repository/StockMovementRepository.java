@@ -13,4 +13,6 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, St
             String referenceType,
             String referenceId
     );
+
+    List<StockMovement> findByBatchIdAndMovementType(String batchId, String movementType);
 }

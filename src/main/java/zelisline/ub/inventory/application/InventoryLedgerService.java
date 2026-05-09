@@ -15,13 +15,18 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.inventory.application.BatchNumberGenerator;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.finance.LedgerAccountCodes;
 import zelisline.ub.finance.application.LedgerAccountResolver;
 import zelisline.ub.finance.application.LedgerPostingPort;
 import zelisline.ub.finance.domain.JournalEntry;
+import zelisline.ub.inventory.CostMethod;
 import zelisline.ub.inventory.InventoryConstants;
+import zelisline.ub.inventory.WastageReason;
+import zelisline.ub.inventory.domain.SupplyBatch;
+import zelisline.ub.inventory.repository.SupplyBatchRepository;
 import zelisline.ub.inventory.api.dto.InventoryMutationResponse;
 import zelisline.ub.inventory.api.dto.PostBatchDecreaseRequest;
 import zelisline.ub.inventory.api.dto.PostOpeningBalanceRequest;
@@ -41,12 +46,16 @@ public class InventoryLedgerService {
     private static final BigDecimal TOLERANCE = new BigDecimal("0.01");
     private static final int QTY_SCALE = 4;
 
+    private final BatchNumberGenerator batchNumberGenerator;
+
     private final LedgerPostingPort ledgerPostingPort;
     private final LedgerAccountResolver ledgerAccountResolver;
     private final InventoryBatchRepository inventoryBatchRepository;
     private final StockMovementRepository stockMovementRepository;
     private final ItemRepository itemRepository;
     private final BranchRepository branchRepository;
+    private final SupplyBatchRepository supplyBatchRepository;
+    private final SupplyBatchLifecycleService supplyBatchLifecycleService;
 
     @Transactional
     public InventoryMutationResponse recordOpeningBalance(
@@ -67,6 +76,9 @@ public class InventoryLedgerService {
                 req.unitCost(),
                 opId
         );
+        SupplyBatch sb = createSupplyBatchForSoloBatch(batch, opId, "Opening balance");
+        batch.setSupplyBatchId(sb.getId());
+        inventoryBatchRepository.save(batch);
         StockMovement mv = persistMovement(
                 businessId,
                 req.branchId(),
@@ -111,6 +123,9 @@ public class InventoryLedgerService {
                 req.unitCost(),
                 opId
         );
+        SupplyBatch sb = createSupplyBatchForSoloBatch(batch, opId, "Stock gain");
+        batch.setSupplyBatchId(sb.getId());
+        inventoryBatchRepository.save(batch);
         StockMovement mv = persistMovement(
                 businessId,
                 req.branchId(),
@@ -154,6 +169,7 @@ public class InventoryLedgerService {
         String opId = UUID.randomUUID().toString();
         batch.setQuantityRemaining(batch.getQuantityRemaining().subtract(req.quantity()));
         inventoryBatchRepository.save(batch);
+        supplyBatchLifecycleService.checkAndTransitionToSoldoutIfNeeded(businessId, batch.getSupplyBatchId());
 
         StockMovement mv = persistMovement(
                 businessId,
@@ -189,29 +205,114 @@ public class InventoryLedgerService {
         requireBranch(businessId, req.branchId());
         Item item = requireStockedItem(businessId, req.itemId());
         String opId = UUID.randomUUID().toString();
+
+        // ── Resolve the target batch ──────────────────────────────────
+        InventoryBatch batch = resolveWastageBatch(businessId, req, item);
+
+        // ── Decrement the batch ───────────────────────────────────────
+        BigDecimal qty = req.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        if (batch.getQuantityRemaining().compareTo(qty) < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Wastage quantity (" + qty + ") exceeds batch remaining ("
+                            + batch.getQuantityRemaining() + ")"
+            );
+        }
+        batch.setQuantityRemaining(batch.getQuantityRemaining().subtract(qty));
+        inventoryBatchRepository.save(batch);
+        supplyBatchLifecycleService.checkAndTransitionToSoldoutIfNeeded(businessId, batch.getSupplyBatchId());
+
+        // ── Resolve enum reason ──────────────────────────────────────────
+        WastageReason cat = WastageReason.fromString(req.wastageReason());
+        String movementReason;
+        if (req.reason() != null && !req.reason().isBlank()) {
+            movementReason = cat.name() + " — " + req.reason();
+        } else {
+            movementReason = cat.name();
+        }
+
+        // ── Record the movement (now WITH batch_id) ───────────────────
         StockMovement mv = persistMovement(
                 businessId,
                 req.branchId(),
                 item.getId(),
-                null,
+                batch.getId(),
                 PurchasingConstants.MOVEMENT_WASTAGE,
                 opId,
-                req.quantity().negate(),
-                req.unitCost(),
-                req.reason(),
+                qty.negate(),
+                batch.getUnitCost(),
+                movementReason,
                 userId
         );
-        applyStockDelta(item, req.quantity().negate());
-        BigDecimal value = extensionMoney(req.quantity(), req.unitCost());
+        mv.setWastageReason(cat.name());
+        stockMovementRepository.save(mv);
+        applyStockDelta(item, qty.negate());
+
+        BigDecimal value = extensionMoney(qty, batch.getUnitCost());
         String jeId = saveJournal(
                 businessId,
                 InventoryConstants.JOURNAL_STANDALONE_WASTAGE,
                 opId,
-                "Inventory wastage",
+                "Inventory wastage — batch " + batch.getBatchNumber(),
                 value,
                 false
         );
-        return new InventoryMutationResponse(jeId, mv.getId(), null);
+        return new InventoryMutationResponse(jeId, mv.getId(), batch.getId());
+    }
+
+    /**
+     * Resolves which batch to deplete for wastage.
+     * If the caller specifies a batchId, use that (validate it).
+     * Otherwise, auto-pick the most eligible batch using FEFO → FIFO.
+     */
+    private InventoryBatch resolveWastageBatch(
+            String businessId,
+            PostStandaloneWastageRequest req,
+            Item item
+    ) {
+        if (req.batchId() != null && !req.batchId().isBlank()) {
+            // ── Caller picked a specific batch ────────────────────────
+            InventoryBatch b = inventoryBatchRepository
+                    .findByIdAndBusinessId(req.batchId(), businessId)
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.NOT_FOUND, "Batch not found"));
+            if (!InventoryConstants.BATCH_STATUS_ACTIVE.equals(b.getStatus())) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Batch is not active");
+            }
+            if (!b.getBranchId().equals(req.branchId())) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Batch does not belong to this branch");
+            }
+            if (!b.getItemId().equals(item.getId())) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Batch item does not match");
+            }
+            return b;
+        }
+
+        // ── Auto-pick: load active batches, sort FEFO → FIFO, take first ─
+        List<InventoryBatch> candidates = inventoryBatchRepository
+                .findActiveBatchesForPreview(
+                        businessId,
+                        item.getId(),
+                        req.branchId(),
+                        InventoryConstants.BATCH_STATUS_ACTIVE,
+                        BigDecimal.ZERO
+                );
+        if (candidates.isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "No active batches with remaining quantity");
+        }
+
+        // Reuse the existing sort logic from BatchAllocationPlanner
+        List<InventoryBatch> working = new ArrayList<>(candidates);
+        BatchAllocationPlanner.sortBatchesForPick(
+                working,
+                item,
+                CostMethod.FIFO   // wastage: oldest first (FEFO if expiry exists)
+        );
+        return working.getFirst();
     }
 
     private InventoryBatch saveInboundBatch(
@@ -319,6 +420,24 @@ public class InventoryLedgerService {
         }
         item.setCurrentStock(next);
         itemRepository.save(item);
+    }
+
+    private SupplyBatch createSupplyBatchForSoloBatch(InventoryBatch batch, String sourceId, String batchName) {
+        SupplyBatch sb = new SupplyBatch();
+        sb.setBusinessId(batch.getBusinessId());
+        sb.setBranchId(batch.getBranchId());
+        sb.setSupplierId(batch.getSupplierId());
+        sb.setBatchNumber(batchNumberGenerator.next(null, null, batch.getReceivedAt(), batch.getBusinessId()));
+        sb.setBatchName(batchName);
+        sb.setSourceType(batch.getSourceType());
+        sb.setSourceId(sourceId);
+        sb.setItemCount(1);
+        sb.setTotalInitialQuantity(batch.getInitialQuantity());
+        sb.setTotalRemainingQuantity(batch.getQuantityRemaining());
+        sb.setReceivedAt(batch.getReceivedAt());
+        sb.setStatus("active");
+        supplyBatchRepository.save(sb);
+        return sb;
     }
 
     private static BigDecimal extensionMoney(BigDecimal qty, BigDecimal unitCost) {

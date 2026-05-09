@@ -23,6 +23,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.inventory.application.BatchNumberGenerator;
 import zelisline.ub.catalog.domain.IdempotencyKey;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.IdempotencyKeyRepository;
@@ -32,6 +33,8 @@ import zelisline.ub.finance.application.LedgerAccountResolver;
 import zelisline.ub.finance.application.LedgerPostingPort;
 import zelisline.ub.finance.domain.JournalEntry;
 import zelisline.ub.identity.application.TokenHasher;
+import zelisline.ub.inventory.domain.SupplyBatch;
+import zelisline.ub.inventory.repository.SupplyBatchRepository;
 import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.api.dto.AddPathAPurchaseOrderLineRequest;
 import zelisline.ub.purchasing.api.dto.CreatePathAPurchaseOrderRequest;
@@ -72,6 +75,8 @@ public class PathAPurchaseService {
     private static final BigDecimal MONEY_SCALE = new BigDecimal("0.01");
     private static final int UNIT_SCALE = 4;
 
+    private final BatchNumberGenerator batchNumberGenerator;
+
     private final PurchaseOrderRepository purchaseOrderRepository;
     private final PurchaseOrderLineRepository purchaseOrderLineRepository;
     private final GoodsReceiptRepository goodsReceiptRepository;
@@ -89,6 +94,7 @@ public class PathAPurchaseService {
     private final BusinessRepository businessRepository;
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final ObjectMapper objectMapper;
+    private final SupplyBatchRepository supplyBatchRepository;
 
     public static String postGrnRoute() {
         return "POST /api/v1/purchasing/path-a/goods-receipts";
@@ -261,8 +267,26 @@ public class PathAPurchaseService {
         grn.setStatus(PurchasingConstants.GRN_DRAFT);
         goodsReceiptRepository.save(grn);
 
+        SupplyBatch sb = new SupplyBatch();
+        sb.setBusinessId(businessId);
+        sb.setBranchId(grn.getBranchId());
+        sb.setSupplierId(po.getSupplierId());
+        sb.setBatchNumber(batchNumberGenerator.next(po.getSupplierId(), supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(po.getSupplierId(), businessId).map(zelisline.ub.suppliers.domain.Supplier::getName).orElse(null), grn.getReceivedAt(), businessId));
+        sb.setBatchName(null);
+        sb.setSourceType(PurchasingConstants.BATCH_SOURCE_PATH_A_GRN);
+        sb.setSourceId(grn.getId());
+        sb.setItemCount(0);
+        sb.setTotalInitialQuantity(BigDecimal.ZERO);
+        sb.setTotalRemainingQuantity(BigDecimal.ZERO);
+        sb.setReceivedAt(grn.getReceivedAt());
+        sb.setStatus("active");
+        supplyBatchRepository.save(sb);
+
         BigDecimal grniTotal = BigDecimal.ZERO;
         List<GoodsReceiptLine> createdLines = new ArrayList<>();
+        int itemCount = 0;
+        BigDecimal totalInitial = BigDecimal.ZERO;
+        BigDecimal totalRemaining = BigDecimal.ZERO;
         for (PostGoodsReceiptLineInput in : req.lines()) {
             PurchaseOrderLine pol = purchaseOrderLineRepository.findById(in.purchaseOrderLineId())
                     .filter(l -> l.getPurchaseOrderId().equals(po.getId()))
@@ -293,6 +317,7 @@ public class PathAPurchaseService {
             batch.setItemId(pol.getItemId());
             batch.setSupplierId(po.getSupplierId());
             batch.setBatchNumber("A-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+            batch.setSupplyBatchId(sb.getId());
             batch.setSourceType(PurchasingConstants.BATCH_SOURCE_PATH_A_GRN);
             batch.setSourceId(gl.getId());
             batch.setInitialQuantity(in.qtyReceived());
@@ -300,6 +325,9 @@ public class PathAPurchaseService {
             batch.setUnitCost(unitCost);
             batch.setReceivedAt(grn.getReceivedAt());
             inventoryBatchRepository.save(batch);
+            itemCount++;
+            totalInitial = totalInitial.add(in.qtyReceived());
+            totalRemaining = totalRemaining.add(in.qtyReceived());
 
             StockMovement sm = new StockMovement();
             sm.setBusinessId(businessId);
@@ -325,6 +353,10 @@ public class PathAPurchaseService {
 
             touchSupplierProduct(po.getSupplierId(), pol.getItemId(), unitCost);
         }
+        sb.setItemCount(itemCount);
+        sb.setTotalInitialQuantity(totalInitial);
+        sb.setTotalRemainingQuantity(totalRemaining);
+        supplyBatchRepository.save(sb);
 
         LocalDate entryDate = LocalDate.ofInstant(grn.getReceivedAt(), ZoneOffset.UTC);
         JournalEntry entry = new JournalEntry();

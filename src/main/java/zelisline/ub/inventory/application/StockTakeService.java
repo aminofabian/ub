@@ -228,7 +228,7 @@ public class StockTakeService {
             String branchId
     ) {
         List<InventoryBatch> batches = inventoryBatchRepository
-                .findByBusinessIdAndItemIdAndBranchIdAndStatusAndQuantityRemainingGreaterThanOrderByIdAsc(
+                .findActiveBatchesForPreview(
                         businessId,
                         itemId,
                         branchId,

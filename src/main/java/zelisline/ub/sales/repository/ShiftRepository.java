@@ -3,6 +3,8 @@ package zelisline.ub.sales.repository;
 import java.util.Optional;
 
 import jakarta.persistence.LockModeType;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -48,4 +50,47 @@ public interface ShiftRepository extends JpaRepository<Shift, String> {
     );
 
     Optional<Shift> findByIdAndBusinessId(String id, String businessId);
+
+    /** List all shifts for a business, latest first. */
+    @Query("""
+            select s from Shift s
+             where s.businessId = :businessId
+             order by s.openedAt desc
+            """)
+    Page<Shift> findByBusinessIdOrderByOpenedAtDesc(
+            @Param("businessId") String businessId,
+            Pageable pageable
+    );
+
+    /** List shifts for a business, filtered by branch. */
+    @Query("""
+            select s from Shift s
+             where s.businessId = :businessId
+               and (:branchId is null or s.branchId = :branchId)
+               and (:status is null or s.status = :status)
+             order by s.openedAt desc
+            """)
+    Page<Shift> findByBusinessIdFiltered(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("status") String status,
+            Pageable pageable
+    );
+
+    /** List shifts opened by a specific cashier. */
+    @Query("""
+            select s from Shift s
+             where s.businessId = :businessId
+               and s.openedBy = :openedBy
+             order by s.openedAt desc
+            """)
+    Page<Shift> findByBusinessIdAndOpenedByOrderByOpenedAtDesc(
+            @Param("businessId") String businessId,
+            @Param("openedBy") String openedBy,
+            Pageable pageable
+    );
+
+    /** Count open shifts for a specific branch. */
+    long countByBusinessIdAndBranchIdAndStatus(
+            String businessId, String branchId, String status);
 }

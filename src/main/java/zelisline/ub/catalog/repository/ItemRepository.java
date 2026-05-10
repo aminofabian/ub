@@ -133,6 +133,8 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             """)
     List<String> findDistinctWebPublishedCategoryIds(@Param("businessId") String businessId);
 
+    boolean existsByBusinessIdAndItemTypeIdAndDeletedAtIsNull(String businessId, String itemTypeId);
+
     @Query("""
             select i from Item i
              where i.businessId = :businessId

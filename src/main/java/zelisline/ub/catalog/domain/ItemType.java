@@ -43,6 +43,9 @@ public class ItemType {
     @Column(name = "active", nullable = false)
     private boolean active = true;
 
+    @Column(name = "is_default", nullable = false)
+    private boolean isDefault = false;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

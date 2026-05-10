@@ -54,17 +54,32 @@ public class Shift {
     @Column(name = "closing_notes", length = 2000)
     private String closingNotes;
 
+    @Column(name = "variance_reason", length = 2000)
+    private String varianceReason;
+
     @Column(name = "closed_by", length = 36)
     private String closedBy;
 
     @Column(name = "close_journal_entry_id", length = 36)
     private String closeJournalEntryId;
 
+    @Column(name = "supervisor_id", length = 36)
+    private String supervisorId;
+
+    @Column(name = "reconciled_by", length = 36)
+    private String reconciledBy;
+
     @Column(name = "opened_at", nullable = false)
     private Instant openedAt;
 
     @Column(name = "closed_at")
     private Instant closedAt;
+
+    @Column(name = "reconciled_at")
+    private Instant reconciledAt;
+
+    @Column(name = "blind_closing")
+    private boolean blindClosing;
 
     @Version
     @Column(name = "version", nullable = false)

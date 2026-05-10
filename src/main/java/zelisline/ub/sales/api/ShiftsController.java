@@ -19,6 +19,8 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.sales.api.dto.PostCloseShiftRequest;
 import zelisline.ub.sales.api.dto.PostOpenShiftRequest;
+import zelisline.ub.sales.api.dto.ShiftDetailResponse;
+import zelisline.ub.sales.api.dto.ShiftListResponse;
 import zelisline.ub.sales.api.dto.ShiftResponse;
 import zelisline.ub.sales.application.ShiftService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
@@ -62,6 +64,40 @@ public class ShiftsController {
                 shiftId,
                 body,
                 user.userId()
+        );
+    }
+
+    @GetMapping
+    @PreAuthorize("hasPermission(null, 'shifts.read')")
+    public ShiftListResponse listShifts(
+            @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String openedBy,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int size,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return shiftService.listShifts(
+                TenantRequestIds.resolveBusinessId(request),
+                branchId,
+                status,
+                openedBy,
+                page,
+                size
+        );
+    }
+
+    @GetMapping("/{shiftId}")
+    @PreAuthorize("hasPermission(null, 'shifts.read')")
+    public ShiftDetailResponse getShiftDetail(
+            @PathVariable String shiftId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return shiftService.getShiftDetail(
+                TenantRequestIds.resolveBusinessId(request),
+                shiftId
         );
     }
 }

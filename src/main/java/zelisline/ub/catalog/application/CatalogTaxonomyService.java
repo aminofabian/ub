@@ -31,6 +31,7 @@ import zelisline.ub.catalog.api.dto.CreateItemTypeRequest;
 import zelisline.ub.catalog.api.dto.ItemImageResponse;
 import zelisline.ub.catalog.api.dto.ItemTypeResponse;
 import zelisline.ub.catalog.api.dto.PatchCategoryRequest;
+import zelisline.ub.catalog.api.dto.PatchItemTypeRequest;
 import zelisline.ub.catalog.api.dto.PostCategoryPriceRuleRequest;
 import zelisline.ub.catalog.api.dto.TaxRateSummaryResponse;
 import zelisline.ub.catalog.domain.Aisle;
@@ -46,6 +47,7 @@ import zelisline.ub.catalog.repository.CategoryPriceRuleRepository;
 import zelisline.ub.catalog.repository.CategoryImageRepository;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.CategorySupplierLinkRepository;
+import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.platform.media.CloudinaryImageService;
 import zelisline.ub.platform.media.CloudinaryUploadResult;
@@ -70,6 +72,7 @@ public class CatalogTaxonomyService {
     private final CloudinaryImageService cloudinaryImageService;
     private final AisleRepository aisleRepository;
     private final ItemTypeRepository itemTypeRepository;
+    private final ItemRepository itemRepository;
     private final TaxRateRepository taxRateRepository;
     private final CategoryPriceRuleRepository categoryPriceRuleRepository;
     private final PriceRuleRepository priceRuleRepository;
@@ -703,8 +706,64 @@ public class CatalogTaxonomyService {
         row.setColor(trimToNull(request.color()));
         row.setSortOrder(request.sortOrder() != null ? request.sortOrder() : 0);
         row.setActive(true);
+        if (Boolean.TRUE.equals(request.isDefault())) {
+            itemTypeRepository.clearDefaultForBusiness(businessId);
+            row.setDefault(true);
+        }
         itemTypeRepository.save(row);
         return toItemTypeResponse(row);
+    }
+
+    @Transactional
+    public ItemTypeResponse updateItemType(String businessId, String id, PatchItemTypeRequest request) {
+        ItemType row = itemTypeRepository.findByIdAndBusinessId(id, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Item type not found"));
+
+        if (request.key() != null) {
+            String key = TaxonomySlug.normalizeItemTypeKey(request.key());
+            if (key.isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid item type key");
+            }
+            if (!row.getTypeKey().equals(key) && itemTypeRepository.existsByBusinessIdAndTypeKey(businessId, key)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Item type key already in use");
+            }
+            row.setTypeKey(key);
+        }
+        if (request.label() != null) {
+            row.setLabel(request.label().trim());
+        }
+        if (request.icon() != null) {
+            row.setIcon(trimToNull(request.icon()));
+        }
+        if (request.color() != null) {
+            row.setColor(trimToNull(request.color()));
+        }
+        if (request.sortOrder() != null) {
+            row.setSortOrder(request.sortOrder());
+        }
+        if (request.active() != null) {
+            row.setActive(request.active());
+        }
+        if (request.isDefault() != null) {
+            if (request.isDefault()) {
+                itemTypeRepository.clearDefaultForBusiness(businessId);
+            }
+            row.setDefault(request.isDefault());
+        }
+
+        itemTypeRepository.save(row);
+        return toItemTypeResponse(row);
+    }
+
+    @Transactional
+    public void deleteItemType(String businessId, String id) {
+        ItemType row = itemTypeRepository.findByIdAndBusinessId(id, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Item type not found"));
+        if (itemRepository.existsByBusinessIdAndItemTypeIdAndDeletedAtIsNull(businessId, id)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Cannot delete item type \"" + row.getLabel() + "\" because it is used by one or more items.");
+        }
+        itemTypeRepository.delete(row);
     }
 
     private String uniqueSlug(String businessId, String base) {
@@ -733,7 +792,8 @@ public class CatalogTaxonomyService {
                 t.getIcon(),
                 t.getColor(),
                 t.getSortOrder(),
-                t.isActive());
+                t.isActive(),
+                t.isDefault());
     }
 
     private static String trimToNull(String value) {

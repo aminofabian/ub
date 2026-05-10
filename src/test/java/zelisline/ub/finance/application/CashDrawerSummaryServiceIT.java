@@ -165,7 +165,7 @@ class CashDrawerSummaryServiceIT {
 
     @Test
     void closeShift_persistsSummarySnapshotWithExpectedFormulaComponents() {
-        var opened = shiftService.openShift(TENANT, new PostOpenShiftRequest(branchId, new BigDecimal("100.00"), "open"), userId);
+        var opened = shiftService.openShift(TENANT, new PostOpenShiftRequest(branchId, new BigDecimal("100.00"), "open", null), userId);
         Shift shift = shiftRepository.findById(opened.id()).orElseThrow();
         Instant openedAt = shift.getOpenedAt();
 
@@ -231,7 +231,7 @@ class CashDrawerSummaryServiceIT {
         shift.setExpectedClosingCash(new BigDecimal("135.00"));
         shiftRepository.save(shift);
 
-        shiftService.closeShift(TENANT, shift.getId(), new PostCloseShiftRequest(new BigDecimal("130.00"), "close"), userId);
+        shiftService.closeShift(TENANT, shift.getId(), new PostCloseShiftRequest(new BigDecimal("130.00"), "close", null, null), userId);
 
         CashDrawerDailySummary summary = summaryRepository.findByShiftId(shift.getId()).orElseThrow();
         assertThat(summary.getOpeningCash()).isEqualByComparingTo(new BigDecimal("100.00"));
@@ -252,4 +252,3 @@ class CashDrawerSummaryServiceIT {
         return p;
     }
 }
-

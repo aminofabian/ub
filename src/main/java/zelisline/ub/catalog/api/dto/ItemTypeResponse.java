@@ -9,6 +9,7 @@ public record ItemTypeResponse(
         String icon,
         String color,
         int sortOrder,
-        boolean active
+        boolean active,
+        @JsonProperty("isDefault") boolean isDefault
 ) {
 }

@@ -90,6 +90,7 @@ public class ItemCatalogService {
             CatalogListScope catalogListScope,
             String excludeLinkedSupplierId,
             String branchIdForStock,
+            String itemTypeId,
             Pageable pageable
     ) {
         String q = blankToNull(search);
@@ -116,6 +117,8 @@ public class ItemCatalogService {
             }
         }
         boolean squashParentGroupsForSearch = includeAllScopes && q != null;
+        String itemType = blankToNull(itemTypeId);
+        boolean itemTypeUnset = itemType == null;
         Page<Item> page = itemRepository.search(
                 businessId,
                 q,
@@ -130,6 +133,8 @@ public class ItemCatalogService {
                 skusOnly,
                 blankToNull(excludeLinkedSupplierId),
                 squashParentGroupsForSearch,
+                itemTypeUnset,
+                itemType != null ? itemType : "",
                 pg);
         List<String> ids = page.getContent().stream().map(Item::getId).toList();
         Map<String, String> thumbs = firstGalleryImageUrlByItemId(ids);

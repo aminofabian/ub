@@ -84,6 +84,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                             and ch.businessId = i.businessId
                             and ch.deletedAt is null
                         )))
+               and (:itemTypeUnset = true or i.itemTypeId = :itemTypeId)
             """)
     Page<Item> search(
             @Param("businessId") String businessId,
@@ -99,6 +100,8 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("skusOnly") boolean skusOnly,
             @Param("excludeLinkedSupplierId") String excludeLinkedSupplierId,
             @Param("squashParentGroupsForSearch") boolean squashParentGroupsForSearch,
+            @Param("itemTypeUnset") boolean itemTypeUnset,
+            @Param("itemTypeId") String itemTypeId,
             Pageable pageable
     );
 

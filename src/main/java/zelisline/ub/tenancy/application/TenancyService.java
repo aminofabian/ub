@@ -249,6 +249,34 @@ public class TenancyService {
         return out;
     }
 
+    @Transactional
+    public BusinessResponse uploadBrandingOgImage(String tenantBusinessId, byte[] fileBytes, String originalFilename) {
+        Business business = requireTenantBusiness(tenantBusinessId);
+        String previousPublicId = storefrontSettingsService.readBrandingOgImagePublicId(business.getSettings());
+        String folder = "ub/" + tenantBusinessId + "/branding/og-image";
+        CloudinaryUploadResult uploaded = cloudinaryImageService.uploadImageToFolder(
+                fileBytes, originalFilename, folder, false);
+        business.setSettings(storefrontSettingsService.mergeBrandingOgImage(
+                business.getSettings(), uploaded.secureUrl(), uploaded.publicId()));
+        BusinessResponse out = toResponse(businessRepository.save(business));
+        if (previousPublicId != null && !previousPublicId.equals(uploaded.publicId())) {
+            cloudinaryImageService.destroyImage(previousPublicId);
+        }
+        return out;
+    }
+
+    @Transactional
+    public BusinessResponse clearBrandingOgImage(String tenantBusinessId) {
+        Business business = requireTenantBusiness(tenantBusinessId);
+        String previousPublicId = storefrontSettingsService.readBrandingOgImagePublicId(business.getSettings());
+        business.setSettings(storefrontSettingsService.mergeBrandingOgImage(business.getSettings(), null, null));
+        BusinessResponse out = toResponse(businessRepository.save(business));
+        if (previousPublicId != null) {
+            cloudinaryImageService.destroyImage(previousPublicId);
+        }
+        return out;
+    }
+
     private Business requireTenantBusiness(String tenantBusinessId) {
         return businessRepository.findByIdAndDeletedAtIsNull(tenantBusinessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));

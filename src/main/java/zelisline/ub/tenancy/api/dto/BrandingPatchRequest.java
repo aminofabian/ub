@@ -23,6 +23,7 @@ public record BrandingPatchRequest(
         @Size(max = 255) String metaTitle,
         @Size(max = 320) String metaDescription,
         @Size(max = 1024) String ogImage,
+        @Size(max = 255) String ogImagePublicId,
         @Size(max = 500) String metaKeywords
 ) {
 }

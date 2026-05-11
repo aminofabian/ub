@@ -253,6 +253,44 @@ public class StorefrontSettingsService {
         }
     }
 
+    /**
+     * Replaces {@code branding.ogImage}/{@code ogImagePublicId} after a
+     * Cloudinary upload. Returns the merged settings JSON.
+     */
+    public String mergeBrandingOgImage(String currentSettings, String secureUrl, String publicId) {
+        ObjectNode root = parseRoot(currentSettings);
+        ObjectNode branding = copyNamespace(root, KEY_BRANDING);
+        if (secureUrl == null || secureUrl.isBlank()) {
+            branding.remove("ogImage");
+            branding.remove("ogImagePublicId");
+        } else {
+            branding.put("ogImage", secureUrl);
+            if (publicId != null && !publicId.isBlank()) {
+                branding.put("ogImagePublicId", publicId.trim());
+            } else {
+                branding.remove("ogImagePublicId");
+            }
+        }
+        root.set(KEY_BRANDING, branding);
+        return writeRoot(root);
+    }
+
+    public String readBrandingOgImagePublicId(String currentSettings) {
+        if (currentSettings == null || currentSettings.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode root = parseSettingsDocument(currentSettings);
+            JsonNode branding = root.path(KEY_BRANDING);
+            if (!branding.isObject()) {
+                return null;
+            }
+            return textOrNull(branding.get("ogImagePublicId"));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private static void applyBrandingPatch(ObjectNode branding, BrandingPatchRequest patch) {
         putOrRemoveString(branding, "displayName", patch.displayName());
         putOrRemoveString(branding, "logoUrl", patch.logoUrl());
@@ -268,6 +306,10 @@ public class StorefrontSettingsService {
         putOrRemoveString(branding, "metaTitle", patch.metaTitle());
         putOrRemoveString(branding, "metaDescription", patch.metaDescription());
         putOrRemoveString(branding, "ogImage", patch.ogImage());
+        putOrRemoveString(branding, "ogImagePublicId", patch.ogImagePublicId());
+        if (patch.ogImage() != null && patch.ogImage().trim().isEmpty()) {
+            branding.remove("ogImagePublicId");
+        }
         putOrRemoveString(branding, "metaKeywords", patch.metaKeywords());
     }
 

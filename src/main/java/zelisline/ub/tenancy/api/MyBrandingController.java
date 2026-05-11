@@ -97,6 +97,29 @@ public class MyBrandingController {
         return tenancyService.clearBrandingFavicon(TenantRequestIds.resolveBusinessId(request));
     }
 
+    @PostMapping(value = "/og-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize(MANAGE_SETTINGS)
+    public ResponseEntity<BusinessResponse> uploadOgImage(
+            @RequestPart("file") MultipartFile file,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        byte[] bytes = readUploadBytes(file, "og-image");
+        BusinessResponse body = tenancyService.uploadBrandingOgImage(
+                TenantRequestIds.resolveBusinessId(request),
+                bytes,
+                file.getOriginalFilename()
+        );
+        return ResponseEntity.status(HttpStatus.CREATED).body(body);
+    }
+
+    @DeleteMapping("/og-image")
+    @PreAuthorize(MANAGE_SETTINGS)
+    public BusinessResponse clearOgImage(HttpServletRequest request) {
+        CurrentTenantUser.require(request);
+        return tenancyService.clearBrandingOgImage(TenantRequestIds.resolveBusinessId(request));
+    }
+
     private static byte[] readUploadBytes(MultipartFile file, String label) {
         if (file == null || file.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Empty " + label + " file");

@@ -11,10 +11,16 @@ public record TenantBrandingDto(
         String logoUrl,
         String faviconUrl,
         String primaryColor,
-        String accentColor
+        String accentColor,
+
+        // SEO / social preview fields (optional)
+        String metaTitle,
+        String metaDescription,
+        String ogImage,
+        String metaKeywords
 ) {
 
     public static TenantBrandingDto defaults(String displayName) {
-        return new TenantBrandingDto(displayName, null, null, null, null);
+        return new TenantBrandingDto(displayName, null, null, null, null, null, null, null, null);
     }
 }

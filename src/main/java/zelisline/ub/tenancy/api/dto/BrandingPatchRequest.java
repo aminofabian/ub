@@ -17,6 +17,12 @@ public record BrandingPatchRequest(
         @Pattern(regexp = "^$|^#[0-9a-fA-F]{6}$", message = "primaryColor must be #RRGGBB")
         @Size(max = 7) String primaryColor,
         @Pattern(regexp = "^$|^#[0-9a-fA-F]{6}$", message = "accentColor must be #RRGGBB")
-        @Size(max = 7) String accentColor
+        @Size(max = 7) String accentColor,
+
+        // SEO / social preview fields — null = no change, empty string = clear
+        @Size(max = 255) String metaTitle,
+        @Size(max = 320) String metaDescription,
+        @Size(max = 1024) String ogImage,
+        @Size(max = 500) String metaKeywords
 ) {
 }

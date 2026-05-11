@@ -95,7 +95,11 @@ public class StorefrontSettingsService {
                 textOrNull(node.get("logoUrl")),
                 textOrNull(node.get("faviconUrl")),
                 textOrNull(node.get("primaryColor")),
-                textOrNull(node.get("accentColor"))
+                textOrNull(node.get("accentColor")),
+                textOrNull(node.get("metaTitle")),
+                textOrNull(node.get("metaDescription")),
+                textOrNull(node.get("ogImage")),
+                textOrNull(node.get("metaKeywords"))
         );
     }
 
@@ -259,6 +263,12 @@ public class StorefrontSettingsService {
         }
         putOrRemoveString(branding, "primaryColor", patch.primaryColor());
         putOrRemoveString(branding, "accentColor", patch.accentColor());
+
+        // SEO / social preview fields
+        putOrRemoveString(branding, "metaTitle", patch.metaTitle());
+        putOrRemoveString(branding, "metaDescription", patch.metaDescription());
+        putOrRemoveString(branding, "ogImage", patch.ogImage());
+        putOrRemoveString(branding, "metaKeywords", patch.metaKeywords());
     }
 
     /**

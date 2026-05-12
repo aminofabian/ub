@@ -3,6 +3,7 @@ package zelisline.ub.notifications.application;
 import java.time.Instant;
 import java.util.List;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -18,6 +19,7 @@ import zelisline.ub.notifications.repository.NotificationRepository;
 public class NotificationService {
 
     private final NotificationRepository notificationRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional(readOnly = true)
     public List<Notification> list(String businessId) {
@@ -54,7 +56,9 @@ public class NotificationService {
         n.setDedupeKey(dedupeKey);
         n.setPayloadJson(payloadJson);
         try {
-            return java.util.Optional.of(notificationRepository.save(n));
+            Notification saved = notificationRepository.save(n);
+            eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.NotificationCreatedEvent(saved));
+            return java.util.Optional.of(saved);
         } catch (DataIntegrityViolationException ex) {
             return java.util.Optional.empty();
         }

@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.LinkedHashMap;
 import java.util.UUID;
 
 import org.apache.poi.ss.usermodel.Cell;
@@ -35,6 +36,7 @@ import zelisline.ub.exports.api.dto.ExportJobResponse;
 import zelisline.ub.exports.domain.ExportJob;
 import zelisline.ub.exports.repository.ExportJobRepository;
 import zelisline.ub.identity.application.TokenHasher;
+import zelisline.ub.notifications.application.NotificationService;
 import zelisline.ub.reporting.api.dto.SalesRegisterResponse;
 import zelisline.ub.reporting.application.SalesReportsService;
 
@@ -55,6 +57,7 @@ public class ExportService {
     private final ExportJobRepository exportJobRepository;
     private final SalesReportsService salesReportsService;
     private final ObjectMapper objectMapper;
+    private final NotificationService notificationService;
 
     @Transactional
     public ExportJobResponse create(String businessId, String userId, ExportCreateRequest req, String idempotencyKeyRaw) {
@@ -90,6 +93,16 @@ public class ExportService {
         try {
             run(job, params);
             job.setStatus(STATUS_COMPLETED);
+            try {
+                var payload = new LinkedHashMap<String, Object>();
+                payload.put("exportId", job.getId());
+                payload.put("reportKey", job.getReportKey());
+                String json = objectMapper.writeValueAsString(payload);
+                notificationService.tryInsertDedupe(
+                        businessId, "export.completed", "export:" + job.getId(), json);
+            } catch (Exception e) {
+                log.warn("Failed to create export notification for job {}: {}", job.getId(), e.getMessage());
+            }
         } catch (Exception ex) {
             log.warn("Export failed jobId={} businessId={}", job.getId(), businessId, ex);
             job.setStatus(STATUS_FAILED);

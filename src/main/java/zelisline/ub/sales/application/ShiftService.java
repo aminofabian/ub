@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -66,6 +67,7 @@ public class ShiftService {
     private final CashDrawerSummaryService cashDrawerSummaryService;
     private final LedgerPostingPort ledgerPostingPort;
     private final LedgerAccountResolver ledgerAccountResolver;
+    private final ApplicationEventPublisher eventPublisher;
 
     // ========================================================================
     // OPEN SHIFT
@@ -92,6 +94,9 @@ public class ShiftService {
         s.setExpectedClosingCash(opening);
         s.setOpeningNotes(blankToNull(req.notes()));
         shiftRepository.save(s);
+
+        eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.ShiftOpenedEvent(
+                businessId, branchId, s.getId(), userId, opening));
 
         // Save opening denominations if provided
         List<DenominationResponse> openingDenoms = Collections.emptyList();
@@ -180,6 +185,10 @@ public class ShiftService {
             s.setCloseJournalEntryId(postVarianceJournal(businessId, s.getId(), variance));
         }
         shiftRepository.save(s);
+
+        eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.ShiftClosedEvent(
+                businessId, s.getBranchId(), shiftId, userId, expected, counted, variance));
+
         cashDrawerSummaryService.upsertForClosedShift(s);
 
         // Record audit log

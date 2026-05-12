@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -53,6 +54,7 @@ public class InventoryBatchPickerService {
     private final BusinessRepository businessRepository;
     private final BusinessInventorySettingsReader businessInventorySettingsReader;
     private final WebhookEnqueueService webhookEnqueueService;
+    private final ApplicationEventPublisher eventPublisher;
     private final SupplyBatchLifecycleService supplyBatchLifecycleService;
 
     @Transactional(readOnly = true)
@@ -164,6 +166,12 @@ public class InventoryBatchPickerService {
             batch.setQuantityRemaining(next);
             inventoryBatchRepository.save(batch);
 
+            // Publish real-time stock.depleted event when batch hits zero
+            if (next.signum() == 0) {
+                eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.StockDepletedEvent(
+                        businessId, branchId, itemId, item.getName(), line.batchId()));
+            }
+
             // Auto-detect sold-out on parent supply batch
             supplyBatchLifecycleService.checkAndTransitionToSoldoutIfNeeded(
                     businessId, batch.getSupplyBatchId());
@@ -253,6 +261,9 @@ public class InventoryBatchPickerService {
             data.put("currentStock", after.toPlainString());
             data.put("reorderLevel", reorder.toPlainString());
             webhookEnqueueService.enqueue(businessId, WebhookEventTypes.STOCK_LOW_STOCK, data, null);
+
+            eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.StockLowEvent(
+                    businessId, branchId, itemId, item.getName(), after, reorder));
         }
     }
 }

@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -59,6 +60,7 @@ public class InventoryTransferService {
     private final BusinessInventorySettingsReader businessInventorySettingsReader;
     private final SupplyBatchRepository supplyBatchRepository;
     private final SupplyBatchLifecycleService supplyBatchLifecycleService;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public StockTransferCreatedResponse createDraft(
@@ -86,6 +88,10 @@ public class InventoryTransferService {
             t.getLines().add(line);
         }
         stockTransferRepository.save(t);
+
+        eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.TransferInitiatedEvent(
+                businessId, req.fromBranchId(), req.toBranchId(), t.getId(), req.lines().size()));
+
         return new StockTransferCreatedResponse(t.getId(), t.getStatus());
     }
 
@@ -103,6 +109,9 @@ public class InventoryTransferService {
         }
         t.setStatus(InventoryConstants.TRANSFER_STATUS_COMPLETED);
         stockTransferRepository.save(t);
+
+        eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.TransferReceivedEvent(
+                businessId, t.getFromBranchId(), t.getToBranchId(), transferId));
     }
 
     private void moveLine(StockTransfer t, StockTransferLine line, String userId) {

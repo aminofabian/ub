@@ -10,11 +10,13 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.inventory.api.dto.ApproveStockAdjustmentRequest;
@@ -44,6 +46,7 @@ public class StockTakeService {
     private final ItemRepository itemRepository;
     private final InventoryBatchRepository inventoryBatchRepository;
     private final BranchRepository branchRepository;
+    private final ApplicationEventPublisher eventPublisher;
     private final InventoryLedgerService inventoryLedgerService;
     private final InventoryBatchPickerService inventoryBatchPickerService;
 
@@ -144,6 +147,9 @@ public class StockTakeService {
         request.setDecidedBy(userId);
         request.setDecidedAt(Instant.now());
         stockAdjustmentRequestRepository.save(request);
+        eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.ApprovalResolvedEvent(
+                businessId, request.getBranchId(), requestId, "approved",
+                userId, request.getRequestedBy()));
     }
 
     @Transactional
@@ -168,6 +174,9 @@ public class StockTakeService {
         request.setDecidedBy(userId);
         request.setDecidedAt(Instant.now());
         stockAdjustmentRequestRepository.save(request);
+        eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.ApprovalResolvedEvent(
+                businessId, request.getBranchId(), requestId, "rejected",
+                userId, request.getRequestedBy()));
     }
 
     private void applyVarianceToStock(
@@ -268,6 +277,10 @@ public class StockTakeService {
         r.setStatus(InventoryConstants.ADJUSTMENT_REQUEST_PENDING);
         r.setRequestedBy(userId);
         stockAdjustmentRequestRepository.save(r);
+        eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.ApprovalRequestedEvent(
+                businessId, r.getBranchId(), r.getId(), "stock_adjustment",
+                r.getRequestedBy(), r.getItemId(), itemName(businessId, r.getItemId()),
+                r.getVarianceQty().abs(), r.getReason()));
     }
 
     private StockTakeSession loadSessionInProgress(String businessId, String sessionId) {
@@ -339,5 +352,10 @@ public class StockTakeService {
     private void requireBranch(String businessId, String branchId) {
         branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(branchId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Branch not found"));
+    }
+
+    private String itemName(String businessId, String itemId) {
+        return itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
+                .map(Item::getName).orElse(itemId);
     }
 }

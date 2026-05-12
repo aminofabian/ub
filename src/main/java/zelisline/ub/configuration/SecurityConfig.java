@@ -134,6 +134,9 @@ public class SecurityConfig {
                                 "/swagger-ui.html"
                         ).permitAll()
 
+                        // WebSocket upgrade: auth is via single-use ticket query param, not JWT.
+                        .requestMatchers("/api/v1/realtime").permitAll()
+
                         // HMAC verification happens inside the controller, not in Spring Security.
                         .requestMatchers(HttpMethod.POST, "/webhooks/**").permitAll()
 

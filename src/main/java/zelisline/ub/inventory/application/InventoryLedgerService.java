@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -56,6 +57,7 @@ public class InventoryLedgerService {
     private final BranchRepository branchRepository;
     private final SupplyBatchRepository supplyBatchRepository;
     private final SupplyBatchLifecycleService supplyBatchLifecycleService;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public InventoryMutationResponse recordOpeningBalance(
@@ -148,6 +150,13 @@ public class InventoryLedgerService {
                 value,
                 true
         );
+        if (req.quantity().signum() != 0) {
+            String itemName = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(req.itemId(), businessId)
+                    .map(zelisline.ub.catalog.domain.Item::getName).orElse(req.itemId());
+            eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.StockAdjustedEvent(
+                    businessId, req.branchId(), req.itemId(), itemName,
+                    "stock_increase", req.quantity()));
+        }
         return new InventoryMutationResponse(jeId, mv.getId(), batch.getId());
     }
 
@@ -257,6 +266,11 @@ public class InventoryLedgerService {
                 value,
                 false
         );
+        String itemName = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(req.itemId(), businessId)
+                .map(zelisline.ub.catalog.domain.Item::getName).orElse(req.itemId());
+        eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.StockAdjustedEvent(
+                businessId, req.branchId(), req.itemId(), itemName,
+                "wastage", qty.negate()));
         return new InventoryMutationResponse(jeId, mv.getId(), batch.getId());
     }
 

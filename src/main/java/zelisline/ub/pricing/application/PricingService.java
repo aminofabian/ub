@@ -10,6 +10,7 @@ import java.util.Map;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -56,6 +57,7 @@ public class PricingService {
     private final BranchRepository branchRepository;
     private final SupplierRepository supplierRepository;
     private final ObjectMapper objectMapper;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public SellingPriceResponse setSellingPrice(String businessId, PostSellingPriceRequest req, String userId) {
@@ -67,12 +69,16 @@ public class PricingService {
         // If an open-ended row already exists for this date, update its price instead of throwing
         for (SellingPrice existing : sellingPriceRepository.findOpenEnded(businessId, req.itemId(), branchId)) {
             if (existing.getEffectiveFrom().equals(req.effectiveFrom())) {
+                BigDecimal oldPrice = existing.getPrice();
                 existing.setPrice(req.price().setScale(MONEY_SCALE, RoundingMode.HALF_UP));
                 if (req.notes() != null && !req.notes().isBlank()) {
                     existing.setNotes(req.notes());
                 }
                 existing.setSetBy(userId);
                 sellingPriceRepository.save(existing);
+                eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.PriceChangedEvent(
+                        businessId, branchId, req.itemId(), itemName(businessId, req.itemId()),
+                        oldPrice, req.price()));
                 return toSellingDto(existing);
             }
             if (!existing.getEffectiveFrom().isBefore(req.effectiveFrom())) {
@@ -95,6 +101,9 @@ public class PricingService {
         row.setSetBy(userId);
         row.setNotes(req.notes());
         sellingPriceRepository.save(row);
+        eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.PriceChangedEvent(
+                businessId, branchId, req.itemId(), itemName(businessId, req.itemId()),
+                BigDecimal.ZERO, req.price()));
         return toSellingDto(row);
     }
 
@@ -436,6 +445,11 @@ public class PricingService {
         } catch (Exception e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid paramsJson");
         }
+    }
+
+    private String itemName(String businessId, String itemId) {
+        return itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
+                .map(Item::getName).orElse(itemId);
     }
 
     private void requireItem(String businessId, String itemId) {

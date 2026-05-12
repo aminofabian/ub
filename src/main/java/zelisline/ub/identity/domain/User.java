@@ -78,6 +78,9 @@ public class User {
     @Column(name = "locked_until")
     private Instant lockedUntil;
 
+    @Column(name = "settings", columnDefinition = "JSON")
+    private String settings;
+
     /** Start of the current 10-minute window for soft-lock counting (§3.4). */
     @Column(name = "auth_soft_window_start")
     private Instant authSoftWindowStart;

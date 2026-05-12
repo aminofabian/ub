@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -70,6 +71,7 @@ public class SaleService {
     private final LoyaltyPointsService loyaltyPointsService;
     private final BusinessCreditSettingsService businessCreditSettingsService;
     private final WebhookEnqueueService webhookEnqueueService;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public SaleCreationOutcome createSale(String businessId, String rawIdempotencyKey, PostSaleRequest req, String userId) {
@@ -142,6 +144,15 @@ public class SaleService {
 
         SaleResponse completed = toResponse(loadSaleOrThrow(saleId, businessId));
         enqueueSaleCompletedWebhook(businessId, completed, effectiveSoldAt);
+
+        // Publish real-time payment.confirmed for each payment method
+        for (NormalizedPayment p : resolved.normalized()) {
+            eventPublisher.publishEvent(
+                    new zelisline.ub.platform.realtime.RealtimeBridge.PaymentConfirmedEvent(
+                            businessId, req.branchId(), saleId, p.amount(),
+                            p.method(), userId));
+        }
+
         return completed;
     }
 

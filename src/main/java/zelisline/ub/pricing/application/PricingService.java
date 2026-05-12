@@ -72,6 +72,7 @@ public class PricingService {
     ) {
         requireItem(businessId, itemId);
         LocalDate today = LocalDate.now();
+        BigDecimal priorPrice = getCurrentOpenSellingPrice(businessId, itemId, null);
         sellingPriceRepository.closeAllOpenRowsForItem(businessId, itemId, today);
         if (bundlePrice == null || bundlePrice.signum() <= 0) {
             return;
@@ -89,16 +90,30 @@ public class PricingService {
                         price,
                         today,
                         "catalog shelf price"),
-                setBy);
+                setBy,
+                priorPrice);
     }
 
     @Transactional
     public SellingPriceResponse setSellingPrice(String businessId, PostSellingPriceRequest req, String userId) {
+        return setSellingPrice(businessId, req, userId, null);
+    }
+
+    @Transactional
+    public SellingPriceResponse setSellingPrice(
+            String businessId,
+            PostSellingPriceRequest req,
+            String userId,
+            BigDecimal priorPriceHint
+    ) {
         requireItem(businessId, req.itemId());
         String branchId = blankToNull(req.branchId());
         if (branchId != null) {
             requireBranch(businessId, branchId);
         }
+        BigDecimal priorForEvent = priorPriceHint != null
+                ? priorPriceHint
+                : resolvePriorSellPriceForEvent(businessId, req.itemId(), branchId);
         // If an open-ended row already exists for this date, update its price instead of throwing
         for (SellingPrice existing : sellingPriceRepository.findOpenEnded(businessId, req.itemId(), branchId)) {
             if (existing.getEffectiveFrom().equals(req.effectiveFrom())) {
@@ -136,7 +151,7 @@ public class PricingService {
         sellingPriceRepository.save(row);
         eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.PriceChangedEvent(
                 businessId, branchId, req.itemId(), itemName(businessId, req.itemId()),
-                BigDecimal.ZERO, req.price()));
+                priorForEvent != null ? priorForEvent : BigDecimal.ZERO, req.price()));
         return toSellingDto(row);
     }
 
@@ -393,6 +408,10 @@ public class PricingService {
             return null;
         }
         return open.getFirst().getPrice().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal resolvePriorSellPriceForEvent(String businessId, String itemId, String branchId) {
+        return getCurrentOpenSellingPrice(businessId, itemId, branchId);
     }
 
     @Transactional

@@ -59,6 +59,39 @@ public class PricingService {
     private final ObjectMapper objectMapper;
     private final ApplicationEventPublisher eventPublisher;
 
+    /**
+     * Keep the pricing module's active selling price aligned with catalog shelf ({@code bundlePrice}).
+     * Storefront, POS, and cart resolve the open selling price before falling back to {@code bundlePrice}.
+     */
+    @Transactional
+    public void syncSellingPriceFromBundle(
+            String businessId,
+            String itemId,
+            BigDecimal bundlePrice,
+            String actorUserId
+    ) {
+        requireItem(businessId, itemId);
+        LocalDate today = LocalDate.now();
+        sellingPriceRepository.closeAllOpenRowsForItem(businessId, itemId, today);
+        if (bundlePrice == null || bundlePrice.signum() <= 0) {
+            return;
+        }
+        BigDecimal price = bundlePrice.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        if (price.compareTo(new BigDecimal("0.01")) < 0) {
+            return;
+        }
+        String setBy = actorUserId != null && !actorUserId.isBlank() ? actorUserId : "system";
+        setSellingPrice(
+                businessId,
+                new PostSellingPriceRequest(
+                        itemId,
+                        null,
+                        price,
+                        today,
+                        "catalog shelf price"),
+                setBy);
+    }
+
     @Transactional
     public SellingPriceResponse setSellingPrice(String businessId, PostSellingPriceRequest req, String userId) {
         requireItem(businessId, req.itemId());

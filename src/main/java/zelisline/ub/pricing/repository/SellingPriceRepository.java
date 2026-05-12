@@ -68,4 +68,19 @@ public interface SellingPriceRepository extends JpaRepository<SellingPrice, Stri
             @Param("newFrom") LocalDate newFrom,
             @Param("closeTo") LocalDate closeTo
     );
+
+    /** Close every open-ended selling price row for an item (branch-specific and business-wide). */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update SellingPrice sp
+               set sp.effectiveTo = :closeTo
+             where sp.businessId = :businessId
+               and sp.itemId = :itemId
+               and sp.effectiveTo is null
+            """)
+    int closeAllOpenRowsForItem(
+            @Param("businessId") String businessId,
+            @Param("itemId") String itemId,
+            @Param("closeTo") LocalDate closeTo
+    );
 }

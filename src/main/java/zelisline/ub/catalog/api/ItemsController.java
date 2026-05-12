@@ -137,8 +137,9 @@ public class ItemsController {
             @Valid @RequestBody PatchItemRequest body,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.require(request);
-        return itemCatalogService.patchItem(TenantRequestIds.resolveBusinessId(request), id, body);
+        String actorUserId = CurrentTenantUser.auditActorId(request);
+        return itemCatalogService.patchItem(
+                TenantRequestIds.resolveBusinessId(request), id, body, actorUserId);
     }
 
     @DeleteMapping("/{id}")

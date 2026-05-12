@@ -53,6 +53,7 @@ import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.identity.application.TokenHasher;
 import zelisline.ub.platform.media.CloudinaryImageService;
 import zelisline.ub.platform.media.CloudinaryUploadResult;
+import zelisline.ub.pricing.application.PricingService;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.suppliers.application.SupplierLinkProvisioner;
 import zelisline.ub.tenancy.repository.BranchRepository;
@@ -76,6 +77,7 @@ public class ItemCatalogService {
     private final CloudinaryImageService cloudinaryImageService;
     private final BranchRepository branchRepository;
     private final InventoryBatchRepository inventoryBatchRepository;
+    private final PricingService pricingService;
     private final SkuGenerationService skuGenerationService;
 
     @Transactional(readOnly = true)
@@ -284,6 +286,16 @@ public class ItemCatalogService {
 
     @Transactional
     public ItemResponse patchItem(String businessId, String itemId, PatchItemRequest patch) {
+        return patchItem(businessId, itemId, patch, null);
+    }
+
+    @Transactional
+    public ItemResponse patchItem(
+            String businessId,
+            String itemId,
+            PatchItemRequest patch,
+            String actorUserId
+    ) {
         Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Item not found"));
 
@@ -346,6 +358,8 @@ public class ItemCatalogService {
         }
         if (patch.bundlePrice() != null) {
             item.setBundlePrice(patch.bundlePrice());
+            pricingService.syncSellingPriceFromBundle(
+                    businessId, itemId, patch.bundlePrice(), actorUserId);
         }
         if (patch.buyingPrice() != null) {
             item.setBuyingPrice(patch.buyingPrice());

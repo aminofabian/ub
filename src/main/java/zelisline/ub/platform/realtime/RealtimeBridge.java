@@ -222,6 +222,29 @@ public class RealtimeBridge {
     // Phase 2 — Inventory, transfer, and shift events
     // ═══════════════════════════════════════════════════════════════
 
+    /**
+     * Phase 9: Fan-out transfer.sent when goods leave the source branch (draft → in_transit).
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onTransferSent(TransferSentEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        var dataMap = new LinkedHashMap<String, String>();
+        dataMap.put("transferId", event.transferId());
+        dataMap.put("fromBranchId", event.fromBranchId());
+        dataMap.put("toBranchId", event.toBranchId());
+        dataMap.put("itemCount", String.valueOf(event.itemCount()));
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) return;
+
+        Set<String> sessionIds = sessionRegistry.findSessionsByBranchChannel(
+                event.businessId(), event.toBranchId(), "transfers");
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "transfer.sent", eventId, "MEDIUM", Instant.now(), payloadJson);
+        }
+        log.debug("Phase9 event transfer.sent: id={} toBranch={} sessions={}",
+                event.transferId(), event.toBranchId(), sessionIds.size());
+    }
+
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onTransferInitiated(TransferInitiatedEvent event) {
         String eventId = UUID.randomUUID().toString();
@@ -488,7 +511,17 @@ public class RealtimeBridge {
             String businessId, String fromBranchId, String toBranchId,
             String transferId, int itemCount) {}
 
+    /** Phase 9: Fired when a transfer is sent (draft → in_transit). */
+    public record TransferSentEvent(
+            String businessId, String fromBranchId, String toBranchId,
+            String transferId, int itemCount) {}
+
     public record TransferReceivedEvent(
+            String businessId, String fromBranchId, String toBranchId,
+            String transferId) {}
+
+    /** Phase 9: Fired when an in-transit transfer is cancelled. */
+    public record TransferCancelledEvent(
             String businessId, String fromBranchId, String toBranchId,
             String transferId) {}
 

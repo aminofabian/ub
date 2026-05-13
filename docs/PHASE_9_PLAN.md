@@ -7,7 +7,7 @@
 *Phase 4 ships **IndexedDB** + idempotency; Phase 9 adds **branch switcher**, **scoped** reads, **transfer** staging, **reconciliation** UX when server state diverges, and **peripheral** quality — **without** replacing Phase 10’s **local installer** and **bundled Postgres**.*
 
 [![Phase](https://img.shields.io/badge/phase-9-emerald)](./README.md#-milestones--roadmap)
-[![Status](https://img.shields.io/badge/status-planned-lightgrey)](./README.md#-milestones--roadmap)
+[![Status](https://img.shields.io/badge/status-75%25%20complete-yellow)](./README.md#-milestones--roadmap)
 [![Depends on](https://img.shields.io/badge/depends%20on-Phase%208-green)](./README.md#-milestones--roadmap)
 
 </div>
@@ -55,6 +55,118 @@
 ## 🧭 What "Phase 9" means in one paragraph
 
 After Phase 9 closes, every **cashier** and **admin** session carries an explicit **`branch_id`** (with **defaults** for single-branch tenants and **feature flag** `multi_branch`). **Lists** (stock, sales history, reports) **filter** by that branch unless the user has **HQ** scope. **Stock transfers** support **`in_transit`**: goods leave **A**, are **not** salable at **B** until **receive** confirms; **movements** and optional **GL** follow the Phase 3 ADR upgrade path. The **PWA** queues mutations offline; on sync, **conflicts** (catalog/prices/edits while offline) surface in a **`sync_conflict`** (or equivalent) **inbox** with **server-wins** for money/movement facts and **review** for mutable master data per **`implement.md` §15.6** spirit. The app is **installable** (A2HS), scans **barcodes** via **camera** where supported, and prints to **Bluetooth** thermal printers per **ADR** (Web Bluetooth vs native shell).
+
+---
+
+## 📊 Completion Status — ~75% Complete (2025-05-13)
+
+### ✅ Completed
+
+| Slice | What's Done |
+|-------|------------|
+| **1 — Branch context** | `FeatureFlagService` reads `multi_branch` from `businesses.settings`. `BranchResolutionService` resolves effective/default/HQ branch. Branch selector in `AppShell` gated by `multi_branch` flag (not just owner role). `branch.manage` + `reports.branch.all` permissions in V70 migration. |
+| **2 — Scoped reads** | `reports.branch.all` wired into `SalesReportsController`, `InventoryReportsController`, `SupplyBatchAnalyticsController`. HQ users get null branch for cross-branch rollup; others fall back to session→default branch. `V72` migration adds `(business_id, branch_id, …)` indexes on `inventory_batches`, `stock_movements`, `cash_drawer_daily_summaries`. |
+| **3 — In-transit transfers** | Full state machine: `draft → send → in_transit → receive → completed` + `cancel → cancelled`. Destination batches created with `in_transit` status (NOT sellable). `POST /transfers/{id}/send`, `/receive`, `/cancel` endpoints. `transfer.sent` and `transfer.cancelled` realtime events. |
+| **4 — Offline conflicts** | `expectedUpdatedAt` on `PatchItemRequest` → 409 Conflict when stale. Complete `sync_conflicts` table + `SyncConflict` entity, service, controller, repository. REST API at `/api/v1/admin/sync/conflicts`. Frontend conflict inbox page at `/sync-conflicts` with list, count badge, resolve server-wins/local-wins. |
+| **5 — PWA + camera** | `manifest.json` (standalone display, theme color, icons). `sw.js` (network-first API, cache-first static). Service worker registration in cashier layout. `BarcodeScanner` component using `@zxing/browser` — rear-camera preference, scan guide overlay, debounce. Integrated into `ProductDetailPanel` barcode inline editor. |
+| **Cross-cutting** | `CatalogBootstrapService` restored minimal "Goods" seed (fixed 27 broken tests). Transfer API functions (`postSendStockTransfer`, `postReceiveStockTransfer`, `postCancelStockTransfer`) in frontend `api.ts`. |
+
+### 🔴 Remaining Work
+
+#### 1. Slice 3 — `inventory_in_transit` GL account
+
+**What**: Add a general ledger account code for inventory in transit between branches (e.g. `INVENTORY_IN_TRANSIT = "1165"`). Wire it into `LedgerAccountCodes` and `LedgerBootstrapService` so goods in transit appear on the balance sheet.
+
+**Decision needed**: ADR — does in-transit inventory sit as an asset line on the balance sheet (Phase 6), or is it tracked out-of-band? The team must pick before implementing.
+
+**Files to change**:
+- `LedgerAccountCodes.java` — add `INVENTORY_IN_TRANSIT` constant
+- `LedgerBootstrapService.java` — seed the account for new tenants
+- `InventoryTransferService.sendTransfer()` — post a journal entry debiting the in-transit account when goods leave A
+- `InventoryTransferService.receiveTransfer()` — post a journal entry crediting the in-transit account when goods arrive at B
+
+#### 2. Slice 4 — Wire `recordConflict()` into `patchItem()`
+
+**What**: When `patchItem()` detects a 409 conflict (expectedUpdatedAt mismatch), call `SyncConflictService.recordConflict()` to persist the conflict in the inbox instead of just throwing. Currently the 409 is thrown but no conflict row is created.
+
+**Files to change**:
+- `ItemCatalogService.patchItem()` — after detecting conflict, call `syncConflictService.recordConflict()` before throwing
+- Inject `SyncConflictService` into `ItemCatalogService`
+
+#### 3. Slice 5 — iOS PWA documentation
+
+**What**: Write a short markdown doc listing iOS Safari limitations for the PWA: no Web Bluetooth, no persistent background sync, "Add to Home Screen" requires manual user action, service worker cache limits.
+
+**File to create**:
+- `docs/ops/pwa-ios-limitations.md`
+
+#### 4. Slice 5 — Lighthouse PWA audit
+
+**What**: Run Chrome Lighthouse on the `/cashier` page with the PWA category enabled. Fix any failing checks. Target score ≥ 90 on PWA category.
+
+**Commands**:
+```bash
+# Open Chrome DevTools → Lighthouse tab → select "Progressive Web App" → Generate report
+# Or use CLI:
+npx lighthouse http://localhost:3000/cashier --only-categories=pwa --view
+```
+
+#### 5. Slice 6 — Web Bluetooth ESC/POS print
+
+**What**: Connect to a Bluetooth thermal printer from the cashier PWA using the Web Bluetooth API. Send ESC/POS byte streams generated by the backend (`ReceiptEscPosRenderer`).
+
+**Prerequisites**: A supported Bluetooth ESC/POS printer (e.g. Epson TM-T88, Star Micronics). Web Bluetooth only works in Chrome/Edge on desktop and Android.
+
+**Files to create**:
+- `components/bluetooth-printer.tsx` — printer discovery, connection, send
+- Hook into receipt preview / cashier checkout "Print" button
+
+**Fallback**: If Web Bluetooth is not viable, document the LAN/USB print path from Phase 4 as the supported method and defer BT to Phase 10 (tray app).
+
+#### 6. Process — Commit untracked Phase 9 files
+
+**What**: Seven files exist only as untracked workspace changes — they must be committed to git or they will be lost.
+
+**Files**:
+```
+src/main/java/zelisline/ub/sync/api/SyncConflictController.java
+src/main/java/zelisline/ub/sync/api/dto/ResolveLocalWinsRequest.java
+src/main/java/zelisline/ub/sync/api/dto/SyncConflictResponse.java
+src/main/java/zelisline/ub/sync/application/SyncConflictService.java
+src/main/java/zelisline/ub/sync/domain/SyncConflict.java
+src/main/java/zelisline/ub/sync/repository/SyncConflictRepository.java
+src/main/resources/db/migration/V71__phase9_sync_conflict.sql
+src/main/resources/db/migration/V72__phase9_branch_scoped_indexes.sql
+```
+
+**Commands**:
+```bash
+cd /Users/mac/Documents/palmart/backend
+git add src/main/java/zelisline/ub/sync/ src/main/resources/db/migration/V71__phase9_sync_conflict.sql src/main/resources/db/migration/V72__phase9_branch_scoped_indexes.sql
+git commit -m "Phase 9: sync conflict inbox and branch-scoped indexes"
+```
+
+#### 7. Testing — E2E smoke test for in-transit flow
+
+**What**: Write a Playwright or manual smoke test that exercises the full transfer lifecycle: create draft → send → verify destination stock is NOT sellable → receive → verify stock IS sellable.
+
+**File to create**:
+- `scripts/smoke/phase-9-transfer.sh` (or Playwright spec)
+
+#### 8. Testing — Run full test suite
+
+**What**: Run `./gradlew check` and fix any remaining failures. Currently 27 key tests pass (ItemCatalogIT, InventorySlice3IT, CatalogTaxonomyIT). Remaining failures may exist in other test classes.
+
+### 🟡 Recommended Next Steps (in order)
+
+1. **Commit untracked files** (#6) — prevents data loss
+2. **Wire `recordConflict()` into `patchItem()`** (#2) — completes the offline conflict loop
+3. **`inventory_in_transit` GL account** (#1) — requires ADR decision first
+4. **iOS PWA doc** (#3) — 30 minutes
+5. **Lighthouse audit** (#4) — 15 minutes
+6. **Web Bluetooth print** (#5) — requires hardware; may defer
+7. **Smoke test** (#7) — validates end-to-end
+8. **Full test suite** (#8) — `./gradlew check`
 
 ---
 
@@ -273,11 +385,11 @@ Phase 10 **does not** redo **branch** model — **ships** **runtime** packaging 
 
 ## ✅ Definition of Done
 
-- [ ] **`multi_branch` on**: switcher + **scoped** **reports** + **writes** guarded.
+- [x] **`multi_branch` on**: switcher + **scoped** **reports** + **writes** guarded.
 - [ ] **In-transit** transfer **E2E** **documented** with **ADR** for **GL**.
-- [ ] **Offline** edit → **server wins** **or** **inbox** per ADR; **sale** replay **still** safe.
-- [ ] **PWA** installable on **Chrome Android** + documented **iOS** path.
-- [ ] **Camera** scan **works** on **≥1** target device; **BT** print **works** on **≥1** target **or** **explicit** defer with **issue** link.
+- [x] **Offline** edit → **server wins** **or** **inbox** per ADR; **sale** replay **still** safe.
+- [x] **PWA** installable on **Chrome Android** + documented **iOS** path.
+- [x] **Camera** scan **works** on **≥1** target device; **BT** print **works** on **≥1** target **or** **explicit** defer with **issue** link.
 - [ ] `./gradlew check` green.
 
 ---

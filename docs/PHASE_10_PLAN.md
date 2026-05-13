@@ -10,6 +10,8 @@
 [![Status](https://img.shields.io/badge/status-deferred%20v1.5-snow)](./README.md#-milestones--roadmap)
 [![Depends on](https://img.shields.io/badge/depends%20on-Phase%209-green)](./README.md#-milestones--roadmap)
 
+> **⚠️ Analysis (2025-05-13): Phase 10 is ~5% implemented — effectively deferred as planned. See [Implementation Status](#-implementation-status) below.**
+
 </div>
 
 ---
@@ -48,6 +50,70 @@
 `implement.md` **§15** is the authoritative design: **three deployment modes** (`cloud` | `local` | `hybrid`), **single JAR**, **bundled PostgreSQL 16**, **profile-swapped adapters**, **outbox → cloud** replication, **conflict rules**, **installer wizard**, **updates** (online + USB), **backups**, **licensing**, **security**, **observability**, and explicit **out-of-scope** items (multi-tenant on one PC, inbound webhooks to the box).
 
 This document turns §15 into **six slices** for engineering execution when the deferral lifts.
+
+---
+
+## 📊 Implementation Status — ~5% (Deferred to v1.5)
+
+Phase 10 is correctly **deferred**. The codebase contains only incidental traces — no
+slice has been intentionally implemented. Here's what exists and what doesn't:
+
+### ✅ Pre-existing Infrastructure (from Phase 8, NOT Phase 10)
+
+| Artifact | Origin | Notes |
+|----------|--------|-------|
+| `ExternalProcessDatabaseDumper` | Phase 8 Slice 4 | Dumps MySQL/Postgres via `mysqldump`/`pg_dump` |
+| `BackupEncryptionService` | Phase 8 Slice 4 | AES-GCM encrypt/decrypt with passphrase |
+| `LocalBackupArtifactStorage` | Phase 8 Slice 4 | Writes encrypted backup to local directory |
+| `S3BackupArtifactStorage` | Phase 8 Slice 4 | Uploads encrypted backup to S3/MinIO |
+| `DatabaseBackupOrchestrator` | Phase 8 Slice 4 | Orchestrates dump→encrypt→store pipeline |
+| `BackupProperties` | Phase 8 Slice 4 | `app.integrations.backup.*` configuration |
+
+These are **cloud backup** primitives that Phase 10 Slice 6 would **extend** (zstd
+compression, AES-256 upgrade, restore flow, retention policy, NAS/USB targets).
+They are NOT the Phase 10 local backup system.
+
+### ⚠️ Phase 10 Stubs (present but incomplete)
+
+| Artifact | What Exists | What's Missing |
+|----------|------------|----------------|
+| `/api/v1/sync/**` security rule | `SecurityConfig` protects this path with `SYNC_WORKER` role | No sync controller, no sync service, no `business_sync_cursor` table, no outbox relay |
+| `InMemoryTicketStore` | Falls back when Redis unavailable (local/hybrid awareness) | No local Spring profile wiring, no Caffeine cache config, no filesystem storage adapter |
+| `SessionRegistry` | Comments mention local/hybrid profiles | No profile-specific bean configuration |
+
+### ❌ Not Implemented (6/6 Slices)
+
+| Slice | Status | Missing Pieces |
+|-------|--------|----------------|
+| 1 — Bundled PG + `local` profile | ❌ 0% | Child process Postgres supervisor, `$DATA_DIR`, profile-swapped beans (Caffeine, filesystem, in-JVM bus, ManualGateway), `spring.profiles.active=local` wiring |
+| 2 — Installers (`jpackage`) | ❌ 0% | `jpackage` config, `.msi`/`.pkg`/`.deb` build, installer wizard (8 steps), Windows service/macOS LaunchDaemon/systemd unit |
+| 3 — LAN + TLS | ❌ 0% | JmDNS `_https._tcp`, self-signed root CA generation, `kiosk.local`, firewall rules, trust docs for iOS/Android |
+| 4 — Licensing | ❌ 0% | Embedded vendor public key, activation JWT, hardware fingerprint, grace period, read-only overrun, rescue key flow |
+| 5 — Hybrid sync | ❌ 0% | Sync worker, outbox cursor (`business_sync_cursor`), cloud `POST /v1/sync` batch ingest, back-pressure banner, compaction policy |
+| 6 — Backup/updates/tray | ❌ 0% | Nightly zstd+AES-256 backup, restore flow, signed manifest updates, `.kioskpack` USB path, tray app, rolling logs, Micrometer fallback |
+
+### 📋 Recommendation
+
+**Do not start Phase 10 yet.** It depends on Phase 9 completing, which is at ~75%.
+The stubs that exist (sync endpoint security, memory ticket store) are harmless
+forward-compatibility hooks — they don't need to be removed.
+
+When Phase 9 closes and Phase 10 is pulled forward:
+1. Start with **Slice 1** (bundled PG + local profile) — it's the foundation
+2. Slice 4 (licensing) can run in parallel with Slice 1
+3. Slice 5 (hybrid sync) needs Slice 1's local profile
+4. The Phase 8 backup primitives will accelerate Slice 6
+
+### 🗑️ What's Unnecessary / Misleading
+
+| Item | Issue | Action |
+|------|-------|--------|
+| `sync/` package (12 files) | Contains ONLY Phase 9 `SyncConflict` files — NO Phase 10 sync worker code. The package name `sync` suggests Phase 10, but it's Phase 9 conflict resolution. | Rename or leave as-is — Phase 10 will add `SyncWorker`, `SyncCursor`, `SyncRelay` to the same package. |
+| `/api/v1/sync/**` security rule | Protects a non-existent endpoint. The `SYNC_WORKER` role has no corresponding user/principal. | Leave as forward-compat hook. When Phase 10 Slice 5 builds the sync controller, this rule is already in place. |
+| `InMemoryTicketStore` | Comment says "for local/hybrid profiles" but no such profiles exist. | Leave — correctly designed fallback. Will be wired when `spring.profiles.active=local` is configured. |
+| Phase 8 backup primitives | `ExternalProcessDatabaseDumper`, `BackupEncryptionService`, etc. are Phase 8 deliverables, NOT Phase 10. The naming and structure may confuse auditors. | Documented above. Phase 10 Slice 6 will extend (not replace) them with zstd, AES-256, and restore flow. |
+
+---
 
 ---
 

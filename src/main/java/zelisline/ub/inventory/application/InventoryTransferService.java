@@ -105,7 +105,7 @@ public class InventoryTransferService {
         validateBranchesDifferentTenant(businessId, t.getFromBranchId(), t.getToBranchId());
         lockDistinctItemsInOrder(businessId, t.getLines());
         for (StockTransferLine line : t.getLines()) {
-            moveLine(t, line, userId);
+            moveLine(t, line, userId, InventoryConstants.BATCH_STATUS_ACTIVE);
         }
         t.setStatus(InventoryConstants.TRANSFER_STATUS_COMPLETED);
         stockTransferRepository.save(t);
@@ -114,7 +114,138 @@ public class InventoryTransferService {
                 businessId, t.getFromBranchId(), t.getToBranchId(), transferId));
     }
 
-    private void moveLine(StockTransfer t, StockTransferLine line, String userId) {
+    /**
+     * Phase 9: Send a draft transfer — goods leave the source branch and are
+     * marked in-transit. Destination batches are created with status
+     * {@code in_transit} so they are NOT sellable until received.
+     */
+    @Transactional
+    public void sendTransfer(String businessId, String transferId, String userId) {
+        StockTransfer t = stockTransferRepository.findByIdAndBusinessIdFetchLines(transferId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer not found"));
+        if (!InventoryConstants.TRANSFER_STATUS_DRAFT.equals(t.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Transfer must be in draft status to send");
+        }
+        validateBranchesDifferentTenant(businessId, t.getFromBranchId(), t.getToBranchId());
+        lockDistinctItemsInOrder(businessId, t.getLines());
+        for (StockTransferLine line : t.getLines()) {
+            moveLine(t, line, userId, InventoryConstants.BATCH_STATUS_IN_TRANSIT);
+        }
+        t.setStatus(InventoryConstants.TRANSFER_STATUS_IN_TRANSIT);
+        stockTransferRepository.save(t);
+
+        eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.TransferSentEvent(
+                businessId, t.getFromBranchId(), t.getToBranchId(), transferId, t.getLines().size()));
+    }
+
+    /**
+     * Phase 9: Receive an in-transit transfer — destination batches flip from
+     * {@code in_transit} to {@code active}, making goods sellable at the
+     * receiving branch. Transfer-in stock movements are recorded.
+     */
+    @Transactional
+    public void receiveTransfer(String businessId, String transferId, String userId) {
+        StockTransfer t = stockTransferRepository.findByIdAndBusinessIdFetchLines(transferId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer not found"));
+        if (!InventoryConstants.TRANSFER_STATUS_IN_TRANSIT.equals(t.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Transfer must be in-transit to receive");
+        }
+        validateBranchesDifferentTenant(businessId, t.getFromBranchId(), t.getToBranchId());
+
+        // Flip all destination batches created by this transfer from in_transit → active
+        // and record the transfer-in stock movements.
+        for (StockTransferLine line : t.getLines()) {
+            receiveLine(t, line, userId);
+        }
+        t.setStatus(InventoryConstants.TRANSFER_STATUS_COMPLETED);
+        stockTransferRepository.save(t);
+
+        eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.TransferReceivedEvent(
+                businessId, t.getFromBranchId(), t.getToBranchId(), transferId));
+    }
+
+    /**
+     * Phase 9: Cancel an in-transit transfer — reverses stock movements at source,
+     * discards destination batches, and marks the transfer cancelled.
+     */
+    @Transactional
+    public void cancelTransfer(String businessId, String transferId, String userId) {
+        StockTransfer t = stockTransferRepository.findByIdAndBusinessIdFetchLines(transferId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer not found"));
+        if (!InventoryConstants.TRANSFER_STATUS_IN_TRANSIT.equals(t.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Only in-transit transfers can be cancelled");
+        }
+        validateBranchesDifferentTenant(businessId, t.getFromBranchId(), t.getToBranchId());
+
+        for (StockTransferLine line : t.getLines()) {
+            cancelLine(t, line, userId);
+        }
+        t.setStatus(InventoryConstants.TRANSFER_STATUS_CANCELLED);
+        stockTransferRepository.save(t);
+
+        eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.TransferCancelledEvent(
+                businessId, t.getFromBranchId(), t.getToBranchId(), transferId));
+    }
+
+    private void cancelLine(StockTransfer t, StockTransferLine line, String userId) {
+        String businessId = t.getBusinessId();
+        // Find destination batches in in_transit status and delete them
+        List<InventoryBatch> inTransitBatches = inventoryBatchRepository
+                .findBySourceTypeAndSourceIdAndStatus(
+                        InventoryConstants.BATCH_SOURCE_STOCK_TRANSFER,
+                        line.getId(),
+                        InventoryConstants.BATCH_STATUS_IN_TRANSIT);
+        for (InventoryBatch dest : inTransitBatches) {
+            // Return stock to source by reversing the transfer_out as a stock adjustment
+            StockMovement reverseMv = new StockMovement();
+            reverseMv.setBusinessId(businessId);
+            reverseMv.setBranchId(t.getFromBranchId());
+            reverseMv.setItemId(line.getItemId());
+            reverseMv.setBatchId(dest.getId());
+            reverseMv.setMovementType(InventoryConstants.MOVEMENT_ADJUSTMENT);
+            reverseMv.setReferenceType(InventoryConstants.REF_STOCK_TRANSFER_LINE);
+            reverseMv.setReferenceId(line.getId());
+            reverseMv.setQuantityDelta(dest.getQuantityRemaining());
+            reverseMv.setUnitCost(dest.getUnitCost());
+            reverseMv.setNotes("Transfer cancelled — stock returned");
+            reverseMv.setCreatedBy(userId);
+            stockMovementRepository.save(reverseMv);
+
+            // Delete the in_transit destination batch
+            dest.setStatus(InventoryConstants.BATCH_STATUS_DEPLETED);
+            dest.setQuantityRemaining(BigDecimal.ZERO.setScale(QTY_SCALE, RoundingMode.HALF_UP));
+            inventoryBatchRepository.save(dest);
+        }
+    }
+
+    private void receiveLine(StockTransfer t, StockTransferLine line, String userId) {
+        String businessId = t.getBusinessId();
+        List<InventoryBatch> inTransitBatches = inventoryBatchRepository
+                .findBySourceTypeAndSourceIdAndStatus(
+                        InventoryConstants.BATCH_SOURCE_STOCK_TRANSFER,
+                        line.getId(),
+                        InventoryConstants.BATCH_STATUS_IN_TRANSIT);
+        for (InventoryBatch dest : inTransitBatches) {
+            dest.setStatus(InventoryConstants.BATCH_STATUS_ACTIVE);
+            inventoryBatchRepository.save(dest);
+
+            StockMovement inMv = new StockMovement();
+            inMv.setBusinessId(businessId);
+            inMv.setBranchId(t.getToBranchId());
+            inMv.setItemId(line.getItemId());
+            inMv.setBatchId(dest.getId());
+            inMv.setMovementType(InventoryConstants.MOVEMENT_TRANSFER_IN);
+            inMv.setReferenceType(InventoryConstants.REF_STOCK_TRANSFER_LINE);
+            inMv.setReferenceId(line.getId());
+            inMv.setQuantityDelta(dest.getQuantityRemaining());
+            inMv.setUnitCost(dest.getUnitCost());
+            inMv.setNotes("Stock transfer received");
+            inMv.setCreatedBy(userId);
+            stockMovementRepository.save(inMv);
+        }
+    }
+
+    private void moveLine(StockTransfer t, StockTransferLine line, String userId, String destBatchStatus) {
         String businessId = t.getBusinessId();
         Item item = requireStockedItem(businessId, line.getItemId());
         List<InventoryBatch> locked = inventoryBatchRepository.lockActiveBatchesForPick(
@@ -132,7 +263,7 @@ public class InventoryTransferService {
             byId.put(b.getId(), b);
         }
         for (BatchAllocationLine pick : picks) {
-            applyPickSlice(t, line, userId, byId.get(pick.batchId()), pick);
+            applyPickSlice(t, line, userId, byId.get(pick.batchId()), pick, destBatchStatus);
         }
     }
 
@@ -141,7 +272,8 @@ public class InventoryTransferService {
             StockTransferLine line,
             String userId,
             InventoryBatch src,
-            BatchAllocationLine pick
+            BatchAllocationLine pick,
+            String destBatchStatus
     ) {
         if (src == null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Batch disappeared");
@@ -149,9 +281,13 @@ public class InventoryTransferService {
         String businessId = t.getBusinessId();
         subtractFromSourceBatch(src, pick);
         persistTransferOut(t, line, userId, src, pick, businessId);
-        InventoryBatch dest = newBatchAtDestination(t, line, src, pick);
+        InventoryBatch dest = newBatchAtDestination(t, line, src, pick, destBatchStatus);
         inventoryBatchRepository.save(dest);
-        persistTransferIn(t, line, userId, dest, pick, businessId);
+        // Phase 9: transfer_in movement is deferred until receive for in_transit batches.
+        // For the legacy completeTransfer path (active), record it immediately.
+        if (InventoryConstants.BATCH_STATUS_ACTIVE.equals(destBatchStatus)) {
+            persistTransferIn(t, line, userId, dest, pick, businessId);
+        }
     }
 
     private static void subtractFromSourceBatch(InventoryBatch src, BatchAllocationLine pick) {
@@ -214,7 +350,8 @@ public class InventoryTransferService {
             StockTransfer t,
             StockTransferLine line,
             InventoryBatch src,
-            BatchAllocationLine pick
+            BatchAllocationLine pick,
+            String destBatchStatus
     ) {
         SupplyBatch sb = new SupplyBatch();
         sb.setBusinessId(t.getBusinessId());
@@ -228,7 +365,7 @@ public class InventoryTransferService {
         sb.setTotalInitialQuantity(pick.quantity());
         sb.setTotalRemainingQuantity(pick.quantity());
         sb.setReceivedAt(Instant.now());
-        sb.setStatus("active");
+        sb.setStatus(destBatchStatus);
         supplyBatchRepository.save(sb);
 
         InventoryBatch dest = new InventoryBatch();
@@ -245,7 +382,7 @@ public class InventoryTransferService {
         dest.setUnitCost(pick.unitCost().setScale(QTY_SCALE, RoundingMode.HALF_UP));
         dest.setReceivedAt(Instant.now());
         dest.setExpiryDate(src.getExpiryDate());
-        dest.setStatus(InventoryConstants.BATCH_STATUS_ACTIVE);
+        dest.setStatus(destBatchStatus);
         return dest;
     }
 

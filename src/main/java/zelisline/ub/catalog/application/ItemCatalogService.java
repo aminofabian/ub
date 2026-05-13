@@ -56,6 +56,7 @@ import zelisline.ub.platform.media.CloudinaryUploadResult;
 import zelisline.ub.pricing.application.PricingService;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.suppliers.application.SupplierLinkProvisioner;
+import zelisline.ub.sync.application.SyncConflictService;
 import zelisline.ub.tenancy.repository.BranchRepository;
 
 @Service
@@ -79,6 +80,7 @@ public class ItemCatalogService {
     private final InventoryBatchRepository inventoryBatchRepository;
     private final PricingService pricingService;
     private final SkuGenerationService skuGenerationService;
+    private final SyncConflictService syncConflictService;
 
     @Transactional(readOnly = true)
     public Page<ItemSummaryResponse> listItems(
@@ -298,6 +300,35 @@ public class ItemCatalogService {
     ) {
         Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Item not found"));
+
+        // Phase 9: Offline conflict detection — reject stale edits when the client's
+        // expectedUpdatedAt does not match the server's current updatedAt.
+        if (patch.expectedUpdatedAt() != null && !patch.expectedUpdatedAt().isBlank()) {
+            String serverUpdatedAt = item.getUpdatedAt().toString();
+            if (!serverUpdatedAt.equals(patch.expectedUpdatedAt().trim())) {
+                try {
+                    syncConflictService.recordConflict(
+                            businessId,
+                            "item",
+                            itemId,
+                            actorUserId,
+                            java.time.Instant.parse(patch.expectedUpdatedAt().trim()).atOffset(java.time.ZoneOffset.UTC).toLocalDateTime(),
+                            item.getUpdatedAt().atOffset(java.time.ZoneOffset.UTC).toLocalDateTime(),
+                            objectMapper.writeValueAsString(patch),
+                            objectMapper.writeValueAsString(item)
+                    );
+                } catch (Exception e) {
+                    log.warn("Failed to record sync conflict for item {}: {}", itemId, e.getMessage());
+                }
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Item was modified by another session. Expected updatedAt="
+                                + patch.expectedUpdatedAt().trim()
+                                + " but server has " + serverUpdatedAt
+                                + ". Refresh and retry."
+                );
+            }
+        }
 
         if (patch.sku() != null) {
             String next = patch.sku().trim();

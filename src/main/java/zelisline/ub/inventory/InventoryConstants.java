@@ -15,7 +15,9 @@ public final class InventoryConstants {
     public static final String REF_STOCK_TRANSFER_LINE = "stock_transfer_line";
     public static final String BATCH_SOURCE_STOCK_TRANSFER = "stock_transfer";
     public static final String TRANSFER_STATUS_DRAFT = "draft";
+    public static final String TRANSFER_STATUS_IN_TRANSIT = "in_transit";
     public static final String TRANSFER_STATUS_COMPLETED = "completed";
+    public static final String TRANSFER_STATUS_CANCELLED = "cancelled";
     public static final String STOCKTAKE_SESSION_IN_PROGRESS = "in_progress";
     public static final String STOCKTAKE_SESSION_CLOSED = "closed";
     public static final String ADJUSTMENT_REQUEST_PENDING = "pending";
@@ -29,6 +31,7 @@ public final class InventoryConstants {
     public static final String JOURNAL_ADJUSTMENT_DOWN = "inventory_adjustment_down";
     public static final String JOURNAL_STANDALONE_WASTAGE = "inventory_wastage";
     public static final String BATCH_STATUS_ACTIVE = "active";
+    public static final String BATCH_STATUS_IN_TRANSIT = "in_transit";
     public static final String BATCH_STATUS_DEPLETED = "depleted";
     public static final String BATCH_SOURCE_REFUND_RETURN = "refund_return";
 

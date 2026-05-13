@@ -13,7 +13,9 @@ import zelisline.ub.inventory.api.dto.analytics.BatchDashboardResponse;
 import zelisline.ub.inventory.api.dto.analytics.BatchTableResponse;
 import zelisline.ub.inventory.application.SupplyBatchAnalyticsService;
 import zelisline.ub.platform.security.CurrentTenantUser;
+import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.tenancy.api.TenantRequestIds;
+import zelisline.ub.tenancy.application.BranchResolutionService;
 
 @RestController
 @RequestMapping("/api/v1/inventory/supply-batches/analytics")
@@ -21,6 +23,7 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class SupplyBatchAnalyticsController {
 
     private final SupplyBatchAnalyticsService analyticsService;
+    private final BranchResolutionService branchResolutionService;
 
     @GetMapping("/dashboard")
     @PreAuthorize("hasPermission(null, 'inventory.read')")
@@ -30,9 +33,11 @@ public class SupplyBatchAnalyticsController {
             @RequestParam(required = false) String to,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.requireHuman(request);
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
-        return analyticsService.getDashboard(businessId, branchId, from, to);
+        String effectiveBranch = branchResolutionService.resolveBranchForReport(
+                businessId, principal.roleId(), principal.branchId(), branchId);
+        return analyticsService.getDashboard(businessId, effectiveBranch, from, to);
     }
 
     @GetMapping("/table")
@@ -51,11 +56,13 @@ public class SupplyBatchAnalyticsController {
             @RequestParam(defaultValue = "desc") String sortDir,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.requireHuman(request);
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
+        String effectiveBranch = branchResolutionService.resolveBranchForReport(
+                businessId, principal.roleId(), principal.branchId(), branchId);
         int safeSize = Math.min(Math.max(size, 1), 100);
         return analyticsService.getTable(
-                businessId, branchId, status, search, from, to,
+                businessId, effectiveBranch, status, search, from, to,
                 quantityMin, quantityMax, page, safeSize, sortBy, sortDir
         );
     }

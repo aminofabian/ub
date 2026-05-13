@@ -677,6 +677,8 @@ class ItemCatalogIT {
 
     private static PatchItemRequest barcodeOnly(String barcode) {
         return new PatchItemRequest(
+                null,
+                null,
                 barcode,
                 null,
                 null,
@@ -696,9 +698,7 @@ class ItemCatalogIT {
                 null,
                 null,
                 null,
-                null,
-                null,
-                null, null, null, null, null);
+                null, null, null, null, null, null);
     }
 
     private static CreateItemRequest minimalItem(String sku, String name, String itemTypeId) {

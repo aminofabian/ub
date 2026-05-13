@@ -152,6 +152,10 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
     List<InventoryBatch> findBySupplyBatchIdAndStatusAndQuantityRemainingGreaterThan(
             String supplyBatchId, String status, BigDecimal minRemaining);
 
+    /** Phase 9: find batches created by a transfer line, filtered by status (e.g. in_transit). */
+    List<InventoryBatch> findBySourceTypeAndSourceIdAndStatus(
+            String sourceType, String sourceId, String status);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
             select b from InventoryBatch b

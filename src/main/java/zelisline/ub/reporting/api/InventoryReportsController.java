@@ -11,10 +11,12 @@ import org.springframework.web.bind.annotation.RestController;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
+import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.reporting.api.dto.InventoryExpiryPipelineResponse;
 import zelisline.ub.reporting.api.dto.InventoryValuationResponse;
 import zelisline.ub.reporting.application.InventoryReportsService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
+import zelisline.ub.tenancy.application.BranchResolutionService;
 
 @RestController
 @RequestMapping("/api/v1/reports/inventory")
@@ -22,6 +24,7 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class InventoryReportsController {
 
     private final InventoryReportsService inventoryReportsService;
+    private final BranchResolutionService branchResolutionService;
 
     @GetMapping("/valuation")
     @PreAuthorize("hasPermission(null, 'reports.inventory.read')")
@@ -29,8 +32,11 @@ public class InventoryReportsController {
             @RequestParam(value = "branchId", required = false) String branchId,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.require(request);
-        return inventoryReportsService.valuation(TenantRequestIds.resolveBusinessId(request), branchId);
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String effectiveBranch = branchResolutionService.resolveBranchForReport(
+                businessId, principal.roleId(), principal.branchId(), branchId);
+        return inventoryReportsService.valuation(businessId, effectiveBranch);
     }
 
     @GetMapping("/expiry-pipeline")
@@ -40,8 +46,10 @@ public class InventoryReportsController {
             @RequestParam(value = "asOf", required = false) LocalDate asOf,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.require(request);
-        return inventoryReportsService.expiryPipeline(
-                TenantRequestIds.resolveBusinessId(request), branchId, asOf);
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String effectiveBranch = branchResolutionService.resolveBranchForReport(
+                businessId, principal.roleId(), principal.branchId(), branchId);
+        return inventoryReportsService.expiryPipeline(businessId, effectiveBranch, asOf);
     }
 }

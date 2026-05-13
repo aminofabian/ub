@@ -5,6 +5,7 @@ import java.math.BigDecimal;
 import jakarta.validation.constraints.Size;
 
 public record PatchItemRequest(
+        String expectedUpdatedAt,
         @Size(max = 191) String sku,
         @Size(max = 191) String barcode,
         @Size(max = 500) String name,

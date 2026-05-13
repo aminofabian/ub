@@ -156,6 +156,51 @@ public class InventoryController {
         );
     }
 
+    @PostMapping("/transfers/{transferId}/send")
+    @PreAuthorize("hasPermission(null, 'inventory.transfer')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void sendTransfer(
+            @PathVariable String transferId,
+            HttpServletRequest request
+    ) {
+        var user = CurrentTenantUser.requireHuman(request);
+        inventoryTransferService.sendTransfer(
+                TenantRequestIds.resolveBusinessId(request),
+                transferId,
+                user.userId()
+        );
+    }
+
+    @PostMapping("/transfers/{transferId}/receive")
+    @PreAuthorize("hasPermission(null, 'inventory.transfer')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void receiveTransfer(
+            @PathVariable String transferId,
+            HttpServletRequest request
+    ) {
+        var user = CurrentTenantUser.requireHuman(request);
+        inventoryTransferService.receiveTransfer(
+                TenantRequestIds.resolveBusinessId(request),
+                transferId,
+                user.userId()
+        );
+    }
+
+    @PostMapping("/transfers/{transferId}/cancel")
+    @PreAuthorize("hasPermission(null, 'inventory.transfer')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void cancelTransfer(
+            @PathVariable String transferId,
+            HttpServletRequest request
+    ) {
+        var user = CurrentTenantUser.requireHuman(request);
+        inventoryTransferService.cancelTransfer(
+                TenantRequestIds.resolveBusinessId(request),
+                transferId,
+                user.userId()
+        );
+    }
+
     @GetMapping("/valuation")
     @PreAuthorize("hasPermission(null, 'inventory.read')")
     public InventoryValuationResponse valuation(

@@ -127,8 +127,8 @@ class CatalogTaxonomyIT {
     }
 
     @Test
-    void newTenantHasThreeDefaultItemTypes() {
-        assertThat(itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(TENANT)).hasSize(3);
+    void newTenantHasOneDefaultItemType() {
+        assertThat(itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(TENANT)).hasSize(1);
     }
 
     @Test
@@ -164,7 +164,7 @@ class CatalogTaxonomyIT {
     }
 
     @Test
-    void listItemTypesReturnsSeededKeys() throws Exception {
+    void listItemTypesReturnsSeededKey() throws Exception {
         String json = mockMvc.perform(get("/api/v1/item-types")
                         .header("X-Tenant-Id", TENANT)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
@@ -173,7 +173,7 @@ class CatalogTaxonomyIT {
                 .andReturn()
                 .getResponse()
                 .getContentAsString();
-        assertThat(json).contains("goods").contains("service").contains("kit");
+        assertThat(json).contains("goods");
     }
 
     @Test

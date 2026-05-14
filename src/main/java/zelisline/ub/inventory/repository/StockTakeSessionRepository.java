@@ -56,7 +56,7 @@ public interface StockTakeSessionRepository extends JpaRepository<StockTakeSessi
     boolean existsByBusinessIdAndBranchIdAndSessionTypeAndSessionDate(
             String businessId, String branchId, String sessionType, LocalDate sessionDate);
 
-    // Find a morning session by type/date/branch for evening session auto-load.
+    // Find all sessions of a given type for a branch/date (supports multiple sessions per day).
     @Query("""
             select s from StockTakeSession s
              left join fetch s.lines
@@ -64,8 +64,9 @@ public interface StockTakeSessionRepository extends JpaRepository<StockTakeSessi
                and s.branchId = :branchId
                and s.sessionType = :sessionType
                and s.sessionDate = :sessionDate
+             order by s.createdAt desc
             """)
-    Optional<StockTakeSession> findByTypeAndBranchAndDateFetchLines(
+    List<StockTakeSession> findAllByTypeAndBranchAndDateFetchLines(
             @Param("businessId") String businessId,
             @Param("branchId") String branchId,
             @Param("sessionType") String sessionType,

@@ -344,18 +344,18 @@ class InventorySlice4IT {
     }
 
     @Test
-    void startMorningAndEveningSessions_enforcesOnePerTypePerDay() throws Exception {
+    void startMorningAndEveningSessions_allowsMultiplePerTypePerDay() throws Exception {
         String today = LocalDate.now().toString();
         // @BeforeEach already created a morning session
 
-        // Second morning session on same day fails
+        // Second morning session on same day now succeeds
         mockMvc.perform(post("/api/v1/inventory/stock-take/sessions")
                         .contentType(APPLICATION_JSON)
                         .content("{\"branchId\":\"" + branchId + "\",\"sessionType\":\"morning\",\"sessionDate\":\"" + today + "\"}")
                         .header("X-Tenant-Id", TENANT)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
-                .andExpect(status().isConflict());
+                .andExpect(status().isCreated());
 
         // Evening session on same day succeeds
         mockMvc.perform(post("/api/v1/inventory/stock-take/sessions")

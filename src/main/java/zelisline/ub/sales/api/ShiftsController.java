@@ -11,11 +11,13 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.sales.api.dto.PostCloseShiftRequest;
 import zelisline.ub.sales.api.dto.PostOpenShiftRequest;
@@ -32,6 +34,7 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class ShiftsController {
 
     private final ShiftService shiftService;
+    private final RoleRepository roleRepository;
 
     @PostMapping("/open")
     @PreAuthorize("hasPermission(null, 'shifts.open')")
@@ -77,12 +80,19 @@ public class ShiftsController {
             @RequestParam(defaultValue = "50") int size,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.requireHuman(request);
+        var user = CurrentTenantUser.requireHuman(request);
+        String effectiveOpenedBy = openedBy;
+
+        var role = roleRepository.findByIdAndDeletedAtIsNull(user.roleId()).orElse(null);
+        if (role != null && "cashier".equals(role.getRoleKey())) {
+            effectiveOpenedBy = user.userId();
+        }
+
         return shiftService.listShifts(
                 TenantRequestIds.resolveBusinessId(request),
                 branchId,
                 status,
-                openedBy,
+                effectiveOpenedBy,
                 page,
                 size
         );
@@ -94,10 +104,19 @@ public class ShiftsController {
             @PathVariable String shiftId,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.requireHuman(request);
-        return shiftService.getShiftDetail(
-                TenantRequestIds.resolveBusinessId(request),
-                shiftId
-        );
+        var user = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+
+        ShiftDetailResponse detail = shiftService.getShiftDetail(businessId, shiftId);
+
+        var role = roleRepository.findByIdAndDeletedAtIsNull(user.roleId()).orElse(null);
+        if (role != null && "cashier".equals(role.getRoleKey())) {
+            if (!user.userId().equals(detail.openedBy())) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                        "Cashiers can only view their own shifts");
+            }
+        }
+
+        return detail;
     }
 }

@@ -82,13 +82,6 @@ public class StockTakeService {
 
         LocalDate sessionDate = req.sessionDate() != null ? req.sessionDate() : LocalDate.now();
 
-        // Enforce one session per type per branch per day
-        if (stockTakeSessionRepository.existsByBusinessIdAndBranchIdAndSessionTypeAndSessionDate(
-                businessId, req.branchId(), req.sessionType(), sessionDate)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "A " + req.sessionType() + " session already exists for this branch on " + sessionDate + ".");
-        }
-
         Map<String, BigDecimal> onHand = loadOnHandByItem(businessId, req.branchId());
 
         // Determine item IDs for this session.
@@ -100,9 +93,9 @@ public class StockTakeService {
         List<String> itemIds = req.itemIds();
         if (itemIds == null || itemIds.isEmpty()) {
             if (InventoryConstants.STOCKTAKE_SESSION_TYPE_EVENING.equals(req.sessionType())) {
-                // Auto-load from confirmed lines in the morning session
+                // Auto-load from confirmed lines in ALL morning sessions for this branch/date
                 itemIds = stockTakeSessionRepository
-                        .findByTypeAndBranchAndDateFetchLines(
+                        .findAllByTypeAndBranchAndDateFetchLines(
                                 businessId, req.branchId(),
                                 InventoryConstants.STOCKTAKE_SESSION_TYPE_MORNING,
                                 sessionDate)
@@ -470,16 +463,23 @@ public class StockTakeService {
             LocalDate date
     ) {
         requireBranch(businessId, branchId);
-        StockTakeSession morning = stockTakeSessionRepository
-                .findByTypeAndBranchAndDateFetchLines(businessId, branchId,
-                        InventoryConstants.STOCKTAKE_SESSION_TYPE_MORNING, date)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
-                        "No morning session found for branch on " + date));
-        StockTakeSession evening = stockTakeSessionRepository
-                .findByTypeAndBranchAndDateFetchLines(businessId, branchId,
-                        InventoryConstants.STOCKTAKE_SESSION_TYPE_EVENING, date)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
-                        "No evening session found for branch on " + date));
+        List<StockTakeSession> morningSessions = stockTakeSessionRepository
+                .findAllByTypeAndBranchAndDateFetchLines(businessId, branchId,
+                        InventoryConstants.STOCKTAKE_SESSION_TYPE_MORNING, date);
+        if (morningSessions.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "No morning session found for branch on " + date);
+        }
+        List<StockTakeSession> eveningSessions = stockTakeSessionRepository
+                .findAllByTypeAndBranchAndDateFetchLines(businessId, branchId,
+                        InventoryConstants.STOCKTAKE_SESSION_TYPE_EVENING, date);
+        if (eveningSessions.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "No evening session found for branch on " + date);
+        }
+        // Use the most recent sessions for reconciliation
+        StockTakeSession morning = morningSessions.get(0);
+        StockTakeSession evening = eveningSessions.get(0);
 
         Map<String, BigDecimal> soldByItem = salesIntelligenceService.quantitySoldByItem(
                 businessId, date, date);

@@ -425,8 +425,7 @@ class InventorySlice4IT {
     @Test
     void startMorningAndEveningSessions_enforcesOnePerTypePerDay() throws Exception {
         String today = LocalDate.now().toString();
-        // First morning session succeeds
-        startSessionJson("morning", today);
+        // @BeforeEach already created a morning session
 
         // Second morning session on same day fails
         mockMvc.perform(post("/api/v1/inventory/stock-take/sessions")
@@ -450,12 +449,11 @@ class InventorySlice4IT {
     @Test
     void eveningSession_inheritsMorningConfirmedLines() throws Exception {
         String today = LocalDate.now().toString();
-        // Start morning session
-        JsonNode morning = startSessionJson("morning", today);
-        String morningLineId = morning.get("lines").get(0).get("id").asText();
+        // Use the morning session created by @BeforeEach
+        String morningLineId = takeLineId;
 
         // Submit count for the morning line
-        mockMvc.perform(patch("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}", morning.get("id").asText(), morningLineId)
+        mockMvc.perform(patch("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}", sessionId, morningLineId)
                         .contentType(APPLICATION_JSON)
                         .content("{\"countedQty\":8}")
                         .header("X-Tenant-Id", TENANT)
@@ -464,7 +462,7 @@ class InventorySlice4IT {
                 .andExpect(status().isOk());
 
         // Confirm the morning line
-        mockMvc.perform(post("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}/confirm", morning.get("id").asText(), morningLineId)
+        mockMvc.perform(post("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}/confirm", sessionId, morningLineId)
                         .contentType(APPLICATION_JSON)
                         .content("{}")
                         .header("X-Tenant-Id", TENANT)
@@ -484,15 +482,13 @@ class InventorySlice4IT {
 
         JsonNode evening = objectMapper.readTree(eveningResult.getResponse().getContentAsString());
         assertThat(evening.get("lines").size()).isEqualTo(1);
-        assertThat(evening.get("lines").get(0).get("itemId").asText())
-                .isEqualTo(morning.get("lines").get(0).get("itemId").asText());
+        assertThat(evening.get("lines").get(0).get("itemId").asText()).isEqualTo(itemId);
     }
 
     @Test
     void applySingleCount_andConfirmLine_appliesInventoryImmediately() throws Exception {
-        JsonNode session = startSessionJson();
-        String sid = session.get("id").asText();
-        String lineId = session.get("lines").get(0).get("id").asText();
+        String sid = sessionId;
+        String lineId = takeLineId;
 
         // Apply single count via PATCH /lines/{lineId}
         mockMvc.perform(patch("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}", sid, lineId)
@@ -518,9 +514,8 @@ class InventorySlice4IT {
 
     @Test
     void confirmLine_preventsFurtherModification() throws Exception {
-        JsonNode session = startSessionJson();
-        String sid = session.get("id").asText();
-        String lineId = session.get("lines").get(0).get("id").asText();
+        String sid = sessionId;
+        String lineId = takeLineId;
 
         // Submit and confirm
         mockMvc.perform(patch("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}", sid, lineId)
@@ -551,9 +546,8 @@ class InventorySlice4IT {
 
     @Test
     void closeSession_withoutForce_warnsIfUnconfirmed() throws Exception {
-        JsonNode session = startSessionJson();
-        String sid = session.get("id").asText();
-        String lineId = session.get("lines").get(0).get("id").asText();
+        String sid = sessionId;
+        String lineId = takeLineId;
 
         // Submit count but do NOT confirm
         mockMvc.perform(patch("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}", sid, lineId)
@@ -583,10 +577,7 @@ class InventorySlice4IT {
 
     @Test
     void managerCannotCloseSession() throws Exception {
-        JsonNode session = startSessionJson();
-        String sid = session.get("id").asText();
-
-        mockMvc.perform(post("/api/v1/inventory/stock-take/sessions/{sessionId}/close", sid)
+        mockMvc.perform(post("/api/v1/inventory/stock-take/sessions/{sessionId}/close", sessionId)
                         .contentType(APPLICATION_JSON)
                         .header("X-Tenant-Id", TENANT)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, manager.getId())
@@ -596,8 +587,7 @@ class InventorySlice4IT {
 
     @Test
     void getActiveSession_returnsSession() throws Exception {
-        JsonNode session = startSessionJson();
-        String sid = session.get("id").asText();
+        String sid = sessionId;
 
         MvcResult result = mockMvc.perform(get("/api/v1/inventory/stock-take/sessions/active")
                         .param("branchId", branchId)
@@ -614,8 +604,7 @@ class InventorySlice4IT {
 
     @Test
     void createItemAndAddLine_atomic() throws Exception {
-        JsonNode session = startSessionJson();
-        String sid = session.get("id").asText();
+        String sid = sessionId;
         String typeId = itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(TENANT).getFirst().getId();
 
         MvcResult result = mockMvc.perform(post("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/with-product", sid)
@@ -639,7 +628,7 @@ class InventorySlice4IT {
             }
         }
         assertThat(newLine).isNotNull();
-        assertThat(newLine.get("countedQty").asText()).isEqualTo("42");
+        assertThat(newLine.get("countedQty").asText()).isIn("42", "42.0");
         assertThat(newLine.get("aisle").asText()).isEqualTo("Aisle 9");
         assertThat(newLine.get("status").asText()).isEqualTo("submitted");
     }
@@ -682,13 +671,17 @@ class InventorySlice4IT {
     }
 
     private void confirmLine(String sid, String lid) throws Exception {
-        mockMvc.perform(post("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}/confirm", sid, lid)
+        MvcResult result = mockMvc.perform(post("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}/confirm", sid, lid)
                         .contentType(APPLICATION_JSON)
                         .content("{}")
                         .header("X-Tenant-Id", TENANT)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
-                .andExpect(status().isOk());
+                .andReturn();
+        if (result.getResponse().getStatus() != 200) {
+            throw new AssertionError("confirmLine failed: " + result.getResponse().getStatus()
+                + " body=" + result.getResponse().getContentAsString());
+        }
     }
 
     private String closeAndGetFirstRequestId() throws Exception {

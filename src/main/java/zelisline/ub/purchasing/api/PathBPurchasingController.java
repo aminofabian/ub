@@ -18,6 +18,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
+import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.purchasing.api.dto.AddPathBLineRequest;
 import zelisline.ub.purchasing.api.dto.CreatePathBSessionRequest;
 import zelisline.ub.purchasing.api.dto.PathBLineResponse;
@@ -26,6 +27,7 @@ import zelisline.ub.purchasing.api.dto.PostPathBRequest;
 import zelisline.ub.purchasing.api.dto.PostPathBResponse;
 import zelisline.ub.purchasing.application.PathBPurchaseService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
+import zelisline.ub.tenancy.application.BranchResolutionService;
 
 @Validated
 @RestController
@@ -34,6 +36,7 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class PathBPurchasingController {
 
     private final PathBPurchaseService pathBPurchaseService;
+    private final BranchResolutionService branchResolutionService;
 
     @PostMapping
     @PreAuthorize("hasPermission(null, 'purchasing.path_b.write')")
@@ -42,8 +45,12 @@ public class PathBPurchasingController {
             @Valid @RequestBody CreatePathBSessionRequest body,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.require(request);
-        return pathBPurchaseService.createSession(TenantRequestIds.resolveBusinessId(request), body);
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String validatedBranch = branchResolutionService.requireBranchForLockedRole(
+                principal.roleId(), principal.branchId(), body.branchId());
+        CreatePathBSessionRequest safe = new CreatePathBSessionRequest(
+                body.supplierId(), validatedBranch, body.receivedAt(), body.notes());
+        return pathBPurchaseService.createSession(TenantRequestIds.resolveBusinessId(request), safe);
     }
 
     @GetMapping("/{sessionId}")

@@ -20,6 +20,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
+import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.sales.api.dto.PostRefundRequest;
 import zelisline.ub.sales.api.dto.PostSaleRequest;
 import zelisline.ub.sales.api.dto.PostVoidSaleRequest;
@@ -30,6 +31,7 @@ import zelisline.ub.sales.application.SaleService;
 import zelisline.ub.sales.application.SaleVoidService;
 import zelisline.ub.sales.receipt.SaleReceiptService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
+import zelisline.ub.tenancy.application.BranchResolutionService;
 
 @Validated
 @RestController
@@ -41,6 +43,7 @@ public class SalesController {
     private final SaleVoidService saleVoidService;
     private final SaleRefundService saleRefundService;
     private final SaleReceiptService saleReceiptService;
+    private final BranchResolutionService branchResolutionService;
 
     @PostMapping
     @PreAuthorize("hasPermission(null, 'sales.sell')")
@@ -49,12 +52,17 @@ public class SalesController {
             @Valid @RequestBody PostSaleRequest body,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.requireHuman(request);
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String validatedBranch = branchResolutionService.requireBranchForLockedRole(
+                principal.roleId(), principal.branchId(), body.branchId());
+        // Replace request branch with validated one
+        PostSaleRequest safe = new PostSaleRequest(
+                validatedBranch, body.lines(), body.payments(), body.clientSoldAt(), body.customerId());
         var out = saleService.createSale(
                 TenantRequestIds.resolveBusinessId(request),
                 idempotencyKey,
-                body,
-                user.userId()
+                safe,
+                principal.userId()
         );
         HttpStatus status = out.createdNew() ? HttpStatus.CREATED : HttpStatus.OK;
         return ResponseEntity.status(status).body(out.response());

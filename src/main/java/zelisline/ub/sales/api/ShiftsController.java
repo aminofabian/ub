@@ -17,8 +17,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
-import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.platform.security.CurrentTenantUser;
+import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.sales.api.dto.PostCloseShiftRequest;
 import zelisline.ub.sales.api.dto.PostOpenShiftRequest;
 import zelisline.ub.sales.api.dto.ShiftDetailResponse;
@@ -26,6 +26,7 @@ import zelisline.ub.sales.api.dto.ShiftListResponse;
 import zelisline.ub.sales.api.dto.ShiftResponse;
 import zelisline.ub.sales.application.ShiftService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
+import zelisline.ub.tenancy.application.BranchResolutionService;
 
 @Validated
 @RestController
@@ -34,23 +35,30 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class ShiftsController {
 
     private final ShiftService shiftService;
-    private final RoleRepository roleRepository;
+    private final BranchResolutionService branchResolutionService;
 
     @PostMapping("/open")
     @PreAuthorize("hasPermission(null, 'shifts.open')")
     @ResponseStatus(HttpStatus.CREATED)
     public ShiftResponse openShift(@Valid @RequestBody PostOpenShiftRequest body, HttpServletRequest request) {
-        var user = CurrentTenantUser.requireHuman(request);
-        return shiftService.openShift(TenantRequestIds.resolveBusinessId(request), body, user.userId());
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String validatedBranch = branchResolutionService.requireBranchForLockedRole(
+                principal.roleId(), principal.branchId(), body.branchId());
+        // Replace the request branch with the validated one, using a wrapper
+        PostOpenShiftRequest safe = new PostOpenShiftRequest(
+                validatedBranch, body.openingCash(), body.notes(), body.denominations());
+        return shiftService.openShift(TenantRequestIds.resolveBusinessId(request), safe, principal.userId());
     }
 
     @GetMapping("/current")
     @PreAuthorize("hasPermission(null, 'shifts.read')")
     public ShiftResponse currentShift(@RequestParam @NotBlank String branchId, HttpServletRequest request) {
-        CurrentTenantUser.requireHuman(request);
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String validatedBranch = branchResolutionService.requireBranchForLockedRole(
+                principal.roleId(), principal.branchId(), branchId);
         return shiftService.getCurrentOpenShift(
                 TenantRequestIds.resolveBusinessId(request),
-                branchId
+                validatedBranch
         );
     }
 
@@ -80,17 +88,21 @@ public class ShiftsController {
             @RequestParam(defaultValue = "50") int size,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.requireHuman(request);
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String effectiveOpenedBy = openedBy;
 
-        var role = roleRepository.findByIdAndDeletedAtIsNull(user.roleId()).orElse(null);
-        if (role != null && "cashier".equals(role.getRoleKey())) {
-            effectiveOpenedBy = user.userId();
+        // Stock managers and cashiers can only list shifts for their assigned branch.
+        String effectiveBranch = branchResolutionService.requireBranchForLockedRole(
+                principal.roleId(), principal.branchId(), branchId);
+
+        // Cashiers can only see their own shifts.
+        if (branchResolutionService.isBranchLockedRole(principal.roleId())) {
+            effectiveOpenedBy = principal.userId();
         }
 
         return shiftService.listShifts(
                 TenantRequestIds.resolveBusinessId(request),
-                branchId,
+                effectiveBranch,
                 status,
                 effectiveOpenedBy,
                 page,
@@ -104,16 +116,16 @@ public class ShiftsController {
             @PathVariable String shiftId,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.requireHuman(request);
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
 
         ShiftDetailResponse detail = shiftService.getShiftDetail(businessId, shiftId);
 
-        var role = roleRepository.findByIdAndDeletedAtIsNull(user.roleId()).orElse(null);
-        if (role != null && "cashier".equals(role.getRoleKey())) {
-            if (!user.userId().equals(detail.openedBy())) {
+        // Cashiers can only view their own shifts.
+        if (branchResolutionService.isBranchLockedRole(principal.roleId())) {
+            if (!principal.userId().equals(detail.openedBy())) {
                 throw new ResponseStatusException(HttpStatus.FORBIDDEN,
-                        "Cashiers can only view their own shifts");
+                        "You can only view your own shifts.");
             }
         }
 

@@ -16,6 +16,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
+import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.purchasing.api.dto.AddPathAPurchaseOrderLineRequest;
 import zelisline.ub.purchasing.api.dto.CreatePathAPurchaseOrderRequest;
 import zelisline.ub.purchasing.api.dto.PathAPurchaseOrderDetailResponse;
@@ -26,6 +27,7 @@ import zelisline.ub.purchasing.api.dto.PostGrnSupplierInvoiceRequest;
 import zelisline.ub.purchasing.api.dto.PostGrnSupplierInvoiceResponse;
 import zelisline.ub.purchasing.application.PathAPurchaseService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
+import zelisline.ub.tenancy.application.BranchResolutionService;
 
 @Validated
 @RestController
@@ -34,6 +36,7 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class PathAPurchasingController {
 
     private final PathAPurchaseService pathAPurchaseService;
+    private final BranchResolutionService branchResolutionService;
 
     @PostMapping("/purchase-orders")
     @PreAuthorize("hasPermission(null, 'purchasing.path_a.write')")
@@ -42,8 +45,12 @@ public class PathAPurchasingController {
             @Valid @RequestBody CreatePathAPurchaseOrderRequest body,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.require(request);
-        return pathAPurchaseService.createPurchaseOrder(TenantRequestIds.resolveBusinessId(request), body);
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String validatedBranch = branchResolutionService.requireBranchForLockedRole(
+                principal.roleId(), principal.branchId(), body.branchId());
+        CreatePathAPurchaseOrderRequest safe = new CreatePathAPurchaseOrderRequest(
+                body.supplierId(), validatedBranch, body.expectedDate(), body.poNumber(), body.notes());
+        return pathAPurchaseService.createPurchaseOrder(TenantRequestIds.resolveBusinessId(request), safe);
     }
 
     @GetMapping("/purchase-orders/{purchaseOrderId}")
@@ -99,10 +106,14 @@ public class PathAPurchasingController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.require(request);
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String validatedBranch = branchResolutionService.requireBranchForLockedRole(
+                principal.roleId(), principal.branchId(), body.branchId());
+        PostGoodsReceiptRequest safe = new PostGoodsReceiptRequest(
+                body.purchaseOrderId(), validatedBranch, body.receivedAt(), body.notes(), body.lines());
         return pathAPurchaseService.postGoodsReceipt(
                 TenantRequestIds.resolveBusinessId(request),
-                body,
+                safe,
                 idempotencyKey
         );
     }

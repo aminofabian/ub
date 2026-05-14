@@ -32,7 +32,9 @@ import zelisline.ub.inventory.api.dto.RejectStockAdjustmentRequest;
 import zelisline.ub.inventory.api.dto.StockTakeSessionResponse;
 import zelisline.ub.inventory.application.StockTakeService;
 import zelisline.ub.platform.security.CurrentTenantUser;
+import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.tenancy.api.TenantRequestIds;
+import zelisline.ub.tenancy.application.BranchResolutionService;
 
 @Validated
 @RestController
@@ -41,6 +43,7 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class StockTakeController {
 
     private final StockTakeService stockTakeService;
+    private final BranchResolutionService branchResolutionService;
 
     // ── Sessions ──────────────────────────────────────────────────────
 
@@ -51,11 +54,19 @@ public class StockTakeController {
             @Valid @RequestBody PostStartStockTakeSessionRequest body,
             HttpServletRequest request
     ) {
-        var user = CurrentTenantUser.requireHuman(request);
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String validatedBranch = branchResolutionService.requireBranchForLockedRole(
+                principal.roleId(), principal.branchId(), body.branchId());
+        PostStartStockTakeSessionRequest effective = new PostStartStockTakeSessionRequest(
+                validatedBranch,
+                body.sessionType(),
+                body.sessionDate(),
+                body.notes(),
+                body.itemIds());
         return stockTakeService.startSession(
                 TenantRequestIds.resolveBusinessId(request),
-                body,
-                user.userId()
+                effective,
+                principal.userId()
         );
     }
 
@@ -68,10 +79,11 @@ public class StockTakeController {
             @RequestParam(required = false) LocalDate to,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.requireHuman(request);
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String filterBranch = coerceOptionalBranchFilter(principal, branchId);
         return stockTakeService.listSessions(
                 TenantRequestIds.resolveBusinessId(request),
-                branchId,
+                filterBranch,
                 status,
                 from,
                 to
@@ -98,15 +110,17 @@ public class StockTakeController {
             @RequestParam(required = false) LocalDate date,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.requireHuman(request);
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
+        String effectiveBranchId = branchResolutionService.requireBranchForLockedRole(
+                principal.roleId(), principal.branchId(), branchId);
         LocalDate today = date != null ? date : LocalDate.now();
 
-        var active = stockTakeService.getActiveSession(businessId, branchId, today);
+        var active = stockTakeService.getActiveSession(businessId, effectiveBranchId, today);
 
         StockTakeSessionResponse stale = null;
         if (active.isEmpty()) {
-            stale = stockTakeService.getStaleSession(businessId, branchId, today).orElse(null);
+            stale = stockTakeService.getStaleSession(businessId, effectiveBranchId, today).orElse(null);
         }
 
         return new ActiveSessionResponse(
@@ -237,7 +251,7 @@ public class StockTakeController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.requireHuman(request);
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
 
         // Auto-detect: find morning & evening sessions by branch + date
@@ -245,8 +259,10 @@ public class StockTakeController {
                 && (eveningSessionId == null || eveningSessionId.isBlank())
                 && branchId != null && !branchId.isBlank()
                 && date != null) {
+            String effectiveBranchId = branchResolutionService.requireBranchForLockedRole(
+                    principal.roleId(), principal.branchId(), branchId);
             return stockTakeService.getReconciliationByBranchAndDate(
-                    businessId, branchId, date);
+                    businessId, effectiveBranchId, date);
         }
 
         if (morningSessionId == null || morningSessionId.isBlank()
@@ -329,5 +345,25 @@ public class StockTakeController {
             @jakarta.validation.constraints.DecimalMin(value = "0", inclusive = true)
             BigDecimal adminQuantity
     ) {
+    }
+
+    /**
+     * Optional branch filter for session lists. Branch-locked roles are always scoped to their
+     * assigned branch (implicit when the query omits {@code branchId}).
+     */
+    private String coerceOptionalBranchFilter(TenantPrincipal principal, String branchId) {
+        if (!branchResolutionService.isBranchLockedRole(principal.roleId())) {
+            return branchId == null || branchId.isBlank() ? null : branchId.trim();
+        }
+        String assigned = principal.branchId() != null ? principal.branchId().trim() : "";
+        if (assigned.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Your account is not assigned to a branch. Contact your administrator.");
+        }
+        if (branchId == null || branchId.isBlank()) {
+            return assigned;
+        }
+        return branchResolutionService.requireBranchForLockedRole(
+                principal.roleId(), principal.branchId(), branchId);
     }
 }

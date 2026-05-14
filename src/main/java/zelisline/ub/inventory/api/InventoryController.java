@@ -36,7 +36,9 @@ import zelisline.ub.inventory.application.InventoryLedgerService;
 import zelisline.ub.inventory.application.InventoryTransferService;
 import zelisline.ub.inventory.application.InventoryValuationService;
 import zelisline.ub.platform.security.CurrentTenantUser;
+import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.tenancy.api.TenantRequestIds;
+import zelisline.ub.tenancy.application.BranchResolutionService;
 
 @Validated
 @RestController
@@ -48,6 +50,7 @@ public class InventoryController {
     private final InventoryBatchPickerService inventoryBatchPickerService;
     private final InventoryTransferService inventoryTransferService;
     private final InventoryValuationService inventoryValuationService;
+    private final BranchResolutionService branchResolutionService;
 
     @GetMapping("/allocation-preview")
     @PreAuthorize("hasPermission(null, 'inventory.read')")
@@ -207,10 +210,13 @@ public class InventoryController {
             @RequestParam(required = false) String branchId,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.requireHuman(request);
-        return inventoryValuationService.valuation(
-                TenantRequestIds.resolveBusinessId(request),
-                branchId
-        );
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String effectiveBranchId = branchId;
+        if (branchResolutionService.isBranchLockedRole(principal.roleId())) {
+            effectiveBranchId = branchResolutionService.resolveBranchForReport(
+                    businessId, principal.roleId(), principal.branchId(), branchId);
+        }
+        return inventoryValuationService.valuation(businessId, effectiveBranchId);
     }
 }

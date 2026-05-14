@@ -1,6 +1,7 @@
 package zelisline.ub.tenancy.application;
 
 import java.util.List;
+import java.util.Set;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -8,6 +9,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.identity.application.RequestPermissionService;
+import zelisline.ub.identity.domain.Role;
+import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.repository.BranchRepository;
 
@@ -27,12 +30,64 @@ public class BranchResolutionService {
     private final BranchRepository branchRepository;
     private final FeatureFlagService featureFlagService;
     private final RequestPermissionService requestPermissionService;
+    private final RoleRepository roleRepository;
+
+    /** Role keys that are locked to their assigned branch — cannot switch or see other branches. */
+    private static final Set<String> BRANCH_LOCKED_ROLE_KEYS = Set.of("stock_manager", "cashier");
+
+    /**
+     * Returns {@code true} when the given role is locked to its assigned branch.
+     */
+    public boolean isBranchLockedRole(String roleId) {
+        if (roleId == null || roleId.isBlank()) {
+            return false;
+        }
+        Role role = roleRepository.findByIdAndDeletedAtIsNull(roleId).orElse(null);
+        if (role == null || role.getRoleKey() == null) {
+            return false;
+        }
+        return BRANCH_LOCKED_ROLE_KEYS.contains(role.getRoleKey().trim().toLowerCase());
+    }
 
     /**
      * Resolve the effective branch for a business, given an optional
-     * session branch. When multi-branch is OFF and no session branch is
-     * provided, returns the business's default branch.
+     * session branch and the user's role. When multi-branch is OFF and
+     * no session branch is provided, returns the business's default branch.
+     *
+     * <p>Stock managers and cashiers are locked to their assigned branch.
      */
+    public String resolveEffectiveBranch(String businessId, String sessionBranchId, String roleId) {
+        // Stock managers and cashiers are locked to their assigned branch.
+        if (isBranchLockedRole(roleId)) {
+            if (sessionBranchId != null && !sessionBranchId.isBlank()) {
+                return sessionBranchId;
+            }
+            String defaultBranch = resolveDefaultBranch(businessId);
+            if (defaultBranch == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Branch is required. Contact your administrator to assign you a branch."
+                );
+            }
+            return defaultBranch;
+        }
+
+        if (featureFlagService.isMultiBranchEnabled(businessId)) {
+            if (sessionBranchId != null && !sessionBranchId.isBlank()) {
+                branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(sessionBranchId, businessId)
+                        .orElseThrow(() -> new ResponseStatusException(
+                                HttpStatus.BAD_REQUEST, "Branch not found or not in this business"));
+                return sessionBranchId;
+            }
+            return null;
+        }
+        return resolveDefaultBranch(businessId);
+    }
+
+    /**
+     * @deprecated Use {@link #resolveEffectiveBranch(String, String, String)} with roleId instead.
+     */
+    @Deprecated
     public String resolveEffectiveBranch(String businessId, String sessionBranchId) {
         if (featureFlagService.isMultiBranchEnabled(businessId)) {
             if (sessionBranchId != null && !sessionBranchId.isBlank()) {
@@ -50,6 +105,9 @@ public class BranchResolutionService {
      * Phase 9 Slice 2: Resolve the branch for a report/analytics query.
      * Users with {@code reports.branch.all} may pass null for HQ cross-branch
      * rollup. Others are scoped to explicit, session, or default branch.
+     *
+     * <p>Stock managers and cashiers are locked to their assigned branch;
+     * explicit branch requests are ignored and their session branch is used.</p>
      */
     public String resolveBranchForReport(
             String businessId,
@@ -57,6 +115,21 @@ public class BranchResolutionService {
             String sessionBranchId,
             String explicitBranchId
     ) {
+        // Stock managers and cashiers are locked to their assigned branch.
+        if (isBranchLockedRole(roleId)) {
+            if (sessionBranchId != null && !sessionBranchId.isBlank()) {
+                return sessionBranchId;
+            }
+            String defaultBranch = resolveDefaultBranch(businessId);
+            if (defaultBranch == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Branch is required. Contact your administrator to assign you a branch."
+                );
+            }
+            return defaultBranch;
+        }
+
         boolean canSeeAll = requestPermissionService.hasPermission(roleId, "reports.branch.all");
 
         if (canSeeAll) {
@@ -81,6 +154,50 @@ public class BranchResolutionService {
             );
         }
         return resolved;
+    }
+
+    /**
+     * Validates that the requested branch is allowed for the user's role.
+     *
+     * <p>For stock managers and cashiers, the requested branch MUST match
+     * their assigned branch (from the JWT). Returns the validated branch ID
+     * or throws {@link ResponseStatusException#FORBIDDEN}.</p>
+     *
+     * <p>For all other roles, returns the requested branch as-is (no restriction).</p>
+     *
+     * @param roleId          the user's role ID (from JWT)
+     * @param assignedBranch  the user's assigned branch (from JWT, may be null)
+     * @param requestedBranch the branch the user wants to operate on
+     * @return the validated branch ID (requestedBranch for unlocked roles, assignedBranch for locked)
+     * @throws ResponseStatusException with FORBIDDEN if a locked role tries a different branch
+     */
+    public String requireBranchForLockedRole(
+            String roleId,
+            String assignedBranch,
+            String requestedBranch
+    ) {
+        if (!isBranchLockedRole(roleId)) {
+            return requestedBranch;
+        }
+
+        // Locked role: must operate on their assigned branch only.
+        String assigned = assignedBranch != null ? assignedBranch.trim() : null;
+        if (assigned == null || assigned.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Your account is not assigned to a branch. Contact your administrator."
+            );
+        }
+
+        String requested = requestedBranch != null ? requestedBranch.trim() : null;
+        if (!assigned.equals(requested)) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "You can only operate on your assigned branch. Branch switching is disabled for your role."
+            );
+        }
+
+        return assigned;
     }
 
     /**

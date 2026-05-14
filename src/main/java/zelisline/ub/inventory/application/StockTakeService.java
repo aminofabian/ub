@@ -379,28 +379,6 @@ public class StockTakeService {
                     unconfirmedWithCounts + " items with counts entered are still unconfirmed. Pass force=true to close anyway.");
         }
 
-        for (StockTakeLine line : session.getLines()) {
-            if (InventoryConstants.STOCKTAKE_LINE_CONFIRMED.equals(line.getStatus())) {
-                // Use admin_quantity if set, otherwise countedQty
-                BigDecimal confirmedQty = line.getAdminQuantity() != null
-                        ? line.getAdminQuantity()
-                        : line.getCountedQty();
-                if (confirmedQty == null) {
-                    continue;
-                }
-                BigDecimal systemSnap = line.getSystemQtySnapshot() != null
-                        ? line.getSystemQtySnapshot()
-                        : BigDecimal.ZERO.setScale(QTY_SCALE, RoundingMode.HALF_UP);
-                BigDecimal variance = confirmedQty.subtract(systemSnap);
-                if (variance.signum() == 0) {
-                    continue;
-                }
-                // Use the confirmed quantity for the adjustment request
-                line.setAdminQuantity(confirmedQty);
-                persistAdjustmentRequest(businessId, session, line, variance, userId);
-            }
-        }
-
         session.setStatus(InventoryConstants.STOCKTAKE_SESSION_CLOSED);
         session.setClosedAt(Instant.now());
         session.setClosedBy(userId);

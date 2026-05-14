@@ -1,6 +1,8 @@
 package zelisline.ub.finance.application;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.finance.domain.LedgerAccount;
@@ -14,7 +16,8 @@ public class LedgerAccountResolver {
 
     public LedgerAccount resolve(String businessId, String code) {
         return ledgerAccountRepository.findByBusinessIdAndCode(businessId, code)
-                .orElseThrow(() -> new IllegalStateException("Missing ledger account " + code));
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Missing ledger account " + code));
     }
 
     public String resolveId(String businessId, String code) {
@@ -23,6 +26,7 @@ public class LedgerAccountResolver {
 
     public LedgerAccount findById(String id) {
         return ledgerAccountRepository.findById(id)
-                .orElseThrow(() -> new IllegalStateException("Missing ledger account " + id));
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Missing ledger account " + id));
     }
 }

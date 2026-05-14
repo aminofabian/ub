@@ -1,5 +1,6 @@
 package zelisline.ub.inventory.application;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 
@@ -43,7 +44,10 @@ public class SupplyBatchLifecycleService {
                 .findBySupplyBatchIdAndStatus(supplyBatchId, InventoryConstants.BATCH_STATUS_ACTIVE);
 
         boolean allZero = lines.stream()
-                .allMatch(b -> b.getQuantityRemaining().signum() <= 0);
+                .allMatch(b -> {
+                    BigDecimal q = b.getQuantityRemaining();
+                    return q == null || q.signum() <= 0;
+                });
 
         if (allZero) {
             // Auto-close the supply batch

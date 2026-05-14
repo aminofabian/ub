@@ -20,6 +20,12 @@ public final class InventoryConstants {
     public static final String TRANSFER_STATUS_CANCELLED = "cancelled";
     public static final String STOCKTAKE_SESSION_IN_PROGRESS = "in_progress";
     public static final String STOCKTAKE_SESSION_CLOSED = "closed";
+    public static final String STOCKTAKE_SESSION_TYPE_MORNING = "morning";
+    public static final String STOCKTAKE_SESSION_TYPE_EVENING = "evening";
+    public static final String STOCKTAKE_LINE_PENDING = "pending";
+    public static final String STOCKTAKE_LINE_SUBMITTED = "submitted";
+    public static final String STOCKTAKE_LINE_CONFIRMED = "confirmed";
+    public static final String STOCKTAKE_CHECKLIST_BOTH = "both";
     public static final String ADJUSTMENT_REQUEST_PENDING = "pending";
     public static final String ADJUSTMENT_REQUEST_APPROVED = "approved";
     public static final String ADJUSTMENT_REQUEST_REJECTED = "rejected";

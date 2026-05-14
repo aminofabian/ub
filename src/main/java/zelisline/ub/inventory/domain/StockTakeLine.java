@@ -1,6 +1,7 @@
 package zelisline.ub.inventory.domain;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.UUID;
 
 import jakarta.persistence.Column;
@@ -37,8 +38,29 @@ public class StockTakeLine {
     @Column(name = "counted_qty", precision = 14, scale = 4)
     private BigDecimal countedQty;
 
+    @Column(name = "admin_quantity", precision = 14, scale = 4)
+    private BigDecimal adminQuantity;
+
     @Column(name = "note", length = 500)
     private String note;
+
+    @Column(name = "aisle", length = 255)
+    private String aisle;
+
+    @Column(name = "status", nullable = false, length = 16)
+    private String status;
+
+    @Column(name = "submitted_by", length = 36)
+    private String submittedBy;
+
+    @Column(name = "submitted_at")
+    private Instant submittedAt;
+
+    @Column(name = "confirmed_by", length = 36)
+    private String confirmedBy;
+
+    @Column(name = "confirmed_at")
+    private Instant confirmedAt;
 
     @Column(name = "sort_order", nullable = false)
     private int sortOrder;

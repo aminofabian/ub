@@ -142,14 +142,19 @@ public class InventoryLedgerService {
         );
         applyStockDelta(item, req.quantity());
         BigDecimal value = extensionMoney(req.quantity(), req.unitCost());
-        String jeId = saveJournal(
-                businessId,
-                InventoryConstants.JOURNAL_COUNT_GAIN,
-                opId,
-                "Stock count / gain",
-                value,
-                true
-        );
+        // Stock-take surplus and other callers may use $0 unit cost when there is no
+        // on-hand batch to average; GL lines must not be zero-amount.
+        String jeId = null;
+        if (value.signum() > 0) {
+            jeId = saveJournal(
+                    businessId,
+                    InventoryConstants.JOURNAL_COUNT_GAIN,
+                    opId,
+                    "Stock count / gain",
+                    value,
+                    true
+            );
+        }
         if (req.quantity().signum() != 0) {
             String itemName = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(req.itemId(), businessId)
                     .map(zelisline.ub.catalog.domain.Item::getName).orElse(req.itemId());
@@ -349,7 +354,8 @@ public class InventoryLedgerService {
         b.setSourceId(sourceId);
         b.setInitialQuantity(quantity);
         b.setQuantityRemaining(quantity);
-        b.setUnitCost(unitCost.setScale(QTY_SCALE, RoundingMode.HALF_UP));
+        BigDecimal cost = unitCost != null ? unitCost : BigDecimal.ZERO;
+        b.setUnitCost(cost.setScale(QTY_SCALE, RoundingMode.HALF_UP));
         b.setReceivedAt(Instant.now());
         inventoryBatchRepository.save(b);
         return b;
@@ -393,7 +399,7 @@ public class InventoryLedgerService {
             boolean isInboundInventory
     ) {
         if (extensionValue.signum() <= 0) {
-            throw new IllegalStateException("Journal amount must be positive");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Journal amount must be positive");
         }
         JournalEntry entry = new JournalEntry();
         entry.setBusinessId(businessId);

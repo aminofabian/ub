@@ -1,6 +1,7 @@
 package zelisline.ub.inventory.domain;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -37,6 +38,12 @@ public class StockTakeSession {
     @Column(name = "status", nullable = false, length = 24)
     private String status;
 
+    @Column(name = "session_type", nullable = false, length = 16)
+    private String sessionType;
+
+    @Column(name = "session_date", nullable = false)
+    private LocalDate sessionDate;
+
     @Column(name = "notes", length = 2000)
     private String notes;
 
@@ -50,11 +57,17 @@ public class StockTakeSession {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    @Column(name = "session_number", nullable = false)
+    private int sessionNumber;
+
     @Column(name = "started_by", length = 36)
     private String startedBy;
 
     @Column(name = "closed_at")
     private Instant closedAt;
+
+    @Column(name = "closed_by", length = 36)
+    private String closedBy;
 
     @OneToMany(mappedBy = "session", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("sortOrder ASC, id ASC")

@@ -130,6 +130,7 @@ class InventorySlice4IT {
         permissionRepository.deleteAll();
         branchRepository.deleteAll();
         businessRepository.deleteAll();
+        System.out.println("=== BEFORE EACH: sessions after delete=" + stockTakeSessionRepository.count());
 
         Business b = new Business();
         b.setId(TENANT);
@@ -143,6 +144,9 @@ class InventorySlice4IT {
         br.setName("Main");
         branchRepository.save(br);
         branchId = br.getId();
+
+        System.out.println("=== BEFORE EACH: branchId=" + branchId + " exists check=" + stockTakeSessionRepository.existsByBusinessIdAndBranchIdAndSessionTypeAndSessionDate(
+                TENANT, branchId, "morning", java.time.LocalDate.now()));
 
         catalogBootstrapService.seedDefaultItemTypesIfMissing(TENANT);
         String goodsTypeId = itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(TENANT).getFirst().getId();

@@ -24,6 +24,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.inventory.api.dto.ApproveStockAdjustmentRequest;
+import zelisline.ub.inventory.api.dto.CreateItemWithStocktakeLineRequest;
 import zelisline.ub.inventory.api.dto.PatchStockTakeCountsRequest;
 import zelisline.ub.inventory.api.dto.PostStartStockTakeSessionRequest;
 import zelisline.ub.inventory.api.dto.ReconciliationResponse;
@@ -183,6 +184,23 @@ public class StockTakeController {
                 sessionId,
                 body.itemId(),
                 body.aisle(),
+                user.userId()
+        );
+    }
+
+    @PostMapping("/sessions/{sessionId}/lines/with-product")
+    @PreAuthorize("hasPermission(null, 'stocktake.run')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public StockTakeSessionResponse createItemAndAddLine(
+            @PathVariable String sessionId,
+            @Valid @RequestBody CreateItemWithStocktakeLineRequest body,
+            HttpServletRequest request
+    ) {
+        var user = CurrentTenantUser.requireHuman(request);
+        return stockTakeService.createItemAndAddLine(
+                TenantRequestIds.resolveBusinessId(request),
+                sessionId,
+                body,
                 user.userId()
         );
     }

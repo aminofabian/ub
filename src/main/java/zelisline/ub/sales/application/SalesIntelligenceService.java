@@ -132,6 +132,32 @@ public class SalesIntelligenceService {
           GROUP BY sil.item_id
             """;
 
+    private static final String Q_ITEMS_BY_DATE = """
+            SELECT sil.item_id,
+                   COALESCE(SUM(sil.quantity), 0) AS qty_sold
+              FROM sale_items sil
+              JOIN sales s ON s.id = sil.sale_id
+              JOIN items i ON i.id = sil.item_id AND i.business_id = s.business_id AND i.deleted_at IS NULL
+             WHERE s.business_id = ?
+               AND s.status IN (?, ?)
+               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+          GROUP BY sil.item_id
+            """;
+
+    private static final String Q_ITEMS_REFUNDS_BY_DATE = """
+            SELECT sil.item_id,
+                   COALESCE(SUM(rl.quantity), 0) AS qty_refunded
+              FROM refund_lines rl
+              JOIN refunds r ON r.id = rl.refund_id
+              JOIN sale_items sil ON sil.id = rl.sale_item_id
+              JOIN sales s ON s.id = sil.sale_id
+              JOIN items i ON i.id = sil.item_id AND i.business_id = r.business_id AND i.deleted_at IS NULL
+             WHERE r.business_id = ?
+               AND r.status = ?
+               AND CAST(r.refunded_at AS DATE) BETWEEN ? AND ?
+          GROUP BY sil.item_id
+            """;
+
     @Transactional(readOnly = true)
     public List<RevenueByCategoryRow> netRevenueByCategory(
             String businessId,
@@ -310,6 +336,50 @@ public class SalesIntelligenceService {
         }
         out.sort(Comparator.comparing(ItemRevenueRow::netRevenue).reversed());
         return out;
+    }
+
+    /**
+     * Returns a map of itemId → net quantity sold (gross minus refunds) for the
+     * given date range, across all categories. Used by stock-take reconciliation.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, BigDecimal> quantitySoldByItem(
+            String businessId,
+            LocalDate fromInclusive,
+            LocalDate toInclusive
+    ) {
+        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
+        Date from = Date.valueOf(w[0]);
+        Date to = Date.valueOf(w[1]);
+
+        Map<String, BigDecimal> byItem = new HashMap<>();
+
+        jdbc.query(
+                Q_ITEMS_BY_DATE,
+                rs -> {
+                    String id = rs.getString("item_id");
+                    BigDecimal qty = rs.getBigDecimal("qty_sold").setScale(4, RoundingMode.HALF_UP);
+                    byItem.merge(id, qty, BigDecimal::add);
+                },
+                businessId,
+                SalesConstants.SALE_STATUS_COMPLETED,
+                SalesConstants.SALE_STATUS_REFUNDED,
+                from,
+                to);
+
+        jdbc.query(
+                Q_ITEMS_REFUNDS_BY_DATE,
+                rs -> {
+                    String id = rs.getString("item_id");
+                    BigDecimal qty = rs.getBigDecimal("qty_refunded").setScale(4, RoundingMode.HALF_UP);
+                    byItem.merge(id, qty.negate(), BigDecimal::add);
+                },
+                businessId,
+                SalesConstants.REFUND_STATUS_COMPLETED,
+                from,
+                to);
+
+        return byItem;
     }
 
     private static final String Q_RECENT_SALES = """

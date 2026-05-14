@@ -21,12 +21,15 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.api.dto.CreateItemRequest;
+import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.domain.Aisle;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.AisleRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.inventory.api.dto.ApproveStockAdjustmentRequest;
+import zelisline.ub.inventory.api.dto.CreateItemWithStocktakeLineRequest;
 import zelisline.ub.inventory.api.dto.PatchStockTakeCountsRequest;
 import zelisline.ub.inventory.api.dto.PostStartStockTakeSessionRequest;
 import zelisline.ub.inventory.api.dto.PostStockIncreaseRequest;
@@ -43,6 +46,7 @@ import zelisline.ub.inventory.repository.StockTakeChecklistItemRepository;
 import zelisline.ub.inventory.repository.StockTakeSessionRepository;
 import zelisline.ub.purchasing.domain.InventoryBatch;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
+import zelisline.ub.sales.application.SalesIntelligenceService;
 import zelisline.ub.tenancy.repository.BranchRepository;
 
 @Service
@@ -62,6 +66,8 @@ public class StockTakeService {
     private final ApplicationEventPublisher eventPublisher;
     private final InventoryLedgerService inventoryLedgerService;
     private final InventoryBatchPickerService inventoryBatchPickerService;
+    private final ItemCatalogService itemCatalogService;
+    private final SalesIntelligenceService salesIntelligenceService;
 
     // ── Session lifecycle ──────────────────────────────────────────────
 
@@ -107,7 +113,7 @@ public class StockTakeService {
                         .distinct()
                         .toList();
             }
-            if (itemIds.isEmpty()) {
+            if (itemIds == null || itemIds.isEmpty()) {
                 itemIds = checklistItemRepository.findItemIdsByBusinessIdAndSessionType(
                         businessId, req.sessionType());
                 if (itemIds.isEmpty()) {
@@ -290,6 +296,63 @@ public class StockTakeService {
         return buildResponse(session);
     }
 
+    // ── Create product + line atomically ───────────────────────────────
+
+    @Transactional
+    public StockTakeSessionResponse createItemAndAddLine(
+            String businessId,
+            String sessionId,
+            CreateItemWithStocktakeLineRequest req,
+            String userId
+    ) {
+        StockTakeSession session = loadSessionInProgress(businessId, sessionId);
+
+        CreateItemRequest createReq = new CreateItemRequest(
+                null,
+                req.barcode(),
+                req.name(),
+                null,
+                req.itemTypeId(),
+                req.categoryId(),
+                null,
+                req.unitType(),
+                false,
+                req.isSellable() != null ? req.isSellable() : true,
+                req.isStocked() != null ? req.isStocked() : true,
+                null, null, null, null, null, null,
+                null, null, null, null, null, null,
+                req.brand(),
+                req.size()
+        );
+
+        var createResult = itemCatalogService.createItem(businessId, createReq, null);
+        String itemId = createResult.body().id();
+
+        boolean exists = session.getLines().stream().anyMatch(l -> l.getItemId().equals(itemId));
+        if (!exists) {
+            Map<String, BigDecimal> onHand = loadOnHandByItem(businessId, session.getBranchId());
+            BigDecimal sys = onHand.getOrDefault(itemId, BigDecimal.ZERO)
+                    .setScale(QTY_SCALE, RoundingMode.HALF_UP);
+            int maxOrder = session.getLines().stream().mapToInt(StockTakeLine::getSortOrder).max().orElse(0);
+            StockTakeLine line = new StockTakeLine();
+            line.setSession(session);
+            line.setItemId(itemId);
+            line.setSystemQtySnapshot(sys);
+            line.setCountedQty(req.countedQty().setScale(QTY_SCALE, RoundingMode.HALF_UP));
+            line.setStatus(InventoryConstants.STOCKTAKE_LINE_SUBMITTED);
+            line.setSortOrder(maxOrder + 1);
+            if (req.aisle() != null && !req.aisle().isBlank()) {
+                line.setAisle(req.aisle().trim());
+            }
+            line.setSubmittedBy(userId);
+            line.setSubmittedAt(Instant.now());
+            session.getLines().add(line);
+        }
+
+        stockTakeSessionRepository.save(session);
+        return buildResponse(session);
+    }
+
     // ── Session close ──────────────────────────────────────────────────
 
     @Transactional
@@ -409,7 +472,53 @@ public class StockTakeService {
                 .findByIdAndBusinessIdFetchLines(eveningSessionId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Evening session not found"));
 
-        // Build morning confirmed quantities map
+        // Use the morning session date for sales lookup (both sessions are same day)
+        Map<String, BigDecimal> soldByItem = salesIntelligenceService.quantitySoldByItem(
+                businessId, morning.getSessionDate(), morning.getSessionDate());
+
+        return buildReconciliationResponse(
+                businessId, morningSessionId, eveningSessionId,
+                morning, evening, soldByItem);
+    }
+
+    /**
+     * Auto-detects morning and evening sessions for a branch + date and returns
+     * the reconciliation report, so users don't have to manually enter session IDs.
+     */
+    @Transactional(readOnly = true)
+    public ReconciliationResponse getReconciliationByBranchAndDate(
+            String businessId,
+            String branchId,
+            LocalDate date
+    ) {
+        requireBranch(businessId, branchId);
+        StockTakeSession morning = stockTakeSessionRepository
+                .findByTypeAndBranchAndDateFetchLines(businessId, branchId,
+                        InventoryConstants.STOCKTAKE_SESSION_TYPE_MORNING, date)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "No morning session found for branch on " + date));
+        StockTakeSession evening = stockTakeSessionRepository
+                .findByTypeAndBranchAndDateFetchLines(businessId, branchId,
+                        InventoryConstants.STOCKTAKE_SESSION_TYPE_EVENING, date)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "No evening session found for branch on " + date));
+
+        Map<String, BigDecimal> soldByItem = salesIntelligenceService.quantitySoldByItem(
+                businessId, date, date);
+
+        return buildReconciliationResponse(
+                businessId, morning.getId(), evening.getId(),
+                morning, evening, soldByItem);
+    }
+
+    private ReconciliationResponse buildReconciliationResponse(
+            String businessId,
+            String morningSessionId,
+            String eveningSessionId,
+            StockTakeSession morning,
+            StockTakeSession evening,
+            Map<String, BigDecimal> soldByItem
+    ) {
         Map<String, BigDecimal> morningQtys = new HashMap<>();
         for (StockTakeLine line : morning.getLines()) {
             if (InventoryConstants.STOCKTAKE_LINE_CONFIRMED.equals(line.getStatus())) {
@@ -420,7 +529,6 @@ public class StockTakeService {
             }
         }
 
-        // Build evening confirmed quantities map
         Map<String, BigDecimal> eveningQtys = new HashMap<>();
         for (StockTakeLine line : evening.getLines()) {
             if (InventoryConstants.STOCKTAKE_LINE_CONFIRMED.equals(line.getStatus())) {
@@ -431,11 +539,9 @@ public class StockTakeService {
             }
         }
 
-        // Capture confirmed counts before computing intersection
         int morningConfirmedCount = morningQtys.size();
         int eveningConfirmedCount = eveningQtys.size();
 
-        // Get items counted in BOTH sessions
         Set<String> commonIds = new HashSet<>(morningQtys.keySet());
         commonIds.retainAll(eveningQtys.keySet());
 
@@ -446,8 +552,7 @@ public class StockTakeService {
         for (String itemId : commonIds) {
             BigDecimal opening = morningQtys.get(itemId);
             BigDecimal actual = eveningQtys.get(itemId);
-            // Units sold — for now use 0; real sales integration comes later
-            BigDecimal sold = BigDecimal.ZERO;
+            BigDecimal sold = soldByItem.getOrDefault(itemId, BigDecimal.ZERO);
             BigDecimal expected = opening.subtract(sold);
             BigDecimal variance = actual.subtract(expected);
 
@@ -485,30 +590,6 @@ public class StockTakeService {
                 eveningConfirmedCount,
                 lines
         );
-    }
-
-    /**
-     * Auto-detects morning and evening sessions for a branch + date and returns
-     * the reconciliation report, so users don't have to manually enter session IDs.
-     */
-    @Transactional(readOnly = true)
-    public ReconciliationResponse getReconciliationByBranchAndDate(
-            String businessId,
-            String branchId,
-            LocalDate date
-    ) {
-        requireBranch(businessId, branchId);
-        StockTakeSession morning = stockTakeSessionRepository
-                .findByTypeAndBranchAndDateFetchLines(businessId, branchId,
-                        InventoryConstants.STOCKTAKE_SESSION_TYPE_MORNING, date)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
-                        "No morning session found for branch on " + date));
-        StockTakeSession evening = stockTakeSessionRepository
-                .findByTypeAndBranchAndDateFetchLines(businessId, branchId,
-                        InventoryConstants.STOCKTAKE_SESSION_TYPE_EVENING, date)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
-                        "No evening session found for branch on " + date));
-        return getReconciliation(businessId, morning.getId(), evening.getId());
     }
 
     // ── Adjustment request approval / rejection ────────────────────────

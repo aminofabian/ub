@@ -6,10 +6,12 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.print;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -314,9 +316,10 @@ class InventorySlice4IT {
         emptyItem.setCurrentStock(BigDecimal.ZERO);
         itemRepository.save(emptyItem);
 
+        String today = LocalDate.now().toString();
         MvcResult start = mockMvc.perform(post("/api/v1/inventory/stock-take/sessions")
                         .contentType(APPLICATION_JSON)
-                        .content("{\"branchId\":\"" + branchId + "\"}")
+                        .content("{\"branchId\":\"" + branchId + "\",\"sessionType\":\"morning\",\"sessionDate\":\"" + today + "\"}")
                         .header("X-Tenant-Id", TENANT)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
@@ -327,6 +330,7 @@ class InventorySlice4IT {
 
         StringBuilder patchBody = new StringBuilder("{\"lines\":[");
         boolean first = true;
+        String noBatchLineId = null;
         for (JsonNode line : session.get("lines")) {
             if (!first) {
                 patchBody.append(",");
@@ -335,6 +339,7 @@ class InventorySlice4IT {
             String lid = line.get("id").asText();
             String iid = line.get("itemId").asText();
             if (iid.equals(itemNoBatch)) {
+                noBatchLineId = lid;
                 patchBody.append("{\"lineId\":\"").append(lid).append("\",\"countedQty\":3}");
             } else {
                 patchBody.append("{\"lineId\":\"").append(lid).append("\",\"countedQty\":")
@@ -351,6 +356,30 @@ class InventorySlice4IT {
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk());
+
+        // Confirm the no-batch line before closing (v2 flow)
+        assertThat(noBatchLineId).isNotNull();
+        mockMvc.perform(post("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}/confirm", sid, noBatchLineId)
+                        .contentType(APPLICATION_JSON)
+                        .content("{}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        // Confirm remaining lines too so close succeeds
+        for (JsonNode line : session.get("lines")) {
+            String lid = line.get("id").asText();
+            if (!lid.equals(noBatchLineId)) {
+                mockMvc.perform(post("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}/confirm", sid, lid)
+                                .contentType(APPLICATION_JSON)
+                                .content("{}")
+                                .header("X-Tenant-Id", TENANT)
+                                .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                                .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                        .andExpect(status().isOk());
+            }
+        }
 
         mockMvc.perform(post("/api/v1/inventory/stock-take/sessions/{sessionId}/close", sid)
                         .contentType(APPLICATION_JSON)
@@ -389,10 +418,247 @@ class InventorySlice4IT {
         assertThat(updated.getCurrentStock().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("3");
     }
 
+    @Test
+    void startMorningAndEveningSessions_enforcesOnePerTypePerDay() throws Exception {
+        String today = LocalDate.now().toString();
+        // First morning session succeeds
+        startSessionJson("morning", today);
+
+        // Second morning session on same day fails
+        mockMvc.perform(post("/api/v1/inventory/stock-take/sessions")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"branchId\":\"" + branchId + "\",\"sessionType\":\"morning\",\"sessionDate\":\"" + today + "\"}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isConflict());
+
+        // Evening session on same day succeeds
+        mockMvc.perform(post("/api/v1/inventory/stock-take/sessions")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"branchId\":\"" + branchId + "\",\"sessionType\":\"evening\",\"sessionDate\":\"" + today + "\"}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated());
+    }
+
+    @Test
+    void eveningSession_inheritsMorningConfirmedLines() throws Exception {
+        String today = LocalDate.now().toString();
+        // Start morning session
+        JsonNode morning = startSessionJson("morning", today);
+        String morningLineId = morning.get("lines").get(0).get("id").asText();
+
+        // Submit count for the morning line
+        mockMvc.perform(patch("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}", morning.get("id").asText(), morningLineId)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"countedQty\":8}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        // Confirm the morning line
+        mockMvc.perform(post("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}/confirm", morning.get("id").asText(), morningLineId)
+                        .contentType(APPLICATION_JSON)
+                        .content("{}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        // Start evening session — should inherit the confirmed morning line
+        MvcResult eveningResult = mockMvc.perform(post("/api/v1/inventory/stock-take/sessions")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"branchId\":\"" + branchId + "\",\"sessionType\":\"evening\",\"sessionDate\":\"" + today + "\"}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        JsonNode evening = objectMapper.readTree(eveningResult.getResponse().getContentAsString());
+        assertThat(evening.get("lines").size()).isEqualTo(1);
+        assertThat(evening.get("lines").get(0).get("itemId").asText())
+                .isEqualTo(morning.get("lines").get(0).get("itemId").asText());
+    }
+
+    @Test
+    void applySingleCount_andConfirmLine_appliesInventoryImmediately() throws Exception {
+        JsonNode session = startSessionJson();
+        String sid = session.get("id").asText();
+        String lineId = session.get("lines").get(0).get("id").asText();
+
+        // Apply single count via PATCH /lines/{lineId}
+        mockMvc.perform(patch("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}", sid, lineId)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"countedQty\":15}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        // Confirm line — inventory should update immediately
+        mockMvc.perform(post("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}/confirm", sid, lineId)
+                        .contentType(APPLICATION_JSON)
+                        .content("{}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        Item item = itemRepository.findById(itemId).orElseThrow();
+        assertThat(item.getCurrentStock().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("15");
+    }
+
+    @Test
+    void confirmLine_preventsFurtherModification() throws Exception {
+        JsonNode session = startSessionJson();
+        String sid = session.get("id").asText();
+        String lineId = session.get("lines").get(0).get("id").asText();
+
+        // Submit and confirm
+        mockMvc.perform(patch("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}", sid, lineId)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"countedQty\":12}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}/confirm", sid, lineId)
+                        .contentType(APPLICATION_JSON)
+                        .content("{}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        // Try to modify confirmed line
+        mockMvc.perform(patch("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}", sid, lineId)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"countedQty\":13}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void closeSession_withoutForce_warnsIfUnconfirmed() throws Exception {
+        JsonNode session = startSessionJson();
+        String sid = session.get("id").asText();
+        String lineId = session.get("lines").get(0).get("id").asText();
+
+        // Submit count but do NOT confirm
+        mockMvc.perform(patch("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}", sid, lineId)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"countedQty\":11}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        // Close without force should fail
+        mockMvc.perform(post("/api/v1/inventory/stock-take/sessions/{sessionId}/close", sid)
+                        .contentType(APPLICATION_JSON)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isConflict());
+
+        // Close with force should succeed
+        mockMvc.perform(post("/api/v1/inventory/stock-take/sessions/{sessionId}/close?force=true", sid)
+                        .contentType(APPLICATION_JSON)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void managerCannotCloseSession() throws Exception {
+        JsonNode session = startSessionJson();
+        String sid = session.get("id").asText();
+
+        mockMvc.perform(post("/api/v1/inventory/stock-take/sessions/{sessionId}/close", sid)
+                        .contentType(APPLICATION_JSON)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, manager.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_MANAGER))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void getActiveSession_returnsSession() throws Exception {
+        JsonNode session = startSessionJson();
+        String sid = session.get("id").asText();
+
+        MvcResult result = mockMvc.perform(get("/api/v1/inventory/stock-take/sessions/active")
+                        .param("branchId", branchId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode root = objectMapper.readTree(result.getResponse().getContentAsString());
+        assertThat(root.get("session").get("id").asText()).isEqualTo(sid);
+        assertThat(root.get("hasStaleSession").asBoolean()).isFalse();
+    }
+
+    @Test
+    void createItemAndAddLine_atomic() throws Exception {
+        JsonNode session = startSessionJson();
+        String sid = session.get("id").asText();
+        String typeId = itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(TENANT).getFirst().getId();
+
+        MvcResult result = mockMvc.perform(post("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/with-product", sid)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"name\":\"Atomic Cereal\",\"itemTypeId\":\"" + typeId + "\",\"countedQty\":42,\"aisle\":\"Aisle 9\"}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        JsonNode root = objectMapper.readTree(result.getResponse().getContentAsString());
+        // Should contain the original line plus the new one
+        assertThat(root.get("lines").size()).isEqualTo(2);
+        // Find the new line
+        JsonNode newLine = null;
+        for (JsonNode line : root.get("lines")) {
+            if ("Atomic Cereal".equals(line.get("itemName").asText())) {
+                newLine = line;
+                break;
+            }
+        }
+        assertThat(newLine).isNotNull();
+        assertThat(newLine.get("countedQty").asText()).isEqualTo("42");
+        assertThat(newLine.get("aisle").asText()).isEqualTo("Aisle 9");
+        assertThat(newLine.get("status").asText()).isEqualTo("submitted");
+    }
+
+    @Test
+    void debugStartSession() throws Exception {
+        mockMvc.perform(post("/api/v1/inventory/stock-take/sessions")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"branchId\":\"" + branchId + "\",\"sessionType\":\"morning\",\"sessionDate\":\"" + LocalDate.now() + "\"}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andDo(print());
+    }
+
     private JsonNode startSessionJson() throws Exception {
+        return startSessionJson("morning", java.time.LocalDate.now().toString());
+    }
+
+    private JsonNode startSessionJson(String sessionType, String sessionDate) throws Exception {
         MvcResult result = mockMvc.perform(post("/api/v1/inventory/stock-take/sessions")
                         .contentType(APPLICATION_JSON)
-                        .content("{\"branchId\":\"" + branchId + "\"}")
+                        .content("{\"branchId\":\"" + branchId + "\",\"sessionType\":\"" + sessionType + "\",\"sessionDate\":\"" + sessionDate + "\"}")
                         .header("X-Tenant-Id", TENANT)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
@@ -411,7 +677,19 @@ class InventorySlice4IT {
                 .andExpect(status().isOk());
     }
 
+    private void confirmLine(String sid, String lid) throws Exception {
+        mockMvc.perform(post("/api/v1/inventory/stock-take/sessions/{sessionId}/lines/{lineId}/confirm", sid, lid)
+                        .contentType(APPLICATION_JSON)
+                        .content("{}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+    }
+
     private String closeAndGetFirstRequestId() throws Exception {
+        // In v2, lines must be confirmed before close (or force=true).
+        confirmLine(sessionId, takeLineId);
         mockMvc.perform(post("/api/v1/inventory/stock-take/sessions/{sessionId}/close", sessionId)
                         .contentType(APPLICATION_JSON)
                         .header("X-Tenant-Id", TENANT)

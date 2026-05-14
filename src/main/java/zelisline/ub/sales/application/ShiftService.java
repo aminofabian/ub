@@ -223,8 +223,13 @@ public class ShiftService {
         Page<Shift> shiftPage;
 
         if (openedBy != null && !openedBy.isBlank()) {
-            shiftPage = shiftRepository.findByBusinessIdAndOpenedByOrderByOpenedAtDesc(
-                    businessId, openedBy, pageRequest);
+            if (branchId != null && !branchId.isBlank()) {
+                shiftPage = shiftRepository.findByBusinessIdAndOpenedByAndBranchIdOrderByOpenedAtDesc(
+                        businessId, openedBy, branchId, pageRequest);
+            } else {
+                shiftPage = shiftRepository.findByBusinessIdAndOpenedByOrderByOpenedAtDesc(
+                        businessId, openedBy, pageRequest);
+            }
         } else if (branchId != null && !branchId.isBlank() || status != null && !status.isBlank()) {
             shiftPage = shiftRepository.findByBusinessIdFiltered(
                     businessId,

@@ -90,6 +90,21 @@ public interface ShiftRepository extends JpaRepository<Shift, String> {
             Pageable pageable
     );
 
+    /** List shifts opened by a cashier at a specific branch (branch-scoped role lists). */
+    @Query("""
+            select s from Shift s
+             where s.businessId = :businessId
+               and s.openedBy = :openedBy
+               and s.branchId = :branchId
+             order by s.openedAt desc
+            """)
+    Page<Shift> findByBusinessIdAndOpenedByAndBranchIdOrderByOpenedAtDesc(
+            @Param("businessId") String businessId,
+            @Param("openedBy") String openedBy,
+            @Param("branchId") String branchId,
+            Pageable pageable
+    );
+
     /** Count open shifts for a specific branch. */
     long countByBusinessIdAndBranchIdAndStatus(
             String businessId, String branchId, String status);

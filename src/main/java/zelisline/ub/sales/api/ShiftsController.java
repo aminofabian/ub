@@ -91,11 +91,10 @@ public class ShiftsController {
         TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String effectiveOpenedBy = openedBy;
 
-        // Stock managers and cashiers can only list shifts for their assigned branch.
-        String effectiveBranch = branchResolutionService.requireBranchForLockedRole(
-                principal.roleId(), principal.branchId(), branchId);
+        // Stock managers and cashiers: optional branch param defaults to assigned branch.
+        String effectiveBranch = coerceOptionalBranchFilterForShiftsList(principal, branchId);
 
-        // Cashiers can only see their own shifts.
+        // Cashiers / stock managers with shift read can only see their own shifts.
         if (branchResolutionService.isBranchLockedRole(principal.roleId())) {
             effectiveOpenedBy = principal.userId();
         }
@@ -121,14 +120,39 @@ public class ShiftsController {
 
         ShiftDetailResponse detail = shiftService.getShiftDetail(businessId, shiftId);
 
-        // Cashiers can only view their own shifts.
+        // Cashiers / stock managers: own shifts only, and only on their assigned branch when set.
         if (branchResolutionService.isBranchLockedRole(principal.roleId())) {
             if (!principal.userId().equals(detail.openedBy())) {
                 throw new ResponseStatusException(HttpStatus.FORBIDDEN,
                         "You can only view your own shifts.");
             }
+            String assigned = principal.branchId() != null ? principal.branchId().trim() : "";
+            if (!assigned.isEmpty() && !assigned.equals(detail.branchId())) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                        "You can only view shifts for your assigned branch.");
+            }
         }
 
         return detail;
+    }
+
+    /**
+     * Optional branch filter for shift lists. Branch-locked roles default to their assigned branch
+     * when the query omits {@code branchId}.
+     */
+    private String coerceOptionalBranchFilterForShiftsList(TenantPrincipal principal, String branchId) {
+        if (!branchResolutionService.isBranchLockedRole(principal.roleId())) {
+            return branchId == null || branchId.isBlank() ? null : branchId.trim();
+        }
+        String assigned = principal.branchId() != null ? principal.branchId().trim() : "";
+        if (assigned.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Your account is not assigned to a branch. Contact your administrator.");
+        }
+        if (branchId == null || branchId.isBlank()) {
+            return assigned;
+        }
+        return branchResolutionService.requireBranchForLockedRole(
+                principal.roleId(), principal.branchId(), branchId);
     }
 }

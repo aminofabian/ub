@@ -74,22 +74,23 @@ class BusinessInventorySettingsIT {
 
     @BeforeEach
     void setUp() {
-        if (businessRepository.findById(TENANT).isEmpty()) {
-            Business business = new Business();
-            business.setId(TENANT);
-            business.setName("Inventory Settings Co");
-            business.setSlug("inventory-settings-co");
-            business.setSettings("{}");
-            businessRepository.save(business);
+        userRepository.deleteAll();
+        businessRepository.deleteAll();
 
-            permissionRepository.save(perm(PERM_MANAGE, "business.manage_settings", "Settings"));
-            Role ownerRole = role(ROLE_OWNER, "owner");
-            roleRepository.save(ownerRole);
-            grant(ROLE_OWNER, PERM_MANAGE);
+        Business business = new Business();
+        business.setId(TENANT);
+        business.setName("Inventory Settings Co");
+        business.setSlug("inventory-settings-co");
+        business.setSettings("{}");
+        businessRepository.save(business);
 
-            owner = user(TENANT, "owner@inventory-settings.test", ROLE_OWNER);
-            userRepository.save(owner);
-        }
+        permissionRepository.save(perm(PERM_MANAGE, "business.manage_settings", "Settings"));
+        Role ownerRole = role(ROLE_OWNER, "owner");
+        roleRepository.save(ownerRole);
+        grant(ROLE_OWNER, PERM_MANAGE);
+
+        owner = user(TENANT, "owner@inventory-settings.test", ROLE_OWNER);
+        userRepository.save(owner);
     }
 
     @Test

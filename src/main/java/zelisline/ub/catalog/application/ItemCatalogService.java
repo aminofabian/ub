@@ -181,23 +181,61 @@ public class ItemCatalogService {
 
     @Transactional(readOnly = true)
     public ItemResponse getItem(String businessId, String itemId) {
+        return getItem(businessId, itemId, null);
+    }
+
+    @Transactional(readOnly = true)
+    public ItemResponse getItem(String businessId, String itemId, String branchIdForStock) {
         Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Item not found"));
+        String stockBranch = blankToNull(branchIdForStock);
+        Map<String, BigDecimal> stockByItemId = branchStockMap(businessId, stockBranch, List.of(item.getId()));
         List<ItemSummaryResponse> variants = List.of();
         if (item.getVariantOfItemId() == null) {
             List<Item> variantRows = itemRepository.findByBusinessIdAndVariantOfItemIdAndDeletedAtIsNullOrderBySkuAsc(
                     businessId, item.getId());
             List<String> variantIds = variantRows.stream().map(Item::getId).toList();
+            Map<String, BigDecimal> variantStock = branchStockMap(businessId, stockBranch, variantIds);
             Map<String, String> vthumbs = firstGalleryImageUrlByItemId(variantIds);
             List<Item> forCat = new ArrayList<>();
             forCat.add(item);
             forCat.addAll(variantRows);
             Map<String, String> catMap = categoryNamesById(forCat.stream().map(Item::getCategoryId).toList());
+            final boolean includeStock = stockBranch != null;
             variants = variantRows.stream()
-                    .map(v -> toSummary(v, vthumbs, categoryNameFor(catMap, v.getCategoryId()), false, null))
+                    .map(v -> toSummary(
+                            v,
+                            vthumbs,
+                            categoryNameFor(catMap, v.getCategoryId()),
+                            false,
+                            includeStock ? variantStock.getOrDefault(v.getId(), BigDecimal.ZERO) : null))
                     .toList();
         }
-        return toResponse(item, variants);
+        BigDecimal stockQty = stockBranch != null
+                ? stockByItemId.getOrDefault(item.getId(), BigDecimal.ZERO)
+                : null;
+        return toResponse(item, variants, stockQty);
+    }
+
+    private Map<String, BigDecimal> branchStockMap(
+            String businessId,
+            String stockBranch,
+            Collection<String> itemIds
+    ) {
+        if (stockBranch == null || itemIds == null || itemIds.isEmpty()) {
+            return Map.of();
+        }
+        branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(stockBranch, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Branch not found"));
+        Map<String, BigDecimal> stockByItemId = new HashMap<>();
+        for (Object[] row : inventoryBatchRepository.sumQuantityRemainingForItemsAtBranch(
+                businessId,
+                stockBranch,
+                "active",
+                itemIds)) {
+            stockByItemId.put((String) row[0], (BigDecimal) row[1]);
+        }
+        return stockByItemId;
     }
 
     @Transactional
@@ -212,7 +250,7 @@ public class ItemCatalogService {
             throw translateDuplicateSku(ex);
         }
         supplierLinkProvisioner.afterItemChanged(businessId, item);
-        return new ItemCreateResult(HttpStatus.CREATED.value(), toResponse(item, List.of()));
+        return new ItemCreateResult(HttpStatus.CREATED.value(), toResponse(item, List.of(), null));
     }
 
     private ItemCreateResult createItemIdempotent(String businessId, CreateItemRequest request, String keyRaw) {
@@ -253,7 +291,7 @@ public class ItemCatalogService {
                 throw translateDuplicateSku(ex);
             }
             supplierLinkProvisioner.afterItemChanged(businessId, item);
-            ItemResponse body = toResponse(item, List.of());
+            ItemResponse body = toResponse(item, List.of(), null);
             persistIdempotency(businessId, keyHash, bodyHash, HttpStatus.CREATED.value(), body);
             return new ItemCreateResult(HttpStatus.CREATED.value(), body);
         }
@@ -543,7 +581,7 @@ public class ItemCatalogService {
             throw translateDuplicateSku(ex);
         }
         supplierLinkProvisioner.afterItemChanged(businessId, child);
-        return toResponse(child, List.of());
+        return toResponse(child, List.of(), null);
     }
 
     @Transactional
@@ -970,7 +1008,7 @@ public class ItemCatalogService {
                     .map(v -> toSummary(v, vthumbs, categoryNameFor(catMap, v.getCategoryId()), false, null))
                     .toList();
         }
-        return toResponse(item, variants);
+        return toResponse(item, variants, null);
     }
 
     private Map<String, String> firstGalleryImageUrlByItemId(Collection<String> itemIds) {
@@ -1065,7 +1103,7 @@ public class ItemCatalogService {
         );
     }
 
-    private ItemResponse toResponse(Item i, List<ItemSummaryResponse> variants) {
+    private ItemResponse toResponse(Item i, List<ItemSummaryResponse> variants, BigDecimal stockQty) {
         return new ItemResponse(
                 i.getId(),
                 i.getSku(),
@@ -1100,7 +1138,8 @@ public class ItemCatalogService {
                 loadImageResponses(i.getId()),
                 variants,
                 i.getBrand(),
-                i.getSize()
+                i.getSize(),
+                stockQty
         );
     }
 

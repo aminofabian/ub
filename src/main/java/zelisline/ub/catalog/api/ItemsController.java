@@ -109,9 +109,16 @@ public class ItemsController {
 
     @GetMapping("/{id}")
     @PreAuthorize("hasPermission(null, 'catalog.items.read')")
-    public ItemResponse getById(@PathVariable("id") String id, HttpServletRequest request) {
+    public ItemResponse getById(
+            @PathVariable("id") String id,
+            @RequestParam(required = false) String branchId,
+            HttpServletRequest request
+    ) {
         CurrentTenantUser.require(request);
-        return itemCatalogService.getItem(TenantRequestIds.resolveBusinessId(request), id);
+        return itemCatalogService.getItem(
+                TenantRequestIds.resolveBusinessId(request),
+                id,
+                branchId);
     }
 
     @PostMapping

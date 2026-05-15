@@ -37,6 +37,11 @@ public record ItemResponse(
         List<ItemImageResponse> images,
         List<ItemSummaryResponse> variants,
         String brand,
-        String size
+        String size,
+        /**
+         * On-hand at {@code branchId} when the detail endpoint was called with that query param;
+         * otherwise null. Prefer this over {@link #currentStock()} for branch-scoped UIs.
+         */
+        BigDecimal stockQty
 ) {
 }

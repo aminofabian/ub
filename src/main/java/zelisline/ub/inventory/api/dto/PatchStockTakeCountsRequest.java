@@ -16,7 +16,14 @@ public record PatchStockTakeCountsRequest(
     public record LineCounted(
             @NotBlank String lineId,
             @NotNull @DecimalMin(value = "0", inclusive = true) BigDecimal countedQty,
-            @Size(max = 255) String aisle
+            @Size(max = 255) String aisle,
+            @Valid List<BatchCounted> batches
+    ) {
+    }
+
+    public record BatchCounted(
+            @NotBlank String batchId,
+            @NotNull @DecimalMin(value = "0", inclusive = true) BigDecimal countedQty
     ) {
     }
 }

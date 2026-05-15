@@ -70,6 +70,24 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
     );
 
     @Query("""
+            select b from InventoryBatch b
+             where b.businessId = :businessId
+               and b.branchId = :branchId
+               and b.status = :status
+               and b.itemId in :itemIds
+               and b.quantityRemaining > :minRemaining
+               and (b.expiryDate is null or b.expiryDate >= current_date)
+             order by b.itemId asc, b.id asc
+            """)
+    List<InventoryBatch> findActiveBatchesForItems(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("status") String status,
+            @Param("itemIds") List<String> itemIds,
+            @Param("minRemaining") BigDecimal minRemaining
+    );
+
+    @Query("""
             select b.itemId, coalesce(sum(b.quantityRemaining), 0)
              from InventoryBatch b
              where b.businessId = :businessId

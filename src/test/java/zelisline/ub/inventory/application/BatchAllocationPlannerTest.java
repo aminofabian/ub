@@ -25,9 +25,10 @@ class BatchAllocationPlannerTest {
         Item item = new Item();
         item.setHasExpiry(true);
         Instant jan = Instant.parse("2026-01-01T12:00:00Z");
+        LocalDate today = LocalDate.now();
         List<InventoryBatch> batches = new ArrayList<>();
-        batches.add(batch("later-received", jan.plusSeconds(60), LocalDate.of(2026, 8, 1), "5"));
-        batches.add(batch("earlier-expiry", jan, LocalDate.of(2026, 4, 1), "5"));
+        batches.add(batch("later-received", jan.plusSeconds(60), today.plusDays(90), "5"));
+        batches.add(batch("earlier-expiry", jan, today.plusDays(7), "5"));
         BatchAllocationPlanner.sortBatchesForPick(batches, item, CostMethod.FIFO);
         List<BatchAllocationLine> lines = BatchAllocationPlanner.allocateInOrder(batches, new BigDecimal("2"));
         assertThat(lines).hasSize(1);

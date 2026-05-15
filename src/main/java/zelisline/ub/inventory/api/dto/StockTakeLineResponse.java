@@ -2,6 +2,7 @@ package zelisline.ub.inventory.api.dto;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 
 public record StockTakeLineResponse(
         String id,
@@ -18,6 +19,7 @@ public record StockTakeLineResponse(
         Instant submittedAt,
         String confirmedBy,
         Instant confirmedAt,
-        Instant updatedAt
+        Instant updatedAt,
+        List<StockTakeLineBatchResponse> batches
 ) {
 }

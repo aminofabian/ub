@@ -29,6 +29,7 @@ import zelisline.ub.inventory.api.dto.PostStartStockTakeSessionRequest;
 import zelisline.ub.inventory.api.dto.ReconciliationResponse;
 import zelisline.ub.inventory.api.dto.RejectStockAdjustmentRequest;
 import zelisline.ub.inventory.api.dto.StockTakeSessionResponse;
+import zelisline.ub.identity.application.RequestPermissionService;
 import zelisline.ub.inventory.application.StockTakeService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
@@ -41,8 +42,12 @@ import zelisline.ub.tenancy.application.BranchResolutionService;
 @RequiredArgsConstructor
 public class StockTakeController {
 
+    private static final String PERMISSION_STOCKTAKE_APPROVE =
+        "stocktake.approve";
+
     private final StockTakeService stockTakeService;
     private final BranchResolutionService branchResolutionService;
+    private final RequestPermissionService permissionService;
 
     // ── Sessions ──────────────────────────────────────────────────────
 
@@ -68,10 +73,13 @@ public class StockTakeController {
                 body.notes(),
                 body.itemIds()
             );
-        return stockTakeService.startSession(
-            TenantRequestIds.resolveBusinessId(request),
-            effective,
-            principal.userId()
+        return maskIfNeeded(
+            stockTakeService.startSession(
+                TenantRequestIds.resolveBusinessId(request),
+                effective,
+                principal.userId()
+            ),
+            principal
         );
     }
 
@@ -86,12 +94,15 @@ public class StockTakeController {
     ) {
         TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String filterBranch = coerceOptionalBranchFilter(principal, branchId);
-        return stockTakeService.listSessions(
-            TenantRequestIds.resolveBusinessId(request),
-            filterBranch,
-            status,
-            from,
-            to
+        return maskListIfNeeded(
+            stockTakeService.listSessions(
+                TenantRequestIds.resolveBusinessId(request),
+                filterBranch,
+                status,
+                from,
+                to
+            ),
+            principal
         );
     }
 
@@ -101,10 +112,13 @@ public class StockTakeController {
         @PathVariable String sessionId,
         HttpServletRequest request
     ) {
-        CurrentTenantUser.requireHuman(request);
-        return stockTakeService.getSession(
-            TenantRequestIds.resolveBusinessId(request),
-            sessionId
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        return maskIfNeeded(
+            stockTakeService.getSession(
+                TenantRequestIds.resolveBusinessId(request),
+                sessionId
+            ),
+            principal
         );
     }
 
@@ -141,7 +155,7 @@ public class StockTakeController {
         }
 
         return new ActiveSessionResponse(
-            active.orElse(null),
+            active.map(s -> maskIfNeeded(s, principal)).orElse(null),
             stale != null,
             stale != null ? stale.sessionDate() : null,
             stale != null ? stale.id() : null
@@ -169,10 +183,13 @@ public class StockTakeController {
         @PathVariable String sessionId,
         HttpServletRequest request
     ) {
-        CurrentTenantUser.requireHuman(request);
-        return stockTakeService.resumeSession(
-            TenantRequestIds.resolveBusinessId(request),
-            sessionId
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        return maskIfNeeded(
+            stockTakeService.resumeSession(
+                TenantRequestIds.resolveBusinessId(request),
+                sessionId
+            ),
+            principal
         );
     }
 
@@ -184,11 +201,14 @@ public class StockTakeController {
         HttpServletRequest request
     ) {
         var user = CurrentTenantUser.requireHuman(request);
-        return stockTakeService.closeSession(
-            TenantRequestIds.resolveBusinessId(request),
-            sessionId,
-            user.userId(),
-            force
+        return maskIfNeeded(
+            stockTakeService.closeSession(
+                TenantRequestIds.resolveBusinessId(request),
+                sessionId,
+                user.userId(),
+                force
+            ),
+            user
         );
     }
 
@@ -202,11 +222,14 @@ public class StockTakeController {
         HttpServletRequest request
     ) {
         var user = CurrentTenantUser.requireHuman(request);
-        return stockTakeService.applyCounts(
-            TenantRequestIds.resolveBusinessId(request),
-            sessionId,
-            body,
-            user.userId()
+        return maskIfNeeded(
+            stockTakeService.applyCounts(
+                TenantRequestIds.resolveBusinessId(request),
+                sessionId,
+                body,
+                user.userId()
+            ),
+            user
         );
     }
 
@@ -219,13 +242,17 @@ public class StockTakeController {
         HttpServletRequest request
     ) {
         var user = CurrentTenantUser.requireHuman(request);
-        return stockTakeService.applySingleCount(
-            TenantRequestIds.resolveBusinessId(request),
-            sessionId,
-            lineId,
-            body.countedQty(),
-            body.aisle(),
-            user.userId()
+        return maskIfNeeded(
+            stockTakeService.applySingleCount(
+                TenantRequestIds.resolveBusinessId(request),
+                sessionId,
+                lineId,
+                body.countedQty(),
+                body.aisle(),
+                body.batches(),
+                user.userId()
+            ),
+            user
         );
     }
 
@@ -238,12 +265,15 @@ public class StockTakeController {
         HttpServletRequest request
     ) {
         var user = CurrentTenantUser.requireHuman(request);
-        return stockTakeService.addAdHocLine(
-            TenantRequestIds.resolveBusinessId(request),
-            sessionId,
-            body.itemId(),
-            body.aisle(),
-            user.userId()
+        return maskIfNeeded(
+            stockTakeService.addAdHocLine(
+                TenantRequestIds.resolveBusinessId(request),
+                sessionId,
+                body.itemId(),
+                body.aisle(),
+                user.userId()
+            ),
+            user
         );
     }
 
@@ -256,11 +286,14 @@ public class StockTakeController {
         HttpServletRequest request
     ) {
         var user = CurrentTenantUser.requireHuman(request);
-        return stockTakeService.createItemAndAddLine(
-            TenantRequestIds.resolveBusinessId(request),
-            sessionId,
-            body,
-            user.userId()
+        return maskIfNeeded(
+            stockTakeService.createItemAndAddLine(
+                TenantRequestIds.resolveBusinessId(request),
+                sessionId,
+                body,
+                user.userId()
+            ),
+            user
         );
     }
 
@@ -276,12 +309,15 @@ public class StockTakeController {
     ) {
         var user = CurrentTenantUser.requireHuman(request);
         BigDecimal adminQuantity = body != null ? body.adminQuantity() : null;
-        return stockTakeService.confirmLine(
-            TenantRequestIds.resolveBusinessId(request),
-            sessionId,
-            lineId,
-            adminQuantity,
-            user.userId()
+        return maskIfNeeded(
+            stockTakeService.confirmLine(
+                TenantRequestIds.resolveBusinessId(request),
+                sessionId,
+                lineId,
+                adminQuantity,
+                user.userId()
+            ),
+            user
         );
     }
 
@@ -398,7 +434,8 @@ public class StockTakeController {
             value = "0",
             inclusive = true
         ) BigDecimal countedQty,
-        @jakarta.validation.constraints.Size(max = 255) String aisle
+        @jakarta.validation.constraints.Size(max = 255) String aisle,
+        java.util.List<PatchStockTakeCountsRequest.BatchCounted> batches
     ) {}
 
     public record AddAdHocLineRequest(
@@ -442,5 +479,35 @@ public class StockTakeController {
             principal.branchId(),
             branchId
         );
+    }
+
+    private boolean canApprove(TenantPrincipal principal) {
+        return permissionService.hasPermission(
+            principal.roleId(),
+            PERMISSION_STOCKTAKE_APPROVE
+        );
+    }
+
+    private StockTakeSessionResponse maskIfNeeded(
+        StockTakeSessionResponse response,
+        TenantPrincipal principal
+    ) {
+        if (canApprove(principal)) {
+            return response;
+        }
+        return stockTakeService.maskSystemQty(response);
+    }
+
+    private List<StockTakeSessionResponse> maskListIfNeeded(
+        List<StockTakeSessionResponse> responses,
+        TenantPrincipal principal
+    ) {
+        if (canApprove(principal)) {
+            return responses;
+        }
+        return responses
+            .stream()
+            .map(stockTakeService::maskSystemQty)
+            .toList();
     }
 }

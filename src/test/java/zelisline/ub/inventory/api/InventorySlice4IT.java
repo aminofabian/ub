@@ -554,6 +554,89 @@ class InventorySlice4IT {
         assertThat(newLine.get("status").asText()).isEqualTo("submitted");
     }
 
+    @Test
+    void applyCounts_withBatchCounts_succeeds() throws Exception {
+        // Add a second batch so we have batch-level data
+        String batch2Id = "cccccccc-cccc-cccc-cccc-cccccccccca2";
+        InventoryBatch batch2 = new InventoryBatch();
+        batch2.setId(batch2Id);
+        batch2.setBusinessId(TENANT);
+        batch2.setBranchId(branchId);
+        batch2.setItemId(itemId);
+        batch2.setBatchNumber("ST-B2");
+        batch2.setSourceType("test");
+        batch2.setSourceId(UUID.randomUUID().toString());
+        batch2.setInitialQuantity(new BigDecimal("5"));
+        batch2.setQuantityRemaining(new BigDecimal("5"));
+        batch2.setUnitCost(new BigDecimal("3.0000"));
+        batch2.setReceivedAt(Instant.parse("2026-04-15T12:00:00Z"));
+        batch2.setStatus(InventoryConstants.BATCH_STATUS_ACTIVE);
+        inventoryBatchRepository.save(batch2);
+
+        Item item = itemRepository.findById(itemId).orElseThrow();
+        item.setCurrentStock(new BigDecimal("15"));
+        itemRepository.save(item);
+
+        // Start a NEW session so both batches are captured
+        JsonNode session = startSessionJson();
+        String sid = session.get("id").asText();
+        String lineId = session.get("lines").get(0).get("id").asText();
+        String batch1IdInLine = null;
+        String batch2IdInLine = null;
+        for (JsonNode b : session.get("lines").get(0).get("batches")) {
+            if (batchId.equals(b.get("batchId").asText())) {
+                batch1IdInLine = b.get("id").asText();
+            } else if (batch2Id.equals(b.get("batchId").asText())) {
+                batch2IdInLine = b.get("id").asText();
+            }
+        }
+        assertThat(batch1IdInLine).isNotNull();
+        assertThat(batch2IdInLine).isNotNull();
+
+        // Submit batch-level counts: batch1=8, batch2=4 (total=12)
+        String patchBody = "{\"lines\":[{\"lineId\":\"" + lineId + "\",\"countedQty\":12,\"batches\":[" +
+                "{\"batchId\":\"" + batchId + "\",\"countedQty\":8}," +
+                "{\"batchId\":\"" + batch2Id + "\",\"countedQty\":4}" +
+                "]}]}";
+        mockMvc.perform(patch("/api/v1/inventory/stock-take/sessions/{sessionId}/lines", sid)
+                        .contentType(APPLICATION_JSON)
+                        .content(patchBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        // Confirm line
+        confirmLine(sid, lineId);
+
+        // Verify batch-level adjustments
+        InventoryBatch b1 = inventoryBatchRepository.findById(batchId).orElseThrow();
+        InventoryBatch b2 = inventoryBatchRepository.findById(batch2Id).orElseThrow();
+        assertThat(b1.getQuantityRemaining().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("8");
+        assertThat(b2.getQuantityRemaining().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("4");
+        assertThat(itemRepository.findById(itemId).orElseThrow().getCurrentStock().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("12");
+    }
+
+    @Test
+    void applyCounts_withBatchCountsSumMismatch_rejects() throws Exception {
+        JsonNode session = startSessionJson();
+        String sid = session.get("id").asText();
+        String lineId = session.get("lines").get(0).get("id").asText();
+        String batch1Id = session.get("lines").get(0).get("batches").get(0).get("batchId").asText();
+
+        String patchBody = "{\"lines\":[{\"lineId\":\"" + lineId + "\",\"countedQty\":12,\"batches\":[" +
+                "{\"batchId\":\"" + batch1Id + "\",\"countedQty\":8}" +
+                "]}]}";
+        mockMvc.perform(patch("/api/v1/inventory/stock-take/sessions/{sessionId}/lines", sid)
+                        .contentType(APPLICATION_JSON)
+                        .content(patchBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isBadRequest());
+    }
+
     private JsonNode startSessionJson() throws Exception {
         return startSessionJson("morning", java.time.LocalDate.now().toString());
     }

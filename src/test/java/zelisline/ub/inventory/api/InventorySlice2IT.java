@@ -185,8 +185,9 @@ class InventorySlice2IT {
         Instant base = Instant.parse("2026-01-10T12:00:00Z");
         batchEarlyExpiry = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1";
         batchLateExpiry = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2";
-        inventoryBatchRepository.save(batch(batchEarlyExpiry, itemId, base, LocalDate.of(2026, 4, 1), "5"));
-        inventoryBatchRepository.save(batch(batchLateExpiry, itemId, base.plusSeconds(600), LocalDate.of(2026, 9, 1), "5"));
+        LocalDate today = LocalDate.now();
+        inventoryBatchRepository.save(batch(batchEarlyExpiry, itemId, base, today.plusDays(7), "5"));
+        inventoryBatchRepository.save(batch(batchLateExpiry, itemId, base.plusSeconds(600), today.plusDays(90), "5"));
 
         item.setCurrentStock(new BigDecimal("10"));
         item.setHasExpiry(true);

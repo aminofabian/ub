@@ -30,6 +30,7 @@ import zelisline.ub.inventory.domain.SupplyBatch;
 import zelisline.ub.inventory.repository.SupplyBatchRepository;
 import zelisline.ub.inventory.api.dto.InventoryMutationResponse;
 import zelisline.ub.inventory.api.dto.PostBatchDecreaseRequest;
+import zelisline.ub.inventory.api.dto.PostBatchIncreaseRequest;
 import zelisline.ub.inventory.api.dto.PostOpeningBalanceRequest;
 import zelisline.ub.inventory.api.dto.PostStandaloneWastageRequest;
 import zelisline.ub.inventory.api.dto.PostStockIncreaseRequest;
@@ -207,6 +208,50 @@ public class InventoryLedgerService {
                 value,
                 false
         );
+        return new InventoryMutationResponse(jeId, mv.getId(), batch.getId());
+    }
+
+    @Transactional
+    public InventoryMutationResponse recordBatchIncrease(
+            String businessId,
+            PostBatchIncreaseRequest req,
+            String userId
+    ) {
+        InventoryBatch batch = inventoryBatchRepository.findByIdAndBusinessId(req.batchId(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Batch not found"));
+        if (!InventoryConstants.BATCH_STATUS_ACTIVE.equals(batch.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Batch is not active");
+        }
+        Item item = requireStockedItem(businessId, batch.getItemId());
+        String opId = UUID.randomUUID().toString();
+        batch.setQuantityRemaining(batch.getQuantityRemaining().add(req.quantity()));
+        inventoryBatchRepository.save(batch);
+
+        StockMovement mv = persistMovement(
+                businessId,
+                batch.getBranchId(),
+                item.getId(),
+                batch.getId(),
+                InventoryConstants.MOVEMENT_ADJUSTMENT,
+                opId,
+                req.quantity(),
+                batch.getUnitCost(),
+                req.reason(),
+                userId
+        );
+        applyStockDelta(item, req.quantity());
+        BigDecimal value = extensionMoney(req.quantity(), batch.getUnitCost());
+        String jeId = null;
+        if (value.signum() > 0) {
+            jeId = saveJournal(
+                    businessId,
+                    InventoryConstants.JOURNAL_COUNT_GAIN,
+                    opId,
+                    "Inventory adjustment (increase)",
+                    value,
+                    true
+            );
+        }
         return new InventoryMutationResponse(jeId, mv.getId(), batch.getId());
     }
 

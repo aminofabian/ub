@@ -30,14 +30,18 @@ import zelisline.ub.inventory.api.dto.ApproveStockAdjustmentRequest;
 import zelisline.ub.inventory.api.dto.CreateItemWithStocktakeLineRequest;
 import zelisline.ub.inventory.api.dto.PatchStockTakeCountsRequest;
 import zelisline.ub.inventory.api.dto.PostStartStockTakeSessionRequest;
+import zelisline.ub.inventory.api.dto.PostBatchDecreaseRequest;
+import zelisline.ub.inventory.api.dto.PostBatchIncreaseRequest;
 import zelisline.ub.inventory.api.dto.PostStockIncreaseRequest;
 import zelisline.ub.inventory.api.dto.ReconciliationLine;
 import zelisline.ub.inventory.api.dto.ReconciliationResponse;
 import zelisline.ub.inventory.api.dto.StockAdjustmentRequestResponse;
+import zelisline.ub.inventory.api.dto.StockTakeLineBatchResponse;
 import zelisline.ub.inventory.api.dto.StockTakeLineResponse;
 import zelisline.ub.inventory.api.dto.StockTakeSessionResponse;
 import zelisline.ub.inventory.domain.StockAdjustmentRequest;
 import zelisline.ub.inventory.domain.StockTakeLine;
+import zelisline.ub.inventory.domain.StockTakeLineBatch;
 import zelisline.ub.inventory.domain.StockTakeSession;
 import zelisline.ub.inventory.repository.StockAdjustmentRequestRepository;
 import zelisline.ub.inventory.repository.StockTakeChecklistItemRepository;
@@ -137,6 +141,19 @@ public class StockTakeService {
             businessId
         );
 
+        // Load active batches for all items in one query (batch-level stock-take support)
+        Map<String, List<InventoryBatch>> batchesByItem =
+            inventoryBatchRepository
+                .findActiveBatchesForItems(
+                    businessId,
+                    req.branchId(),
+                    InventoryConstants.BATCH_STATUS_ACTIVE,
+                    itemIds,
+                    BigDecimal.ZERO
+                )
+                .stream()
+                .collect(Collectors.groupingBy(InventoryBatch::getItemId));
+
         StockTakeSession session = new StockTakeSession();
         session.setBusinessId(businessId);
         session.setBranchId(req.branchId());
@@ -160,6 +177,27 @@ public class StockTakeService {
             line.setSortOrder(order++);
             // Pre-fill aisle from product data
             resolveAisleName(businessId, itemId).ifPresent(line::setAisle);
+
+            // Populate batch-level snapshots
+            List<InventoryBatch> itemBatches = batchesByItem.getOrDefault(
+                itemId,
+                List.of()
+            );
+            int batchOrder = 0;
+            for (InventoryBatch ib : itemBatches) {
+                StockTakeLineBatch slb = new StockTakeLineBatch();
+                slb.setLine(line);
+                slb.setBatchId(ib.getId());
+                slb.setBatchNumber(ib.getBatchNumber());
+                slb.setExpiryDate(ib.getExpiryDate());
+                slb.setSystemQtySnapshot(
+                    ib.getQuantityRemaining()
+                        .setScale(QTY_SCALE, RoundingMode.HALF_UP)
+                );
+                slb.setSortOrder(batchOrder++);
+                line.getBatches().add(slb);
+            }
+
             session.getLines().add(line);
         }
         stockTakeSessionRepository.save(session);
@@ -294,6 +332,10 @@ public class StockTakeService {
             line.setStatus(InventoryConstants.STOCKTAKE_LINE_SUBMITTED);
             line.setSubmittedBy(userId);
             line.setSubmittedAt(now);
+
+            if (lc.batches() != null && !lc.batches().isEmpty()) {
+                applyBatchCounts(line, lc.batches());
+            }
         }
         stockTakeSessionRepository.save(session);
         return buildResponse(session);
@@ -308,6 +350,7 @@ public class StockTakeService {
         String lineId,
         BigDecimal countedQty,
         String aisle,
+        List<PatchStockTakeCountsRequest.BatchCounted> batches,
         String userId
     ) {
         StockTakeSession session = loadSessionInProgress(businessId, sessionId);
@@ -340,8 +383,46 @@ public class StockTakeService {
         line.setStatus(InventoryConstants.STOCKTAKE_LINE_SUBMITTED);
         line.setSubmittedBy(userId);
         line.setSubmittedAt(now);
+
+        if (batches != null && !batches.isEmpty()) {
+            applyBatchCounts(line, batches);
+        }
+
         stockTakeSessionRepository.save(session);
         return buildResponse(session);
+    }
+
+    private void applyBatchCounts(
+        StockTakeLine line,
+        List<PatchStockTakeCountsRequest.BatchCounted> batchCounts
+    ) {
+        Map<String, StockTakeLineBatch> byBatchId = line
+            .getBatches()
+            .stream()
+            .collect(Collectors.toMap(StockTakeLineBatch::getBatchId, b -> b));
+        BigDecimal batchSum = BigDecimal.ZERO;
+        for (PatchStockTakeCountsRequest.BatchCounted bc : batchCounts) {
+            StockTakeLineBatch slb = byBatchId.get(bc.batchId());
+            if (slb == null) {
+                throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Batch " + bc.batchId() + " does not belong to line " + line.getId()
+                );
+            }
+            slb.setCountedQty(
+                bc.countedQty().setScale(QTY_SCALE, RoundingMode.HALF_UP)
+            );
+            batchSum = batchSum.add(slb.getCountedQty());
+        }
+        if (batchSum.compareTo(line.getCountedQty()) != 0) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Batch counts sum to " +
+                    batchSum +
+                    " but line countedQty is " +
+                    line.getCountedQty()
+            );
+        }
     }
 
     // ── Ad-hoc line (product not on checklist) ─────────────────────────
@@ -387,6 +468,10 @@ public class StockTakeService {
         } else {
             resolveAisleName(businessId, itemId).ifPresent(line::setAisle);
         }
+
+        // Populate batch-level snapshots for ad-hoc line
+        populateLineBatches(businessId, session.getBranchId(), itemId, line);
+
         session.getLines().add(line);
         stockTakeSessionRepository.save(session);
         return buildResponse(session);
@@ -470,6 +555,7 @@ public class StockTakeService {
             }
             line.setSubmittedBy(userId);
             line.setSubmittedAt(Instant.now());
+            populateLineBatches(businessId, session.getBranchId(), itemId, line);
             session.getLines().add(line);
         }
 
@@ -628,7 +714,21 @@ public class StockTakeService {
             r.setStatus(InventoryConstants.ADJUSTMENT_REQUEST_APPROVED);
             r.setDecidedBy(userId);
             r.setDecidedAt(now);
-            applyVarianceToStock(businessId, r, null, userId);
+
+            boolean hasBatchCounts = line
+                .getBatches()
+                .stream()
+                .anyMatch(b -> b.getCountedQty() != null);
+            if (hasBatchCounts) {
+                applyBatchVarianceToStock(
+                    businessId,
+                    session.getBranchId(),
+                    line,
+                    userId
+                );
+            } else {
+                applyVarianceToStock(businessId, r, null, userId);
+            }
             stockAdjustmentRequestRepository.save(r);
         }
 
@@ -1049,6 +1149,55 @@ public class StockTakeService {
         }
     }
 
+    private void applyBatchVarianceToStock(
+        String businessId,
+        String branchId,
+        StockTakeLine line,
+        String userId
+    ) {
+        BigDecimal adminQty = line.getAdminQuantity();
+        BigDecimal countedQty = line.getCountedQty();
+        BigDecimal scale = BigDecimal.ONE;
+        if (adminQty != null && countedQty != null && countedQty.signum() > 0) {
+            scale = adminQty.divide(countedQty, QTY_SCALE, RoundingMode.HALF_UP);
+        }
+
+        for (StockTakeLineBatch slb : line.getBatches()) {
+            if (slb.getCountedQty() == null) {
+                continue;
+            }
+            BigDecimal effectiveCounted = slb
+                .getCountedQty()
+                .multiply(scale)
+                .setScale(QTY_SCALE, RoundingMode.HALF_UP);
+            BigDecimal batchVariance = effectiveCounted.subtract(slb.getSystemQtySnapshot());
+            if (batchVariance.signum() == 0) {
+                continue;
+            }
+            if (batchVariance.signum() > 0) {
+                inventoryLedgerService.recordBatchIncrease(
+                    businessId,
+                    new PostBatchIncreaseRequest(
+                        slb.getBatchId(),
+                        batchVariance,
+                        "Stock-take surplus approved"
+                    ),
+                    userId
+                );
+            } else {
+                inventoryLedgerService.recordBatchDecrease(
+                    businessId,
+                    new PostBatchDecreaseRequest(
+                        slb.getBatchId(),
+                        batchVariance.negate(),
+                        "Stock-take deficit approved"
+                    ),
+                    userId
+                );
+            }
+        }
+    }
+
     private BigDecimal resolveInboundUnitCost(
         String businessId,
         String branchId,
@@ -1172,6 +1321,21 @@ public class StockTakeService {
             .stream()
             .map(l -> {
                 Item item = itemsById.get(l.getItemId());
+                List<StockTakeLineBatchResponse> batchDtos = l
+                    .getBatches()
+                    .stream()
+                    .map(b ->
+                        new StockTakeLineBatchResponse(
+                            b.getId(),
+                            b.getBatchId(),
+                            b.getBatchNumber(),
+                            b.getExpiryDate(),
+                            b.getSystemQtySnapshot(),
+                            b.getCountedQty(),
+                            b.getSortOrder()
+                        )
+                    )
+                    .toList();
                 return new StockTakeLineResponse(
                     l.getId(),
                     l.getItemId(),
@@ -1187,7 +1351,8 @@ public class StockTakeService {
                     l.getSubmittedAt(),
                     l.getConfirmedBy(),
                     l.getConfirmedAt(),
-                    l.getUpdatedAt()
+                    l.getUpdatedAt(),
+                    batchDtos
                 );
             })
             .toList();
@@ -1246,6 +1411,36 @@ public class StockTakeService {
                 remainingCount
             )
         );
+    }
+
+    private void populateLineBatches(
+        String businessId,
+        String branchId,
+        String itemId,
+        StockTakeLine line
+    ) {
+        List<InventoryBatch> batches = inventoryBatchRepository
+            .findActiveBatchesForItems(
+                businessId,
+                branchId,
+                InventoryConstants.BATCH_STATUS_ACTIVE,
+                List.of(itemId),
+                BigDecimal.ZERO
+            );
+        int batchOrder = 0;
+        for (InventoryBatch ib : batches) {
+            StockTakeLineBatch slb = new StockTakeLineBatch();
+            slb.setLine(line);
+            slb.setBatchId(ib.getId());
+            slb.setBatchNumber(ib.getBatchNumber());
+            slb.setExpiryDate(ib.getExpiryDate());
+            slb.setSystemQtySnapshot(
+                ib.getQuantityRemaining()
+                    .setScale(QTY_SCALE, RoundingMode.HALF_UP)
+            );
+            slb.setSortOrder(batchOrder++);
+            line.getBatches().add(slb);
+        }
     }
 
     private Map<String, BigDecimal> loadOnHandByItem(
@@ -1334,5 +1529,58 @@ public class StockTakeService {
             .findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
             .map(Item::getName)
             .orElse(itemId);
+    }
+
+    /**
+     * Returns a copy of the response with {@code systemQtySnapshot} removed from
+     * every line. Used for stock counters who should not see expected quantities
+     * while performing the physical count.
+     */
+    public StockTakeSessionResponse maskSystemQty(
+        StockTakeSessionResponse response
+    ) {
+        if (response == null || response.lines() == null) {
+            return response;
+        }
+        List<StockTakeLineResponse> masked = response
+            .lines()
+            .stream()
+            .map(l ->
+                new StockTakeLineResponse(
+                    l.id(),
+                    l.itemId(),
+                    l.itemName(),
+                    l.itemSku(),
+                    null,
+                    l.countedQty(),
+                    l.adminQuantity(),
+                    l.note(),
+                    l.aisle(),
+                    l.status(),
+                    l.submittedBy(),
+                    l.submittedAt(),
+                    l.confirmedBy(),
+                    l.confirmedAt(),
+                    l.updatedAt(),
+                    l.batches()
+                )
+            )
+            .toList();
+        return new StockTakeSessionResponse(
+            response.id(),
+            response.sessionNumber(),
+            response.branchId(),
+            response.status(),
+            response.sessionType(),
+            response.sessionDate(),
+            response.name(),
+            response.notes(),
+            response.startedBy(),
+            response.closedAt(),
+            response.closedBy(),
+            masked,
+            response.adjustmentRequests(),
+            response.summary()
+        );
     }
 }

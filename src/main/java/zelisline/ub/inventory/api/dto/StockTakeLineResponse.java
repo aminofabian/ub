@@ -17,6 +17,7 @@ public record StockTakeLineResponse(
         String submittedBy,
         Instant submittedAt,
         String confirmedBy,
-        Instant confirmedAt
+        Instant confirmedAt,
+        Instant updatedAt
 ) {
 }

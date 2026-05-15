@@ -188,14 +188,27 @@ public class StockTakeService {
     public Optional<StockTakeSessionResponse> getActiveSession(
         String businessId,
         String branchId,
-        LocalDate date
+        LocalDate date,
+        String sessionType
     ) {
+        if (sessionType != null && !sessionType.isBlank()) {
+            return stockTakeSessionRepository
+                .findActiveByBusinessIdAndBranchIdAndDateAndTypeFetchLines(
+                    businessId,
+                    branchId,
+                    date,
+                    sessionType
+                )
+                .map(this::buildResponse);
+        }
         return stockTakeSessionRepository
-            .findActiveByBusinessIdAndBranchIdAndDateFetchLines(
+            .findActiveListByBusinessIdAndBranchIdAndDateFetchLines(
                 businessId,
                 branchId,
                 date
             )
+            .stream()
+            .findFirst()
             .map(this::buildResponse);
     }
 
@@ -461,6 +474,34 @@ public class StockTakeService {
         }
 
         stockTakeSessionRepository.save(session);
+        return buildResponse(session);
+    }
+
+    // ── Session resume ─────────────────────────────────────────────────
+
+    @Transactional(readOnly = true)
+    public StockTakeSessionResponse resumeSession(
+        String businessId,
+        String sessionId
+    ) {
+        StockTakeSession session = stockTakeSessionRepository
+            .findByIdAndBusinessIdFetchLines(sessionId, businessId)
+            .orElseThrow(() ->
+                new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Session not found"
+                )
+            );
+        if (
+            !InventoryConstants.STOCKTAKE_SESSION_IN_PROGRESS.equals(
+                session.getStatus()
+            )
+        ) {
+            throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Session is not in progress"
+            );
+        }
         return buildResponse(session);
     }
 
@@ -737,24 +778,40 @@ public class StockTakeService {
         int morningConfirmedCount = morningQtys.size();
         int eveningConfirmedCount = eveningQtys.size();
 
-        Set<String> commonIds = new HashSet<>(morningQtys.keySet());
-        commonIds.retainAll(eveningQtys.keySet());
+        Set<String> allIds = new HashSet<>(morningQtys.keySet());
+        allIds.addAll(eveningQtys.keySet());
 
         List<ReconciliationLine> lines = new ArrayList<>();
         int zeroVariance = 0;
         int withVariance = 0;
+        int missingInMorningCount = 0;
+        int missingInEveningCount = 0;
 
-        for (String itemId : commonIds) {
+        for (String itemId : allIds) {
             BigDecimal opening = morningQtys.get(itemId);
             BigDecimal actual = eveningQtys.get(itemId);
+            String missingIn = null;
+
+            if (opening == null) {
+                missingIn = "morning";
+                missingInMorningCount++;
+                opening = BigDecimal.ZERO;
+            } else if (actual == null) {
+                missingIn = "evening";
+                missingInEveningCount++;
+                actual = BigDecimal.ZERO;
+            }
+
             BigDecimal sold = soldByItem.getOrDefault(itemId, BigDecimal.ZERO);
             BigDecimal expected = opening.subtract(sold);
             BigDecimal variance = actual.subtract(expected);
 
-            if (variance.signum() == 0) {
-                zeroVariance++;
-            } else {
-                withVariance++;
+            if (missingIn == null) {
+                if (variance.signum() == 0) {
+                    zeroVariance++;
+                } else {
+                    withVariance++;
+                }
             }
 
             Item item = itemRepository
@@ -769,7 +826,8 @@ public class StockTakeService {
                     sold,
                     expected,
                     actual,
-                    variance
+                    variance,
+                    missingIn
                 )
             );
         }
@@ -793,6 +851,8 @@ public class StockTakeService {
             withVariance,
             morningConfirmedCount,
             eveningConfirmedCount,
+            missingInMorningCount,
+            missingInEveningCount,
             lines
         );
     }
@@ -1126,7 +1186,8 @@ public class StockTakeService {
                     l.getSubmittedBy(),
                     l.getSubmittedAt(),
                     l.getConfirmedBy(),
-                    l.getConfirmedAt()
+                    l.getConfirmedAt(),
+                    l.getUpdatedAt()
                 );
             })
             .toList();
@@ -1150,6 +1211,19 @@ public class StockTakeService {
             )
             .toList();
 
+        int totalCount = lineDtos.size();
+        int pendingCount = 0;
+        int submittedCount = 0;
+        int confirmedCount = 0;
+        for (StockTakeLineResponse l : lineDtos) {
+            switch (l.status()) {
+                case InventoryConstants.STOCKTAKE_LINE_PENDING -> pendingCount++;
+                case InventoryConstants.STOCKTAKE_LINE_SUBMITTED -> submittedCount++;
+                case InventoryConstants.STOCKTAKE_LINE_CONFIRMED -> confirmedCount++;
+            }
+        }
+        int remainingCount = totalCount - confirmedCount;
+
         return new StockTakeSessionResponse(
             session.getId(),
             session.getSessionNumber(),
@@ -1163,7 +1237,14 @@ public class StockTakeService {
             session.getClosedAt(),
             session.getClosedBy(),
             lineDtos,
-            reqDtos
+            reqDtos,
+            new StockTakeSessionResponse.Summary(
+                totalCount,
+                pendingCount,
+                submittedCount,
+                confirmedCount,
+                remainingCount
+            )
         );
     }
 

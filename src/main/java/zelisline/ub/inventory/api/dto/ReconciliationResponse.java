@@ -12,6 +12,8 @@ public record ReconciliationResponse(
         int withVariance,
         int morningConfirmedCount,
         int eveningConfirmedCount,
+        int missingInMorningCount,
+        int missingInEveningCount,
         List<ReconciliationLine> lines
 ) {
 }

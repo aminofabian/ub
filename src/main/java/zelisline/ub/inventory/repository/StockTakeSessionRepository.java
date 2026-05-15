@@ -29,11 +29,29 @@ public interface StockTakeSessionRepository extends JpaRepository<StockTakeSessi
                and s.branchId = :branchId
                and s.sessionDate = :sessionDate
                and s.status = 'in_progress'
+             order by s.createdAt desc
             """)
-    Optional<StockTakeSession> findActiveByBusinessIdAndBranchIdAndDateFetchLines(
+    List<StockTakeSession> findActiveListByBusinessIdAndBranchIdAndDateFetchLines(
             @Param("businessId") String businessId,
             @Param("branchId") String branchId,
             @Param("sessionDate") LocalDate sessionDate
+    );
+
+    @Query("""
+            select s from StockTakeSession s
+             left join fetch s.lines
+             where s.businessId = :businessId
+               and s.branchId = :branchId
+               and s.sessionDate = :sessionDate
+               and s.status = 'in_progress'
+               and s.sessionType = :sessionType
+             order by s.createdAt desc
+            """)
+    Optional<StockTakeSession> findActiveByBusinessIdAndBranchIdAndDateAndTypeFetchLines(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("sessionDate") LocalDate sessionDate,
+            @Param("sessionType") String sessionType
     );
 
     // Returns a list (not Optional) to avoid NonUniqueResultException when multiple

@@ -17,6 +17,14 @@ public record StockTakeSessionResponse(
         Instant closedAt,
         String closedBy,
         List<StockTakeLineResponse> lines,
-        List<StockAdjustmentRequestResponse> adjustmentRequests
+        List<StockAdjustmentRequestResponse> adjustmentRequests,
+        Summary summary
 ) {
+    public record Summary(
+            int totalCount,
+            int pendingCount,
+            int submittedCount,
+            int confirmedCount,
+            int remainingCount
+    ) {}
 }

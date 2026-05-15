@@ -75,6 +75,7 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
              where b.businessId = :businessId
                and b.branchId = :branchId
                and b.status = :status
+               and (b.expiryDate is null or b.expiryDate >= current_date)
              group by b.itemId
             """)
     List<Object[]> sumQuantityRemainingByItemAtBranch(

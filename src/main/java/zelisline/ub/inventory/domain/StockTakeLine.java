@@ -11,6 +11,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.PrePersist;
+import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
@@ -65,10 +66,19 @@ public class StockTakeLine {
     @Column(name = "sort_order", nullable = false)
     private int sortOrder;
 
+    @Column(name = "updated_at")
+    private Instant updatedAt;
+
     @PrePersist
     void onCreate() {
         if (id == null || id.isBlank()) {
             id = UUID.randomUUID().toString();
         }
+        updatedAt = Instant.now();
+    }
+
+    @PreUpdate
+    void onUpdate() {
+        updatedAt = Instant.now();
     }
 }

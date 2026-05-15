@@ -10,6 +10,7 @@ public record ReconciliationLine(
         BigDecimal unitsSold,
         BigDecimal expectedClosing,
         BigDecimal actualClosing,
-        BigDecimal variance
+        BigDecimal variance,
+        String missingIn
 ) {
 }

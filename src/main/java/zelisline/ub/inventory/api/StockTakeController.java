@@ -113,6 +113,7 @@ public class StockTakeController {
     public ActiveSessionResponse getActiveSession(
         @RequestParam @NotBlank String branchId,
         @RequestParam(required = false) LocalDate date,
+        @RequestParam(required = false) String sessionType,
         HttpServletRequest request
     ) {
         TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
@@ -128,7 +129,8 @@ public class StockTakeController {
         var active = stockTakeService.getActiveSession(
             businessId,
             effectiveBranchId,
-            today
+            today,
+            sessionType
         );
 
         StockTakeSessionResponse stale = null;
@@ -158,6 +160,19 @@ public class StockTakeController {
             TenantRequestIds.resolveBusinessId(request),
             sessionId,
             user.userId()
+        );
+    }
+
+    @PostMapping("/sessions/{sessionId}/resume")
+    @PreAuthorize("hasPermission(null, 'stocktake.run')")
+    public StockTakeSessionResponse resumeSession(
+        @PathVariable String sessionId,
+        HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return stockTakeService.resumeSession(
+            TenantRequestIds.resolveBusinessId(request),
+            sessionId
         );
     }
 

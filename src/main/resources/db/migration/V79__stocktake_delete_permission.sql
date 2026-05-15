@@ -2,9 +2,9 @@
 -- This ensures only admins can delete stock-take sessions.
 
 INSERT INTO permissions (id, permission_key, description) VALUES
-  ('11111111-0000-0000-0000-000000000108', 'stocktake.delete',
+  ('11111111-0000-0000-0000-000000000109', 'stocktake.delete',
    'Delete stock-take sessions.');
 
 -- Grant to admin role only (not owner, not manager, not stock_manager).
 INSERT INTO role_permissions (role_id, permission_id) VALUES
-  ('22222222-0000-0000-0000-000000000002', '11111111-0000-0000-0000-000000000108');
+  ('22222222-0000-0000-0000-000000000002', '11111111-0000-0000-0000-000000000109');

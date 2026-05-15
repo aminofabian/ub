@@ -114,10 +114,11 @@ public class PublicStorefrontCatalogService {
     }
 
     @Transactional(readOnly = true)
-    public PublicCatalogItemDetailResponse getItemDetail(String slug, String itemId) {
+    public PublicCatalogItemDetailResponse getItemDetail(String slug, String idOrSku) {
         PublicStorefrontContext ctx = storefrontContextService.requireForSlug(slug);
-        Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, ctx.business().getId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found"));
+        Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(idOrSku, ctx.business().getId())
+                .orElseGet(() -> itemRepository.findByBusinessIdAndSkuAndDeletedAtIsNull(ctx.business().getId(), idOrSku)
+                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found")));
         if (!item.isWebPublished() || !item.isActive()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found");
         }
@@ -129,6 +130,7 @@ public class PublicStorefrontCatalogService {
         String parentId = item.getVariantOfItemId() != null ? item.getVariantOfItemId() : item.getId();
         return new PublicCatalogItemDetailResponse(
                 item.getId(),
+                item.getSku(),
                 item.getName(),
                 blankToNull(item.getDescription()),
                 blankToNull(item.getVariantName()),
@@ -137,7 +139,7 @@ public class PublicStorefrontCatalogService {
                 pricingService.getCurrentOpenSellingPrice(
                         ctx.business().getId(), item.getId(), ctx.catalogBranch().getId()),
                 onHand,
-                listImagesForItem(itemId),
+                listImagesForItem(item.getId()),
                 listPublishedVariants(ctx, parentId)
         );
     }
@@ -246,6 +248,7 @@ public class PublicStorefrontCatalogService {
                     BigDecimal fallbackBuying = latestBuying != null ? latestBuying : i.getBuyingPrice();
                     return new PublicCatalogItemCardResponse(
                             i.getId(),
+                            i.getSku(),
                             i.getName(),
                             blankToNull(i.getVariantName()),
                             thumbs.get(i.getId()),
@@ -315,6 +318,7 @@ public class PublicStorefrontCatalogService {
         return publishedInStock.stream()
                 .map(v -> new PublicCatalogVariantResponse(
                         v.getId(),
+                        v.getSku(),
                         v.getName(),
                         blankToNull(v.getVariantName()),
                         thumbs.get(v.getId()),

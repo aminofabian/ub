@@ -7,6 +7,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record PublicCatalogItemCardResponse(
         String id,
+        String sku,
         String name,
         String variantName,
         String imageUrl,

@@ -292,6 +292,7 @@ public class PublicWebCartService {
             }
             out.add(new PublicCartLineResponse(
                     L.getItemId(),
+                    it.getSku(),
                     it.getName(),
                     blankToNull(it.getVariantName()),
                     thumbs.get(L.getItemId()),

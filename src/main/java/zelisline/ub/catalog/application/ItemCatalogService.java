@@ -535,6 +535,7 @@ public class ItemCatalogService {
         child.setImageKey(firstNonBlank(request.imageKey(), parent.getImageKey()));
         child.setBrand(firstNonBlank(request.brand(), parent.getBrand()));
         child.setSize(firstNonBlank(request.size(), parent.getSize()));
+        child.setWebPublished(true);
 
         try {
             itemRepository.save(child);
@@ -950,6 +951,7 @@ public class ItemCatalogService {
         item.setImageKey(blankToNull(request.imageKey()));
         item.setBrand(blankToNull(request.brand()));
         item.setSize(blankToNull(request.size()));
+        item.setWebPublished(true);
         return item;
     }
 

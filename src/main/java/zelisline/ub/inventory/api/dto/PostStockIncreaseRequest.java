@@ -11,7 +11,7 @@ public record PostStockIncreaseRequest(
         @NotBlank String branchId,
         @NotBlank String itemId,
         @NotNull @DecimalMin(value = "0.0001", inclusive = true) BigDecimal quantity,
-        @NotNull @DecimalMin(value = "0.0001", inclusive = true) BigDecimal unitCost,
+        @NotNull @DecimalMin(value = "0", inclusive = true) BigDecimal unitCost,
         @Size(max = 2000) String notes
 ) {
 }

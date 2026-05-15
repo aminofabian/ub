@@ -23,6 +23,7 @@ import zelisline.ub.tenancy.api.dto.CreateBranchRequest;
 import zelisline.ub.tenancy.api.dto.CreateBusinessRequest;
 import zelisline.ub.tenancy.api.dto.DomainResponse;
 import zelisline.ub.tenancy.api.dto.PatchBranchRequest;
+import zelisline.ub.tenancy.api.dto.InventorySettingsResponse;
 import zelisline.ub.tenancy.api.dto.StorefrontSettingsResponse;
 import zelisline.ub.tenancy.api.dto.UpdateBusinessRequest;
 import zelisline.ub.tenancy.domain.Branch;
@@ -44,6 +45,7 @@ public class TenancyService {
     private final BranchRepository branchRepository;
     private final CatalogBootstrapService catalogBootstrapService;
     private final StorefrontSettingsService storefrontSettingsService;
+    private final BusinessInventorySettingsService businessInventorySettingsService;
     private final CloudinaryImageService cloudinaryImageService;
 
     @Transactional
@@ -102,6 +104,11 @@ public class TenancyService {
                     business.getSettings(),
                     request.storefront());
             business.setSettings(merged);
+        }
+        if (request.inventory() != null) {
+            business.setSettings(businessInventorySettingsService.merge(
+                    business.getSettings(),
+                    request.inventory()));
         }
 
         return toResponse(businessRepository.save(business));
@@ -353,6 +360,8 @@ public class TenancyService {
     private BusinessResponse toResponse(Business business) {
         StorefrontSettingsResponse storefront =
                 storefrontSettingsService.readFromSettingsJson(business.getSettings());
+        InventorySettingsResponse inventory =
+                businessInventorySettingsService.readFromSettingsJson(business.getSettings());
         var bundle = storefrontSettingsService.readTenantConfig(business.getSettings(), business.getName());
         String primaryDomain = domainMappingRepository
                 .findByBusinessIdAndDeletedAtIsNull(business.getId())
@@ -373,6 +382,7 @@ public class TenancyService {
                 business.getCreatedAt(),
                 business.getUpdatedAt(),
                 storefront,
+                inventory,
                 bundle.branding(),
                 primaryDomain
         );

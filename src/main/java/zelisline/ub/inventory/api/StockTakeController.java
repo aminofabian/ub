@@ -1,14 +1,17 @@
 package zelisline.ub.inventory.api;
 
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
-
+import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
-import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -18,11 +21,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
-
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotBlank;
-import lombok.RequiredArgsConstructor;
+import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.inventory.api.dto.ApproveStockAdjustmentRequest;
 import zelisline.ub.inventory.api.dto.CreateItemWithStocktakeLineRequest;
 import zelisline.ub.inventory.api.dto.PatchStockTakeCountsRequest;
@@ -51,99 +50,130 @@ public class StockTakeController {
     @PreAuthorize("hasPermission(null, 'stocktake.run')")
     @ResponseStatus(HttpStatus.CREATED)
     public StockTakeSessionResponse startSession(
-            @Valid @RequestBody PostStartStockTakeSessionRequest body,
-            HttpServletRequest request
+        @Valid @RequestBody PostStartStockTakeSessionRequest body,
+        HttpServletRequest request
     ) {
         TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
-        String validatedBranch = branchResolutionService.requireBranchForLockedRole(
-                principal.roleId(), principal.branchId(), body.branchId());
-        PostStartStockTakeSessionRequest effective = new PostStartStockTakeSessionRequest(
+        String validatedBranch =
+            branchResolutionService.requireBranchForLockedRole(
+                principal.roleId(),
+                principal.branchId(),
+                body.branchId()
+            );
+        PostStartStockTakeSessionRequest effective =
+            new PostStartStockTakeSessionRequest(
                 validatedBranch,
                 body.sessionType(),
                 body.sessionDate(),
                 body.notes(),
-                body.itemIds());
+                body.itemIds()
+            );
         return stockTakeService.startSession(
-                TenantRequestIds.resolveBusinessId(request),
-                effective,
-                principal.userId()
+            TenantRequestIds.resolveBusinessId(request),
+            effective,
+            principal.userId()
         );
     }
 
     @GetMapping("/sessions")
     @PreAuthorize("hasPermission(null, 'stocktake.read')")
     public List<StockTakeSessionResponse> listSessions(
-            @RequestParam(required = false) String branchId,
-            @RequestParam(required = false) String status,
-            @RequestParam(required = false) LocalDate from,
-            @RequestParam(required = false) LocalDate to,
-            HttpServletRequest request
+        @RequestParam(required = false) String branchId,
+        @RequestParam(required = false) String status,
+        @RequestParam(required = false) LocalDate from,
+        @RequestParam(required = false) LocalDate to,
+        HttpServletRequest request
     ) {
         TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String filterBranch = coerceOptionalBranchFilter(principal, branchId);
         return stockTakeService.listSessions(
-                TenantRequestIds.resolveBusinessId(request),
-                filterBranch,
-                status,
-                from,
-                to
+            TenantRequestIds.resolveBusinessId(request),
+            filterBranch,
+            status,
+            from,
+            to
         );
     }
 
     @GetMapping("/sessions/{sessionId}")
     @PreAuthorize("hasPermission(null, 'stocktake.read')")
     public StockTakeSessionResponse getSession(
-            @PathVariable String sessionId,
-            HttpServletRequest request
+        @PathVariable String sessionId,
+        HttpServletRequest request
     ) {
         CurrentTenantUser.requireHuman(request);
         return stockTakeService.getSession(
-                TenantRequestIds.resolveBusinessId(request),
-                sessionId
+            TenantRequestIds.resolveBusinessId(request),
+            sessionId
         );
     }
 
     @GetMapping("/sessions/active")
     @PreAuthorize("hasPermission(null, 'stocktake.read')")
     public ActiveSessionResponse getActiveSession(
-            @RequestParam @NotBlank String branchId,
-            @RequestParam(required = false) LocalDate date,
-            HttpServletRequest request
+        @RequestParam @NotBlank String branchId,
+        @RequestParam(required = false) LocalDate date,
+        HttpServletRequest request
     ) {
         TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
-        String effectiveBranchId = branchResolutionService.requireBranchForLockedRole(
-                principal.roleId(), principal.branchId(), branchId);
+        String effectiveBranchId =
+            branchResolutionService.requireBranchForLockedRole(
+                principal.roleId(),
+                principal.branchId(),
+                branchId
+            );
         LocalDate today = date != null ? date : LocalDate.now();
 
-        var active = stockTakeService.getActiveSession(businessId, effectiveBranchId, today);
+        var active = stockTakeService.getActiveSession(
+            businessId,
+            effectiveBranchId,
+            today
+        );
 
         StockTakeSessionResponse stale = null;
         if (active.isEmpty()) {
-            stale = stockTakeService.getStaleSession(businessId, effectiveBranchId, today).orElse(null);
+            stale = stockTakeService
+                .getStaleSession(businessId, effectiveBranchId, today)
+                .orElse(null);
         }
 
         return new ActiveSessionResponse(
-                active.orElse(null),
-                stale != null,
-                stale != null ? stale.sessionDate() : null,
-                stale != null ? stale.id() : null
+            active.orElse(null),
+            stale != null,
+            stale != null ? stale.sessionDate() : null,
+            stale != null ? stale.id() : null
+        );
+    }
+
+    @DeleteMapping("/sessions/{sessionId}")
+    @PreAuthorize("hasPermission(null, 'stocktake.delete')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteSession(
+        @PathVariable String sessionId,
+        HttpServletRequest request
+    ) {
+        var user = CurrentTenantUser.requireHuman(request);
+        stockTakeService.deleteSession(
+            TenantRequestIds.resolveBusinessId(request),
+            sessionId,
+            user.userId()
         );
     }
 
     @PostMapping("/sessions/{sessionId}/close")
     @PreAuthorize("hasPermission(null, 'stocktake.approve')")
     public StockTakeSessionResponse closeSession(
-            @PathVariable String sessionId,
-            @RequestParam(defaultValue = "false") boolean force,
-            HttpServletRequest request
+        @PathVariable String sessionId,
+        @RequestParam(defaultValue = "false") boolean force,
+        HttpServletRequest request
     ) {
         var user = CurrentTenantUser.requireHuman(request);
         return stockTakeService.closeSession(
-                TenantRequestIds.resolveBusinessId(request),
-                sessionId,
-                user.userId(),
-                force
+            TenantRequestIds.resolveBusinessId(request),
+            sessionId,
+            user.userId(),
+            force
         );
     }
 
@@ -152,35 +182,35 @@ public class StockTakeController {
     @PatchMapping("/sessions/{sessionId}/lines")
     @PreAuthorize("hasPermission(null, 'stocktake.run')")
     public StockTakeSessionResponse applyCounts(
-            @PathVariable String sessionId,
-            @Valid @RequestBody PatchStockTakeCountsRequest body,
-            HttpServletRequest request
+        @PathVariable String sessionId,
+        @Valid @RequestBody PatchStockTakeCountsRequest body,
+        HttpServletRequest request
     ) {
         var user = CurrentTenantUser.requireHuman(request);
         return stockTakeService.applyCounts(
-                TenantRequestIds.resolveBusinessId(request),
-                sessionId,
-                body,
-                user.userId()
+            TenantRequestIds.resolveBusinessId(request),
+            sessionId,
+            body,
+            user.userId()
         );
     }
 
     @PatchMapping("/sessions/{sessionId}/lines/{lineId}")
     @PreAuthorize("hasPermission(null, 'stocktake.run')")
     public StockTakeSessionResponse applySingleCount(
-            @PathVariable String sessionId,
-            @PathVariable String lineId,
-            @Valid @RequestBody PatchSingleLineRequest body,
-            HttpServletRequest request
+        @PathVariable String sessionId,
+        @PathVariable String lineId,
+        @Valid @RequestBody PatchSingleLineRequest body,
+        HttpServletRequest request
     ) {
         var user = CurrentTenantUser.requireHuman(request);
         return stockTakeService.applySingleCount(
-                TenantRequestIds.resolveBusinessId(request),
-                sessionId,
-                lineId,
-                body.countedQty(),
-                body.aisle(),
-                user.userId()
+            TenantRequestIds.resolveBusinessId(request),
+            sessionId,
+            lineId,
+            body.countedQty(),
+            body.aisle(),
+            user.userId()
         );
     }
 
@@ -188,17 +218,17 @@ public class StockTakeController {
     @PreAuthorize("hasPermission(null, 'stocktake.run')")
     @ResponseStatus(HttpStatus.CREATED)
     public StockTakeSessionResponse addAdHocLine(
-            @PathVariable String sessionId,
-            @Valid @RequestBody AddAdHocLineRequest body,
-            HttpServletRequest request
+        @PathVariable String sessionId,
+        @Valid @RequestBody AddAdHocLineRequest body,
+        HttpServletRequest request
     ) {
         var user = CurrentTenantUser.requireHuman(request);
         return stockTakeService.addAdHocLine(
-                TenantRequestIds.resolveBusinessId(request),
-                sessionId,
-                body.itemId(),
-                body.aisle(),
-                user.userId()
+            TenantRequestIds.resolveBusinessId(request),
+            sessionId,
+            body.itemId(),
+            body.aisle(),
+            user.userId()
         );
     }
 
@@ -206,16 +236,16 @@ public class StockTakeController {
     @PreAuthorize("hasPermission(null, 'stocktake.run')")
     @ResponseStatus(HttpStatus.CREATED)
     public StockTakeSessionResponse createItemAndAddLine(
-            @PathVariable String sessionId,
-            @Valid @RequestBody CreateItemWithStocktakeLineRequest body,
-            HttpServletRequest request
+        @PathVariable String sessionId,
+        @Valid @RequestBody CreateItemWithStocktakeLineRequest body,
+        HttpServletRequest request
     ) {
         var user = CurrentTenantUser.requireHuman(request);
         return stockTakeService.createItemAndAddLine(
-                TenantRequestIds.resolveBusinessId(request),
-                sessionId,
-                body,
-                user.userId()
+            TenantRequestIds.resolveBusinessId(request),
+            sessionId,
+            body,
+            user.userId()
         );
     }
 
@@ -224,19 +254,19 @@ public class StockTakeController {
     @PostMapping("/sessions/{sessionId}/lines/{lineId}/confirm")
     @PreAuthorize("hasPermission(null, 'stocktake.approve')")
     public StockTakeSessionResponse confirmLine(
-            @PathVariable String sessionId,
-            @PathVariable String lineId,
-            @RequestBody(required = false) ConfirmLineRequest body,
-            HttpServletRequest request
+        @PathVariable String sessionId,
+        @PathVariable String lineId,
+        @RequestBody(required = false) ConfirmLineRequest body,
+        HttpServletRequest request
     ) {
         var user = CurrentTenantUser.requireHuman(request);
         BigDecimal adminQuantity = body != null ? body.adminQuantity() : null;
         return stockTakeService.confirmLine(
-                TenantRequestIds.resolveBusinessId(request),
-                sessionId,
-                lineId,
-                adminQuantity,
-                user.userId()
+            TenantRequestIds.resolveBusinessId(request),
+            sessionId,
+            lineId,
+            adminQuantity,
+            user.userId()
         );
     }
 
@@ -245,54 +275,77 @@ public class StockTakeController {
     @GetMapping("/sessions/reconciliation")
     @PreAuthorize("hasPermission(null, 'stocktake.read')")
     public ReconciliationResponse getReconciliation(
-            @RequestParam(required = false) String morningSessionId,
-            @RequestParam(required = false) String eveningSessionId,
-            @RequestParam(required = false) String branchId,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
-            HttpServletRequest request
+        @RequestParam(required = false) String morningSessionId,
+        @RequestParam(required = false) String eveningSessionId,
+        @RequestParam(required = false) String branchId,
+        @RequestParam(required = false) @DateTimeFormat(
+            iso = DateTimeFormat.ISO.DATE
+        ) LocalDate date,
+        HttpServletRequest request
     ) {
         TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
 
         // Auto-detect: find morning & evening sessions by branch + date
-        if ((morningSessionId == null || morningSessionId.isBlank())
-                && (eveningSessionId == null || eveningSessionId.isBlank())
-                && branchId != null && !branchId.isBlank()
-                && date != null) {
-            String effectiveBranchId = branchResolutionService.requireBranchForLockedRole(
-                    principal.roleId(), principal.branchId(), branchId);
+        if (
+            (morningSessionId == null || morningSessionId.isBlank()) &&
+            (eveningSessionId == null || eveningSessionId.isBlank()) &&
+            branchId != null &&
+            !branchId.isBlank() &&
+            date != null
+        ) {
+            String effectiveBranchId =
+                branchResolutionService.requireBranchForLockedRole(
+                    principal.roleId(),
+                    principal.branchId(),
+                    branchId
+                );
             return stockTakeService.getReconciliationByBranchAndDate(
-                    businessId, effectiveBranchId, date);
+                businessId,
+                effectiveBranchId,
+                date
+            );
         }
 
-        if (morningSessionId == null || morningSessionId.isBlank()
-                || eveningSessionId == null || eveningSessionId.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Provide both session IDs, or branchId + date for auto-detection.");
+        if (
+            morningSessionId == null ||
+            morningSessionId.isBlank() ||
+            eveningSessionId == null ||
+            eveningSessionId.isBlank()
+        ) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Provide both session IDs, or branchId + date for auto-detection."
+            );
         }
 
         return stockTakeService.getReconciliation(
-                businessId, morningSessionId, eveningSessionId);
+            businessId,
+            morningSessionId,
+            eveningSessionId
+        );
     }
 
     // ── Adjustment requests ───────────────────────────────────────────
 
-    @PostMapping("/sessions/{sessionId}/adjustment-requests/{requestId}/approve")
+    @PostMapping(
+        "/sessions/{sessionId}/adjustment-requests/{requestId}/approve"
+    )
     @PreAuthorize("hasPermission(null, 'stocktake.approve')")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void approveRequest(
-            @PathVariable String sessionId,
-            @PathVariable String requestId,
-            @RequestBody(required = false) ApproveStockAdjustmentRequest body,
-            HttpServletRequest request
+        @PathVariable String sessionId,
+        @PathVariable String requestId,
+        @RequestBody(required = false) ApproveStockAdjustmentRequest body,
+        HttpServletRequest request
     ) {
         var user = CurrentTenantUser.requireHuman(request);
         stockTakeService.approveAdjustmentRequest(
-                TenantRequestIds.resolveBusinessId(request),
-                sessionId,
-                requestId,
-                body,
-                user.userId()
+            TenantRequestIds.resolveBusinessId(request),
+            sessionId,
+            requestId,
+            body,
+            user.userId()
         );
     }
 
@@ -300,70 +353,79 @@ public class StockTakeController {
     @PreAuthorize("hasPermission(null, 'stocktake.approve')")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void rejectRequest(
-            @PathVariable String sessionId,
-            @PathVariable String requestId,
-            @RequestBody(required = false) RejectStockAdjustmentRequest body,
-            HttpServletRequest request
+        @PathVariable String sessionId,
+        @PathVariable String requestId,
+        @RequestBody(required = false) RejectStockAdjustmentRequest body,
+        HttpServletRequest request
     ) {
         var user = CurrentTenantUser.requireHuman(request);
         String notes = body == null ? null : body.notes();
         stockTakeService.rejectAdjustmentRequest(
-                TenantRequestIds.resolveBusinessId(request),
-                sessionId,
-                requestId,
-                notes,
-                user.userId()
+            TenantRequestIds.resolveBusinessId(request),
+            sessionId,
+            requestId,
+            notes,
+            user.userId()
         );
     }
 
     // ── Inline DTOs ───────────────────────────────────────────────────
 
     public record ActiveSessionResponse(
-            StockTakeSessionResponse session,
-            boolean hasStaleSession,
-            LocalDate staleSessionDate,
-            String staleSessionId
-    ) {
-    }
+        StockTakeSessionResponse session,
+        boolean hasStaleSession,
+        LocalDate staleSessionDate,
+        String staleSessionId
+    ) {}
 
     public record PatchSingleLineRequest(
-            @jakarta.validation.constraints.NotNull
-            @jakarta.validation.constraints.DecimalMin(value = "0", inclusive = true)
-            BigDecimal countedQty,
-            @jakarta.validation.constraints.Size(max = 255)
-            String aisle
-    ) {
-    }
+        @jakarta.validation.constraints.NotNull @jakarta.validation.constraints.DecimalMin(
+            value = "0",
+            inclusive = true
+        ) BigDecimal countedQty,
+        @jakarta.validation.constraints.Size(max = 255) String aisle
+    ) {}
 
     public record AddAdHocLineRequest(
-            @NotBlank String itemId,
-            @jakarta.validation.constraints.Size(max = 255) String aisle
-    ) {
-    }
+        @NotBlank String itemId,
+        @jakarta.validation.constraints.Size(max = 255) String aisle
+    ) {}
 
     public record ConfirmLineRequest(
-            @jakarta.validation.constraints.DecimalMin(value = "0", inclusive = true)
-            BigDecimal adminQuantity
-    ) {
-    }
+        @jakarta.validation.constraints.DecimalMin(
+            value = "0",
+            inclusive = true
+        ) BigDecimal adminQuantity
+    ) {}
 
     /**
      * Optional branch filter for session lists. Branch-locked roles are always scoped to their
      * assigned branch (implicit when the query omits {@code branchId}).
      */
-    private String coerceOptionalBranchFilter(TenantPrincipal principal, String branchId) {
+    private String coerceOptionalBranchFilter(
+        TenantPrincipal principal,
+        String branchId
+    ) {
         if (!branchResolutionService.isBranchLockedRole(principal.roleId())) {
-            return branchId == null || branchId.isBlank() ? null : branchId.trim();
+            return branchId == null || branchId.isBlank()
+                ? null
+                : branchId.trim();
         }
-        String assigned = principal.branchId() != null ? principal.branchId().trim() : "";
+        String assigned =
+            principal.branchId() != null ? principal.branchId().trim() : "";
         if (assigned.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
-                    "Your account is not assigned to a branch. Contact your administrator.");
+            throw new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "Your account is not assigned to a branch. Contact your administrator."
+            );
         }
         if (branchId == null || branchId.isBlank()) {
             return assigned;
         }
         return branchResolutionService.requireBranchForLockedRole(
-                principal.roleId(), principal.branchId(), branchId);
+            principal.roleId(),
+            principal.branchId(),
+            branchId
+        );
     }
 }

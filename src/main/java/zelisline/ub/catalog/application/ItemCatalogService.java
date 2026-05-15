@@ -54,6 +54,7 @@ import zelisline.ub.identity.application.TokenHasher;
 import zelisline.ub.platform.media.CloudinaryImageService;
 import zelisline.ub.platform.media.CloudinaryUploadResult;
 import zelisline.ub.pricing.application.PricingService;
+import zelisline.ub.inventory.repository.StockTakeChecklistItemRepository;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.suppliers.application.SupplierLinkProvisioner;
 import zelisline.ub.sync.application.SyncConflictService;
@@ -78,6 +79,7 @@ public class ItemCatalogService {
     private final CloudinaryImageService cloudinaryImageService;
     private final BranchRepository branchRepository;
     private final InventoryBatchRepository inventoryBatchRepository;
+    private final StockTakeChecklistItemRepository stockTakeChecklistItemRepository;
     private final PricingService pricingService;
     private final SkuGenerationService skuGenerationService;
     private final SyncConflictService syncConflictService;
@@ -447,11 +449,17 @@ public class ItemCatalogService {
                     businessId, item.getId());
             for (Item child : children) {
                 softDeleteItem(child);
+                removeFromStockTakeChecklist(businessId, child.getId());
             }
             itemRepository.saveAll(children);
         }
         softDeleteItem(item);
         itemRepository.save(item);
+        removeFromStockTakeChecklist(businessId, item.getId());
+    }
+
+    private void removeFromStockTakeChecklist(String businessId, String itemId) {
+        stockTakeChecklistItemRepository.deleteByBusinessIdAndItemId(businessId, itemId);
     }
 
     private void softDeleteItem(Item item) {

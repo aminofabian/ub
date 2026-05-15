@@ -136,6 +136,7 @@ public class StockTakeService {
                 }
             }
         }
+        itemIds = filterActiveItemIds(businessId, itemIds);
 
         int sessionNumber = stockTakeSessionRepository.nextSessionNumber(
             businessId
@@ -204,7 +205,7 @@ public class StockTakeService {
         return buildResponse(session);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public StockTakeSessionResponse getSession(
         String businessId,
         String sessionId
@@ -217,12 +218,12 @@ public class StockTakeService {
                     "Session not found"
                 )
             );
-        return buildResponse(session);
+        return sessionResponse(session);
     }
 
     // ── Active / stale session lookup ──────────────────────────────────
 
-    @Transactional(readOnly = true)
+    @Transactional
     public Optional<StockTakeSessionResponse> getActiveSession(
         String businessId,
         String branchId,
@@ -237,7 +238,7 @@ public class StockTakeService {
                     date,
                     sessionType
                 )
-                .map(this::buildResponse);
+                .map(this::sessionResponse);
         }
         return stockTakeSessionRepository
             .findActiveListByBusinessIdAndBranchIdAndDateFetchLines(
@@ -247,10 +248,10 @@ public class StockTakeService {
             )
             .stream()
             .findFirst()
-            .map(this::buildResponse);
+            .map(this::sessionResponse);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public Optional<StockTakeSessionResponse> getStaleSession(
         String businessId,
         String branchId,
@@ -266,7 +267,7 @@ public class StockTakeService {
             )
             .stream()
             .findFirst()
-            .map(this::buildResponse);
+            .map(this::sessionResponse);
     }
 
     @Transactional(readOnly = true)
@@ -565,7 +566,7 @@ public class StockTakeService {
 
     // ── Session resume ─────────────────────────────────────────────────
 
-    @Transactional(readOnly = true)
+    @Transactional
     public StockTakeSessionResponse resumeSession(
         String businessId,
         String sessionId
@@ -588,7 +589,7 @@ public class StockTakeService {
                 "Session is not in progress"
             );
         }
-        return buildResponse(session);
+        return sessionResponse(session);
     }
 
     // ── Session close ──────────────────────────────────────────────────
@@ -1290,6 +1291,49 @@ public class StockTakeService {
             );
         }
         return session;
+    }
+
+    /**
+     * Drops stock-take lines whose catalog item was deleted after the session started.
+     */
+    private void pruneOrphanLines(StockTakeSession session) {
+        if (session.getLines() == null || session.getLines().isEmpty()) {
+            return;
+        }
+        String businessId = session.getBusinessId();
+        List<String> lineItemIds = session
+            .getLines()
+            .stream()
+            .map(StockTakeLine::getItemId)
+            .distinct()
+            .toList();
+        Set<String> activeItemIds = itemRepository
+            .findByIdInAndBusinessIdAndDeletedAtIsNull(lineItemIds, businessId)
+            .stream()
+            .map(Item::getId)
+            .collect(Collectors.toCollection(HashSet::new));
+        boolean removed = session
+            .getLines()
+            .removeIf(l -> !activeItemIds.contains(l.getItemId()));
+        if (removed) {
+            stockTakeSessionRepository.save(session);
+        }
+    }
+
+    private StockTakeSessionResponse sessionResponse(StockTakeSession session) {
+        pruneOrphanLines(session);
+        return buildResponse(session);
+    }
+
+    private List<String> filterActiveItemIds(String businessId, List<String> itemIds) {
+        if (itemIds == null || itemIds.isEmpty()) {
+            return List.of();
+        }
+        return itemRepository
+            .findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)
+            .stream()
+            .map(Item::getId)
+            .toList();
     }
 
     private StockTakeSessionResponse buildResponse(StockTakeSession session) {

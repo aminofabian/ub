@@ -698,7 +698,7 @@ class ItemCatalogIT {
                 null,
                 null,
                 null,
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
     }
 
     private static CreateItemRequest minimalItem(String sku, String name, String itemTypeId) {

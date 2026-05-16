@@ -468,6 +468,14 @@ public class ItemCatalogService {
         if (patch.size() != null) {
             item.setSize(blankToNull(patch.size()));
         }
+        if (patch.variantName() != null && item.getVariantOfItemId() != null && !item.getVariantOfItemId().isBlank()) {
+            String raw = patch.variantName().trim();
+            if (raw.isEmpty()) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Variant label cannot be empty");
+            }
+            item.setVariantName(raw);
+        }
 
         try {
             itemRepository.save(item);

@@ -384,6 +384,7 @@ public class LegacyProductJsonImportService {
                         r.active(),
                         null,
                         null,
+                        null,
                         null
                 )
         );
@@ -404,7 +405,7 @@ public class LegacyProductJsonImportService {
                     new PatchItemRequest(
                             null, null, null, null, null, null, null, null, null, null,
                             null, null, null, null, null, null, null, null, null, null,
-                            null, null, null, false, null, null, null));
+                            null, null, null, false, null, null, null, null));
         }
         BigDecimal sell = sanitizeMoney14_2(r.sellPrice());
         if (sell != null && sell.compareTo(new BigDecimal("0.01")) >= 0) {

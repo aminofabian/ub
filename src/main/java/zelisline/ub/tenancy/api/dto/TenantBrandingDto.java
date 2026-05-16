@@ -1,5 +1,7 @@
 package zelisline.ub.tenancy.api.dto;
 
+import java.util.List;
+
 /**
  * Tenant-facing branding bundle returned by the public host-resolve endpoint.
  * Stored under the {@code branding} namespace inside {@code businesses.settings}
@@ -7,20 +9,32 @@ package zelisline.ub.tenancy.api.dto;
  * something to render.
  */
 public record TenantBrandingDto(
-        String displayName,
-        String logoUrl,
-        String faviconUrl,
-        String primaryColor,
-        String accentColor,
+    String displayName,
+    String logoUrl,
+    String faviconUrl,
+    String primaryColor,
+    String accentColor,
 
-        // SEO / social preview fields (optional)
-        String metaTitle,
-        String metaDescription,
-        String ogImage,
-        String metaKeywords
+    // SEO / social preview fields (optional)
+    String metaTitle,
+    String metaDescription,
+    String ogImage,
+    String metaKeywords,
+
+    List<String> heroBannerUrls
 ) {
-
     public static TenantBrandingDto defaults(String displayName) {
-        return new TenantBrandingDto(displayName, null, null, null, null, null, null, null, null);
+        return new TenantBrandingDto(
+            displayName,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+        );
     }
 }

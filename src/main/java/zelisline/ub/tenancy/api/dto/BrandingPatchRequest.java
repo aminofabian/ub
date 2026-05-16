@@ -2,6 +2,7 @@ package zelisline.ub.tenancy.api.dto;
 
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import java.util.List;
 
 /**
  * Tenant-self-service branding patch. Every field is optional: nulls are
@@ -10,20 +11,29 @@ import jakarta.validation.constraints.Size;
  * controller level so an invalid value never reaches the JSON namespace.
  */
 public record BrandingPatchRequest(
-        @Size(max = 255) String displayName,
-        @Size(max = 1024) String logoUrl,
-        @Size(max = 255) String logoPublicId,
-        @Size(max = 1024) String faviconUrl,
-        @Pattern(regexp = "^$|^#[0-9a-fA-F]{6}$", message = "primaryColor must be #RRGGBB")
-        @Size(max = 7) String primaryColor,
-        @Pattern(regexp = "^$|^#[0-9a-fA-F]{6}$", message = "accentColor must be #RRGGBB")
-        @Size(max = 7) String accentColor,
+    @Size(max = 255) String displayName,
+    @Size(max = 1024) String logoUrl,
+    @Size(max = 255) String logoPublicId,
+    @Size(max = 1024) String faviconUrl,
+    @Pattern(
+        regexp = "^$|^#[0-9a-fA-F]{6}$",
+        message = "primaryColor must be #RRGGBB"
+    )
+    @Size(max = 7)
+    String primaryColor,
+    @Pattern(
+        regexp = "^$|^#[0-9a-fA-F]{6}$",
+        message = "accentColor must be #RRGGBB"
+    )
+    @Size(max = 7)
+    String accentColor,
 
-        // SEO / social preview fields — null = no change, empty string = clear
-        @Size(max = 255) String metaTitle,
-        @Size(max = 320) String metaDescription,
-        @Size(max = 1024) String ogImage,
-        @Size(max = 255) String ogImagePublicId,
-        @Size(max = 500) String metaKeywords
-) {
-}
+    // SEO / social preview fields — null = no change, empty string = clear
+    @Size(max = 255) String metaTitle,
+    @Size(max = 320) String metaDescription,
+    @Size(max = 1024) String ogImage,
+    @Size(max = 255) String ogImagePublicId,
+    @Size(max = 500) String metaKeywords,
+
+    List<@Size(max = 1024) String> heroBannerUrls
+) {}

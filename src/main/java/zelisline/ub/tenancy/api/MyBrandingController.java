@@ -1,5 +1,9 @@
 package zelisline.ub.tenancy.api;
 
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+import java.util.List;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -7,18 +11,17 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
-
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.validation.Valid;
-import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
+import zelisline.ub.tenancy.api.dto.AddBannerRequest;
 import zelisline.ub.tenancy.api.dto.BrandingPatchRequest;
 import zelisline.ub.tenancy.api.dto.BusinessResponse;
 import zelisline.ub.tenancy.application.TenancyService;
@@ -34,35 +37,39 @@ import zelisline.ub.tenancy.application.TenancyService;
 @RequiredArgsConstructor
 public class MyBrandingController {
 
-    private static final String MANAGE_SETTINGS = "hasPermission(null, 'business.manage_settings')";
+    private static final String MANAGE_SETTINGS =
+        "hasPermission(null, 'business.manage_settings')";
 
     private final TenancyService tenancyService;
 
     @PatchMapping
     @PreAuthorize(MANAGE_SETTINGS)
     public BusinessResponse patchBranding(
-            @Valid @RequestBody BrandingPatchRequest patch,
-            HttpServletRequest request
+        @Valid @RequestBody BrandingPatchRequest patch,
+        HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
         return tenancyService.updateBrandingForTenant(
-                TenantRequestIds.resolveBusinessId(request),
-                patch
+            TenantRequestIds.resolveBusinessId(request),
+            patch
         );
     }
 
-    @PostMapping(value = "/logo", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PostMapping(
+        value = "/logo",
+        consumes = MediaType.MULTIPART_FORM_DATA_VALUE
+    )
     @PreAuthorize(MANAGE_SETTINGS)
     public ResponseEntity<BusinessResponse> uploadLogo(
-            @RequestPart("file") MultipartFile file,
-            HttpServletRequest request
+        @RequestPart("file") MultipartFile file,
+        HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
         byte[] bytes = readUploadBytes(file, "logo");
         BusinessResponse body = tenancyService.uploadBrandingLogo(
-                TenantRequestIds.resolveBusinessId(request),
-                bytes,
-                file.getOriginalFilename()
+            TenantRequestIds.resolveBusinessId(request),
+            bytes,
+            file.getOriginalFilename()
         );
         return ResponseEntity.status(HttpStatus.CREATED).body(body);
     }
@@ -71,21 +78,26 @@ public class MyBrandingController {
     @PreAuthorize(MANAGE_SETTINGS)
     public BusinessResponse clearLogo(HttpServletRequest request) {
         CurrentTenantUser.require(request);
-        return tenancyService.clearBrandingLogo(TenantRequestIds.resolveBusinessId(request));
+        return tenancyService.clearBrandingLogo(
+            TenantRequestIds.resolveBusinessId(request)
+        );
     }
 
-    @PostMapping(value = "/favicon", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PostMapping(
+        value = "/favicon",
+        consumes = MediaType.MULTIPART_FORM_DATA_VALUE
+    )
     @PreAuthorize(MANAGE_SETTINGS)
     public ResponseEntity<BusinessResponse> uploadFavicon(
-            @RequestPart("file") MultipartFile file,
-            HttpServletRequest request
+        @RequestPart("file") MultipartFile file,
+        HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
         byte[] bytes = readUploadBytes(file, "favicon");
         BusinessResponse body = tenancyService.uploadBrandingFavicon(
-                TenantRequestIds.resolveBusinessId(request),
-                bytes,
-                file.getOriginalFilename()
+            TenantRequestIds.resolveBusinessId(request),
+            bytes,
+            file.getOriginalFilename()
         );
         return ResponseEntity.status(HttpStatus.CREATED).body(body);
     }
@@ -94,21 +106,26 @@ public class MyBrandingController {
     @PreAuthorize(MANAGE_SETTINGS)
     public BusinessResponse clearFavicon(HttpServletRequest request) {
         CurrentTenantUser.require(request);
-        return tenancyService.clearBrandingFavicon(TenantRequestIds.resolveBusinessId(request));
+        return tenancyService.clearBrandingFavicon(
+            TenantRequestIds.resolveBusinessId(request)
+        );
     }
 
-    @PostMapping(value = "/og-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PostMapping(
+        value = "/og-image",
+        consumes = MediaType.MULTIPART_FORM_DATA_VALUE
+    )
     @PreAuthorize(MANAGE_SETTINGS)
     public ResponseEntity<BusinessResponse> uploadOgImage(
-            @RequestPart("file") MultipartFile file,
-            HttpServletRequest request
+        @RequestPart("file") MultipartFile file,
+        HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
         byte[] bytes = readUploadBytes(file, "og-image");
         BusinessResponse body = tenancyService.uploadBrandingOgImage(
-                TenantRequestIds.resolveBusinessId(request),
-                bytes,
-                file.getOriginalFilename()
+            TenantRequestIds.resolveBusinessId(request),
+            bytes,
+            file.getOriginalFilename()
         );
         return ResponseEntity.status(HttpStatus.CREATED).body(body);
     }
@@ -117,17 +134,72 @@ public class MyBrandingController {
     @PreAuthorize(MANAGE_SETTINGS)
     public BusinessResponse clearOgImage(HttpServletRequest request) {
         CurrentTenantUser.require(request);
-        return tenancyService.clearBrandingOgImage(TenantRequestIds.resolveBusinessId(request));
+        return tenancyService.clearBrandingOgImage(
+            TenantRequestIds.resolveBusinessId(request)
+        );
+    }
+
+    @PostMapping("/banners")
+    @PreAuthorize(MANAGE_SETTINGS)
+    public ResponseEntity<BusinessResponse> addBanner(
+        @RequestBody AddBannerRequest body,
+        HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        if (body.url() == null || body.url().isBlank()) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Banner URL is required"
+            );
+        }
+        BusinessResponse result = tenancyService.addBrandingBanner(
+            TenantRequestIds.resolveBusinessId(request),
+            body.url().trim(),
+            body.publicId() != null ? body.publicId().trim() : null
+        );
+        return ResponseEntity.status(HttpStatus.CREATED).body(result);
+    }
+
+    @DeleteMapping("/banners/{index}")
+    @PreAuthorize(MANAGE_SETTINGS)
+    public BusinessResponse deleteBanner(
+        @PathVariable int index,
+        HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return tenancyService.deleteBrandingBanner(
+            TenantRequestIds.resolveBusinessId(request),
+            index
+        );
+    }
+
+    @PutMapping("/banners/reorder")
+    @PreAuthorize(MANAGE_SETTINGS)
+    public BusinessResponse reorderBanners(
+        @RequestBody List<String> orderedUrls,
+        HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return tenancyService.reorderBrandingBanners(
+            TenantRequestIds.resolveBusinessId(request),
+            orderedUrls
+        );
     }
 
     private static byte[] readUploadBytes(MultipartFile file, String label) {
         if (file == null || file.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Empty " + label + " file");
+            throw new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Empty " + label + " file"
+            );
         }
         try {
             return file.getBytes();
         } catch (java.io.IOException e) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Could not read uploaded file");
+            throw new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Could not read uploaded file"
+            );
         }
     }
 }

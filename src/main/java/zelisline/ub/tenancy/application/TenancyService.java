@@ -3,27 +3,25 @@ package zelisline.ub.tenancy.application;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
-
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
-
-import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.platform.media.CloudinaryImageService;
 import zelisline.ub.platform.media.CloudinaryUploadResult;
-import zelisline.ub.tenancy.api.dto.BrandingPatchRequest;
 import zelisline.ub.tenancy.api.dto.BranchResponse;
+import zelisline.ub.tenancy.api.dto.BrandingPatchRequest;
 import zelisline.ub.tenancy.api.dto.BusinessResponse;
 import zelisline.ub.tenancy.api.dto.CreateBranchRequest;
 import zelisline.ub.tenancy.api.dto.CreateBusinessRequest;
 import zelisline.ub.tenancy.api.dto.DomainResponse;
-import zelisline.ub.tenancy.api.dto.PatchBranchRequest;
 import zelisline.ub.tenancy.api.dto.InventorySettingsResponse;
+import zelisline.ub.tenancy.api.dto.PatchBranchRequest;
 import zelisline.ub.tenancy.api.dto.StorefrontSettingsResponse;
 import zelisline.ub.tenancy.api.dto.UpdateBusinessRequest;
 import zelisline.ub.tenancy.domain.Branch;
@@ -52,7 +50,10 @@ public class TenancyService {
     public BusinessResponse createBusiness(CreateBusinessRequest request) {
         String normalizedSlug = normalizeSlug(request.slug());
         if (businessRepository.existsBySlugAndDeletedAtIsNull(normalizedSlug)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Business slug already exists");
+            throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Business slug already exists"
+            );
         }
 
         Business business = new Business();
@@ -61,12 +62,19 @@ public class TenancyService {
         business.setCurrency(normalizeCode(request.currency(), "KES"));
         business.setCountryCode(normalizeCode(request.countryCode(), "KE"));
         business.setTimezone(fallback(request.timezone(), "Africa/Nairobi"));
-        business.setSubscriptionTier(fallback(request.subscriptionTier(), "starter").toLowerCase(Locale.ROOT));
+        business.setSubscriptionTier(
+            fallback(request.subscriptionTier(), "starter").toLowerCase(
+                Locale.ROOT
+            )
+        );
         business.setSettings("{}");
         Business saved = businessRepository.save(business);
         catalogBootstrapService.seedDefaultItemTypesIfMissing(saved.getId());
 
-        String hostname = resolvePrimaryHostname(request.primaryDomain(), normalizedSlug);
+        String hostname = resolvePrimaryHostname(
+            request.primaryDomain(),
+            normalizedSlug
+        );
         if (hostname != null) {
             DomainMapping domain = new DomainMapping();
             domain.setBusinessId(saved.getId());
@@ -81,65 +89,111 @@ public class TenancyService {
 
     @Transactional(readOnly = true)
     public Page<BusinessResponse> listBusinesses(Pageable pageable) {
-        return businessRepository.findByDeletedAtIsNull(pageable).map(this::toResponse);
+        return businessRepository
+            .findByDeletedAtIsNull(pageable)
+            .map(this::toResponse);
     }
 
     @Transactional
-    public BusinessResponse updateBusiness(String businessId, UpdateBusinessRequest request) {
-        Business business = businessRepository.findByIdAndDeletedAtIsNull(businessId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
+    public BusinessResponse updateBusiness(
+        String businessId,
+        UpdateBusinessRequest request
+    ) {
+        Business business = businessRepository
+            .findByIdAndDeletedAtIsNull(businessId)
+            .orElseThrow(() ->
+                new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Business not found"
+                )
+            );
 
         if (request.name() != null && !request.name().isBlank()) {
             business.setName(request.name().trim());
         }
-        if (request.subscriptionTier() != null && !request.subscriptionTier().isBlank()) {
-            business.setSubscriptionTier(request.subscriptionTier().trim().toLowerCase(Locale.ROOT));
+        if (
+            request.subscriptionTier() != null &&
+            !request.subscriptionTier().isBlank()
+        ) {
+            business.setSubscriptionTier(
+                request.subscriptionTier().trim().toLowerCase(Locale.ROOT)
+            );
         }
         if (request.active() != null) {
             business.setActive(request.active());
         }
         if (request.storefront() != null) {
             String merged = storefrontSettingsService.mergeAndValidate(
-                    business.getId(),
-                    business.getSettings(),
-                    request.storefront());
+                business.getId(),
+                business.getSettings(),
+                request.storefront()
+            );
             business.setSettings(merged);
         }
         if (request.inventory() != null) {
-            business.setSettings(businessInventorySettingsService.merge(
+            business.setSettings(
+                businessInventorySettingsService.merge(
                     business.getSettings(),
-                    request.inventory()));
+                    request.inventory()
+                )
+            );
         }
 
         return toResponse(businessRepository.save(business));
     }
 
     @Transactional
-    public BusinessResponse updateBrandingForTenant(String tenantBusinessId, BrandingPatchRequest patch) {
+    public BusinessResponse updateBrandingForTenant(
+        String tenantBusinessId,
+        BrandingPatchRequest patch
+    ) {
         Business business = requireTenantBusiness(tenantBusinessId);
-        business.setSettings(storefrontSettingsService.mergeBranding(business.getSettings(), patch));
+        business.setSettings(
+            storefrontSettingsService.mergeBranding(
+                business.getSettings(),
+                patch
+            )
+        );
         return toResponse(businessRepository.save(business));
     }
 
     @Transactional(readOnly = true)
     public List<DomainResponse> listDomains(String businessId) {
-        if (businessRepository.findByIdAndDeletedAtIsNull(businessId).isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found");
+        if (
+            businessRepository.findByIdAndDeletedAtIsNull(businessId).isEmpty()
+        ) {
+            throw new ResponseStatusException(
+                HttpStatus.NOT_FOUND,
+                "Business not found"
+            );
         }
-        return domainMappingRepository.findByBusinessIdAndDeletedAtIsNull(businessId)
-                .stream()
-                .map(this::toResponse)
-                .toList();
+        return domainMappingRepository
+            .findByBusinessIdAndDeletedAtIsNull(businessId)
+            .stream()
+            .map(this::toResponse)
+            .toList();
     }
 
     @Transactional
     public DomainResponse addDomain(String businessId, String domainName) {
-        if (businessRepository.findByIdAndDeletedAtIsNull(businessId).isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found");
+        if (
+            businessRepository.findByIdAndDeletedAtIsNull(businessId).isEmpty()
+        ) {
+            throw new ResponseStatusException(
+                HttpStatus.NOT_FOUND,
+                "Business not found"
+            );
         }
         String normalized = normalizeHostname(domainName);
-        if (domainMappingRepository.findByDomainAndActiveTrue(normalized).isPresent()) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Domain is already in use");
+        if (
+            domainMappingRepository
+                .findByDomainAndActiveTrue(normalized)
+                .isPresent()
+        ) {
+            throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Domain is already in use"
+            );
         }
 
         DomainMapping domain = new DomainMapping();
@@ -147,7 +201,9 @@ public class TenancyService {
         domain.setDomain(normalized);
         domain.setActive(true);
 
-        boolean hasExistingPrimary = !domainMappingRepository.findByBusinessIdAndDeletedAtIsNull(businessId).isEmpty();
+        boolean hasExistingPrimary = !domainMappingRepository
+            .findByBusinessIdAndDeletedAtIsNull(businessId)
+            .isEmpty();
         domain.setPrimary(!hasExistingPrimary);
 
         DomainMapping saved = domainMappingRepository.save(domain);
@@ -156,15 +212,28 @@ public class TenancyService {
 
     @Transactional
     public void deleteDomain(String businessId, String domainId) {
-        DomainMapping domain = domainMappingRepository.findById(domainId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Domain not found"));
-        if (!domain.getBusinessId().equals(businessId) || domain.getDeletedAt() != null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Domain not found");
+        DomainMapping domain = domainMappingRepository
+            .findById(domainId)
+            .orElseThrow(() ->
+                new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Domain not found"
+                )
+            );
+        if (
+            !domain.getBusinessId().equals(businessId) ||
+            domain.getDeletedAt() != null
+        ) {
+            throw new ResponseStatusException(
+                HttpStatus.NOT_FOUND,
+                "Domain not found"
+            );
         }
         if (domain.isPrimary()) {
             throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Cannot delete the primary domain. Promote another domain first.");
+                HttpStatus.CONFLICT,
+                "Cannot delete the primary domain. Promote another domain first."
+            );
         }
         domain.setActive(false);
         domain.setDeletedAt(Instant.now());
@@ -173,14 +242,30 @@ public class TenancyService {
 
     @Transactional
     public DomainResponse setPrimaryDomain(String businessId, String domainId) {
-        DomainMapping toPromote = domainMappingRepository.findById(domainId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Domain not found"));
-        if (!toPromote.getBusinessId().equals(businessId) || toPromote.getDeletedAt() != null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Domain not found");
+        DomainMapping toPromote = domainMappingRepository
+            .findById(domainId)
+            .orElseThrow(() ->
+                new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Domain not found"
+                )
+            );
+        if (
+            !toPromote.getBusinessId().equals(businessId) ||
+            toPromote.getDeletedAt() != null
+        ) {
+            throw new ResponseStatusException(
+                HttpStatus.NOT_FOUND,
+                "Domain not found"
+            );
         }
 
         Instant now = Instant.now();
-        domainMappingRepository.clearPrimaryForBusinessExcept(businessId, toPromote.getId(), now);
+        domainMappingRepository.clearPrimaryForBusinessExcept(
+            businessId,
+            toPromote.getId(),
+            now
+        );
         if (!toPromote.isPrimary()) {
             toPromote.setPrimary(true);
             toPromote = domainMappingRepository.save(toPromote);
@@ -190,27 +275,56 @@ public class TenancyService {
 
     @Transactional(readOnly = true)
     public BusinessResponse getBusinessForTenant(String tenantBusinessId) {
-        Business business = businessRepository.findByIdAndDeletedAtIsNull(tenantBusinessId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
+        Business business = businessRepository
+            .findByIdAndDeletedAtIsNull(tenantBusinessId)
+            .orElseThrow(() ->
+                new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Business not found"
+                )
+            );
         return toResponse(business);
     }
 
     @Transactional
-    public BusinessResponse updateBusinessForTenant(String tenantBusinessId, UpdateBusinessRequest request) {
+    public BusinessResponse updateBusinessForTenant(
+        String tenantBusinessId,
+        UpdateBusinessRequest request
+    ) {
         return updateBusiness(tenantBusinessId, request);
     }
 
     @Transactional
-    public BusinessResponse uploadBrandingLogo(String tenantBusinessId, byte[] fileBytes, String originalFilename) {
+    public BusinessResponse uploadBrandingLogo(
+        String tenantBusinessId,
+        byte[] fileBytes,
+        String originalFilename
+    ) {
         Business business = requireTenantBusiness(tenantBusinessId);
-        String previousPublicId = storefrontSettingsService.readBrandingLogoPublicId(business.getSettings());
+        String previousPublicId =
+            storefrontSettingsService.readBrandingLogoPublicId(
+                business.getSettings()
+            );
         String folder = "ub/" + tenantBusinessId + "/branding/logo";
-        CloudinaryUploadResult uploaded = cloudinaryImageService.uploadImageToFolder(
-                fileBytes, originalFilename, folder, true);
-        business.setSettings(storefrontSettingsService.mergeBrandingLogo(
-                business.getSettings(), uploaded.secureUrl(), uploaded.publicId()));
+        CloudinaryUploadResult uploaded =
+            cloudinaryImageService.uploadImageToFolder(
+                fileBytes,
+                originalFilename,
+                folder,
+                true
+            );
+        business.setSettings(
+            storefrontSettingsService.mergeBrandingLogo(
+                business.getSettings(),
+                uploaded.secureUrl(),
+                uploaded.publicId()
+            )
+        );
         BusinessResponse out = toResponse(businessRepository.save(business));
-        if (previousPublicId != null && !previousPublicId.equals(uploaded.publicId())) {
+        if (
+            previousPublicId != null &&
+            !previousPublicId.equals(uploaded.publicId())
+        ) {
             cloudinaryImageService.destroyImage(previousPublicId);
         }
         return out;
@@ -219,8 +333,17 @@ public class TenancyService {
     @Transactional
     public BusinessResponse clearBrandingLogo(String tenantBusinessId) {
         Business business = requireTenantBusiness(tenantBusinessId);
-        String previousPublicId = storefrontSettingsService.readBrandingLogoPublicId(business.getSettings());
-        business.setSettings(storefrontSettingsService.mergeBrandingLogo(business.getSettings(), null, null));
+        String previousPublicId =
+            storefrontSettingsService.readBrandingLogoPublicId(
+                business.getSettings()
+            );
+        business.setSettings(
+            storefrontSettingsService.mergeBrandingLogo(
+                business.getSettings(),
+                null,
+                null
+            )
+        );
         BusinessResponse out = toResponse(businessRepository.save(business));
         if (previousPublicId != null) {
             cloudinaryImageService.destroyImage(previousPublicId);
@@ -229,16 +352,36 @@ public class TenancyService {
     }
 
     @Transactional
-    public BusinessResponse uploadBrandingFavicon(String tenantBusinessId, byte[] fileBytes, String originalFilename) {
+    public BusinessResponse uploadBrandingFavicon(
+        String tenantBusinessId,
+        byte[] fileBytes,
+        String originalFilename
+    ) {
         Business business = requireTenantBusiness(tenantBusinessId);
-        String previousPublicId = storefrontSettingsService.readBrandingFaviconPublicId(business.getSettings());
+        String previousPublicId =
+            storefrontSettingsService.readBrandingFaviconPublicId(
+                business.getSettings()
+            );
         String folder = "ub/" + tenantBusinessId + "/branding/favicon";
-        CloudinaryUploadResult uploaded = cloudinaryImageService.uploadImageToFolder(
-                fileBytes, originalFilename, folder, false);
-        business.setSettings(storefrontSettingsService.mergeBrandingFavicon(
-                business.getSettings(), uploaded.secureUrl(), uploaded.publicId()));
+        CloudinaryUploadResult uploaded =
+            cloudinaryImageService.uploadImageToFolder(
+                fileBytes,
+                originalFilename,
+                folder,
+                false
+            );
+        business.setSettings(
+            storefrontSettingsService.mergeBrandingFavicon(
+                business.getSettings(),
+                uploaded.secureUrl(),
+                uploaded.publicId()
+            )
+        );
         BusinessResponse out = toResponse(businessRepository.save(business));
-        if (previousPublicId != null && !previousPublicId.equals(uploaded.publicId())) {
+        if (
+            previousPublicId != null &&
+            !previousPublicId.equals(uploaded.publicId())
+        ) {
             cloudinaryImageService.destroyImage(previousPublicId);
         }
         return out;
@@ -247,8 +390,17 @@ public class TenancyService {
     @Transactional
     public BusinessResponse clearBrandingFavicon(String tenantBusinessId) {
         Business business = requireTenantBusiness(tenantBusinessId);
-        String previousPublicId = storefrontSettingsService.readBrandingFaviconPublicId(business.getSettings());
-        business.setSettings(storefrontSettingsService.mergeBrandingFavicon(business.getSettings(), null, null));
+        String previousPublicId =
+            storefrontSettingsService.readBrandingFaviconPublicId(
+                business.getSettings()
+            );
+        business.setSettings(
+            storefrontSettingsService.mergeBrandingFavicon(
+                business.getSettings(),
+                null,
+                null
+            )
+        );
         BusinessResponse out = toResponse(businessRepository.save(business));
         if (previousPublicId != null) {
             cloudinaryImageService.destroyImage(previousPublicId);
@@ -257,16 +409,36 @@ public class TenancyService {
     }
 
     @Transactional
-    public BusinessResponse uploadBrandingOgImage(String tenantBusinessId, byte[] fileBytes, String originalFilename) {
+    public BusinessResponse uploadBrandingOgImage(
+        String tenantBusinessId,
+        byte[] fileBytes,
+        String originalFilename
+    ) {
         Business business = requireTenantBusiness(tenantBusinessId);
-        String previousPublicId = storefrontSettingsService.readBrandingOgImagePublicId(business.getSettings());
+        String previousPublicId =
+            storefrontSettingsService.readBrandingOgImagePublicId(
+                business.getSettings()
+            );
         String folder = "ub/" + tenantBusinessId + "/branding/og-image";
-        CloudinaryUploadResult uploaded = cloudinaryImageService.uploadImageToFolder(
-                fileBytes, originalFilename, folder, false);
-        business.setSettings(storefrontSettingsService.mergeBrandingOgImage(
-                business.getSettings(), uploaded.secureUrl(), uploaded.publicId()));
+        CloudinaryUploadResult uploaded =
+            cloudinaryImageService.uploadImageToFolder(
+                fileBytes,
+                originalFilename,
+                folder,
+                false
+            );
+        business.setSettings(
+            storefrontSettingsService.mergeBrandingOgImage(
+                business.getSettings(),
+                uploaded.secureUrl(),
+                uploaded.publicId()
+            )
+        );
         BusinessResponse out = toResponse(businessRepository.save(business));
-        if (previousPublicId != null && !previousPublicId.equals(uploaded.publicId())) {
+        if (
+            previousPublicId != null &&
+            !previousPublicId.equals(uploaded.publicId())
+        ) {
             cloudinaryImageService.destroyImage(previousPublicId);
         }
         return out;
@@ -275,8 +447,17 @@ public class TenancyService {
     @Transactional
     public BusinessResponse clearBrandingOgImage(String tenantBusinessId) {
         Business business = requireTenantBusiness(tenantBusinessId);
-        String previousPublicId = storefrontSettingsService.readBrandingOgImagePublicId(business.getSettings());
-        business.setSettings(storefrontSettingsService.mergeBrandingOgImage(business.getSettings(), null, null));
+        String previousPublicId =
+            storefrontSettingsService.readBrandingOgImagePublicId(
+                business.getSettings()
+            );
+        business.setSettings(
+            storefrontSettingsService.mergeBrandingOgImage(
+                business.getSettings(),
+                null,
+                null
+            )
+        );
         BusinessResponse out = toResponse(businessRepository.save(business));
         if (previousPublicId != null) {
             cloudinaryImageService.destroyImage(previousPublicId);
@@ -284,24 +465,102 @@ public class TenancyService {
         return out;
     }
 
-    private Business requireTenantBusiness(String tenantBusinessId) {
-        return businessRepository.findByIdAndDeletedAtIsNull(tenantBusinessId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
-    }
-
-    @Transactional(readOnly = true)
-    public Page<BranchResponse> listBranches(String businessId, Pageable pageable) {
-        requireBusiness(businessId);
-        return branchRepository.findByBusinessIdAndDeletedAtIsNull(businessId, pageable)
-                .map(this::toBranchResponse);
+    @Transactional
+    public BusinessResponse addBrandingBanner(
+        String tenantBusinessId,
+        String url,
+        String publicId
+    ) {
+        Business business = requireTenantBusiness(tenantBusinessId);
+        business.setSettings(
+            storefrontSettingsService.mergeBrandingBannerAdd(
+                business.getSettings(),
+                url,
+                publicId
+            )
+        );
+        return toResponse(businessRepository.save(business));
     }
 
     @Transactional
-    public BranchResponse createBranch(String businessId, CreateBranchRequest request) {
+    public BusinessResponse deleteBrandingBanner(
+        String tenantBusinessId,
+        int index
+    ) {
+        Business business = requireTenantBusiness(tenantBusinessId);
+        List<String> publicIds =
+            storefrontSettingsService.readBrandingBannerPublicIds(
+                business.getSettings()
+            );
+        if (index >= 0 && index < publicIds.size()) {
+            String publicId = publicIds.get(index);
+            if (publicId != null && !publicId.isBlank()) {
+                cloudinaryImageService.destroyImage(publicId);
+            }
+        }
+        business.setSettings(
+            storefrontSettingsService.mergeBrandingBannerRemove(
+                business.getSettings(),
+                index
+            )
+        );
+        return toResponse(businessRepository.save(business));
+    }
+
+    @Transactional
+    public BusinessResponse reorderBrandingBanners(
+        String tenantBusinessId,
+        List<String> orderedUrls
+    ) {
+        Business business = requireTenantBusiness(tenantBusinessId);
+        business.setSettings(
+            storefrontSettingsService.mergeBrandingBannersReorder(
+                business.getSettings(),
+                orderedUrls
+            )
+        );
+        return toResponse(businessRepository.save(business));
+    }
+
+    private Business requireTenantBusiness(String tenantBusinessId) {
+        return businessRepository
+            .findByIdAndDeletedAtIsNull(tenantBusinessId)
+            .orElseThrow(() ->
+                new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Business not found"
+                )
+            );
+    }
+
+    @Transactional(readOnly = true)
+    public Page<BranchResponse> listBranches(
+        String businessId,
+        Pageable pageable
+    ) {
+        requireBusiness(businessId);
+        return branchRepository
+            .findByBusinessIdAndDeletedAtIsNull(businessId, pageable)
+            .map(this::toBranchResponse);
+    }
+
+    @Transactional
+    public BranchResponse createBranch(
+        String businessId,
+        CreateBranchRequest request
+    ) {
         requireBusiness(businessId);
         String name = request.name().trim();
-        if (branchRepository.existsByBusinessIdAndNameAndDeletedAtIsNull(businessId, name)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Branch name already exists for this business");
+        if (
+            branchRepository.existsByBusinessIdAndNameAndDeletedAtIsNull(
+                businessId,
+                name
+            )
+        ) {
+            throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Branch name already exists for this business"
+            );
         }
         Branch branch = new Branch();
         branch.setBusinessId(businessId);
@@ -312,14 +571,32 @@ public class TenancyService {
     }
 
     @Transactional
-    public BranchResponse patchBranch(String businessId, String branchId, PatchBranchRequest request) {
-        Branch branch = branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(branchId, businessId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Branch not found"));
+    public BranchResponse patchBranch(
+        String businessId,
+        String branchId,
+        PatchBranchRequest request
+    ) {
+        Branch branch = branchRepository
+            .findByIdAndBusinessIdAndDeletedAtIsNull(branchId, businessId)
+            .orElseThrow(() ->
+                new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Branch not found"
+                )
+            );
         if (request.name() != null && !request.name().isBlank()) {
             String nextName = request.name().trim();
-            if (!nextName.equals(branch.getName())
-                    && branchRepository.existsByBusinessIdAndNameAndDeletedAtIsNull(businessId, nextName)) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "Branch name already exists for this business");
+            if (
+                !nextName.equals(branch.getName()) &&
+                branchRepository.existsByBusinessIdAndNameAndDeletedAtIsNull(
+                    businessId,
+                    nextName
+                )
+            ) {
+                throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Branch name already exists for this business"
+                );
             }
             branch.setName(nextName);
         }
@@ -333,8 +610,13 @@ public class TenancyService {
     }
 
     private void requireBusiness(String businessId) {
-        if (businessRepository.findByIdAndDeletedAtIsNull(businessId).isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found");
+        if (
+            businessRepository.findByIdAndDeletedAtIsNull(businessId).isEmpty()
+        ) {
+            throw new ResponseStatusException(
+                HttpStatus.NOT_FOUND,
+                "Business not found"
+            );
         }
     }
 
@@ -347,58 +629,68 @@ public class TenancyService {
 
     private BranchResponse toBranchResponse(Branch branch) {
         return new BranchResponse(
-                branch.getId(),
-                branch.getBusinessId(),
-                branch.getName(),
-                branch.getAddress(),
-                branch.isActive(),
-                branch.getCreatedAt(),
-                branch.getUpdatedAt()
+            branch.getId(),
+            branch.getBusinessId(),
+            branch.getName(),
+            branch.getAddress(),
+            branch.isActive(),
+            branch.getCreatedAt(),
+            branch.getUpdatedAt()
         );
     }
 
     private BusinessResponse toResponse(Business business) {
         StorefrontSettingsResponse storefront =
-                storefrontSettingsService.readFromSettingsJson(business.getSettings());
+            storefrontSettingsService.readFromSettingsJson(
+                business.getSettings()
+            );
         InventorySettingsResponse inventory =
-                businessInventorySettingsService.readFromSettingsJson(business.getSettings());
-        var bundle = storefrontSettingsService.readTenantConfig(business.getSettings(), business.getName());
+            businessInventorySettingsService.readFromSettingsJson(
+                business.getSettings()
+            );
+        var bundle = storefrontSettingsService.readTenantConfig(
+            business.getSettings(),
+            business.getName()
+        );
         String primaryDomain = domainMappingRepository
-                .findByBusinessIdAndDeletedAtIsNull(business.getId())
-                .stream()
-                .filter(d -> d.isPrimary() && d.isActive())
-                .map(DomainMapping::getDomain)
-                .findFirst()
-                .orElse(null);
+            .findByBusinessIdAndDeletedAtIsNull(business.getId())
+            .stream()
+            .filter(d -> d.isPrimary() && d.isActive())
+            .map(DomainMapping::getDomain)
+            .findFirst()
+            .orElse(null);
         return new BusinessResponse(
-                business.getId(),
-                business.getName(),
-                business.getSlug(),
-                business.getCurrency(),
-                business.getCountryCode(),
-                business.getTimezone(),
-                business.isActive(),
-                business.getSubscriptionTier(),
-                business.getCreatedAt(),
-                business.getUpdatedAt(),
-                storefront,
-                inventory,
-                bundle.branding(),
-                primaryDomain
+            business.getId(),
+            business.getName(),
+            business.getSlug(),
+            business.getCurrency(),
+            business.getCountryCode(),
+            business.getTimezone(),
+            business.isActive(),
+            business.getSubscriptionTier(),
+            business.getCreatedAt(),
+            business.getUpdatedAt(),
+            storefront,
+            inventory,
+            bundle.branding(),
+            primaryDomain
         );
     }
 
     private DomainResponse toResponse(DomainMapping domain) {
         return new DomainResponse(
-                domain.getId(),
-                domain.getBusinessId(),
-                domain.getDomain(),
-                domain.isPrimary(),
-                domain.isActive()
+            domain.getId(),
+            domain.getBusinessId(),
+            domain.getDomain(),
+            domain.isPrimary(),
+            domain.isActive()
         );
     }
 
-    private String resolvePrimaryHostname(String explicitPrimary, String normalizedSlug) {
+    private String resolvePrimaryHostname(
+        String explicitPrimary,
+        String normalizedSlug
+    ) {
         String trimmed = blankToNull(explicitPrimary);
         if (trimmed != null) {
             return trimmed;
@@ -416,14 +708,20 @@ public class TenancyService {
 
     private String normalizeHostname(String raw) {
         if (raw == null || raw.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Domain is required");
+            throw new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Domain is required"
+            );
         }
         return raw.trim().toLowerCase(Locale.ROOT);
     }
 
     private String normalizeSlug(String slug) {
         if (slug == null || slug.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Slug is required");
+            throw new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Slug is required"
+            );
         }
         return slug.trim().toLowerCase(Locale.ROOT);
     }

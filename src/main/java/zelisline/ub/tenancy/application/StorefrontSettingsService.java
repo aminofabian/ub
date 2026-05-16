@@ -1,22 +1,19 @@
 package zelisline.ub.tenancy.application;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-
-import org.springframework.http.HttpStatus;
-import org.springframework.stereotype.Service;
-import org.springframework.web.server.ResponseStatusException;
-
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.tenancy.api.dto.BrandingPatchRequest;
 import zelisline.ub.tenancy.api.dto.StorefrontPatchRequest;
 import zelisline.ub.tenancy.api.dto.StorefrontSettingsResponse;
@@ -36,12 +33,19 @@ public class StorefrontSettingsService {
     private static final String KEY_AUTH = "authConfig";
     private static final String KEY_FEATURES = "featureFlags";
 
-    private static final List<String> SUPPORTED_AUTH_METHODS = List.of("password", "google", "microsoft", "saml");
+    private static final List<String> SUPPORTED_AUTH_METHODS = List.of(
+        "password",
+        "google",
+        "microsoft",
+        "saml"
+    );
 
     private final ObjectMapper objectMapper;
     private final BranchRepository branchRepository;
 
-    public StorefrontSettingsResponse readFromSettingsJson(String settingsJson) {
+    public StorefrontSettingsResponse readFromSettingsJson(
+        String settingsJson
+    ) {
         if (settingsJson == null || settingsJson.isBlank()) {
             return StorefrontSettingsResponse.defaults();
         }
@@ -55,18 +59,21 @@ public class StorefrontSettingsService {
                 return StorefrontSettingsResponse.defaults();
             }
             return new StorefrontSettingsResponse(
-                    readEnabled(sf),
-                    textOrNull(sf.get("catalogBranchId")),
-                    textOrNull(sf.get("label")),
-                    textOrNull(sf.get("announcement")),
-                    readFeaturedIds(sf.get("featuredItemIds"))
+                readEnabled(sf),
+                textOrNull(sf.get("catalogBranchId")),
+                textOrNull(sf.get("label")),
+                textOrNull(sf.get("announcement")),
+                readFeaturedIds(sf.get("featuredItemIds"))
             );
         } catch (Exception e) {
             return StorefrontSettingsResponse.defaults();
         }
     }
 
-    public TenantConfigBundle readTenantConfig(String settingsJson, String fallbackDisplayName) {
+    public TenantConfigBundle readTenantConfig(
+        String settingsJson,
+        String fallbackDisplayName
+    ) {
         if (settingsJson == null || settingsJson.isBlank()) {
             return TenantConfigBundle.defaults(fallbackDisplayName);
         }
@@ -76,30 +83,34 @@ public class StorefrontSettingsService {
                 return TenantConfigBundle.defaults(fallbackDisplayName);
             }
             return new TenantConfigBundle(
-                    readBranding(root.path(KEY_BRANDING), fallbackDisplayName),
-                    readAuthConfig(root.path(KEY_AUTH)),
-                    readFeatureFlags(root.path(KEY_FEATURES))
+                readBranding(root.path(KEY_BRANDING), fallbackDisplayName),
+                readAuthConfig(root.path(KEY_AUTH)),
+                readFeatureFlags(root.path(KEY_FEATURES))
             );
         } catch (Exception e) {
             return TenantConfigBundle.defaults(fallbackDisplayName);
         }
     }
 
-    private static TenantBrandingDto readBranding(JsonNode node, String fallbackDisplayName) {
+    private static TenantBrandingDto readBranding(
+        JsonNode node,
+        String fallbackDisplayName
+    ) {
         if (node.isMissingNode() || !node.isObject()) {
             return TenantBrandingDto.defaults(fallbackDisplayName);
         }
         String display = textOrNull(node.get("displayName"));
         return new TenantBrandingDto(
-                display != null ? display : fallbackDisplayName,
-                textOrNull(node.get("logoUrl")),
-                textOrNull(node.get("faviconUrl")),
-                textOrNull(node.get("primaryColor")),
-                textOrNull(node.get("accentColor")),
-                textOrNull(node.get("metaTitle")),
-                textOrNull(node.get("metaDescription")),
-                textOrNull(node.get("ogImage")),
-                textOrNull(node.get("metaKeywords"))
+            display != null ? display : fallbackDisplayName,
+            textOrNull(node.get("logoUrl")),
+            textOrNull(node.get("faviconUrl")),
+            textOrNull(node.get("primaryColor")),
+            textOrNull(node.get("accentColor")),
+            textOrNull(node.get("metaTitle")),
+            textOrNull(node.get("metaDescription")),
+            textOrNull(node.get("ogImage")),
+            textOrNull(node.get("metaKeywords")),
+            readBannerUrls(node.get("heroBanners"))
         );
     }
 
@@ -109,7 +120,9 @@ public class StorefrontSettingsService {
         }
         List<String> methods = readAuthMethods(node.get("methods"));
         List<String> sso = readStringList(node.get("ssoProviders"));
-        TenantPasswordPolicyDto policy = readPasswordPolicy(node.get("passwordPolicy"));
+        TenantPasswordPolicyDto policy = readPasswordPolicy(
+            node.get("passwordPolicy")
+        );
         return new TenantAuthConfigDto(methods, sso, policy);
     }
 
@@ -125,7 +138,9 @@ public class StorefrontSettingsService {
                 filtered.add(lc);
             }
         }
-        return filtered.isEmpty() ? TenantAuthConfigDto.defaults().methods() : List.copyOf(filtered);
+        return filtered.isEmpty()
+            ? TenantAuthConfigDto.defaults().methods()
+            : List.copyOf(filtered);
     }
 
     private static TenantPasswordPolicyDto readPasswordPolicy(JsonNode node) {
@@ -134,9 +149,17 @@ public class StorefrontSettingsService {
         }
         TenantPasswordPolicyDto def = TenantPasswordPolicyDto.defaults();
         int minLength = node.path("minLength").asInt(def.minLength());
-        boolean requireNumber = node.path("requireNumber").asBoolean(def.requireNumber());
-        boolean requireSymbol = node.path("requireSymbol").asBoolean(def.requireSymbol());
-        return new TenantPasswordPolicyDto(Math.max(minLength, 1), requireNumber, requireSymbol);
+        boolean requireNumber = node
+            .path("requireNumber")
+            .asBoolean(def.requireNumber());
+        boolean requireSymbol = node
+            .path("requireSymbol")
+            .asBoolean(def.requireSymbol());
+        return new TenantPasswordPolicyDto(
+            Math.max(minLength, 1),
+            requireNumber,
+            requireSymbol
+        );
     }
 
     private static Map<String, Boolean> readFeatureFlags(JsonNode node) {
@@ -144,12 +167,14 @@ public class StorefrontSettingsService {
             return Map.of();
         }
         Map<String, Boolean> out = new LinkedHashMap<>();
-        node.fields().forEachRemaining(entry -> {
-            JsonNode value = entry.getValue();
-            if (value.isBoolean()) {
-                out.put(entry.getKey(), value.booleanValue());
-            }
-        });
+        node
+            .fields()
+            .forEachRemaining(entry -> {
+                JsonNode value = entry.getValue();
+                if (value.isBoolean()) {
+                    out.put(entry.getKey(), value.booleanValue());
+                }
+            });
         return Map.copyOf(out);
     }
 
@@ -169,7 +194,30 @@ public class StorefrontSettingsService {
         return List.copyOf(out);
     }
 
-    public String mergeBranding(String currentSettings, BrandingPatchRequest patch) {
+    /**
+     * Reads the {@code heroBanners} array (objects with url/publicId fields)
+     * and returns just the URLs as a list.
+     */
+    private static List<String> readBannerUrls(JsonNode arrayNode) {
+        if (arrayNode == null || !arrayNode.isArray()) {
+            return List.of();
+        }
+        List<String> out = new ArrayList<>();
+        for (JsonNode n : arrayNode) {
+            if (n.isObject()) {
+                String url = textOrNull(n.get("url"));
+                if (url != null) {
+                    out.add(url);
+                }
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    public String mergeBranding(
+        String currentSettings,
+        BrandingPatchRequest patch
+    ) {
         ObjectNode root = parseRoot(currentSettings);
         ObjectNode branding = copyNamespace(root, KEY_BRANDING);
         applyBrandingPatch(branding, patch);
@@ -181,7 +229,11 @@ public class StorefrontSettingsService {
      * Replaces the {@code branding.logoUrl}/{@code logoPublicId} fields after a
      * Cloudinary upload. Returns the merged settings JSON.
      */
-    public String mergeBrandingLogo(String currentSettings, String secureUrl, String publicId) {
+    public String mergeBrandingLogo(
+        String currentSettings,
+        String secureUrl,
+        String publicId
+    ) {
         ObjectNode root = parseRoot(currentSettings);
         ObjectNode branding = copyNamespace(root, KEY_BRANDING);
         if (secureUrl == null || secureUrl.isBlank()) {
@@ -216,10 +268,126 @@ public class StorefrontSettingsService {
     }
 
     /**
-     * Replaces {@code branding.faviconUrl}/{@code faviconPublicId} after a
-     * Cloudinary upload. Returns the merged settings JSON.
+     * Appends a banner object ({@code {"url": "...", "publicId": "..."}})
+     * to the {@code branding.heroBanners} array. Creates the array if it does
+     * not exist yet. Returns the merged settings JSON.
      */
-    public String mergeBrandingFavicon(String currentSettings, String secureUrl, String publicId) {
+    public String mergeBrandingBannerAdd(
+        String currentSettings,
+        String secureUrl,
+        String publicId
+    ) {
+        ObjectNode root = parseRoot(currentSettings);
+        ObjectNode branding = copyNamespace(root, KEY_BRANDING);
+        ArrayNode banners;
+        JsonNode existing = branding.get("heroBanners");
+        if (existing != null && existing.isArray()) {
+            banners = (ArrayNode) existing;
+        } else {
+            banners = objectMapper.createArrayNode();
+        }
+        ObjectNode entry = objectMapper.createObjectNode();
+        entry.put("url", secureUrl);
+        entry.put("publicId", publicId != null ? publicId.trim() : "");
+        banners.add(entry);
+        branding.set("heroBanners", banners);
+        root.set(KEY_BRANDING, branding);
+        return writeRoot(root);
+    }
+
+    /**
+     * Removes the banner at the given index from the {@code branding.heroBanners}
+     * array. Returns the merged settings JSON.
+     */
+    public String mergeBrandingBannerRemove(String currentSettings, int index) {
+        ObjectNode root = parseRoot(currentSettings);
+        ObjectNode branding = copyNamespace(root, KEY_BRANDING);
+        JsonNode existing = branding.get("heroBanners");
+        if (existing != null && existing.isArray()) {
+            ArrayNode banners = (ArrayNode) existing;
+            if (index >= 0 && index < banners.size()) {
+                banners.remove(index);
+            }
+            branding.set("heroBanners", banners);
+        }
+        root.set(KEY_BRANDING, branding);
+        return writeRoot(root);
+    }
+
+    /**
+     * Replaces the {@code branding.heroBanners} array based on the ordered list
+     * of URLs. Preserves {@code publicId} for URLs that still exist; drops any
+     * banners whose URLs are not in the ordered list.
+     */
+    public String mergeBrandingBannersReorder(
+        String currentSettings,
+        List<String> orderedUrls
+    ) {
+        ObjectNode root = parseRoot(currentSettings);
+        ObjectNode branding = copyNamespace(root, KEY_BRANDING);
+        // Build a lookup from url → publicId from the existing banners
+        Map<String, String> urlToPublicId = new LinkedHashMap<>();
+        JsonNode existing = branding.get("heroBanners");
+        if (existing != null && existing.isArray()) {
+            for (JsonNode n : existing) {
+                String url = textOrNull(n.get("url"));
+                String pid = textOrNull(n.get("publicId"));
+                if (url != null) {
+                    urlToPublicId.put(url, pid != null ? pid : "");
+                }
+            }
+        }
+        ArrayNode newBanners = objectMapper.createArrayNode();
+        for (String url : orderedUrls) {
+            if (url == null || url.isBlank()) {
+                continue;
+            }
+            ObjectNode entry = objectMapper.createObjectNode();
+            entry.put("url", url.trim());
+            entry.put("publicId", urlToPublicId.getOrDefault(url.trim(), ""));
+            newBanners.add(entry);
+        }
+        branding.set("heroBanners", newBanners);
+        root.set(KEY_BRANDING, branding);
+        return writeRoot(root);
+    }
+
+    /**
+     * Reads all {@code publicId} values from the {@code branding.heroBanners}
+     * array. Returns an empty list if there are no banners.
+     */
+    public List<String> readBrandingBannerPublicIds(String currentSettings) {
+        if (currentSettings == null || currentSettings.isBlank()) {
+            return List.of();
+        }
+        try {
+            JsonNode root = parseSettingsDocument(currentSettings);
+            JsonNode branding = root.path(KEY_BRANDING);
+            if (!branding.isObject()) {
+                return List.of();
+            }
+            JsonNode banners = branding.get("heroBanners");
+            if (banners == null || !banners.isArray()) {
+                return List.of();
+            }
+            List<String> ids = new ArrayList<>();
+            for (JsonNode n : banners) {
+                String pid = textOrNull(n.get("publicId"));
+                if (pid != null) {
+                    ids.add(pid);
+                }
+            }
+            return List.copyOf(ids);
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    public String mergeBrandingFavicon(
+        String currentSettings,
+        String secureUrl,
+        String publicId
+    ) {
         ObjectNode root = parseRoot(currentSettings);
         ObjectNode branding = copyNamespace(root, KEY_BRANDING);
         if (secureUrl == null || secureUrl.isBlank()) {
@@ -257,7 +425,11 @@ public class StorefrontSettingsService {
      * Replaces {@code branding.ogImage}/{@code ogImagePublicId} after a
      * Cloudinary upload. Returns the merged settings JSON.
      */
-    public String mergeBrandingOgImage(String currentSettings, String secureUrl, String publicId) {
+    public String mergeBrandingOgImage(
+        String currentSettings,
+        String secureUrl,
+        String publicId
+    ) {
         ObjectNode root = parseRoot(currentSettings);
         ObjectNode branding = copyNamespace(root, KEY_BRANDING);
         if (secureUrl == null || secureUrl.isBlank()) {
@@ -291,7 +463,10 @@ public class StorefrontSettingsService {
         }
     }
 
-    private static void applyBrandingPatch(ObjectNode branding, BrandingPatchRequest patch) {
+    private void applyBrandingPatch(
+        ObjectNode branding,
+        BrandingPatchRequest patch
+    ) {
         putOrRemoveString(branding, "displayName", patch.displayName());
         putOrRemoveString(branding, "logoUrl", patch.logoUrl());
         putOrRemoveString(branding, "logoPublicId", patch.logoPublicId());
@@ -311,6 +486,38 @@ public class StorefrontSettingsService {
             branding.remove("ogImagePublicId");
         }
         putOrRemoveString(branding, "metaKeywords", patch.metaKeywords());
+
+        // Hero banner URLs – reorder via full list (preserves existing publicIds)
+        if (patch.heroBannerUrls() != null) {
+            if (patch.heroBannerUrls().isEmpty()) {
+                branding.remove("heroBanners");
+                branding.remove("heroBannerUrls");
+            } else {
+                // Read existing heroBanners to preserve publicId for matching URLs
+                java.util.Map<String, String> urlToPid = new java.util.LinkedHashMap<>();
+                JsonNode existingBanners = branding.get("heroBanners");
+                if (existingBanners != null && existingBanners.isArray()) {
+                    for (JsonNode n : existingBanners) {
+                        String eu = textOrNull(n.get("url"));
+                        String ep = textOrNull(n.get("publicId"));
+                        if (eu != null) {
+                            urlToPid.put(eu, ep != null ? ep : "");
+                        }
+                    }
+                }
+                ArrayNode arr = objectMapper.createArrayNode();
+                for (String url : patch.heroBannerUrls()) {
+                    if (url != null && !url.isBlank()) {
+                        ObjectNode entry = objectMapper.createObjectNode();
+                        entry.put("url", url.trim());
+                        entry.put("publicId", urlToPid.getOrDefault(url.trim(), ""));
+                        arr.add(entry);
+                    }
+                }
+                branding.set("heroBanners", arr);
+                branding.remove("heroBannerUrls");
+            }
+        }
     }
 
     /**
@@ -318,7 +525,11 @@ public class StorefrontSettingsService {
      * the rest of the patch surface relies on. Trimming is intentional so users
      * can't accidentally smuggle whitespace into branding values.
      */
-    private static void putOrRemoveString(ObjectNode node, String key, String value) {
+    private static void putOrRemoveString(
+        ObjectNode node,
+        String key,
+        String value
+    ) {
         if (value == null) {
             return;
         }
@@ -342,13 +553,17 @@ public class StorefrontSettingsService {
             return objectMapper.writeValueAsString(root);
         } catch (Exception e) {
             throw new ResponseStatusException(
-                    HttpStatus.INTERNAL_SERVER_ERROR,
-                    "Could not save settings"
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "Could not save settings"
             );
         }
     }
 
-    public String mergeAndValidate(String businessId, String currentSettings, StorefrontPatchRequest patch) {
+    public String mergeAndValidate(
+        String businessId,
+        String currentSettings,
+        StorefrontPatchRequest patch
+    ) {
         ObjectNode root = parseRoot(currentSettings);
         ObjectNode storefront = copyStorefront(root);
         applyPatch(storefront, patch);
@@ -357,7 +572,10 @@ public class StorefrontSettingsService {
         try {
             return objectMapper.writeValueAsString(root);
         } catch (Exception e) {
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Could not save storefront settings");
+            throw new ResponseStatusException(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "Could not save storefront settings"
+            );
         }
     }
 
@@ -367,7 +585,9 @@ public class StorefrontSettingsService {
         }
         try {
             JsonNode root = parseSettingsDocument(currentSettings);
-            return root.isObject() ? (ObjectNode) root : objectMapper.createObjectNode();
+            return root.isObject()
+                ? (ObjectNode) root
+                : objectMapper.createObjectNode();
         } catch (Exception e) {
             return objectMapper.createObjectNode();
         }
@@ -376,7 +596,8 @@ public class StorefrontSettingsService {
     /**
      * Some JDBC JSON mappings return a JSON string document; unwrap to the embedded object.
      */
-    private JsonNode parseSettingsDocument(String raw) throws JsonProcessingException {
+    private JsonNode parseSettingsDocument(String raw)
+        throws JsonProcessingException {
         JsonNode n = objectMapper.readTree(raw);
         if (n.isTextual()) {
             return objectMapper.readTree(n.asText());
@@ -391,7 +612,10 @@ public class StorefrontSettingsService {
         return objectMapper.createObjectNode();
     }
 
-    private void applyPatch(ObjectNode storefront, StorefrontPatchRequest patch) {
+    private void applyPatch(
+        ObjectNode storefront,
+        StorefrontPatchRequest patch
+    ) {
         if (patch.enabled() != null) {
             storefront.put("enabled", patch.enabled());
         }
@@ -434,16 +658,24 @@ public class StorefrontSettingsService {
         }
     }
 
-    private void validateStorefrontForBusiness(String businessId, ObjectNode storefront) {
+    private void validateStorefrontForBusiness(
+        String businessId,
+        ObjectNode storefront
+    ) {
         if (!readEnabled(storefront)) {
             return;
         }
         String branchId = textOrNull(storefront.get("catalogBranchId"));
         if (branchId == null) {
-            throw badRequest("Catalog branch is required when the online storefront is enabled");
+            throw badRequest(
+                "Catalog branch is required when the online storefront is enabled"
+            );
         }
-        Branch branch = branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(branchId, businessId)
-                .orElseThrow(() -> badRequest("Catalog branch not found for this business"));
+        Branch branch = branchRepository
+            .findByIdAndBusinessIdAndDeletedAtIsNull(branchId, businessId)
+            .orElseThrow(() ->
+                badRequest("Catalog branch not found for this business")
+            );
         if (!branch.isActive()) {
             throw badRequest("Catalog branch must be active");
         }

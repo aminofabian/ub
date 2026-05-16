@@ -74,7 +74,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         try {
             claims = jwtTokenService.parseAndValidate(token);
         } catch (JwtException | IllegalArgumentException ex) {
-            writeProblem(response, HttpStatus.UNAUTHORIZED, "Invalid or expired access token", "unauthorized");
+            writeProblem(response, HttpStatus.UNAUTHORIZED, "Invalid or expired access token", "unauthorized", "token_expired");
             return;
         }
 
@@ -177,9 +177,18 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private void writeProblem(HttpServletResponse response, HttpStatus status, String title, String slug)
             throws IOException {
-        ProblemDetail body = ProblemDetail.forStatus(status.value());
-        body.setTitle(title);
-        body.setType(URI.create(PROBLEM_BASE + slug));
+        writeProblem(response, status, title, slug, null);
+    }
+
+    private void writeProblem(HttpServletResponse response, HttpStatus status, String title, String slug, String code)
+            throws IOException {
+        java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("type", URI.create(PROBLEM_BASE + slug).toString());
+        body.put("title", title);
+        body.put("status", status.value());
+        if (code != null) {
+            body.put("code", code);
+        }
         response.setStatus(status.value());
         response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
         response.setCharacterEncoding("UTF-8");

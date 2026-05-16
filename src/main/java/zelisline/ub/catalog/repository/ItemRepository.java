@@ -175,4 +175,61 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("catalogBranchId") String catalogBranchId,
             Pageable pageable
     );
+
+    @Query("""
+            select count(i) from Item i
+             where i.businessId = :businessId
+               and i.deletedAt is null
+               and i.active = true
+               and i.webPublished = true
+               and (:catUnset = true or i.categoryId in :categoryIds)
+               and (:q is null or :q = ''
+                    or lower(i.name) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(i.variantName, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(i.description, '')) like lower(concat('%', :q, '%')))
+               and ((:q is null or :q = '')
+                    or i.variantOfItemId is not null
+                    or not exists (
+                      select 1 from Item ch
+                      where ch.variantOfItemId = i.id
+                        and ch.businessId = i.businessId
+                        and ch.deletedAt is null
+                    ))
+               and (:cursor is null or :cursor = '' or i.id > :cursor)
+               and (select coalesce(sum(b.quantityRemaining), 0)
+                      from InventoryBatch b
+                     where b.itemId = i.id
+                       and b.businessId = i.businessId
+                       and b.branchId = :catalogBranchId
+                       and b.status = 'active') > 0
+            """)
+    Long countStorefrontCatalog(
+            @Param("businessId") String businessId,
+            @Param("q") String q,
+            @Param("catUnset") boolean catUnset,
+            @Param("categoryIds") Collection<String> categoryIds,
+            @Param("cursor") String cursor,
+            @Param("catalogBranchId") String catalogBranchId
+    );
+
+    @Query("""
+            select i.categoryId, count(i) from Item i
+             where i.businessId = :businessId
+               and i.deletedAt is null
+               and i.active = true
+               and i.webPublished = true
+               and i.categoryId is not null
+               and i.categoryId <> ''
+               and (select coalesce(sum(b.quantityRemaining), 0)
+                      from InventoryBatch b
+                     where b.itemId = i.id
+                       and b.businessId = i.businessId
+                       and b.branchId = :catalogBranchId
+                       and b.status = 'active') > 0
+             group by i.categoryId
+            """)
+    List<Object[]> countStorefrontItemsByCategory(
+            @Param("businessId") String businessId,
+            @Param("catalogBranchId") String catalogBranchId
+    );
 }

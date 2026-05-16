@@ -8,6 +8,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 public record PublicCatalogListResponse(
         String currency,
         List<PublicCatalogItemCardResponse> items,
-        String nextCursor
+        String nextCursor,
+        Long totalCount
 ) {
 }

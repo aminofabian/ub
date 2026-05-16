@@ -96,7 +96,7 @@ public class PublicStorefrontCatalogService {
         if (!catUnset) {
             categoryIds = resolveCategorySubtreeIds(ctx.business().getId(), cat);
             if (categoryIds.isEmpty()) {
-                return new PublicCatalogListResponse(ctx.business().getCurrency(), List.of(), null);
+                return new PublicCatalogListResponse(ctx.business().getCurrency(), List.of(), null, 0L);
             }
         }
         Pageable pg = PageRequest.of(0, sz, Sort.by(Sort.Direction.ASC, "id"));
@@ -110,7 +110,9 @@ public class PublicStorefrontCatalogService {
                 pg);
         List<Item> items = slice.getContent();
         String next = slice.hasNext() && !items.isEmpty() ? items.getLast().getId() : null;
-        return new PublicCatalogListResponse(ctx.business().getCurrency(), toCards(ctx, items), next);
+        Long total = itemRepository.countStorefrontCatalog(
+                ctx.business().getId(), qq, catUnset, categoryIds, blankToNull(cursor), ctx.catalogBranch().getId());
+        return new PublicCatalogListResponse(ctx.business().getCurrency(), toCards(ctx, items), next, total);
     }
 
     @Transactional(readOnly = true)
@@ -179,13 +181,26 @@ public class PublicStorefrontCatalogService {
                         .comparing((Category c) -> categoryDepth(c, byId, depthMemo))
                         .thenComparingInt(Category::getPosition))
                 .toList();
+
+        Map<String, Long> directCounts = countStorefrontItemsByCategory(ctx);
+        Map<String, List<String>> childrenByParent = new LinkedHashMap<>();
+        for (Category c : all) {
+            String pk = c.getParentId() == null ? "" : c.getParentId();
+            childrenByParent.computeIfAbsent(pk, k -> new ArrayList<>()).add(c.getId());
+        }
+        Map<String, Long> subtreeCounts = new HashMap<>();
+        for (Category c : sorted) {
+            subtreeCounts.put(c.getId(), subtreeItemCount(c.getId(), directCounts, childrenByParent, subtreeCounts));
+        }
+
         List<PublicCategoryResponse> rows = sorted.stream()
                 .map(c -> new PublicCategoryResponse(
                         c.getId(),
                         c.getName(),
                         blankToNull(c.getParentId()),
                         c.getSlug(),
-                        blankToNull(c.getIcon())))
+                        blankToNull(c.getIcon()),
+                        subtreeCounts.getOrDefault(c.getId(), 0L)))
                 .toList();
         return new PublicCategoryListResponse(rows);
     }
@@ -396,5 +411,35 @@ public class PublicStorefrontCatalogService {
             return null;
         }
         return s.trim();
+    }
+
+    private Map<String, Long> countStorefrontItemsByCategory(PublicStorefrontContext ctx) {
+        List<Object[]> rows = itemRepository.countStorefrontItemsByCategory(
+                ctx.business().getId(), ctx.catalogBranch().getId());
+        Map<String, Long> out = new HashMap<>();
+        for (Object[] row : rows) {
+            String catId = (String) row[0];
+            Long cnt = row[1] instanceof Number n ? n.longValue() : 0L;
+            if (catId != null && !catId.isBlank()) {
+                out.put(catId, cnt);
+            }
+        }
+        return out;
+    }
+
+    private static long subtreeItemCount(String categoryId,
+                                         Map<String, Long> directCounts,
+                                         Map<String, List<String>> childrenByParent,
+                                         Map<String, Long> memo) {
+        Long hit = memo.get(categoryId);
+        if (hit != null) {
+            return hit;
+        }
+        long total = directCounts.getOrDefault(categoryId, 0L);
+        for (String child : childrenByParent.getOrDefault(categoryId, List.of())) {
+            total += subtreeItemCount(child, directCounts, childrenByParent, memo);
+        }
+        memo.put(categoryId, total);
+        return total;
     }
 }

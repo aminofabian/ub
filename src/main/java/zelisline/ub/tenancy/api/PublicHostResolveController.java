@@ -51,6 +51,22 @@ public class PublicHostResolveController {
     }
 
     /**
+     * Email-based tenant lookup so visitors on the landing page can be
+     * redirected to their correct business subdomain for login.
+     */
+    @GetMapping("/resolve-by-email")
+    public ResponseEntity<PublicHostResolveResponse> resolveByEmail(
+            @RequestParam("email") String email) {
+        PublicHostResolveResponse body = publicHostResolverService.resolveByEmail(email)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "No active business found for this email"));
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.maxAge(CACHE_TTL).cachePublic())
+                .body(body);
+    }
+
+    /**
      * Self-service business onboarding for visitors on an unmapped domain.
      * Creates a business, maps the host, and returns tenant context so the
      * frontend can proceed directly to login or signup.

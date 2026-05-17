@@ -41,6 +41,10 @@ public interface UserRepository extends JpaRepository<User, String> {
 
     Optional<User> findByBusinessIdAndEmailAndDeletedAtIsNull(String businessId, String email);
 
+    /** Global lookup for host-domain login routing — finds which business a user belongs to. */
+    @Query("select u from User u where u.email = :email and u.deletedAt is null and u.status = 'active' order by u.createdAt asc")
+    Optional<User> findFirstActiveByEmail(@Param("email") String email);
+
     boolean existsByBusinessIdAndEmailAndDeletedAtIsNull(String businessId, String email);
 
     long countByBusinessIdAndDeletedAtIsNull(String businessId);

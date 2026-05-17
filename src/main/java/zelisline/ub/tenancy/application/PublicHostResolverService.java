@@ -20,6 +20,7 @@ import zelisline.ub.tenancy.infrastructure.TenantHostParsing;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
+import zelisline.ub.identity.repository.UserRepository;
 
 /**
  * Maps a browser hostname to its tenant configuration using the same active
@@ -38,16 +39,34 @@ public class PublicHostResolverService {
     private final BusinessRepository businessRepository;
     private final StorefrontSettingsService storefrontSettingsService;
     private final CatalogBootstrapService catalogBootstrapService;
+    private final UserRepository userRepository;
 
     public PublicHostResolverService(
             DomainMappingRepository domainMappingRepository,
             BusinessRepository businessRepository,
             StorefrontSettingsService storefrontSettingsService,
-            CatalogBootstrapService catalogBootstrapService) {
+            CatalogBootstrapService catalogBootstrapService,
+            UserRepository userRepository) {
         this.domainMappingRepository = domainMappingRepository;
         this.businessRepository = businessRepository;
         this.storefrontSettingsService = storefrontSettingsService;
         this.catalogBootstrapService = catalogBootstrapService;
+        this.userRepository = userRepository;
+    }
+
+    /**
+     * Looks up a user's business by email so the frontend can redirect
+     * visitors from the landing page to their correct tenant subdomain.
+     */
+    @Transactional(readOnly = true)
+    public Optional<PublicHostResolveResponse> resolveByEmail(String email) {
+        if (email == null || email.isBlank()) {
+            return Optional.empty();
+        }
+        return userRepository.findFirstActiveByEmail(email.trim().toLowerCase())
+                .map(user -> businessRepository.findByIdAndDeletedAtIsNull(user.getBusinessId()))
+                .flatMap(opt -> opt)
+                .map(this::toResponse);
     }
 
     @Transactional(readOnly = true)

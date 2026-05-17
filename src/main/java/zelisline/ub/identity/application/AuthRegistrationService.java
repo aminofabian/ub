@@ -278,8 +278,11 @@ public class AuthRegistrationService {
             scheme = http.getScheme();
         }
 
-        // 3. Determine the port (only include non-default ports)
+        // 3. Determine the port — *.localhost uses Next.js dev port 3000
         int port = http.getServerPort();
+        if (frontendHost.endsWith(".localhost") || "localhost".equalsIgnoreCase(frontendHost)) {
+            port = 3000;
+        }
         boolean defaultPort = (port == 80 && "http".equals(scheme))
                 || (port == 443 && "https".equals(scheme));
 

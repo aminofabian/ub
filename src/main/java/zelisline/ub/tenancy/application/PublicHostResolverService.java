@@ -63,17 +63,13 @@ public class PublicHostResolverService {
     }
 
     /**
-     * Self-service onboarding: creates a business for an unmapped host so the
-     * visitor can immediately proceed to login or signup.
+     * Self-service onboarding: creates a business and a {@code {slug}.{suffix}}
+     * subdomain mapping. The apex host (e.g. kiosk.ke) is NEVER mapped —
+     * it stays as the landing page where visitors can only create shops.
      *
-     * <p>The business slug is derived from the provided name (lowercased,
-     * whitespace→hyphen, non-alphanumeric stripped). A domain mapping is
-     * created for the host; if the host matches the platform apex, an
-     * additional {@code {slug}.{suffix}} mapping is also created so the
-     * tenant gets its own subdomain.
-     *
-     * @param name  display name for the new business
-     * @param rawHost  the host the visitor is currently on
+     * @param name    display name for the new business
+     * @param rawHost the host the visitor is currently on (used only for
+     *                logging/idempotency, not for domain mapping)
      * @return full resolve response for the newly created tenant
      */
     @Transactional
@@ -84,12 +80,6 @@ public class PublicHostResolverService {
                     HttpStatus.BAD_REQUEST, "A valid host is required");
         }
 
-        // If this host already maps to a business, reject (idempotent guard).
-        if (domainMappingRepository.findByDomainAndActiveTrue(lookup).isPresent()) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT, "A business is already registered for this host");
-        }
-
         String slug = nameToSlug(name);
         if (slug.isBlank()) {
             throw new ResponseStatusException(
@@ -98,8 +88,18 @@ public class PublicHostResolverService {
 
         // Ensure slug uniqueness
         if (businessRepository.existsBySlugAndDeletedAtIsNull(slug)) {
-            // Append a short random suffix to make it unique
             slug = slug + "-" + java.util.UUID.randomUUID().toString().substring(0, 6);
+        }
+
+        // Ensure the subdomain isn't already taken
+        String suffix = (slugDomainSuffix != null) ? slugDomainSuffix.trim().toLowerCase(Locale.ROOT) : "";
+        if (!suffix.isEmpty() && !suffix.isBlank()) {
+            String subdomain = slug + "." + suffix;
+            if (domainMappingRepository.findByDomainAndActiveTrue(subdomain).isPresent()) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "A business is already registered for " + subdomain);
+            }
         }
 
         Business business = new Business();
@@ -113,29 +113,16 @@ public class PublicHostResolverService {
         Business saved = businessRepository.save(business);
         catalogBootstrapService.seedDefaultItemTypesIfMissing(saved.getId());
 
-        // Create domain mapping for the host the visitor is on
-        DomainMapping mapping = new DomainMapping();
-        mapping.setBusinessId(saved.getId());
-        mapping.setDomain(lookup);
-        mapping.setPrimary(true);
-        mapping.setActive(true);
-        domainMappingRepository.save(mapping);
-
-        // If a slug-domain suffix is configured and the lookup host is the
-        // platform apex (not already a subdomain), also create the canonical
-        // {slug}.{suffix} mapping so the tenant has its own branded subdomain.
-        String suffix = (slugDomainSuffix != null) ? slugDomainSuffix.trim().toLowerCase(Locale.ROOT) : "";
+        // ONLY create the {slug}.{suffix} subdomain mapping —
+        // the apex (kiosk.ke) stays as a landing page forever.
         if (!suffix.isEmpty() && !suffix.isBlank()) {
             String subdomain = slug + "." + suffix;
-            if (!subdomain.equals(lookup)
-                    && domainMappingRepository.findByDomainAndActiveTrue(subdomain).isEmpty()) {
-                DomainMapping canonical = new DomainMapping();
-                canonical.setBusinessId(saved.getId());
-                canonical.setDomain(subdomain);
-                canonical.setPrimary(false);
-                canonical.setActive(true);
-                domainMappingRepository.save(canonical);
-            }
+            DomainMapping mapping = new DomainMapping();
+            mapping.setBusinessId(saved.getId());
+            mapping.setDomain(subdomain);
+            mapping.setPrimary(true);
+            mapping.setActive(true);
+            domainMappingRepository.save(mapping);
         }
 
         return toResponse(saved);

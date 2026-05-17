@@ -7,12 +7,16 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.tenancy.api.dto.OnboardBusinessRequest;
 import zelisline.ub.tenancy.api.dto.PublicHostResolveResponse;
 import zelisline.ub.tenancy.application.PublicHostResolverService;
 
@@ -44,5 +48,18 @@ public class PublicHostResolveController {
                 .cacheControl(CacheControl.maxAge(CACHE_TTL).cachePublic())
                 .header(HttpHeaders.VARY, "host")
                 .body(body);
+    }
+
+    /**
+     * Self-service business onboarding for visitors on an unmapped domain.
+     * Creates a business, maps the host, and returns tenant context so the
+     * frontend can proceed directly to login or signup.
+     */
+    @PostMapping("/onboard")
+    public ResponseEntity<PublicHostResolveResponse> onboard(
+            @Valid @RequestBody OnboardBusinessRequest request) {
+        PublicHostResolveResponse body = publicHostResolverService.onboardBusiness(
+                request.name(), request.host());
+        return ResponseEntity.status(HttpStatus.CREATED).body(body);
     }
 }

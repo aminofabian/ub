@@ -147,6 +147,36 @@ public class PublicStorefrontCatalogService {
     }
 
     @Transactional(readOnly = true)
+    public PublicCatalogItemDetailResponse getItemByBarcode(String slug, String barcode) {
+        PublicStorefrontContext ctx = storefrontContextService.requireForSlug(slug);
+        Item item = itemRepository.findByBusinessIdAndBarcodeAndDeletedAtIsNull(ctx.business().getId(), barcode)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found"));
+        if (!item.isWebPublished() || !item.isActive()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found");
+        }
+        Map<String, BigDecimal> detailQty = loadQtyOnHand(ctx, List.of(item.getId()));
+        BigDecimal onHand = detailQty.getOrDefault(item.getId(), BigDecimal.ZERO);
+        if (onHand.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found");
+        }
+        String parentId = item.getVariantOfItemId() != null ? item.getVariantOfItemId() : item.getId();
+        return new PublicCatalogItemDetailResponse(
+                item.getId(),
+                item.getSku(),
+                item.getName(),
+                blankToNull(item.getDescription()),
+                blankToNull(item.getVariantName()),
+                item.getVariantOfItemId(),
+                ctx.business().getCurrency(),
+                pricingService.getCurrentOpenSellingPrice(
+                        ctx.business().getId(), item.getId(), ctx.catalogBranch().getId()),
+                onHand,
+                listImagesForItem(item.getId()),
+                listPublishedVariants(ctx, parentId)
+        );
+    }
+
+    @Transactional(readOnly = true)
     public PublicCategoryListResponse listPublishedCategories(String slug) {
         PublicStorefrontContext ctx = storefrontContextService.requireForSlug(slug);
         List<String> assigned = itemRepository.findDistinctWebPublishedCategoryIds(ctx.business().getId());

@@ -59,4 +59,13 @@ public class PublicStorefrontController {
         PublicCatalogItemDetailResponse body = publicStorefrontCatalogService.getItemDetail(slug, id);
         return ResponseEntity.ok().cacheControl(CacheControl.maxAge(Duration.ofSeconds(60))).body(body);
     }
+
+    @GetMapping("/catalog/items/by-barcode/{barcode}")
+    public ResponseEntity<PublicCatalogItemDetailResponse> itemByBarcode(
+            @PathVariable String slug,
+            @PathVariable String barcode
+    ) {
+        PublicCatalogItemDetailResponse body = publicStorefrontCatalogService.getItemByBarcode(slug, barcode);
+        return ResponseEntity.ok().cacheControl(CacheControl.maxAge(Duration.ofSeconds(60))).body(body);
+    }
 }

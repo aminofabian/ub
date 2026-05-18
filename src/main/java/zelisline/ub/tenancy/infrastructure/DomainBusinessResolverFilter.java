@@ -129,8 +129,14 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
         }
         for (String prefix : NON_TENANT_PATH_PREFIXES) {
             if (path.startsWith(prefix)) {
+                if (path.contains("/auth/")) {
+                    logger.info("[DomainResolver] shouldNotFilter=TRUE path={} matched prefix={}", path, prefix);
+                }
                 return true;
             }
+        }
+        if (path.contains("/auth/")) {
+            logger.info("[DomainResolver] shouldNotFilter=FALSE path={} serverName={}", path, request.getServerName());
         }
         return false;
     }
@@ -143,6 +149,13 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
     ) throws ServletException, IOException {
         String serverHost = TenantHostParsing.hostnameOnly(request.getServerName());
         String lookupHost = resolveLookupHost(serverHost, request.getHeader("X-Tenant-Host"));
+        String path = request.getRequestURI();
+        if (path != null && path.contains("/auth/")) {
+            logger.info("[DomainResolver] doFilterInternal ENTRY path={} serverHost={} lookupHost={} xTenantHost={} xTenantId={}",
+                    path, serverHost, lookupHost,
+                    request.getHeader("X-Tenant-Host"),
+                    request.getHeader("X-Tenant-Id"));
+        }
 
         if (lookupHost == null || hostsWithoutMapping.contains(lookupHost.toLowerCase(Locale.ROOT))) {
             filterChain.doFilter(request, response);

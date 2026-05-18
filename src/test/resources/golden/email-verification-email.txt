@@ -1,8 +1,10 @@
 UB — verify your email
 
+Confirm your email to unlock your account.
+
 We received a registration for owner@example.com.
 
-Open this link to activate your account:
+Activate your account:
 http://localhost:5173/verify-email?token=abc
 
 If you did not sign up, you can ignore this message.

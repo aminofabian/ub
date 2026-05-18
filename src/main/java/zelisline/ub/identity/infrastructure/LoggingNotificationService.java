@@ -61,8 +61,8 @@ public class LoggingNotificationService implements NotificationService {
     }
 
     @Override
-    public void sendEmailVerificationEmail(String toEmail, String subject, String textBody) {
-        sendOrLog(toEmail, subject, textBody, "email verification");
+    public void sendEmailVerificationEmail(String toEmail, String subject, String htmlBody) {
+        sendOrLogHtml(toEmail, subject, htmlBody, "email verification");
     }
 
     @Override

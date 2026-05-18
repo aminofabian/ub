@@ -32,6 +32,7 @@ import zelisline.ub.identity.repository.EmailVerificationTokenRepository;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.tenancy.api.TenantRequestIds;
+import zelisline.ub.tenancy.application.PublicHostResolverService;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
 /**
@@ -57,6 +58,7 @@ public class AuthRegistrationService {
     private final EmailVerificationTokenRepository emailVerificationTokenRepository;
     private final NotificationService notificationService;
     private final EmailVerificationEmailRenderer emailVerificationEmailRenderer;
+    private final PublicHostResolverService publicHostResolverService;
     private final Environment environment;
 
     @Value("${app.auth.self-signup-enabled:true}")
@@ -241,8 +243,15 @@ public class AuthRegistrationService {
         token.setExpiresAt(Instant.now().plus(emailVerificationTtlHours, ChronoUnit.HOURS));
         emailVerificationTokenRepository.save(token);
         String link = buildVerificationUrlPrefix(http) + raw;
-        String body = emailVerificationEmailRenderer.renderBody(user.getEmail(), link);
-        notificationService.sendEmailVerificationEmail(user.getEmail(), "Verify your UB account", body);
+        String frontendHost = resolveFrontendHost(http);
+        var branding = EmailVerificationBrandingContext.fromHost(
+                frontendHost != null
+                        ? publicHostResolverService.resolveByHost(frontendHost)
+                        : Optional.empty(),
+                frontendHost);
+        String subject = emailVerificationEmailRenderer.renderSubject(branding);
+        String htmlBody = emailVerificationEmailRenderer.renderHtml(branding, user.getEmail(), link);
+        notificationService.sendEmailVerificationEmail(user.getEmail(), subject, htmlBody);
         return link;
     }
 
@@ -261,8 +270,7 @@ public class AuthRegistrationService {
      * <p>The scheme is read from {@code X-Forwarded-Proto} (for reverse-proxy deployments)
      * then from {@link HttpServletRequest#getScheme()}.
      */
-    private String buildVerificationUrlPrefix(HttpServletRequest http) {
-        // 1. Determine the frontend hostname
+    private String resolveFrontendHost(HttpServletRequest http) {
         String frontendHost = http.getHeader("X-Tenant-Host");
         if (frontendHost == null || frontendHost.isBlank()) {
             String serverName = http.getServerName();
@@ -273,8 +281,13 @@ public class AuthRegistrationService {
                 frontendHost = serverName;
             }
         }
+        return (frontendHost == null || frontendHost.isBlank()) ? null : frontendHost.trim();
+    }
 
-        if (frontendHost == null || frontendHost.isBlank()) {
+    private String buildVerificationUrlPrefix(HttpServletRequest http) {
+        String frontendHost = resolveFrontendHost(http);
+
+        if (frontendHost == null) {
             // Ultimate fallback: use the statically configured prefix
             return emailVerificationUrlPrefix;
         }
@@ -295,7 +308,7 @@ public class AuthRegistrationService {
 
         StringBuilder prefix = new StringBuilder(scheme)
                 .append("://")
-                .append(frontendHost.trim());
+                .append(frontendHost);
         if (!defaultPort) {
             prefix.append(":").append(port);
         }

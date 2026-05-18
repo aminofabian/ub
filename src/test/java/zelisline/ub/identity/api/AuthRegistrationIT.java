@@ -38,7 +38,7 @@ class AuthRegistrationIT {
     private static final String OWNER_ROLE_ID = "22222222-0000-0000-0000-000000000001";
     private static final String VIEWER_ROLE_ID = "22222222-0000-0000-0000-000000000005";
 
-    private static final Pattern TOKEN_IN_LINK = Pattern.compile("token=([^\\s]+)");
+    private static final Pattern TOKEN_IN_LINK = Pattern.compile("token=([^&\\s\"']+)");
 
     @Autowired
     private MockMvc mockMvc;

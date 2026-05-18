@@ -10,7 +10,8 @@ public interface NotificationService {
 
     void sendTemporaryLockNotice(String toEmail);
 
-    void sendEmailVerificationEmail(String toEmail, String subject, String textBody);
+    /** {@code htmlBody} is a complete HTML document (inline CSS). */
+    void sendEmailVerificationEmail(String toEmail, String subject, String htmlBody);
 
     void sendOrderConfirmationHtml(String toEmail, String subject, String htmlBody);
 }

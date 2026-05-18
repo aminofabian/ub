@@ -45,6 +45,11 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
+    protected boolean shouldNotFilter(@NonNull HttpServletRequest request) {
+        return PublicAuthEndpoints.matches(request.getRequestURI());
+    }
+
+    @Override
     protected void doFilterInternal(
             @NonNull HttpServletRequest request,
             @NonNull HttpServletResponse response,

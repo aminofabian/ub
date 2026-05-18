@@ -49,6 +49,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final SuperAdminRepository superAdminRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * Sign-up and sign-in must not fail because the browser still has a Bearer token
+     * from another tenant or an expired session (common after onboarding redirect).
+     */
+    @Override
+    protected boolean shouldNotFilter(@NonNull HttpServletRequest request) {
+        return PublicAuthEndpoints.matches(request.getRequestURI());
+    }
+
     @Override
     protected void doFilterInternal(
             @NonNull HttpServletRequest request,

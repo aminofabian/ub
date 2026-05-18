@@ -101,7 +101,7 @@ public class AuthRegistrationService {
         });
         log.info("[register] resolving signup role...");
         var role = resolveSignupRole(businessId, request);
-        log.info("[register] resolved role={} key={}", role.getId(), role.getKey());
+        log.info("[register] resolved role={} roleKey={}", role.getId(), role.getRoleKey());
         User user = new User();
         user.setBusinessId(businessId);
         user.setEmail(email);

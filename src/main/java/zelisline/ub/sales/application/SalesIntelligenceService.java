@@ -393,7 +393,7 @@ public class SalesIntelligenceService {
                     END
                       FROM sale_payments sp2
                      WHERE sp2.sale_id = s.id) AS payment_method,
-                   (SELECT STRING_AGG(DISTINCT sp2.method, ',' ORDER BY sp2.method)
+                   (SELECT GROUP_CONCAT(DISTINCT sp2.method ORDER BY sp2.method SEPARATOR ',')
                       FROM sale_payments sp2
                      WHERE sp2.sale_id = s.id) AS payment_methods,
                    sil.item_id,

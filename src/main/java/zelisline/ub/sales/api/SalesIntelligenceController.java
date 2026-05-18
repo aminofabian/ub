@@ -71,6 +71,19 @@ public class SalesIntelligenceController {
                 TenantRequestIds.resolveBusinessId(request), categoryId, from, to);
     }
 
+    @GetMapping("/recent-web-order-lines")
+    @PreAuthorize("hasPermission(null, 'storefront.orders.read')")
+    public List<RecentSaleRow> recentWebOrderLines(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) String branchId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return salesIntelligenceService.recentWebOrderLines(
+                TenantRequestIds.resolveBusinessId(request), from, to, branchId);
+    }
+
     @GetMapping("/recent-sales")
     @PreAuthorize("hasPermission(null, 'sales.intelligence.read')")
     public List<RecentSaleRow> recentSales(

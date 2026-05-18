@@ -385,27 +385,59 @@ public class SalesIntelligenceService {
     private static final String Q_RECENT_SALES = """
             SELECT s.id AS sale_id,
                    s.sold_at,
-                   COALESCE(u.email, s.sold_by) AS cashier_name,
+                   COALESCE(NULLIF(TRIM(u.name), ''), u.email, s.sold_by) AS cashier_name,
                    COALESCE(cu.name, '') AS customer_name,
-                   COALESCE(sp.method, 'unknown') AS payment_method,
+                   (SELECT CASE
+                        WHEN COUNT(DISTINCT sp2.method) > 1 THEN 'split'
+                        ELSE COALESCE(MAX(sp2.method), 'unknown')
+                    END
+                      FROM sale_payments sp2
+                     WHERE sp2.sale_id = s.id) AS payment_method,
+                   (SELECT STRING_AGG(DISTINCT sp2.method, ',' ORDER BY sp2.method)
+                      FROM sale_payments sp2
+                     WHERE sp2.sale_id = s.id) AS payment_methods,
                    sil.item_id,
                    i.name AS item_name,
                    sil.quantity,
                    sil.unit_price,
                    sil.line_total,
                    sil.profit,
-                   s.status
+                   s.status,
+                   'walk_in' AS channel
               FROM sale_items sil
               JOIN sales s ON s.id = sil.sale_id
               JOIN items i ON i.id = sil.item_id AND i.business_id = s.business_id AND i.deleted_at IS NULL
          LEFT JOIN users u ON u.id = s.sold_by AND u.business_id = s.business_id AND u.deleted_at IS NULL
          LEFT JOIN customers cu ON cu.id = s.customer_id AND cu.business_id = s.business_id
-         LEFT JOIN sale_payments sp ON sp.sale_id = s.id AND sp.sort_order = 0
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
                AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
                AND (? IS NULL OR s.branch_id = ?)
           ORDER BY s.sold_at DESC
+             LIMIT 500
+            """;
+
+    private static final String Q_RECENT_WEB_ORDER_LINES = """
+            SELECT wo.id AS sale_id,
+                   wo.created_at AS sold_at,
+                   '' AS cashier_name,
+                   COALESCE(wo.customer_name, '') AS customer_name,
+                   'online' AS payment_method,
+                   'online' AS payment_methods,
+                   wol.item_id,
+                   wol.item_name,
+                   wol.quantity,
+                   wol.unit_price,
+                   wol.line_total,
+                   0 AS profit,
+                   wo.status,
+                   'online_store' AS channel
+              FROM web_order_lines wol
+              JOIN web_orders wo ON wo.id = wol.order_id
+             WHERE wo.business_id = ?
+               AND CAST(wo.created_at AS DATE) BETWEEN ? AND ?
+               AND (? IS NULL OR wo.catalog_branch_id = ?)
+          ORDER BY wo.created_at DESC
              LIMIT 500
             """;
 
@@ -425,7 +457,7 @@ public class SalesIntelligenceService {
 
     private static final String Q_STAFF_PERFORMANCE = """
             SELECT s.sold_by AS user_id,
-                   COALESCE(u.email, s.sold_by) AS user_name,
+                   COALESCE(NULLIF(TRIM(u.name), ''), u.email, s.sold_by) AS user_name,
                    COUNT(DISTINCT s.id) AS sale_count,
                    COALESCE(SUM(sil.quantity), 0) AS item_count,
                    COALESCE(SUM(sil.line_total), 0) AS total_revenue,
@@ -437,7 +469,7 @@ public class SalesIntelligenceService {
                AND s.status IN (?, ?)
                AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
                AND (? IS NULL OR s.branch_id = ?)
-          GROUP BY s.sold_by, COALESCE(u.email, s.sold_by)
+          GROUP BY s.sold_by, COALESCE(NULLIF(TRIM(u.name), ''), u.email, s.sold_by)
           ORDER BY total_revenue DESC
             """;
 
@@ -463,18 +495,61 @@ public class SalesIntelligenceService {
                             rs.getString("cashier_name"),
                             rs.getString("customer_name"),
                             rs.getString("payment_method"),
+                            rs.getString("payment_methods"),
                             rs.getString("item_id"),
                             rs.getString("item_name"),
                             rs.getBigDecimal("quantity").setScale(4, RoundingMode.HALF_UP),
                             rs.getBigDecimal("unit_price").setScale(4, RoundingMode.HALF_UP),
                             rs.getBigDecimal("line_total").setScale(2, RoundingMode.HALF_UP),
                             rs.getBigDecimal("profit").setScale(2, RoundingMode.HALF_UP),
-                            rs.getString("status")
+                            rs.getString("status"),
+                            rs.getString("channel")
                     ));
                 },
                 businessId,
                 SalesConstants.SALE_STATUS_COMPLETED,
                 SalesConstants.SALE_STATUS_REFUNDED,
+                from,
+                to,
+                branchFilter,
+                branchFilter);
+        return out;
+    }
+
+    @Transactional(readOnly = true)
+    public List<RecentSaleRow> recentWebOrderLines(
+            String businessId,
+            LocalDate fromInclusive,
+            LocalDate toInclusive,
+            String branchId
+    ) {
+        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
+        Date from = Date.valueOf(w[0]);
+        Date to = Date.valueOf(w[1]);
+        String branchFilter = (branchId != null && !branchId.isBlank()) ? branchId : null;
+
+        List<RecentSaleRow> out = new ArrayList<>();
+        jdbc.query(
+                Q_RECENT_WEB_ORDER_LINES,
+                rs -> {
+                    out.add(new RecentSaleRow(
+                            rs.getString("sale_id"),
+                            rs.getTimestamp("sold_at").toInstant(),
+                            rs.getString("cashier_name"),
+                            rs.getString("customer_name"),
+                            rs.getString("payment_method"),
+                            rs.getString("payment_methods"),
+                            rs.getString("item_id"),
+                            rs.getString("item_name"),
+                            rs.getBigDecimal("quantity").setScale(4, RoundingMode.HALF_UP),
+                            rs.getBigDecimal("unit_price").setScale(4, RoundingMode.HALF_UP),
+                            rs.getBigDecimal("line_total").setScale(2, RoundingMode.HALF_UP),
+                            rs.getBigDecimal("profit").setScale(2, RoundingMode.HALF_UP),
+                            rs.getString("status"),
+                            rs.getString("channel")
+                    ));
+                },
+                businessId,
                 from,
                 to,
                 branchFilter,

@@ -24,7 +24,7 @@ class EmailVerificationEmailRendererTest {
     }
 
     @Test
-    void htmlIncludesBrandedButtonAndVerifyLink() {
+    void htmlMatchesMockupLayoutAndGreenPalette() {
         var renderer = new EmailVerificationEmailRenderer();
         var branding = EmailVerificationBrandingContext.fromHost(
                 java.util.Optional.empty(),
@@ -33,12 +33,15 @@ class EmailVerificationEmailRendererTest {
         String html = renderer.renderHtml(branding, "owner@example.com", link);
 
         assertThat(html).contains("<!DOCTYPE html>");
-        assertThat(html).contains("Verify email address");
+        assertThat(html).contains("Verify Your Email");
+        assertThat(html).contains("Confirm your email");
+        assertThat(html).contains("Please click the button below to confirm your email");
+        assertThat(html).contains(EmailVerificationEmailRenderer.BG_MINT);
+        assertThat(html).contains(EmailVerificationEmailRenderer.HERO_BG);
+        assertThat(html).contains(EmailVerificationEmailRenderer.GREEN);
         assertThat(html).contains("href=\"" + link + "\"");
-        assertThat(html).contains("Uzapoint");
-        assertThat(html).contains("Your point of sale");
-        assertThat(html).contains("#0D9488");
-        assertThat(html).contains("#EA580C");
+        assertThat(html).contains("If you did not request this, no worries");
+        assertThat(html).contains("<svg");
     }
 
     @Test

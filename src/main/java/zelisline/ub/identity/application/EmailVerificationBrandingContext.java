@@ -56,8 +56,8 @@ public record EmailVerificationBrandingContext(
                 "UB",
                 "ub",
                 null,
-                "#1B4332",
-                "#F59E0B",
+                "#28A745",
+                "#20863B",
                 null,
                 "Confirm your email to unlock your account.");
     }
@@ -102,23 +102,8 @@ public record EmailVerificationBrandingContext(
 
     /** Curated retail / POS palettes when tenant colors are unset. */
     static String[] paletteForSlug(String slug) {
-        if (slug == null || slug.isBlank()) {
-            return new String[] {"#0F766E", "#EA580C"};
-        }
-        if ("uzapoint".equalsIgnoreCase(slug)) {
-            return new String[] {"#0D9488", "#EA580C"};
-        }
-        int idx = Math.floorMod(slug.toLowerCase(Locale.ROOT).hashCode(), PALETTES.length);
-        return PALETTES[idx];
+        return new String[] {"#28A745", "#20863B"};
     }
-
-    private static final String[][] PALETTES = {
-            {"#0D9488", "#EA580C"},  // teal + orange (UzaPoint vibe)
-            {"#1D4ED8", "#F59E0B"},  // blue + amber
-            {"#7C3AED", "#10B981"},  // violet + emerald
-            {"#BE123C", "#0EA5E9"},  // rose + sky
-            {"#1B4332", "#52B788"},  // forest greens
-    };
 
     private static String titleCase(String slug) {
         if (slug == null || slug.isBlank()) {

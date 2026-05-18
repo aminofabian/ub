@@ -9,6 +9,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.lang.NonNull;
@@ -46,6 +48,8 @@ import zelisline.ub.tenancy.repository.DomainMappingRepository;
  * in from the platform login form.
  */
 public class DomainBusinessResolverFilter extends OncePerRequestFilter {
+
+    private static final Logger logger = LoggerFactory.getLogger(DomainBusinessResolverFilter.class);
 
     private static final String PROBLEM_TYPE = "urn:problem:tenant-not-found";
     private static final String PROBLEM_TYPE_NOT_ACTIVE = "urn:problem:tenant-not-active";
@@ -148,9 +152,11 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
         var mapping = domainMappingRepository.findByDomainAndActiveTrue(lookupHost);
         if (mapping.isPresent()) {
             String businessId = mapping.get().getBusinessId();
+            logger.info("[DomainResolver] found mapping: host={} businessId={}", lookupHost, businessId);
             TenantStatus status = businessRepository.findTenantStatusById(businessId)
                     .orElse(TenantStatus.ACTIVE);
             if (status != TenantStatus.ACTIVE) {
+                logger.warn("[DomainResolver] tenant not active: host={} businessId={} status={}", lookupHost, businessId, status);
                 writeTenantNotActive(response, status);
                 return;
             }
@@ -160,10 +166,12 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
         }
 
         if (hasExplicitTenantId(request)) {
+            logger.info("[DomainResolver] no mapping but X-Tenant-Id present: host={}", lookupHost);
             filterChain.doFilter(request, response);
             return;
         }
 
+        logger.warn("[DomainResolver] tenant not found: host={} serverHost={} requestURI={}", lookupHost, serverHost, request.getRequestURI());
         writeTenantNotFound(response, lookupHost);
     }
 

@@ -1,5 +1,7 @@
 package zelisline.ub.tenancy.api;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -13,20 +15,27 @@ import zelisline.ub.tenancy.infrastructure.TenantRequestAttributes;
  */
 public final class TenantRequestIds {
 
+    private static final Logger log = LoggerFactory.getLogger(TenantRequestIds.class);
+
     private TenantRequestIds() {
     }
 
     public static String resolveBusinessId(HttpServletRequest request) {
         Object fromResolver = request.getAttribute(TenantRequestAttributes.BUSINESS_ID);
         if (fromResolver instanceof String value && !value.isBlank()) {
+            log.debug("[TenantIds] resolved from DomainResolver attribute: {}", value);
             return value;
         }
 
         String fromHeader = request.getHeader("X-Tenant-Id");
         if (fromHeader != null && !fromHeader.isBlank()) {
-            return fromHeader.trim();
+            String trimmed = fromHeader.trim();
+            log.info("[TenantIds] resolved from X-Tenant-Id header: {}", trimmed);
+            return trimmed;
         }
 
+        log.warn("[TenantIds] NO tenant context - no attribute and no X-Tenant-Id header. URI={} serverName={}",
+                request.getRequestURI(), request.getServerName());
         throw new ResponseStatusException(
                 HttpStatus.BAD_REQUEST,
                 "Tenant context missing. Provide mapped Host header or X-Tenant-Id."

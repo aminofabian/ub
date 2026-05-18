@@ -82,19 +82,26 @@ public class AuthRegistrationService {
 
     @Transactional
     public RegisterResponse register(HttpServletRequest http, RegisterRequest request) {
+        log.info("[register] START selfSignupEnabled={} email={}", selfSignupEnabled, request.email());
         assertSignupEnabled();
         String businessId = TenantRequestIds.resolveBusinessId(http);
+        log.info("[register] resolved businessId={}", businessId);
         if (!businessRepository.findByIdAndDeletedAtIsNull(businessId).isPresent()) {
+            log.warn("[register] business not found: {}", businessId);
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found");
         }
         String email = normaliseEmail(request.email());
+        log.info("[register] checking for existing user: businessId={} email={}", businessId, email);
         userRepository.findByBusinessIdAndEmailAndDeletedAtIsNull(businessId, email).ifPresent(u -> {
+            log.warn("[register] duplicate email: businessId={} email={}", businessId, email);
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "An account with this email already exists for this business"
             );
         });
+        log.info("[register] resolving signup role...");
         var role = resolveSignupRole(businessId, request);
+        log.info("[register] resolved role={} key={}", role.getId(), role.getKey());
         User user = new User();
         user.setBusinessId(businessId);
         user.setEmail(email);

@@ -42,6 +42,11 @@ class EmailVerificationEmailRendererTest {
         assertThat(html).contains("href=\"" + link + "\"");
         assertThat(html).contains("If you did not request this, no worries");
         assertThat(html).contains("<svg");
+        assertThat(html).contains("fonts.googleapis.com");
+        assertThat(html).contains("Cormorant+Garamond");
+        assertThat(html).contains("DM+Sans");
+        assertThat(html).contains(EmailVerificationEmailRenderer.FONT_SERIF);
+        assertThat(html).contains(EmailVerificationEmailRenderer.FONT_SANS);
     }
 
     @Test

@@ -22,6 +22,13 @@ public class EmailVerificationEmailRenderer {
     static final String TEXT = "#111827";
     static final String MUTED = "#6C757D";
 
+    /** Display type — matches frontend {@code --font-cormorant} / {@code .font-serif}. */
+    static final String FONT_SERIF =
+            "'Cormorant Garamond', Georgia, 'Times New Roman', serif";
+    /** UI type — matches frontend {@code --font-dm-sans} / {@code font-sans}. */
+    static final String FONT_SANS =
+            "'DM Sans', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+
     public String renderSubject(EmailVerificationBrandingContext branding) {
         return "Verify your " + branding.displayName() + " account";
     }
@@ -68,8 +75,9 @@ public class EmailVerificationEmailRenderer {
                 <meta charset="utf-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>Verify your email</title>
+                %s
                 </head>
-                <body style="margin:0;padding:0;background-color:%s;font-family:Inter,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+                <body style="margin:0;padding:0;background-color:%s;font-family:%s;">
                 <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="background-color:%s;">
                   <tr>
                     <td align="center" style="padding:40px 16px 48px;">
@@ -86,7 +94,9 @@ public class EmailVerificationEmailRenderer {
                 </body>
                 </html>
                 """.formatted(
+                renderFontHead(),
                 BG_MINT,
+                FONT_SANS,
                 BG_MINT,
                 renderBackgroundBlobs(greenDark),
                 CARD,
@@ -94,6 +104,19 @@ public class EmailVerificationEmailRenderer {
                 renderHero(green, greenDark),
                 renderBody(email, link, green),
                 renderFooter(display, hostLine));
+    }
+
+    /**
+     * Google Fonts — same families as {@code frontend/app/layout.tsx}
+     * (Cormorant Garamond + DM Sans). Many clients load {@code link}; others fall
+     * back to Georgia / system sans from inline {@code font-family}.
+     */
+    private static String renderFontHead() {
+        return """
+                <link rel="preconnect" href="https://fonts.googleapis.com">
+                <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+                <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+                """;
     }
 
     /** Decorative circles behind the card (mint field). */
@@ -123,8 +146,8 @@ public class EmailVerificationEmailRenderer {
                 <img src="%s" alt="%s" width="56" height="56" style="display:block;width:56px;height:56px;object-fit:contain;border:0;">
                 """.formatted(escape(branding.logoUrl()), display)
                 : """
-                <span style="font-size:18px;font-weight:800;color:#FFFFFF;letter-spacing:0.5px;">%s</span>
-                """.formatted(escape(initials));
+                <span style="font-family:%s;font-size:22px;font-weight:600;color:#FFFFFF;letter-spacing:0.04em;">%s</span>
+                """.formatted(FONT_SERIF, escape(initials));
 
         return """
                 <tr>
@@ -155,54 +178,60 @@ public class EmailVerificationEmailRenderer {
         return """
                 <tr>
                   <td style="background-color:%s;padding:8px 40px 36px;text-align:center;">
-                    <h1 style="margin:0 0 12px;font-size:28px;font-weight:700;color:%s;line-height:1.25;">
+                    <h1 style="margin:0 0 12px;font-family:%s;font-size:32px;font-weight:600;color:%s;line-height:1.15;letter-spacing:-0.02em;">
                       Verify Your Email
                     </h1>
-                    <p style="margin:0 0 8px;font-size:16px;color:%s;line-height:1.55;">
+                    <p style="margin:0 0 8px;font-family:%s;font-size:16px;font-weight:400;color:%s;line-height:1.55;">
                       Please click the button below to confirm your email.
                     </p>
-                    <p style="margin:0 0 28px;font-size:14px;color:%s;line-height:1.5;">
-                      Account: <strong style="color:%s;">%s</strong>
+                    <p style="margin:0 0 28px;font-family:%s;font-size:14px;font-weight:400;color:%s;line-height:1.5;">
+                      Account: <strong style="font-weight:600;color:%s;">%s</strong>
                     </p>
                     <table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:0 auto 24px;">
                       <tr>
                         <td align="center" style="border-radius:8px;background-color:%s;">
-                          <a href="%s" target="_blank" style="display:inline-block;padding:14px 32px;font-size:16px;font-weight:600;color:#FFFFFF;text-decoration:none;">
+                          <a href="%s" target="_blank" style="display:inline-block;padding:14px 32px;font-family:%s;font-size:16px;font-weight:600;color:#FFFFFF;text-decoration:none;">
                             Confirm your email
                           </a>
                         </td>
                       </tr>
                     </table>
-                    <p style="margin:0 0 16px;font-size:13px;color:%s;line-height:1.55;">
+                    <p style="margin:0 0 16px;font-family:%s;font-size:13px;font-weight:400;color:%s;line-height:1.55;">
                       If you did not request this, no worries — simply ignore this message.
                     </p>
-                    <p style="margin:0;font-size:12px;color:%s;line-height:1.5;word-break:break-all;">
+                    <p style="margin:0;font-family:%s;font-size:12px;font-weight:400;color:%s;line-height:1.5;word-break:break-all;">
                       <a href="%s" style="color:%s;text-decoration:underline;">%s</a>
                     </p>
                   </td>
                 </tr>
                 """.formatted(
-                CARD, TEXT, TEXT, MUTED, TEXT, email,
-                green, link,
-                MUTED, MUTED, link, green, link);
+                CARD,
+                FONT_SERIF, TEXT,
+                FONT_SANS, TEXT,
+                FONT_SANS, MUTED, TEXT, email,
+                green, link, FONT_SANS,
+                FONT_SANS, MUTED,
+                FONT_SANS, MUTED, link, green, link);
     }
 
     private String renderFooter(String display, String hostLine) {
         return """
                 <tr>
                   <td style="background-color:%s;padding:24px 32px 32px;border-top:1px solid #E5E7EB;text-align:center;">
-                    <p style="margin:0 0 8px;font-size:12px;color:%s;line-height:1.6;">
+                    <p style="margin:0 0 8px;font-family:%s;font-size:12px;font-weight:500;color:%s;line-height:1.6;">
                       %s
                     </p>
-                    <p style="margin:0;font-size:11px;color:#9CA3AF;line-height:1.5;">
+                    <p style="margin:0;font-family:%s;font-size:11px;font-weight:400;color:#9CA3AF;line-height:1.5;">
                       &copy; %s &nbsp;&middot;&nbsp; %s
                     </p>
                   </td>
                 </tr>
                 """.formatted(
                 CARD,
+                FONT_SANS,
                 MUTED,
                 escape(display),
+                FONT_SANS,
                 java.time.Year.now().getValue(),
                 escape(hostLine));
     }

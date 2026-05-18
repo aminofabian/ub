@@ -1,5 +1,7 @@
 package zelisline.ub.tenancy.api;
 
+import java.util.List;
+
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -19,6 +21,8 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.tenancy.api.dto.BusinessResponse;
 import zelisline.ub.tenancy.api.dto.CreateBusinessRequest;
 import zelisline.ub.tenancy.api.dto.DomainResponse;
+import zelisline.ub.tenancy.api.dto.SaBusinessStatsResponse;
+import zelisline.ub.tenancy.api.dto.SaBusinessUserResponse;
 import zelisline.ub.tenancy.api.dto.UpdateBusinessRequest;
 import zelisline.ub.tenancy.api.dto.AddDomainRequest;
 import zelisline.ub.tenancy.application.BusinessDeletionService;
@@ -58,8 +62,24 @@ public class SuperAdminBusinessController {
         businessDeletionService.deleteBusinessAndUsers(businessId);
     }
 
+    // ── Users ────────────────────────────────────────────────────────────
+
+    @GetMapping("/{businessId}/users")
+    public List<SaBusinessUserResponse> listUsers(@PathVariable String businessId) {
+        return tenancyService.getBusinessUsers(businessId);
+    }
+
+    // ── Statistics ───────────────────────────────────────────────────────
+
+    @GetMapping("/{businessId}/stats")
+    public SaBusinessStatsResponse getStats(@PathVariable String businessId) {
+        return tenancyService.getBusinessStats(businessId);
+    }
+
+    // ── Domains ──────────────────────────────────────────────────────────
+
     @GetMapping("/{businessId}/domains")
-    public java.util.List<DomainResponse> listDomains(@PathVariable String businessId) {
+    public List<DomainResponse> listDomains(@PathVariable String businessId) {
         return tenancyService.listDomains(businessId);
     }
 

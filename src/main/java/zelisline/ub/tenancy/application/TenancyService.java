@@ -1,8 +1,12 @@
 package zelisline.ub.tenancy.application;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.stream.Collectors;
+
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
@@ -12,8 +16,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
+import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.identity.domain.Role;
+import zelisline.ub.identity.domain.User;
+import zelisline.ub.identity.repository.RoleRepository;
+import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.platform.media.CloudinaryImageService;
 import zelisline.ub.platform.media.CloudinaryUploadResult;
+import zelisline.ub.sales.repository.ShiftRepository;
 import zelisline.ub.tenancy.api.dto.BranchResponse;
 import zelisline.ub.tenancy.api.dto.BrandingPatchRequest;
 import zelisline.ub.tenancy.api.dto.BusinessResponse;
@@ -22,6 +32,8 @@ import zelisline.ub.tenancy.api.dto.CreateBusinessRequest;
 import zelisline.ub.tenancy.api.dto.DomainResponse;
 import zelisline.ub.tenancy.api.dto.InventorySettingsResponse;
 import zelisline.ub.tenancy.api.dto.PatchBranchRequest;
+import zelisline.ub.tenancy.api.dto.SaBusinessStatsResponse;
+import zelisline.ub.tenancy.api.dto.SaBusinessUserResponse;
 import zelisline.ub.tenancy.api.dto.StorefrontSettingsResponse;
 import zelisline.ub.tenancy.api.dto.UpdateBusinessRequest;
 import zelisline.ub.tenancy.domain.Branch;
@@ -45,6 +57,10 @@ public class TenancyService {
     private final StorefrontSettingsService storefrontSettingsService;
     private final BusinessInventorySettingsService businessInventorySettingsService;
     private final CloudinaryImageService cloudinaryImageService;
+    private final UserRepository userRepository;
+    private final RoleRepository roleRepository;
+    private final ItemRepository itemRepository;
+    private final ShiftRepository shiftRepository;
 
     @Transactional
     public BusinessResponse createBusiness(CreateBusinessRequest request) {
@@ -684,6 +700,89 @@ public class TenancyService {
             domain.getDomain(),
             domain.isPrimary(),
             domain.isActive()
+        );
+    }
+
+    // ── Super-admin: business users ────────────────────────────────────
+
+    @Transactional(readOnly = true)
+    public List<SaBusinessUserResponse> getBusinessUsers(String businessId) {
+        requireBusiness(businessId);
+
+        // Load all users for the business
+        Page<User> userPage = userRepository.pageByBusiness(businessId, Pageable.unpaged());
+        List<User> users = userPage.getContent();
+
+        // Load roles and branches in one pass
+        List<Role> roles = roleRepository.findVisibleForTenant(businessId);
+        Map<String, Role> roleById = roles.stream()
+                .collect(Collectors.toMap(Role::getId, r -> r));
+
+        // Load branches for name display
+        var branches = branchRepository.findByBusinessIdAndDeletedAtIsNull(businessId, Pageable.unpaged());
+        Map<String, String> branchNameById = branches.getContent().stream()
+                .collect(Collectors.toMap(Branch::getId, Branch::getName));
+
+        return users.stream()
+                .map(u -> {
+                    Role role = roleById.get(u.getRoleId());
+                    return new SaBusinessUserResponse(
+                            u.getId(),
+                            u.getEmail(),
+                            u.getName(),
+                            u.getPhone(),
+                            u.getStatus(),
+                            role != null ? role.getRoleKey() : "unknown",
+                            role != null ? role.getName() : "Unknown",
+                            u.getBranchId() != null ? branchNameById.getOrDefault(u.getBranchId(), "—") : "—",
+                            u.getLastLoginAt(),
+                            u.getCreatedAt()
+                    );
+                })
+                .toList();
+    }
+
+    // ── Super-admin: business stats ─────────────────────────────────────
+
+    @Transactional(readOnly = true)
+    public SaBusinessStatsResponse getBusinessStats(String businessId) {
+        requireBusiness(businessId);
+
+        // User counts
+        long totalUsers = userRepository.countByBusinessIdAndDeletedAtIsNull(businessId);
+        long activeUsers = userRepository.pageByBusinessFiltered(
+                businessId, "active", null, null, Pageable.unpaged()
+        ).getTotalElements();
+
+        // Product count — count by SKUs for the business
+        long totalProducts = itemRepository.findSkusByBusinessIdActive(businessId).size();
+
+        // Branch count
+        long totalBranches = branchRepository.findByBusinessIdAndDeletedAtIsNull(businessId, Pageable.unpaged())
+                .getTotalElements();
+
+        // Sales today / this month — use the materialized view or simply default to zero
+        // when no dedicated super-admin sales query is wired yet.
+        long totalSalesToday = 0L;
+        BigDecimal revenueToday = BigDecimal.ZERO;
+        long totalSalesThisMonth = 0L;
+        BigDecimal revenueThisMonth = BigDecimal.ZERO;
+
+        // Open shifts — count open shifts across all branches
+        long openShifts = shiftRepository.findByBusinessIdFiltered(
+                businessId, null, "open", Pageable.unpaged()
+        ).getTotalElements();
+
+        return new SaBusinessStatsResponse(
+                totalUsers,
+                activeUsers,
+                totalProducts,
+                totalBranches,
+                totalSalesToday,
+                revenueToday,
+                totalSalesThisMonth,
+                revenueThisMonth,
+                openShifts
         );
     }
 

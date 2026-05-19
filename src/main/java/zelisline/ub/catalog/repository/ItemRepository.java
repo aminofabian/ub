@@ -34,10 +34,12 @@ public interface ItemRepository extends JpaRepository<Item, String> {
     Optional<Item> findByBusinessIdAndBarcodeAndDeletedAtIsNull(String businessId, String barcode);
 
     /**
-     * Published items whose name contains the query, across all businesses.
+     * Published items whose name or variant name contains the query, across all businesses.
      * <p>
      * Space-insensitive: {@code "blue band"} matches {@code "Blueband"} and vice-versa.
-     * The query is also stripped of spaces on the caller side for the second match clause.
+     * <p>
+     * Returns standalone items and variants, but <strong>not</strong> parent items that have
+     * variant children — parents are labels, not scannable products.
      */
     @Query("""
             select i from Item i
@@ -45,9 +47,17 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                and i.active = true
                and i.webPublished = true
                and (lower(i.name) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(i.variantName, '')) like lower(concat('%', :q, '%'))
                     or (:qNoSpace is not null
-                        and lower(replace(i.name, ' ', '')) like lower(concat('%', :qNoSpace, '%'))))
-               and i.variantOfItemId is null
+                        and (lower(replace(i.name, ' ', '')) like lower(concat('%', :qNoSpace, '%'))
+                             or lower(replace(coalesce(i.variantName, ''), ' ', '')) like lower(concat('%', :qNoSpace, '%')))))
+               and (i.variantOfItemId is not null
+                    or not exists (
+                      select 1 from Item ch
+                      where ch.variantOfItemId = i.id
+                        and ch.businessId = i.businessId
+                        and ch.deletedAt is null
+                    ))
              order by i.name asc
             """)
     List<Item> findPublishedByNameContaining(

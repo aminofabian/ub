@@ -23,6 +23,10 @@ public record PublicBarcodeLookupResponse(
         String currency,
         BigDecimal price,
         BigDecimal qtyOnHand,
-        List<PublicItemImageResponse> images
+        List<PublicItemImageResponse> images,
+        /** When this item is a variant, the parent item's name. {@code null} for standalone items. */
+        String parentName,
+        /** The variant's own label (e.g. "500ml", "1L"). {@code null} for standalone items. */
+        String variantName
 ) {
 }

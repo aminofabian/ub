@@ -91,6 +91,17 @@ public class PublicBarcodeLookupService {
             }
         }
 
+        String parentName = null;
+        String variantLabel = null;
+        if (item.getVariantOfItemId() != null) {
+            Item parent = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(
+                    item.getVariantOfItemId(), item.getBusinessId()).orElse(null);
+            if (parent != null) {
+                parentName = parent.getName();
+                variantLabel = item.getVariantName();
+            }
+        }
+
         return new PublicBarcodeLookupResponse(
                 item.getId(),
                 item.getSku(),
@@ -107,7 +118,9 @@ public class PublicBarcodeLookupService {
                 business.getCurrency(),
                 price,
                 null,
-                images);
+                images,
+                parentName,
+                variantLabel);
     }
 
     private static final int MAX_SEARCH_RESULTS = 25;
@@ -132,6 +145,15 @@ public class PublicBarcodeLookupService {
         items = items.stream()
                 .filter(i -> i.getBarcode() != null && !i.getBarcode().isBlank())
                 .toList();
+
+        // Resolve parent names for variants in one batch
+        List<String> parentIds = items.stream()
+                .map(Item::getVariantOfItemId)
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .toList();
+        var parentsById = itemRepository.findAllById(parentIds).stream()
+                .collect(java.util.stream.Collectors.toMap(Item::getId, Item::getName));
 
         // Resolve business names, slugs, currencies, and prices
         return items.stream()
@@ -172,11 +194,18 @@ public class PublicBarcodeLookupService {
                             ? List.of(image)
                             : List.of();
 
+                    String parentName = null;
+                    String variantLabel = null;
+                    if (item.getVariantOfItemId() != null) {
+                        parentName = parentsById.get(item.getVariantOfItemId());
+                        variantLabel = item.getVariantName();
+                    }
+
                     return new PublicBarcodeLookupResponse(
                             item.getId(),
                             item.getSku(),
                             item.getBarcode(),
-                            item.getName(),
+                            parentName != null ? parentName : item.getName(),
                             item.getDescription() != null && !item.getDescription().isBlank()
                                     ? item.getDescription().trim() : null,
                             item.getBrand() != null && !item.getBrand().isBlank()
@@ -188,7 +217,9 @@ public class PublicBarcodeLookupService {
                             business.getCurrency(),
                             price,
                             null,
-                            images);
+                            images,
+                            parentName,
+                            variantLabel);
                 })
                 .filter(r -> r != null)
                 .sorted(Comparator.comparing(PublicBarcodeLookupResponse::name))

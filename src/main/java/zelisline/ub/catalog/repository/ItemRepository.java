@@ -44,8 +44,6 @@ public interface ItemRepository extends JpaRepository<Item, String> {
              where i.deletedAt is null
                and i.active = true
                and i.webPublished = true
-               and i.barcode is not null
-               and i.barcode <> ''
                and (lower(i.name) like lower(concat('%', :q, '%'))
                     or (:qNoSpace is not null
                         and lower(replace(i.name, ' ', '')) like lower(concat('%', :qNoSpace, '%'))))

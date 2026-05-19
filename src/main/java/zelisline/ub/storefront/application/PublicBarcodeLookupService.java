@@ -116,8 +116,13 @@ public class PublicBarcodeLookupService {
             return List.of();
         }
 
+        String query = q.trim();
+        String queryNoSpace = query.replace(" ", "");
+        // Only pass the space-stripped variant if it differs from the original
+        String qNoSpace = queryNoSpace.equals(query) ? null : queryNoSpace;
+
         List<Item> items = itemRepository.findPublishedByNameContaining(
-                q.trim(), PageRequest.of(0, MAX_SEARCH_RESULTS));
+                query, qNoSpace, PageRequest.of(0, MAX_SEARCH_RESULTS));
 
         // Resolve business names, slugs, currencies, and prices
         return items.stream()

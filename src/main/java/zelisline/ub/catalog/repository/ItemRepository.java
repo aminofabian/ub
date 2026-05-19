@@ -33,7 +33,12 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     Optional<Item> findByBusinessIdAndBarcodeAndDeletedAtIsNull(String businessId, String barcode);
 
-    /** Published items whose name contains the query, across all businesses. */
+    /**
+     * Published items whose name contains the query, across all businesses.
+     * <p>
+     * Space-insensitive: {@code "blue band"} matches {@code "Blueband"} and vice-versa.
+     * The query is also stripped of spaces on the caller side for the second match clause.
+     */
     @Query("""
             select i from Item i
              where i.deletedAt is null
@@ -41,11 +46,16 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                and i.webPublished = true
                and i.barcode is not null
                and i.barcode <> ''
-               and lower(i.name) like lower(concat('%', :q, '%'))
+               and (lower(i.name) like lower(concat('%', :q, '%'))
+                    or (:qNoSpace is not null
+                        and lower(replace(i.name, ' ', '')) like lower(concat('%', :qNoSpace, '%'))))
                and i.variantOfItemId is null
              order by i.name asc
             """)
-    List<Item> findPublishedByNameContaining(@Param("q") String q, Pageable pageable);
+    List<Item> findPublishedByNameContaining(
+            @Param("q") String q,
+            @Param("qNoSpace") String qNoSpace,
+            Pageable pageable);
 
     /** First published item matching barcode across all businesses. */
     @Query("""

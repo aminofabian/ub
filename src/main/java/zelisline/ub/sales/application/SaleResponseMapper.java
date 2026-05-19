@@ -15,7 +15,12 @@ public final class SaleResponseMapper {
     private SaleResponseMapper() {
     }
 
-    public static SaleResponse map(Sale sale, List<SaleItem> items, List<SalePayment> pays) {
+    public static SaleResponse map(
+            Sale sale,
+            List<SaleItem> items,
+            List<SalePayment> pays,
+            String soldByName
+    ) {
         List<SaleItemResponse> ir = new ArrayList<>();
         for (SaleItem si : items) {
             ir.add(new SaleItemResponse(
@@ -48,6 +53,7 @@ public final class SaleResponseMapper {
                 ir,
                 sale.getVoidedAt(),
                 sale.getVoidedBy(),
+                soldByName,
                 sale.getVoidJournalEntryId(),
                 sale.getVoidNotes()
         );

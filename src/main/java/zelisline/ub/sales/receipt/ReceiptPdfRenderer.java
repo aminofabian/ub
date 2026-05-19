@@ -1,11 +1,14 @@
 package zelisline.ub.sales.receipt;
 
 import java.io.ByteArrayOutputStream;
+import java.net.URI;
 
 import com.lowagie.text.Document;
 import com.lowagie.text.DocumentException;
+import com.lowagie.text.Element;
 import com.lowagie.text.Font;
 import com.lowagie.text.FontFactory;
+import com.lowagie.text.Image;
 import com.lowagie.text.PageSize;
 import com.lowagie.text.Paragraph;
 import com.lowagie.text.Phrase;
@@ -29,6 +32,7 @@ public final class ReceiptPdfRenderer {
             Font bold = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 10);
             Font body = FontFactory.getFont(FontFactory.HELVETICA, 10);
 
+            addLogoIfPresent(doc, s.logoUrl());
             doc.add(new Paragraph(s.businessName(), title));
             doc.add(new Paragraph(s.branchName(), body));
             doc.add(new Paragraph("Sale " + s.saleId(), body));
@@ -55,16 +59,62 @@ public final class ReceiptPdfRenderer {
             doc.add(new Phrase("Total: ", bold));
             doc.add(new Phrase(s.grandTotalDisplay() + " " + s.currency(), bold));
             doc.add(new Paragraph(" "));
+
             if (s.footerNote() != null && !s.footerNote().isBlank()) {
                 doc.add(new Paragraph(s.footerNote(), bold));
+            }
+
+            addFooterContact(doc, s, body);
+
+            if (s.branchReceiptMessage() != null && !s.branchReceiptMessage().isBlank()) {
+                doc.add(new Paragraph(s.branchReceiptMessage(), body));
             }
             doc.add(new Paragraph("Thank you", body));
 
             doc.close();
             return baos.toByteArray();
-        } catch (DocumentException e) {
+        } catch (Exception e) {
             throw new IllegalStateException("Failed to render receipt PDF", e);
         }
+    }
+
+    private static void addLogoIfPresent(Document doc, String logoUrl) throws Exception {
+        if (logoUrl == null || logoUrl.isBlank()) {
+            return;
+        }
+        try {
+            Image img = Image.getInstance(URI.create(logoUrl.trim()).toURL());
+            img.scaleToFit(120, 48);
+            img.setAlignment(Element.ALIGN_CENTER);
+            doc.add(img);
+            doc.add(new Paragraph(" "));
+        } catch (Exception ignored) {
+            // Skip logo if URL is unreachable or invalid
+        }
+    }
+
+    private static void addFooterContact(Document doc, ReceiptSnapshot s, Font body) throws DocumentException {
+        doc.add(new Paragraph(" "));
+        addIfPresent(doc, s.branchAddress(), body);
+        addIfPresent(doc, formatContactLine("Tel", s.branchPhone()), body);
+        addIfPresent(doc, formatContactLine("Email", s.branchEmail()), body);
+        addIfPresent(doc, formatContactLine("Web", s.branchWebsite()), body);
+        if (s.servedByName() != null && !s.servedByName().isBlank()) {
+            doc.add(new Paragraph("Served by: " + s.servedByName(), body));
+        }
+    }
+
+    private static void addIfPresent(Document doc, String text, Font font) throws DocumentException {
+        if (text != null && !text.isBlank()) {
+            doc.add(new Paragraph(text, font));
+        }
+    }
+
+    private static String formatContactLine(String label, String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return label + ": " + value.trim();
     }
 
     private static PdfPCell cell(String text, Font font) {

@@ -5,6 +5,7 @@ import jakarta.validation.constraints.Size;
 
 public record CreateBranchRequest(
         @NotBlank @Size(max = 255) String name,
-        @Size(max = 500) String address
+        @Size(max = 500) String address,
+        BranchReceiptSettingsPatch receipt
 ) {
 }

@@ -41,6 +41,19 @@ public final class ReceiptEscPosRenderer {
         if (s.footerNote() != null && !s.footerNote().isBlank()) {
             out.add(center(strip(s.footerNote()), w));
         }
+        out.add(repeat('-', w));
+        addCenteredIfPresent(out, s.branchAddress(), w);
+        addCenteredIfPresent(out, contactLine("Tel", s.branchPhone()), w);
+        addCenteredIfPresent(out, contactLine("Email", s.branchEmail()), w);
+        addCenteredIfPresent(out, contactLine("Web", s.branchWebsite()), w);
+        if (s.servedByName() != null && !s.servedByName().isBlank()) {
+            out.add(center("Served by: " + strip(s.servedByName()), w));
+        }
+        if (s.branchReceiptMessage() != null && !s.branchReceiptMessage().isBlank()) {
+            for (String row : wrap(strip(s.branchReceiptMessage()), w)) {
+                out.add(center(row, w));
+            }
+        }
         out.add(center("Thank you", w));
         out.add("");
 
@@ -58,10 +71,29 @@ public final class ReceiptEscPosRenderer {
     }
 
     static int charWidth(int widthMm) {
+        if (widthMm <= 50) {
+            return 28;
+        }
         if (widthMm <= 58) {
             return 32;
         }
         return 48;
+    }
+
+    private static void addCenteredIfPresent(List<String> out, String text, int w) {
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        for (String row : wrap(strip(text), w)) {
+            out.add(center(row, w));
+        }
+    }
+
+    private static String contactLine(String label, String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return label + ": " + value.trim();
     }
 
     private static String center(String text, int w) {

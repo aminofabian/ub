@@ -72,6 +72,7 @@ public class SaleService {
     private final BusinessCreditSettingsService businessCreditSettingsService;
     private final WebhookEnqueueService webhookEnqueueService;
     private final ApplicationEventPublisher eventPublisher;
+    private final SaleActorNameService saleActorNameService;
 
     @Transactional
     public SaleCreationOutcome createSale(String businessId, String rawIdempotencyKey, PostSaleRequest req, String userId) {
@@ -388,7 +389,12 @@ public class SaleService {
     private SaleResponse toResponse(Sale sale) {
         List<SaleItem> items = saleItemRepository.findBySaleIdOrderByLineIndexAsc(sale.getId());
         List<SalePayment> pays = salePaymentRepository.findBySaleIdOrderBySortOrderAsc(sale.getId());
-        return SaleResponseMapper.map(sale, items, pays);
+        return SaleResponseMapper.map(
+                sale,
+                items,
+                pays,
+                saleActorNameService.resolveSoldByName(sale.getBusinessId(), sale.getSoldBy())
+        );
     }
 
     private static BigDecimal computeCartTotal(List<PostSaleLineRequest> lines) {

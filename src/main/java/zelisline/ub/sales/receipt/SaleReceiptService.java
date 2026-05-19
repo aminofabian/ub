@@ -26,6 +26,10 @@ import zelisline.ub.sales.repository.SalePaymentRepository;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.domain.Business;
+import zelisline.ub.sales.application.SaleActorNameService;
+import zelisline.ub.tenancy.api.dto.BranchReceiptSettingsResponse;
+import zelisline.ub.tenancy.application.BranchReceiptSettingsService;
+import zelisline.ub.tenancy.application.StorefrontSettingsService;
 import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
@@ -41,14 +45,17 @@ public class SaleReceiptService {
     private final BusinessRepository businessRepository;
     private final BranchRepository branchRepository;
     private final ItemRepository itemRepository;
+    private final SaleActorNameService saleActorNameService;
+    private final BranchReceiptSettingsService branchReceiptSettingsService;
+    private final StorefrontSettingsService storefrontSettingsService;
 
     public byte[] buildPdf(String businessId, String saleId) {
         return ReceiptPdfRenderer.render(loadSnapshot(businessId, saleId));
     }
 
     public byte[] buildEscPos(String businessId, String saleId, int widthMm) {
-        if (widthMm != 58 && widthMm != 80) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "widthMm must be 58 or 80");
+        if (widthMm != 50 && widthMm != 58 && widthMm != 80) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "widthMm must be 50, 58, or 80");
         }
         return ReceiptEscPosRenderer.render(loadSnapshot(businessId, saleId), widthMm);
     }
@@ -99,10 +106,23 @@ public class SaleReceiptService {
                 .format(sale.getSoldAt());
 
         String footer = footerNote(sale);
+        BranchReceiptSettingsResponse receiptSettings =
+                branchReceiptSettingsService.read(branch.getReceiptSettings());
+        String logoUrl = storefrontSettingsService
+                .readTenantConfig(business.getSettings(), business.getName())
+                .branding()
+                .logoUrl();
 
         return new ReceiptSnapshot(
                 business.getName(),
+                blankToNull(logoUrl),
                 branch.getName(),
+                blankToNull(branch.getAddress()),
+                receiptSettings.phone(),
+                receiptSettings.email(),
+                receiptSettings.website(),
+                receiptSettings.footerNote(),
+                saleActorNameService.resolveSoldByName(businessId, sale.getSoldBy()),
                 blankToDefault(business.getCurrency(), "KES").trim().toUpperCase(Locale.ROOT),
                 sale.getId(),
                 soldAt,
@@ -112,6 +132,13 @@ public class SaleReceiptService {
                 money(sale.getGrandTotal()),
                 footer
         );
+    }
+
+    private static String blankToNull(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        return raw.trim();
     }
 
     private static String footerNote(Sale sale) {

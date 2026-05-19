@@ -89,6 +89,7 @@ public class SaleRefundService {
     private final WalletLedgerService walletLedgerService;
     private final LoyaltyPointsService loyaltyPointsService;
     private final BusinessCreditSettingsService businessCreditSettingsService;
+    private final SaleActorNameService saleActorNameService;
     @PersistenceContext
     private EntityManager entityManager;
 
@@ -457,7 +458,12 @@ public class SaleRefundService {
                 refund.getReason(),
                 lr,
                 pr,
-                SaleResponseMapper.map(sale, items, pays)
+                SaleResponseMapper.map(
+                        sale,
+                        items,
+                        pays,
+                        saleActorNameService.resolveSoldByName(sale.getBusinessId(), sale.getSoldBy())
+                )
         );
     }
 

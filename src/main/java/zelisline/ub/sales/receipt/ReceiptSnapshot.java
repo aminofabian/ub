@@ -4,7 +4,14 @@ import java.util.List;
 
 public record ReceiptSnapshot(
         String businessName,
+        String logoUrl,
         String branchName,
+        String branchAddress,
+        String branchPhone,
+        String branchEmail,
+        String branchWebsite,
+        String branchReceiptMessage,
+        String servedByName,
         String currency,
         String saleId,
         String soldAtDisplay,

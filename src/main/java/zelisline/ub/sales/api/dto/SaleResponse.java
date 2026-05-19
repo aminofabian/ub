@@ -17,6 +17,7 @@ public record SaleResponse(
         List<SaleItemResponse> items,
         Instant voidedAt,
         String voidedBy,
+        String soldByName,
         String voidJournalEntryId,
         String voidNotes
 ) {

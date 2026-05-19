@@ -73,6 +73,7 @@ public class SaleVoidService {
     private final WalletLedgerService walletLedgerService;
     private final LoyaltyPointsService loyaltyPointsService;
     private final BusinessCreditSettingsService businessCreditSettingsService;
+    private final SaleActorNameService saleActorNameService;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -166,7 +167,12 @@ public class SaleVoidService {
     private SaleResponse responseFor(Sale sale) {
         List<SaleItem> items = saleItemRepository.findBySaleIdOrderByLineIndexAsc(sale.getId());
         List<SalePayment> pays = salePaymentRepository.findBySaleIdOrderBySortOrderAsc(sale.getId());
-        return SaleResponseMapper.map(sale, items, pays);
+        return SaleResponseMapper.map(
+                sale,
+                items,
+                pays,
+                saleActorNameService.resolveSoldByName(sale.getBusinessId(), sale.getSoldBy())
+        );
     }
 
     private void restoreInventory(String businessId, Sale sale, List<SaleItem> itemRows, String userId) {

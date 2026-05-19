@@ -7,6 +7,7 @@ public record BranchResponse(
         String businessId,
         String name,
         String address,
+        BranchReceiptSettingsResponse receipt,
         boolean active,
         Instant createdAt,
         Instant updatedAt

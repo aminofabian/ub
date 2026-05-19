@@ -61,6 +61,7 @@ public class TenancyService {
     private final BusinessInventorySettingsService businessInventorySettingsService;
     private final BusinessProfileSettingsService businessProfileSettingsService;
     private final BusinessOnboardingSettingsService businessOnboardingSettingsService;
+    private final BranchReceiptSettingsService branchReceiptSettingsService;
     private final CloudinaryImageService cloudinaryImageService;
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
@@ -628,6 +629,11 @@ public class TenancyService {
         branch.setBusinessId(businessId);
         branch.setName(name);
         branch.setAddress(blankToNull(request.address()));
+        if (request.receipt() != null) {
+            branch.setReceiptSettings(
+                    branchReceiptSettingsService.merge(null, request.receipt())
+            );
+        }
         branch.setActive(true);
         return toBranchResponse(branchRepository.save(branch));
     }
@@ -668,6 +674,11 @@ public class TenancyService {
         if (request.active() != null) {
             branch.setActive(request.active());
         }
+        if (request.receipt() != null) {
+            branch.setReceiptSettings(
+                    branchReceiptSettingsService.merge(branch.getReceiptSettings(), request.receipt())
+            );
+        }
         return toBranchResponse(branchRepository.save(branch));
     }
 
@@ -695,6 +706,7 @@ public class TenancyService {
             branch.getBusinessId(),
             branch.getName(),
             branch.getAddress(),
+            branchReceiptSettingsService.read(branch.getReceiptSettings()),
             branch.isActive(),
             branch.getCreatedAt(),
             branch.getUpdatedAt()

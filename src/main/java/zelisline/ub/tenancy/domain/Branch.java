@@ -31,6 +31,9 @@ public class Branch {
     @Column(name = "address")
     private String address;
 
+    @Column(name = "receipt_settings", columnDefinition = "json")
+    private String receiptSettings;
+
     @Column(name = "active", nullable = false)
     private boolean active = true;
 

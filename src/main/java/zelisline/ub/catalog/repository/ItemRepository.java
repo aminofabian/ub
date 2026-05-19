@@ -33,6 +33,20 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     Optional<Item> findByBusinessIdAndBarcodeAndDeletedAtIsNull(String businessId, String barcode);
 
+    /** Published items whose name contains the query, across all businesses. */
+    @Query("""
+            select i from Item i
+             where i.deletedAt is null
+               and i.active = true
+               and i.webPublished = true
+               and i.barcode is not null
+               and i.barcode <> ''
+               and lower(i.name) like lower(concat('%', :q, '%'))
+               and i.variantOfItemId is null
+             order by i.name asc
+            """)
+    List<Item> findPublishedByNameContaining(@Param("q") String q, Pageable pageable);
+
     /** First published item matching barcode across all businesses. */
     @Query("""
             select i from Item i

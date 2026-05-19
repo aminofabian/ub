@@ -1,12 +1,14 @@
 package zelisline.ub.storefront.api;
 
 import java.time.Duration;
+import java.util.List;
 
 import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import lombok.RequiredArgsConstructor;
@@ -33,5 +35,21 @@ public class PublicBarcodeController {
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.maxAge(Duration.ofSeconds(60)))
                 .body(body);
+    }
+
+    /**
+     * Search published products by name across all businesses.
+     * <pre>{@code GET /api/v1/public/barcode/search?q=coffee&limit=20}</pre>
+     */
+    @GetMapping("/search")
+    public ResponseEntity<List<PublicBarcodeLookupResponse>> search(
+            @RequestParam String q,
+            @RequestParam(required = false, defaultValue = "20") int limit
+    ) {
+        List<PublicBarcodeLookupResponse> results = lookupService.searchByName(q);
+        int capped = Math.min(results.size(), Math.max(1, Math.min(limit, 25)));
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.maxAge(Duration.ofSeconds(120)))
+                .body(results.subList(0, capped));
     }
 }

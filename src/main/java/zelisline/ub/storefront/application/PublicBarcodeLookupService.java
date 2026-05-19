@@ -15,6 +15,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.ItemImage;
 import zelisline.ub.catalog.repository.ItemImageRepository;
@@ -38,12 +39,13 @@ public class PublicBarcodeLookupService {
 
     @Transactional(readOnly = true)
     public PublicBarcodeLookupResponse lookup(String barcode) {
-        if (barcode == null || barcode.isBlank()) {
+        String normalized = ItemCatalogService.normalizeBarcode(barcode);
+        if (normalized == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found");
         }
 
         Item item = itemRepository
-                .findFirstPublishedByBarcode(barcode.trim())
+                .findFirstPublishedByBarcode(normalized)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found"));
 
         Business business = businessRepository.findByIdAndDeletedAtIsNull(item.getBusinessId())

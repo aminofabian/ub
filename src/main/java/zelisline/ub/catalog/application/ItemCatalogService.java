@@ -1229,11 +1229,28 @@ public class ItemCatalogService {
         return fallback;
     }
 
-    private static String normalizeBarcode(String barcode) {
+    /**
+     * Normalises a barcode for storage and lookup. Must match the frontend
+     * {@code parseBarcode} logic so that a scanned code always hits the DB row.
+     *
+     * <ul>
+     *   <li>Strips whitespace, hyphens, dots, and underscores.</li>
+     *   <li>Returns {@code null} when the result is blank or shorter than 4 chars.</li>
+     *   <li>Returns {@code null} when the result contains non-digit characters.</li>
+     * </ul>
+     */
+    public static String normalizeBarcode(String barcode) {
         if (barcode == null || barcode.isBlank()) {
             return null;
         }
-        return barcode.trim();
+        String clean = barcode.trim().replaceAll("[\\s\\-._]", "");
+        if (clean.length() < 4) {
+            return null;
+        }
+        if (!clean.matches("\\d+")) {
+            return null;
+        }
+        return clean;
     }
 
     private void assertBarcodeAvailable(String businessId, String barcode, String ignoreItemId) {

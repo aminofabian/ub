@@ -126,6 +126,13 @@ public class PublicBarcodeLookupService {
         List<Item> items = itemRepository.findPublishedByNameContaining(
                 query, qNoSpace, PageRequest.of(0, MAX_SEARCH_RESULTS));
 
+        // Only return items that have a barcode — this is a barcode lookup tool.
+        // The query intentionally casts a wider net (no barcode filter in SQL) so
+        // it can match more rows; we post-filter here to keep results scannable.
+        items = items.stream()
+                .filter(i -> i.getBarcode() != null && !i.getBarcode().isBlank())
+                .toList();
+
         // Resolve business names, slugs, currencies, and prices
         return items.stream()
                 .map(item -> {

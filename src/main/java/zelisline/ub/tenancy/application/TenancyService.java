@@ -31,7 +31,10 @@ import zelisline.ub.tenancy.api.dto.CreateBranchRequest;
 import zelisline.ub.tenancy.api.dto.CreateBusinessRequest;
 import zelisline.ub.tenancy.api.dto.DomainResponse;
 import zelisline.ub.tenancy.api.dto.InventorySettingsResponse;
+import zelisline.ub.tenancy.api.dto.OnboardingPatchRequest;
+import zelisline.ub.tenancy.api.dto.OnboardingSettingsResponse;
 import zelisline.ub.tenancy.api.dto.PatchBranchRequest;
+import zelisline.ub.tenancy.api.dto.ProfileSettingsResponse;
 import zelisline.ub.tenancy.api.dto.SaBusinessStatsResponse;
 import zelisline.ub.tenancy.api.dto.SaBusinessUserResponse;
 import zelisline.ub.tenancy.api.dto.StorefrontSettingsResponse;
@@ -56,6 +59,8 @@ public class TenancyService {
     private final CatalogBootstrapService catalogBootstrapService;
     private final StorefrontSettingsService storefrontSettingsService;
     private final BusinessInventorySettingsService businessInventorySettingsService;
+    private final BusinessProfileSettingsService businessProfileSettingsService;
+    private final BusinessOnboardingSettingsService businessOnboardingSettingsService;
     private final CloudinaryImageService cloudinaryImageService;
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
@@ -85,6 +90,10 @@ public class TenancyService {
         );
         business.setSettings("{}");
         Business saved = businessRepository.save(business);
+        saved.setSettings(
+                businessOnboardingSettingsService.mergeInitialPending(saved.getSettings())
+        );
+        saved = businessRepository.save(saved);
         catalogBootstrapService.seedDefaultItemTypesIfMissing(saved.getId());
 
         String hostname = resolvePrimaryHostname(
@@ -154,8 +163,45 @@ public class TenancyService {
                 )
             );
         }
+        if (request.profile() != null) {
+            business.setSettings(
+                businessProfileSettingsService.merge(
+                    business.getSettings(),
+                    request.profile()
+                )
+            );
+        }
 
         return toResponse(businessRepository.save(business));
+    }
+
+    @Transactional(readOnly = true)
+    public OnboardingSettingsResponse getOnboardingForTenant(String tenantBusinessId) {
+        Business business = requireTenantBusiness(tenantBusinessId);
+        return businessOnboardingSettingsService.readFromSettingsJson(
+                business.getSettings()
+        );
+    }
+
+    @Transactional
+    public OnboardingSettingsResponse updateOnboardingForTenant(
+            String tenantBusinessId,
+            OnboardingPatchRequest patch
+    ) {
+        Business business = requireTenantBusiness(tenantBusinessId);
+        String settings = businessOnboardingSettingsService.merge(
+                business.getSettings(),
+                patch
+        );
+        if (patch.answers() != null && patch.answers().storeType() != null) {
+            settings = businessProfileSettingsService.mergeStoreType(
+                    settings,
+                    patch.answers().storeType()
+            );
+        }
+        business.setSettings(settings);
+        Business saved = businessRepository.save(business);
+        return businessOnboardingSettingsService.readFromSettingsJson(saved.getSettings());
     }
 
     @Transactional
@@ -664,6 +710,14 @@ public class TenancyService {
             businessInventorySettingsService.readFromSettingsJson(
                 business.getSettings()
             );
+        ProfileSettingsResponse profile =
+            businessProfileSettingsService.readFromSettingsJson(
+                business.getSettings()
+            );
+        OnboardingSettingsResponse onboarding =
+            businessOnboardingSettingsService.readFromSettingsJson(
+                business.getSettings()
+            );
         var bundle = storefrontSettingsService.readTenantConfig(
             business.getSettings(),
             business.getName()
@@ -688,6 +742,8 @@ public class TenancyService {
             business.getUpdatedAt(),
             storefront,
             inventory,
+            profile,
+            onboarding,
             bundle.branding(),
             primaryDomain
         );

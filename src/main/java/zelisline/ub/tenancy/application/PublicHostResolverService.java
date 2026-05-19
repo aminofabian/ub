@@ -39,6 +39,7 @@ public class PublicHostResolverService {
     private final BusinessRepository businessRepository;
     private final StorefrontSettingsService storefrontSettingsService;
     private final CatalogBootstrapService catalogBootstrapService;
+    private final BusinessOnboardingSettingsService businessOnboardingSettingsService;
     private final UserRepository userRepository;
 
     public PublicHostResolverService(
@@ -46,11 +47,13 @@ public class PublicHostResolverService {
             BusinessRepository businessRepository,
             StorefrontSettingsService storefrontSettingsService,
             CatalogBootstrapService catalogBootstrapService,
+            BusinessOnboardingSettingsService businessOnboardingSettingsService,
             UserRepository userRepository) {
         this.domainMappingRepository = domainMappingRepository;
         this.businessRepository = businessRepository;
         this.storefrontSettingsService = storefrontSettingsService;
         this.catalogBootstrapService = catalogBootstrapService;
+        this.businessOnboardingSettingsService = businessOnboardingSettingsService;
         this.userRepository = userRepository;
     }
 
@@ -130,6 +133,10 @@ public class PublicHostResolverService {
         business.setSubscriptionTier("starter");
         business.setSettings("{}");
         Business saved = businessRepository.save(business);
+        saved.setSettings(
+                businessOnboardingSettingsService.mergeInitialPending(saved.getSettings())
+        );
+        saved = businessRepository.save(saved);
         catalogBootstrapService.seedDefaultItemTypesIfMissing(saved.getId());
 
         // ONLY create the {slug}.{suffix} subdomain mapping —

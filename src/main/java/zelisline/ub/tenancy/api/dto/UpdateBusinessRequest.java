@@ -8,6 +8,7 @@ public record UpdateBusinessRequest(
         @Size(max = 64) String subscriptionTier,
         Boolean active,
         @Valid StorefrontPatchRequest storefront,
-        @Valid InventoryPatchRequest inventory
+        @Valid InventoryPatchRequest inventory,
+        @Valid ProfilePatchRequest profile
 ) {
 }

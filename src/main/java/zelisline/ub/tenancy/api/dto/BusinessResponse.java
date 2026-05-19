@@ -15,6 +15,8 @@ public record BusinessResponse(
         Instant updatedAt,
         StorefrontSettingsResponse storefront,
         InventorySettingsResponse inventory,
+        ProfileSettingsResponse profile,
+        OnboardingSettingsResponse onboarding,
         TenantBrandingDto branding,
         // Hostname of the active primary domain mapping, if any. Used by the
         // app shell to keep cross-origin redirects (login handoff, share

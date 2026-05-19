@@ -37,7 +37,7 @@ public final class TenantRequestIds {
         log.warn("[TenantIds] NO tenant context - no attribute and no X-Tenant-Id header. URI={} serverName={}",
                 request.getRequestURI(), request.getServerName());
         throw new ResponseStatusException(
-                HttpStatus.BAD_REQUEST,
+                HttpStatus.UNAUTHORIZED,
                 "Tenant context missing. Provide mapped Host header or X-Tenant-Id."
         );
     }

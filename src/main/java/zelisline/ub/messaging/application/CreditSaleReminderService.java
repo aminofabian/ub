@@ -97,6 +97,79 @@ public class CreditSaleReminderService {
 
         pushInAppNotification(event, customer, message, paymentUrl, currency);
 
+        ExternalDeliveryAttempt delivery = deliverExternalMessage(messaging, phoneDigits, message);
+        saveDispatch(event, delivery.channel(), delivery.outcome(), delivery.detail(), message);
+        log.info("credit_sale_reminder sale={} customer={} channel={} outcome={} detail={}",
+                event.saleId(), event.customerId(), delivery.channel(), delivery.outcome(), delivery.detail());
+    }
+
+    /**
+     * Synchronous test send for admin settings (returns provider outcome in the HTTP response).
+     */
+    public zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse sendTest(
+            String businessId,
+            String rawPhone
+    ) {
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForDispatch(businessId);
+        String message = buildMessage(
+                2,
+                new BigDecimal("100.00"),
+                "KES",
+                messaging.paymentAccountUrl().isBlank()
+                        ? "https://palmart.co.ke/shop/account"
+                        : messaging.paymentAccountUrl());
+
+        if (!messaging.enabled()) {
+            return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
+                    false,
+                    messaging.rapidApiConfigured(),
+                    messaging.metaWhatsAppConfigured(),
+                    messaging.smsConfigured(),
+                    false,
+                    false,
+                    "reminders_disabled",
+                    "none",
+                    "skipped",
+                    "Enable “Send reminders after credit (tab) sales”, save, then retry.",
+                    message);
+        }
+
+        String phoneDigits = StkPhoneNormalizer.normalize(rawPhone);
+        if (phoneDigits == null) {
+            return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
+                    true,
+                    messaging.rapidApiConfigured(),
+                    messaging.metaWhatsAppConfigured(),
+                    messaging.smsConfigured(),
+                    false,
+                    false,
+                    "invalid_phone",
+                    "none",
+                    "failed",
+                    "Use a Kenyan number e.g. 0712345678 or 254712345678",
+                    message);
+        }
+
+        ExternalDeliveryAttempt attempt = deliverExternalMessage(messaging, phoneDigits, message);
+        return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
+                true,
+                messaging.rapidApiConfigured(),
+                messaging.metaWhatsAppConfigured(),
+                messaging.smsConfigured(),
+                attempt.lookup().skipped(),
+                attempt.lookup().onWhatsApp(),
+                attempt.lookup().detail(),
+                attempt.channel(),
+                attempt.outcome(),
+                attempt.detail(),
+                message);
+    }
+
+    private ExternalDeliveryAttempt deliverExternalMessage(
+            TenantMessagingConfig messaging,
+            String phoneDigits,
+            String message
+    ) {
         String e164 = "+" + phoneDigits;
         String channel;
         String outcome;
@@ -131,10 +204,15 @@ public class CreditSaleReminderService {
             outcome = sms.sent() ? "sent" : (sms.stub() ? "stub" : "failed");
             detail = "not_on_whatsapp:" + lookup.detail() + ";" + sms.detail();
         }
+        return new ExternalDeliveryAttempt(lookup, channel, outcome, detail);
+    }
 
-        saveDispatch(event, channel, outcome, detail, message);
-        log.info("credit_sale_reminder sale={} customer={} channel={} outcome={}",
-                event.saleId(), event.customerId(), channel, outcome);
+    private record ExternalDeliveryAttempt(
+            RapidApiWhatsAppLookupClient.LookupResult lookup,
+            String channel,
+            String outcome,
+            String detail
+    ) {
     }
 
     private void pushInAppNotification(

@@ -23,7 +23,7 @@ public class CreditSaleReminderListener {
         try {
             creditSaleReminderService.dispatch(event);
         } catch (Exception ex) {
-            log.warn("Credit sale reminder failed saleId={}: {}", event.saleId(), ex.getMessage());
+            log.warn("Credit sale reminder failed saleId={}", event.saleId(), ex);
         }
     }
 }

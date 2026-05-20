@@ -41,10 +41,11 @@ import zelisline.ub.payments.domain.spi.WebhookResult;
  *   <li>Connection test via OAuth token endpoint ping</li>
  * </ul>
  *
- * <p>Environment URLs:
+ * <p>Environment URLs (production uses two hosts per KopoKopo docs):
  * <ul>
- *   <li>Sandbox: {@code https://sandbox.kopokopo.com}</li>
- *   <li>Production: {@code https://app.kopokopo.com}</li>
+ *   <li>Sandbox: {@code https://sandbox.kopokopo.com} for OAuth and API</li>
+ *   <li>Production OAuth: {@code https://app.kopokopo.com/oauth/token}</li>
+ *   <li>Production API: {@code https://api.kopokopo.com/api/v2/...}</li>
  * </ul>
  */
 @Component
@@ -53,8 +54,8 @@ public class KopokopoPaymentGateway implements PaymentGateway {
     private static final Logger log = LoggerFactory.getLogger(KopokopoPaymentGateway.class);
 
     private static final String SANDBOX_BASE = "https://sandbox.kopokopo.com";
-    /** K2Connect SDK and OAuth docs use {@code app.kopokopo.com} for production (not {@code api.kopokopo.com}). */
-    private static final String PRODUCTION_BASE = "https://app.kopokopo.com";
+    private static final String PRODUCTION_AUTH_BASE = "https://app.kopokopo.com";
+    private static final String PRODUCTION_API_BASE = "https://api.kopokopo.com";
 
     private static final String OAUTH_PATH = "/oauth/token";
     private static final String INCOMING_PAYMENTS_PATH = "/api/v2/incoming_payments";
@@ -75,8 +76,9 @@ public class KopokopoPaymentGateway implements PaymentGateway {
     @Override
     public StkPushResponse initiateStkPush(StkPushRequest request) {
         Map<String, String> creds = request.credentials();
-        String baseUrl = resolveBaseUrl(creds);
-        String accessToken = obtainAccessToken(creds, baseUrl);
+        String authBase = resolveAuthBaseUrl(creds);
+        String apiBase = resolveApiBaseUrl(creds);
+        String accessToken = obtainAccessToken(creds, authBase);
         String tillNumber = creds.getOrDefault("tillNumber", creds.get("shortcode"));
 
         if (tillNumber == null || tillNumber.isBlank()) {
@@ -122,7 +124,7 @@ public class KopokopoPaymentGateway implements PaymentGateway {
 
         try {
             String json = objectMapper.writeValueAsString(body);
-            HttpResponse<String> response = Unirest.post(baseUrl + INCOMING_PAYMENTS_PATH)
+            HttpResponse<String> response = Unirest.post(apiBase + INCOMING_PAYMENTS_PATH)
                     .header("Authorization", "Bearer " + accessToken)
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
@@ -163,9 +165,10 @@ public class KopokopoPaymentGateway implements PaymentGateway {
      * Query STK status with credentials (called by the polling scheduler).
      */
     public StkStatusResponse queryStkStatus(String paymentId, Map<String, String> creds) {
-        String baseUrl = resolveBaseUrl(creds);
-        String accessToken = obtainAccessToken(creds, baseUrl);
-        String url = baseUrl + INCOMING_PAYMENTS_PATH + "/" + paymentId;
+        String authBase = resolveAuthBaseUrl(creds);
+        String apiBase = resolveApiBaseUrl(creds);
+        String accessToken = obtainAccessToken(creds, authBase);
+        String url = apiBase + INCOMING_PAYMENTS_PATH + "/" + paymentId;
 
         try {
             HttpResponse<String> response = Unirest.get(url)
@@ -360,10 +363,10 @@ public class KopokopoPaymentGateway implements PaymentGateway {
             return ValidationResult.failure("INVALID_JSON", "Credentials are not valid JSON: " + e.getMessage(), null);
         }
 
-        String baseUrl = resolveBaseUrl(creds);
+        String authBase = resolveAuthBaseUrl(creds);
 
         try {
-            String token = obtainAccessToken(creds, baseUrl);
+            String token = obtainAccessToken(creds, authBase);
             if (token != null && !token.isBlank()) {
                 return ValidationResult.success();
             }
@@ -406,9 +409,18 @@ public class KopokopoPaymentGateway implements PaymentGateway {
 
     // ── Helpers ──────────────────────────────────────────────────────
 
-    private String resolveBaseUrl(Map<String, String> creds) {
-        String env = creds.getOrDefault("environment", "sandbox");
-        return "production".equalsIgnoreCase(env) ? PRODUCTION_BASE : SANDBOX_BASE;
+    private static boolean isProduction(Map<String, String> creds) {
+        return "production".equalsIgnoreCase(creds.getOrDefault("environment", "sandbox"));
+    }
+
+    /** OAuth token endpoint host. */
+    private String resolveAuthBaseUrl(Map<String, String> creds) {
+        return isProduction(creds) ? PRODUCTION_AUTH_BASE : SANDBOX_BASE;
+    }
+
+    /** STK push and incoming-payment status host. */
+    private String resolveApiBaseUrl(Map<String, String> creds) {
+        return isProduction(creds) ? PRODUCTION_API_BASE : SANDBOX_BASE;
     }
 
     private String obtainAccessToken(Map<String, String> creds, String baseUrl) {

@@ -35,6 +35,10 @@ public class PlatformPaymentGateway {
     @Column(name = "is_enabled", nullable = false)
     private boolean isEnabled;
 
+    /** When true, tenants may use this gateway type for supplier Send Money / B2C payouts. */
+    @Column(name = "supplier_payout_supported", nullable = false)
+    private boolean supplierPayoutSupported;
+
     @Column(name = "display_name", nullable = false, length = 100)
     private String displayName;
 

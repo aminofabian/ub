@@ -4,7 +4,11 @@ import java.math.BigDecimal;
 
 public record SupplyPayOptionsResponse(
         BigDecimal balanceOpen,
-        boolean kopokopoActive,
+        /** Tenant enabled supplier payouts under Payments settings. */
+        boolean supplierPayoutEnabled,
+        /** Selected gateway is active and allowed for supplier payouts. */
+        boolean supplierPayoutGatewayReady,
+        String supplierPayoutGatewayLabel,
         boolean supplierMobilePayoutConfigured,
         String payoutPhone,
         boolean kopokopoPayEligible,

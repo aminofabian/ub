@@ -8,6 +8,7 @@ import java.time.Instant;
 public record PlatformGatewayResponse(
         String gatewayType,
         boolean isEnabled,
+        boolean supplierPayoutSupported,
         String displayName,
         String description,
         String logoUrl,

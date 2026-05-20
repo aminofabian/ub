@@ -38,6 +38,9 @@ public class PlatformPaymentGatewayService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "Platform gateway not found: " + gatewayType));
         gw.setEnabled(request.isEnabled());
+        if (request.supplierPayoutSupported() != null) {
+            gw.setSupplierPayoutSupported(request.supplierPayoutSupported());
+        }
         gw.setDisplayName(request.displayName());
         if (request.description() != null) {
             gw.setDescription(request.description());
@@ -59,6 +62,7 @@ public class PlatformPaymentGatewayService {
         return new PlatformGatewayResponse(
                 gw.getGatewayType().name(),
                 gw.isEnabled(),
+                gw.isSupplierPayoutSupported(),
                 gw.getDisplayName(),
                 gw.getDescription(),
                 gw.getLogoUrl(),

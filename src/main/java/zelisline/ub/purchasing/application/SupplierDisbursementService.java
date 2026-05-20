@@ -19,7 +19,7 @@ import org.springframework.web.server.ResponseStatusException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
-import zelisline.ub.payments.application.PaymentGatewayStkService;
+import zelisline.ub.payments.application.SupplierPayoutSettingsService;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
 import zelisline.ub.payments.domain.spi.SendMoneyRequest;
@@ -54,7 +54,7 @@ public class SupplierDisbursementService {
     private final SupplierPaymentAllocationRepository allocationRepository;
     private final SupplierRepository supplierRepository;
     private final PaymentGatewayConfigRepository configRepository;
-    private final PaymentGatewayStkService paymentGatewayStkService;
+    private final SupplierPayoutSettingsService supplierPayoutSettingsService;
     private final CredentialEncryptionService encryptionService;
     private final KopokopoPaymentGateway kopokopoGateway;
     private final SupplierPaymentService supplierPaymentService;
@@ -74,18 +74,21 @@ public class SupplierDisbursementService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
 
         BigDecimal open = openBalance(inv);
-        String configId = findActiveKopokopoConfigId(businessId);
-        boolean kopokopoActive = configId != null;
+        Optional<PaymentGatewayConfig> payoutGateway = supplierPayoutSettingsService.resolveActivePayoutConfig(businessId);
+        boolean supplierPayoutEnabled = supplierPayoutSettingsService.isSupplierPayoutToggleEnabled(businessId);
+        boolean gatewayReady = payoutGateway.isPresent();
         boolean mobilePayout = SupplierPayoutTypes.MOBILE_WALLET.equals(supplier.getPayoutType())
                 && supplier.getPayoutPhone() != null
                 && !supplier.getPayoutPhone().isBlank();
-        boolean kopokopoEligible = kopokopoActive && mobilePayout && open.compareTo(MONEY) > 0;
+        boolean kopokopoEligible = gatewayReady && mobilePayout && open.compareTo(MONEY) > 0;
 
         Optional<SupplierDisbursement> pending = findPendingDisbursement(businessId, invoiceId);
 
         return new SupplyPayOptionsResponse(
                 open,
-                kopokopoActive,
+                supplierPayoutEnabled,
+                gatewayReady,
+                payoutGateway.map(PaymentGatewayConfig::getLabel).orElse(null),
                 mobilePayout,
                 supplier.getPayoutPhone(),
                 kopokopoEligible,
@@ -120,13 +123,14 @@ public class SupplierDisbursementService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Supplier payout phone is required");
         }
 
-        String configId = findActiveKopokopoConfigId(businessId);
-        if (configId == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "KopoKopo is not active for this business");
+        PaymentGatewayConfig cfg = supplierPayoutSettingsService.resolveActivePayoutConfig(businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Supplier payouts are disabled or no active payout gateway is configured. "
+                                + "Enable under Payments → Supplier payouts."));
+        if (cfg.getGatewayType() != GatewayType.KOPOKOPO) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Supplier payout via " + cfg.getGatewayType().name() + " is not implemented yet");
         }
-
-        PaymentGatewayConfig cfg = configRepository.findById(configId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Gateway config not found"));
 
         Map<String, String> creds = decryptCredentials(cfg);
         String till = creds.getOrDefault("tillNumber", creds.get("shortcode"));
@@ -332,10 +336,6 @@ public class SupplierDisbursementService {
         BigDecimal paid = allocationRepository.sumAmountBySupplierInvoiceId(inv.getId());
         return inv.getGrandTotal().subtract(paid != null ? paid : BigDecimal.ZERO)
                 .setScale(2, RoundingMode.HALF_UP);
-    }
-
-    private String findActiveKopokopoConfigId(String businessId) {
-        return paymentGatewayStkService.findDefaultActiveStkConfigId(businessId);
     }
 
     private Map<String, String> decryptCredentials(PaymentGatewayConfig cfg) {

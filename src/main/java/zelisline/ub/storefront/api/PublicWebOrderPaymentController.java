@@ -3,6 +3,7 @@ package zelisline.ub.storefront.api;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -11,6 +12,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.storefront.api.dto.PublicWebOrderPaymentStatusResponse;
 import zelisline.ub.storefront.api.dto.PublicWebStkPushRequest;
 import zelisline.ub.storefront.api.dto.PublicWebStkPushResponse;
 import zelisline.ub.storefront.application.PublicStorefrontPaymentService;
@@ -35,5 +37,15 @@ public class PublicWebOrderPaymentController {
                 body.phoneNumber()
         );
         return ResponseEntity.status(HttpStatus.OK).cacheControl(CacheControl.noStore()).body(out);
+    }
+
+    @GetMapping("/{orderId}/payment-status")
+    public ResponseEntity<PublicWebOrderPaymentStatusResponse> paymentStatus(
+            @PathVariable String slug,
+            @PathVariable String orderId
+    ) {
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .body(publicStorefrontPaymentService.orderPaymentStatus(slug, orderId));
     }
 }

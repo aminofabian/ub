@@ -14,9 +14,14 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.MpesaStkStatuses;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.MpesaStkIntent;
+import zelisline.ub.credits.domain.CustomerPhone;
 import zelisline.ub.credits.repository.CreditAccountRepository;
+import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.MpesaStkIntentRepository;
+import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.PaymentGatewayStkService;
+import zelisline.ub.payments.domain.GatewayType;
+import zelisline.ub.payments.domain.StkPushContextType;
 
 @Service
 @RequiredArgsConstructor
@@ -29,6 +34,8 @@ public class MpesaStkIntentService {
     private final CreditAccountRepository creditAccountRepository;
     private final WalletLedgerService walletLedgerService;
     private final PaymentGatewayStkService paymentGatewayStkService;
+    private final GatewayStkPushService gatewayStkPushService;
+    private final CustomerPhoneRepository customerPhoneRepository;
 
     @Transactional
     public MpesaStkIntent initiate(String businessId, String customerId, BigDecimal rawAmount, String idempotencyKey) {
@@ -39,8 +46,10 @@ public class MpesaStkIntentService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Amount must be positive");
         }
 
+        String phone = resolveCustomerPhone(customerId);
         try {
-            return createRow(businessId, account.getId(), amt, idempotencyKey);
+            MpesaStkIntent row = createRow(businessId, account.getId(), amt, idempotencyKey, phone);
+            return row;
         } catch (DataIntegrityViolationException duplicate) {
             return mpesaStkIntentRepository
                     .findByBusinessIdAndIdempotencyKey(businessId, idempotencyKey)
@@ -48,7 +57,13 @@ public class MpesaStkIntentService {
         }
     }
 
-    private MpesaStkIntent createRow(String businessId, String creditAccountId, BigDecimal amt, String idempotencyKey) {
+    private MpesaStkIntent createRow(
+            String businessId,
+            String creditAccountId,
+            BigDecimal amt,
+            String idempotencyKey,
+            String phone
+    ) {
         MpesaStkIntent row = new MpesaStkIntent();
         row.setBusinessId(businessId);
         row.setCreditAccountId(creditAccountId);
@@ -57,31 +72,77 @@ public class MpesaStkIntentService {
         row.setIdempotencyKey(idempotencyKey.trim());
         row.setStatus(MpesaStkStatuses.PENDING);
 
-        // Try to use a real gateway; fall back to STUB if none is ACTIVE
-        String checkoutRequestId = initiateRealStkPush(businessId, amt, idempotencyKey);
+        PaymentGatewayStkService.StkPushOutcome outcome = initiateRealStkPush(
+                businessId, phone, amt, idempotencyKey);
+        String checkoutRequestId = outcome.accepted() && outcome.checkoutRequestId() != null
+                ? outcome.checkoutRequestId()
+                : "STUB-" + java.util.UUID.randomUUID();
         row.setCheckoutRequestId(checkoutRequestId);
 
         mpesaStkIntentRepository.save(row);
+        registerWalletPush(businessId, row, phone, outcome);
         return row;
     }
 
-    /**
-     * Attempts to find an ACTIVE gateway config and initiate a real STK Push.
-     * Falls back to a STUB checkout ID if no gateway is available.
-     */
-    private String initiateRealStkPush(String businessId, BigDecimal amount, String reference) {
+    private PaymentGatewayStkService.StkPushOutcome initiateRealStkPush(
+            String businessId,
+            String phone,
+            BigDecimal amount,
+            String reference
+    ) {
+        if (phone == null || phone.isBlank()) {
+            log.warn("Wallet STK skipped — no customer phone for business={}", businessId);
+            return PaymentGatewayStkService.StkPushOutcome.rejected(null, "NO_PHONE", "Customer has no phone");
+        }
         PaymentGatewayStkService.StkPushOutcome outcome = paymentGatewayStkService.initiate(
                 businessId,
                 null,
+                phone,
                 amount,
                 reference,
                 "Wallet Top Up"
         );
-        if (outcome.accepted() && outcome.checkoutRequestId() != null) {
-            return outcome.checkoutRequestId();
+        if (!outcome.accepted()) {
+            log.info("No ACTIVE gateway accepted wallet STK for business={}", businessId);
         }
-        log.info("No ACTIVE gateway accepted STK for business={} — using STUB", businessId);
-        return "STUB-" + java.util.UUID.randomUUID();
+        return outcome;
+    }
+
+    private void registerWalletPush(
+            String businessId,
+            MpesaStkIntent intent,
+            String phone,
+            PaymentGatewayStkService.StkPushOutcome outcome
+    ) {
+        if (!outcome.accepted()
+                || intent.getCheckoutRequestId() == null
+                || intent.getCheckoutRequestId().startsWith("STUB-")) {
+            return;
+        }
+        GatewayType gatewayType = GatewayType.valueOf(outcome.gatewayType());
+        gatewayStkPushService.registerPush(
+                businessId,
+                gatewayType,
+                outcome.configId(),
+                intent.getCheckoutRequestId(),
+                intent.getIdempotencyKey(),
+                StkPushContextType.WALLET_INTENT,
+                intent.getId(),
+                intent.getAmount(),
+                phone);
+    }
+
+    private String resolveCustomerPhone(String customerId) {
+        java.util.List<CustomerPhone> phones = customerPhoneRepository.findByCustomerIdOrderByCreatedAtAsc(customerId);
+        if (phones.isEmpty()) {
+            return null;
+        }
+        for (CustomerPhone p : phones) {
+            if (p.isPrimary() && p.getPhone() != null && !p.getPhone().isBlank()) {
+                return p.getPhone().trim();
+            }
+        }
+        return phones.getFirst().getPhone() != null ? phones.getFirst().getPhone().trim() : null;
     }
 
     /** Test/dev completion path — guarded by webhook shared secret when configured. */

@@ -1,0 +1,371 @@
+package zelisline.ub.payments.application;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.Map;
+import java.util.Optional;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import lombok.RequiredArgsConstructor;
+import zelisline.ub.credits.MpesaStkStatuses;
+import zelisline.ub.credits.application.WalletLedgerService;
+import zelisline.ub.credits.domain.CreditAccount;
+import zelisline.ub.credits.domain.MpesaStkIntent;
+import zelisline.ub.credits.repository.CreditAccountRepository;
+import zelisline.ub.credits.repository.MpesaStkIntentRepository;
+import zelisline.ub.notifications.application.NotificationService;
+import zelisline.ub.payments.domain.GatewayStkPush;
+import zelisline.ub.payments.domain.GatewayStkPushStatuses;
+import zelisline.ub.payments.domain.GatewayStatus;
+import zelisline.ub.payments.domain.GatewayType;
+import zelisline.ub.payments.domain.PaymentGatewayConfig;
+import zelisline.ub.payments.domain.PaymentWebhookEvent;
+import zelisline.ub.payments.domain.StkPushContextType;
+import zelisline.ub.payments.domain.spi.WebhookResult;
+import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
+import zelisline.ub.payments.infrastructure.KopokopoPaymentGateway;
+import zelisline.ub.payments.repository.GatewayStkPushRepository;
+import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
+import zelisline.ub.payments.repository.PaymentWebhookEventRepository;
+import zelisline.ub.platform.realtime.RealtimeBridge;
+import zelisline.ub.storefront.WebOrderStatuses;
+import zelisline.ub.storefront.domain.WebOrder;
+import zelisline.ub.storefront.repository.WebOrderRepository;
+
+@Service
+@RequiredArgsConstructor
+public class GatewayStkPushService {
+
+    private static final Logger log = LoggerFactory.getLogger(GatewayStkPushService.class);
+
+    private final GatewayStkPushRepository pushRepository;
+    private final PaymentWebhookEventRepository webhookEventRepository;
+    private final PaymentGatewayConfigRepository configRepository;
+    private final WebOrderRepository webOrderRepository;
+    private final MpesaStkIntentRepository mpesaStkIntentRepository;
+    private final CreditAccountRepository creditAccountRepository;
+    private final WalletLedgerService walletLedgerService;
+    private final CredentialEncryptionService encryptionService;
+    private final KopokopoPaymentGateway kopokopoGateway;
+    private final ObjectMapper objectMapper;
+    private final NotificationService notificationService;
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
+
+    @Transactional
+    public GatewayStkPush registerPush(
+            String businessId,
+            GatewayType gatewayType,
+            String configId,
+            String gatewayCheckoutId,
+            String merchantReference,
+            StkPushContextType contextType,
+            String contextId,
+            BigDecimal amount,
+            String phoneNumber
+    ) {
+        if (gatewayCheckoutId == null || gatewayCheckoutId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Missing gateway checkout id");
+        }
+        Optional<GatewayStkPush> existing = pushRepository.findByGatewayTypeAndGatewayCheckoutId(
+                gatewayType, gatewayCheckoutId.trim());
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+
+        GatewayStkPush row = new GatewayStkPush();
+        row.setBusinessId(businessId);
+        row.setGatewayType(gatewayType);
+        row.setConfigId(configId);
+        row.setGatewayCheckoutId(gatewayCheckoutId.trim());
+        row.setMerchantReference(merchantReference != null ? merchantReference.trim() : gatewayCheckoutId.trim());
+        row.setContextType(contextType);
+        row.setContextId(contextId);
+        row.setAmount(amount);
+        row.setPhoneNumber(phoneNumber != null ? phoneNumber.trim() : "");
+        row.setStatus(GatewayStkPushStatuses.PENDING);
+        try {
+            return pushRepository.save(row);
+        } catch (DataIntegrityViolationException e) {
+            return pushRepository.findByGatewayTypeAndGatewayCheckoutId(gatewayType, gatewayCheckoutId.trim())
+                    .orElseThrow(() -> e);
+        }
+    }
+
+    @Transactional
+    public boolean processKopokopoWebhook(
+            String businessId,
+            String configId,
+            WebhookResult parsed
+    ) {
+        if (parsed == null) {
+            return false;
+        }
+        String eventId = parsed.webhookEventId() != null && !parsed.webhookEventId().isBlank()
+                ? parsed.webhookEventId()
+                : parsed.gatewayTransactionId();
+        if (eventId != null && !eventId.isBlank()) {
+            if (webhookEventRepository.existsByGatewayTypeAndGatewayEventId(GatewayType.KOPOKOPO, eventId)) {
+                log.info("KopoKopo webhook duplicate ignored: eventId={}", eventId);
+                return true;
+            }
+            PaymentWebhookEvent audit = new PaymentWebhookEvent();
+            audit.setBusinessId(businessId);
+            audit.setGatewayType(GatewayType.KOPOKOPO);
+            audit.setGatewayEventId(eventId);
+            audit.setTopic(parsed.topic());
+            audit.setRawPayload(parsed.rawPayload());
+            webhookEventRepository.save(audit);
+        }
+
+        Optional<GatewayStkPush> push = resolvePush(businessId, parsed);
+        if (push.isEmpty()) {
+            log.warn("KopoKopo webhook: no matching STK push business={} checkout={} ref={}",
+                    businessId, parsed.gatewayCheckoutId(), parsed.reference());
+            return true;
+        }
+
+        if (parsed.success()) {
+            confirmPush(push.get(), parsed.gatewayTransactionId(), parsed.amount());
+            return true;
+        }
+        if (parsed.terminalFailure()) {
+            markFailed(push.get(), "Payment declined by M-Pesa");
+            return true;
+        }
+        return true;
+    }
+
+    @Transactional
+    public Optional<GatewayStkPush> pollAndUpdate(GatewayStkPush push) {
+        if (!GatewayStkPushStatuses.PENDING.equals(push.getStatus())) {
+            return Optional.of(push);
+        }
+        if (push.getGatewayType() != GatewayType.KOPOKOPO) {
+            return Optional.of(push);
+        }
+        PaymentGatewayConfig cfg = resolveConfig(push);
+        if (cfg == null) {
+            return Optional.of(push);
+        }
+
+        Map<String, String> creds = decryptCredentials(cfg);
+        if (creds == null) {
+            return Optional.of(push);
+        }
+
+        var status = kopokopoGateway.queryStkStatus(push.getGatewayCheckoutId(), creds);
+        push.setLastPolledAt(Instant.now());
+        push.setPollCount(push.getPollCount() + 1);
+        pushRepository.save(push);
+
+        if (status.completed()) {
+            confirmPush(push, push.getGatewayCheckoutId(), push.getAmount());
+            return Optional.of(pushRepository.findById(push.getId()).orElse(push));
+        }
+        if (status.failed()) {
+            markFailed(push, status.resultDescription() != null ? status.resultDescription() : "STK payment failed");
+            return Optional.of(pushRepository.findById(push.getId()).orElse(push));
+        }
+        return Optional.of(push);
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<GatewayStkPush> findByCheckoutId(GatewayType type, String checkoutId) {
+        if (checkoutId == null || checkoutId.isBlank()) {
+            return Optional.empty();
+        }
+        return pushRepository.findByGatewayTypeAndGatewayCheckoutId(type, checkoutId.trim());
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<GatewayStkPush> findLatestForWebOrder(String orderId) {
+        return pushRepository.findFirstByContextTypeAndContextIdOrderByCreatedAtDesc(
+                StkPushContextType.WEB_ORDER, orderId);
+    }
+
+    private Optional<GatewayStkPush> resolvePush(String businessId, WebhookResult parsed) {
+        if (parsed.gatewayCheckoutId() != null && !parsed.gatewayCheckoutId().isBlank()) {
+            Optional<GatewayStkPush> byCheckout = pushRepository.findByGatewayTypeAndGatewayCheckoutId(
+                    GatewayType.KOPOKOPO, parsed.gatewayCheckoutId().trim());
+            if (byCheckout.isPresent() && businessId.equals(byCheckout.get().getBusinessId())) {
+                return byCheckout;
+            }
+        }
+        if (parsed.reference() != null && !parsed.reference().isBlank()) {
+            return pushRepository.findFirstByBusinessIdAndMerchantReferenceAndStatus(
+                    businessId, parsed.reference().trim(), GatewayStkPushStatuses.PENDING);
+        }
+        return Optional.empty();
+    }
+
+    private void confirmPush(GatewayStkPush push, String gatewayTxnId, BigDecimal webhookAmount) {
+        if (!GatewayStkPushStatuses.PENDING.equals(push.getStatus())) {
+            return;
+        }
+        if (webhookAmount != null
+                && webhookAmount.subtract(push.getAmount()).abs().compareTo(new BigDecimal("1.00")) > 0) {
+            log.warn("STK amount mismatch push={} expected={} got={}",
+                    push.getId(), push.getAmount(), webhookAmount);
+        }
+
+        push.setStatus(GatewayStkPushStatuses.SUCCESS);
+        push.setGatewayTransactionId(gatewayTxnId);
+        push.setConfirmedAt(Instant.now());
+        push.setFailureReason(null);
+        pushRepository.save(push);
+
+        switch (push.getContextType()) {
+            case WEB_ORDER -> confirmWebOrder(push);
+            case WALLET_INTENT -> confirmWalletIntent(push);
+            case POS_PAYMENT -> publishPosConfirmation(push);
+            default -> log.warn("Unknown STK context type: {}", push.getContextType());
+        }
+    }
+
+    private void markFailed(GatewayStkPush push, String reason) {
+        if (!GatewayStkPushStatuses.PENDING.equals(push.getStatus())) {
+            return;
+        }
+        push.setStatus(GatewayStkPushStatuses.FAILED);
+        push.setFailureReason(reason);
+        pushRepository.save(push);
+
+        if (push.getContextType() == StkPushContextType.WEB_ORDER && push.getContextId() != null) {
+            webOrderRepository.findById(push.getContextId()).ifPresent(order -> {
+                if (WebOrderStatuses.PENDING_PAYMENT.equals(order.getStatus())) {
+                    order.setStatus(WebOrderStatuses.PAYMENT_FAILED);
+                    webOrderRepository.save(order);
+                }
+            });
+        }
+        if (push.getContextType() == StkPushContextType.WALLET_INTENT) {
+            mpesaStkIntentRepository.findByBusinessIdAndIdempotencyKey(
+                    push.getBusinessId(), push.getMerchantReference()).ifPresent(intent -> {
+                if (MpesaStkStatuses.PENDING.equals(intent.getStatus())) {
+                    intent.setStatus(MpesaStkStatuses.FAILED);
+                    mpesaStkIntentRepository.save(intent);
+                }
+            });
+        }
+        publishStkRealtime(push, false, reason);
+    }
+
+    private void confirmWebOrder(GatewayStkPush push) {
+        if (push.getContextId() == null) {
+            return;
+        }
+        WebOrder order = webOrderRepository.findById(push.getContextId()).orElse(null);
+        if (order == null || !push.getBusinessId().equals(order.getBusinessId())) {
+            return;
+        }
+        if (!WebOrderStatuses.PENDING_PAYMENT.equals(order.getStatus())
+                && !WebOrderStatuses.PAYMENT_FAILED.equals(order.getStatus())) {
+            return;
+        }
+        order.setStatus(WebOrderStatuses.PAID);
+        order.setPaymentCheckoutId(push.getGatewayCheckoutId());
+        order.setPaidAt(Instant.now());
+        webOrderRepository.save(order);
+
+        try {
+            var payload = new java.util.LinkedHashMap<String, Object>();
+            payload.put("orderId", order.getId());
+            payload.put("total", order.getGrandTotal().toPlainString());
+            payload.put("customerName", order.getCustomerName());
+            notificationService.tryInsertDedupe(
+                    order.getBusinessId(),
+                    "storefront.order.paid",
+                    "web_order_paid:" + order.getId(),
+                    objectMapper.writeValueAsString(payload));
+        } catch (Exception e) {
+            log.warn("Failed in-app notification for paid web order {}", order.getId(), e);
+        }
+
+        publishStkRealtime(push, true, "Order paid");
+        log.info("Web order marked paid: orderId={} checkoutId={}", order.getId(), push.getGatewayCheckoutId());
+    }
+
+    private void confirmWalletIntent(GatewayStkPush push) {
+        MpesaStkIntent intent = null;
+        if (push.getContextId() != null) {
+            intent = mpesaStkIntentRepository.findById(push.getContextId()).orElse(null);
+        }
+        if (intent == null) {
+            intent = mpesaStkIntentRepository.findByBusinessIdAndIdempotencyKey(
+                    push.getBusinessId(), push.getMerchantReference()).orElse(null);
+        }
+        if (intent == null) {
+            log.warn("Wallet STK intent not found for push {}", push.getId());
+            return;
+        }
+        if (MpesaStkStatuses.FULFILLED.equals(intent.getStatus())) {
+            return;
+        }
+        try {
+            CreditAccount acc = creditAccountRepository.findById(intent.getCreditAccountId()).orElseThrow();
+            walletLedgerService.creditWalletFromMpesaStk(
+                    intent.getBusinessId(),
+                    acc.getCustomerId(),
+                    intent.getAmount(),
+                    intent.getId());
+            intent.setStatus(MpesaStkStatuses.FULFILLED);
+            intent.setGatewayConfirmationCode(
+                    push.getGatewayTransactionId() != null ? push.getGatewayTransactionId() : "OK");
+            intent.setFulfilledWalletTxnId(intent.getId());
+            mpesaStkIntentRepository.save(intent);
+            publishStkRealtime(push, true, "Wallet topped up");
+        } catch (Exception e) {
+            log.error("Failed to fulfill wallet STK intent {}", intent.getId(), e);
+            markFailed(push, e.getMessage());
+        }
+    }
+
+    private void publishPosConfirmation(GatewayStkPush push) {
+        publishStkRealtime(push, true, "M-Pesa payment received");
+    }
+
+    private void publishStkRealtime(GatewayStkPush push, boolean success, String message) {
+        eventPublisher.publishEvent(new RealtimeBridge.StkPaymentSettledEvent(
+                push.getBusinessId(),
+                push.getGatewayCheckoutId(),
+                push.getMerchantReference(),
+                push.getContextType().name(),
+                push.getContextId(),
+                success,
+                message));
+    }
+
+    private PaymentGatewayConfig resolveConfig(GatewayStkPush push) {
+        if (push.getConfigId() != null && !push.getConfigId().isBlank()) {
+            PaymentGatewayConfig cfg = configRepository.findById(push.getConfigId()).orElse(null);
+            if (cfg != null && push.getBusinessId().equals(cfg.getBusinessId())) {
+                return cfg;
+            }
+        }
+        return configRepository.findByBusinessIdAndGatewayTypeAndStatus(
+                push.getBusinessId(), GatewayType.KOPOKOPO, GatewayStatus.ACTIVE)
+                .stream()
+                .findFirst()
+                .orElse(null);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, String> decryptCredentials(PaymentGatewayConfig cfg) {
+        try {
+            String decrypted = encryptionService.decrypt(cfg.getCredentialsJson());
+            return objectMapper.readValue(decrypted, Map.class);
+        } catch (Exception e) {
+            log.warn("Cannot decrypt credentials for STK poll config={}", cfg.getId());
+            return null;
+        }
+    }
+}

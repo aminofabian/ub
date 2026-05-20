@@ -35,6 +35,12 @@ public class WebOrder {
     @Column(name = "status", nullable = false, length = 24)
     private String status;
 
+    @Column(name = "payment_checkout_id", length = 128)
+    private String paymentCheckoutId;
+
+    @Column(name = "paid_at")
+    private Instant paidAt;
+
     @Column(name = "currency", nullable = false, length = 8)
     private String currency;
 

@@ -206,58 +206,134 @@ public class KopokopoPaymentGateway implements PaymentGateway {
 
     @Override
     public WebhookResult processWebhook(Map<String, String> headers, String rawBody) {
-        // The webhook handler in the controller resolves the business and
-        // verifies the signature before calling this method. Here we just parse.
         try {
             var root = objectMapper.readTree(rawBody);
 
-            // K2Connect payload format
+            // STK callback / status payload: { "data": { "id", "attributes": { status, metadata, event } } }
+            if (root.has("data") && root.get("data").isObject()) {
+                return parseIncomingPaymentData(root.get("data"), null, rawBody);
+            }
+
+            // K2Connect topic webhook: { topic, id, event: { resource } }
             if (root.has("topic") && root.has("event")) {
                 String topic = root.get("topic").asText();
+                String webhookEventId = root.has("id") ? root.get("id").asText() : null;
                 var resource = root.get("event").get("resource");
 
                 if (resource == null || resource.isNull()) {
-                    return new WebhookResult(null, null, null, null, null, false, rawBody);
+                    return WebhookResult.empty(rawBody);
                 }
 
                 String gatewayTxnId = resource.has("id") ? resource.get("id").asText() : null;
-                String phone = resource.has("sender_phone_number")
-                        ? resource.get("sender_phone_number").asText() : null;
-                String amountStr = resource.has("amount") ? resource.get("amount").asText() : "0";
-                BigDecimal amount = new BigDecimal(amountStr);
-                String reference = resource.has("reference") ? resource.get("reference").asText() : null;
+                String phone = normalizeWebhookPhone(textOrNull(resource, "sender_phone_number"));
+                BigDecimal amount = parseAmount(textOrNull(resource, "amount"));
+                String reference = textOrNull(resource, "reference");
+                String status = textOrNull(resource, "status");
 
                 boolean success = "buygoods_transaction_received".equals(topic)
-                        && "Received".equalsIgnoreCase(resource.has("status")
-                                ? resource.get("status").asText() : "");
+                        && "Received".equalsIgnoreCase(status);
+                boolean failed = "Failed".equalsIgnoreCase(status);
 
-                // Normalize phone
-                if (phone != null) {
-                    phone = phone.replaceAll("[^0-9]", "");
-                    if (phone.startsWith("0")) phone = "254" + phone.substring(1);
-                }
-
-                return new WebhookResult(null, gatewayTxnId, phone, amount, reference, success, rawBody);
+                return new WebhookResult(
+                        null,
+                        gatewayTxnId,
+                        phone,
+                        amount,
+                        reference,
+                        success,
+                        failed,
+                        null,
+                        webhookEventId,
+                        topic,
+                        rawBody);
             }
 
-            // Daraja payload format
-            if (root.has("TransactionType") && root.has("TransID")) {
-                String gatewayTxnId = root.get("TransID").asText();
-                String amountStr = root.has("TransAmount") ? root.get("TransAmount").asText() : "0";
-                BigDecimal amount = new BigDecimal(amountStr);
-                String reference = root.has("BillRefNumber") ? root.get("BillRefNumber").asText() : "";
-                boolean success = "Buygoods".equalsIgnoreCase(
-                        root.has("TransactionType") ? root.get("TransactionType").asText() : "");
-
-                return new WebhookResult(null, gatewayTxnId, null, amount,
-                        reference.isBlank() ? null : reference, success, rawBody);
-            }
-
-            return new WebhookResult(null, null, null, null, null, false, rawBody);
+            return WebhookResult.empty(rawBody);
         } catch (Exception e) {
             log.error("KopoKopo webhook parsing failed", e);
-            return new WebhookResult(null, null, null, null, null, false, rawBody);
+            return WebhookResult.empty(rawBody);
         }
+    }
+
+    private WebhookResult parseIncomingPaymentData(
+            com.fasterxml.jackson.databind.JsonNode data,
+            String webhookEventId,
+            String rawBody
+    ) {
+        String checkoutId = data.has("id") ? data.get("id").asText() : null;
+        var attrs = data.get("attributes");
+        if (attrs == null || attrs.isNull()) {
+            return new WebhookResult(
+                    null, null, null, null, null, false, false, checkoutId, webhookEventId, null, rawBody);
+        }
+
+        String status = textOrNull(attrs, "status");
+        String reference = null;
+        if (attrs.has("metadata") && attrs.get("metadata").isObject()) {
+            reference = textOrNull(attrs.get("metadata"), "reference");
+        }
+
+        String phone = null;
+        BigDecimal amount = null;
+        String gatewayTxnId = null;
+        if (attrs.has("event") && attrs.get("event").has("resource")) {
+            var resource = attrs.get("event").get("resource");
+            if (resource != null && !resource.isNull()) {
+                gatewayTxnId = textOrNull(resource, "id");
+                phone = normalizeWebhookPhone(textOrNull(resource, "sender_phone_number"));
+                amount = parseAmount(textOrNull(resource, "amount"));
+                if (reference == null || reference.isBlank()) {
+                    reference = textOrNull(resource, "reference");
+                }
+            }
+        }
+
+        boolean success = "Success".equalsIgnoreCase(status)
+                || "Received".equalsIgnoreCase(status);
+        boolean failed = "Failed".equalsIgnoreCase(status);
+
+        return new WebhookResult(
+                null,
+                gatewayTxnId,
+                phone,
+                amount,
+                reference,
+                success,
+                failed,
+                checkoutId,
+                webhookEventId,
+                "incoming_payment",
+                rawBody);
+    }
+
+    private static String textOrNull(com.fasterxml.jackson.databind.JsonNode node, String field) {
+        if (node == null || !node.has(field) || node.get(field).isNull()) {
+            return null;
+        }
+        String v = node.get(field).asText();
+        return v == null || v.isBlank() ? null : v.trim();
+    }
+
+    private static BigDecimal parseAmount(String amountStr) {
+        if (amountStr == null || amountStr.isBlank()) {
+            return null;
+        }
+        try {
+            return new BigDecimal(amountStr.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static String normalizeWebhookPhone(String phone) {
+        if (phone == null || phone.isBlank()) {
+            return null;
+        }
+        phone = phone.replaceAll("[^0-9]", "");
+        if (phone.startsWith("0")) {
+            phone = "254" + phone.substring(1);
+        }
+        return phone;
     }
 
     // ── Display Instructions (not applicable) ────────────────────────

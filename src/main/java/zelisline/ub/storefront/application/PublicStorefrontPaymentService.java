@@ -14,16 +14,22 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.PaymentGatewayStkService;
 import zelisline.ub.payments.application.PlatformPaymentGatewayService;
+import zelisline.ub.payments.domain.GatewayStkPush;
+import zelisline.ub.payments.domain.GatewayType;
+import zelisline.ub.payments.domain.StkPushContextType;
 import zelisline.ub.payments.domain.GatewayStatus;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
 import zelisline.ub.payments.domain.PlatformPaymentGateway;
 import zelisline.ub.payments.domain.spi.DisplayInstructions;
 import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
+import zelisline.ub.storefront.WebOrderStatuses;
 import zelisline.ub.storefront.api.dto.PublicCheckoutPaymentOptions;
 import zelisline.ub.storefront.api.dto.PublicOnlinePaymentMethod;
+import zelisline.ub.storefront.api.dto.PublicWebOrderPaymentStatusResponse;
 import zelisline.ub.storefront.api.dto.PublicWebStkPushResponse;
 import zelisline.ub.storefront.domain.WebOrder;
 import zelisline.ub.storefront.repository.WebOrderRepository;
@@ -46,6 +52,7 @@ public class PublicStorefrontPaymentService {
     private final PlatformPaymentGatewayService platformPaymentGatewayService;
     private final WebOrderRepository webOrderRepository;
     private final PaymentGatewayStkService paymentGatewayStkService;
+    private final GatewayStkPushService gatewayStkPushService;
     private final ObjectMapper objectMapper;
 
     @Transactional(readOnly = true)
@@ -90,7 +97,7 @@ public class PublicStorefrontPaymentService {
         return new PublicCheckoutPaymentOptions(manual, online);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public PublicWebStkPushResponse initiateOrderStkPush(
             String slug,
             String orderId,
@@ -121,6 +128,19 @@ public class PublicStorefrontPaymentService {
         );
 
         if (outcome.accepted()) {
+            GatewayType gatewayType = GatewayType.valueOf(outcome.gatewayType());
+            gatewayStkPushService.registerPush(
+                    business.getId(),
+                    gatewayType,
+                    outcome.configId(),
+                    outcome.checkoutRequestId(),
+                    order.getId(),
+                    StkPushContextType.WEB_ORDER,
+                    order.getId(),
+                    order.getGrandTotal(),
+                    phone);
+            order.setPaymentCheckoutId(outcome.checkoutRequestId());
+            webOrderRepository.save(order);
             return new PublicWebStkPushResponse(
                     true,
                     outcome.gatewayType(),
@@ -134,6 +154,40 @@ public class PublicStorefrontPaymentService {
                 null,
                 outcome.message() != null ? outcome.message() : "Could not send M-Pesa prompt"
         );
+    }
+
+    @Transactional
+    public PublicWebOrderPaymentStatusResponse orderPaymentStatus(String slug, String orderId) {
+        Business business = requireBusiness(slug);
+        WebOrder order = webOrderRepository.findById(orderId.trim())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found"));
+        if (!business.getId().equals(order.getBusinessId())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+        }
+
+        boolean paid = WebOrderStatuses.PAID.equals(order.getStatus());
+        boolean failed = WebOrderStatuses.PAYMENT_FAILED.equals(order.getStatus());
+        String checkoutId = order.getPaymentCheckoutId();
+        String failureReason = null;
+
+        var pushOpt = gatewayStkPushService.findLatestForWebOrder(order.getId());
+        if (pushOpt.isPresent()) {
+            GatewayStkPush push = pushOpt.get();
+            if (zelisline.ub.payments.domain.GatewayStkPushStatuses.PENDING.equals(push.getStatus())) {
+                push = gatewayStkPushService.pollAndUpdate(push).orElse(push);
+            }
+            checkoutId = push.getGatewayCheckoutId();
+            failed = failed || zelisline.ub.payments.domain.GatewayStkPushStatuses.FAILED.equals(push.getStatus());
+            paid = paid || zelisline.ub.payments.domain.GatewayStkPushStatuses.SUCCESS.equals(push.getStatus());
+            failureReason = push.getFailureReason();
+        }
+
+        return new PublicWebOrderPaymentStatusResponse(
+                order.getStatus(),
+                paid,
+                failed,
+                checkoutId,
+                failureReason);
     }
 
     private Business requireBusiness(String slug) {

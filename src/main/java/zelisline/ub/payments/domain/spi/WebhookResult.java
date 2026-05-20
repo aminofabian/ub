@@ -6,25 +6,23 @@ import java.math.BigDecimal;
  * Normalized result from processing a gateway webhook.
  */
 public record WebhookResult(
-        /** The business ID resolved from the webhook payload. */
         String businessId,
-
-        /** Gateway-native transaction ID (for idempotency). */
         String gatewayTransactionId,
-
-        /** The phone number that made the payment, if available. */
         String phoneNumber,
-
-        /** Amount received in the payment. */
         BigDecimal amount,
-
-        /** Reference / account reference from the payer. */
+        /** Merchant reference from STK metadata or bill ref. */
         String reference,
-
-        /** Whether the payment was successful. */
         boolean success,
-
-        /** Raw payload for audit/debug. */
+        /** True when gateway reports a terminal failure (not merely unknown). */
+        boolean terminalFailure,
+        /** Incoming-payment / STK checkout id when present in payload. */
+        String gatewayCheckoutId,
+        /** Gateway webhook event id for idempotency. */
+        String webhookEventId,
+        String topic,
         String rawPayload
 ) {
+    public static WebhookResult empty(String rawPayload) {
+        return new WebhookResult(null, null, null, null, null, false, false, null, null, null, rawPayload);
+    }
 }

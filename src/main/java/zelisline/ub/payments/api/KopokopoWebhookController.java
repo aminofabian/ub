@@ -20,6 +20,7 @@ import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
 import zelisline.ub.payments.domain.spi.WebhookResult;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
+import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.infrastructure.KopokopoPaymentGateway;
 import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
 
@@ -40,6 +41,7 @@ public class KopokopoWebhookController {
     private final KopokopoPaymentGateway kopokopoGateway;
     private final PaymentGatewayConfigRepository configRepository;
     private final CredentialEncryptionService encryptionService;
+    private final GatewayStkPushService gatewayStkPushService;
     private final ObjectMapper objectMapper;
 
     @PostMapping("/payment")
@@ -94,8 +96,10 @@ public class KopokopoWebhookController {
                 matchedConfig.getBusinessId(), result.gatewayTransactionId(),
                 result.amount(), result.success());
 
-        // TODO: Credit wallet, mark STK intent fulfilled, etc.
-        // This will be wired when the wallet integration is complete.
+        gatewayStkPushService.processKopokopoWebhook(
+                matchedConfig.getBusinessId(),
+                matchedConfig.getId(),
+                result);
 
         return ResponseEntity.ok("Received");
     }

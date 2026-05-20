@@ -146,6 +146,29 @@ public class RealtimeBridge {
      * Fan-out payment.confirmed to the originating cashier.
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onStkPaymentSettled(StkPaymentSettledEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        String payloadJson = toJson(Map.of(
+                "checkoutRequestId", event.checkoutRequestId() != null ? event.checkoutRequestId() : "",
+                "merchantReference", event.merchantReference() != null ? event.merchantReference() : "",
+                "contextType", event.contextType() != null ? event.contextType() : "",
+                "contextId", event.contextId() != null ? event.contextId() : "",
+                "success", event.success(),
+                "message", event.message() != null ? event.message() : ""
+        ));
+        if (payloadJson == null) {
+            return;
+        }
+
+        Set<String> sessionIds = sessionRegistry.findAllSessionsForBusiness(event.businessId());
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "stk.payment.settled", eventId, "HIGH", Instant.now(), payloadJson);
+        }
+        log.debug("POS event stk.payment.settled: checkout={} success={} sessions={}",
+                event.checkoutRequestId(), event.success(), sessionIds.size());
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPaymentConfirmed(PaymentConfirmedEvent event) {
         String eventId = UUID.randomUUID().toString();
         String payloadJson = toJson(Map.of(
@@ -493,6 +516,15 @@ public class RealtimeBridge {
     public record PaymentConfirmedEvent(
             String businessId, String branchId, String saleId, BigDecimal amount,
             String paymentMethod, String cashierUserId) {}
+
+    public record StkPaymentSettledEvent(
+            String businessId,
+            String checkoutRequestId,
+            String merchantReference,
+            String contextType,
+            String contextId,
+            boolean success,
+            String message) {}
 
     public record ApprovalRequestedEvent(
             String businessId, String branchId, String approvalId, String adjustmentType,

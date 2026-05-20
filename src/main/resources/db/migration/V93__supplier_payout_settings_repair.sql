@@ -1,7 +1,16 @@
--- Repair partial/failed V92: ensure column + table exist (no FK — avoids charset/engine mismatches).
+-- Repair partial/failed V92: ensure column + table exist (MySQL-compatible, idempotent).
+-- MySQL does not support ALTER TABLE ... ADD COLUMN IF NOT EXISTS.
 
-ALTER TABLE platform_payment_gateways
-  ADD COLUMN IF NOT EXISTS supplier_payout_supported BOOLEAN NOT NULL DEFAULT FALSE;
+SET @s := IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS
+   WHERE TABLE_SCHEMA = DATABASE()
+     AND TABLE_NAME = 'platform_payment_gateways'
+     AND COLUMN_NAME = 'supplier_payout_supported') = 0,
+  'ALTER TABLE platform_payment_gateways ADD COLUMN supplier_payout_supported BOOLEAN NOT NULL DEFAULT FALSE',
+  'SELECT 1');
+PREPARE stmt FROM @s;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
 UPDATE platform_payment_gateways
 SET supplier_payout_supported = TRUE

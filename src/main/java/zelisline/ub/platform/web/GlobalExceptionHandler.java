@@ -10,8 +10,11 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.InvalidDataAccessResourceUsageException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -30,7 +33,20 @@ import jakarta.validation.ConstraintViolationException;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
     private static final String PROBLEM_BASE = "urn:problem:";
+
+    @ExceptionHandler(InvalidDataAccessResourceUsageException.class)
+    public ResponseEntity<ProblemDetail> handleInvalidDataAccess(InvalidDataAccessResourceUsageException ex) {
+        log.error("Database schema/query error", ex);
+        ProblemDetail body = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
+        body.setTitle("Database not ready");
+        body.setType(URI.create(PROBLEM_BASE + "schema-mismatch"));
+        body.setDetail(
+                "A required database migration may be missing (supplier_payout_settings / "
+                        + "supplier_payout_supported). Redeploy the API so Flyway can run V92/V93.");
+        return problem(body, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
 
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ProblemDetail> handleAccessDenied(AccessDeniedException ex) {
@@ -113,6 +129,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ProblemDetail> handleUnexpected(Exception ex) {
+        log.error("Unhandled exception", ex);
         ProblemDetail body = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
         body.setTitle("Internal server error");
         body.setType(URI.create(PROBLEM_BASE + "internal-error"));

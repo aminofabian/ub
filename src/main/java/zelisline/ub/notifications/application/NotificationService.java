@@ -47,11 +47,26 @@ public class NotificationService {
             String dedupeKey,
             String payloadJson
     ) {
+        return tryInsertDedupeForUser(businessId, null, type, dedupeKey, payloadJson);
+    }
+
+    /**
+     * Idempotent insert targeted at a single user (shopper in-app push). Duplicates ignored via dedupe key.
+     */
+    @Transactional
+    public java.util.Optional<Notification> tryInsertDedupeForUser(
+            String businessId,
+            String userId,
+            String type,
+            String dedupeKey,
+            String payloadJson
+    ) {
         if (notificationRepository.existsByBusinessIdAndDedupeKey(businessId, dedupeKey)) {
             return java.util.Optional.empty();
         }
         Notification n = new Notification();
         n.setBusinessId(businessId);
+        n.setUserId(blankToNull(userId));
         n.setType(type);
         n.setDedupeKey(dedupeKey);
         n.setPayloadJson(payloadJson);
@@ -62,5 +77,12 @@ public class NotificationService {
         } catch (DataIntegrityViolationException ex) {
             return java.util.Optional.empty();
         }
+    }
+
+    private static String blankToNull(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        return raw.trim();
     }
 }

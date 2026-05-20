@@ -416,6 +416,7 @@ public class RealtimeBridge {
             case "stock.low", "shift.variance_detected", "storefront.order.placed",
                  "approval.requested", "approval.resolved" -> "HIGH";
             case "payable.overdue", "receivable.overdue", "batch.expiring" -> "MEDIUM";
+            case "credit_sale.reminder" -> "HIGH";
             case "export.completed" -> "LOW";
             default -> "MEDIUM";
         };
@@ -437,23 +438,46 @@ public class RealtimeBridge {
             }
         }
 
-        String title = switch (n.getType()) {
-            case "payable.overdue" -> "Overdue supplier payments";
-            case "receivable.overdue" -> "Overdue customer payments";
-            case "shift.variance_detected" -> "Shift cash variance detected";
-            case "stock.low" -> "Low stock alert";
-            case "batch.expiring" -> "Expiring stock alert";
-            case "storefront.order.placed" -> "New web order";
-            case "approval.requested" -> "Approval requested";
-            case "approval.resolved" -> "Approval resolved";
-            case "export.completed" -> "Export ready";
-            default -> n.getType();
-        };
+        String title;
+        String body = "";
+        String actionUrl = "";
+        if ("credit_sale.reminder".equals(n.getType()) && n.getPayloadJson() != null && !n.getPayloadJson().isBlank()) {
+            try {
+                @SuppressWarnings("unchecked")
+                var parsed = objectMapper.readValue(n.getPayloadJson(), Map.class);
+                title = stringOr(parsed.get("title"), "Credit purchase");
+                body = stringOr(parsed.get("body"), "");
+                actionUrl = stringOr(parsed.get("paymentUrl"), "");
+            } catch (Exception e) {
+                title = "Credit purchase";
+            }
+        } else {
+            title = switch (n.getType()) {
+                case "payable.overdue" -> "Overdue supplier payments";
+                case "receivable.overdue" -> "Overdue customer payments";
+                case "shift.variance_detected" -> "Shift cash variance detected";
+                case "stock.low" -> "Low stock alert";
+                case "batch.expiring" -> "Expiring stock alert";
+                case "storefront.order.placed" -> "New web order";
+                case "approval.requested" -> "Approval requested";
+                case "approval.resolved" -> "Approval resolved";
+                case "export.completed" -> "Export ready";
+                default -> n.getType();
+            };
+        }
         payload.put("title", title);
-        payload.put("body", "");
-        payload.put("actionUrl", "");
+        payload.put("body", body);
+        payload.put("actionUrl", actionUrl);
 
         return payload;
+    }
+
+    private static String stringOr(Object raw, String fallback) {
+        if (raw == null) {
+            return fallback;
+        }
+        String s = String.valueOf(raw).trim();
+        return s.isEmpty() ? fallback : s;
     }
 
     private String toJson(Object obj) {

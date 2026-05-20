@@ -33,6 +33,7 @@ import zelisline.ub.credits.application.LoyaltyPointsService;
 import zelisline.ub.credits.application.WalletLedgerService;
 import zelisline.ub.integrations.webhook.WebhookEventTypes;
 import zelisline.ub.integrations.webhook.application.WebhookEnqueueService;
+import zelisline.ub.messaging.application.CreditSaleReminderEvent;
 import zelisline.ub.sales.SalePaymentLedger;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.PostSaleLineRequest;
@@ -132,6 +133,14 @@ public class SaleService {
                 resolved.normalized(), resolved.overpay());
         attachJournalToSale(saleId, businessId, journalId);
         creditSaleDebtService.applyDebtForNewSale(businessId, saleId, customerId, creditTenderTotal);
+        if (creditTenderTotal.signum() > 0 && customerId != null && !customerId.isBlank()) {
+            eventPublisher.publishEvent(new CreditSaleReminderEvent(
+                    businessId,
+                    saleId,
+                    customerId,
+                    creditTenderTotal,
+                    countCreditSaleItems(saleItems)));
+        }
         walletLedgerService.applyWalletForCompletedSale(
                 businessId, saleId, customerId, walletTenderTotal, resolved.overpay());
         loyaltyPointsService.applyAfterCompletedSale(
@@ -506,5 +515,19 @@ public class SaleService {
             return null;
         }
         return raw.trim();
+    }
+
+    private static int countCreditSaleItems(List<SaleItem> items) {
+        int total = 0;
+        for (SaleItem line : items) {
+            BigDecimal q = line.getQuantity();
+            if (q != null && q.signum() > 0) {
+                total += q.setScale(0, RoundingMode.HALF_UP).intValue();
+            }
+        }
+        if (total > 0) {
+            return total;
+        }
+        return Math.max(1, items.size());
     }
 }

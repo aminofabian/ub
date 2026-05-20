@@ -27,4 +27,31 @@ public class BusinessCreditSettings {
 
     @Column(name = "loyalty_max_redeem_bps", nullable = false)
     private int loyaltyMaxRedeemBps = 5000;
+
+    @Column(name = "credit_sale_reminder_enabled", nullable = false)
+    private boolean creditSaleReminderEnabled;
+
+    @Column(name = "credit_sale_reminder_payment_url", length = 512)
+    private String creditSaleReminderPaymentUrl;
+
+    @Column(name = "rapidapi_key_enc", columnDefinition = "TEXT")
+    private String rapidapiKeyEnc;
+
+    @Column(name = "whatsapp_meta_access_token_enc", columnDefinition = "TEXT")
+    private String whatsappMetaAccessTokenEnc;
+
+    @Column(name = "whatsapp_meta_phone_number_id", length = 64)
+    private String whatsappMetaPhoneNumberId;
+
+    @Column(name = "whatsapp_meta_graph_version", nullable = false, length = 16)
+    private String whatsappMetaGraphVersion = "v25.0";
+
+    @Column(name = "sms_provider", nullable = false, length = 32)
+    private String smsProvider = "none";
+
+    @Column(name = "sms_africas_talking_username", length = 128)
+    private String smsAfricasTalkingUsername;
+
+    @Column(name = "sms_africas_talking_api_key_enc", columnDefinition = "TEXT")
+    private String smsAfricasTalkingApiKeyEnc;
 }

@@ -47,6 +47,11 @@ public class BusinessCreditSettingsService {
         return businessCreditSettingsRepository.save(s);
     }
 
+    @Transactional
+    public BusinessCreditSettings saveSettings(BusinessCreditSettings settings) {
+        return businessCreditSettingsRepository.save(settings);
+    }
+
     private BusinessCreditSettings insertDefaults(String businessId) {
         BusinessCreditSettings s = new BusinessCreditSettings();
         s.setBusinessId(businessId);

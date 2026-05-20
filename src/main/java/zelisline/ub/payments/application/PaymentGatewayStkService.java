@@ -14,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.domain.GatewayStatus;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
+import zelisline.ub.payments.domain.PlatformPaymentGateway;
 import zelisline.ub.payments.domain.spi.PaymentGateway;
 import zelisline.ub.payments.domain.spi.StkPushRequest;
 import zelisline.ub.payments.domain.spi.StkPushResponse;
@@ -37,6 +38,7 @@ public class PaymentGatewayStkService {
     };
 
     private final PaymentGatewayConfigRepository configRepository;
+    private final PlatformPaymentGatewayService platformPaymentGatewayService;
     private final PaymentGatewayRegistry gatewayRegistry;
     private final CredentialEncryptionService encryptionService;
     private final ObjectMapper objectMapper;
@@ -62,6 +64,10 @@ public class PaymentGatewayStkService {
             String reference,
             String description
     ) {
+        if (preferredConfigId == null || preferredConfigId.isBlank()) {
+            preferredConfigId = findDefaultActiveStkConfigId(businessId);
+        }
+
         if (preferredConfigId != null && !preferredConfigId.isBlank()) {
             StkPushOutcome preferred = tryConfig(
                     businessId, preferredConfigId, phoneNumber, amount, reference, description);
@@ -70,20 +76,60 @@ public class PaymentGatewayStkService {
             }
         }
 
+        StkPushOutcome lastOutcome = null;
+        boolean attempted = false;
+
         for (GatewayType type : STK_GATEWAY_PRIORITY) {
+            if (!isPlatformEnabled(type)) {
+                continue;
+            }
             var configs = configRepository.findByBusinessIdAndGatewayTypeAndStatus(
                     businessId, type, GatewayStatus.ACTIVE);
             for (PaymentGatewayConfig cfg : configs) {
                 StkPushOutcome outcome = pushWithConfig(
                         cfg, phoneNumber, amount, reference, description);
-                if (outcome != null && outcome.accepted()) {
+                if (outcome == null) {
+                    continue;
+                }
+                attempted = true;
+                lastOutcome = outcome;
+                if (outcome.accepted()) {
                     return outcome;
                 }
             }
         }
 
-        log.info("No ACTIVE online gateway accepted STK for business={}", businessId);
+        if (attempted && lastOutcome != null) {
+            log.warn("STK declined for business={}: {} {}", businessId,
+                    lastOutcome.responseCode(), lastOutcome.message());
+            return lastOutcome;
+        }
+
+        log.warn("No ACTIVE online STK gateway for business={} (check tenant id, platform enable, Activate)", businessId);
         return StkPushOutcome.rejected(null, "NO_GATEWAY", "Online payment is not available right now.");
+    }
+
+    /**
+     * First ACTIVE tenant config for an enabled platform STK gateway (same selection as storefront checkout).
+     */
+    public String findDefaultActiveStkConfigId(String businessId) {
+        for (GatewayType type : STK_GATEWAY_PRIORITY) {
+            if (!isPlatformEnabled(type)) {
+                continue;
+            }
+            var configs = configRepository.findByBusinessIdAndGatewayTypeAndStatus(
+                    businessId, type, GatewayStatus.ACTIVE);
+            if (!configs.isEmpty()) {
+                return configs.getFirst().getId();
+            }
+        }
+        return null;
+    }
+
+    private boolean isPlatformEnabled(GatewayType type) {
+        return platformPaymentGatewayService.listEnabled().stream()
+                .map(PlatformPaymentGateway::getGatewayType)
+                .anyMatch(t -> t == type);
     }
 
     private StkPushOutcome tryConfig(

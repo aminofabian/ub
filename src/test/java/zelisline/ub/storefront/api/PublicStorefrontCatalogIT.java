@@ -195,6 +195,13 @@ class PublicStorefrontCatalogIT {
     }
 
     @Test
+    void paymentDisplayInstructions_returnsOkWithoutAuth() throws Exception {
+        mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/payments/display-instructions"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray());
+    }
+
+    @Test
     void catalog_listsOnlyPublishedItemsWithPrice() throws Exception {
         mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/catalog/items"))
                 .andExpect(status().isOk())

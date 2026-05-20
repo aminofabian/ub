@@ -1,0 +1,9 @@
+-- Assign payment gateway permissions to Owner and Admin roles.
+-- Owner: 22222222-0000-0000-0000-000000000001
+-- Admin: 22222222-0000-0000-0000-000000000002
+
+INSERT INTO role_permissions (role_id, permission_id) VALUES
+  ('22222222-0000-0000-0000-000000000001', 'd1e7f9a2-3b4c-4d5e-8f6a-7b8c9d0e1f2a'),
+  ('22222222-0000-0000-0000-000000000001', 'e2f8a0b3-4c5d-4e6f-9a0b-8c9d0e1f2b3c'),
+  ('22222222-0000-0000-0000-000000000002', 'd1e7f9a2-3b4c-4d5e-8f6a-7b8c9d0e1f2a'),
+  ('22222222-0000-0000-0000-000000000002', 'e2f8a0b3-4c5d-4e6f-9a0b-8c9d0e1f2b3c');

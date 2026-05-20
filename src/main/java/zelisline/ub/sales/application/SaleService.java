@@ -426,7 +426,7 @@ public class SaleService {
             BigDecimal amt = p.amount().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
             String ref = blankToNull(p.reference());
             if (SalesConstants.PAYMENT_METHOD_MPESA_MANUAL.equals(m) && ref == null) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "M-Pesa manual payments require a reference");
+                // Reference is optional for mpesa_manual — STK Push auto-sets it
             }
             forbidReferenceOnNonReferenceTender(m, ref);
             sum = sum.add(amt);

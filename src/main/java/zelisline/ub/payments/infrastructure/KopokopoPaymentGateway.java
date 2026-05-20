@@ -44,7 +44,7 @@ import zelisline.ub.payments.domain.spi.WebhookResult;
  * <p>Environment URLs:
  * <ul>
  *   <li>Sandbox: {@code https://sandbox.kopokopo.com}</li>
- *   <li>Production: {@code https://api.kopokopo.com}</li>
+ *   <li>Production: {@code https://app.kopokopo.com}</li>
  * </ul>
  */
 @Component
@@ -53,7 +53,8 @@ public class KopokopoPaymentGateway implements PaymentGateway {
     private static final Logger log = LoggerFactory.getLogger(KopokopoPaymentGateway.class);
 
     private static final String SANDBOX_BASE = "https://sandbox.kopokopo.com";
-    private static final String PRODUCTION_BASE = "https://api.kopokopo.com";
+    /** K2Connect SDK and OAuth docs use {@code app.kopokopo.com} for production (not {@code api.kopokopo.com}). */
+    private static final String PRODUCTION_BASE = "https://app.kopokopo.com";
 
     private static final String OAUTH_PATH = "/oauth/token";
     private static final String INCOMING_PAYMENTS_PATH = "/api/v2/incoming_payments";
@@ -335,8 +336,8 @@ public class KopokopoPaymentGateway implements PaymentGateway {
     }
 
     private String obtainAccessToken(Map<String, String> creds, String baseUrl) {
-        String clientId = creds.get("clientId");
-        String clientSecret = creds.get("clientSecret");
+        String clientId = trimCred(creds.get("clientId"));
+        String clientSecret = trimCred(creds.get("clientSecret"));
 
         if (clientId == null || clientId.isBlank() || clientSecret == null || clientSecret.isBlank()) {
             throw new IllegalArgumentException("clientId and clientSecret are required");
@@ -388,12 +389,22 @@ public class KopokopoPaymentGateway implements PaymentGateway {
         return location;
     }
 
+    private static String trimCred(String value) {
+        return value == null ? null : value.trim();
+    }
+
     private String parseKopokopoError(String body) {
         if (body == null || body.isBlank()) return "Unknown error";
         try {
             var node = objectMapper.readTree(body);
             if (node.has("error_message")) return node.get("error_message").asText();
-            if (node.has("error")) return node.get("error").asText();
+            if (node.has("error")) {
+                String code = node.get("error").asText();
+                if (node.has("error_description")) {
+                    return code + " — " + node.get("error_description").asText();
+                }
+                return code;
+            }
         } catch (Exception ignored) {
         }
         return body.length() > 200 ? body.substring(0, 200) : body;

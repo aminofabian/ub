@@ -48,6 +48,11 @@ public class GatewayStkPushPoller {
         int polled = 0;
         for (GatewayStkPush push : pending) {
             if (push.getPollCount() >= maxAttempts) {
+                try {
+                    pushService.markTimedOutIfPollsExhausted(push, maxAttempts);
+                } catch (Exception e) {
+                    log.warn("STK expire after max polls failed for push={}: {}", push.getId(), e.getMessage());
+                }
                 continue;
             }
             try {

@@ -118,6 +118,8 @@ public class PublicStorefrontPaymentService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customer phone is required for M-Pesa payment");
         }
 
+        gatewayStkPushService.reconcilePendingForPhone(business.getId(), phone);
+
         PaymentGatewayStkService.StkPushOutcome outcome = paymentGatewayStkService.initiate(
                 business.getId(),
                 preferredConfigId,
@@ -126,6 +128,18 @@ public class PublicStorefrontPaymentService {
                 order.getId(),
                 "Web order " + order.getId()
         );
+
+        if (!outcome.accepted() && GatewayStkPushService.isKopokopoPendingPhoneError(outcome.message())) {
+            gatewayStkPushService.expireStalePendingForPhone(business.getId(), phone);
+            gatewayStkPushService.reconcilePendingForPhone(business.getId(), phone);
+            outcome = paymentGatewayStkService.initiate(
+                    business.getId(),
+                    preferredConfigId,
+                    phone,
+                    order.getGrandTotal(),
+                    order.getId() + "-r",
+                    "Web order " + order.getId());
+        }
 
         if (outcome.accepted()) {
             GatewayType gatewayType = GatewayType.valueOf(outcome.gatewayType());

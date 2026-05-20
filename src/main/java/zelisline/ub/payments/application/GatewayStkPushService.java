@@ -2,11 +2,15 @@ package zelisline.ub.payments.application;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -46,6 +50,12 @@ import zelisline.ub.storefront.repository.WebOrderRepository;
 public class GatewayStkPushService {
 
     private static final Logger log = LoggerFactory.getLogger(GatewayStkPushService.class);
+
+    private static final int RECONCILE_LOOKBACK_HOURS = 48;
+
+    /** After this age, a still-pending local STK row is marked failed so cashier can retry. */
+    @Value("${app.payments.stk.stale-pending-seconds:30}")
+    private int stalePendingSeconds;
 
     private final GatewayStkPushRepository pushRepository;
     private final PaymentWebhookEventRepository webhookEventRepository;
@@ -90,7 +100,8 @@ public class GatewayStkPushService {
         row.setContextType(contextType);
         row.setContextId(contextId);
         row.setAmount(amount);
-        row.setPhoneNumber(phoneNumber != null ? phoneNumber.trim() : "");
+        String normalizedPhone = StkPhoneNormalizer.normalize(phoneNumber);
+        row.setPhoneNumber(normalizedPhone != null ? normalizedPhone : (phoneNumber != null ? phoneNumber.trim() : ""));
         row.setStatus(GatewayStkPushStatuses.PENDING);
         try {
             return pushRepository.save(row);
@@ -176,6 +187,81 @@ public class GatewayStkPushService {
             return Optional.of(pushRepository.findById(push.getId()).orElse(push));
         }
         return Optional.of(push);
+    }
+
+    /**
+     * Polls KopoKopo for open STK pushes on this phone so a new prompt can be sent after
+     * the previous one failed or timed out. KopoKopo rejects duplicate prompts while one is pending.
+     */
+    @Transactional
+    public ReconcileResult reconcilePendingForPhone(String businessId, String rawPhone) {
+        String phone = StkPhoneNormalizer.normalize(rawPhone);
+        if (phone == null || businessId == null || businessId.isBlank()) {
+            return new ReconcileResult(0, false);
+        }
+        Instant since = Instant.now().minus(RECONCILE_LOOKBACK_HOURS, ChronoUnit.HOURS);
+        List<GatewayStkPush> pending = pushRepository
+                .findByBusinessIdAndPhoneNumberAndStatusAndCreatedAtAfterOrderByCreatedAtAsc(
+                        businessId, phone, GatewayStkPushStatuses.PENDING, since);
+        if (pending.isEmpty()) {
+            return new ReconcileResult(0, false);
+        }
+        int terminalUpdates = 0;
+        for (GatewayStkPush push : pending) {
+            Optional<GatewayStkPush> updated = pollAndUpdate(push);
+            GatewayStkPush row = updated.orElse(push);
+            if (!GatewayStkPushStatuses.PENDING.equals(row.getStatus())) {
+                terminalUpdates++;
+            }
+        }
+        expireStalePendingForPhone(businessId, phone);
+        boolean stillOpen = pushRepository
+                .findByBusinessIdAndPhoneNumberAndStatusAndCreatedAtAfterOrderByCreatedAtAsc(
+                        businessId, phone, GatewayStkPushStatuses.PENDING, since)
+                .stream()
+                .anyMatch(p -> GatewayStkPushStatuses.PENDING.equals(p.getStatus()));
+        return new ReconcileResult(terminalUpdates, stillOpen);
+    }
+
+    @Transactional
+    public void expireStalePendingForPhone(String businessId, String rawPhone) {
+        String phone = StkPhoneNormalizer.normalize(rawPhone);
+        if (phone == null) {
+            return;
+        }
+        Instant since = Instant.now().minus(RECONCILE_LOOKBACK_HOURS, ChronoUnit.HOURS);
+        Instant staleBefore = Instant.now().minus(Math.max(stalePendingSeconds, 5), ChronoUnit.SECONDS);
+        List<GatewayStkPush> pending = pushRepository
+                .findByBusinessIdAndPhoneNumberAndStatusAndCreatedAtAfterOrderByCreatedAtAsc(
+                        businessId, phone, GatewayStkPushStatuses.PENDING, since);
+        for (GatewayStkPush push : pending) {
+            if (push.getCreatedAt() != null && push.getCreatedAt().isBefore(staleBefore)) {
+                markFailed(push, "M-Pesa prompt timed out — you can send a new prompt");
+                log.info("STK push timed out locally: pushId={} phone={}", push.getId(), phone);
+            }
+        }
+    }
+
+    public static boolean isKopokopoPendingPhoneError(String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        String m = message.toLowerCase(Locale.ROOT);
+        return m.contains("pending request") && m.contains("phone");
+    }
+
+    public record ReconcileResult(int terminalUpdates, boolean hasOpenPending) {
+    }
+
+    @Transactional
+    public void markTimedOutIfPollsExhausted(GatewayStkPush push, int maxPolls) {
+        if (push == null || maxPolls <= 0) {
+            return;
+        }
+        if (push.getPollCount() >= maxPolls
+                && GatewayStkPushStatuses.PENDING.equals(push.getStatus())) {
+            markFailed(push, "M-Pesa prompt timed out — you can send a new prompt");
+        }
     }
 
     @Transactional(readOnly = true)

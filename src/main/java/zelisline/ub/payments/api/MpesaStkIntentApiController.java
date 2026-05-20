@@ -85,6 +85,16 @@ public class MpesaStkIntentApiController {
         String description = body.description() != null && !body.description().isBlank()
                 ? body.description().trim()
                 : "POS payment";
+
+        GatewayStkPushService.ReconcileResult reconcile =
+                gatewayStkPushService.reconcilePendingForPhone(businessId, phone);
+        if (reconcile.hasOpenPending()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "This phone number already has an active M-Pesa prompt. "
+                            + "Ask the customer to complete or cancel it on their phone, then try again.");
+        }
+
         PaymentGatewayStkService.StkPushOutcome outcome = paymentGatewayStkService.initiate(
                 businessId,
                 null,
@@ -92,6 +102,18 @@ public class MpesaStkIntentApiController {
                 body.amount(),
                 reference,
                 description);
+
+        if (!outcome.accepted() && GatewayStkPushService.isKopokopoPendingPhoneError(outcome.message())) {
+            gatewayStkPushService.expireStalePendingForPhone(businessId, phone);
+            gatewayStkPushService.reconcilePendingForPhone(businessId, phone);
+            outcome = paymentGatewayStkService.initiate(
+                    businessId,
+                    null,
+                    phone,
+                    body.amount(),
+                    reference + "-r",
+                    description);
+        }
         if (outcome.accepted() && outcome.checkoutRequestId() != null) {
             GatewayType gatewayType = GatewayType.valueOf(outcome.gatewayType());
             gatewayStkPushService.registerPush(

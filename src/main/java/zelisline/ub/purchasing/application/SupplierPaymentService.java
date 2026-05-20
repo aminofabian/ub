@@ -2,6 +2,7 @@ package zelisline.ub.purchasing.application;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -137,6 +138,30 @@ public class SupplierPaymentService {
         }
         rows.sort(Comparator.comparing(OpenSupplierInvoiceRow::invoiceDate).reversed());
         return rows;
+    }
+
+    /**
+     * Posts supplier payment after KopoKopo Send Money webhook confirms success.
+     */
+    @Transactional
+    public PostSupplierPaymentResponse recordKopokopoDisbursement(
+            String businessId,
+            String supplierId,
+            String supplierInvoiceId,
+            BigDecimal amount,
+            String reference,
+            Instant paidAt
+    ) {
+        PostSupplierPaymentRequest req = new PostSupplierPaymentRequest(
+                supplierId,
+                paidAt,
+                PurchasingConstants.PAY_METHOD_MPESA,
+                amount.setScale(2, RoundingMode.HALF_UP),
+                BigDecimal.ZERO,
+                reference,
+                "Paid via KopoKopo Send Money",
+                List.of(new PostSupplierPaymentAllocationLine(supplierInvoiceId, amount.setScale(2, RoundingMode.HALF_UP))));
+        return executePayment(businessId, req);
     }
 
     @Transactional

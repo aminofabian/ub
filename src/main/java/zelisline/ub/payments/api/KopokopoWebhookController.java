@@ -21,6 +21,7 @@ import zelisline.ub.payments.domain.PaymentGatewayConfig;
 import zelisline.ub.payments.domain.spi.WebhookResult;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
 import zelisline.ub.payments.application.GatewayStkPushService;
+import zelisline.ub.purchasing.application.SupplierDisbursementService;
 import zelisline.ub.payments.infrastructure.KopokopoPaymentGateway;
 import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
 
@@ -42,6 +43,7 @@ public class KopokopoWebhookController {
     private final PaymentGatewayConfigRepository configRepository;
     private final CredentialEncryptionService encryptionService;
     private final GatewayStkPushService gatewayStkPushService;
+    private final SupplierDisbursementService supplierDisbursementService;
     private final ObjectMapper objectMapper;
 
     @PostMapping("/payment")
@@ -92,14 +94,21 @@ public class KopokopoWebhookController {
         WebhookResult result = kopokopoGateway.processWebhook(
                 Map.of(SIGNATURE_HEADER, signature != null ? signature : ""), rawBody);
 
-        log.info("KopoKopo webhook processed: businessId={} txnId={} amount={} success={}",
-                matchedConfig.getBusinessId(), result.gatewayTransactionId(),
-                result.amount(), result.success());
+        log.info("KopoKopo webhook processed: businessId={} topic={} txnId={} success={}",
+                matchedConfig.getBusinessId(), result.topic(),
+                result.gatewayTransactionId(), result.success());
 
-        gatewayStkPushService.processKopokopoWebhook(
-                matchedConfig.getBusinessId(),
-                matchedConfig.getId(),
-                result);
+        if ("send_money".equalsIgnoreCase(result.topic())) {
+            supplierDisbursementService.processKopokopoSendMoneyWebhook(
+                    matchedConfig.getBusinessId(),
+                    matchedConfig.getId(),
+                    result);
+        } else {
+            gatewayStkPushService.processKopokopoWebhook(
+                    matchedConfig.getBusinessId(),
+                    matchedConfig.getId(),
+                    result);
+        }
 
         return ResponseEntity.ok("Received");
     }

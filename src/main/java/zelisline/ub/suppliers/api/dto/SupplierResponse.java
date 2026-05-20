@@ -17,6 +17,9 @@ public record SupplierResponse(
         String notes,
         String paymentMethodPreferred,
         String paymentDetails,
+        String payoutType,
+        String payoutPhone,
+        String kopokopoExternalRecipientUrl,
         long version,
         Instant createdAt,
         Instant updatedAt

@@ -4,11 +4,14 @@ import java.util.List;
 
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -18,7 +21,10 @@ import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.purchasing.api.dto.PatchPathBSupplyInvoiceRequest;
 import zelisline.ub.purchasing.api.dto.PathBSupplyInvoiceDetailDto;
 import zelisline.ub.purchasing.api.dto.PathBSupplyListRow;
+import zelisline.ub.purchasing.api.dto.SupplyKopokopoPayResponse;
+import zelisline.ub.purchasing.api.dto.SupplyPayOptionsResponse;
 import zelisline.ub.purchasing.api.dto.SupplyPaymentHistoryRow;
+import zelisline.ub.purchasing.application.SupplierDisbursementService;
 import zelisline.ub.purchasing.application.SupplyInvoiceEditService;
 import zelisline.ub.purchasing.application.SupplyReceiptQueryService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
@@ -31,6 +37,7 @@ public class PurchasingSuppliesController {
 
     private final SupplyReceiptQueryService supplyReceiptQueryService;
     private final SupplyInvoiceEditService supplyInvoiceEditService;
+    private final SupplierDisbursementService supplierDisbursementService;
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'purchasing.path_b.read') or hasPermission(null, 'purchasing.payment.read')")
@@ -65,6 +72,43 @@ public class PurchasingSuppliesController {
                 invoiceId,
                 body
         );
+    }
+
+    @GetMapping("/{invoiceId}/pay-options")
+    @PreAuthorize("hasPermission(null, 'purchasing.path_b.read') or hasPermission(null, 'purchasing.payment.read')")
+    public SupplyPayOptionsResponse payOptions(
+            @PathVariable String invoiceId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return supplierDisbursementService.payOptions(
+                TenantRequestIds.resolveBusinessId(request),
+                invoiceId);
+    }
+
+    @PostMapping("/{invoiceId}/pay-kopokopo")
+    @PreAuthorize("hasPermission(null, 'purchasing.payment.write')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public SupplyKopokopoPayResponse payViaKopokopo(
+            @PathVariable String invoiceId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return supplierDisbursementService.initiateKopokopoPay(
+                TenantRequestIds.resolveBusinessId(request),
+                invoiceId);
+    }
+
+    @GetMapping("/{invoiceId}/disbursement-status")
+    @PreAuthorize("hasPermission(null, 'purchasing.path_b.read') or hasPermission(null, 'purchasing.payment.read')")
+    public SupplyKopokopoPayResponse disbursementStatus(
+            @PathVariable String invoiceId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return supplierDisbursementService.disbursementStatus(
+                TenantRequestIds.resolveBusinessId(request),
+                invoiceId);
     }
 
     @GetMapping("/{invoiceId}/payment-history")

@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -23,6 +24,8 @@ import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
 import zelisline.ub.payments.domain.spi.DisplayInstructions;
 import zelisline.ub.payments.domain.spi.PaymentGateway;
+import zelisline.ub.payments.domain.spi.SendMoneyRequest;
+import zelisline.ub.payments.domain.spi.SendMoneyResult;
 import zelisline.ub.payments.domain.spi.StkPushRequest;
 import zelisline.ub.payments.domain.spi.StkPushResponse;
 import zelisline.ub.payments.domain.spi.StkStatusResponse;
@@ -59,6 +62,7 @@ public class KopokopoPaymentGateway implements PaymentGateway {
 
     private static final String OAUTH_PATH = "/oauth/token";
     private static final String INCOMING_PAYMENTS_PATH = "/api/v2/incoming_payments";
+    private static final String SEND_MONEY_PATH = "/api/v2/send_money";
     private static final String USER_AGENT = "PalMart/1.0 KopoKopo";
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -149,6 +153,84 @@ public class KopokopoPaymentGateway implements PaymentGateway {
         }
     }
 
+    // ── Send Money (supplier disbursement) ───────────────────────────
+
+    /**
+     * Disburse funds to a supplier M-Pesa wallet via KopoKopo Send Money API.
+     */
+    public SendMoneyResult sendMoney(SendMoneyRequest request) {
+        Map<String, String> creds = request.credentials();
+        String authBase = resolveAuthBaseUrl(creds);
+        String apiBase = resolveApiBaseUrl(creds);
+        String accessToken = obtainAccessToken(creds, authBase);
+
+        String phone = request.phoneNumber();
+        if (phone == null || phone.isBlank()) {
+            return SendMoneyResult.rejected("MISSING_PHONE", "phoneNumber is required");
+        }
+        phone = phone.replaceAll("[^0-9]", "");
+        if (phone.startsWith("0")) {
+            phone = "254" + phone.substring(1);
+        }
+        if (!phone.startsWith("254")) {
+            phone = "254" + phone;
+        }
+
+        BigDecimal amount = request.amount().setScale(0, RoundingMode.HALF_UP);
+        if (amount.signum() <= 0) {
+            return SendMoneyResult.rejected("INVALID_AMOUNT", "amount must be positive");
+        }
+
+        String till = request.sourceIdentifier();
+        if (till == null || till.isBlank()) {
+            till = creds.getOrDefault("tillNumber", creds.get("shortcode"));
+        }
+
+        Map<String, Object> destination = new java.util.LinkedHashMap<>();
+        destination.put("type", "mobile_wallet");
+        destination.put("phone_number", phone);
+        destination.put("network", "Safaricom");
+        destination.put("amount", amount.intValue());
+        destination.put("description", request.description() != null ? request.description() : "Supplier payment");
+
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("destinations", List.of(destination));
+        body.put("currency", request.currency() != null ? request.currency() : "KES");
+        if (till != null && !till.isBlank()) {
+            body.put("source_identifier", till);
+        }
+        if (request.metadata() != null && !request.metadata().isEmpty()) {
+            body.put("metadata", request.metadata());
+        }
+        body.put("_links", Map.of(
+                "callback_url", request.callbackBaseUrl() + "/webhooks/kopokopo/payment"));
+
+        try {
+            String json = objectMapper.writeValueAsString(body);
+            HttpResponse<String> response = Unirest.post(apiBase + SEND_MONEY_PATH)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .header("User-Agent", USER_AGENT)
+                    .body(json)
+                    .asString();
+
+            if (response.getStatus() == 201) {
+                String location = response.getHeaders().getFirst("Location");
+                String paymentId = extractIdFromLocation(location);
+                log.info("KopoKopo Send Money initiated: id={}", paymentId);
+                return SendMoneyResult.accepted(paymentId);
+            }
+
+            String errorMsg = parseKopokopoError(response.getBody());
+            log.warn("KopoKopo Send Money rejected: status={} body={}", response.getStatus(), response.getBody());
+            return SendMoneyResult.rejected(String.valueOf(response.getStatus()), errorMsg);
+        } catch (Exception e) {
+            log.error("KopoKopo Send Money failed", e);
+            return SendMoneyResult.rejected("NETWORK_ERROR", e.getMessage());
+        }
+    }
+
     // ── Status Query ─────────────────────────────────────────────────
 
     @Override
@@ -212,6 +294,10 @@ public class KopokopoPaymentGateway implements PaymentGateway {
         try {
             var root = objectMapper.readTree(rawBody);
 
+            if (root.has("type") && "send_money".equalsIgnoreCase(root.get("type").asText())) {
+                return parseSendMoneyWebhook(root, rawBody);
+            }
+
             // STK callback / status payload: { "data": { "id", "attributes": { status, metadata, event } } }
             if (root.has("data") && root.get("data").isObject()) {
                 return parseIncomingPaymentData(root.get("data"), null, rawBody);
@@ -256,6 +342,48 @@ public class KopokopoPaymentGateway implements PaymentGateway {
             log.error("KopoKopo webhook parsing failed", e);
             return WebhookResult.empty(rawBody);
         }
+    }
+
+    private WebhookResult parseSendMoneyWebhook(
+            com.fasterxml.jackson.databind.JsonNode root,
+            String rawBody
+    ) {
+        String sendMoneyId = null;
+        String status = null;
+        String reference = null;
+        BigDecimal amount = null;
+
+        if (root.has("data") && root.get("data").isObject()) {
+            var data = root.get("data");
+            sendMoneyId = data.has("id") ? data.get("id").asText() : null;
+            var attrs = data.get("attributes");
+            if (attrs != null && !attrs.isNull()) {
+                status = textOrNull(attrs, "status");
+                if (attrs.has("metadata") && attrs.get("metadata").isObject()) {
+                    reference = textOrNull(attrs.get("metadata"), "supplierInvoiceId");
+                    if (reference == null) {
+                        reference = textOrNull(attrs.get("metadata"), "reference");
+                    }
+                }
+                amount = parseAmount(textOrNull(attrs, "amount"));
+            }
+        }
+
+        boolean success = "Success".equalsIgnoreCase(status) || "Received".equalsIgnoreCase(status);
+        boolean failed = "Failed".equalsIgnoreCase(status) || "Error".equalsIgnoreCase(status);
+
+        return new WebhookResult(
+                null,
+                sendMoneyId,
+                null,
+                amount,
+                reference,
+                success,
+                failed,
+                sendMoneyId,
+                root.has("id") ? root.get("id").asText() : null,
+                "send_money",
+                rawBody);
     }
 
     private WebhookResult parseIncomingPaymentData(

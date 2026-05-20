@@ -16,6 +16,8 @@ public record CreateSupplierRequest(
         @Size(max = 16) String status,
         @Size(max = 5000) String notes,
         @Size(max = 32) String paymentMethodPreferred,
-        @Size(max = 2000) String paymentDetails
+        @Size(max = 2000) String paymentDetails,
+        @Size(max = 32) String payoutType,
+        @Size(max = 32) String payoutPhone
 ) {
 }

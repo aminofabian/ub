@@ -63,6 +63,17 @@ public class Supplier {
     @Column(name = "payment_details", columnDefinition = "TEXT")
     private String paymentDetails;
 
+    /** {@link SupplierPayoutTypes}: manual, mobile_wallet, … */
+    @Column(name = "payout_type", nullable = false, length = 32)
+    private String payoutType = SupplierPayoutTypes.MANUAL;
+
+    /** Normalized MSISDN (254…) for KopoKopo Send Money mobile_wallet. */
+    @Column(name = "payout_phone", length = 32)
+    private String payoutPhone;
+
+    @Column(name = "kopokopo_external_recipient_url", length = 512)
+    private String kopokopoExternalRecipientUrl;
+
     @Column(name = "prepayment_balance", nullable = false, precision = 14, scale = 2)
     private BigDecimal prepaymentBalance = BigDecimal.ZERO;
 

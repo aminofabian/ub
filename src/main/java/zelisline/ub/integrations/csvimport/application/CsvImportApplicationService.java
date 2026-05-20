@@ -201,6 +201,8 @@ public class CsvImportApplicationService {
                             status.isEmpty() ? null : status,
                             notes.isEmpty() ? null : notes,
                             null,
+                            null,
+                            null,
                             null
                     )
             );

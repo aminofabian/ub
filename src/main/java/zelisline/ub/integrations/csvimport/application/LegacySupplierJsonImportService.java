@@ -88,7 +88,9 @@ public class LegacySupplierJsonImportService {
                 r.status(),
                 r.notes(),
                 r.paymentMethodPreferred(),
-                r.paymentDetails());
+                r.paymentDetails(),
+                null,
+                null);
     }
 
     private List<CsvImportLineError> validateRows(String businessId, List<SupplierRow> rows) {

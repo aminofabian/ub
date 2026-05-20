@@ -19,8 +19,10 @@ import zelisline.ub.suppliers.api.dto.PatchSupplierContactRequest;
 import zelisline.ub.suppliers.api.dto.PatchSupplierRequest;
 import zelisline.ub.suppliers.api.dto.SupplierContactResponse;
 import zelisline.ub.suppliers.api.dto.SupplierResponse;
+import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierContact;
+import zelisline.ub.suppliers.domain.SupplierPayoutTypes;
 import zelisline.ub.suppliers.repository.SupplierContactRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
 
@@ -66,6 +68,7 @@ public class SupplierService {
         s.setNotes(blankToNull(request.notes()));
         s.setPaymentMethodPreferred(blankToNull(request.paymentMethodPreferred()));
         s.setPaymentDetails(blankToNull(request.paymentDetails()));
+        applyPayoutFields(s, request.payoutType(), request.payoutPhone(), null);
         try {
             supplierRepository.save(s);
         } catch (DataIntegrityViolationException ex) {
@@ -128,6 +131,13 @@ public class SupplierService {
         }
         if (patch.paymentDetails() != null) {
             s.setPaymentDetails(blankToNull(patch.paymentDetails()));
+        }
+        if (patch.payoutType() != null || patch.payoutPhone() != null || patch.kopokopoExternalRecipientUrl() != null) {
+            applyPayoutFields(
+                    s,
+                    patch.payoutType(),
+                    patch.payoutPhone(),
+                    patch.kopokopoExternalRecipientUrl());
         }
         try {
             supplierRepository.save(s);
@@ -244,6 +254,43 @@ public class SupplierService {
         }
     }
 
+    private static void applyPayoutFields(
+            Supplier s,
+            String payoutType,
+            String payoutPhone,
+            String kopokopoRecipientUrl
+    ) {
+        if (payoutType != null) {
+            String t = blankToNull(payoutType);
+            if (t == null) {
+                s.setPayoutType(SupplierPayoutTypes.MANUAL);
+            } else {
+                String norm = t.toLowerCase();
+                if (!SupplierPayoutTypes.MANUAL.equals(norm) && !SupplierPayoutTypes.MOBILE_WALLET.equals(norm)) {
+                    throw new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST,
+                            "payoutType must be manual or mobile_wallet");
+                }
+                s.setPayoutType(norm);
+            }
+        }
+        if (payoutPhone != null) {
+            String raw = blankToNull(payoutPhone);
+            if (raw == null) {
+                s.setPayoutPhone(null);
+            } else {
+                String normalized = StkPhoneNormalizer.normalize(raw);
+                if (normalized == null) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid payout phone number");
+                }
+                s.setPayoutPhone(normalized);
+            }
+        }
+        if (kopokopoRecipientUrl != null) {
+            s.setKopokopoExternalRecipientUrl(blankToNull(kopokopoRecipientUrl));
+        }
+    }
+
     private static SupplierResponse toResponse(Supplier s) {
         return new SupplierResponse(
                 s.getId(),
@@ -259,6 +306,9 @@ public class SupplierService {
                 s.getNotes(),
                 s.getPaymentMethodPreferred(),
                 s.getPaymentDetails(),
+                s.getPayoutType(),
+                s.getPayoutPhone(),
+                s.getKopokopoExternalRecipientUrl(),
                 s.getVersion(),
                 s.getCreatedAt(),
                 s.getUpdatedAt()

@@ -117,7 +117,18 @@ public class PaymentGatewayStkService {
         }
         PaymentGateway gw = gatewayRegistry.get(type.name());
         try {
-            String decrypted = encryptionService.decrypt(cfg.getCredentialsJson());
+            String decrypted;
+            try {
+                decrypted = encryptionService.decrypt(cfg.getCredentialsJson());
+            } catch (RuntimeException decryptError) {
+                String hint = encryptionService.usesEphemeralKey()
+                        ? "Server payment encryption key is not configured — contact the store admin."
+                        : "Ask the store to re-save KopoKopo credentials in Payments settings (Test connection, then Activate).";
+                return StkPushOutcome.rejected(
+                        type.name(),
+                        "CREDENTIALS",
+                        decryptError.getMessage() != null ? decryptError.getMessage() + " " + hint : hint);
+            }
             @SuppressWarnings("unchecked")
             Map<String, String> creds = objectMapper.readValue(decrypted, Map.class);
 

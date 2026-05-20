@@ -21,6 +21,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.api.dto.AvailableGatewayResponse;
 import zelisline.ub.payments.api.dto.GatewayConfigRequest;
 import zelisline.ub.payments.api.dto.GatewayConfigResponse;
+import zelisline.ub.payments.api.dto.GatewayCredentialSettingsResponse;
 import zelisline.ub.payments.api.dto.TestConnectionResponse;
 import zelisline.ub.payments.application.PaymentGatewayConfigService;
 import zelisline.ub.platform.security.CurrentTenantUser;
@@ -74,6 +75,16 @@ public class PaymentGatewaySettingsController {
     public GatewayConfigResponse get(@PathVariable String id, HttpServletRequest request) {
         CurrentTenantUser.require(request);
         return configService.getConfig(TenantRequestIds.resolveBusinessId(request), id);
+    }
+
+    @GetMapping("/{id}/credential-settings")
+    @PreAuthorize("hasPermission(null, 'payments.gateways.read')")
+    public GatewayCredentialSettingsResponse credentialSettings(
+            @PathVariable String id,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return configService.getCredentialSettings(TenantRequestIds.resolveBusinessId(request), id);
     }
 
     @PatchMapping("/{id}")

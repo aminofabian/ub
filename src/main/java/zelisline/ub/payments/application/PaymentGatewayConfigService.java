@@ -12,12 +12,14 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.api.dto.AvailableGatewayResponse;
 import zelisline.ub.payments.api.dto.GatewayConfigRequest;
 import zelisline.ub.payments.api.dto.GatewayConfigResponse;
+import zelisline.ub.payments.api.dto.GatewayCredentialSettingsResponse;
 import zelisline.ub.payments.api.dto.TestConnectionResponse;
 import zelisline.ub.payments.domain.GatewayStatus;
 import zelisline.ub.payments.domain.GatewayType;
@@ -88,6 +90,23 @@ public class PaymentGatewayConfigService {
         return toResponse(cfg);
     }
 
+    /**
+     * Non-secret credential fields for the admin edit form (till number, environment, etc.).
+     */
+    @Transactional(readOnly = true)
+    public GatewayCredentialSettingsResponse getCredentialSettings(String businessId, String configId) {
+        PaymentGatewayConfig cfg = findOwn(businessId, configId);
+        if (cfg.getGatewayType() == GatewayType.MANUAL) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Manual payment methods do not use API credentials");
+        }
+        CredentialReadResult read = tryReadCredentialsMap(cfg);
+        if (!read.readable()) {
+            return GatewayCredentialSettingsResponse.unreadable(read.errorMessage());
+        }
+        return toCredentialSettings(read.credentials());
+    }
+
     @Transactional
     public GatewayConfigResponse create(String businessId, GatewayConfigRequest request) {
         GatewayType type = GatewayType.fromWire(request.gatewayType());
@@ -146,7 +165,10 @@ public class PaymentGatewayConfigService {
         cfg.setDefault(request.isDefault());
 
         if (request.credentialsJson() != null && !request.credentialsJson().isBlank()) {
-            String newEncrypted = encryptionService.encrypt(request.credentialsJson());
+            String mergedPlaintext = mergeCredentialsPlaintext(
+                    cfg.getCredentialsJson(),
+                    request.credentialsJson());
+            String newEncrypted = encryptionService.encrypt(mergedPlaintext);
             if (!newEncrypted.equals(cfg.getCredentialsJson())) {
                 cfg.setCredentialsJson(newEncrypted);
                 credentialsChanged = true;
@@ -187,21 +209,21 @@ public class PaymentGatewayConfigService {
         cfg.setStatus(GatewayStatus.TESTING);
         configRepository.save(cfg);
 
+        String encryptedAtRest = cfg.getCredentialsJson();
+        String decryptedPlaintext = null;
+
         try {
             PaymentGateway gw = registry.get(cfg.getGatewayType().name());
 
-            // Decrypt credentials for the test call
-            if (cfg.getCredentialsJson() != null && !cfg.getCredentialsJson().isBlank()) {
-                String decrypted = encryptionService.decrypt(cfg.getCredentialsJson());
-                // Temporarily set decrypted so validateConfiguration can read it
-                cfg.setCredentialsJson(decrypted);
+            if (encryptedAtRest != null && !encryptedAtRest.isBlank()) {
+                decryptedPlaintext = encryptionService.decrypt(encryptedAtRest);
+                cfg.setCredentialsJson(decryptedPlaintext);
             }
 
             ValidationResult result = gw.validateConfiguration(cfg);
 
-            // Re-encrypt
-            if (cfg.getCredentialsJson() != null && !cfg.getCredentialsJson().isBlank()) {
-                cfg.setCredentialsJson(encryptionService.encrypt(cfg.getCredentialsJson()));
+            if (decryptedPlaintext != null && !decryptedPlaintext.isBlank()) {
+                cfg.setCredentialsJson(encryptionService.encrypt(decryptedPlaintext));
             }
 
             if (result.valid()) {
@@ -223,13 +245,8 @@ public class PaymentGatewayConfigService {
                         result.errorCode(), result.errorMessage());
             }
         } catch (Exception e) {
-            // Re-encrypt on error too
-            if (cfg.getCredentialsJson() != null && !cfg.getCredentialsJson().isBlank()) {
-                try {
-                    cfg.setCredentialsJson(encryptionService.encrypt(cfg.getCredentialsJson()));
-                } catch (Exception ignored) {
-                    // encryption failed — credentials may already be encrypted
-                }
+            if (encryptedAtRest != null && !encryptedAtRest.isBlank()) {
+                cfg.setCredentialsJson(encryptedAtRest);
             }
             cfg.setStatus(GatewayStatus.ERROR);
             cfg.setLastTestedAt(Instant.now());
@@ -306,5 +323,132 @@ public class PaymentGatewayConfigService {
         } catch (JsonProcessingException e) {
             return "{}";
         }
+    }
+
+    private Map<String, String> readCredentialsMap(PaymentGatewayConfig cfg) {
+        CredentialReadResult read = tryReadCredentialsMap(cfg);
+        if (!read.readable()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, read.errorMessage());
+        }
+        return read.credentials();
+    }
+
+    private CredentialReadResult tryReadCredentialsMap(PaymentGatewayConfig cfg) {
+        String atRest = cfg.getCredentialsJson();
+        if (atRest == null || atRest.isBlank()) {
+            return new CredentialReadResult(true, null, Map.of());
+        }
+        try {
+            String decrypted = encryptionService.decrypt(atRest);
+            if (decrypted == null || decrypted.isBlank()) {
+                return new CredentialReadResult(true, null, Map.of());
+            }
+            return new CredentialReadResult(true, null, parseCredentialsMap(decrypted));
+        } catch (Exception e) {
+            String detail = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            return new CredentialReadResult(
+                    false,
+                    "Stored credentials could not be read (" + detail
+                            + "). Re-enter all API keys and till number below, then save.",
+                    Map.of());
+        }
+    }
+
+    private Map<String, String> parseCredentialsMap(String json) throws JsonProcessingException {
+        JsonNode node = objectMapper.readTree(json);
+        if (!node.isObject()) {
+            return Map.of();
+        }
+        Map<String, String> out = new java.util.LinkedHashMap<>();
+        node.fields().forEachRemaining(entry -> {
+            JsonNode value = entry.getValue();
+            if (value == null || value.isNull()) {
+                return;
+            }
+            out.put(entry.getKey(), value.isValueNode() ? value.asText() : value.toString());
+        });
+        return out;
+    }
+
+    private String mergeCredentialsPlaintext(String encryptedAtRest, String incomingJson) {
+        try {
+            Map<String, String> merged = new java.util.LinkedHashMap<>();
+            if (encryptedAtRest != null && !encryptedAtRest.isBlank()) {
+                CredentialReadResult existing = tryReadCredentialsFromBlob(encryptedAtRest);
+                if (existing.readable()) {
+                    merged.putAll(existing.credentials());
+                }
+            }
+            Map<String, String> incoming = parseCredentialsMap(incomingJson);
+            for (var entry : incoming.entrySet()) {
+                if (entry.getValue() != null && !entry.getValue().isBlank()) {
+                    merged.put(entry.getKey(), entry.getValue().trim());
+                }
+            }
+            return objectMapper.writeValueAsString(merged);
+        } catch (JsonProcessingException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Invalid credentials JSON: " + e.getMessage());
+        }
+    }
+
+    private static GatewayCredentialSettingsResponse toCredentialSettings(
+            Map<String, String> creds
+    ) {
+        String till = firstNonBlank(creds, "tillNumber", "shortcode");
+        String env = creds.get("environment");
+        if (env == null || env.isBlank()) {
+            env = "sandbox";
+        }
+        return new GatewayCredentialSettingsResponse(
+                env,
+                till,
+                creds.get("shortcode"),
+                creds.get("shortcodeType"),
+                isPresent(creds, "clientId"),
+                isPresent(creds, "clientSecret"),
+                isPresent(creds, "apiKey"),
+                isPresent(creds, "secretKey"),
+                isPresent(creds, "publicKey"),
+                isPresent(creds, "consumerKey"),
+                isPresent(creds, "consumerSecret"),
+                isPresent(creds, "passkey"),
+                true,
+                null
+        );
+    }
+
+    private CredentialReadResult tryReadCredentialsFromBlob(String encryptedAtRest) {
+        try {
+            String decrypted = encryptionService.decrypt(encryptedAtRest);
+            if (decrypted == null || decrypted.isBlank()) {
+                return new CredentialReadResult(true, null, Map.of());
+            }
+            return new CredentialReadResult(true, null, parseCredentialsMap(decrypted));
+        } catch (Exception e) {
+            return new CredentialReadResult(false, e.getMessage(), Map.of());
+        }
+    }
+
+    private record CredentialReadResult(
+            boolean readable,
+            String errorMessage,
+            Map<String, String> credentials
+    ) {
+    }
+
+    private static boolean isPresent(Map<String, String> creds, String key) {
+        String v = creds.get(key);
+        return v != null && !v.isBlank();
+    }
+
+    private static String firstNonBlank(Map<String, String> creds, String... keys) {
+        for (String key : keys) {
+            String v = creds.get(key);
+            if (v != null && !v.isBlank()) {
+                return v.trim();
+            }
+        }
+        return null;
     }
 }

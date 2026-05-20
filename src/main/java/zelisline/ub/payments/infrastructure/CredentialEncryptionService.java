@@ -11,6 +11,8 @@ import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -28,17 +30,31 @@ import org.springframework.stereotype.Component;
 @Component
 public class CredentialEncryptionService {
 
+    private static final Logger log = LoggerFactory.getLogger(CredentialEncryptionService.class);
+
     private static final String ALGORITHM = "AES/GCM/NoPadding";
     private static final int GCM_IV_LENGTH = 12;
     private static final int GCM_TAG_LENGTH = 128;
     private static final int AES_KEY_SIZE = 256;
 
     private final SecretKey secretKey;
+    private final boolean ephemeralKey;
 
     public CredentialEncryptionService(
             @Value("${app.payments.encryption-key:}") String base64Key
     ) {
+        boolean hasConfiguredKey = base64Key != null && !base64Key.isBlank();
+        this.ephemeralKey = !hasConfiguredKey;
         this.secretKey = resolveKey(base64Key);
+        if (this.ephemeralKey) {
+            log.warn(
+                    "app.payments.encryption-key is not set — gateway credentials use a random key "
+                            + "that changes on every restart. Set APP_PAYMENTS_ENCRYPTION_KEY in production.");
+        }
+    }
+
+    public boolean usesEphemeralKey() {
+        return ephemeralKey;
     }
 
     /**
@@ -47,6 +63,9 @@ public class CredentialEncryptionService {
     public String encrypt(String plaintext) {
         if (plaintext == null || plaintext.isBlank()) {
             return null;
+        }
+        if (!isPlaintextCredentials(plaintext)) {
+            throw new IllegalArgumentException("Refusing to encrypt values that are not plaintext credentials");
         }
         try {
             byte[] iv = new byte[GCM_IV_LENGTH];
@@ -66,27 +85,58 @@ public class CredentialEncryptionService {
     }
 
     /**
-     * Decrypt a string produced by {@link #encrypt(String)}.
+     * Decrypt credentials stored at rest. Accepts plaintext JSON left from legacy rows
+     * and recovers from accidental double-encryption after a failed connection test.
      */
-    public String decrypt(String encrypted) {
-        if (encrypted == null || encrypted.isBlank()) {
+    public String decrypt(String stored) {
+        if (stored == null || stored.isBlank()) {
             return null;
         }
-        try {
-            byte[] data = Base64.getDecoder().decode(encrypted);
-
-            ByteBuffer buffer = ByteBuffer.wrap(data);
-            byte[] iv = new byte[GCM_IV_LENGTH];
-            buffer.get(iv);
-            byte[] ciphertext = new byte[buffer.remaining()];
-            buffer.get(ciphertext);
-
-            Cipher cipher = Cipher.getInstance(ALGORITHM);
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, new GCMParameterSpec(GCM_TAG_LENGTH, iv));
-            return new String(cipher.doFinal(ciphertext), StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to decrypt credentials", e);
+        String trimmed = stored.trim();
+        if (isPlaintextCredentials(trimmed)) {
+            return trimmed;
         }
+
+        try {
+            return decryptCipherBlob(trimmed);
+        } catch (Exception firstFailure) {
+            try {
+                String once = decryptCipherBlob(trimmed);
+                if (isPlaintextCredentials(once)) {
+                    log.warn("Recovered double-encrypted gateway credentials");
+                    return once;
+                }
+                return decryptCipherBlob(once);
+            } catch (Exception secondFailure) {
+                String hint = ephemeralKey
+                        ? " Payment encryption key is not configured on the server (credentials are lost after restart)."
+                        : " Re-save gateway credentials in Payments settings using the same APP_PAYMENTS_ENCRYPTION_KEY as when they were stored.";
+                throw new RuntimeException("Failed to decrypt credentials." + hint, firstFailure);
+            }
+        }
+    }
+
+    /** True when the value is JSON credential text, not an encrypted blob. */
+    public static boolean isPlaintextCredentials(String value) {
+        if (value == null) {
+            return false;
+        }
+        String t = value.trim();
+        return t.startsWith("{") || t.startsWith("[");
+    }
+
+    private String decryptCipherBlob(String base64Cipher) throws Exception {
+        byte[] data = Base64.getDecoder().decode(base64Cipher);
+
+        ByteBuffer buffer = ByteBuffer.wrap(data);
+        byte[] iv = new byte[GCM_IV_LENGTH];
+        buffer.get(iv);
+        byte[] ciphertext = new byte[buffer.remaining()];
+        buffer.get(ciphertext);
+
+        Cipher cipher = Cipher.getInstance(ALGORITHM);
+        cipher.init(Cipher.DECRYPT_MODE, secretKey, new GCMParameterSpec(GCM_TAG_LENGTH, iv));
+        return new String(cipher.doFinal(ciphertext), StandardCharsets.UTF_8);
     }
 
     private static SecretKey resolveKey(String base64Key) {
@@ -98,8 +148,6 @@ public class CredentialEncryptionService {
             }
             return new SecretKeySpec(keyBytes, "AES");
         }
-        // Development fallback — generates a fresh key on every startup.
-        // Encrypted data does NOT survive restarts in this mode.
         try {
             KeyGenerator kg = KeyGenerator.getInstance("AES");
             kg.init(AES_KEY_SIZE);

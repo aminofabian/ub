@@ -121,16 +121,18 @@ public class BusinessCreditMessagingSettingsService {
     }
 
     private SecretRead readSecrets(BusinessCreditSettings s) {
+        String persistenceHint = null;
         if (encryptionService.usesEphemeralKey()) {
-            return new SecretRead(false, false, false, false,
-                    "Server encryption key not configured — set APP_PAYMENTS_ENCRYPTION_KEY to store API keys.");
+            persistenceHint =
+                    "Set APP_PAYMENTS_ENCRYPTION_KEY on the server so saved API keys survive a restart. "
+                            + "You can still save and use keys until the next deploy.";
         }
         return new SecretRead(
                 hasEncrypted(s.getRapidapiKeyEnc()),
                 hasEncrypted(s.getWhatsappMetaAccessTokenEnc()),
                 hasEncrypted(s.getSmsAfricasTalkingApiKeyEnc()),
                 true,
-                null);
+                persistenceHint);
     }
 
     private static boolean hasEncrypted(String enc) {

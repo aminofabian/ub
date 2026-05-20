@@ -3,6 +3,7 @@ package zelisline.ub.purchasing.application;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -63,6 +64,9 @@ public class SupplierDisbursementService {
     @Value("${app.public.api-base-url:http://localhost:5050}")
     private String publicApiBaseUrl;
 
+    @Value("${app.payments.send-money.stale-pending-seconds:180}")
+    private int stalePendingSeconds;
+
     @Transactional(readOnly = true)
     public SupplyPayOptionsResponse payOptions(String businessId, String invoiceId) {
         SupplierInvoice inv = requirePayableInvoice(businessId, invoiceId);
@@ -77,9 +81,7 @@ public class SupplierDisbursementService {
                 && !supplier.getPayoutPhone().isBlank();
         boolean kopokopoEligible = kopokopoActive && mobilePayout && open.compareTo(MONEY) > 0;
 
-        Optional<SupplierDisbursement> pending = disbursementRepository
-                .findFirstByBusinessIdAndSupplierInvoiceIdAndStatusOrderByCreatedAtDesc(
-                        businessId, invoiceId, SupplierDisbursementStatuses.PENDING);
+        Optional<SupplierDisbursement> pending = findPendingDisbursement(businessId, invoiceId);
 
         return new SupplyPayOptionsResponse(
                 open,
@@ -99,14 +101,11 @@ public class SupplierDisbursementService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice has no open balance");
         }
 
-        disbursementRepository
-                .findFirstByBusinessIdAndSupplierInvoiceIdAndStatusOrderByCreatedAtDesc(
-                        businessId, invoiceId, SupplierDisbursementStatuses.PENDING)
-                .ifPresent(d -> {
-                    throw new ResponseStatusException(
-                            HttpStatus.CONFLICT,
-                            "A KopoKopo payment is already pending for this supply");
-                });
+        findPendingDisbursement(businessId, invoiceId).ifPresent(d -> {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "A KopoKopo payment is already pending for this supply");
+        });
 
         Supplier supplier = supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(inv.getSupplierId(), businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
@@ -183,13 +182,14 @@ public class SupplierDisbursementService {
                 "M-Pesa payment sent — waiting for KopoKopo confirmation");
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public SupplyKopokopoPayResponse disbursementStatus(String businessId, String invoiceId) {
         SupplierDisbursement d = disbursementRepository
                 .findByBusinessIdAndSupplierInvoiceIdOrderByCreatedAtDesc(businessId, invoiceId)
                 .stream()
                 .findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No disbursement found"));
+        reconcileStalePending(d);
 
         return new SupplyKopokopoPayResponse(
                 SupplierDisbursementStatuses.SUCCESS.equals(d.getStatus()),
@@ -291,6 +291,29 @@ public class SupplierDisbursementService {
                     .orElse(null);
         }
         return null;
+    }
+
+    private Optional<SupplierDisbursement> findPendingDisbursement(String businessId, String invoiceId) {
+        Optional<SupplierDisbursement> pending = disbursementRepository
+                .findFirstByBusinessIdAndSupplierInvoiceIdAndStatusOrderByCreatedAtDesc(
+                        businessId, invoiceId, SupplierDisbursementStatuses.PENDING);
+        pending.ifPresent(this::reconcileStalePending);
+        if (pending.isPresent() && SupplierDisbursementStatuses.PENDING.equals(pending.get().getStatus())) {
+            return pending;
+        }
+        return Optional.empty();
+    }
+
+    private void reconcileStalePending(SupplierDisbursement disbursement) {
+        if (!SupplierDisbursementStatuses.PENDING.equals(disbursement.getStatus())) {
+            return;
+        }
+        Instant staleBefore = Instant.now().minus(Math.max(stalePendingSeconds, 60), ChronoUnit.SECONDS);
+        if (disbursement.getCreatedAt() != null && disbursement.getCreatedAt().isBefore(staleBefore)) {
+            markFailed(
+                    disbursement,
+                    "Timed out waiting for KopoKopo confirmation. Check KopoKopo or retry Send Money.");
+        }
     }
 
     private SupplierInvoice requirePayableInvoice(String businessId, String invoiceId) {

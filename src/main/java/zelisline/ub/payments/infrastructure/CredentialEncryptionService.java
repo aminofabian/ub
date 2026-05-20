@@ -58,7 +58,7 @@ public class CredentialEncryptionService {
     }
 
     /**
-     * Encrypt a plaintext string. Returns base64(IV || ciphertext).
+     * Encrypt gateway credential JSON ({@code {…}} / {@code […]}). Returns base64(IV || ciphertext).
      */
     public String encrypt(String plaintext) {
         if (plaintext == null || plaintext.isBlank()) {
@@ -67,6 +67,20 @@ public class CredentialEncryptionService {
         if (!isPlaintextCredentials(plaintext)) {
             throw new IllegalArgumentException("Refusing to encrypt values that are not plaintext credentials");
         }
+        return encryptBytes(plaintext);
+    }
+
+    /**
+     * Encrypt an arbitrary secret (API keys, tokens) at rest. Returns base64(IV || ciphertext).
+     */
+    public String encryptSecret(String plaintext) {
+        if (plaintext == null || plaintext.isBlank()) {
+            return null;
+        }
+        return encryptBytes(plaintext);
+    }
+
+    private String encryptBytes(String plaintext) {
         try {
             byte[] iv = new byte[GCM_IV_LENGTH];
             SecureRandom.getInstanceStrong().nextBytes(iv);
@@ -80,7 +94,7 @@ public class CredentialEncryptionService {
             buffer.put(ciphertext);
             return Base64.getEncoder().encodeToString(buffer.array());
         } catch (Exception e) {
-            throw new RuntimeException("Failed to encrypt credentials", e);
+            throw new RuntimeException("Failed to encrypt secret", e);
         }
     }
 

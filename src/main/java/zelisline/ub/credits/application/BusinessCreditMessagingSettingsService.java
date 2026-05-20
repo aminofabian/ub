@@ -143,7 +143,7 @@ public class BusinessCreditMessagingSettingsService {
         if (raw == null || raw.isBlank()) {
             return null;
         }
-        return encryptionService.encrypt(raw.trim());
+        return encryptionService.encryptSecret(raw.trim());
     }
 
     private String decryptOrNull(String enc) {

@@ -43,8 +43,8 @@ public class GlobalExceptionHandler {
         body.setTitle("Database not ready");
         body.setType(URI.create(PROBLEM_BASE + "schema-mismatch"));
         body.setDetail(
-                "A required database migration may be missing (supplier_payout_settings / "
-                        + "supplier_payout_supported). Redeploy the API so Flyway can run V92/V93.");
+                "A required database migration may be missing. Redeploy the API so Flyway can run "
+                        + "pending migrations (e.g. V93 supplier payout, V95–V97 credit sale reminder settings).");
         return problem(body, HttpStatus.INTERNAL_SERVER_ERROR);
     }
 

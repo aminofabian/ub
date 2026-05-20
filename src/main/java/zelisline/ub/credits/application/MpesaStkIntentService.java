@@ -2,8 +2,6 @@ package zelisline.ub.credits.application;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.Map;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -12,23 +10,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.MpesaStkStatuses;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.MpesaStkIntent;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.MpesaStkIntentRepository;
-import zelisline.ub.payments.application.PaymentGatewayRegistry;
-import zelisline.ub.payments.domain.GatewayStatus;
-import zelisline.ub.payments.domain.GatewayType;
-import zelisline.ub.payments.domain.PaymentGatewayConfig;
-import zelisline.ub.payments.domain.spi.PaymentGateway;
-import zelisline.ub.payments.domain.spi.StkPushRequest;
-import zelisline.ub.payments.domain.spi.StkPushResponse;
-import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
-import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
+import zelisline.ub.payments.application.PaymentGatewayStkService;
 
 @Service
 @RequiredArgsConstructor
@@ -40,10 +28,7 @@ public class MpesaStkIntentService {
     private final MpesaStkIntentRepository mpesaStkIntentRepository;
     private final CreditAccountRepository creditAccountRepository;
     private final WalletLedgerService walletLedgerService;
-    private final PaymentGatewayRegistry gatewayRegistry;
-    private final PaymentGatewayConfigRepository gatewayConfigRepository;
-    private final CredentialEncryptionService encryptionService;
-    private final ObjectMapper objectMapper;
+    private final PaymentGatewayStkService paymentGatewayStkService;
 
     @Transactional
     public MpesaStkIntent initiate(String businessId, String customerId, BigDecimal rawAmount, String idempotencyKey) {
@@ -85,46 +70,17 @@ public class MpesaStkIntentService {
      * Falls back to a STUB checkout ID if no gateway is available.
      */
     private String initiateRealStkPush(String businessId, BigDecimal amount, String reference) {
-        // Try KopoKopo first, then Daraja
-        for (GatewayType type : new GatewayType[]{GatewayType.KOPOKOPO, GatewayType.DARAJA}) {
-            var configs = gatewayConfigRepository.findByBusinessIdAndGatewayTypeAndStatus(
-                    businessId, type, GatewayStatus.ACTIVE);
-            if (configs.isEmpty()) continue;
-
-            PaymentGatewayConfig cfg = configs.get(0);
-            if (!gatewayRegistry.has(type.name())) continue;
-
-            PaymentGateway gw = gatewayRegistry.get(type.name());
-
-            try {
-                String decrypted = encryptionService.decrypt(cfg.getCredentialsJson());
-                @SuppressWarnings("unchecked")
-                Map<String, String> creds = objectMapper.readValue(decrypted, Map.class);
-
-                StkPushRequest pushReq = new StkPushRequest(
-                        businessId,
-                        null, // phone will be filled by the caller with customer data
-                        amount,
-                        reference,
-                        "Wallet Top Up",
-                        "https://api.palmart.co.ke",
-                        creds
-                );
-
-                StkPushResponse response = gw.initiateStkPush(pushReq);
-                if (response.accepted() && response.gatewayCheckoutRequestId() != null) {
-                    log.info("STK Push initiated via {}: checkoutId={}", type, response.gatewayCheckoutRequestId());
-                    return response.gatewayCheckoutRequestId();
-                }
-                log.warn("STK Push via {} rejected: code={} desc={}", type,
-                        response.responseCode(), response.responseDescription());
-            } catch (Exception e) {
-                log.error("STK Push via {} failed", type, e);
-            }
+        PaymentGatewayStkService.StkPushOutcome outcome = paymentGatewayStkService.initiate(
+                businessId,
+                null,
+                amount,
+                reference,
+                "Wallet Top Up"
+        );
+        if (outcome.accepted() && outcome.checkoutRequestId() != null) {
+            return outcome.checkoutRequestId();
         }
-
-        // Fallback: no ACTIVE gateway or all failed
-        log.info("No ACTIVE gateway available for business={} — using STUB", businessId);
+        log.info("No ACTIVE gateway accepted STK for business={} — using STUB", businessId);
         return "STUB-" + java.util.UUID.randomUUID();
     }
 

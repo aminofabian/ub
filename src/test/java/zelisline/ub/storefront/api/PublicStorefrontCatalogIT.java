@@ -202,6 +202,14 @@ class PublicStorefrontCatalogIT {
     }
 
     @Test
+    void checkoutPaymentOptions_returnsManualAndOnlineArrays() throws Exception {
+        mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/payments/checkout-options"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.manual").isArray())
+                .andExpect(jsonPath("$.online").isArray());
+    }
+
+    @Test
     void catalog_listsOnlyPublishedItemsWithPrice() throws Exception {
         mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/catalog/items"))
                 .andExpect(status().isOk())

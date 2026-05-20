@@ -55,6 +55,9 @@ public class BusinessCreditSettingsService {
     private BusinessCreditSettings insertDefaults(String businessId) {
         BusinessCreditSettings s = new BusinessCreditSettings();
         s.setBusinessId(businessId);
+        s.setCreditSaleReminderEnabled(false);
+        s.setWhatsappMetaGraphVersion("v25.0");
+        s.setSmsProvider("none");
         try {
             return businessCreditSettingsRepository.save(s);
         } catch (DataIntegrityViolationException e) {

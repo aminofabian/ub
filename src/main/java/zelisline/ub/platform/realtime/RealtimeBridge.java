@@ -16,7 +16,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import zelisline.ub.notifications.domain.Notification;
-import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.notifications.application.NotificationPreferenceService;
 
 /**
  * Bridges committed business events to WebSocket fan-out.
@@ -32,14 +32,17 @@ public class RealtimeBridge {
     private final SessionRegistry sessionRegistry;
     private final RealtimeWebSocketHandler handler;
     private final ObjectMapper objectMapper;
-    private final UserRepository userRepository;
+    private final NotificationPreferenceService preferenceService;
 
-    public RealtimeBridge(SessionRegistry sessionRegistry, RealtimeWebSocketHandler handler,
-                          UserRepository userRepository) {
+    public RealtimeBridge(
+            SessionRegistry sessionRegistry,
+            RealtimeWebSocketHandler handler,
+            NotificationPreferenceService preferenceService
+    ) {
         this.sessionRegistry = sessionRegistry;
         this.handler = handler;
         this.objectMapper = new ObjectMapper();
-        this.userRepository = userRepository;
+        this.preferenceService = preferenceService;
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -57,7 +60,7 @@ public class RealtimeBridge {
         String priority = resolveNotificationPriority(notification.getType());
 
         // Skip push if target user is in quiet hours
-        if (targetUserId != null && isInQuietHours(businessId, targetUserId)) {
+        if (targetUserId != null && preferenceService.isInQuietHours(businessId, targetUserId, "HIGH".equals(priority))) {
             log.debug("Notification suppressed (quiet hours): type={} user={}", notification.getType(), targetUserId);
             return;
         }
@@ -414,7 +417,9 @@ public class RealtimeBridge {
     private String resolveNotificationPriority(String type) {
         return switch (type) {
             case "stock.low", "shift.variance_detected", "storefront.order.placed",
-                 "approval.requested", "approval.resolved" -> "HIGH";
+                 "storefront.order.paid", "approval.requested", "approval.resolved",
+                 "order.received", "order.payment_received", "order.confirmed",
+                 "order.dispatched", "order.delivered" -> "HIGH";
             case "payable.overdue", "receivable.overdue", "batch.expiring" -> "MEDIUM";
             case "credit_sale.reminder" -> "HIGH";
             case "export.completed" -> "LOW";
@@ -441,35 +446,58 @@ public class RealtimeBridge {
         String title;
         String body = "";
         String actionUrl = "";
-        if ("credit_sale.reminder".equals(n.getType()) && n.getPayloadJson() != null && !n.getPayloadJson().isBlank()) {
+        if (usesPayloadPresentation(n.getType()) && n.getPayloadJson() != null && !n.getPayloadJson().isBlank()) {
             try {
                 @SuppressWarnings("unchecked")
                 var parsed = objectMapper.readValue(n.getPayloadJson(), Map.class);
-                title = stringOr(parsed.get("title"), "Credit purchase");
+                title = stringOr(parsed.get("title"), defaultTitleForType(n.getType()));
                 body = stringOr(parsed.get("body"), "");
-                actionUrl = stringOr(parsed.get("paymentUrl"), "");
+                actionUrl = stringOr(parsed.get("actionUrl"),
+                        stringOr(parsed.get("paymentUrl"), ""));
             } catch (Exception e) {
-                title = "Credit purchase";
+                title = defaultTitleForType(n.getType());
             }
         } else {
-            title = switch (n.getType()) {
-                case "payable.overdue" -> "Overdue supplier payments";
-                case "receivable.overdue" -> "Overdue customer payments";
-                case "shift.variance_detected" -> "Shift cash variance detected";
-                case "stock.low" -> "Low stock alert";
-                case "batch.expiring" -> "Expiring stock alert";
-                case "storefront.order.placed" -> "New web order";
-                case "approval.requested" -> "Approval requested";
-                case "approval.resolved" -> "Approval resolved";
-                case "export.completed" -> "Export ready";
-                default -> n.getType();
-            };
+            title = defaultTitleForType(n.getType());
         }
         payload.put("title", title);
         payload.put("body", body);
         payload.put("actionUrl", actionUrl);
 
         return payload;
+    }
+
+    private static boolean usesPayloadPresentation(String type) {
+        return switch (type) {
+            case "credit_sale.reminder", "order.received", "order.payment_received",
+                 "order.confirmed", "order.dispatched", "order.delivered",
+                 "storefront.order.placed", "storefront.order.paid", "stock.low",
+                 "sales.daily_digest" -> true;
+            default -> false;
+        };
+    }
+
+    private static String defaultTitleForType(String type) {
+        return switch (type) {
+            case "payable.overdue" -> "Overdue supplier payments";
+            case "receivable.overdue" -> "Overdue customer payments";
+            case "shift.variance_detected" -> "Shift cash variance detected";
+            case "stock.low" -> "Low stock alert";
+            case "batch.expiring" -> "Expiring stock alert";
+            case "storefront.order.placed" -> "New web order";
+            case "storefront.order.paid" -> "Web order paid";
+            case "order.received" -> "Order received";
+            case "order.payment_received" -> "Payment received";
+            case "order.confirmed" -> "Order confirmed";
+            case "order.dispatched" -> "Ready for pickup";
+            case "order.delivered" -> "Order complete";
+            case "approval.requested" -> "Approval requested";
+            case "approval.resolved" -> "Approval resolved";
+            case "export.completed" -> "Export ready";
+            case "credit_sale.reminder" -> "Credit purchase";
+            case "sales.daily_digest" -> "Daily sales summary";
+            default -> type;
+        };
     }
 
     private static String stringOr(Object raw, String fallback) {
@@ -486,36 +514,6 @@ public class RealtimeBridge {
         } catch (Exception e) {
             log.warn("Failed to serialize payload", e);
             return null;
-        }
-    }
-
-    private boolean isInQuietHours(String businessId, String userId) {
-        try {
-            var userOpt = userRepository.findById(userId);
-            if (userOpt.isEmpty()) return false;
-            String settingsJson = userOpt.get().getSettings();
-            if (settingsJson == null || settingsJson.isBlank()) return false;
-
-            @SuppressWarnings("unchecked")
-            var settings = objectMapper.readValue(settingsJson, java.util.Map.class);
-            Boolean enabled = (Boolean) settings.get("quietHoursEnabled");
-            if (!Boolean.TRUE.equals(enabled)) return false;
-
-            String start = (String) settings.getOrDefault("quietHoursStart", "22:00");
-            String end = (String) settings.getOrDefault("quietHoursEnd", "07:00");
-            java.time.LocalTime now = java.time.LocalTime.now();
-            java.time.LocalTime startTime = java.time.LocalTime.parse(start);
-            java.time.LocalTime endTime = java.time.LocalTime.parse(end);
-
-            if (startTime.isBefore(endTime)) {
-                return !now.isBefore(startTime) && now.isBefore(endTime);
-            } else {
-                // Overnight window (e.g. 22:00 - 07:00)
-                return !now.isBefore(startTime) || now.isBefore(endTime);
-            }
-        } catch (Exception e) {
-            log.debug("Failed to check quiet hours for user={}: {}", userId, e.getMessage());
-            return false;
         }
     }
 

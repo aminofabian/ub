@@ -26,7 +26,7 @@ import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.MpesaStkIntent;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.MpesaStkIntentRepository;
-import zelisline.ub.notifications.application.NotificationService;
+import zelisline.ub.notifications.application.NotificationOutboxService;
 import zelisline.ub.payments.domain.GatewayStkPush;
 import zelisline.ub.payments.domain.GatewayStkPushStatuses;
 import zelisline.ub.payments.domain.GatewayStatus;
@@ -42,6 +42,7 @@ import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
 import zelisline.ub.payments.repository.PaymentWebhookEventRepository;
 import zelisline.ub.platform.realtime.RealtimeBridge;
 import zelisline.ub.storefront.WebOrderStatuses;
+import zelisline.ub.storefront.application.WebOrderFulfillmentService;
 import zelisline.ub.storefront.domain.WebOrder;
 import zelisline.ub.storefront.repository.WebOrderRepository;
 
@@ -67,7 +68,8 @@ public class GatewayStkPushService {
     private final CredentialEncryptionService encryptionService;
     private final KopokopoPaymentGateway kopokopoGateway;
     private final ObjectMapper objectMapper;
-    private final NotificationService notificationService;
+    private final NotificationOutboxService notificationOutboxService;
+    private final WebOrderFulfillmentService webOrderFulfillmentService;
     private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     @Transactional
@@ -363,17 +365,10 @@ public class GatewayStkPushService {
         webOrderRepository.save(order);
 
         try {
-            var payload = new java.util.LinkedHashMap<String, Object>();
-            payload.put("orderId", order.getId());
-            payload.put("total", order.getGrandTotal().toPlainString());
-            payload.put("customerName", order.getCustomerName());
-            notificationService.tryInsertDedupe(
-                    order.getBusinessId(),
-                    "storefront.order.paid",
-                    "web_order_paid:" + order.getId(),
-                    objectMapper.writeValueAsString(payload));
+            webOrderFulfillmentService.onOrderPaid(order);
+            notificationOutboxService.enqueueWebOrderPaid(order);
         } catch (Exception e) {
-            log.warn("Failed in-app notification for paid web order {}", order.getId(), e);
+            log.warn("Failed notifications for paid web order {}", order.getId(), e);
         }
 
         publishStkRealtime(push, true, "Order paid");

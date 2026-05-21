@@ -483,6 +483,12 @@ public class InventoryLedgerService {
         if (next.signum() < 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Stock cannot go negative");
         }
+        if (base.signum() <= 0 && next.signum() > 0) {
+            eventPublisher.publishEvent(new zelisline.ub.notifications.application.CatalogNotificationListener.ItemRestockedEvent(
+                    item.getBusinessId(),
+                    item.getId(),
+                    item.getName()));
+        }
         item.setCurrentStock(next);
         itemRepository.save(item);
     }

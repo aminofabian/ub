@@ -34,6 +34,12 @@ public class Notification {
     @Column(name = "type", nullable = false, length = 64)
     private String type;
 
+    @Column(name = "category", nullable = false, length = 32)
+    private String category = "operational";
+
+    @Column(name = "priority", nullable = false, length = 8)
+    private String priority = "MEDIUM";
+
     @Column(name = "dedupe_key", length = 191)
     private String dedupeKey;
 

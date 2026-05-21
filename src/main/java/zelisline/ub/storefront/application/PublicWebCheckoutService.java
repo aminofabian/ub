@@ -10,7 +10,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.web.server.ResponseStatusException;
 
 import zelisline.ub.catalog.domain.Item;
@@ -46,8 +45,7 @@ public class PublicWebCheckoutService {
     private final WebCartRepository webCartRepository;
     private final OrderConfirmationEmailRenderer orderConfirmationEmailRenderer;
     private final NotificationService notificationService;
-    private final zelisline.ub.notifications.application.NotificationService inAppNotificationService;
-    private final ApplicationEventPublisher eventPublisher;
+    private final zelisline.ub.notifications.application.NotificationOutboxService notificationOutboxService;
 
     public PublicWebCheckoutService(
             PublicWebCartService publicWebCartService,
@@ -59,8 +57,7 @@ public class PublicWebCheckoutService {
             WebCartRepository webCartRepository,
             OrderConfirmationEmailRenderer orderConfirmationEmailRenderer,
             NotificationService notificationService,
-            zelisline.ub.notifications.application.NotificationService inAppNotificationService,
-            ApplicationEventPublisher eventPublisher
+            zelisline.ub.notifications.application.NotificationOutboxService notificationOutboxService
     ) {
         this.publicWebCartService = publicWebCartService;
         this.inventoryBatchPickerService = inventoryBatchPickerService;
@@ -71,8 +68,7 @@ public class PublicWebCheckoutService {
         this.webCartRepository = webCartRepository;
         this.orderConfirmationEmailRenderer = orderConfirmationEmailRenderer;
         this.notificationService = notificationService;
-        this.inAppNotificationService = inAppNotificationService;
-        this.eventPublisher = eventPublisher;
+        this.notificationOutboxService = notificationOutboxService;
     }
 
     @Transactional
@@ -151,19 +147,10 @@ public class PublicWebCheckoutService {
             }
         }
 
-        // ── create in-app notification for staff ──
         try {
-            var payload = new java.util.LinkedHashMap<String, Object>();
-            payload.put("orderId", order.getId());
-            payload.put("total", order.getGrandTotal().toPlainString());
-            payload.put("customerName", name);
-            payload.put("branchId", branchId);
-            String payloadJson = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(payload);
-            String dedupe = "web_order:" + order.getId();
-            inAppNotificationService.tryInsertDedupe(
-                    businessId, "storefront.order.placed", dedupe, payloadJson);
+            notificationOutboxService.enqueueWebOrderPlaced(order);
         } catch (Exception e) {
-            log.warn("Failed to create in-app notification for order {}: {}", order.getId(), e.getMessage());
+            log.warn("Failed to create notifications for order {}: {}", order.getId(), e.getMessage());
         }
 
         webCartRepository.deleteById(elig.cart().getId());

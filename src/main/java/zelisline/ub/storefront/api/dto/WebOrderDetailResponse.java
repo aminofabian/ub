@@ -8,6 +8,7 @@ public record WebOrderDetailResponse(
         String id,
         String cartId,
         String status,
+        String fulfillmentStatus,
         BigDecimal grandTotal,
         String currency,
         String catalogBranchId,

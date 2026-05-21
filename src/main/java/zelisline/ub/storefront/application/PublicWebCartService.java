@@ -112,6 +112,7 @@ public class PublicWebCartService {
                     HttpStatus.BAD_REQUEST,
                     "Only " + available.stripTrailingZeros().toPlainString() + " available at this store");
         }
+        requireCheckoutPrice(ctx, itemId);
         Optional<WebCartLine> row = webCartLineRepository.findByCartIdAndItemId(cartId, itemId);
         if (row.isEmpty() && webCartLineRepository.countByCartId(cartId) >= MAX_DISTINCT_LINES) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cart is full");
@@ -212,6 +213,7 @@ public class PublicWebCartService {
         Map<String, BigDecimal> prices = loadPrices(businessId, ctx.catalogBranch().getId(), itemIds);
         BigDecimal grandTotal = BigDecimal.ZERO;
         List<CheckoutLine> out = new ArrayList<>();
+        List<String> unpricedLabels = new ArrayList<>();
         int idx = 0;
         for (WebCartLine row : raw) {
             Item it = itemsById.get(row.getItemId());
@@ -228,13 +230,43 @@ public class PublicWebCartService {
             }
             BigDecimal unit = prices.get(row.getItemId());
             if (unit == null) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Pricing unavailable for checkout");
+                unpricedLabels.add(checkoutItemLabel(it));
+                continue;
             }
             BigDecimal lineTotal = unit.multiply(row.getQuantity()).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
             grandTotal = grandTotal.add(lineTotal);
             out.add(new CheckoutLine(it, row.getQuantity(), unit, lineTotal, idx++));
         }
+        if (!unpricedLabels.isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Pricing unavailable for checkout: "
+                            + String.join(", ", unpricedLabels)
+                            + ". Set a shelf price in Products or remove these items from your cart.");
+        }
         return new CheckoutEligibility(cart, ctx, out, grandTotal);
+    }
+
+    private void requireCheckoutPrice(PublicStorefrontContext ctx, String itemId) {
+        BigDecimal unit = pricingService.getCurrentOpenSellingPrice(
+                ctx.business().getId(), itemId, ctx.catalogBranch().getId());
+        if (unit == null) {
+            Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, ctx.business().getId())
+                    .orElse(null);
+            String label = item != null ? checkoutItemLabel(item) : itemId;
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "No online price for " + label + ". Set a shelf price in Products before adding to cart.");
+        }
+    }
+
+    private static String checkoutItemLabel(Item it) {
+        String sku = it.getSku() != null ? it.getSku().trim() : "";
+        String name = it.getName() != null ? it.getName().trim() : "item";
+        if (!sku.isEmpty()) {
+            return sku + " (" + name + ")";
+        }
+        return name;
     }
 
     public record CheckoutLine(
@@ -277,7 +309,7 @@ public class PublicWebCartService {
         Map<String, String> thumbs = firstGalleryUrlByItemIds(itemIds);
         List<PublicCartLineResponse> out = new ArrayList<>();
         BigDecimal subtotal = BigDecimal.ZERO;
-        boolean anyPriced = false;
+        boolean allPriced = true;
         for (WebCartLine L : lines) {
             Item it = itemsById.get(L.getItemId());
             if (it == null || !it.isWebPublished() || !it.isActive()) {
@@ -288,7 +320,8 @@ public class PublicWebCartService {
             if (unit != null) {
                 lineTotal = unit.multiply(L.getQuantity()).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
                 subtotal = subtotal.add(lineTotal);
-                anyPriced = true;
+            } else {
+                allPriced = false;
             }
             out.add(new PublicCartLineResponse(
                     L.getItemId(),
@@ -307,7 +340,7 @@ public class PublicWebCartService {
                 cart.getCatalogBranchId(),
                 ctx.catalogBranch().getName(),
                 cart.getExpiresAt(),
-                anyPriced ? subtotal : null,
+                allPriced && !out.isEmpty() ? subtotal : null,
                 out
         );
     }

@@ -70,6 +70,15 @@ public class LoggingNotificationService implements NotificationService {
         sendOrLogHtml(toEmail, subject, htmlBody, "order confirmation");
     }
 
+    @Override
+    public void sendNotificationEmail(String toEmail, String subject, String textBody, String htmlBody) {
+        if (htmlBody != null && !htmlBody.isBlank()) {
+            sendOrLogHtml(toEmail, subject, htmlBody, "notification");
+            return;
+        }
+        sendOrLog(toEmail, subject, textBody != null ? textBody : "", "notification");
+    }
+
     private void sendOrLogHtml(String toEmail, String subject, String htmlBody, String kind) {
         if (trySendSmtpHtml(toEmail, subject, htmlBody, kind)) {
             return;

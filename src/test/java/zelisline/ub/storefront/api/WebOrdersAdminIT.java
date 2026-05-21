@@ -1,6 +1,7 @@
 package zelisline.ub.storefront.api;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -27,6 +28,7 @@ import zelisline.ub.identity.repository.RolePermissionRepository;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.platform.security.TestAuthenticationFilter;
+import zelisline.ub.storefront.WebOrderFulfillmentStatuses;
 import zelisline.ub.storefront.WebOrderStatuses;
 import zelisline.ub.storefront.domain.WebOrder;
 import zelisline.ub.storefront.domain.WebOrderLine;
@@ -190,6 +192,34 @@ class WebOrdersAdminIT {
                 .andExpect(jsonPath("$.lines.length()").value(1))
                 .andExpect(jsonPath("$.lines[0].itemName").value("Sample SKU"))
                 .andExpect(jsonPath("$.notes").value("Gate B"));
+    }
+
+    @Test
+    void fulfillment_advanceOnPaidOrder() throws Exception {
+        WebOrder paid = webOrderRepository.findById(orderId).orElseThrow();
+        paid.setStatus(WebOrderStatuses.PAID);
+        paid.setFulfillmentStatus(WebOrderFulfillmentStatuses.AWAITING_CONFIRMATION);
+        webOrderRepository.save(paid);
+
+        mockMvc.perform(
+                        patch("/api/v1/web-orders/" + orderId + "/fulfillment")
+                                .header("X-Tenant-Id", TENANT)
+                                .header(TestAuthenticationFilter.HEADER_USER_ID, staff.getId())
+                                .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ID)
+                                .contentType("application/json")
+                                .content("{\"fulfillmentStatus\":\"confirmed\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.fulfillmentStatus").value("confirmed"));
+
+        mockMvc.perform(
+                        patch("/api/v1/web-orders/" + orderId + "/fulfillment")
+                                .header("X-Tenant-Id", TENANT)
+                                .header(TestAuthenticationFilter.HEADER_USER_ID, staff.getId())
+                                .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ID)
+                                .contentType("application/json")
+                                .content("{\"fulfillmentStatus\":\"dispatched\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.fulfillmentStatus").value("dispatched"));
     }
 
     @Test

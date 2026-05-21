@@ -6,6 +6,7 @@ import java.time.Instant;
 public record WebOrderSummaryResponse(
         String id,
         String status,
+        String fulfillmentStatus,
         BigDecimal grandTotal,
         String currency,
         String customerName,

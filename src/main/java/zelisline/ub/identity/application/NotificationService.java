@@ -14,4 +14,7 @@ public interface NotificationService {
     void sendEmailVerificationEmail(String toEmail, String subject, String htmlBody);
 
     void sendOrderConfirmationHtml(String toEmail, String subject, String htmlBody);
+
+    /** In-app notification projection to email (plain + minimal HTML). */
+    void sendNotificationEmail(String toEmail, String subject, String textBody, String htmlBody);
 }

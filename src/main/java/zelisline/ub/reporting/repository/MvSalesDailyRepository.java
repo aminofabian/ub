@@ -72,6 +72,16 @@ public interface MvSalesDailyRepository extends JpaRepository<MvSalesDaily, MvSa
             @Param("branchId") String branchId
     );
 
+    @Query(value = """
+            SELECT COALESCE(SUM(m.revenue), 0)
+              FROM mv_sales_daily m
+             WHERE m.business_id = :businessId
+               AND m.business_day = :businessDay
+            """, nativeQuery = true)
+    BigDecimal sumRevenueForBusinessDay(
+            @Param("businessId") String businessId,
+            @Param("businessDay") LocalDate businessDay);
+
     /**
      * OLTP twin of {@link #sumByDay} for "today" — keeps the live window honest
      * regardless of MV refresh lag (PHASE_7_PLAN.md "today hybrid" rule).
@@ -121,4 +131,25 @@ public interface MvSalesDailyRepository extends JpaRepository<MvSalesDaily, MvSa
             @Param("to") LocalDate to,
             @Param("limit") int limit
     );
+
+    interface PeakHourRow {
+        String getPeakHour();
+
+        BigDecimal getRevenue();
+    }
+
+    @Query(value = """
+            SELECT DATE_FORMAT(CONVERT_TZ(s.sold_at, '+00:00', '+03:00'), '%H:00') AS peakHour,
+                   COALESCE(SUM(s.grand_total), 0) AS revenue
+              FROM sales s
+             WHERE s.business_id = :businessId
+               AND s.status = 'completed'
+               AND DATE(CONVERT_TZ(s.sold_at, '+00:00', '+03:00')) = :businessDay
+             GROUP BY HOUR(CONVERT_TZ(s.sold_at, '+00:00', '+03:00'))
+             ORDER BY revenue DESC
+             LIMIT 1
+            """, nativeQuery = true)
+    List<PeakHourRow> findPeakSalesHourForDay(
+            @Param("businessId") String businessId,
+            @Param("businessDay") LocalDate businessDay);
 }

@@ -22,6 +22,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.integrations.webhook.WebhookEventTypes;
 import zelisline.ub.integrations.webhook.application.WebhookEnqueueService;
+import zelisline.ub.notifications.application.NotificationOutboxService;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.inventory.CostMethod;
 import zelisline.ub.inventory.InventoryConstants;
@@ -54,6 +55,7 @@ public class InventoryBatchPickerService {
     private final BusinessRepository businessRepository;
     private final BusinessInventorySettingsReader businessInventorySettingsReader;
     private final WebhookEnqueueService webhookEnqueueService;
+    private final NotificationOutboxService notificationOutboxService;
     private final ApplicationEventPublisher eventPublisher;
     private final SupplyBatchLifecycleService supplyBatchLifecycleService;
 
@@ -264,6 +266,18 @@ public class InventoryBatchPickerService {
 
             eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.StockLowEvent(
                     businessId, branchId, itemId, item.getName(), after, reorder));
+
+            try {
+                notificationOutboxService.enqueueStockLow(
+                        businessId,
+                        branchId,
+                        itemId,
+                        item.getName(),
+                        after.toPlainString(),
+                        reorder.toPlainString());
+            } catch (Exception ex) {
+                // must not roll back inventory pick
+            }
         }
     }
 }

@@ -14,6 +14,8 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.storefront.api.dto.WebOrderDetailResponse;
 import zelisline.ub.storefront.api.dto.WebOrderLineSnapshotResponse;
 import zelisline.ub.storefront.api.dto.WebOrderSummaryResponse;
+import zelisline.ub.storefront.WebOrderFulfillmentStatuses;
+import zelisline.ub.storefront.WebOrderStatuses;
 import zelisline.ub.storefront.domain.WebOrder;
 import zelisline.ub.storefront.domain.WebOrderLine;
 import zelisline.ub.storefront.repository.WebOrderLineRepository;
@@ -86,6 +88,7 @@ public class WebOrderAdminService {
                 o.getId(),
                 o.getCartId(),
                 o.getStatus(),
+                displayFulfillment(o),
                 o.getGrandTotal(),
                 o.getCurrency(),
                 o.getCatalogBranchId(),
@@ -106,6 +109,7 @@ public class WebOrderAdminService {
         return new WebOrderSummaryResponse(
                 o.getId(),
                 o.getStatus(),
+                displayFulfillment(o),
                 o.getGrandTotal(),
                 o.getCurrency(),
                 o.getCustomerName(),
@@ -113,6 +117,16 @@ public class WebOrderAdminService {
                 o.getCatalogBranchId(),
                 branchName,
                 o.getCreatedAt());
+    }
+
+    static String displayFulfillment(WebOrder o) {
+        if (o.getFulfillmentStatus() != null && !o.getFulfillmentStatus().isBlank()) {
+            return o.getFulfillmentStatus().trim();
+        }
+        if (WebOrderStatuses.PAID.equals(o.getStatus())) {
+            return WebOrderFulfillmentStatuses.AWAITING_CONFIRMATION;
+        }
+        return "";
     }
 
     private static String safeEmailKey(String raw) {

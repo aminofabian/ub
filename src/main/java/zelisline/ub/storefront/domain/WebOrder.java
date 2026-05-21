@@ -35,6 +35,9 @@ public class WebOrder {
     @Column(name = "status", nullable = false, length = 24)
     private String status;
 
+    @Column(name = "fulfillment_status", length = 24)
+    private String fulfillmentStatus;
+
     @Column(name = "payment_checkout_id", length = 128)
     private String paymentCheckoutId;
 

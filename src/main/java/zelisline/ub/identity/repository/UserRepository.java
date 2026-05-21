@@ -101,4 +101,29 @@ public interface UserRepository extends JpaRepository<User, String> {
     long countActiveByRoleKey(
             @Param("businessId") String businessId,
             @Param("roleKey") String roleKey);
+
+    @Query(value = """
+        SELECT DISTINCT u.id
+          FROM users u
+          JOIN role_permissions rp ON rp.role_id = u.role_id
+          JOIN permissions p ON p.id = rp.permission_id
+         WHERE u.business_id = :businessId
+           AND u.deleted_at IS NULL
+           AND u.status = 'active'
+           AND p.permission_key = :permissionKey
+        """, nativeQuery = true)
+    List<String> findIdsWithPermission(
+            @Param("businessId") String businessId,
+            @Param("permissionKey") String permissionKey);
+
+    @Query("""
+        select u.id from User u
+         where u.businessId = :businessId
+           and u.roleId = :roleId
+           and u.deletedAt is null
+           and u.status = 'active'
+        """)
+    List<String> findBuyerUserIdsByBusinessIdAndRoleId(
+            @Param("businessId") String businessId,
+            @Param("roleId") String roleId);
 }

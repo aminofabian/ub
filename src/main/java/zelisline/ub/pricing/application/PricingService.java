@@ -41,7 +41,10 @@ import zelisline.ub.pricing.repository.PriceRuleRepository;
 import zelisline.ub.pricing.repository.SellingPriceRepository;
 import zelisline.ub.pricing.repository.TaxRateRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
+import zelisline.ub.notifications.application.CatalogNotificationListener;
+import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BranchRepository;
+import zelisline.ub.tenancy.repository.BusinessRepository;
 
 @Service
 @RequiredArgsConstructor
@@ -58,6 +61,7 @@ public class PricingService {
     private final SupplierRepository supplierRepository;
     private final ObjectMapper objectMapper;
     private final ApplicationEventPublisher eventPublisher;
+    private final BusinessRepository businessRepository;
 
     /**
      * Keep the pricing module's active selling price aligned with catalog shelf ({@code bundlePrice}).
@@ -127,6 +131,7 @@ public class PricingService {
                 eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.PriceChangedEvent(
                         businessId, branchId, req.itemId(), itemName(businessId, req.itemId()),
                         oldPrice, req.price()));
+                maybePublishSubscriberPriceDrop(businessId, req.itemId(), oldPrice, req.price());
                 return toSellingDto(existing);
             }
             if (!existing.getEffectiveFrom().isBefore(req.effectiveFrom())) {
@@ -149,10 +154,35 @@ public class PricingService {
         row.setSetBy(userId);
         row.setNotes(req.notes());
         sellingPriceRepository.save(row);
+        BigDecimal prior = priorForEvent != null ? priorForEvent : BigDecimal.ZERO;
         eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.PriceChangedEvent(
                 businessId, branchId, req.itemId(), itemName(businessId, req.itemId()),
-                priorForEvent != null ? priorForEvent : BigDecimal.ZERO, req.price()));
+                prior, req.price()));
+        maybePublishSubscriberPriceDrop(businessId, req.itemId(), prior, req.price());
         return toSellingDto(row);
+    }
+
+    private void maybePublishSubscriberPriceDrop(
+            String businessId,
+            String itemId,
+            BigDecimal oldPrice,
+            BigDecimal newPrice
+    ) {
+        if (newPrice.compareTo(oldPrice) >= 0) {
+            return;
+        }
+        String currency = businessRepository.findById(businessId)
+                .map(Business::getCurrency)
+                .map(String::trim)
+                .filter(c -> !c.isBlank())
+                .orElse("KES");
+        eventPublisher.publishEvent(new CatalogNotificationListener.PriceDropForSubscribersEvent(
+                businessId,
+                itemId,
+                itemName(businessId, itemId),
+                oldPrice.setScale(MONEY_SCALE, RoundingMode.HALF_UP).toPlainString(),
+                newPrice.setScale(MONEY_SCALE, RoundingMode.HALF_UP).toPlainString(),
+                currency));
     }
 
     @Transactional

@@ -27,7 +27,6 @@ import zelisline.ub.catalog.domain.ItemImage;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
-import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.pricing.application.PricingService;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.storefront.api.dto.PublicCatalogItemCardResponse;
@@ -45,28 +44,29 @@ public class PublicStorefrontCatalogService {
 
     private static final int DEFAULT_PAGE_SIZE = 24;
     private static final int MAX_PAGE_SIZE = 100;
+    private static final int CATALOG_SCAN_PAGE = 64;
 
     private final PublicStorefrontContextService storefrontContextService;
     private final ItemRepository itemRepository;
     private final PricingService pricingService;
-    private final InventoryBatchRepository inventoryBatchRepository;
     private final ItemImageRepository itemImageRepository;
     private final CategoryRepository categoryRepository;
+    private final StorefrontCatalogStockService storefrontCatalogStockService;
 
     public PublicStorefrontCatalogService(
             PublicStorefrontContextService storefrontContextService,
             ItemRepository itemRepository,
             PricingService pricingService,
-            InventoryBatchRepository inventoryBatchRepository,
             ItemImageRepository itemImageRepository,
-            CategoryRepository categoryRepository
+            CategoryRepository categoryRepository,
+            StorefrontCatalogStockService storefrontCatalogStockService
     ) {
         this.storefrontContextService = storefrontContextService;
         this.itemRepository = itemRepository;
         this.pricingService = pricingService;
-        this.inventoryBatchRepository = inventoryBatchRepository;
         this.itemImageRepository = itemImageRepository;
         this.categoryRepository = categoryRepository;
+        this.storefrontCatalogStockService = storefrontCatalogStockService;
     }
 
     @Transactional(readOnly = true)
@@ -99,19 +99,12 @@ public class PublicStorefrontCatalogService {
                 return new PublicCatalogListResponse(ctx.business().getCurrency(), List.of(), null, 0L);
             }
         }
-        Pageable pg = PageRequest.of(0, sz, Sort.by(Sort.Direction.ASC, "id"));
-        Slice<Item> slice = itemRepository.searchStorefrontCatalog(
-                ctx.business().getId(),
-                qq,
-                catUnset,
-                categoryIds,
-                blankToNull(cursor),
-                ctx.catalogBranch().getId(),
-                pg);
-        List<Item> items = slice.getContent();
-        String next = slice.hasNext() && !items.isEmpty() ? items.getLast().getId() : null;
-        Long total = itemRepository.countStorefrontCatalog(
-                ctx.business().getId(), qq, catUnset, categoryIds, blankToNull(cursor), ctx.catalogBranch().getId());
+        List<Item> items = fetchInStockCatalogPage(ctx, qq, catUnset, categoryIds, blankToNull(cursor), sz);
+        String next = null;
+        if (!items.isEmpty() && hasInStockCatalogAfter(ctx, qq, catUnset, categoryIds, items.getLast().getId())) {
+            next = items.getLast().getId();
+        }
+        long total = countInStockCatalog(ctx, qq, catUnset, categoryIds, blankToNull(cursor));
         return new PublicCatalogListResponse(ctx.business().getCurrency(), toCards(ctx, items), next, total);
     }
 
@@ -124,8 +117,8 @@ public class PublicStorefrontCatalogService {
         if (!item.isWebPublished() || !item.isActive()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found");
         }
-        Map<String, BigDecimal> detailQty = loadQtyOnHand(ctx, List.of(item.getId()));
-        BigDecimal onHand = detailQty.getOrDefault(item.getId(), BigDecimal.ZERO);
+        BigDecimal onHand = storefrontCatalogStockService.displayQtyForItem(
+                ctx.business().getId(), ctx.catalogBranch().getId(), item);
         if (onHand.compareTo(BigDecimal.ZERO) <= 0) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found");
         }
@@ -154,8 +147,8 @@ public class PublicStorefrontCatalogService {
         if (!item.isWebPublished() || !item.isActive()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found");
         }
-        Map<String, BigDecimal> detailQty = loadQtyOnHand(ctx, List.of(item.getId()));
-        BigDecimal onHand = detailQty.getOrDefault(item.getId(), BigDecimal.ZERO);
+        BigDecimal onHand = storefrontCatalogStockService.displayQtyForItem(
+                ctx.business().getId(), ctx.catalogBranch().getId(), item);
         if (onHand.compareTo(BigDecimal.ZERO) <= 0) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found");
         }
@@ -269,8 +262,8 @@ public class PublicStorefrontCatalogService {
         if (ordered.isEmpty()) {
             return List.of();
         }
-        List<String> featuredIds = ordered.stream().map(Item::getId).toList();
-        Map<String, BigDecimal> qtyMap = loadQtyOnHand(ctx, featuredIds);
+        Map<String, BigDecimal> qtyMap = storefrontCatalogStockService.displayQtyForItems(
+                ctx.business().getId(), ctx.catalogBranch().getId(), ordered);
         List<Item> inStock = ordered.stream()
                 .filter(i -> qtyMap.getOrDefault(i.getId(), BigDecimal.ZERO).compareTo(BigDecimal.ZERO) > 0)
                 .toList();
@@ -283,7 +276,8 @@ public class PublicStorefrontCatalogService {
         }
         List<String> itemIds = items.stream().map(Item::getId).toList();
         Map<String, BigDecimal> prices = loadPrices(ctx, itemIds);
-        Map<String, BigDecimal> qty = loadQtyOnHand(ctx, itemIds);
+        Map<String, BigDecimal> qty = storefrontCatalogStockService.displayQtyForItems(
+                ctx.business().getId(), ctx.catalogBranch().getId(), items);
         Map<String, BigDecimal> buyingPrices = pricingService.getLatestBuyingPricesForItems(
                 ctx.business().getId(), itemIds);
         Map<String, String> thumbs = firstGalleryUrlByItemIds(itemIds);
@@ -303,25 +297,6 @@ public class PublicStorefrontCatalogService {
                     );
                 })
                 .toList();
-    }
-
-    private Map<String, BigDecimal> loadQtyOnHand(PublicStorefrontContext ctx, List<String> itemIds) {
-        if (itemIds.isEmpty()) {
-            return Map.of();
-        }
-        Map<String, BigDecimal> out = new HashMap<>();
-        List<Object[]> rows = inventoryBatchRepository.sumQuantityRemainingForItemsAtBranch(
-                ctx.business().getId(),
-                ctx.catalogBranch().getId(),
-                InventoryConstants.BATCH_STATUS_ACTIVE,
-                itemIds);
-        for (Object[] row : rows) {
-            String id = (String) row[0];
-            Object q = row[1];
-            BigDecimal qty = q instanceof BigDecimal bd ? bd : BigDecimal.ZERO;
-            out.put(id, qty);
-        }
-        return out;
     }
 
     private Map<String, BigDecimal> loadPrices(PublicStorefrontContext ctx, List<String> itemIds) {
@@ -349,8 +324,8 @@ public class PublicStorefrontCatalogService {
         if (published.isEmpty()) {
             return List.of();
         }
-        List<String> ids = published.stream().map(Item::getId).toList();
-        Map<String, BigDecimal> qtyByItem = loadQtyOnHand(ctx, ids);
+        Map<String, BigDecimal> qtyByItem = storefrontCatalogStockService.displayQtyForItems(
+                ctx.business().getId(), ctx.catalogBranch().getId(), published);
         List<Item> publishedInStock = published.stream()
                 .filter(v -> qtyByItem.getOrDefault(v.getId(), BigDecimal.ZERO).compareTo(BigDecimal.ZERO) > 0)
                 .toList();
@@ -444,17 +419,152 @@ public class PublicStorefrontCatalogService {
     }
 
     private Map<String, Long> countStorefrontItemsByCategory(PublicStorefrontContext ctx) {
-        List<Object[]> rows = itemRepository.countStorefrontItemsByCategory(
-                ctx.business().getId(), ctx.catalogBranch().getId());
         Map<String, Long> out = new HashMap<>();
-        for (Object[] row : rows) {
-            String catId = (String) row[0];
-            Long cnt = row[1] instanceof Number n ? n.longValue() : 0L;
-            if (catId != null && !catId.isBlank()) {
-                out.put(catId, cnt);
+        String scan = null;
+        while (true) {
+            Slice<Item> slice = itemRepository.searchStorefrontCatalog(
+                    ctx.business().getId(),
+                    null,
+                    true,
+                    List.of(""),
+                    scan,
+                    ctx.catalogBranch().getId(),
+                    PageRequest.of(0, CATALOG_SCAN_PAGE, Sort.by(Sort.Direction.ASC, "id")));
+            List<Item> batch = slice.getContent();
+            if (batch.isEmpty()) {
+                break;
             }
+            Map<String, BigDecimal> qty = storefrontCatalogStockService.displayQtyForItems(
+                    ctx.business().getId(), ctx.catalogBranch().getId(), batch);
+            for (Item item : batch) {
+                if (qty.getOrDefault(item.getId(), BigDecimal.ZERO).compareTo(BigDecimal.ZERO) <= 0) {
+                    continue;
+                }
+                String catId = item.getCategoryId();
+                if (catId != null && !catId.isBlank()) {
+                    out.merge(catId, 1L, Long::sum);
+                }
+            }
+            if (!slice.hasNext()) {
+                break;
+            }
+            scan = batch.getLast().getId();
         }
         return out;
+    }
+
+    private List<Item> fetchInStockCatalogPage(
+            PublicStorefrontContext ctx,
+            String q,
+            boolean catUnset,
+            Collection<String> categoryIds,
+            String cursor,
+            int limit
+    ) {
+        List<Item> page = new ArrayList<>();
+        String scan = cursor;
+        while (page.size() < limit) {
+            Slice<Item> slice = itemRepository.searchStorefrontCatalog(
+                    ctx.business().getId(),
+                    q,
+                    catUnset,
+                    categoryIds,
+                    scan,
+                    ctx.catalogBranch().getId(),
+                    PageRequest.of(0, CATALOG_SCAN_PAGE, Sort.by(Sort.Direction.ASC, "id")));
+            List<Item> batch = slice.getContent();
+            if (batch.isEmpty()) {
+                break;
+            }
+            Map<String, BigDecimal> qty = storefrontCatalogStockService.displayQtyForItems(
+                    ctx.business().getId(), ctx.catalogBranch().getId(), batch);
+            for (Item item : batch) {
+                if (page.size() >= limit) {
+                    break;
+                }
+                if (qty.getOrDefault(item.getId(), BigDecimal.ZERO).compareTo(BigDecimal.ZERO) > 0) {
+                    page.add(item);
+                }
+            }
+            if (!slice.hasNext()) {
+                break;
+            }
+            scan = batch.getLast().getId();
+        }
+        return page;
+    }
+
+    private boolean hasInStockCatalogAfter(
+            PublicStorefrontContext ctx,
+            String q,
+            boolean catUnset,
+            Collection<String> categoryIds,
+            String afterItemId
+    ) {
+        String scan = afterItemId;
+        while (true) {
+            Slice<Item> slice = itemRepository.searchStorefrontCatalog(
+                    ctx.business().getId(),
+                    q,
+                    catUnset,
+                    categoryIds,
+                    scan,
+                    ctx.catalogBranch().getId(),
+                    PageRequest.of(0, CATALOG_SCAN_PAGE, Sort.by(Sort.Direction.ASC, "id")));
+            List<Item> batch = slice.getContent();
+            if (batch.isEmpty()) {
+                return false;
+            }
+            Map<String, BigDecimal> qty = storefrontCatalogStockService.displayQtyForItems(
+                    ctx.business().getId(), ctx.catalogBranch().getId(), batch);
+            for (Item item : batch) {
+                if (!item.getId().equals(afterItemId)
+                        && qty.getOrDefault(item.getId(), BigDecimal.ZERO).compareTo(BigDecimal.ZERO) > 0) {
+                    return true;
+                }
+            }
+            if (!slice.hasNext()) {
+                return false;
+            }
+            scan = batch.getLast().getId();
+        }
+    }
+
+    private long countInStockCatalog(
+            PublicStorefrontContext ctx,
+            String q,
+            boolean catUnset,
+            Collection<String> categoryIds,
+            String cursor
+    ) {
+        long count = 0;
+        String scan = cursor;
+        while (true) {
+            Slice<Item> slice = itemRepository.searchStorefrontCatalog(
+                    ctx.business().getId(),
+                    q,
+                    catUnset,
+                    categoryIds,
+                    scan,
+                    ctx.catalogBranch().getId(),
+                    PageRequest.of(0, CATALOG_SCAN_PAGE, Sort.by(Sort.Direction.ASC, "id")));
+            List<Item> batch = slice.getContent();
+            if (batch.isEmpty()) {
+                break;
+            }
+            Map<String, BigDecimal> qty = storefrontCatalogStockService.displayQtyForItems(
+                    ctx.business().getId(), ctx.catalogBranch().getId(), batch);
+            for (Item item : batch) {
+                if (qty.getOrDefault(item.getId(), BigDecimal.ZERO).compareTo(BigDecimal.ZERO) > 0) {
+                    count++;
+                }
+            }
+            if (!slice.hasNext()) {
+                break;
+            }
+            scan = batch.getLast().getId();
+        }
+        return count;
     }
 
     private static long subtreeItemCount(String categoryId,

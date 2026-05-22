@@ -202,12 +202,6 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                         and ch.deletedAt is null
                     ))
                and (:cursor is null or :cursor = '' or i.id > :cursor)
-               and (select coalesce(sum(b.quantityRemaining), 0)
-                      from InventoryBatch b
-                     where b.itemId = i.id
-                       and b.businessId = i.businessId
-                       and b.branchId = :catalogBranchId
-                       and b.status = 'active') > 0
              order by i.id asc
             """)
     Slice<Item> searchStorefrontCatalog(
@@ -240,12 +234,6 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                         and ch.deletedAt is null
                     ))
                and (:cursor is null or :cursor = '' or i.id > :cursor)
-               and (select coalesce(sum(b.quantityRemaining), 0)
-                      from InventoryBatch b
-                     where b.itemId = i.id
-                       and b.businessId = i.businessId
-                       and b.branchId = :catalogBranchId
-                       and b.status = 'active') > 0
             """)
     Long countStorefrontCatalog(
             @Param("businessId") String businessId,
@@ -264,12 +252,6 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                and i.webPublished = true
                and i.categoryId is not null
                and i.categoryId <> ''
-               and (select coalesce(sum(b.quantityRemaining), 0)
-                      from InventoryBatch b
-                     where b.itemId = i.id
-                       and b.businessId = i.businessId
-                       and b.branchId = :catalogBranchId
-                       and b.status = 'active') > 0
              group by i.categoryId
             """)
     List<Object[]> countStorefrontItemsByCategory(

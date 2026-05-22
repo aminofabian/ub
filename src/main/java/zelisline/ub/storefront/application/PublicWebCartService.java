@@ -23,9 +23,7 @@ import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.ItemImage;
 import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
-import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.pricing.application.PricingService;
-import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.storefront.api.dto.PublicCartLineResponse;
 import zelisline.ub.storefront.api.dto.PublicCartResponse;
 import zelisline.ub.storefront.api.dto.PublicUpsertCartLineRequest;
@@ -47,8 +45,8 @@ public class PublicWebCartService {
     private final WebCartLineRepository webCartLineRepository;
     private final ItemRepository itemRepository;
     private final PricingService pricingService;
-    private final InventoryBatchRepository inventoryBatchRepository;
     private final ItemImageRepository itemImageRepository;
+    private final StorefrontCatalogStockService storefrontCatalogStockService;
 
     public PublicWebCartService(
             PublicStorefrontContextService storefrontContextService,
@@ -56,16 +54,16 @@ public class PublicWebCartService {
             WebCartLineRepository webCartLineRepository,
             ItemRepository itemRepository,
             PricingService pricingService,
-            InventoryBatchRepository inventoryBatchRepository,
-            ItemImageRepository itemImageRepository
+            ItemImageRepository itemImageRepository,
+            StorefrontCatalogStockService storefrontCatalogStockService
     ) {
         this.storefrontContextService = storefrontContextService;
         this.webCartRepository = webCartRepository;
         this.webCartLineRepository = webCartLineRepository;
         this.itemRepository = itemRepository;
         this.pricingService = pricingService;
-        this.inventoryBatchRepository = inventoryBatchRepository;
         this.itemImageRepository = itemImageRepository;
+        this.storefrontCatalogStockService = storefrontCatalogStockService;
     }
 
     @Transactional
@@ -168,19 +166,10 @@ public class PublicWebCartService {
     }
 
     private BigDecimal availableQtyAtCatalogBranch(PublicStorefrontContext ctx, String itemId) {
-        List<Object[]> rows = inventoryBatchRepository.sumQuantityRemainingForItemsAtBranch(
-                ctx.business().getId(),
-                ctx.catalogBranch().getId(),
-                InventoryConstants.BATCH_STATUS_ACTIVE,
-                List.of(itemId));
-        if (rows.isEmpty()) {
-            return BigDecimal.ZERO;
-        }
-        Object q = rows.getFirst()[1];
-        if (q instanceof BigDecimal bd) {
-            return bd;
-        }
-        return BigDecimal.ZERO;
+        Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, ctx.business().getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
+        return storefrontCatalogStockService.displayQtyForItem(
+                ctx.business().getId(), ctx.catalogBranch().getId(), item);
     }
 
     private static BigDecimal normalizeQty(BigDecimal q) {

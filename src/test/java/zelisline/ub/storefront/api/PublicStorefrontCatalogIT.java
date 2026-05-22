@@ -20,6 +20,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
+import zelisline.ub.catalog.api.dto.CreateVariantRequest;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.domain.Category;
@@ -316,5 +317,121 @@ class PublicStorefrontCatalogIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.price").value(42.0))
                 .andExpect(jsonPath("$.qtyOnHand").value(3));
+    }
+
+    @Test
+    void catalog_listsPackageVariantUsingParentStock() throws Exception {
+        String goodsTypeId = itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(TENANT).getFirst().getId();
+        String categoryId =
+                categoryRepository.findByBusinessIdOrderByPositionAsc(TENANT).getFirst().getId();
+
+        String parentId = itemCatalogService
+                .createItem(
+                        TENANT,
+                        new CreateItemRequest(
+                                "SKU-PKG-PARENT",
+                                null,
+                                "Tray Parent",
+                                null,
+                                goodsTypeId,
+                                categoryId,
+                                null,
+                                null,
+                                false,
+                                true,
+                                true,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                false,
+                                null,
+                                null,
+                                null),
+                        null)
+                .body()
+                .id();
+
+        patchWebPublished(parentId, true);
+
+        String packageId = itemCatalogService
+                .createVariant(
+                        TENANT,
+                        parentId,
+                        new CreateVariantRequest(
+                                "SKU-PKG-TRAY",
+                                "30-pack tray",
+                                null,
+                                null,
+                                null,
+                                categoryId,
+                                null,
+                                null,
+                                null,
+                                true,
+                                null,
+                                true,
+                                "tray",
+                                new BigDecimal("30"),
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null))
+                .id();
+
+        patchWebPublished(packageId, true);
+
+        SellingPrice parentPrice = new SellingPrice();
+        parentPrice.setBusinessId(TENANT);
+        parentPrice.setItemId(parentId);
+        parentPrice.setBranchId(branchId);
+        parentPrice.setPrice(new BigDecimal("10.00"));
+        parentPrice.setEffectiveFrom(LocalDate.of(2026, 1, 1));
+        sellingPriceRepository.save(parentPrice);
+
+        SellingPrice packagePrice = new SellingPrice();
+        packagePrice.setBusinessId(TENANT);
+        packagePrice.setItemId(packageId);
+        packagePrice.setBranchId(branchId);
+        packagePrice.setPrice(new BigDecimal("250.00"));
+        packagePrice.setEffectiveFrom(LocalDate.of(2026, 1, 1));
+        sellingPriceRepository.save(packagePrice);
+
+        InventoryBatch parentBatch = new InventoryBatch();
+        parentBatch.setBusinessId(TENANT);
+        parentBatch.setBranchId(branchId);
+        parentBatch.setItemId(parentId);
+        parentBatch.setBatchNumber("IT-PKG-PARENT");
+        parentBatch.setSourceType("test");
+        parentBatch.setSourceId(UUID.randomUUID().toString());
+        BigDecimal baseQty = new BigDecimal("90");
+        parentBatch.setInitialQuantity(baseQty);
+        parentBatch.setQuantityRemaining(baseQty);
+        parentBatch.setUnitCost(new BigDecimal("1.0000"));
+        parentBatch.setReceivedAt(Instant.parse("2026-01-02T12:00:00Z"));
+        parentBatch.setStatus("active");
+        inventoryBatchRepository.save(parentBatch);
+
+        mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/catalog/items"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[?(@.id=='" + packageId + "')].qtyOnHand").value(3))
+                .andExpect(jsonPath("$.items[?(@.id=='" + packageId + "')].price").value(250.0));
+
+        mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/catalog/items/" + packageId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.qtyOnHand").value(3))
+                .andExpect(jsonPath("$.variantName").value("30-pack tray"));
     }
 }

@@ -20,6 +20,7 @@ import jakarta.persistence.LockModeType;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.inventory.application.BatchNumberGenerator;
+import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.inventory.CostMethod;
@@ -61,6 +62,7 @@ public class InventoryTransferService {
     private final SupplyBatchRepository supplyBatchRepository;
     private final SupplyBatchLifecycleService supplyBatchLifecycleService;
     private final ApplicationEventPublisher eventPublisher;
+    private final PackageVariantStockResolver packageVariantStockResolver;
 
     @Transactional
     public StockTransferCreatedResponse createDraft(
@@ -78,7 +80,7 @@ public class InventoryTransferService {
         t.setCreatedBy(userId);
         int order = 0;
         for (PostStockTransferRequest.Line lr : req.lines()) {
-            requireStockedItem(businessId, lr.itemId());
+            packageVariantStockResolver.requireInventoryHolder(businessId, lr.itemId());
             BigDecimal qty = lr.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
             StockTransferLine line = new StockTransferLine();
             line.setTransfer(t);
@@ -200,7 +202,7 @@ public class InventoryTransferService {
             StockMovement reverseMv = new StockMovement();
             reverseMv.setBusinessId(businessId);
             reverseMv.setBranchId(t.getFromBranchId());
-            reverseMv.setItemId(line.getItemId());
+            reverseMv.setItemId(dest.getItemId());
             reverseMv.setBatchId(dest.getId());
             reverseMv.setMovementType(InventoryConstants.MOVEMENT_ADJUSTMENT);
             reverseMv.setReferenceType(InventoryConstants.REF_STOCK_TRANSFER_LINE);
@@ -232,7 +234,7 @@ public class InventoryTransferService {
             StockMovement inMv = new StockMovement();
             inMv.setBusinessId(businessId);
             inMv.setBranchId(t.getToBranchId());
-            inMv.setItemId(line.getItemId());
+            inMv.setItemId(dest.getItemId());
             inMv.setBatchId(dest.getId());
             inMv.setMovementType(InventoryConstants.MOVEMENT_TRANSFER_IN);
             inMv.setReferenceType(InventoryConstants.REF_STOCK_TRANSFER_LINE);
@@ -247,23 +249,26 @@ public class InventoryTransferService {
 
     private void moveLine(StockTransfer t, StockTransferLine line, String userId, String destBatchStatus) {
         String businessId = t.getBusinessId();
-        Item item = requireStockedItem(businessId, line.getItemId());
+        PackageVariantStockResolver.StockPickResolution stock =
+                packageVariantStockResolver.resolveInbound(businessId, line.getItemId(), line.getQuantity());
+        String stockHolderId = stock.stockItemId();
+        Item item = packageVariantStockResolver.requireInventoryHolder(businessId, stockHolderId);
         List<InventoryBatch> locked = inventoryBatchRepository.lockActiveBatchesForPick(
                 businessId,
-                line.getItemId(),
+                stockHolderId,
                 t.getFromBranchId(),
                 InventoryConstants.BATCH_STATUS_ACTIVE,
                 BigDecimal.ZERO
         );
         List<InventoryBatch> working = new ArrayList<>(locked);
         BatchAllocationPlanner.sortBatchesForPick(working, item, costMethodForTenant(businessId));
-        List<BatchAllocationLine> picks = BatchAllocationPlanner.allocateInOrder(working, line.getQuantity());
+        List<BatchAllocationLine> picks = BatchAllocationPlanner.allocateInOrder(working, stock.stockQuantity());
         Map<String, InventoryBatch> byId = new HashMap<>();
         for (InventoryBatch b : locked) {
             byId.put(b.getId(), b);
         }
-        for (BatchAllocationLine pick : picks) {
-            applyPickSlice(t, line, userId, byId.get(pick.batchId()), pick, destBatchStatus);
+        for (BatchAllocationLine slice : picks) {
+            applyPickSlice(t, line, userId, stockHolderId, byId.get(slice.batchId()), slice, destBatchStatus);
         }
     }
 
@@ -271,22 +276,23 @@ public class InventoryTransferService {
             StockTransfer t,
             StockTransferLine line,
             String userId,
+            String stockHolderId,
             InventoryBatch src,
-            BatchAllocationLine pick,
+            BatchAllocationLine slice,
             String destBatchStatus
     ) {
         if (src == null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Batch disappeared");
         }
         String businessId = t.getBusinessId();
-        subtractFromSourceBatch(src, pick);
-        persistTransferOut(t, line, userId, src, pick, businessId);
-        InventoryBatch dest = newBatchAtDestination(t, line, src, pick, destBatchStatus);
+        subtractFromSourceBatch(src, slice);
+        persistTransferOut(t, line, userId, stockHolderId, src, slice, businessId);
+        InventoryBatch dest = newBatchAtDestination(t, line, stockHolderId, src, slice, destBatchStatus);
         inventoryBatchRepository.save(dest);
         // Phase 9: transfer_in movement is deferred until receive for in_transit batches.
         // For the legacy completeTransfer path (active), record it immediately.
         if (InventoryConstants.BATCH_STATUS_ACTIVE.equals(destBatchStatus)) {
-            persistTransferIn(t, line, userId, dest, pick, businessId);
+            persistTransferIn(t, line, userId, stockHolderId, dest, slice, businessId);
         }
     }
 
@@ -302,8 +308,9 @@ public class InventoryTransferService {
             StockTransfer t,
             StockTransferLine line,
             String userId,
+            String stockHolderId,
             InventoryBatch src,
-            BatchAllocationLine pick,
+            BatchAllocationLine slice,
             String businessId
     ) {
         inventoryBatchRepository.save(src);
@@ -311,13 +318,13 @@ public class InventoryTransferService {
         StockMovement outMv = new StockMovement();
         outMv.setBusinessId(businessId);
         outMv.setBranchId(t.getFromBranchId());
-        outMv.setItemId(line.getItemId());
+        outMv.setItemId(stockHolderId);
         outMv.setBatchId(src.getId());
         outMv.setMovementType(InventoryConstants.MOVEMENT_TRANSFER_OUT);
         outMv.setReferenceType(InventoryConstants.REF_STOCK_TRANSFER_LINE);
         outMv.setReferenceId(line.getId());
-        outMv.setQuantityDelta(pick.quantity().negate());
-        outMv.setUnitCost(pick.unitCost());
+        outMv.setQuantityDelta(slice.quantity().negate());
+        outMv.setUnitCost(slice.unitCost());
         outMv.setNotes("Stock transfer out");
         outMv.setCreatedBy(userId);
         stockMovementRepository.save(outMv);
@@ -327,20 +334,21 @@ public class InventoryTransferService {
             StockTransfer t,
             StockTransferLine line,
             String userId,
+            String stockHolderId,
             InventoryBatch dest,
-            BatchAllocationLine pick,
+            BatchAllocationLine slice,
             String businessId
     ) {
         StockMovement inMv = new StockMovement();
         inMv.setBusinessId(businessId);
         inMv.setBranchId(t.getToBranchId());
-        inMv.setItemId(line.getItemId());
+        inMv.setItemId(stockHolderId);
         inMv.setBatchId(dest.getId());
         inMv.setMovementType(InventoryConstants.MOVEMENT_TRANSFER_IN);
         inMv.setReferenceType(InventoryConstants.REF_STOCK_TRANSFER_LINE);
         inMv.setReferenceId(line.getId());
-        inMv.setQuantityDelta(pick.quantity());
-        inMv.setUnitCost(pick.unitCost());
+        inMv.setQuantityDelta(slice.quantity());
+        inMv.setUnitCost(slice.unitCost());
         inMv.setNotes("Stock transfer in");
         inMv.setCreatedBy(userId);
         stockMovementRepository.save(inMv);
@@ -349,8 +357,9 @@ public class InventoryTransferService {
     private InventoryBatch newBatchAtDestination(
             StockTransfer t,
             StockTransferLine line,
+            String stockHolderId,
             InventoryBatch src,
-            BatchAllocationLine pick,
+            BatchAllocationLine slice,
             String destBatchStatus
     ) {
         SupplyBatch sb = new SupplyBatch();
@@ -362,8 +371,8 @@ public class InventoryTransferService {
         sb.setSourceType(InventoryConstants.BATCH_SOURCE_STOCK_TRANSFER);
         sb.setSourceId(line.getId());
         sb.setItemCount(1);
-        sb.setTotalInitialQuantity(pick.quantity());
-        sb.setTotalRemainingQuantity(pick.quantity());
+        sb.setTotalInitialQuantity(slice.quantity());
+        sb.setTotalRemainingQuantity(slice.quantity());
         sb.setReceivedAt(Instant.now());
         sb.setStatus(destBatchStatus);
         supplyBatchRepository.save(sb);
@@ -371,15 +380,15 @@ public class InventoryTransferService {
         InventoryBatch dest = new InventoryBatch();
         dest.setBusinessId(t.getBusinessId());
         dest.setBranchId(t.getToBranchId());
-        dest.setItemId(line.getItemId());
+        dest.setItemId(stockHolderId);
         dest.setSupplyBatchId(sb.getId());
         dest.setSupplierId(src.getSupplierId());
-        dest.setBatchNumber(batchNumberForSlice(line, pick));
+        dest.setBatchNumber(batchNumberForSlice(line, slice));
         dest.setSourceType(InventoryConstants.BATCH_SOURCE_STOCK_TRANSFER);
         dest.setSourceId(line.getId());
-        dest.setInitialQuantity(pick.quantity());
-        dest.setQuantityRemaining(pick.quantity());
-        dest.setUnitCost(pick.unitCost().setScale(QTY_SCALE, RoundingMode.HALF_UP));
+        dest.setInitialQuantity(slice.quantity());
+        dest.setQuantityRemaining(slice.quantity());
+        dest.setUnitCost(slice.unitCost().setScale(QTY_SCALE, RoundingMode.HALF_UP));
         dest.setReceivedAt(Instant.now());
         dest.setExpiryDate(src.getExpiryDate());
         dest.setStatus(destBatchStatus);

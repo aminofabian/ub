@@ -66,6 +66,13 @@ public class Item {
     @Column(name = "is_stocked", nullable = false)
     private boolean stocked = true;
 
+    /**
+     * When true, this variant sells as a package (e.g. tray) and deducts
+     * {@link #packagingUnitQty} from the parent item per unit sold.
+     */
+    @Column(name = "is_package_variant", nullable = false)
+    private boolean packageVariant;
+
     @Column(name = "current_stock", nullable = false, precision = 14, scale = 4)
     private BigDecimal currentStock = BigDecimal.ZERO;
 

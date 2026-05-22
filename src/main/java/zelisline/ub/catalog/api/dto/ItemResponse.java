@@ -18,6 +18,7 @@ public record ItemResponse(
         boolean isWeighed,
         boolean isSellable,
         boolean isStocked,
+        boolean packageVariant,
         BigDecimal currentStock,
         String packagingUnitName,
         BigDecimal packagingUnitQty,
@@ -41,7 +42,10 @@ public record ItemResponse(
         /**
          * On-hand at {@code branchId} when the detail endpoint was called with that query param;
          * otherwise null. Prefer this over {@link #currentStock()} for branch-scoped UIs.
+         * For package variants this is available whole packages; see {@link #baseStockQty}.
          */
-        BigDecimal stockQty
+        BigDecimal stockQty,
+        /** Parent/base on-hand in base units when {@code packageVariant} and branch stock was requested. */
+        BigDecimal baseStockQty
 ) {
 }

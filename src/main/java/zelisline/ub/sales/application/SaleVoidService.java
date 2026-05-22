@@ -24,6 +24,7 @@ import zelisline.ub.credits.application.BusinessCreditSettingsService;
 import zelisline.ub.credits.application.CreditSaleDebtService;
 import zelisline.ub.credits.application.LoyaltyPointsService;
 import zelisline.ub.credits.application.WalletLedgerService;
+import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.finance.LedgerAccountCodes;
@@ -61,6 +62,7 @@ public class SaleVoidService {
 
     private final SaleRepository saleRepository;
     private final SaleItemRepository saleItemRepository;
+    private final PackageVariantStockResolver packageVariantStockResolver;
     private final SalePaymentRepository salePaymentRepository;
     private final ShiftRepository shiftRepository;
     private final InventoryBatchRepository inventoryBatchRepository;
@@ -179,16 +181,19 @@ public class SaleVoidService {
         List<SaleItem> sorted = new ArrayList<>(itemRows);
         sorted.sort(Comparator.comparing(SaleItem::getItemId).thenComparing(SaleItem::getBatchId));
         Item item = null;
-        String lastItemId = null;
+        String lastStockHolderId = null;
         for (SaleItem si : sorted) {
-            if (!si.getItemId().equals(lastItemId)) {
+            Item sold = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(si.getItemId(), businessId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
+            String stockHolderId = packageVariantStockResolver.stockHolderItemId(sold);
+            if (!stockHolderId.equals(lastStockHolderId)) {
                 if (item != null) {
                     itemRepository.save(item);
                 }
-                item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(si.getItemId(), businessId)
+                item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(stockHolderId, businessId)
                         .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
                 entityManager.lock(item, LockModeType.PESSIMISTIC_WRITE);
-                lastItemId = si.getItemId();
+                lastStockHolderId = stockHolderId;
             }
             InventoryBatch b = inventoryBatchRepository
                     .findByIdAndBusinessIdForUpdate(si.getBatchId(), businessId)
@@ -204,7 +209,7 @@ public class SaleVoidService {
             StockMovement sm = new StockMovement();
             sm.setBusinessId(businessId);
             sm.setBranchId(sale.getBranchId());
-            sm.setItemId(si.getItemId());
+            sm.setItemId(lastStockHolderId);
             sm.setBatchId(si.getBatchId());
             sm.setMovementType(InventoryConstants.MOVEMENT_SALE_VOID);
             sm.setReferenceType(SalesConstants.STOCK_REFERENCE_TYPE_SALE_VOID);

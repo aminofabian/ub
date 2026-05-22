@@ -23,8 +23,17 @@ public record ItemSummaryResponse(
         boolean groupLabelOnly,
         /**
          * On-hand quantity at the branch when {@code branchId} was passed to the list endpoint; otherwise null.
+         * For package variants this is available whole packages; see {@link #baseStockQty}.
          */
         BigDecimal stockQty,
+        /** When true, this SKU sells as a package and stock is held on the parent item. */
+        boolean packageVariant,
+        /** Base units consumed per one package sold (e.g. 30 eggs per tray). */
+        BigDecimal packageUnitsPerSale,
+        /**
+         * Parent/base on-hand in base units when {@code packageVariant} and branch stock was requested.
+         */
+        BigDecimal baseStockQty,
         String brand,
         String size
 ) {

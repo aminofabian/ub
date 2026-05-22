@@ -29,6 +29,7 @@ import zelisline.ub.credits.application.BusinessCreditSettingsService;
 import zelisline.ub.credits.application.CreditSaleDebtService;
 import zelisline.ub.credits.application.LoyaltyPointsService;
 import zelisline.ub.credits.application.WalletLedgerService;
+import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.finance.LedgerAccountCodes;
@@ -90,6 +91,7 @@ public class SaleRefundService {
     private final LoyaltyPointsService loyaltyPointsService;
     private final BusinessCreditSettingsService businessCreditSettingsService;
     private final SaleActorNameService saleActorNameService;
+    private final PackageVariantStockResolver packageVariantStockResolver;
     @PersistenceContext
     private EntityManager entityManager;
 
@@ -245,17 +247,20 @@ public class SaleRefundService {
         List<RefundRow> sorted = new ArrayList<>(rows);
         sorted.sort(Comparator.comparing(r -> r.saleItem().getItemId()));
         Item item = null;
-        String lastItemId = null;
+        String lastStockHolderId = null;
         for (RefundRow row : sorted) {
             SaleItem si = row.saleItem();
-            if (!si.getItemId().equals(lastItemId)) {
+            Item sold = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(si.getItemId(), businessId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
+            String stockHolderId = packageVariantStockResolver.stockHolderItemId(sold);
+            if (!stockHolderId.equals(lastStockHolderId)) {
                 if (item != null) {
                     itemRepository.save(item);
                 }
-                item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(si.getItemId(), businessId)
+                item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(stockHolderId, businessId)
                         .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
                 entityManager.lock(item, LockModeType.PESSIMISTIC_WRITE);
-                lastItemId = si.getItemId();
+                lastStockHolderId = stockHolderId;
             }
             BigDecimal q = row.quantity();
             StockTarget target = resolveReturnBatch(businessId, sale, refundId, si, q);
@@ -266,7 +271,7 @@ public class SaleRefundService {
             StockMovement sm = new StockMovement();
             sm.setBusinessId(businessId);
             sm.setBranchId(sale.getBranchId());
-            sm.setItemId(si.getItemId());
+            sm.setItemId(lastStockHolderId);
             sm.setBatchId(target.batch().getId());
             sm.setMovementType(InventoryConstants.MOVEMENT_REFUND);
             sm.setReferenceType(SalesConstants.STOCK_REFERENCE_TYPE_SALE_REFUND);
@@ -319,7 +324,9 @@ public class SaleRefundService {
         InventoryBatch b = new InventoryBatch();
         b.setBusinessId(businessId);
         b.setBranchId(sale.getBranchId());
-        b.setItemId(si.getItemId());
+        Item sold = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(si.getItemId(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
+        b.setItemId(packageVariantStockResolver.stockHolderItemId(sold));
         b.setSupplyBatchId(sb.getId());
         b.setSupplierId(supplierId);
         b.setBatchNumber("RR-" + refundId.replace("-", "").substring(0, 12));

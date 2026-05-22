@@ -69,6 +69,27 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
             @Param("minRemaining") BigDecimal minRemaining
     );
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select b from InventoryBatch b
+             where b.businessId = :businessId
+               and b.branchId = :branchId
+               and b.status = :status
+               and b.itemId in :itemIds
+               and b.quantityRemaining > :minRemaining
+               and (b.supplyBatchId is null or b.supplyBatchId not in (
+                   select sb.id from zelisline.ub.inventory.domain.SupplyBatch sb where sb.status = 'closed'
+               ))
+             order by b.itemId asc, b.id asc
+            """)
+    List<InventoryBatch> lockActiveBatchesForPickForItems(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("status") String status,
+            @Param("itemIds") Collection<String> itemIds,
+            @Param("minRemaining") BigDecimal minRemaining
+    );
+
     @Query("""
             select b from InventoryBatch b
              where b.businessId = :businessId

@@ -58,6 +58,7 @@ import zelisline.ub.inventory.repository.StockTakeChecklistItemRepository;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.suppliers.application.SupplierLinkProvisioner;
 import zelisline.ub.sync.application.SyncConflictService;
+import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.tenancy.repository.BranchRepository;
 
 @Service
@@ -83,6 +84,8 @@ public class ItemCatalogService {
     private final PricingService pricingService;
     private final SkuGenerationService skuGenerationService;
     private final SyncConflictService syncConflictService;
+    private final PackageVariantStockResolver packageVariantStockResolver;
+    private final SaleItemRepository saleItemRepository;
 
     @Transactional(readOnly = true)
     public Page<ItemSummaryResponse> listItems(
@@ -161,22 +164,37 @@ public class ItemCatalogService {
         if (stockBranch != null) {
             branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(stockBranch, businessId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Branch not found"));
-            if (!ids.isEmpty()) {
+            Set<String> stockIds = new HashSet<>(ids);
+            for (Item row : page.getContent()) {
+                stockIds.addAll(packageVariantStockResolver.branchStockPoolItemIds(businessId, row));
+            }
+            if (!stockIds.isEmpty()) {
                 stockByItemId = new HashMap<>();
                 for (Object[] row : inventoryBatchRepository.sumQuantityRemainingForItemsAtBranch(
-                        businessId, stockBranch, "active", ids)) {
+                        businessId, stockBranch, "active", stockIds)) {
                     stockByItemId.put((String) row[0], (BigDecimal) row[1]);
                 }
             }
         }
         final Map<String, BigDecimal> stockMap = stockByItemId;
         final boolean includeStock = stockBranch != null;
-        return page.map(item -> toSummary(
-                item,
-                thumbs,
-                categoryNameFor(catNames, item.getCategoryId()),
-                item.getVariantOfItemId() == null && parentsWithChildren.contains(item.getId()),
-                includeStock ? stockMap.getOrDefault(item.getId(), BigDecimal.ZERO) : null));
+        return page.map(item -> {
+            BigDecimal holderStock = null;
+            BigDecimal displayStock = null;
+            BigDecimal baseStock = null;
+            if (includeStock) {
+                holderStock = packageVariantStockResolver.sumPoolStock(item, stockMap);
+                displayStock = packageVariantStockResolver.displayStockQty(item, holderStock);
+                baseStock = packageVariantStockResolver.unitsPerSale(item) != null ? holderStock : null;
+            }
+            return toSummary(
+                    item,
+                    thumbs,
+                    categoryNameFor(catNames, item.getCategoryId()),
+                    item.getVariantOfItemId() == null && parentsWithChildren.contains(item.getId()),
+                    displayStock,
+                    baseStock);
+        });
     }
 
     @Transactional(readOnly = true)
@@ -189,13 +207,17 @@ public class ItemCatalogService {
         Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Item not found"));
         String stockBranch = blankToNull(branchIdForStock);
-        Map<String, BigDecimal> stockByItemId = branchStockMap(businessId, stockBranch, List.of(item.getId()));
+        Set<String> detailStockIds = new HashSet<>(packageVariantStockResolver.branchStockPoolItemIds(businessId, item));
         List<ItemSummaryResponse> variants = List.of();
         if (item.getVariantOfItemId() == null) {
             List<Item> variantRows = itemRepository.findByBusinessIdAndVariantOfItemIdAndDeletedAtIsNullOrderBySkuAsc(
                     businessId, item.getId());
             List<String> variantIds = variantRows.stream().map(Item::getId).toList();
-            Map<String, BigDecimal> variantStock = branchStockMap(businessId, stockBranch, variantIds);
+            Set<String> variantStockIds = new HashSet<>(detailStockIds);
+            for (Item v : variantRows) {
+                variantStockIds.addAll(packageVariantStockResolver.branchStockPoolItemIds(businessId, v));
+            }
+            Map<String, BigDecimal> variantStock = branchStockMap(businessId, stockBranch, variantStockIds);
             Map<String, String> vthumbs = firstGalleryImageUrlByItemId(variantIds);
             List<Item> forCat = new ArrayList<>();
             forCat.add(item);
@@ -203,18 +225,35 @@ public class ItemCatalogService {
             Map<String, String> catMap = categoryNamesById(forCat.stream().map(Item::getCategoryId).toList());
             final boolean includeStock = stockBranch != null;
             variants = variantRows.stream()
-                    .map(v -> toSummary(
-                            v,
-                            vthumbs,
-                            categoryNameFor(catMap, v.getCategoryId()),
-                            false,
-                            includeStock ? variantStock.getOrDefault(v.getId(), BigDecimal.ZERO) : null))
+                    .map(v -> {
+                        BigDecimal holder = null;
+                        BigDecimal display = null;
+                        BigDecimal base = null;
+                        if (includeStock) {
+                            holder = packageVariantStockResolver.sumPoolStock(v, variantStock);
+                            display = packageVariantStockResolver.displayStockQty(v, holder);
+                            base = packageVariantStockResolver.unitsPerSale(v) != null ? holder : null;
+                        }
+                        return toSummary(
+                                v,
+                                vthumbs,
+                                categoryNameFor(catMap, v.getCategoryId()),
+                                false,
+                                display,
+                                base);
+                    })
                     .toList();
         }
-        BigDecimal stockQty = stockBranch != null
-                ? stockByItemId.getOrDefault(item.getId(), BigDecimal.ZERO)
-                : null;
-        return toResponse(item, variants, stockQty);
+        BigDecimal holderStock = null;
+        BigDecimal stockQty = null;
+        BigDecimal baseStockQty = null;
+        if (stockBranch != null) {
+            Map<String, BigDecimal> detailStock = branchStockMap(businessId, stockBranch, detailStockIds);
+            holderStock = packageVariantStockResolver.sumPoolStock(item, detailStock);
+            stockQty = packageVariantStockResolver.displayStockQty(item, holderStock);
+            baseStockQty = packageVariantStockResolver.unitsPerSale(item) != null ? holderStock : null;
+        }
+        return toResponse(item, variants, stockQty, baseStockQty);
     }
 
     private Map<String, BigDecimal> branchStockMap(
@@ -250,7 +289,7 @@ public class ItemCatalogService {
             throw translateDuplicateSku(ex);
         }
         supplierLinkProvisioner.afterItemChanged(businessId, item);
-        return new ItemCreateResult(HttpStatus.CREATED.value(), toResponse(item, List.of(), null));
+        return new ItemCreateResult(HttpStatus.CREATED.value(), toResponse(item, List.of(), null, null));
     }
 
     private ItemCreateResult createItemIdempotent(String businessId, CreateItemRequest request, String keyRaw) {
@@ -291,7 +330,7 @@ public class ItemCatalogService {
                 throw translateDuplicateSku(ex);
             }
             supplierLinkProvisioner.afterItemChanged(businessId, item);
-            ItemResponse body = toResponse(item, List.of(), null);
+            ItemResponse body = toResponse(item, List.of(), null, null);
             persistIdempotency(businessId, keyHash, bodyHash, HttpStatus.CREATED.value(), body);
             return new ItemCreateResult(HttpStatus.CREATED.value(), body);
         }
@@ -418,11 +457,31 @@ public class ItemCatalogService {
         if (patch.isStocked() != null) {
             item.setStocked(patch.isStocked());
         }
+        if (patch.packageVariant() != null) {
+            item.setPackageVariant(patch.packageVariant());
+            if (patch.packageVariant()) {
+                item.setStocked(false);
+            }
+        }
         if (patch.packagingUnitName() != null) {
             item.setPackagingUnitName(blankToNull(patch.packagingUnitName()));
         }
         if (patch.packagingUnitQty() != null) {
-            item.setPackagingUnitQty(patch.packagingUnitQty());
+            BigDecimal next = patch.packagingUnitQty();
+            BigDecimal prev = item.getPackagingUnitQty();
+            if (prev != null && next.compareTo(prev) != 0
+                    && saleItemRepository.countByBusinessIdAndItemId(businessId, itemId) > 0) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Cannot change units per package after sales exist for this SKU. "
+                                + "Historical sales used the previous conversion (" + prev.stripTrailingZeros().toPlainString()
+                                + " base units per unit sold)."
+                );
+            }
+            item.setPackagingUnitQty(next);
+            if (blankToNull(item.getVariantOfItemId()) != null && next.signum() > 0) {
+                item.setStocked(false);
+            }
         }
         if (patch.bundleQty() != null) {
             item.setBundleQty(patch.bundleQty());
@@ -559,14 +618,39 @@ public class ItemCatalogService {
         child.setAisleId(resolveOptionalAisle(businessId, request.aisleId(), parent.getAisleId()));
         child.setUnitType(firstNonBlank(request.unitType(), parent.getUnitType()));
         child.setWeighed(request.isWeighed() != null ? request.isWeighed() : parent.isWeighed());
+        boolean packageVariant = Boolean.TRUE.equals(request.packageVariant());
+        child.setPackageVariant(packageVariant);
         child.setSellable(request.isSellable() != null ? request.isSellable() : true);
-        child.setStocked(request.isStocked() != null ? request.isStocked() : parent.isStocked());
-        child.setPackagingUnitName(parent.getPackagingUnitName());
-        child.setPackagingUnitQty(parent.getPackagingUnitQty());
-        child.setBundleQty(parent.getBundleQty());
-        child.setBundlePrice(parent.getBundlePrice());
-        child.setBuyingPrice(parent.getBuyingPrice());
-        child.setBundleName(parent.getBundleName());
+        if (packageVariant) {
+            if (request.packagingUnitQty() == null || request.packagingUnitQty().signum() <= 0) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Base units per package must be a positive number"
+                );
+            }
+            child.setPackagingUnitQty(request.packagingUnitQty());
+            child.setPackagingUnitName(
+                    firstNonBlank(request.packagingUnitName(), request.variantName().trim()));
+            child.setStocked(false);
+            child.setBundleQty(request.bundleQty() != null ? request.bundleQty() : 1);
+            if (request.bundlePrice() != null) {
+                child.setBundlePrice(request.bundlePrice());
+            }
+            if (request.buyingPrice() != null) {
+                child.setBuyingPrice(request.buyingPrice());
+            }
+            if (request.bundleName() != null) {
+                child.setBundleName(blankToNull(request.bundleName()));
+            }
+        } else {
+            child.setStocked(request.isStocked() != null ? request.isStocked() : parent.isStocked());
+            child.setPackagingUnitName(parent.getPackagingUnitName());
+            child.setPackagingUnitQty(parent.getPackagingUnitQty());
+            child.setBundleQty(parent.getBundleQty());
+            child.setBundlePrice(parent.getBundlePrice());
+            child.setBuyingPrice(parent.getBuyingPrice());
+            child.setBundleName(parent.getBundleName());
+        }
         if (request.minStockLevel() != null) {
             child.setMinStockLevel(request.minStockLevel());
         }
@@ -589,7 +673,7 @@ public class ItemCatalogService {
             throw translateDuplicateSku(ex);
         }
         supplierLinkProvisioner.afterItemChanged(businessId, child);
-        return toResponse(child, List.of(), null);
+        return toResponse(child, List.of(), null, null);
     }
 
     @Transactional
@@ -1013,10 +1097,10 @@ public class ItemCatalogService {
             forCat.addAll(variantRows);
             Map<String, String> catMap = categoryNamesById(forCat.stream().map(Item::getCategoryId).toList());
             variants = variantRows.stream()
-                    .map(v -> toSummary(v, vthumbs, categoryNameFor(catMap, v.getCategoryId()), false, null))
+                    .map(v -> toSummary(v, vthumbs, categoryNameFor(catMap, v.getCategoryId()), false, null, null))
                     .toList();
         }
-        return toResponse(item, variants, null);
+        return toResponse(item, variants, null, null);
     }
 
     private Map<String, String> firstGalleryImageUrlByItemId(Collection<String> itemIds) {
@@ -1089,7 +1173,8 @@ public class ItemCatalogService {
             Map<String, String> galleryFirstUrlByItemId,
             String categoryName,
             boolean groupLabelOnly,
-            BigDecimal stockQty
+            BigDecimal stockQty,
+            BigDecimal baseStockQty
     ) {
         return new ItemSummaryResponse(
                 i.getId(),
@@ -1106,12 +1191,20 @@ public class ItemCatalogService {
                 i.getVariantOfItemId(),
                 groupLabelOnly,
                 stockQty,
+                i.isPackageVariant(),
+                packageVariantStockResolver.unitsPerPackage(i),
+                baseStockQty,
                 i.getBrand(),
                 i.getSize()
         );
     }
 
-    private ItemResponse toResponse(Item i, List<ItemSummaryResponse> variants, BigDecimal stockQty) {
+    private ItemResponse toResponse(
+            Item i,
+            List<ItemSummaryResponse> variants,
+            BigDecimal stockQty,
+            BigDecimal baseStockQty
+    ) {
         return new ItemResponse(
                 i.getId(),
                 i.getSku(),
@@ -1127,6 +1220,7 @@ public class ItemCatalogService {
                 i.isWeighed(),
                 i.isSellable(),
                 i.isStocked(),
+                i.isPackageVariant(),
                 i.getCurrentStock(),
                 i.getPackagingUnitName(),
                 i.getPackagingUnitQty(),
@@ -1147,7 +1241,8 @@ public class ItemCatalogService {
                 variants,
                 i.getBrand(),
                 i.getSize(),
-                stockQty
+                stockQty,
+                baseStockQty
         );
     }
 

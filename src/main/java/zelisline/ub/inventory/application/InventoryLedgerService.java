@@ -17,6 +17,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.inventory.application.BatchNumberGenerator;
+import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.finance.LedgerAccountCodes;
@@ -59,6 +60,7 @@ public class InventoryLedgerService {
     private final SupplyBatchRepository supplyBatchRepository;
     private final SupplyBatchLifecycleService supplyBatchLifecycleService;
     private final ApplicationEventPublisher eventPublisher;
+    private final PackageVariantStockResolver packageVariantStockResolver;
 
     @Transactional
     public InventoryMutationResponse recordOpeningBalance(
@@ -67,7 +69,9 @@ public class InventoryLedgerService {
             String userId
     ) {
         requireBranch(businessId, req.branchId());
-        Item item = requireStockedItem(businessId, req.itemId());
+        PackageVariantStockResolver.StockPickResolution inbound =
+                packageVariantStockResolver.resolveInbound(businessId, req.itemId(), req.quantity());
+        Item item = packageVariantStockResolver.requireInventoryHolder(businessId, inbound.stockItemId());
         String opId = UUID.randomUUID().toString();
         InventoryBatch batch = saveInboundBatch(
                 businessId,
@@ -75,7 +79,7 @@ public class InventoryLedgerService {
                 item.getId(),
                 InventoryConstants.BATCH_SOURCE_OPENING,
                 opId,
-                req.quantity(),
+                inbound.stockQuantity(),
                 req.unitCost(),
                 opId
         );
@@ -89,13 +93,13 @@ public class InventoryLedgerService {
                 batch.getId(),
                 InventoryConstants.MOVEMENT_OPENING,
                 opId,
-                req.quantity(),
+                inbound.stockQuantity(),
                 req.unitCost(),
                 req.notes(),
                 userId
         );
-        applyStockDelta(item, req.quantity());
-        BigDecimal value = extensionMoney(req.quantity(), req.unitCost());
+        applyStockDelta(item, inbound.stockQuantity());
+        BigDecimal value = extensionMoney(inbound.stockQuantity(), req.unitCost());
         String jeId = saveJournal(
                 businessId,
                 InventoryConstants.JOURNAL_OPENING,
@@ -114,7 +118,9 @@ public class InventoryLedgerService {
             String userId
     ) {
         requireBranch(businessId, req.branchId());
-        Item item = requireStockedItem(businessId, req.itemId());
+        PackageVariantStockResolver.StockPickResolution inbound =
+                packageVariantStockResolver.resolveInbound(businessId, req.itemId(), req.quantity());
+        Item item = packageVariantStockResolver.requireInventoryHolder(businessId, inbound.stockItemId());
         String opId = UUID.randomUUID().toString();
         InventoryBatch batch = saveInboundBatch(
                 businessId,
@@ -122,7 +128,7 @@ public class InventoryLedgerService {
                 item.getId(),
                 InventoryConstants.BATCH_SOURCE_STOCK_GAIN,
                 opId,
-                req.quantity(),
+                inbound.stockQuantity(),
                 req.unitCost(),
                 opId
         );
@@ -136,13 +142,13 @@ public class InventoryLedgerService {
                 batch.getId(),
                 InventoryConstants.MOVEMENT_ADJUSTMENT,
                 opId,
-                req.quantity(),
+                inbound.stockQuantity(),
                 req.unitCost(),
                 req.notes(),
                 userId
         );
-        applyStockDelta(item, req.quantity());
-        BigDecimal value = extensionMoney(req.quantity(), req.unitCost());
+        applyStockDelta(item, inbound.stockQuantity());
+        BigDecimal value = extensionMoney(inbound.stockQuantity(), req.unitCost());
         // Stock-take surplus and other callers may use $0 unit cost when there is no
         // on-hand batch to average; GL lines must not be zero-amount.
         String jeId = null;
@@ -156,12 +162,12 @@ public class InventoryLedgerService {
                     true
             );
         }
-        if (req.quantity().signum() != 0) {
-            String itemName = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(req.itemId(), businessId)
-                    .map(zelisline.ub.catalog.domain.Item::getName).orElse(req.itemId());
+        if (inbound.stockQuantity().signum() != 0) {
+            String itemName = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(item.getId(), businessId)
+                    .map(zelisline.ub.catalog.domain.Item::getName).orElse(item.getId());
             eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.StockAdjustedEvent(
-                    businessId, req.branchId(), req.itemId(), itemName,
-                    "stock_increase", req.quantity()));
+                    businessId, req.branchId(), item.getId(), itemName,
+                    "stock_increase", inbound.stockQuantity()));
         }
         return new InventoryMutationResponse(jeId, mv.getId(), batch.getId());
     }
@@ -262,14 +268,16 @@ public class InventoryLedgerService {
             String userId
     ) {
         requireBranch(businessId, req.branchId());
-        Item item = requireStockedItem(businessId, req.itemId());
+        PackageVariantStockResolver.StockPickResolution outbound =
+                packageVariantStockResolver.resolveInbound(businessId, req.itemId(), req.quantity());
+        Item item = packageVariantStockResolver.requireInventoryHolder(businessId, outbound.stockItemId());
         String opId = UUID.randomUUID().toString();
 
         // ── Resolve the target batch ──────────────────────────────────
         InventoryBatch batch = resolveWastageBatch(businessId, req, item);
 
         // ── Decrement the batch ───────────────────────────────────────
-        BigDecimal qty = req.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal qty = outbound.stockQuantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
         if (batch.getQuantityRemaining().compareTo(qty) < 0) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,

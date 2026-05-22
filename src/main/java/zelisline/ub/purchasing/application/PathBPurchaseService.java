@@ -26,6 +26,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.inventory.application.BatchNumberGenerator;
+import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.IdempotencyKey;
 import zelisline.ub.catalog.repository.IdempotencyKeyRepository;
@@ -88,6 +89,7 @@ public class PathBPurchaseService {
     private final BranchRepository branchRepository;
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final ObjectMapper objectMapper;
+    private final PackageVariantStockResolver packageVariantStockResolver;
     private final SupplierPaymentAllocationRepository allocationRepository;
     private final SupplyBatchRepository supplyBatchRepository;
 
@@ -368,18 +370,21 @@ public class PathBPurchaseService {
         RawPurchaseLine line = p.line();
         CostSplit s = p.split();
         if (p.usableQty().signum() > 0) {
-            BigDecimal unitCost = s.inventoryMoney().divide(p.usableQty(), UNIT_SCALE, RoundingMode.HALF_UP);
+            PackageVariantStockResolver.StockPickResolution inbound = packageVariantStockResolver.resolveInbound(
+                    businessId, p.itemId(), p.usableQty());
+            Item holder = packageVariantStockResolver.requireInventoryHolder(businessId, inbound.stockItemId());
+            BigDecimal unitCost = s.inventoryMoney().divide(inbound.stockQuantity(), UNIT_SCALE, RoundingMode.HALF_UP);
             InventoryBatch b = new InventoryBatch();
             b.setBusinessId(businessId);
             b.setBranchId(session.getBranchId());
-            b.setItemId(p.itemId());
+            b.setItemId(inbound.stockItemId());
             b.setSupplyBatchId(sb.getId());
             b.setSupplierId(session.getSupplierId());
             b.setBatchNumber("B-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
             b.setSourceType(PurchasingConstants.BATCH_SOURCE_PATH_B);
             b.setSourceId(line.getId());
-            b.setInitialQuantity(p.usableQty());
-            b.setQuantityRemaining(p.usableQty());
+            b.setInitialQuantity(inbound.stockQuantity());
+            b.setQuantityRemaining(inbound.stockQuantity());
             b.setUnitCost(unitCost);
             b.setReceivedAt(session.getReceivedAt());
             if (p.expiryDate() != null) {
@@ -390,19 +395,18 @@ public class PathBPurchaseService {
             StockMovement sm = new StockMovement();
             sm.setBusinessId(businessId);
             sm.setBranchId(session.getBranchId());
-            sm.setItemId(p.itemId());
+            sm.setItemId(inbound.stockItemId());
             sm.setBatchId(b.getId());
             sm.setMovementType(PurchasingConstants.MOVEMENT_RECEIPT);
             sm.setReferenceType(PurchasingConstants.STOCK_REF_RAW_LINE);
             sm.setReferenceId(line.getId());
-            sm.setQuantityDelta(p.usableQty());
+            sm.setQuantityDelta(inbound.stockQuantity());
             sm.setUnitCost(unitCost);
             stockMovementRepository.save(sm);
 
-            Item it = p.item();
-            BigDecimal base = it.getCurrentStock() == null ? BigDecimal.ZERO : it.getCurrentStock();
-            it.setCurrentStock(base.add(p.usableQty()));
-            itemRepository.save(it);
+            BigDecimal base = holder.getCurrentStock() == null ? BigDecimal.ZERO : holder.getCurrentStock();
+            holder.setCurrentStock(base.add(inbound.stockQuantity()));
+            itemRepository.save(holder);
 
             line.setInventoryBatchId(b.getId());
             touchSupplierProduct(session.getSupplierId(), p.itemId(), unitCost);

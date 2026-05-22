@@ -24,6 +24,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.inventory.application.BatchNumberGenerator;
+import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.domain.IdempotencyKey;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.IdempotencyKeyRepository;
@@ -95,6 +96,7 @@ public class PathAPurchaseService {
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final ObjectMapper objectMapper;
     private final SupplyBatchRepository supplyBatchRepository;
+    private final PackageVariantStockResolver packageVariantStockResolver;
 
     public static String postGrnRoute() {
         return "POST /api/v1/purchasing/path-a/goods-receipts";
@@ -298,10 +300,11 @@ public class PathAPurchaseService {
             if (in.qtyReceived().compareTo(remaining) > 0) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Receive quantity exceeds open quantity on line");
             }
-            Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(pol.getItemId(), businessId)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
+            PackageVariantStockResolver.StockPickResolution inbound = packageVariantStockResolver.resolveInbound(
+                    businessId, pol.getItemId(), in.qtyReceived());
+            Item item = packageVariantStockResolver.requireInventoryHolder(businessId, inbound.stockItemId());
             BigDecimal unitCost = pol.getUnitEstimatedCost();
-            BigDecimal lineMoney = in.qtyReceived().multiply(unitCost).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal lineMoney = inbound.stockQuantity().multiply(unitCost).setScale(2, RoundingMode.HALF_UP);
             grniTotal = grniTotal.add(lineMoney);
 
             GoodsReceiptLine gl = new GoodsReceiptLine();
@@ -314,35 +317,35 @@ public class PathAPurchaseService {
             InventoryBatch batch = new InventoryBatch();
             batch.setBusinessId(businessId);
             batch.setBranchId(grn.getBranchId());
-            batch.setItemId(pol.getItemId());
+            batch.setItemId(inbound.stockItemId());
             batch.setSupplierId(po.getSupplierId());
             batch.setBatchNumber("A-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
             batch.setSupplyBatchId(sb.getId());
             batch.setSourceType(PurchasingConstants.BATCH_SOURCE_PATH_A_GRN);
             batch.setSourceId(gl.getId());
-            batch.setInitialQuantity(in.qtyReceived());
-            batch.setQuantityRemaining(in.qtyReceived());
+            batch.setInitialQuantity(inbound.stockQuantity());
+            batch.setQuantityRemaining(inbound.stockQuantity());
             batch.setUnitCost(unitCost);
             batch.setReceivedAt(grn.getReceivedAt());
             inventoryBatchRepository.save(batch);
             itemCount++;
-            totalInitial = totalInitial.add(in.qtyReceived());
-            totalRemaining = totalRemaining.add(in.qtyReceived());
+            totalInitial = totalInitial.add(inbound.stockQuantity());
+            totalRemaining = totalRemaining.add(inbound.stockQuantity());
 
             StockMovement sm = new StockMovement();
             sm.setBusinessId(businessId);
             sm.setBranchId(grn.getBranchId());
-            sm.setItemId(pol.getItemId());
+            sm.setItemId(inbound.stockItemId());
             sm.setBatchId(batch.getId());
             sm.setMovementType(PurchasingConstants.MOVEMENT_RECEIPT);
             sm.setReferenceType(PurchasingConstants.STOCK_REF_GRN_LINE);
             sm.setReferenceId(gl.getId());
-            sm.setQuantityDelta(in.qtyReceived());
+            sm.setQuantityDelta(inbound.stockQuantity());
             sm.setUnitCost(unitCost);
             stockMovementRepository.save(sm);
 
             BigDecimal base = item.getCurrentStock() == null ? BigDecimal.ZERO : item.getCurrentStock();
-            item.setCurrentStock(base.add(in.qtyReceived()));
+            item.setCurrentStock(base.add(inbound.stockQuantity()));
             itemRepository.save(item);
 
             pol.setQtyReceived(pol.getQtyReceived().add(in.qtyReceived()));

@@ -16,6 +16,7 @@ public record PatchItemRequest(
         Boolean isWeighed,
         Boolean isSellable,
         Boolean isStocked,
+        Boolean packageVariant,
         @Size(max = 255) String packagingUnitName,
         BigDecimal packagingUnitQty,
         Integer bundleQty,

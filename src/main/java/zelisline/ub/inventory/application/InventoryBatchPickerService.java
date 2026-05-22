@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
@@ -19,6 +20,8 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.application.PackageVariantStockResolver;
+import zelisline.ub.catalog.application.PackageVariantStockResolver.StockPickResolution;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.integrations.webhook.WebhookEventTypes;
 import zelisline.ub.integrations.webhook.application.WebhookEnqueueService;
@@ -58,6 +61,7 @@ public class InventoryBatchPickerService {
     private final NotificationOutboxService notificationOutboxService;
     private final ApplicationEventPublisher eventPublisher;
     private final SupplyBatchLifecycleService supplyBatchLifecycleService;
+    private final PackageVariantStockResolver packageVariantStockResolver;
 
     @Transactional(readOnly = true)
     public List<BatchAllocationLine> previewAllocation(
@@ -67,8 +71,10 @@ public class InventoryBatchPickerService {
             BigDecimal quantity
     ) {
         requireBranch(businessId, branchId);
-        Item item = requireStockedItem(businessId, itemId);
-        List<InventoryBatch> batches = loadActiveBatchesReadOnly(businessId, itemId, branchId);
+        Item catalogItem = packageVariantStockResolver.requireSellableItem(businessId, itemId);
+        StockPickResolution pick = packageVariantStockResolver.resolvePick(businessId, itemId, quantity);
+        Item item = requireStockedItem(businessId, pick.stockItemId());
+        List<InventoryBatch> batches = loadActiveBatchesReadOnly(businessId, catalogItem, branchId);
         List<InventoryBatch> working = new ArrayList<>(batches);
         // ── Exclude expired batches BEFORE sorting ────────────────────────
         working = new ArrayList<>(BatchAllocationPlanner.excludeExpired(working));
@@ -83,7 +89,7 @@ public class InventoryBatchPickerService {
                 item,
                 costMethodForTenant(businessId)
         );
-        return BatchAllocationPlanner.allocateInOrder(working, quantity);
+        return BatchAllocationPlanner.allocateInOrder(working, pick.stockQuantity());
     }
 
     /**
@@ -126,15 +132,12 @@ public class InventoryBatchPickerService {
             String userId
     ) {
         requireBranch(businessId, branchId);
-        Item item = requireStockedItem(businessId, itemId);
+        Item catalogItem = packageVariantStockResolver.requireSellableItem(businessId, itemId);
+        StockPickResolution pick = packageVariantStockResolver.resolvePick(businessId, itemId, quantity);
+        Item item = requireStockedItem(businessId, pick.stockItemId());
         entityManager.lock(item, LockModeType.PESSIMISTIC_WRITE);
-        List<InventoryBatch> locked = inventoryBatchRepository.lockActiveBatchesForPick(
-                businessId,
-                itemId,
-                branchId,
-                InventoryConstants.BATCH_STATUS_ACTIVE,
-                BigDecimal.ZERO
-        );
+        List<InventoryBatch> locked = lockActiveBatchesForPool(
+                businessId, branchId, catalogItem);
         List<InventoryBatch> working = new ArrayList<>(locked);
         // ── Exclude expired batches BEFORE sorting ────────────────────────
         working = new ArrayList<>(BatchAllocationPlanner.excludeExpired(working));
@@ -149,7 +152,7 @@ public class InventoryBatchPickerService {
                 item,
                 costMethodForTenant(businessId)
         );
-        List<BatchAllocationLine> lines = BatchAllocationPlanner.allocateInOrder(working, quantity);
+        List<BatchAllocationLine> lines = BatchAllocationPlanner.allocateInOrder(working, pick.stockQuantity());
 
         Map<String, InventoryBatch> byId = new HashMap<>();
         for (InventoryBatch b : locked) {
@@ -171,7 +174,7 @@ public class InventoryBatchPickerService {
             // Publish real-time stock.depleted event when batch hits zero
             if (next.signum() == 0) {
                 eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.StockDepletedEvent(
-                        businessId, branchId, itemId, item.getName(), line.batchId()));
+                        businessId, branchId, pick.stockItemId(), item.getName(), line.batchId()));
             }
 
             // Auto-detect sold-out on parent supply batch
@@ -181,7 +184,7 @@ public class InventoryBatchPickerService {
             StockMovement sm = new StockMovement();
             sm.setBusinessId(businessId);
             sm.setBranchId(branchId);
-            sm.setItemId(itemId);
+            sm.setItemId(pick.stockItemId());
             sm.setBatchId(line.batchId());
             sm.setMovementType(movementType);
             sm.setReferenceType(referenceType);
@@ -194,8 +197,8 @@ public class InventoryBatchPickerService {
         }
 
         BigDecimal stockBefore = item.getCurrentStock() == null ? BigDecimal.ZERO : item.getCurrentStock();
-        applyStockDelta(item, quantity.negate());
-        maybeEnqueueLowStockWebhook(businessId, branchId, itemId, item, stockBefore);
+        applyStockDelta(item, pick.stockQuantity().negate());
+        maybeEnqueueLowStockWebhook(businessId, branchId, pick.stockItemId(), item, stockBefore);
         return lines;
     }
 
@@ -208,15 +211,53 @@ public class InventoryBatchPickerService {
         return businessInventorySettingsReader.costMethodFromSettingsJson(json);
     }
 
-    private List<InventoryBatch> loadActiveBatchesReadOnly(String businessId, String itemId, String branchId) {
-        return inventoryBatchRepository
-                .findActiveBatchesForPreview(
-                        businessId,
-                        itemId,
-                        branchId,
-                        InventoryConstants.BATCH_STATUS_ACTIVE,
-                        BigDecimal.ZERO
-                );
+    private List<InventoryBatch> loadActiveBatchesReadOnly(
+            String businessId,
+            Item catalogItem,
+            String branchId
+    ) {
+        Set<String> pool = packageVariantStockResolver.branchStockPoolItemIds(businessId, catalogItem);
+        if (pool.size() <= 1) {
+            String only = pool.iterator().next();
+            return inventoryBatchRepository.findActiveBatchesForPreview(
+                    businessId,
+                    only,
+                    branchId,
+                    InventoryConstants.BATCH_STATUS_ACTIVE,
+                    BigDecimal.ZERO
+            );
+        }
+        return inventoryBatchRepository.findActiveBatchesForItems(
+                businessId,
+                branchId,
+                InventoryConstants.BATCH_STATUS_ACTIVE,
+                List.copyOf(pool),
+                BigDecimal.ZERO
+        );
+    }
+
+    private List<InventoryBatch> lockActiveBatchesForPool(
+            String businessId,
+            String branchId,
+            Item catalogItem
+    ) {
+        Set<String> pool = packageVariantStockResolver.branchStockPoolItemIds(businessId, catalogItem);
+        if (pool.size() <= 1) {
+            return inventoryBatchRepository.lockActiveBatchesForPick(
+                    businessId,
+                    pool.iterator().next(),
+                    branchId,
+                    InventoryConstants.BATCH_STATUS_ACTIVE,
+                    BigDecimal.ZERO
+            );
+        }
+        return inventoryBatchRepository.lockActiveBatchesForPickForItems(
+                businessId,
+                branchId,
+                InventoryConstants.BATCH_STATUS_ACTIVE,
+                List.copyOf(pool),
+                BigDecimal.ZERO
+        );
     }
 
     private void requireBranch(String businessId, String branchId) {

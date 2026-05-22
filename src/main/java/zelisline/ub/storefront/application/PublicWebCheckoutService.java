@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.identity.application.NotificationService;
@@ -38,6 +39,7 @@ public class PublicWebCheckoutService {
 
     private final PublicWebCartService publicWebCartService;
     private final InventoryBatchPickerService inventoryBatchPickerService;
+    private final PackageVariantStockResolver packageVariantStockResolver;
     private final ItemRepository itemRepository;
     private final InventoryBatchRepository inventoryBatchRepository;
     private final WebOrderRepository webOrderRepository;
@@ -50,6 +52,7 @@ public class PublicWebCheckoutService {
     public PublicWebCheckoutService(
             PublicWebCartService publicWebCartService,
             InventoryBatchPickerService inventoryBatchPickerService,
+            PackageVariantStockResolver packageVariantStockResolver,
             ItemRepository itemRepository,
             InventoryBatchRepository inventoryBatchRepository,
             WebOrderRepository webOrderRepository,
@@ -61,6 +64,7 @@ public class PublicWebCheckoutService {
     ) {
         this.publicWebCartService = publicWebCartService;
         this.inventoryBatchPickerService = inventoryBatchPickerService;
+        this.packageVariantStockResolver = packageVariantStockResolver;
         this.itemRepository = itemRepository;
         this.inventoryBatchRepository = inventoryBatchRepository;
         this.webOrderRepository = webOrderRepository;
@@ -102,8 +106,10 @@ public class PublicWebCheckoutService {
             Item itemRow = itemRepository
                     .findByIdAndBusinessIdAndDeletedAtIsNull(line.item().getId(), businessId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
-            if (itemRow.isStocked()) {
-                reconcileCurrentStockFromBatches(itemRow, businessId, branchId);
+            if (itemRow.isSellable()) {
+                Item stockHolder = packageVariantStockResolver.requireInventoryHolder(
+                        businessId, itemRow.getId());
+                reconcileCurrentStockFromBatches(stockHolder, businessId, branchId);
                 inventoryBatchPickerService.pickAndApplyPhysicalDecrement(
                         businessId,
                         itemRow.getId(),

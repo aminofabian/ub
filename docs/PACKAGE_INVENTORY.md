@@ -8,7 +8,7 @@
   - `packaging_unit_qty` → base units per unit sold (conversion)
   - `is_package_variant` / `is_stocked = false` for package rows
 - **Available packages** = `floor(pool_on_hand / packaging_unit_qty)` (see `PackageVariantStockResolver.displayStockQty`).
-- **Stock pool** (`branchStockPoolItemIds`): sums active batches on the parent plus any variant SKUs that share the pool (including legacy rows that still have batches on a child SKU, e.g. singles marked stocked).
+- **Stock pool** (`branchStockPoolItemIds`): only for `packageVariant` / shared-stock selling units — sums parent + those package SKUs. Normal option variants keep their **own** `item_id` batches and are not folded into the parent pool.
 
 ## Sales & checkout
 

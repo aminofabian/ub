@@ -132,15 +132,17 @@ public class PackageVariantStockResolver {
         if (packaged.compareTo(BigDecimal.ONE) > 0) {
             return packaged;
         }
-        // Single selling unit (1 egg) — same pool as parent when linked as a variant
-        if (packaged.compareTo(BigDecimal.ONE) == 0) {
-            return packaged;
-        }
         return null;
     }
 
+    /** True when this SKU sells from the parent's shared batch pool (package / bundle variants only). */
     public boolean sharesParentStock(Item item) {
         return unitsPerSale(item) != null && blankToNull(item.getVariantOfItemId()) != null;
+    }
+
+    /** Whether branch stock queries should aggregate a parent + package-variant pool. */
+    public boolean usesSharedStockPool(Item item) {
+        return sharesParentStock(item);
     }
 
     /** Item row that owns {@code inventory_batches} and {@code current_stock} for this catalog SKU. */
@@ -187,20 +189,38 @@ public class PackageVariantStockResolver {
     }
 
     /**
-     * All item ids whose active batches count toward one shared pool (parent + selling-unit variants).
-     * Includes legacy rows that still hold stock on a child SKU (e.g. singles marked stocked).
+     * Item ids whose active batches count toward on-hand for this catalog row.
+     * <ul>
+     *   <li>Normal variants / standalone products: only {@code catalogItem.id}</li>
+     *   <li>Package / shared-stock selling units: parent + this SKU + other package variants on the same parent</li>
+     *   <li>Parent product row: self + package-variant children (not independent option variants)</li>
+     * </ul>
      */
     public Set<String> branchStockPoolItemIds(String businessId, Item catalogItem) {
-        String parentId = blankToNull(catalogItem.getVariantOfItemId());
-        if (parentId == null) {
-            parentId = catalogItem.getId();
+        if (!usesSharedStockPool(catalogItem)) {
+            String parentId = blankToNull(catalogItem.getVariantOfItemId());
+            if (parentId == null) {
+                Set<String> pool = new LinkedHashSet<>();
+                pool.add(catalogItem.getId());
+                List<Item> children = itemRepository.findByBusinessIdAndVariantOfItemIdAndDeletedAtIsNullOrderBySkuAsc(
+                        businessId, catalogItem.getId());
+                for (Item child : children) {
+                    if (usesSharedStockPool(child)) {
+                        pool.add(child.getId());
+                    }
+                }
+                return pool;
+            }
+            return Set.of(catalogItem.getId());
         }
+        String parentId = blankToNull(catalogItem.getVariantOfItemId());
         Set<String> pool = new LinkedHashSet<>();
         pool.add(parentId);
+        pool.add(catalogItem.getId());
         List<Item> siblings = itemRepository.findByBusinessIdAndVariantOfItemIdAndDeletedAtIsNullOrderBySkuAsc(
                 businessId, parentId);
         for (Item sibling : siblings) {
-            if (includeSiblingInStockPool(sibling)) {
+            if (usesSharedStockPool(sibling)) {
                 pool.add(sibling.getId());
             }
         }
@@ -218,17 +238,6 @@ public class PackageVariantStockResolver {
             sum = sum.add(stockByItemId.getOrDefault(id, BigDecimal.ZERO));
         }
         return sum.setScale(QTY_SCALE, RoundingMode.HALF_UP);
-    }
-
-    private boolean includeSiblingInStockPool(Item sibling) {
-        if (sibling.isPackageVariant() || sharesParentStock(sibling)) {
-            return true;
-        }
-        String parentId = blankToNull(sibling.getVariantOfItemId());
-        if (parentId == null) {
-            return false;
-        }
-        return positiveUnits(sibling.getPackagingUnitQty()) != null;
     }
 
     private static BigDecimal positiveUnits(BigDecimal units) {

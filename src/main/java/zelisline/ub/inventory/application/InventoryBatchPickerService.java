@@ -216,7 +216,9 @@ public class InventoryBatchPickerService {
             Item catalogItem,
             String branchId
     ) {
-        Set<String> pool = packageVariantStockResolver.branchStockPoolItemIds(businessId, catalogItem);
+        Set<String> pool = packageVariantStockResolver.usesSharedStockPool(catalogItem)
+                ? packageVariantStockResolver.branchStockPoolItemIds(businessId, catalogItem)
+                : Set.of(catalogItem.getId());
         if (pool.size() <= 1) {
             String only = pool.iterator().next();
             return inventoryBatchRepository.findActiveBatchesForPreview(
@@ -241,7 +243,9 @@ public class InventoryBatchPickerService {
             String branchId,
             Item catalogItem
     ) {
-        Set<String> pool = packageVariantStockResolver.branchStockPoolItemIds(businessId, catalogItem);
+        Set<String> pool = packageVariantStockResolver.usesSharedStockPool(catalogItem)
+                ? packageVariantStockResolver.branchStockPoolItemIds(businessId, catalogItem)
+                : Set.of(catalogItem.getId());
         if (pool.size() <= 1) {
             return inventoryBatchRepository.lockActiveBatchesForPick(
                     businessId,

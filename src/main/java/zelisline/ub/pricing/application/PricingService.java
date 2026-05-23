@@ -308,9 +308,10 @@ public class PricingService {
                     cost, null, null, null, "No active margin price rule", currentSell);
         }
         BigDecimal margin = readMarginPercent(marginRule.getParamsJson());
-        BigDecimal suggested = cost.multiply(
+        BigDecimal rawSuggested = cost.multiply(
                 BigDecimal.ONE.add(margin.movePointLeft(2)))
                 .setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal suggested = SuggestedSellPriceRounding.round(rawSuggested);
         return new SellPriceSuggestionResponse(cost, margin, marginRule.getName(), suggested, null, currentSell);
     }
 

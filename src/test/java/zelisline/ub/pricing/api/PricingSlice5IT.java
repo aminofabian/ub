@@ -260,6 +260,35 @@ class PricingSlice5IT {
     }
 
     @Test
+    void suggestSell_roundsSuggestedPriceToNearestFiveOrTen() throws Exception {
+        mockMvc.perform(post("/api/v1/pricing/price-rules")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"name":"Default margin","ruleType":"MARGIN_PERCENT",
+                                 "paramsJson":"{\\"marginPercent\\":25}","active":true}
+                                """)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated());
+
+        MvcResult res = mockMvc.perform(get("/api/v1/pricing/suggest/sell")
+                        .param("itemId", itemId)
+                        .param("supplierId", supplierId)
+                        .param("unitCost", "11")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        var body = objectMapper.readTree(res.getResponse().getContentAsString());
+        // 11 × 1.25 = 13.75 → nearest 5 = 15
+        assertThat(body.get("suggestedSellPrice").decimalValue().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("15.00");
+    }
+
+    @Test
     void suggestSell_usesDraftUnitCostWhenNoBuyingHistory() throws Exception {
         mockMvc.perform(post("/api/v1/pricing/price-rules")
                         .contentType(APPLICATION_JSON)

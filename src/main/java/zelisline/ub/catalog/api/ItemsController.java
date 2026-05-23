@@ -30,6 +30,8 @@ import zelisline.ub.catalog.api.dto.EffectivePricingContextResponse;
 import zelisline.ub.catalog.api.dto.CatalogListScope;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.api.dto.CreateVariantRequest;
+import zelisline.ub.catalog.api.dto.GenerateProductDescriptionRequest;
+import zelisline.ub.catalog.api.dto.GenerateProductDescriptionResponse;
 import zelisline.ub.catalog.api.dto.ItemImageResponse;
 import zelisline.ub.catalog.api.dto.ItemResponse;
 import zelisline.ub.catalog.api.dto.ItemSummaryResponse;
@@ -39,6 +41,7 @@ import zelisline.ub.catalog.api.dto.SuggestedSkuResponse;
 import zelisline.ub.catalog.application.CategoryPricingResolutionService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.application.ItemCreateResult;
+import zelisline.ub.catalog.application.ProductDescriptionGeneratorService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
@@ -50,6 +53,7 @@ public class ItemsController {
 
     private final ItemCatalogService itemCatalogService;
     private final CategoryPricingResolutionService categoryPricingResolutionService;
+    private final ProductDescriptionGeneratorService productDescriptionGeneratorService;
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'catalog.items.read')")
@@ -82,6 +86,16 @@ public class ItemsController {
                 itemTypeId,
                 pageable
         );
+    }
+
+    @PostMapping("/generate-description")
+    @PreAuthorize("hasPermission(null, 'catalog.items.write')")
+    public GenerateProductDescriptionResponse generateDescription(
+            @Valid @RequestBody GenerateProductDescriptionRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return new GenerateProductDescriptionResponse(productDescriptionGeneratorService.generate(body));
     }
 
     @GetMapping("/next-sku")

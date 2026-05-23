@@ -1,0 +1,41 @@
+package zelisline.ub.platform.domain;
+
+import java.time.Instant;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+import lombok.Getter;
+import lombok.Setter;
+
+@Entity
+@Table(name = "platform_integration_settings")
+@Getter
+@Setter
+public class PlatformIntegrationSettings {
+
+    public static final String SINGLETON_ID = "00000000-0000-0000-0000-000000000001";
+
+    @Id
+    @Column(length = 36, nullable = false)
+    private String id;
+
+    @Column(name = "deepseek_api_key_enc", columnDefinition = "TEXT")
+    private String deepseekApiKeyEnc;
+
+    @Column(name = "deepseek_host", length = 255)
+    private String deepseekHost;
+
+    @Column(name = "deepseek_url", length = 512)
+    private String deepseekUrl;
+
+    @Column(name = "deepseek_model", length = 128)
+    private String deepseekModel;
+
+    @Column(name = "rapidapi_whatsapp_key_enc", columnDefinition = "TEXT")
+    private String rapidapiWhatsappKeyEnc;
+
+    @Column(name = "updated_at", nullable = false)
+    private Instant updatedAt = Instant.now();
+}

@@ -13,6 +13,7 @@ import zelisline.ub.credits.domain.BusinessCreditSettings;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
 import zelisline.ub.messaging.config.MessagingProperties;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
+import zelisline.ub.platform.application.PlatformIntegrationSettingsService;
 
 @Service
 @RequiredArgsConstructor
@@ -21,6 +22,7 @@ public class BusinessCreditMessagingSettingsService {
     private final BusinessCreditSettingsService businessCreditSettingsService;
     private final CredentialEncryptionService encryptionService;
     private final MessagingProperties messagingProperties;
+    private final PlatformIntegrationSettingsService platformIntegrationSettingsService;
 
     @Value("${app.public.frontend-base-url:http://localhost:3000}")
     private String frontendBaseUrl;
@@ -50,7 +52,9 @@ public class BusinessCreditMessagingSettingsService {
         return new TenantMessagingConfig(
                 true,
                 paymentUrl,
-                firstNonBlank(decryptOrNull(s.getRapidapiKeyEnc()), env.rapidApiWhatsApp().apiKey()),
+                firstNonBlank(
+                        decryptOrNull(s.getRapidapiKeyEnc()),
+                        platformIntegrationSettingsService.resolveRapidApiWhatsappKey()),
                 env.rapidApiWhatsApp().host(),
                 env.rapidApiWhatsApp().lookupUrl(),
                 firstNonBlank(decryptOrNull(s.getWhatsappMetaAccessTokenEnc()), env.metaWhatsApp().accessToken()),

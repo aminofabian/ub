@@ -206,6 +206,19 @@ class SuppliersApiIT {
     }
 
     @Test
+    void purchaseHistory_emptyForNewSupplier() throws Exception {
+        String supplierA = createSupplier(TENANT_A, "No Orders Yet");
+        mockMvc.perform(get("/api/v1/suppliers/" + supplierA + "/purchase-history")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.summary.invoiceCount").value(0))
+                .andExpect(jsonPath("$.summary.totalSpent").value(0))
+                .andExpect(jsonPath("$.orders").isEmpty());
+    }
+
+    @Test
     void listSupplierItemLinks_returnsLinkedItems() throws Exception {
         String supplierA = createSupplier(TENANT_A, "Stockist");
         String itemId = createSellableItem("SKU-L1", "Linked one");

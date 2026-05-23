@@ -3,6 +3,7 @@ package zelisline.ub.purchasing.repository;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import zelisline.ub.purchasing.domain.SupplierInvoice;
@@ -22,6 +23,21 @@ public interface SupplierInvoiceRepository extends JpaRepository<SupplierInvoice
      */
     List<SupplierInvoice> findByBusinessIdAndStatusAndRawPurchaseSessionIdIsNotNullOrderByCreatedAtDescIdDesc(
             String businessId,
+            String status
+    );
+
+    List<SupplierInvoice> findByBusinessIdAndSupplierIdAndStatusOrderByInvoiceDateDescCreatedAtDescIdDesc(
+            String businessId,
+            String supplierId,
+            String status,
+            Pageable pageable
+    );
+
+    int countByBusinessIdAndSupplierIdAndStatus(String businessId, String supplierId, String status);
+
+    List<SupplierInvoice> findByBusinessIdAndSupplierIdAndStatus(
+            String businessId,
+            String supplierId,
             String status
     );
 }

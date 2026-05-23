@@ -189,6 +189,23 @@ class SuppliersApiIT {
     }
 
     @Test
+    void listSuppliers_searchByLinkedProductName() throws Exception {
+        String supplierA = createSupplier(TENANT_A, "Obscure Vendor Ltd");
+        createSupplier(TENANT_A, "Other Wholesale");
+        String itemId = createSellableItem("SKU-SEARCH", "Premium Mango Juice");
+        addLink(itemId, supplierA, true);
+
+        mockMvc.perform(get("/api/v1/suppliers")
+                        .param("search", "mango juice")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].name").value("Obscure Vendor Ltd"));
+    }
+
+    @Test
     void listSupplierItemLinks_returnsLinkedItems() throws Exception {
         String supplierA = createSupplier(TENANT_A, "Stockist");
         String itemId = createSellableItem("SKU-L1", "Linked one");

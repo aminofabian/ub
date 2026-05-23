@@ -20,7 +20,22 @@ public interface SupplierRepository extends JpaRepository<Supplier, String> {
                and s.deletedAt is null
                and (:q is null or :q = ''
                     or lower(s.name) like lower(concat('%', :q, '%'))
-                    or lower(coalesce(s.code, '')) like lower(concat('%', :q, '%')))
+                    or lower(coalesce(s.code, '')) like lower(concat('%', :q, '%'))
+                    or exists (
+                      select 1 from SupplierProduct sp
+                       join Item i on i.id = sp.itemId
+                       where sp.supplierId = s.id
+                         and sp.deletedAt is null
+                         and sp.active = true
+                         and i.businessId = s.businessId
+                         and i.deletedAt is null
+                         and i.active = true
+                         and (lower(i.name) like lower(concat('%', :q, '%'))
+                           or lower(coalesce(i.variantName, '')) like lower(concat('%', :q, '%'))
+                           or lower(i.sku) like lower(concat('%', :q, '%'))
+                           or lower(coalesce(i.barcode, '')) like lower(concat('%', :q, '%'))
+                           or lower(coalesce(sp.supplierSku, '')) like lower(concat('%', :q, '%')))
+                    ))
                and (:status is null or :status = '' or s.status = :status)
              order by s.name asc
             """)

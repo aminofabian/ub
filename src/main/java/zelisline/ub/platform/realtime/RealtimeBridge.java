@@ -16,6 +16,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import zelisline.ub.notifications.domain.Notification;
+import zelisline.ub.notifications.repository.NotificationRepository;
 import zelisline.ub.notifications.application.NotificationPreferenceService;
 
 /**
@@ -33,16 +34,19 @@ public class RealtimeBridge {
     private final RealtimeWebSocketHandler handler;
     private final ObjectMapper objectMapper;
     private final NotificationPreferenceService preferenceService;
+    private final NotificationRepository notificationRepository;
 
     public RealtimeBridge(
             SessionRegistry sessionRegistry,
             RealtimeWebSocketHandler handler,
-            NotificationPreferenceService preferenceService
+            NotificationPreferenceService preferenceService,
+            NotificationRepository notificationRepository
     ) {
         this.sessionRegistry = sessionRegistry;
         this.handler = handler;
         this.objectMapper = new ObjectMapper();
         this.preferenceService = preferenceService;
+        this.notificationRepository = notificationRepository;
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -411,11 +415,6 @@ public class RealtimeBridge {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // Helpers
-    // ═══════════════════════════════════════════════════════════════
-
-    
-    // ═══════════════════════════════════════════════════════════════
     // Grocery Checkout Event Listeners
     // ═══════════════════════════════════════════════════════════════
 
@@ -432,6 +431,7 @@ public class RealtimeBridge {
         String payloadJson = toJson(dataMap);
         if (payloadJson == null) return;
 
+        // Fan-out to grocery channel subscribers
         Set<String> sessionIds = sessionRegistry.findSessionsByBranchChannel(
                 event.businessId(), event.branchId(), "grocery");
         for (String sid : sessionIds) {
@@ -439,6 +439,29 @@ public class RealtimeBridge {
         }
         log.debug("Grocery event invoice.created: invoice={} branch={} sessions={}",
                 event.invoiceId(), event.branchId(), sessionIds.size());
+
+        // Also persist a Notification row so it appears in the bell + REST polling
+        try {
+            var payload = new LinkedHashMap<String, Object>();
+            payload.put("invoiceId", event.invoiceId());
+            payload.put("barcodeCode", event.barcodeCode());
+            payload.put("grandTotal", event.grandTotal().toPlainString());
+            payload.put("lineCount", event.lineCount());
+            payload.put("createdByName", event.createdByName());
+            payload.put("actionUrl", "/cashier?invoice=" + event.barcodeCode());
+
+            Notification notif = new Notification();
+            notif.setBusinessId(event.businessId());
+            notif.setUserId(null); // business-wide — all cashiers see it
+            notif.setType("grocery.invoice.created");
+            notif.setCategory("operational");
+            notif.setPriority("HIGH");
+            notif.setDedupeKey("gi:" + event.invoiceId());
+            notif.setPayloadJson(objectMapper.writeValueAsString(payload));
+            notificationRepository.save(notif);
+        } catch (Exception e) {
+            log.warn("Failed to persist grocery notification for invoice {}", event.invoiceId(), e);
+        }
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)

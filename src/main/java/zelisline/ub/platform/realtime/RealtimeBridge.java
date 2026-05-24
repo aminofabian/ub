@@ -414,7 +414,119 @@ public class RealtimeBridge {
     // Helpers
     // ═══════════════════════════════════════════════════════════════
 
-    private String resolveNotificationPriority(String type) {
+    
+    // ═══════════════════════════════════════════════════════════════
+    // Grocery Checkout Event Listeners
+    // ═══════════════════════════════════════════════════════════════
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onGroceryInvoiceCreated(GroceryInvoiceCreatedEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        var dataMap = new LinkedHashMap<String, String>();
+        dataMap.put("invoiceId", event.invoiceId());
+        dataMap.put("barcodeCode", event.barcodeCode());
+        dataMap.put("grandTotal", event.grandTotal().toPlainString());
+        dataMap.put("lineCount", String.valueOf(event.lineCount()));
+        dataMap.put("createdBy", event.createdBy());
+        dataMap.put("createdByName", event.createdByName());
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) return;
+
+        Set<String> sessionIds = sessionRegistry.findSessionsByBranchChannel(
+                event.businessId(), event.branchId(), "grocery");
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "grocery.invoice.created", eventId, "HIGH", Instant.now(), payloadJson);
+        }
+        log.debug("Grocery event invoice.created: invoice={} branch={} sessions={}",
+                event.invoiceId(), event.branchId(), sessionIds.size());
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onGroceryInvoiceLocked(GroceryInvoiceLockedEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        var dataMap = new LinkedHashMap<String, String>();
+        dataMap.put("invoiceId", event.invoiceId());
+        dataMap.put("barcodeCode", event.barcodeCode());
+        dataMap.put("lockedBy", event.lockedBy());
+        dataMap.put("lockedByName", event.lockedByName());
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) return;
+
+        Set<String> sessionIds = sessionRegistry.findSessionsByBranchChannel(
+                event.businessId(), event.branchId(), "grocery");
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "grocery.invoice.locked", eventId, "MEDIUM", Instant.now(), payloadJson);
+        }
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onGroceryInvoiceUnlocked(GroceryInvoiceUnlockedEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        var dataMap = new LinkedHashMap<String, String>();
+        dataMap.put("invoiceId", event.invoiceId());
+        dataMap.put("barcodeCode", event.barcodeCode());
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) return;
+
+        Set<String> sessionIds = sessionRegistry.findSessionsByBranchChannel(
+                event.businessId(), event.branchId(), "grocery");
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "grocery.invoice.unlocked", eventId, "LOW", Instant.now(), payloadJson);
+        }
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onGroceryInvoicePaid(GroceryInvoicePaidEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        var dataMap = new LinkedHashMap<String, String>();
+        dataMap.put("invoiceId", event.invoiceId());
+        dataMap.put("barcodeCode", event.barcodeCode());
+        dataMap.put("saleId", event.saleId());
+        dataMap.put("paidBy", event.paidBy());
+        dataMap.put("paidByName", event.paidByName());
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) return;
+
+        Set<String> sessionIds = sessionRegistry.findSessionsByBranchChannel(
+                event.businessId(), event.branchId(), "grocery");
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "grocery.invoice.paid", eventId, "HIGH", Instant.now(), payloadJson);
+        }
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onGroceryInvoiceCancelled(GroceryInvoiceCancelledEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        var dataMap = new LinkedHashMap<String, String>();
+        dataMap.put("invoiceId", event.invoiceId());
+        dataMap.put("barcodeCode", event.barcodeCode());
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) return;
+
+        Set<String> sessionIds = sessionRegistry.findSessionsByBranchChannel(
+                event.businessId(), event.branchId(), "grocery");
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "grocery.invoice.cancelled", eventId, "MEDIUM", Instant.now(), payloadJson);
+        }
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onGroceryInvoiceExpired(GroceryInvoiceExpiredEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        var dataMap = new LinkedHashMap<String, String>();
+        dataMap.put("invoiceId", event.invoiceId());
+        dataMap.put("barcodeCode", event.barcodeCode());
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) return;
+
+        Set<String> sessionIds = sessionRegistry.findSessionsByBranchChannel(
+                event.businessId(), event.branchId(), "grocery");
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "grocery.invoice.expired", eventId, "LOW", Instant.now(), payloadJson);
+        }
+    }
+
+private String resolveNotificationPriority(String type) {
         return switch (type) {
             case "stock.low", "shift.variance_detected", "storefront.order.placed",
                  "storefront.order.paid", "approval.requested", "approval.resolved",
@@ -598,4 +710,34 @@ public class RealtimeBridge {
 
     public record SystemAnnouncementEvent(
             String businessId, String title, String body, String level) {}
+    // ═══════════════════════════════════════════════════════════════
+    // Grocery Checkout Events
+    // ═══════════════════════════════════════════════════════════════
+
+    public record GroceryInvoiceCreatedEvent(
+            String businessId, String branchId, String invoiceId,
+            String barcodeCode, java.math.BigDecimal grandTotal,
+            int lineCount, String createdBy, String createdByName) {}
+
+    public record GroceryInvoiceLockedEvent(
+            String businessId, String branchId, String invoiceId,
+            String barcodeCode, String lockedBy, String lockedByName) {}
+
+    public record GroceryInvoiceUnlockedEvent(
+            String businessId, String branchId, String invoiceId,
+            String barcodeCode) {}
+
+    public record GroceryInvoicePaidEvent(
+            String businessId, String branchId, String invoiceId,
+            String barcodeCode, String saleId, String paidBy,
+            String paidByName) {}
+
+    public record GroceryInvoiceCancelledEvent(
+            String businessId, String branchId, String invoiceId,
+            String barcodeCode) {}
+
+    public record GroceryInvoiceExpiredEvent(
+            String businessId, String branchId, String invoiceId,
+            String barcodeCode) {}
+
 }

@@ -30,7 +30,7 @@ public class DeepSeekRapidApiClient {
     private final PlatformIntegrationSettingsService platformIntegrationSettingsService;
     private final ObjectMapper objectMapper;
 
-    public String complete(String userPrompt) {
+    public String complete(String systemPrompt, String userPrompt) {
         ResolvedCatalogAiConfig properties =
                 platformIntegrationSettingsService.resolveCatalogAi();
         if (!properties.configured()) {
@@ -42,9 +42,12 @@ public class DeepSeekRapidApiClient {
         }
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("model", properties.model());
-        payload.put(
-                "messages",
-                List.of(Map.of("role", "user", "content", userPrompt)));
+        List<Map<String, String>> messages = new java.util.ArrayList<>();
+        if (systemPrompt != null && !systemPrompt.isBlank()) {
+            messages.add(Map.of("role", "system", "content", systemPrompt.strip()));
+        }
+        messages.add(Map.of("role", "user", "content", userPrompt.strip()));
+        payload.put("messages", messages);
 
         final String json;
         try {

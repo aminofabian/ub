@@ -129,6 +129,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                             and ch.deletedAt is null
                         )))
                and (:itemTypeUnset = true or i.itemTypeId = :itemTypeId)
+               and (:restrictByAllowedItemTypes = false or i.itemTypeId in :allowedItemTypeIds)
             """)
     Page<Item> search(
             @Param("businessId") String businessId,
@@ -146,6 +147,8 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("squashParentGroupsForSearch") boolean squashParentGroupsForSearch,
             @Param("itemTypeUnset") boolean itemTypeUnset,
             @Param("itemTypeId") String itemTypeId,
+            @Param("restrictByAllowedItemTypes") boolean restrictByAllowedItemTypes,
+            @Param("allowedItemTypeIds") Collection<String> allowedItemTypeIds,
             Pageable pageable
     );
 

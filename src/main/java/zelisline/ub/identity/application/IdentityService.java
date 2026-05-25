@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.identity.api.dto.AssignRoleRequest;
 import zelisline.ub.identity.api.dto.CreateRoleRequest;
 import zelisline.ub.identity.api.dto.CreateUserRequest;
@@ -29,10 +30,12 @@ import zelisline.ub.identity.api.dto.UserResponse;
 import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.domain.RolePermission;
 import zelisline.ub.identity.domain.User;
+import zelisline.ub.identity.domain.UserItemType;
 import zelisline.ub.identity.domain.UserStatus;
 import zelisline.ub.identity.repository.PermissionRepository;
 import zelisline.ub.identity.repository.RolePermissionRepository;
 import zelisline.ub.identity.repository.RoleRepository;
+import zelisline.ub.identity.repository.UserItemTypeRepository;
 import zelisline.ub.identity.repository.UserRepository;
 
 /**
@@ -56,6 +59,8 @@ public class IdentityService {
     private final RoleRepository roleRepository;
     private final PermissionRepository permissionRepository;
     private final RolePermissionRepository rolePermissionRepository;
+    private final UserItemTypeRepository userItemTypeRepository;
+    private final ItemTypeRepository itemTypeRepository;
     private final PasswordEncoder passwordEncoder;
 
     // ---------- Users -------------------------------------------------------
@@ -365,6 +370,7 @@ public class IdentityService {
         List<String> permissions = role == null
                 ? List.of()
                 : permissionRepository.findPermissionKeysByRoleId(role.getId());
+        List<String> itemTypeIds = userItemTypeRepository.findItemTypeIdsByUserId(user.getId());
         return new UserResponse(
                 user.getId(),
                 user.getBusinessId(),
@@ -375,10 +381,69 @@ public class IdentityService {
                 user.getStatus(),
                 roleSummary,
                 permissions,
+                itemTypeIds,
                 user.getLastLoginAt(),
                 user.getCreatedAt(),
                 user.getUpdatedAt()
         );
+    }
+
+    // ---------- User ↔ item type assignments --------------------------------
+
+    /**
+     * Read the department (item type) IDs assigned to a user. Returned in
+     * insertion order from the join table.
+     */
+    @Transactional(readOnly = true)
+    public List<String> listItemTypeIdsForUser(String businessId, String userId) {
+        requireTenantUser(businessId, userId);
+        return userItemTypeRepository.findItemTypeIdsByUserId(userId);
+    }
+
+    /**
+     * Replace the user's department assignments with the given set. All IDs
+     * are validated to belong to the calling tenant; unknown / cross-tenant
+     * IDs cause a {@code 400 BAD_REQUEST}.
+     */
+    @Transactional
+    public List<String> setItemTypeIdsForUser(
+            String businessId,
+            String userId,
+            List<String> itemTypeIds
+    ) {
+        requireTenantUser(businessId, userId);
+        List<String> deduped = dedupeNonBlank(itemTypeIds);
+        for (String itemTypeId : deduped) {
+            itemTypeRepository.findByIdAndBusinessId(itemTypeId, businessId)
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST,
+                            "Unknown item type: " + itemTypeId));
+        }
+        userItemTypeRepository.deleteAllByUserId(userId);
+        userItemTypeRepository.flush();
+        for (String itemTypeId : deduped) {
+            UserItemType row = new UserItemType();
+            row.setId(new UserItemType.Id(userId, itemTypeId));
+            userItemTypeRepository.save(row);
+        }
+        return userItemTypeRepository.findItemTypeIdsByUserId(userId);
+    }
+
+    private List<String> dedupeNonBlank(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        Set<String> seen = new HashSet<>();
+        List<String> kept = new java.util.ArrayList<>(values.size());
+        for (String v : values) {
+            if (v == null) continue;
+            String trimmed = v.trim();
+            if (trimmed.isEmpty()) continue;
+            if (seen.add(trimmed)) {
+                kept.add(trimmed);
+            }
+        }
+        return kept;
     }
 
     private RoleResponse toRoleResponse(Role role) {

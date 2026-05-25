@@ -42,8 +42,17 @@ import zelisline.ub.catalog.application.CategoryPricingResolutionService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.application.ItemCreateResult;
 import zelisline.ub.catalog.application.ProductDescriptionGeneratorService;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+
+import zelisline.ub.identity.repository.UserItemTypeRepository;
 import zelisline.ub.platform.security.CurrentTenantUser;
+import zelisline.ub.platform.security.TenantPrincipal;
+import zelisline.ub.tenancy.application.BranchResolutionService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
+
+import java.util.List;
+import java.util.Set;
 
 @Validated
 @RestController
@@ -54,6 +63,8 @@ public class ItemsController {
     private final ItemCatalogService itemCatalogService;
     private final CategoryPricingResolutionService categoryPricingResolutionService;
     private final ProductDescriptionGeneratorService productDescriptionGeneratorService;
+    private final BranchResolutionService branchResolutionService;
+    private final UserItemTypeRepository userItemTypeRepository;
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'catalog.items.read')")
@@ -72,6 +83,7 @@ public class ItemsController {
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
+        List<String> allowedItemTypes = resolveCallerAllowedItemTypes(request, itemTypeId);
         return itemCatalogService.listItems(
                 TenantRequestIds.resolveBusinessId(request),
                 search,
@@ -84,8 +96,39 @@ public class ItemsController {
                 excludeLinkedSupplierId,
                 branchId,
                 itemTypeId,
+                allowedItemTypes,
                 pageable
         );
+    }
+
+    /**
+     * For role-restricted callers (currently only {@code grocery_clerk}),
+     * returns the list of item-type IDs they are allowed to see. Other roles
+     * return {@code null}, which means "no restriction".
+     *
+     * <p>If the caller explicitly requested an {@code itemTypeId} that falls
+     * outside their allowed set, we narrow the allowed set to the empty set
+     * so the query short-circuits to an empty page rather than leaking items
+     * from a forbidden department.</p>
+     */
+    private List<String> resolveCallerAllowedItemTypes(HttpServletRequest request, String requestedItemTypeId) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        Object p = auth == null ? null : auth.getPrincipal();
+        if (!(p instanceof TenantPrincipal tp)) {
+            return null;
+        }
+        if (!branchResolutionService.isGroceryClerkRole(tp.roleId())) {
+            return null;
+        }
+        List<String> assigned = userItemTypeRepository.findItemTypeIdsByUserId(tp.userId());
+        String requested = requestedItemTypeId == null ? null : requestedItemTypeId.trim();
+        if (requested != null && !requested.isEmpty()) {
+            Set<String> allowed = Set.copyOf(assigned);
+            if (!allowed.contains(requested)) {
+                return List.of();
+            }
+        }
+        return assigned;
     }
 
     @PostMapping("/generate-description")

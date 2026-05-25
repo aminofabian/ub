@@ -17,6 +17,13 @@ public record UserResponse(
         String status,
         RoleSummary role,
         List<String> permissions,
+        /**
+         * IDs of item types (departments) this user is restricted to. Only
+         * meaningful for roles whose catalog access is scoped by department
+         * (e.g. {@code grocery_clerk}); other roles see the empty list and
+         * are unrestricted.
+         */
+        List<String> itemTypeIds,
         Instant lastLoginAt,
         Instant createdAt,
         Instant updatedAt

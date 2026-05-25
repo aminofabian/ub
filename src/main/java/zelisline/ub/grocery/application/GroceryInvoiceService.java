@@ -17,7 +17,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+import org.springframework.data.domain.PageRequest;
+
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.grocery.GroceryConstants;
@@ -28,6 +34,7 @@ import zelisline.ub.grocery.api.dto.GroceryInvoiceLineResponse;
 import zelisline.ub.grocery.api.dto.GroceryInvoiceListResponse;
 import zelisline.ub.grocery.api.dto.GroceryInvoiceResponse;
 import zelisline.ub.grocery.api.dto.GroceryInvoiceSummaryResponse;
+import zelisline.ub.grocery.api.dto.GroceryTopProductResponse;
 import zelisline.ub.grocery.api.dto.PayGroceryInvoiceRequest;
 import zelisline.ub.grocery.api.dto.PayGroceryInvoiceResponse;
 import zelisline.ub.grocery.domain.GroceryInvoice;
@@ -58,6 +65,7 @@ public class GroceryInvoiceService {
     private final GroceryInvoiceRepository invoiceRepository;
     private final GroceryInvoiceLineRepository lineRepository;
     private final ItemRepository itemRepository;
+    private final ItemCatalogService itemCatalogService;
     private final BranchRepository branchRepository;
     private final SaleService saleService;
     private final ShiftRepository shiftRepository;
@@ -212,6 +220,73 @@ public class GroceryInvoiceService {
         }
 
         return new GroceryInvoiceListResponse(summaries);
+    }
+
+    /**
+     * Top items the given user has invoiced from the given branch, ranked by
+     * distinct invoice count (then total quantity, then recency). Used by the
+     * grocery counter's "Top sellers" panel so it survives page reloads —
+     * sorting happens at the database, not in the browser.
+     *
+     * <p>Cancelled invoices are excluded so a clerk's mistakes don't pollute
+     * their personal top sellers.</p>
+     */
+    @Transactional(readOnly = true)
+    public List<GroceryTopProductResponse> topProductsForUser(
+            String businessId,
+            String branchId,
+            String userId,
+            int limit
+    ) {
+        if (businessId == null || businessId.isBlank()
+                || branchId == null || branchId.isBlank()
+                || userId == null || userId.isBlank()) {
+            return List.of();
+        }
+        int bounded = Math.max(1, Math.min(limit, 100));
+        List<Object[]> rows = lineRepository.topItemsForUser(
+                businessId, branchId, userId, PageRequest.of(0, bounded));
+        if (rows.isEmpty()) {
+            return List.of();
+        }
+        List<String> itemIds = new ArrayList<>(rows.size());
+        for (Object[] row : rows) {
+            itemIds.add((String) row[0]);
+        }
+        Map<String, Item> itemsById = new LinkedHashMap<>();
+        for (Item item : itemRepository.findAllById(itemIds)) {
+            if (businessId.equals(item.getBusinessId())) {
+                itemsById.put(item.getId(), item);
+            }
+        }
+        Map<String, String> thumbs = itemCatalogService.resolveThumbnailUrls(businessId, itemIds);
+
+        List<GroceryTopProductResponse> out = new ArrayList<>(rows.size());
+        for (Object[] row : rows) {
+            String itemId = (String) row[0];
+            Item item = itemsById.get(itemId);
+            if (item == null) {
+                continue;
+            }
+            String name = item.getName() != null ? item.getName() : (String) row[1];
+            String sku = item.getSku();
+            String thumb = thumbs.get(itemId);
+            long invoiceCount = ((Number) row[2]).longValue();
+            BigDecimal totalQty = row[3] instanceof BigDecimal bd
+                    ? bd
+                    : BigDecimal.valueOf(((Number) row[3]).doubleValue());
+            Instant lastAt = (Instant) row[4];
+            out.add(new GroceryTopProductResponse(
+                    itemId,
+                    name,
+                    sku,
+                    thumb,
+                    invoiceCount,
+                    totalQty,
+                    lastAt
+            ));
+        }
+        return out;
     }
 
     @Transactional

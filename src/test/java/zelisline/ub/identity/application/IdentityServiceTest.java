@@ -29,9 +29,11 @@ import zelisline.ub.identity.api.dto.UserResponse;
 import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.domain.UserStatus;
+import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.identity.repository.PermissionRepository;
 import zelisline.ub.identity.repository.RolePermissionRepository;
 import zelisline.ub.identity.repository.RoleRepository;
+import zelisline.ub.identity.repository.UserItemTypeRepository;
 import zelisline.ub.identity.repository.UserRepository;
 
 /**
@@ -53,6 +55,8 @@ class IdentityServiceTest {
     @Mock private RoleRepository roleRepository;
     @Mock private PermissionRepository permissionRepository;
     @Mock private RolePermissionRepository rolePermissionRepository;
+    @Mock private UserItemTypeRepository userItemTypeRepository;
+    @Mock private ItemTypeRepository itemTypeRepository;
     @Mock private PasswordEncoder passwordEncoder;
 
     @InjectMocks

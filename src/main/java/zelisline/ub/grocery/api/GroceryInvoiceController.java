@@ -15,10 +15,13 @@ import org.springframework.web.bind.annotation.RestController;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import java.util.List;
+
 import zelisline.ub.grocery.api.dto.CancelGroceryInvoiceRequest;
 import zelisline.ub.grocery.api.dto.CreateGroceryInvoiceRequest;
 import zelisline.ub.grocery.api.dto.GroceryInvoiceListResponse;
 import zelisline.ub.grocery.api.dto.GroceryInvoiceResponse;
+import zelisline.ub.grocery.api.dto.GroceryTopProductResponse;
 import zelisline.ub.grocery.api.dto.PayGroceryInvoiceRequest;
 import zelisline.ub.grocery.api.dto.PayGroceryInvoiceResponse;
 import zelisline.ub.grocery.application.GroceryInvoiceService;
@@ -193,5 +196,33 @@ public class GroceryInvoiceController {
                 id,
                 principal.userId()
         );
+    }
+
+    /**
+     * Server-aggregated "Top sellers" feed for the grocery counter. Ranks
+     * items by the calling user's own invoice activity at the resolved branch
+     * (cancelled invoices excluded), so the panel survives page reloads.
+     *
+     * <p>{@code branchId} defaults to the caller's assigned branch when
+     * omitted; {@code limit} clamps to 1..100 and defaults to 20.</p>
+     */
+    @GetMapping("/top-products")
+    @PreAuthorize("hasPermission(null, 'grocery.invoices.create')")
+    public List<GroceryTopProductResponse> topProducts(
+            @RequestParam(required = false) String branchId,
+            @RequestParam(required = false, defaultValue = "20") int limit,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String effectiveBranch = branchResolutionService.resolveEffectiveBranch(
+                businessId, branchId, principal.roleId());
+        String resolvedBranch = effectiveBranch != null
+                ? effectiveBranch
+                : principal.branchId();
+        if (resolvedBranch == null) {
+            return List.of();
+        }
+        return service.topProductsForUser(businessId, resolvedBranch, principal.userId(), limit);
     }
 }

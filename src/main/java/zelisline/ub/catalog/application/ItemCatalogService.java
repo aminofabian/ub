@@ -102,6 +102,46 @@ public class ItemCatalogService {
             String itemTypeId,
             Pageable pageable
     ) {
+        return listItems(
+                businessId,
+                search,
+                barcodeExact,
+                categoryId,
+                includeCategoryDescendants,
+                noBarcode,
+                includeInactive,
+                catalogListScope,
+                excludeLinkedSupplierId,
+                branchIdForStock,
+                itemTypeId,
+                null,
+                pageable);
+    }
+
+    /**
+     * Same as {@link #listItems(String, String, String, String, boolean,
+     * boolean, boolean, CatalogListScope, String, String, String, Pageable)}
+     * but additionally AND-s the given {@code allowedItemTypeIds} into the
+     * query. Used to enforce per-user department restrictions for the
+     * {@code grocery_clerk} role. Pass {@code null} to skip restriction; an
+     * empty (non-null) list short-circuits to an empty page.
+     */
+    @Transactional(readOnly = true)
+    public Page<ItemSummaryResponse> listItems(
+            String businessId,
+            String search,
+            String barcodeExact,
+            String categoryId,
+            boolean includeCategoryDescendants,
+            boolean noBarcode,
+            boolean includeInactive,
+            CatalogListScope catalogListScope,
+            String excludeLinkedSupplierId,
+            String branchIdForStock,
+            String itemTypeId,
+            Collection<String> allowedItemTypeIds,
+            Pageable pageable
+    ) {
         String q = blankToNull(search);
         String bc = blankToNull(barcodeExact);
         String cat = blankToNull(categoryId);
@@ -128,6 +168,13 @@ public class ItemCatalogService {
         boolean squashParentGroupsForSearch = includeAllScopes && q != null;
         String itemType = blankToNull(itemTypeId);
         boolean itemTypeUnset = itemType == null;
+        boolean restrictByAllowedItemTypes = allowedItemTypeIds != null;
+        if (restrictByAllowedItemTypes && allowedItemTypeIds.isEmpty()) {
+            return Page.empty(pg);
+        }
+        Collection<String> safeAllowedItemTypes = restrictByAllowedItemTypes
+                ? allowedItemTypeIds
+                : List.of("");
         Page<Item> page = itemRepository.search(
                 businessId,
                 q,
@@ -144,6 +191,8 @@ public class ItemCatalogService {
                 squashParentGroupsForSearch,
                 itemTypeUnset,
                 itemType != null ? itemType : "",
+                restrictByAllowedItemTypes,
+                safeAllowedItemTypes,
                 pg);
         List<String> ids = page.getContent().stream().map(Item::getId).toList();
         Map<String, String> thumbs = firstGalleryImageUrlByItemId(ids);
@@ -1101,6 +1150,32 @@ public class ItemCatalogService {
                     .toList();
         }
         return toResponse(item, variants, null, null);
+    }
+
+    /**
+     * Resolve display thumbnail URLs for the given item IDs. Returns a map
+     * keyed by item id; items without a thumbnail are simply omitted. Used by
+     * downstream features (e.g. the grocery counter's "Top sellers" panel)
+     * that already know which items to load.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, String> resolveThumbnailUrls(String businessId, Collection<String> itemIds) {
+        if (itemIds == null || itemIds.isEmpty() || businessId == null || businessId.isBlank()) {
+            return Map.of();
+        }
+        Map<String, String> gallery = firstGalleryImageUrlByItemId(itemIds);
+        List<Item> items = itemRepository.findAllById(itemIds);
+        Map<String, String> out = new LinkedHashMap<>();
+        for (Item item : items) {
+            if (!businessId.equals(item.getBusinessId())) {
+                continue;
+            }
+            String thumb = resolveListThumbnail(item, gallery);
+            if (thumb != null && !thumb.isBlank()) {
+                out.put(item.getId(), thumb);
+            }
+        }
+        return out;
     }
 
     private Map<String, String> firstGalleryImageUrlByItemId(Collection<String> itemIds) {

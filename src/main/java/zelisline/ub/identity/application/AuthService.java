@@ -48,6 +48,31 @@ public class AuthService {
     private static final int HARD_WINDOW_MINUTES = 60;
     private static final int HARD_LOCK_FAILURES = 10;
 
+    /**
+     * Rotation-grace window for refresh-token reuse detection.
+     *
+     * <p>RFC 6819 §5.2.2.3 reuse detection cascades a revocation of every session
+     * for the user when an already-rotated refresh token is presented a second
+     * time. That is safe against an attacker but disastrous when the same client
+     * legitimately fires two requests in parallel (page load issuing 4-6 API
+     * calls, mobile browser retrying after a flaky network, WebSocket reauth
+     * racing with a normal API request, two tabs both hitting the scheduled
+     * proactive refresh, etc.).
+     *
+     * <p>The grace window covers exactly that case: if the presented refresh
+     * token was rotated within the last {@value} seconds <em>and</em> its
+     * successor session is still active, we treat the second request as a
+     * benign duplicate and return {@code 401} <em>without</em> cascading the
+     * revoke. The first caller already received a fresh access+refresh pair,
+     * so the duplicate caller can simply read the new tokens from shared
+     * storage (or get a fresh 401 + single-flight refresh) and continue.
+     *
+     * <p>True reuse (token stolen and replayed minutes/hours later) still
+     * triggers the cascade because either (a) the time delta exceeds the
+     * window, or (b) the successor has already been rotated again itself.
+     */
+    private static final long REFRESH_ROTATION_GRACE_SECONDS = 60;
+
     /** RFC 9457 {@code detail} when user status is {@link UserStatus#INVITED}. */
     public static final String LOGIN_EMAIL_NOT_VERIFIED_DETAIL =
             "Email not verified. Open the link we sent you or use resend verification, then try again.";
@@ -61,7 +86,7 @@ public class AuthService {
     private final PasswordResetEmailRenderer passwordResetEmailRenderer;
     private final NotificationService notificationService;
 
-    @Value("${app.jwt.access-ttl-minutes:15}")
+    @Value("${app.jwt.access-ttl-minutes:60}")
     private long accessTtlMinutes;
 
     @Value("${app.jwt.refresh-ttl-days:30}")
@@ -125,6 +150,16 @@ public class AuthService {
         }
 
         if (old.getRevokedAt() != null) {
+            if (isWithinRotationGrace(old)) {
+                /*
+                 * Concurrent legitimate refresh: another in-flight request from the
+                 * same client (or another tab) already rotated this token within the
+                 * grace window and its successor is still active. Returning 401
+                 * without cascading the revoke lets the loser read the new tokens
+                 * from shared storage / single-flight queue and recover.
+                 */
+                throw invalidCredentials();
+            }
             userSessionRevocation.revokeAllActiveForUserNow(old.getUserId());
             throw invalidCredentials();
         }
@@ -144,6 +179,25 @@ public class AuthService {
         userSessionRepository.save(old);
 
         return neu.tokens();
+    }
+
+    /**
+     * Returns true when the just-presented (already-revoked) refresh token was
+     * rotated within the grace window <em>and</em> its successor session is
+     * still active. See {@link #REFRESH_ROTATION_GRACE_SECONDS}.
+     */
+    private boolean isWithinRotationGrace(UserSession revoked) {
+        Instant revokedAt = revoked.getRevokedAt();
+        String successorId = revoked.getRotatedToId();
+        if (revokedAt == null || successorId == null || successorId.isBlank()) {
+            return false;
+        }
+        if (revokedAt.plusSeconds(REFRESH_ROTATION_GRACE_SECONDS).isBefore(Instant.now())) {
+            return false;
+        }
+        return userSessionRepository.findById(successorId)
+                .map(successor -> successor.getRevokedAt() == null)
+                .orElse(false);
     }
 
     @Transactional

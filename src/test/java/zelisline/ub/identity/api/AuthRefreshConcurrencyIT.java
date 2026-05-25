@@ -37,7 +37,17 @@ import zelisline.ub.tenancy.repository.DomainMappingRepository;
 
 /**
  * Same refresh token used twice in parallel — one {@code 200}, one {@code 401},
- * rotated refresh is also dead (PHASE_1_PLAN.md §3.6).
+ * and the winner's freshly-rotated refresh token stays usable.
+ *
+ * <p>This guards against the failure mode where two legitimate concurrent
+ * refresh requests (e.g. multi-tab, page navigation issuing several
+ * authenticated calls that all 401 simultaneously, WS reauth racing with
+ * an API refresh) would otherwise trip RFC 6819 reuse detection inside
+ * {@code AuthService.refresh} and cascade-revoke every active session for
+ * the user. The rotation grace window inside {@code AuthService.refresh}
+ * suppresses that cascade for concurrent requests within
+ * {@code REFRESH_ROTATION_GRACE_SECONDS} as long as the successor session
+ * is still active.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
@@ -100,7 +110,7 @@ class AuthRefreshConcurrencyIT {
     }
 
     @Test
-    void parallelRefreshWithSameToken_oneUnauthorizedAndNewRefreshInvalidated() throws Exception {
+    void parallelRefreshWithSameToken_oneUnauthorizedAndNewRefreshStillUsable() throws Exception {
         String root = "http://127.0.0.1:" + port;
 
         HttpRequest loginReq = HttpRequest.newBuilder()
@@ -165,6 +175,16 @@ class AuthRefreshConcurrencyIT {
             }
             assertThat(newRefresh).isNotNull();
 
+            /*
+             * The winner's freshly-rotated refresh token must remain usable.
+             * The concurrent loser's 401 is benign (inside the rotation grace
+             * window) and must NOT cascade-revoke the successor session.
+             *
+             * Without this guarantee, any time the frontend fires multiple
+             * authenticated requests in parallel after the access token has
+             * expired, every parallel refresh after the winner would trigger
+             * a cascade and silently log the user out.
+             */
             HttpRequest replayReq = HttpRequest.newBuilder()
                     .uri(URI.create(root + "/api/v1/auth/refresh"))
                     .header("Content-Type", "application/json")
@@ -174,7 +194,7 @@ class AuthRefreshConcurrencyIT {
                             StandardCharsets.UTF_8))
                     .build();
             HttpResponse<String> replayNew = httpClient.send(replayReq, HttpResponse.BodyHandlers.ofString());
-            assertThat(replayNew.statusCode()).isEqualTo(401);
+            assertThat(replayNew.statusCode()).isEqualTo(200);
         } finally {
             pool.shutdownNow();
         }

@@ -27,12 +27,22 @@ public class JwtTokenService {
     public static final String CLAIM_PRINCIPAL_KIND = "principal_kind";
     public static final String PRINCIPAL_SUPER_ADMIN = "SUPER_ADMIN";
 
+    /**
+     * Tolerated clock skew during JWT validation. Mobile browsers, sleeping
+     * laptops and CDN/proxy hops routinely drift a few seconds. Without this,
+     * a token issued at T can fail validation at T+ttl-1 because the verifier
+     * thinks "now" is already past exp. 30 seconds is well within OAuth/JWT
+     * recommendations and large enough to swallow normal drift while still
+     * preserving the short-lived nature of the access token.
+     */
+    private static final long ALLOWED_CLOCK_SKEW_SECONDS = 30;
+
     private final SecretKey key;
     private final long accessTtlMinutes;
 
     public JwtTokenService(
             @Value("${app.jwt.secret}") String secret,
-            @Value("${app.jwt.access-ttl-minutes:15}") long accessTtlMinutes
+            @Value("${app.jwt.access-ttl-minutes:60}") long accessTtlMinutes
     ) {
         byte[] bytes = secret.getBytes(StandardCharsets.UTF_8);
         if (bytes.length < 32) {
@@ -82,6 +92,7 @@ public class JwtTokenService {
     public Claims parseAndValidate(String token) throws JwtException {
         return Jwts.parser()
                 .verifyWith(key)
+                .clockSkewSeconds(ALLOWED_CLOCK_SKEW_SECONDS)
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();

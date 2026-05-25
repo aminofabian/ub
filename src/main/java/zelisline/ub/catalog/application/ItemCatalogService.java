@@ -494,6 +494,17 @@ public class ItemCatalogService {
             }
             item.setAisleId(aid);
         }
+        if (patch.itemTypeId() != null) {
+            String tid = blankToNull(patch.itemTypeId());
+            if (tid == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Department cannot be blank");
+            }
+            itemTypeRepository.findByIdAndBusinessId(tid, businessId)
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST, "Department not found"));
+            item.setItemTypeId(tid);
+        }
         if (patch.unitType() != null && !patch.unitType().isBlank()) {
             item.setUnitType(patch.unitType().trim());
         }

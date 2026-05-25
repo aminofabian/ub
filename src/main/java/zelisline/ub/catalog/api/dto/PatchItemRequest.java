@@ -12,6 +12,11 @@ public record PatchItemRequest(
         @Size(max = 10_000) String description,
         @Size(max = 36) String categoryId,
         @Size(max = 36) String aisleId,
+        /**
+         * Department (item type) the SKU should belong to. When provided the value
+         * must be a non-blank id of an existing item type for the business.
+         */
+        @Size(max = 36) String itemTypeId,
         @Size(max = 16) String unitType,
         Boolean isWeighed,
         Boolean isSellable,

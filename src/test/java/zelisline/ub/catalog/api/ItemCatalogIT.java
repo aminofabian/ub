@@ -677,28 +677,37 @@ class ItemCatalogIT {
 
     private static PatchItemRequest barcodeOnly(String barcode) {
         return new PatchItemRequest(
-                null,
-                null,
-                barcode,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null, null, null, null, null, null, null);
+                null,    // expectedUpdatedAt
+                null,    // sku
+                barcode, // barcode
+                null,    // name
+                null,    // description
+                null,    // categoryId
+                null,    // aisleId
+                null,    // itemTypeId
+                null,    // unitType
+                null,    // isWeighed
+                null,    // isSellable
+                null,    // isStocked
+                null,    // packageVariant
+                null,    // packagingUnitName
+                null,    // packagingUnitQty
+                null,    // bundleQty
+                null,    // bundlePrice
+                null,    // buyingPrice
+                null,    // bundleName
+                null,    // minStockLevel
+                null,    // reorderLevel
+                null,    // reorderQty
+                null,    // expiresAfterDays
+                null,    // hasExpiry
+                null,    // imageKey
+                null,    // active
+                null,    // webPublished
+                null,    // brand
+                null,    // size
+                null     // variantName
+        );
     }
 
     private static CreateItemRequest minimalItem(String sku, String name, String itemTypeId) {

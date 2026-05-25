@@ -365,35 +365,36 @@ public class LegacyProductJsonImportService {
                 businessId,
                 itemId,
                 new PatchItemRequest(
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
+                        null, // expectedUpdatedAt
+                        null, // sku
+                        null, // barcode
+                        null, // name
+                        null, // description
+                        null, // categoryId
+                        null, // aisleId
+                        null, // itemTypeId
+                        null, // unitType
+                        null, // isWeighed
+                        null, // isSellable
+                        null, // isStocked
+                        null, // packageVariant
                         safePackagingUnitName(r.packagingUnitName()),
                         sanitizeQty14_4(r.packagingUnitQty()),
                         sanitizeBundleQty(r.bundleQty()),
                         sanitizeMoney14_2(r.bundlePrice()),
-                        null,
+                        null, // buyingPrice
                         safeBundleName(r.bundleName()),
-                        null,
-                        null,
-                        null,
+                        null, // minStockLevel
+                        null, // reorderLevel
+                        null, // reorderQty
                         sanitizeExpiresDays(r.expiresAfterDays()),
                         r.hasExpiryOverride(),
                         imageKeyOrNull(r.imageUrl()),
                         r.active(),
-                        null,
-                        null,
-                        null,
-                        null
+                        null, // webPublished
+                        null, // brand
+                        null, // size
+                        null  // variantName
                 )
         );
     }
@@ -411,9 +412,16 @@ public class LegacyProductJsonImportService {
                     businessId,
                     newItemId,
                     new PatchItemRequest(
+                            // 1-10: expectedUpdatedAt, sku, barcode, name, description,
+                            //       categoryId, aisleId, itemTypeId, unitType, isWeighed
                             null, null, null, null, null, null, null, null, null, null,
+                            // 11-20: isSellable, isStocked, packageVariant, packagingUnitName,
+                            //        packagingUnitQty, bundleQty, bundlePrice, buyingPrice,
+                            //        bundleName, minStockLevel
                             null, null, null, null, null, null, null, null, null, null,
-                            null, null, null, null, false, null, null, null, null));
+                            // 21-30: reorderLevel, reorderQty, expiresAfterDays, hasExpiry,
+                            //        imageKey, active, webPublished, brand, size, variantName
+                            null, null, null, null, null, false, null, null, null, null));
         }
         BigDecimal sell = sanitizeMoney14_2(r.sellPrice());
         if (sell != null && sell.compareTo(new BigDecimal("0.01")) >= 0) {

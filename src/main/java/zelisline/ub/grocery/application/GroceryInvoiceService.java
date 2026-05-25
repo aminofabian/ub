@@ -158,10 +158,34 @@ public class GroceryInvoiceService {
 
     @Transactional(readOnly = true)
     public GroceryInvoiceListResponse listInvoices(String businessId, String branchId, String status) {
+        return listInvoices(businessId, branchId, status, null);
+    }
+
+    /**
+     * Variant of {@link #listInvoices(String, String, String)} that, when
+     * {@code createdByFilter} is non-blank, restricts results to invoices
+     * created by that user. Used to scope a {@code grocery_clerk} to the
+     * invoices they themselves generated.
+     */
+    @Transactional(readOnly = true)
+    public GroceryInvoiceListResponse listInvoices(
+            String businessId,
+            String branchId,
+            String status,
+            String createdByFilter
+    ) {
+        boolean ownOnly = createdByFilter != null && !createdByFilter.isBlank();
+        boolean filterStatus = status != null && !status.isBlank();
         List<GroceryInvoice> invoices;
-        if (status != null && !status.isBlank()) {
+        if (filterStatus && ownOnly) {
+            invoices = invoiceRepository.findByBusinessIdAndBranchIdAndStatusAndCreatedByOrderByCreatedAtDesc(
+                    businessId, branchId, status, createdByFilter);
+        } else if (filterStatus) {
             invoices = invoiceRepository.findByBusinessIdAndBranchIdAndStatusOrderByCreatedAtDesc(
                     businessId, branchId, status);
+        } else if (ownOnly) {
+            invoices = invoiceRepository.findByBusinessIdAndBranchIdAndCreatedByOrderByCreatedAtDesc(
+                    businessId, branchId, createdByFilter);
         } else {
             invoices = invoiceRepository.findByBusinessIdAndBranchIdOrderByCreatedAtDesc(
                     businessId, branchId);

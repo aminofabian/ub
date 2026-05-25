@@ -42,6 +42,34 @@ public interface GroceryInvoiceRepository extends JpaRepository<GroceryInvoice, 
 
     @Query("""
             select gi from GroceryInvoice gi
+             where gi.businessId = :businessId
+               and gi.branchId = :branchId
+               and gi.createdBy = :createdBy
+             order by gi.createdAt desc
+            """)
+    List<GroceryInvoice> findByBusinessIdAndBranchIdAndCreatedByOrderByCreatedAtDesc(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("createdBy") String createdBy
+    );
+
+    @Query("""
+            select gi from GroceryInvoice gi
+             where gi.businessId = :businessId
+               and gi.branchId = :branchId
+               and gi.status = :status
+               and gi.createdBy = :createdBy
+             order by gi.createdAt desc
+            """)
+    List<GroceryInvoice> findByBusinessIdAndBranchIdAndStatusAndCreatedByOrderByCreatedAtDesc(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("status") String status,
+            @Param("createdBy") String createdBy
+    );
+
+    @Query("""
+            select gi from GroceryInvoice gi
              where gi.status = :status
                and gi.expiresAt <= :cutoff
             """)

@@ -61,11 +61,13 @@ public class GroceryInvoiceController {
             @RequestParam("barcode") String barcode,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.requireHuman(request);
-        return service.getInvoiceByBarcode(
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        GroceryInvoiceResponse invoice = service.getInvoiceByBarcode(
                 TenantRequestIds.resolveBusinessId(request),
                 barcode
         );
+        enforceOwnInvoiceForGroceryClerk(principal, invoice);
+        return invoice;
     }
 
     @GetMapping("/invoices")
@@ -86,7 +88,11 @@ public class GroceryInvoiceController {
                     org.springframework.http.HttpStatus.BAD_REQUEST,
                     "Branch is required. Use the branch filter or contact your administrator.");
         }
-        return service.listInvoices(businessId, resolvedBranch, status);
+        // Grocery clerks only see invoices they themselves created.
+        String createdByFilter = branchResolutionService.isGroceryClerkRole(principal.roleId())
+                ? principal.userId()
+                : null;
+        return service.listInvoices(businessId, resolvedBranch, status, createdByFilter);
     }
 
     @GetMapping("/invoices/{id}")
@@ -95,11 +101,13 @@ public class GroceryInvoiceController {
             @PathVariable String id,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.requireHuman(request);
-        return service.getInvoice(
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        GroceryInvoiceResponse invoice = service.getInvoice(
                 TenantRequestIds.resolveBusinessId(request),
                 id
         );
+        enforceOwnInvoiceForGroceryClerk(principal, invoice);
+        return invoice;
     }
 
     @PostMapping("/invoices/{id}/cancel")
@@ -110,12 +118,37 @@ public class GroceryInvoiceController {
             HttpServletRequest request
     ) {
         TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        // For grocery clerks, prevent cancelling someone else's invoice (404 to avoid leaking existence).
+        if (branchResolutionService.isGroceryClerkRole(principal.roleId())) {
+            GroceryInvoiceResponse existing = service.getInvoice(businessId, id);
+            enforceOwnInvoiceForGroceryClerk(principal, existing);
+        }
         return service.cancelInvoice(
-                TenantRequestIds.resolveBusinessId(request),
+                businessId,
                 id,
                 body,
                 principal.userId()
         );
+    }
+
+    /**
+     * Hide invoices created by other users from {@code grocery_clerk} principals.
+     * Returns {@code 404} (rather than {@code 403}) so existence is not leaked.
+     */
+    private void enforceOwnInvoiceForGroceryClerk(
+            TenantPrincipal principal,
+            GroceryInvoiceResponse invoice
+    ) {
+        if (!branchResolutionService.isGroceryClerkRole(principal.roleId())) {
+            return;
+        }
+        String creator = invoice.createdBy();
+        if (creator == null || !creator.equals(principal.userId())) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "Invoice not found");
+        }
     }
 
     @PostMapping("/invoices/{id}/pay")

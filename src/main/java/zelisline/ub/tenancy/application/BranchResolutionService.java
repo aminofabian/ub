@@ -33,7 +33,11 @@ public class BranchResolutionService {
     private final RoleRepository roleRepository;
 
     /** Role keys that are locked to their assigned branch — cannot switch or see other branches. */
-    private static final Set<String> BRANCH_LOCKED_ROLE_KEYS = Set.of("stock_manager", "cashier");
+    private static final Set<String> BRANCH_LOCKED_ROLE_KEYS = Set.of(
+            "stock_manager", "cashier", "grocery_clerk");
+
+    /** Role key for grocery counter staff (read scoped to invoices they themselves created). */
+    private static final String GROCERY_CLERK_ROLE_KEY = "grocery_clerk";
 
     /**
      * Returns {@code true} when the given role is locked to its assigned branch.
@@ -47,6 +51,22 @@ public class BranchResolutionService {
             return false;
         }
         return BRANCH_LOCKED_ROLE_KEYS.contains(role.getRoleKey().trim().toLowerCase());
+    }
+
+    /**
+     * Returns {@code true} when the given role is {@code grocery_clerk}. Grocery
+     * clerks generate invoices but can only see / cancel the invoices they
+     * themselves created — the service layer narrows reads to their own rows.
+     */
+    public boolean isGroceryClerkRole(String roleId) {
+        if (roleId == null || roleId.isBlank()) {
+            return false;
+        }
+        Role role = roleRepository.findByIdAndDeletedAtIsNull(roleId).orElse(null);
+        if (role == null || role.getRoleKey() == null) {
+            return false;
+        }
+        return GROCERY_CLERK_ROLE_KEY.equalsIgnoreCase(role.getRoleKey().trim());
     }
 
     /**

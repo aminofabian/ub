@@ -26,13 +26,27 @@ CREATE TABLE roles (
 );
 
 -- (business_id, role_key) is the desired uniqueness contract, but MySQL treats
--- multiple NULLs as distinct so two system roles can share a key. Use a
--- generated column to project NULL business_id to a sentinel string for the
--- system-role uniqueness branch only.
+-- multiple NULLs as distinct so two system roles can share a key. We project
+-- NULL business_id to a sentinel string in `business_scope` for the system-role
+-- uniqueness branch.
+--
+-- MySQL 8 accepts a STORED GENERATED column with COALESCE here, but MariaDB
+-- 10.11 (desktop SKU, see V1's comment block + DESKTOP_INSTALLATION.md §7)
+-- rejects ANY function call on a CHAR(n) input inside a STORED expression.
+-- Triggers express the same semantics on both engines.
 ALTER TABLE roles
-  ADD COLUMN business_scope CHAR(36) GENERATED ALWAYS AS (
-    COALESCE(business_id, '00000000-0000-0000-0000-000000000000')
-  ) STORED;
+  ADD COLUMN business_scope CHAR(36) NOT NULL
+    DEFAULT '00000000-0000-0000-0000-000000000000';
+
+UPDATE roles
+   SET business_scope = COALESCE(business_id, '00000000-0000-0000-0000-000000000000');
+
+CREATE TRIGGER trg_roles_scope_bi BEFORE INSERT ON roles
+  FOR EACH ROW SET NEW.business_scope =
+    COALESCE(NEW.business_id, '00000000-0000-0000-0000-000000000000');
+CREATE TRIGGER trg_roles_scope_bu BEFORE UPDATE ON roles
+  FOR EACH ROW SET NEW.business_scope =
+    COALESCE(NEW.business_id, '00000000-0000-0000-0000-000000000000');
 
 CREATE UNIQUE INDEX uq_roles_scope_key ON roles (business_scope, role_key);
 

@@ -21,8 +21,8 @@ import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
-import zelisline.ub.platform.media.CloudinaryImageService;
 import zelisline.ub.platform.media.CloudinaryUploadResult;
+import zelisline.ub.platform.media.MediaStore;
 import zelisline.ub.sales.repository.ShiftRepository;
 import zelisline.ub.tenancy.api.dto.BranchResponse;
 import zelisline.ub.tenancy.api.dto.BrandingPatchRequest;
@@ -62,7 +62,7 @@ public class TenancyService {
     private final BusinessProfileSettingsService businessProfileSettingsService;
     private final BusinessOnboardingSettingsService businessOnboardingSettingsService;
     private final BranchReceiptSettingsService branchReceiptSettingsService;
-    private final CloudinaryImageService cloudinaryImageService;
+    private final MediaStore cloudinaryImageService;
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final ItemRepository itemRepository;

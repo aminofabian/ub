@@ -36,9 +36,13 @@ CREATE TABLE domains (
   business_id CHAR(36) NOT NULL,
   domain      VARCHAR(255) NOT NULL UNIQUE,
   is_primary  BOOLEAN NOT NULL DEFAULT FALSE,
-  primary_business_id CHAR(36) GENERATED ALWAYS AS (
-    CASE WHEN is_primary THEN business_id ELSE NULL END
-  ) STORED,
+  -- Mirrors `business_id` when `is_primary = TRUE`, NULL otherwise. Maintained
+  -- by the two triggers below. MySQL 8 happily accepts a STORED GENERATED
+  -- expression here, but MariaDB 10.11 (the desktop SKU's bundled DB, see
+  -- DESKTOP_INSTALLATION.md §7) rejects ANY function call on a CHAR(n) input
+  -- inside a STORED expression — including CASE / IF / COALESCE / CONCAT —
+  -- so we use triggers instead to express identical semantics on both engines.
+  primary_business_id CHAR(36) NULL,
   active      BOOLEAN NOT NULL DEFAULT TRUE,
   created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -48,5 +52,14 @@ CREATE TABLE domains (
   CONSTRAINT fk_domains_business FOREIGN KEY (business_id) REFERENCES businesses(id)
 );
 
+CREATE TRIGGER trg_domains_primary_bi BEFORE INSERT ON domains
+  FOR EACH ROW SET NEW.primary_business_id = IF(NEW.is_primary, NEW.business_id, NULL);
+CREATE TRIGGER trg_domains_primary_bu BEFORE UPDATE ON domains
+  FOR EACH ROW SET NEW.primary_business_id = IF(NEW.is_primary, NEW.business_id, NULL);
+
+-- Unique index still enforces "at most one primary domain per business": two
+-- `is_primary = TRUE` rows for the same business produce identical
+-- `primary_business_id` values, violating uniqueness. NULLs don't conflict
+-- (MySQL/MariaDB treat multiple NULLs as distinct in UNIQUE indexes).
 CREATE UNIQUE INDEX uq_domains_primary
   ON domains (primary_business_id);

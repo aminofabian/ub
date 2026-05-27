@@ -51,8 +51,8 @@ import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.identity.application.TokenHasher;
-import zelisline.ub.platform.media.CloudinaryImageService;
 import zelisline.ub.platform.media.CloudinaryUploadResult;
+import zelisline.ub.platform.media.MediaStore;
 import zelisline.ub.pricing.application.PricingService;
 import zelisline.ub.inventory.repository.StockTakeChecklistItemRepository;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
@@ -77,7 +77,7 @@ public class ItemCatalogService {
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final ObjectMapper objectMapper;
     private final SupplierLinkProvisioner supplierLinkProvisioner;
-    private final CloudinaryImageService cloudinaryImageService;
+    private final MediaStore cloudinaryImageService;
     private final BranchRepository branchRepository;
     private final InventoryBatchRepository inventoryBatchRepository;
     private final StockTakeChecklistItemRepository stockTakeChecklistItemRepository;

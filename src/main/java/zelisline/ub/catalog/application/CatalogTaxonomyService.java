@@ -51,6 +51,7 @@ import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.platform.media.CloudinaryImageService;
 import zelisline.ub.platform.media.CloudinaryUploadResult;
+import zelisline.ub.platform.media.MediaStore;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.repository.SupplierRepository;
 import zelisline.ub.pricing.domain.PriceRule;
@@ -69,7 +70,7 @@ public class CatalogTaxonomyService {
     private final CategoryImageRepository categoryImageRepository;
     private final CategorySupplierLinkRepository categorySupplierLinkRepository;
     private final SupplierRepository supplierRepository;
-    private final CloudinaryImageService cloudinaryImageService;
+    private final MediaStore cloudinaryImageService;
     private final AisleRepository aisleRepository;
     private final ItemTypeRepository itemTypeRepository;
     private final ItemRepository itemRepository;

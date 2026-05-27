@@ -48,6 +48,14 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-cache'
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	runtimeOnly 'com.mysql:mysql-connector-j'
+	// MariaDB driver ships alongside MySQL on every build (see
+	// DESKTOP_INSTALLATION.md §5.7). Spring picks the right driver by the JDBC
+	// URL scheme — `jdbc:mariadb://…` for desktop, `jdbc:mysql://…` for cloud —
+	// so adding it here is a no-op for the cloud SKU at runtime and lets the
+	// desktop profile bind to the bundled MariaDB without a Gradle flip.
+	runtimeOnly 'org.mariadb.jdbc:mariadb-java-client'
+	// flyway-mysql also handles MariaDB; the migrations are MySQL-dialect and
+	// MariaDB executes them unchanged. No separate flyway-mariadb dep needed.
 	runtimeOnly 'org.flywaydb:flyway-mysql'
 	runtimeOnly 'org.postgresql:postgresql'
 	annotationProcessor 'org.projectlombok:lombok'
@@ -69,6 +77,332 @@ tasks.named('test') {
 	if (exportOpenapi != null) {
 		systemProperty 'exportOpenapi', exportOpenapi
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Desktop SKU packaging (see ../DESKTOP_INSTALLATION.md §5.7).
+//
+// Activated with `./gradlew bootJar -Pdesktop=true` (and at dev time with
+// `./gradlew bootRun -Pdesktop=true` so the Next.js export is on the
+// classpath at :5050). When the flag is absent these tasks are no-ops so
+// cloud CI keeps running unchanged.
+// ---------------------------------------------------------------------------
+def desktopBuild = providers.gradleProperty('desktop')
+		.map { it.toLowerCase() in ['', 'true', '1', 'yes'] }
+		.orElse(false)
+		.get()
+
+def frontendOutDir = rootProject.file('../frontend/out')
+
+tasks.register('copyDesktopUi', Copy) {
+	description = 'Copies the Next.js static export into the backend JAR under classpath:/static/.'
+	group = 'desktop'
+	from(frontendOutDir)
+	into layout.buildDirectory.dir('resources/main/static')
+	// Don't fail the build when the user hasn't produced frontend/out yet —
+	// just emit a warning so the JAR still builds. Mismatches surface as a
+	// blank 404 on /, which is unambiguous and easy to diagnose.
+	doFirst {
+		if (!frontendOutDir.exists()) {
+			logger.warn(
+				"[desktop] frontend/out does not exist; bundling an empty UI. " +
+				"Run `bun run build:desktop` in ../frontend first.")
+		}
+	}
+	onlyIf { desktopBuild }
+}
+
+if (desktopBuild) {
+	tasks.named('processResources').configure {
+		dependsOn('copyDesktopUi')
+	}
+	tasks.named('bootJar').configure {
+		archiveBaseName = 'kiosk-desktop'
+		dependsOn('copyDesktopUi')
+	}
+	tasks.named('bootRun').configure {
+		dependsOn('copyDesktopUi')
+		// Default profile when the developer forgets to set it.
+		systemProperty 'spring.profiles.active',
+			System.getProperty('spring.profiles.active', 'desktop')
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Desktop SKU — download MariaDB 10.11 binaries for the current OS/arch
+// (see ../DESKTOP_INSTALLATION.md §7).
+//
+// The Tauri shell / installer will pick up the extracted directory from
+// build/mariadb/ and bundle it into the platform package. This task is only
+// for packaging — at dev time, use a local Docker MariaDB or an existing
+// system install and point the JDBC URL at it.
+// ---------------------------------------------------------------------------
+def mariadbVersion = '10.11.11'
+def mariadbDir = layout.buildDirectory.dir('mariadb')
+
+/**
+ * Build the official mariadb.org archive download URL for a given platform triplet.
+ * See https://mariadb.org/download/?t=mariadb&v=${mariadbVersion} for the latest URLs.
+ */
+def mariadbDownloadUrl = {
+    def os = org.gradle.internal.os.OperatingSystem.current()
+    def arch = System.getProperty('os.arch').toLowerCase()
+    def isArm = arch.contains('aarch64') || arch.contains('arm')
+
+    def base = "https://archive.mariadb.org/mariadb-${mariadbVersion}"
+
+    if (os.isMacOsX()) {
+        // macOS .tar.gz — the archive provides both x86_64 and arm64 under osx11-packages/
+        def plat = isArm ? 'arm64' : 'x86_64'
+        return "${base}/osx11-packages/mariadb-${mariadbVersion}-osx11-${plat}.tar.gz"
+    } else if (os.isLinux()) {
+        // Linux generic glibc .tar.gz — works on any glibc 2.31+ distro
+        def plat = isArm ? 'aarch64' : 'x86_64'
+        return "${base}/bintar-linux-systemd/mariadb-${mariadbVersion}-linux-systemd-${plat}.tar.gz"
+    } else if (os.isWindows()) {
+        return "${base}/winx64-packages/mariadb-${mariadbVersion}-winx64.zip"
+    }
+    throw new GradleException("Unsupported OS for MariaDB download: ${os.name}")
+}
+
+tasks.register('downloadMariaDb', DefaultTask) {
+    description = 'Copies MariaDB 10.11 binaries into build/mariadb/ (Homebrew on macOS, download on Linux/Windows).'
+    group = 'desktop'
+
+    doLast {
+        def destDir = mariadbDir.get().asFile
+        if (destDir.exists() && destDir.listFiles()?.length > 0) {
+            logger.lifecycle("[desktop] MariaDB already present at {}. Delete to re-copy.", destDir)
+            return
+        }
+        destDir.mkdirs()
+
+        // On macOS, use Homebrew's installed MariaDB if available
+        def homebrewPrefix = '/opt/homebrew/opt/mariadb@10.11'
+        def intelPrefix = '/usr/local/opt/mariadb@10.11'
+        def brewDir = null
+        if (new File(homebrewPrefix, 'bin/mariadb').exists()) {
+            brewDir = new File(homebrewPrefix)
+        } else if (new File(intelPrefix, 'bin/mariadb').exists()) {
+            brewDir = new File(intelPrefix)
+        }
+
+        if (brewDir != null) {
+            logger.lifecycle("[desktop] copying MariaDB from Homebrew: {}", brewDir)
+            copy {
+                from brewDir
+                into destDir
+                include 'bin/**', 'lib/**', 'share/**', 'include/**'
+            }
+            logger.lifecycle("[desktop] MariaDB copied from Homebrew to {}", destDir)
+            return
+        }
+
+        // Fallback: download from archive
+        def url = mariadbDownloadUrl()
+        logger.lifecycle("[desktop] downloading MariaDB {} from {}", mariadbVersion, url)
+        def ext = url.endsWith('.zip') ? '.zip' : '.tar.gz'
+        def archive = new File(destDir, "mariadb" + ext)
+        new URL(url).withInputStream { input ->
+            archive.withOutputStream { output -> output << input }
+        }
+        logger.lifecycle("[desktop] downloaded {} ({} bytes)", archive.name, archive.length())
+
+        if (url.endsWith('.zip')) {
+            ant.unzip(src: archive, dest: destDir)
+        } else {
+            def extractCmd = ['tar', '-xzf', archive.absolutePath, '-C', destDir.absolutePath]
+            def proc = extractCmd.execute()
+            proc.waitFor()
+            if (proc.exitValue() != 0) {
+                throw new GradleException("tar extraction failed: " + proc.err.text)
+            }
+        }
+        archive.delete()
+        logger.lifecycle("[desktop] MariaDB extracted to {}", destDir)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Desktop SKU — trim a custom JRE with jlink (~50 MB instead of ~190 MB)
+// (see ../DESKTOP_INSTALLATION.md §8).
+//
+// The Tauri shell / installer picks up build/jre/ and bundles it alongside
+// the fat JAR and MariaDB. We run jlink against the JDK that is building
+// the project (the one Gradle itself runs on) because that guarantees the
+// JRE is binary-compatible with the compiled classes.
+//
+// Use Temurin 21 for x86-64 and Liberica NIK 21 for Apple Silicon — the
+// latter only when Temurin's macOS aarch64 jlink is known-broken (verify
+// before release and switch back to Temurin if current).
+// ---------------------------------------------------------------------------
+def jlinkOutputDir = layout.buildDirectory.dir('jre')
+
+// The module set the doc specifies, plus jdk.management (needed by Hibernate /
+// Spring Boot's JMX MBeans at runtime — without it the JVM starts but entity
+// manager factories fail to register). These are additive: adding a module
+// jlink doesn't need doesn't increase the image (jlink only includes what's
+// reachable).
+def JLINK_MODULES = [
+    'java.base',
+    'java.sql',
+    'java.naming',
+    'java.management',
+    'java.net.http',
+    'java.security.jgss',
+    'java.security.sasl',
+    'java.instrument',
+    'java.xml',
+    'java.desktop',          // Spring Boot property binding (java.beans.PropertyEditorSupport)
+    'java.compiler',         // Spring Data JPA AOT (javax.lang.model.SourceVersion)
+    'jdk.crypto.ec',
+    'jdk.unsupported',
+    'jdk.zipfs',
+    'jdk.management',        // Hibernate JMX MBeans
+    'jdk.management.agent',  // Actuator / health endpoint introspection
+]
+
+tasks.register('jlinkJre', DefaultTask) {
+    description = 'Creates a trimmed JRE via jlink for desktop packaging.'
+    group = 'desktop'
+
+    doLast {
+        def javaHome = System.getProperty('java.home')
+        if (javaHome == null || javaHome.isBlank()) {
+            throw new GradleException('java.home is not set — cannot run jlink')
+        }
+        def jlinkBin = new File(javaHome, 'bin/jlink')
+        if (!jlinkBin.canExecute()) {
+            // macOS JDKs sometimes have jlink under `Contents/Home/bin/` when
+            // `java.home` points one level up.
+            jlinkBin = new File(javaHome, 'Contents/Home/bin/jlink')
+        }
+        if (!jlinkBin.canExecute()) {
+            throw new GradleException("jlink not found at ${jlinkBin.absolutePath}. Set JLINK_HOME to a JDK 21+.")
+        }
+
+        def dest = jlinkOutputDir.get().asFile
+        if (dest.exists()) {
+            logger.lifecycle('[desktop] removing previous JRE at {}', dest)
+            dest.deleteDir()
+        }
+        def moduleList = JLINK_MODULES.join(',')
+        logger.lifecycle('[desktop] running jlink from {} with modules: {}', jlinkBin.absolutePath, moduleList)
+
+        def cmd = [
+            jlinkBin.absolutePath,
+            '--add-modules', moduleList,
+            '--output', dest.absolutePath,
+            '--no-header-files',
+            '--no-man-pages',
+            '--strip-debug',
+            '--compress=2'
+        ]
+        def pb = new ProcessBuilder(cmd)
+        pb.redirectErrorStream(true)
+        def proc = pb.start()
+        def out = new String(proc.inputStream.readAllBytes(), 'UTF-8')
+        def exitCode = proc.waitFor()
+
+        if (exitCode != 0) {
+            logger.error('[desktop] jlink output: {}', out.trim())
+            throw new GradleException("jlink failed with exit code ${exitCode}")
+        }
+
+        // Report the trimmed size
+        def sizeMb = (dest.directorySize() ?: 0) / (1024 * 1024)
+        logger.lifecycle('[desktop] JRE created at {} (~{} MB)', dest, String.format('%.0f', sizeMb))
+    }
+}
+
+// Hook both MariaDB download and JRE trimming into the desktop bootJar.
+if (desktopBuild) {
+    tasks.named('bootJar').configure {
+        dependsOn('downloadMariaDb', 'jlinkJre')
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// Desktop SKU — assemble the distributable package
+// (see ../DESKTOP_INSTALLATION.md \u00a712 and ../package-desktop.sh).
+// ---------------------------------------------------------------------------
+def packageDir = layout.buildDirectory.dir('kiosk-desktop')
+
+tasks.register('packageDesktop', Copy) {
+    description = 'Assembles jre/ + mariadb/ + kiosk.jar + config into build/kiosk-desktop/.'
+    group = 'desktop'
+
+    doFirst {
+        // Clean previous output — jlink files are often read-only
+        def out = packageDir.get().asFile
+        if (out.exists()) {
+            delete out
+        }
+    }
+
+    from(jlinkOutputDir) { into 'jre' }
+    from(mariadbDir)    { into 'mariadb' }
+    from(tasks.named('bootJar').map { it.archiveFile }) { into 'app' }
+    from('src/main/resources/application-desktop.properties') {
+        into 'app/config'
+        rename { 'application.properties' }
+    }
+    into packageDir
+
+    doLast {
+        def pkg = packageDir.get().asFile
+        // Rename versioned JAR to predictable name
+        def jars = new File(pkg, 'app').listFiles({ f -> f.name.endsWith('.jar') } as FileFilter)
+        if (jars != null && jars.length > 0) {
+            def target = new File(pkg, 'app/kiosk.jar')
+            copy { from jars[0]; into target.parentFile; rename { 'kiosk.jar' } }
+        }
+        // Create launcher
+        def sh = new File(pkg, 'start.sh')
+        sh.text = '''#!/usr/bin/env bash
+set -euo pipefail
+DIR="$(cd "$(dirname "$0")" && pwd)"
+DATA="${APP_DATA:-$HOME/.palmart}"
+if [ -z "${APP_DESKTOP_BIND+x}" ]; then
+  # LAN marker controls the bind address on next launch.
+  if [ -f "$DATA/conf/lan-enabled" ]; then
+    APP_DESKTOP_BIND="0.0.0.0"
+  else
+    APP_DESKTOP_BIND="127.0.0.1"
+  fi
+fi
+PORT="${KIOSK_DB_PORT:-33306}"
+USER="${KIOSK_DB_USER:-ub_local}"
+PASS="${KIOSK_DB_PASSWORD:-kiosk-local}"
+
+echo "== Kiosk Desktop =="
+
+if [ ! -d "$DATA/db/mysql" ]; then
+  echo "First run - init database..."
+  mkdir -p "$DATA/db"
+  "$DIR/mariadb/bin/mariadb-install-db" --datadir="$DATA/db" --user="$(whoami)" 2>&1 | tail -1
+fi
+
+echo "Starting MariaDB..."
+"$DIR/mariadb/bin/mariadbd" --datadir="$DATA/db" --port="$PORT" --socket="$DATA/mariadb.sock" --skip-grant-tables --bind-address=127.0.0.1 > "$DATA/mariadb.log" 2>&1 &
+sleep 2
+"$DIR/mariadb/bin/mariadb" -S "$DATA/mariadb.sock" -e "CREATE DATABASE IF NOT EXISTS ub; CREATE USER IF NOT EXISTS '$USER'@'127.0.0.1' IDENTIFIED BY '$PASS'; GRANT ALL ON ub.* TO '$USER'@'127.0.0.1'; FLUSH PRIVILEGES;" 2>/dev/null || true
+
+echo "Starting http://127.0.0.1:5050 ..."
+"$DIR/jre/bin/java" -DAPP_DATA="$DATA" -DAPP_DESKTOP_DB_PORT="$PORT" -DAPP_DESKTOP_DB_USER="$USER" -DAPP_DESKTOP_DB_PASSWORD="$PASS" -Dspring.profiles.active=desktop -jar "$DIR/app/kiosk.jar" --spring.config.additional-location="$DIR/app/config/application.properties" --server.port=5050
+
+echo "Shutting down..."
+"$DIR/mariadb/bin/mariadb-admin" -u"$USER" -p"$PASS" -P"$PORT" -h127.0.0.1 shutdown 2>/dev/null || true
+'''
+        sh.setExecutable(true)
+    }
+}
+
+if (desktopBuild) {
+    tasks.named('packageDesktop').configure {
+        dependsOn('bootJar', 'jlinkJre', 'downloadMariaDb')
+    }
 }
 
 def readBackendDotEnv() {

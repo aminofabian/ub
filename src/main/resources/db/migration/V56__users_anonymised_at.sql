@@ -3,8 +3,11 @@
 ALTER TABLE users
   ADD COLUMN anonymised_at TIMESTAMP(3) NULL;
 
+-- `DROP CONSTRAINT` is portable (MySQL 8.0.16+ and MariaDB 10.2+); the
+-- older `DROP CHECK` form is MySQL-only and breaks on MariaDB 10.11 (desktop
+-- SKU, see DESKTOP_INSTALLATION.md §7).
 ALTER TABLE users
-  DROP CHECK chk_users_credentials;
+  DROP CONSTRAINT chk_users_credentials;
 
 ALTER TABLE users
   ADD CONSTRAINT chk_users_credentials_v2 CHECK (

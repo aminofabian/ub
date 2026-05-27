@@ -6,14 +6,27 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import kong.unirest.HttpResponse;
 import kong.unirest.Unirest;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.io.ByteArrayInputStream;
 
+/**
+ * Cloud {@link MediaStore} implementation backed by Cloudinary's upload API.
+ *
+ * <p>Active when {@code app.media.cloudinary.enabled=true} (the cloud default).
+ * The desktop SKU sets this to {@code false} and activates {@code LocalMediaStore}
+ * instead via {@code app.media.local.enabled=true}; only one bean implementing
+ * {@link MediaStore} is created at a time.
+ */
 @Service
-public class CloudinaryImageService {
+@ConditionalOnProperty(
+        name = "app.media.cloudinary.enabled",
+        havingValue = "true",
+        matchIfMissing = true)
+public class CloudinaryImageService implements MediaStore {
 
     private static final int MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
 

@@ -20,10 +20,15 @@
 -- against information_schema so we don't accidentally drop a freshly-created
 -- plain column.
 --
--- NOTE: editing V1 + V2 changes their Flyway checksum, so existing cloud DBs
--- will fail validation on the next deploy until the operator runs
--- `mvn flyway:repair` (or sets `spring.flyway.repair-on-migrate=true` for one
--- boot). After that, this migration runs and the schema converges.
+-- IMPORTANT (cloud MySQL): trigger CREATE only runs when legacy STORED GENERATED
+-- columns are being converted (@col_is_generated > 0). Fresh installs skip
+-- trigger DDL entirely — V1/V2 already created the triggers. Recreating them
+-- on every deploy fails on managed MySQL when binary logging is enabled unless
+-- the server has log_bin_trust_function_creators=1 (error 1419).
+--
+-- Legacy cloud DBs that still have STORED GENERATED columns need either:
+--   SET GLOBAL log_bin_trust_function_creators = 1;
+-- or a one-time manual trigger migration by a privileged user.
 
 -- ---------------------------------------------------------------------------
 -- domains.primary_business_id
@@ -44,20 +49,40 @@ SET @sql = IF(
 );
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
-DROP TRIGGER IF EXISTS trg_domains_primary_bi;
-DROP TRIGGER IF EXISTS trg_domains_primary_bu;
-CREATE TRIGGER trg_domains_primary_bi BEFORE INSERT ON domains
-  FOR EACH ROW SET NEW.primary_business_id = IF(NEW.is_primary, NEW.business_id, NULL);
-CREATE TRIGGER trg_domains_primary_bu BEFORE UPDATE ON domains
-  FOR EACH ROW SET NEW.primary_business_id = IF(NEW.is_primary, NEW.business_id, NULL);
+SET @sql = IF(
+  @col_is_generated > 0,
+  'DROP TRIGGER IF EXISTS trg_domains_primary_bi',
+  'DO 0'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
--- Backfill: for pre-existing rows whose primary_business_id was cleared by the
--- DROP/ADD above, recompute from the current is_primary / business_id values.
--- For fresh installs this is a no-op (the column is already populated by V1's
--- own triggers).
-UPDATE domains
-   SET primary_business_id = IF(is_primary, business_id, NULL)
- WHERE primary_business_id IS NULL AND is_primary;
+SET @sql = IF(
+  @col_is_generated > 0,
+  'DROP TRIGGER IF EXISTS trg_domains_primary_bu',
+  'DO 0'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = IF(
+  @col_is_generated > 0,
+  'CREATE TRIGGER trg_domains_primary_bi BEFORE INSERT ON domains FOR EACH ROW SET NEW.primary_business_id = IF(NEW.is_primary, NEW.business_id, NULL)',
+  'DO 0'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = IF(
+  @col_is_generated > 0,
+  'CREATE TRIGGER trg_domains_primary_bu BEFORE UPDATE ON domains FOR EACH ROW SET NEW.primary_business_id = IF(NEW.is_primary, NEW.business_id, NULL)',
+  'DO 0'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = IF(
+  @col_is_generated > 0,
+  'UPDATE domains SET primary_business_id = IF(is_primary, business_id, NULL) WHERE primary_business_id IS NULL AND is_primary',
+  'DO 0'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 SET @idx_exists = (
   SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
@@ -94,18 +119,40 @@ SET @sql = IF(
 );
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
--- Re-populate from business_id for pre-existing rows (no-op on fresh installs).
-UPDATE roles
-   SET business_scope = COALESCE(business_id, '00000000-0000-0000-0000-000000000000');
+SET @sql = IF(
+  @col_is_generated > 0,
+  'UPDATE roles SET business_scope = COALESCE(business_id, ''00000000-0000-0000-0000-000000000000'')',
+  'DO 0'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
-DROP TRIGGER IF EXISTS trg_roles_scope_bi;
-DROP TRIGGER IF EXISTS trg_roles_scope_bu;
-CREATE TRIGGER trg_roles_scope_bi BEFORE INSERT ON roles
-  FOR EACH ROW SET NEW.business_scope =
-    COALESCE(NEW.business_id, '00000000-0000-0000-0000-000000000000');
-CREATE TRIGGER trg_roles_scope_bu BEFORE UPDATE ON roles
-  FOR EACH ROW SET NEW.business_scope =
-    COALESCE(NEW.business_id, '00000000-0000-0000-0000-000000000000');
+SET @sql = IF(
+  @col_is_generated > 0,
+  'DROP TRIGGER IF EXISTS trg_roles_scope_bi',
+  'DO 0'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = IF(
+  @col_is_generated > 0,
+  'DROP TRIGGER IF EXISTS trg_roles_scope_bu',
+  'DO 0'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = IF(
+  @col_is_generated > 0,
+  'CREATE TRIGGER trg_roles_scope_bi BEFORE INSERT ON roles FOR EACH ROW SET NEW.business_scope = COALESCE(NEW.business_id, ''00000000-0000-0000-0000-000000000000'')',
+  'DO 0'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = IF(
+  @col_is_generated > 0,
+  'CREATE TRIGGER trg_roles_scope_bu BEFORE UPDATE ON roles FOR EACH ROW SET NEW.business_scope = COALESCE(NEW.business_id, ''00000000-0000-0000-0000-000000000000'')',
+  'DO 0'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 SET @idx_exists = (
   SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS

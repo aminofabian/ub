@@ -124,7 +124,8 @@ public class AuthRegistrationService {
     }
 
     @Transactional
-    public void verifyEmail(VerifyEmailRequest request) {
+    public void verifyEmail(HttpServletRequest http, VerifyEmailRequest request) {
+        String businessId = TenantRequestIds.resolveBusinessId(http);
         String hash = TokenHasher.sha256Hex(request.token());
         var row = emailVerificationTokenRepository.findByTokenHashAndUsedAtIsNull(hash)
                 .orElseThrow(() -> invalidToken());
@@ -133,7 +134,7 @@ public class AuthRegistrationService {
         }
         User user = userRepository.findById(row.getUserId())
                 .orElseThrow(() -> invalidToken());
-        if (user.getDeletedAt() != null) {
+        if (user.getDeletedAt() != null || !user.getBusinessId().equals(businessId)) {
             throw invalidToken();
         }
         if (user.statusAsEnum() != UserStatus.INVITED) {

@@ -27,6 +27,7 @@ import zelisline.ub.identity.api.dto.ResendVerificationLinkResponse;
 import zelisline.ub.identity.api.dto.VerifyEmailRequest;
 import zelisline.ub.identity.application.AuthRegistrationService;
 import zelisline.ub.identity.application.AuthService;
+import zelisline.ub.identity.application.RefreshTokenCookieSupport;
 import zelisline.ub.platform.security.CurrentTenantUser;
 
 @Validated
@@ -37,6 +38,7 @@ public class AuthController {
 
     private final AuthService authService;
     private final AuthRegistrationService authRegistrationService;
+    private final RefreshTokenCookieSupport refreshTokenCookieSupport;
 
     @Value("${app.auth.return-verification-link-in-register-response:false}")
     private boolean returnVerificationLinkInRegisterResponse;
@@ -49,8 +51,8 @@ public class AuthController {
 
     @PostMapping("/verify-email")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void verifyEmail(@Valid @RequestBody VerifyEmailRequest body) {
-        authRegistrationService.verifyEmail(body);
+    public void verifyEmail(@Valid @RequestBody VerifyEmailRequest body, HttpServletRequest http) {
+        authRegistrationService.verifyEmail(http, body);
     }
 
     /**
@@ -69,32 +71,47 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    public LoginResponse login(@Valid @RequestBody LoginRequest request, HttpServletRequest http) {
-        return authService.login(http, request);
+    public ResponseEntity<LoginResponse> login(@Valid @RequestBody LoginRequest request, HttpServletRequest http) {
+        return toSessionResponse(authService.login(http, request));
     }
 
     @PostMapping("/login-pin")
-    public LoginResponse loginPin(@Valid @RequestBody LoginPinRequest request, HttpServletRequest http) {
-        return authService.loginPin(http, request);
+    public ResponseEntity<LoginResponse> loginPin(@Valid @RequestBody LoginPinRequest request, HttpServletRequest http) {
+        return toSessionResponse(authService.loginPin(http, request));
     }
 
     @PostMapping("/refresh")
-    public LoginResponse refresh(@Valid @RequestBody RefreshRequest request, HttpServletRequest http) {
-        return authService.refresh(http, request);
+    public ResponseEntity<LoginResponse> refresh(
+            HttpServletRequest http,
+            @RequestBody(required = false) RefreshRequest request
+    ) {
+        return toSessionResponse(authService.refresh(http, request == null ? new RefreshRequest(null) : request));
     }
 
     @PostMapping("/logout")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<Void> logout(HttpServletRequest http) {
         authService.logout(CurrentTenantUser.requireHuman(http));
-        return ResponseEntity.noContent().build();
+        return ResponseEntity.noContent()
+                .headers(refreshTokenCookieSupport.clearCookieHeaders())
+                .build();
+    }
+
+    /** Clears the httpOnly refresh cookie without requiring a valid access token. */
+    @PostMapping("/clear-session-cookie")
+    public ResponseEntity<Void> clearSessionCookie() {
+        return ResponseEntity.noContent()
+                .headers(refreshTokenCookieSupport.clearCookieHeaders())
+                .build();
     }
 
     @PostMapping("/logout-all")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<Void> logoutAll(HttpServletRequest http) {
         authService.logoutAll(CurrentTenantUser.requireHuman(http));
-        return ResponseEntity.noContent().build();
+        return ResponseEntity.noContent()
+                .headers(refreshTokenCookieSupport.clearCookieHeaders())
+                .build();
     }
 
     /**
@@ -112,8 +129,8 @@ public class AuthController {
 
     @PostMapping("/password/reset")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void passwordReset(@Valid @RequestBody PasswordResetRequest request) {
-        authService.passwordReset(request);
+    public void passwordReset(@Valid @RequestBody PasswordResetRequest request, HttpServletRequest http) {
+        authService.passwordReset(http, request);
     }
 
     @PostMapping("/password/change")
@@ -121,5 +138,15 @@ public class AuthController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void passwordChange(@Valid @RequestBody PasswordChangeRequest request, HttpServletRequest http) {
         authService.passwordChange(http, CurrentTenantUser.requireHuman(http), request);
+    }
+
+    private ResponseEntity<LoginResponse> toSessionResponse(LoginResponse tokens) {
+        if (!refreshTokenCookieSupport.isEnabled()) {
+            return ResponseEntity.ok(tokens);
+        }
+        LoginResponse body = new LoginResponse(tokens.accessToken(), null, tokens.user());
+        return ResponseEntity.ok()
+                .headers(refreshTokenCookieSupport.cookieHeaders(tokens.refreshToken()))
+                .body(body);
     }
 }

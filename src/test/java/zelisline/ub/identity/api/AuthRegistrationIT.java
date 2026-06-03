@@ -122,6 +122,7 @@ class AuthRegistrationIT {
         String rawToken = extractToken(bodyCaptor.getValue());
 
         mockMvc.perform(post("/api/v1/auth/verify-email")
+                        .header("X-Tenant-Id", TENANT)
                         .contentType(APPLICATION_JSON)
                         .content("{\"token\":\"" + rawToken + "\"}"))
                 .andExpect(status().isNoContent());

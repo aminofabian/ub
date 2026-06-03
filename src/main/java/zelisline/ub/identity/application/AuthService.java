@@ -4,6 +4,7 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
+import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -86,6 +87,7 @@ public class AuthService {
     private final PasswordResetEmailRenderer passwordResetEmailRenderer;
     private final NotificationService notificationService;
     private final FrontendAuthLinkBuilder frontendAuthLinkBuilder;
+    private final RefreshTokenCookieSupport refreshTokenCookieSupport;
 
     @Value("${app.jwt.access-ttl-minutes:60}")
     private long accessTtlMinutes;
@@ -138,8 +140,12 @@ public class AuthService {
 
     @Transactional
     public LoginResponse refresh(HttpServletRequest http, RefreshRequest request) {
+        String refreshRaw = resolveRefreshToken(http, request);
+        if (refreshRaw == null || refreshRaw.isBlank()) {
+            throw invalidCredentials();
+        }
         String businessId = TenantRequestIds.resolveBusinessId(http);
-        String hash = TokenHasher.sha256Hex(request.refreshToken());
+        String hash = TokenHasher.sha256Hex(refreshRaw);
         UserSession old = userSessionRepository.findByRefreshTokenHashForUpdate(hash)
                 .orElseThrow(this::invalidCredentials);
 
@@ -242,7 +248,8 @@ public class AuthService {
     }
 
     @Transactional
-    public void passwordReset(PasswordResetRequest request) {
+    public void passwordReset(HttpServletRequest http, PasswordResetRequest request) {
+        String businessId = TenantRequestIds.resolveBusinessId(http);
         String hash = TokenHasher.sha256Hex(request.token());
         PasswordResetToken row = passwordResetTokenRepository.findByTokenHashAndUsedAtIsNull(hash)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid or expired token"));
@@ -251,7 +258,7 @@ public class AuthService {
         }
         User user = userRepository.findById(row.getUserId()).orElseThrow(() ->
                 new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid or expired token"));
-        if (user.getDeletedAt() != null) {
+        if (user.getDeletedAt() != null || !user.getBusinessId().equals(businessId)) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid or expired token");
         }
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
@@ -400,6 +407,17 @@ public class AuthService {
 
     private ResponseStatusException invalidCredentials() {
         return new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Incorrect email or password.");
+    }
+
+    private String resolveRefreshToken(HttpServletRequest http, RefreshRequest request) {
+        Optional<String> fromCookie = refreshTokenCookieSupport.read(http);
+        if (fromCookie.isPresent()) {
+            return fromCookie.get();
+        }
+        if (request != null && request.refreshToken() != null && !request.refreshToken().isBlank()) {
+            return request.refreshToken().trim();
+        }
+        return null;
     }
 
     private record SessionBundle(LoginResponse tokens, UserSession session) {

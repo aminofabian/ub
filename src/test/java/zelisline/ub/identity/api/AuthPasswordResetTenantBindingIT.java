@@ -30,15 +30,17 @@ import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
 
+/** Reset tokens are only accepted when the resolved tenant matches the token owner's business. */
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @TestPropertySource(properties = "spring.jpa.hibernate.ddl-auto=create-drop")
-class PasswordResetIT {
+class AuthPasswordResetTenantBindingIT {
 
-    private static final String TENANT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    private static final String TENANT_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    private static final String TENANT_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
     private static final String ROLE_ID = "22222222-2222-2222-2222-222222222201";
-    private static final String RAW_TOKEN = "integration-reset-token-plain";
+    private static final String RAW_TOKEN = "tenant-bound-reset-token";
 
     @Autowired
     private MockMvc mockMvc;
@@ -69,12 +71,6 @@ class PasswordResetIT {
         roleRepository.deleteAll();
         businessRepository.deleteAll();
 
-        Business business = new Business();
-        business.setId(TENANT);
-        business.setName("Tenant A");
-        business.setSlug("tenant-a-pwd");
-        businessRepository.save(business);
-
         Role owner = new Role();
         owner.setId(ROLE_ID);
         owner.setBusinessId(null);
@@ -83,8 +79,19 @@ class PasswordResetIT {
         owner.setSystem(true);
         roleRepository.save(owner);
 
+        for (String[] pair : new String[][]{
+                {TENANT_A, "tenant-a"},
+                {TENANT_B, "tenant-b"},
+        }) {
+            Business business = new Business();
+            business.setId(pair[0]);
+            business.setName(pair[1]);
+            business.setSlug(pair[1]);
+            businessRepository.save(business);
+        }
+
         User user = new User();
-        user.setBusinessId(TENANT);
+        user.setBusinessId(TENANT_A);
         user.setEmail("owner@example.com");
         user.setName("Owner");
         user.setRoleId(ROLE_ID);
@@ -100,9 +107,20 @@ class PasswordResetIT {
     }
 
     @Test
-    void passwordResetConsumesToken() throws Exception {
+    void passwordResetRejectsTokenUnderWrongTenant() throws Exception {
         mockMvc.perform(post("/api/v1/auth/password/reset")
-                        .header("X-Tenant-Id", TENANT)
+                        .header("X-Tenant-Id", TENANT_B)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"token":"%s","newPassword":"new-password-ok"}
+                                """.formatted(RAW_TOKEN)))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void passwordResetAcceptsTokenUnderMatchingTenant() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/password/reset")
+                        .header("X-Tenant-Id", TENANT_A)
                         .contentType(APPLICATION_JSON)
                         .content("""
                                 {"token":"%s","newPassword":"new-password-ok"}

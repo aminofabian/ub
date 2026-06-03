@@ -1,8 +1,7 @@
 package zelisline.ub.identity.api.dto;
 
-import jakarta.validation.constraints.NotBlank;
-
+/** Refresh token from httpOnly cookie and/or JSON body (legacy / handoff migration). */
 public record RefreshRequest(
-        @NotBlank String refreshToken
+        String refreshToken
 ) {
 }

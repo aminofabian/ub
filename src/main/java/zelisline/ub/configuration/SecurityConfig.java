@@ -42,6 +42,8 @@ import zelisline.ub.platform.security.JwtAuthenticationFilter;
 import zelisline.ub.platform.security.JwtTokenService;
 import zelisline.ub.platform.security.LoginIpRateLimiter;
 import zelisline.ub.platform.security.LoginRateLimitFilter;
+import zelisline.ub.platform.security.RefreshIpRateLimiter;
+import zelisline.ub.platform.security.RefreshRateLimitFilter;
 import zelisline.ub.platform.security.TestAuthenticationFilter;
 import zelisline.ub.tenancy.infrastructure.DomainBusinessResolverFilter;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
@@ -91,6 +93,7 @@ public class SecurityConfig {
             PublicStorefrontRateLimitFilter publicStorefrontRateLimitFilter,
             PublicCreditClaimRateLimitFilter publicCreditClaimRateLimitFilter,
             LoginRateLimitFilter loginRateLimitFilter,
+            RefreshRateLimitFilter refreshRateLimitFilter,
             JwtAuthenticationFilter jwtAuthenticationFilter,
             ApiKeyAuthenticationFilter apiKeyAuthenticationFilter,
             ApiKeyRateLimitFilter apiKeyRateLimitFilter,
@@ -161,7 +164,8 @@ public class SecurityConfig {
         http.addFilterAfter(publicStorefrontRateLimitFilter, DomainBusinessResolverFilter.class);
         http.addFilterAfter(publicCreditClaimRateLimitFilter, PublicStorefrontRateLimitFilter.class);
         http.addFilterAfter(loginRateLimitFilter, PublicCreditClaimRateLimitFilter.class);
-        http.addFilterAfter(jwtAuthenticationFilter, LoginRateLimitFilter.class);
+        http.addFilterAfter(refreshRateLimitFilter, LoginRateLimitFilter.class);
+        http.addFilterAfter(jwtAuthenticationFilter, RefreshRateLimitFilter.class);
         http.addFilterAfter(apiKeyAuthenticationFilter, JwtAuthenticationFilter.class);
         http.addFilterAfter(apiKeyRateLimitFilter, ApiKeyAuthenticationFilter.class);
         testAuthenticationFilter.ifAvailable(filter ->
@@ -187,6 +191,11 @@ public class SecurityConfig {
     @Bean
     public LoginRateLimitFilter loginRateLimitFilter(LoginIpRateLimiter loginIpRateLimiter) {
         return new LoginRateLimitFilter(loginIpRateLimiter);
+    }
+
+    @Bean
+    public RefreshRateLimitFilter refreshRateLimitFilter(RefreshIpRateLimiter refreshIpRateLimiter) {
+        return new RefreshRateLimitFilter(refreshIpRateLimiter);
     }
 
     @Bean

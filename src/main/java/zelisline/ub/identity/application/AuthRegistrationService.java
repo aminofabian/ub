@@ -59,6 +59,7 @@ public class AuthRegistrationService {
     private final NotificationService notificationService;
     private final EmailVerificationEmailRenderer emailVerificationEmailRenderer;
     private final PublicHostResolverService publicHostResolverService;
+    private final FrontendAuthLinkBuilder frontendAuthLinkBuilder;
     private final Environment environment;
 
     @Value("${app.auth.self-signup-enabled:true}")
@@ -75,9 +76,6 @@ public class AuthRegistrationService {
 
     @Value("${app.auth.email-verification-ttl-hours:48}")
     private long emailVerificationTtlHours;
-
-    @Value("${app.public.email-verification-url-prefix:http://localhost:3000/verify-email?token=}")
-    private String emailVerificationUrlPrefix;
 
     @Value("${app.auth.return-verification-link-in-register-response:false}")
     private boolean returnVerificationLinkInRegisterResponse;
@@ -242,8 +240,8 @@ public class AuthRegistrationService {
         token.setTokenHash(TokenHasher.sha256Hex(raw));
         token.setExpiresAt(Instant.now().plus(emailVerificationTtlHours, ChronoUnit.HOURS));
         emailVerificationTokenRepository.save(token);
-        String link = buildVerificationUrlPrefix(http) + raw;
-        String frontendHost = resolveFrontendHost(http);
+        String link = frontendAuthLinkBuilder.verificationLink(http, user.getBusinessId(), raw);
+        String frontendHost = frontendAuthLinkBuilder.resolveFrontendHost(http);
         var branding = EmailVerificationBrandingContext.fromHost(
                 frontendHost != null
                         ? publicHostResolverService.resolveByHost(frontendHost)
@@ -253,67 +251,6 @@ public class AuthRegistrationService {
         String htmlBody = emailVerificationEmailRenderer.renderHtml(branding, user.getEmail(), link);
         notificationService.sendEmailVerificationEmail(user.getEmail(), subject, htmlBody);
         return link;
-    }
-
-    /**
-     * Builds the verification URL prefix ({scheme}://{host}/verify-email?token=) dynamically
-     * from the incoming request so that subdomain tenants (e.g. barakia.palmart.co.ke)
-     * receive links pointing to their own frontend origin, not the platform apex.
-     *
-     * <p>Priority:
-     * <ol>
-     *   <li>{@code X-Tenant-Host} header — sent by the frontend for tenant-aware routing</li>
-     *   <li>{@code Host} header (when it differs from the configured platform hosts)</li>
-     *   <li>Configured {@code emailVerificationUrlPrefix} (static fallback)</li>
-     * </ol>
-     *
-     * <p>The scheme is read from {@code X-Forwarded-Proto} (for reverse-proxy deployments)
-     * then from {@link HttpServletRequest#getScheme()}.
-     */
-    private String resolveFrontendHost(HttpServletRequest http) {
-        String frontendHost = http.getHeader("X-Tenant-Host");
-        if (frontendHost == null || frontendHost.isBlank()) {
-            String serverName = http.getServerName();
-            if (serverName != null && !serverName.isBlank()
-                    && !"localhost".equalsIgnoreCase(serverName)
-                    && !"127.0.0.1".equals(serverName)
-                    && !"::1".equals(serverName)) {
-                frontendHost = serverName;
-            }
-        }
-        return (frontendHost == null || frontendHost.isBlank()) ? null : frontendHost.trim();
-    }
-
-    private String buildVerificationUrlPrefix(HttpServletRequest http) {
-        String frontendHost = resolveFrontendHost(http);
-
-        if (frontendHost == null) {
-            // Ultimate fallback: use the statically configured prefix
-            return emailVerificationUrlPrefix;
-        }
-
-        // 2. Determine the scheme (respect reverse-proxy headers)
-        String scheme = http.getHeader("X-Forwarded-Proto");
-        if (scheme == null || scheme.isBlank()) {
-            scheme = http.getScheme();
-        }
-
-        // 3. Determine the port — *.localhost uses Next.js dev port 3000
-        int port = http.getServerPort();
-        if (frontendHost.endsWith(".localhost") || "localhost".equalsIgnoreCase(frontendHost)) {
-            port = 3000;
-        }
-        boolean defaultPort = (port == 80 && "http".equals(scheme))
-                || (port == 443 && "https".equals(scheme));
-
-        StringBuilder prefix = new StringBuilder(scheme)
-                .append("://")
-                .append(frontendHost);
-        if (!defaultPort) {
-            prefix.append(":").append(port);
-        }
-        prefix.append("/verify-email?token=");
-        return prefix.toString();
     }
 
     private static String normaliseEmail(String email) {

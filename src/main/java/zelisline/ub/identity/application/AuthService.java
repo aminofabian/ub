@@ -85,6 +85,7 @@ public class AuthService {
     private final JwtTokenService jwtTokenService;
     private final PasswordResetEmailRenderer passwordResetEmailRenderer;
     private final NotificationService notificationService;
+    private final FrontendAuthLinkBuilder frontendAuthLinkBuilder;
 
     @Value("${app.jwt.access-ttl-minutes:60}")
     private long accessTtlMinutes;
@@ -94,9 +95,6 @@ public class AuthService {
 
     @Value("${app.auth.password-reset-ttl-hours:1}")
     private long passwordResetTtlHours;
-
-    @Value("${app.public.password-reset-url-prefix:http://localhost:3000/reset-password?token=}")
-    private String passwordResetUrlPrefix;
 
     @Transactional
     public LoginResponse login(HttpServletRequest http, LoginRequest request) {
@@ -237,56 +235,10 @@ public class AuthService {
             entity.setTokenHash(tokenHash);
             entity.setExpiresAt(now.plus(passwordResetTtlHours, ChronoUnit.HOURS));
             passwordResetTokenRepository.save(entity);
-            String link = buildPasswordResetUrlPrefix(http) + raw;
+            String link = frontendAuthLinkBuilder.passwordResetLink(http, businessId, raw);
             String body = passwordResetEmailRenderer.renderBody(user.getEmail(), link);
             notificationService.sendPasswordResetEmail(user.getEmail(), "Reset your UB password", body);
         });
-    }
-
-    /**
-     * Builds the password-reset URL prefix ({scheme}://{host}/reset-password?token=) dynamically
-     * from the incoming request so that subdomain tenants receive links pointing to their own
-     * frontend origin, not the platform apex.
-     *
-     * <p>See {@link AuthRegistrationService#buildVerificationUrlPrefix} for the same logic
-     * applied to email-verification links.
-     */
-    private String buildPasswordResetUrlPrefix(HttpServletRequest http) {
-        // 1. Determine the frontend hostname
-        String frontendHost = http.getHeader("X-Tenant-Host");
-        if (frontendHost == null || frontendHost.isBlank()) {
-            String serverName = http.getServerName();
-            if (serverName != null && !serverName.isBlank()
-                    && !"localhost".equalsIgnoreCase(serverName)
-                    && !"127.0.0.1".equals(serverName)
-                    && !"::1".equals(serverName)) {
-                frontendHost = serverName;
-            }
-        }
-
-        if (frontendHost == null || frontendHost.isBlank()) {
-            return passwordResetUrlPrefix;
-        }
-
-        // 2. Determine the scheme (respect reverse-proxy headers)
-        String scheme = http.getHeader("X-Forwarded-Proto");
-        if (scheme == null || scheme.isBlank()) {
-            scheme = http.getScheme();
-        }
-
-        // 3. Determine the port (only include non-default ports)
-        int port = http.getServerPort();
-        boolean defaultPort = (port == 80 && "http".equals(scheme))
-                || (port == 443 && "https".equals(scheme));
-
-        StringBuilder prefix = new StringBuilder(scheme)
-                .append("://")
-                .append(frontendHost.trim());
-        if (!defaultPort) {
-            prefix.append(":").append(port);
-        }
-        prefix.append("/reset-password?token=");
-        return prefix.toString();
     }
 
     @Transactional

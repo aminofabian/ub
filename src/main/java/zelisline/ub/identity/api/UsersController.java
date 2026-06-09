@@ -28,6 +28,7 @@ import zelisline.ub.identity.api.dto.SetUserItemTypesRequest;
 import zelisline.ub.identity.api.dto.UpdateUserRequest;
 import zelisline.ub.identity.api.dto.UserResponse;
 import zelisline.ub.identity.application.IdentityService;
+import zelisline.ub.identity.application.UserInvitationService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
@@ -38,6 +39,7 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class UsersController {
 
     private final IdentityService identityService;
+    private final UserInvitationService userInvitationService;
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'users.list')")
@@ -66,7 +68,12 @@ public class UsersController {
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        return identityService.createUser(TenantRequestIds.resolveBusinessId(request), body);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        UserResponse created = identityService.createUser(businessId, body);
+        if (Boolean.TRUE.equals(body.sendInvite())) {
+            userInvitationService.sendInvite(request, businessId, created.id());
+        }
+        return created;
     }
 
     @GetMapping("/{userId}")

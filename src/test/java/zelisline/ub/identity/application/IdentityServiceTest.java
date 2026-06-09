@@ -89,7 +89,7 @@ class IdentityServiceTest {
 
         UserResponse response = identityService.createUser(TENANT_A, new CreateUserRequest(
                 "Owner@Example.com", "Owner Name", null, ROLE_OWNER, null, null,
-                "correct-horse-battery-staple", "1234"
+                "correct-horse-battery-staple", "1234", null
         ));
 
         assertThat(response.email()).isEqualTo("owner@example.com");
@@ -107,7 +107,7 @@ class IdentityServiceTest {
         ResponseStatusException ex = catchThrowableOfType(
                 () -> identityService.createUser(TENANT_A,
                         new CreateUserRequest("owner@example.com", "Owner", null, ROLE_OWNER, null, null,
-                                "password-12345", null)),
+                                "password-12345", null, null)),
                 ResponseStatusException.class);
 
         assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
@@ -123,7 +123,7 @@ class IdentityServiceTest {
         ResponseStatusException ex = catchThrowableOfType(
                 () -> identityService.createUser(TENANT_A,
                         new CreateUserRequest("a@b.com", "X", null, "role-foreign", null, null,
-                                "password-12345", null)),
+                                "password-12345", null, null)),
                 ResponseStatusException.class);
 
         assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
@@ -137,7 +137,7 @@ class IdentityServiceTest {
 
         ResponseStatusException ex = catchThrowableOfType(
                 () -> identityService.createUser(TENANT_A,
-                        new CreateUserRequest("a@b.com", "Z", null, ROLE_OWNER, null, null, null, null)),
+                        new CreateUserRequest("a@b.com", "Z", null, ROLE_OWNER, null, null, null, null, null)),
                 ResponseStatusException.class);
 
         assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);

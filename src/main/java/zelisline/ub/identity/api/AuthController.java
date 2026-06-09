@@ -4,11 +4,14 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -20,6 +23,7 @@ import zelisline.ub.identity.api.dto.LoginResponse;
 import zelisline.ub.identity.api.dto.PasswordChangeRequest;
 import zelisline.ub.identity.api.dto.PasswordForgotRequest;
 import zelisline.ub.identity.api.dto.PasswordResetRequest;
+import zelisline.ub.identity.api.dto.PublicBranchResponse;
 import zelisline.ub.identity.api.dto.RefreshRequest;
 import zelisline.ub.identity.api.dto.RegisterRequest;
 import zelisline.ub.identity.api.dto.RegisterResponse;
@@ -27,6 +31,7 @@ import zelisline.ub.identity.api.dto.ResendVerificationLinkResponse;
 import zelisline.ub.identity.api.dto.VerifyEmailRequest;
 import zelisline.ub.identity.application.AuthRegistrationService;
 import zelisline.ub.identity.application.AuthService;
+import zelisline.ub.identity.application.LoginBranchDirectoryService;
 import zelisline.ub.identity.application.RefreshTokenCookieSupport;
 import zelisline.ub.platform.security.CurrentTenantUser;
 
@@ -38,6 +43,7 @@ public class AuthController {
 
     private final AuthService authService;
     private final AuthRegistrationService authRegistrationService;
+    private final LoginBranchDirectoryService loginBranchDirectoryService;
     private final RefreshTokenCookieSupport refreshTokenCookieSupport;
 
     @Value("${app.auth.return-verification-link-in-register-response:false}")
@@ -78,6 +84,16 @@ public class AuthController {
     @PostMapping("/login-pin")
     public ResponseEntity<LoginResponse> loginPin(@Valid @RequestBody LoginPinRequest request, HttpServletRequest http) {
         return toSessionResponse(authService.loginPin(http, request));
+    }
+
+    /**
+     * Active branches (id + name) for the request's tenant, so the PIN login
+     * screen can offer a branch picker instead of a raw UUID field. Public:
+     * returns {@code []} when no tenant is resolvable.
+     */
+    @GetMapping("/branches")
+    public List<PublicBranchResponse> branches(HttpServletRequest http) {
+        return loginBranchDirectoryService.listForTenant(http);
     }
 
     @PostMapping("/refresh")

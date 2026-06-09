@@ -77,13 +77,17 @@ public class IdentityService {
 
         Role role = requireRoleAssignableToTenant(businessId, request.roleId());
 
-        if ((request.password() == null || request.password().isBlank())
-                && (request.pin() == null || request.pin().isBlank())) {
+        boolean invite = Boolean.TRUE.equals(request.sendInvite());
+        boolean hasPassword = request.password() != null && !request.password().isBlank();
+        boolean hasPin = request.pin() != null && !request.pin().isBlank();
+        if (!invite && !hasPassword && !hasPin) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Either password or PIN must be provided");
+                    "Either a password, a PIN, or an email invitation must be provided");
         }
 
-        UserStatus status = parseStatus(request.status(), UserStatus.ACTIVE);
+        // Invited users have no credentials yet — they stay INVITED (login blocked)
+        // until they accept the email invite and set their own password.
+        UserStatus status = parseStatus(request.status(), invite ? UserStatus.INVITED : UserStatus.ACTIVE);
 
         User user = new User();
         user.setBusinessId(businessId);

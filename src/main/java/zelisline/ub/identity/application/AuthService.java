@@ -262,6 +262,12 @@ public class AuthService {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid or expired token");
         }
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        // Admin-invited users land here via their invitation link with no
+        // password set yet; accepting the invite (setting a password) also
+        // activates the account so they can sign in.
+        if (user.statusAsEnum() == UserStatus.INVITED) {
+            user.setStatus(UserStatus.ACTIVE);
+        }
         userRepository.save(user);
         row.setUsedAt(Instant.now());
         passwordResetTokenRepository.save(row);

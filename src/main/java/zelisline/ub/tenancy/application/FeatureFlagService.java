@@ -40,6 +40,30 @@ public class FeatureFlagService {
     /** M-Pesa STK push payments. */
     public static final String FLAG_MPESA_STK = "mpesa_stk";
 
+    /** Cashier POS draft cart persistence (master kill-switch). */
+    public static final String FLAG_POS_DRAFTS_ENABLED = "pos_drafts.enabled";
+
+    /** Shadow-write drafts without changing cashier UI. */
+    public static final String FLAG_POS_DRAFTS_SHADOW_WRITES = "pos_drafts.shadow_writes";
+
+    /** Show ticket numbers, sync status, and pending panel on cashier. */
+    public static final String FLAG_POS_DRAFTS_UI_VISIBLE = "pos_drafts.ui_visible";
+
+    /** Local IndexedDB mirror and offline mutation replay. */
+    public static final String FLAG_POS_DRAFTS_OFFLINE_MIRROR = "pos_drafts.offline_mirror";
+
+    /** Grocery counter draft cart persistence (master kill-switch). */
+    public static final String FLAG_GROCERY_DRAFTS_ENABLED = "grocery_drafts.enabled";
+
+    /** Shadow-write grocery drafts without changing counter UI. */
+    public static final String FLAG_GROCERY_DRAFTS_SHADOW_WRITES = "grocery_drafts.shadow_writes";
+
+    /** Show Counter #, sync status, and pending panel on grocery counter. */
+    public static final String FLAG_GROCERY_DRAFTS_UI_VISIBLE = "grocery_drafts.ui_visible";
+
+    /** Local IndexedDB mirror and offline mutation replay for grocery drafts. */
+    public static final String FLAG_GROCERY_DRAFTS_OFFLINE_MIRROR = "grocery_drafts.offline_mirror";
+
     /**
      * Read all feature flags for a business. Returns an empty map when the
      * business or its settings are absent.

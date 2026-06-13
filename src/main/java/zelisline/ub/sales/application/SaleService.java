@@ -85,6 +85,13 @@ public class SaleService {
         return new SaleCreationOutcome(completeNewSale(businessId, idempotencyKey, req, userId), true);
     }
 
+    @Transactional(readOnly = true)
+    public SaleResponse requireSale(String businessId, String saleId) {
+        Sale sale = saleRepository.findByIdAndBusinessId(saleId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Sale not found"));
+        return toResponse(sale);
+    }
+
     private SaleResponse completeNewSale(String businessId, String idempotencyKey, PostSaleRequest req, String userId) {
         var creditSettingsResolved = businessCreditSettingsService.resolveForBusiness(businessId);
         requireBranch(businessId, req.branchId());

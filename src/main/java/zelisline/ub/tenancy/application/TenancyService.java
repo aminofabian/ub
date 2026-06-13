@@ -172,6 +172,14 @@ public class TenancyService {
                 )
             );
         }
+        if (request.featureFlags() != null) {
+            business.setSettings(
+                storefrontSettingsService.mergeFeatureFlags(
+                    business.getSettings(),
+                    request.featureFlags()
+                )
+            );
+        }
 
         return toResponse(businessRepository.save(business));
     }
@@ -757,6 +765,7 @@ public class TenancyService {
             profile,
             onboarding,
             bundle.branding(),
+            bundle.featureFlags(),
             primaryDomain
         );
     }

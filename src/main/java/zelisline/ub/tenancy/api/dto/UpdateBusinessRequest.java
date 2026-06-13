@@ -9,6 +9,7 @@ public record UpdateBusinessRequest(
         Boolean active,
         @Valid StorefrontPatchRequest storefront,
         @Valid InventoryPatchRequest inventory,
-        @Valid ProfilePatchRequest profile
+        @Valid ProfilePatchRequest profile,
+        @Valid FeatureFlagsPatchRequest featureFlags
 ) {
 }

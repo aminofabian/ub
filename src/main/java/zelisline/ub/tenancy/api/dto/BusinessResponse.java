@@ -18,6 +18,7 @@ public record BusinessResponse(
         ProfileSettingsResponse profile,
         OnboardingSettingsResponse onboarding,
         TenantBrandingDto branding,
+        java.util.Map<String, Boolean> featureFlags,
         // Hostname of the active primary domain mapping, if any. Used by the
         // app shell to keep cross-origin redirects (login handoff, share
         // links) anchored to the tenant's chosen primary host instead of a

@@ -15,6 +15,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.tenancy.api.dto.BrandingPatchRequest;
+import zelisline.ub.tenancy.api.dto.FeatureFlagsPatchRequest;
+import zelisline.ub.tenancy.api.dto.PosDraftsFeatureFlagsPatch;
 import zelisline.ub.tenancy.api.dto.StorefrontPatchRequest;
 import zelisline.ub.tenancy.api.dto.StorefrontSettingsResponse;
 import zelisline.ub.tenancy.api.dto.TenantAuthConfigDto;
@@ -576,6 +578,51 @@ public class StorefrontSettingsService {
                 HttpStatus.INTERNAL_SERVER_ERROR,
                 "Could not save storefront settings"
             );
+        }
+    }
+
+    public String mergeFeatureFlags(
+        String currentSettings,
+        FeatureFlagsPatchRequest patch
+    ) {
+        if (patch == null || patch.posDrafts() == null) {
+            return currentSettings;
+        }
+        ObjectNode root = parseRoot(currentSettings);
+        ObjectNode flags = copyFeatureFlags(root);
+        applyPosDraftsFlags(flags, patch.posDrafts());
+        root.set(KEY_FEATURES, flags);
+        return writeRoot(root);
+    }
+
+    private ObjectNode copyFeatureFlags(ObjectNode root) {
+        if (root.has(KEY_FEATURES) && root.get(KEY_FEATURES).isObject()) {
+            return (ObjectNode) root.get(KEY_FEATURES).deepCopy();
+        }
+        return objectMapper.createObjectNode();
+    }
+
+    private void applyPosDraftsFlags(
+        ObjectNode flags,
+        PosDraftsFeatureFlagsPatch patch
+    ) {
+        putFlagIfPresent(flags, FeatureFlagService.FLAG_POS_DRAFTS_ENABLED, patch.enabled());
+        putFlagIfPresent(flags, FeatureFlagService.FLAG_POS_DRAFTS_UI_VISIBLE, patch.uiVisible());
+        putFlagIfPresent(
+            flags,
+            FeatureFlagService.FLAG_POS_DRAFTS_SHADOW_WRITES,
+            patch.shadowWrites()
+        );
+        putFlagIfPresent(
+            flags,
+            FeatureFlagService.FLAG_POS_DRAFTS_OFFLINE_MIRROR,
+            patch.offlineMirror()
+        );
+    }
+
+    private static void putFlagIfPresent(ObjectNode flags, String key, Boolean value) {
+        if (value != null) {
+            flags.put(key, value);
         }
     }
 

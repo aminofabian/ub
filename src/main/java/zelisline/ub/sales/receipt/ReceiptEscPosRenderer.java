@@ -22,6 +22,9 @@ public final class ReceiptEscPosRenderer {
         out.add(repeat('-', w));
         out.add(center("Sale " + s.saleId(), w));
         out.add(center(strip(s.soldAtDisplay()) + " | " + strip(s.saleStatus()), w));
+        if (s.servedByName() != null && !s.servedByName().isBlank()) {
+            out.add(center("Served by: " + strip(s.servedByName()), w));
+        }
         out.add(repeat('-', w));
         for (ReceiptLineRow line : s.lines()) {
             for (String row : wrap(strip(line.description()), w)) {
@@ -46,9 +49,6 @@ public final class ReceiptEscPosRenderer {
         addCenteredIfPresent(out, contactLine("Tel", s.branchPhone()), w);
         addCenteredIfPresent(out, contactLine("Email", s.branchEmail()), w);
         addCenteredIfPresent(out, contactLine("Web", s.branchWebsite()), w);
-        if (s.servedByName() != null && !s.servedByName().isBlank()) {
-            out.add(center("Served by: " + strip(s.servedByName()), w));
-        }
         if (s.branchReceiptMessage() != null && !s.branchReceiptMessage().isBlank()) {
             for (String row : wrap(strip(s.branchReceiptMessage()), w)) {
                 out.add(center(row, w));

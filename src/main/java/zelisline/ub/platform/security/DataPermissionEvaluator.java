@@ -8,6 +8,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Component;
 
 import zelisline.ub.identity.application.RequestPermissionService;
+import zelisline.ub.inventory.application.InventoryRoleAccessService;
 
 /**
  * Bridges Spring EL {@code hasPermission(null, 'users.create')} to the
@@ -17,9 +18,14 @@ import zelisline.ub.identity.application.RequestPermissionService;
 public class DataPermissionEvaluator implements PermissionEvaluator {
 
     private final ObjectProvider<RequestPermissionService> permissionService;
+    private final ObjectProvider<InventoryRoleAccessService> inventoryRoleAccessService;
 
-    public DataPermissionEvaluator(ObjectProvider<RequestPermissionService> permissionService) {
+    public DataPermissionEvaluator(
+            ObjectProvider<RequestPermissionService> permissionService,
+            ObjectProvider<InventoryRoleAccessService> inventoryRoleAccessService
+    ) {
         this.permissionService = permissionService;
+        this.inventoryRoleAccessService = inventoryRoleAccessService;
     }
 
     @Override
@@ -37,7 +43,24 @@ public class DataPermissionEvaluator implements PermissionEvaluator {
         if (!(authentication.getPrincipal() instanceof TenantPrincipal tenant)) {
             return false;
         }
-        return permissionService.getObject().hasPermission(tenant.roleId(), perm);
+        RequestPermissionService permissions = permissionService.getObject();
+        if (permissions.hasPermission(tenant.roleId(), perm)) {
+            return true;
+        }
+        InventoryRoleAccessService inventoryAccess = inventoryRoleAccessService.getObject();
+        if ("inventory.write".equals(perm)) {
+            return inventoryAccess.grantsDelegatedInventoryWrite(
+                    tenant.businessId(),
+                    tenant.roleId()
+            );
+        }
+        if ("inventory.read".equals(perm)) {
+            return inventoryAccess.grantsDelegatedInventoryRead(
+                    tenant.businessId(),
+                    tenant.roleId()
+            );
+        }
+        return false;
     }
 
     /**

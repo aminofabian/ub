@@ -37,6 +37,9 @@ public final class ReceiptPdfRenderer {
             doc.add(new Paragraph(s.branchName(), body));
             doc.add(new Paragraph("Sale " + s.saleId(), body));
             doc.add(new Paragraph(s.soldAtDisplay() + " · " + s.saleStatus(), body));
+            if (s.servedByName() != null && !s.servedByName().isBlank()) {
+                doc.add(new Paragraph("Served by: " + s.servedByName(), body));
+            }
             doc.add(new Paragraph(" "));
 
             PdfPTable table = new PdfPTable(4);
@@ -99,9 +102,6 @@ public final class ReceiptPdfRenderer {
         addIfPresent(doc, formatContactLine("Tel", s.branchPhone()), body);
         addIfPresent(doc, formatContactLine("Email", s.branchEmail()), body);
         addIfPresent(doc, formatContactLine("Web", s.branchWebsite()), body);
-        if (s.servedByName() != null && !s.servedByName().isBlank()) {
-            doc.add(new Paragraph("Served by: " + s.servedByName(), body));
-        }
     }
 
     private static void addIfPresent(Document doc, String text, Font font) throws DocumentException {

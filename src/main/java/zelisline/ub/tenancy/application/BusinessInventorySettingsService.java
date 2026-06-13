@@ -12,6 +12,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.tenancy.api.dto.InventoryPatchRequest;
 import zelisline.ub.tenancy.api.dto.InventorySettingsResponse;
+import zelisline.ub.tenancy.api.dto.StockLevelsPatchRequest;
+import zelisline.ub.tenancy.api.dto.StockLevelsSettingsResponse;
 import zelisline.ub.tenancy.api.dto.StocktakePatchRequest;
 import zelisline.ub.tenancy.api.dto.StocktakeSettingsResponse;
 
@@ -21,8 +23,13 @@ public class BusinessInventorySettingsService {
 
     private static final String KEY_INVENTORY = "inventory";
     private static final String KEY_STOCKTAKE = "stocktake";
+    private static final String KEY_STOCK_LEVELS = "stockLevels";
     private static final String KEY_SHOW_SYSTEM_STOCK =
             "showSystemStockToStockManager";
+    private static final String KEY_ALLOW_EDIT_STOCK_MANAGER =
+            "allowStockEditForStockManager";
+    private static final String KEY_ALLOW_EDIT_GROCERY_CLERK =
+            "allowStockEditForGroceryClerk";
 
     private final ObjectMapper objectMapper;
 
@@ -35,21 +42,34 @@ public class BusinessInventorySettingsService {
             if (!root.isObject()) {
                 return InventorySettingsResponse.defaults();
             }
-            return new InventorySettingsResponse(readStocktake(root.path(KEY_INVENTORY)));
+            return new InventorySettingsResponse(
+                    readStocktake(root.path(KEY_INVENTORY)),
+                    readStockLevels(root.path(KEY_INVENTORY))
+            );
         } catch (Exception e) {
             return InventorySettingsResponse.defaults();
         }
     }
 
     public String merge(String currentSettings, InventoryPatchRequest patch) {
-        if (patch == null || patch.stocktake() == null) {
+        if (patch == null) {
+            return currentSettings;
+        }
+        if (patch.stocktake() == null && patch.stockLevels() == null) {
             return currentSettings;
         }
         ObjectNode root = parseRoot(currentSettings);
         ObjectNode inventory = copyNamespace(root, KEY_INVENTORY);
-        ObjectNode stocktake = copyNamespace(inventory, KEY_STOCKTAKE);
-        applyStocktakePatch(stocktake, patch.stocktake());
-        inventory.set(KEY_STOCKTAKE, stocktake);
+        if (patch.stocktake() != null) {
+            ObjectNode stocktake = copyNamespace(inventory, KEY_STOCKTAKE);
+            applyStocktakePatch(stocktake, patch.stocktake());
+            inventory.set(KEY_STOCKTAKE, stocktake);
+        }
+        if (patch.stockLevels() != null) {
+            ObjectNode stockLevels = copyNamespace(inventory, KEY_STOCK_LEVELS);
+            applyStockLevelsPatch(stockLevels, patch.stockLevels());
+            inventory.set(KEY_STOCK_LEVELS, stockLevels);
+        }
         root.set(KEY_INVENTORY, inventory);
         return writeRoot(root);
     }
@@ -65,6 +85,38 @@ public class BusinessInventorySettingsService {
         return new StocktakeSettingsResponse(
                 stocktake.path(KEY_SHOW_SYSTEM_STOCK).asBoolean(false)
         );
+    }
+
+    private static StockLevelsSettingsResponse readStockLevels(JsonNode inventoryNode) {
+        if (inventoryNode.isMissingNode() || !inventoryNode.isObject()) {
+            return StockLevelsSettingsResponse.defaults();
+        }
+        JsonNode stockLevels = inventoryNode.path(KEY_STOCK_LEVELS);
+        if (stockLevels.isMissingNode() || !stockLevels.isObject()) {
+            return StockLevelsSettingsResponse.defaults();
+        }
+        return new StockLevelsSettingsResponse(
+                stockLevels.path(KEY_ALLOW_EDIT_STOCK_MANAGER).asBoolean(false),
+                stockLevels.path(KEY_ALLOW_EDIT_GROCERY_CLERK).asBoolean(false)
+        );
+    }
+
+    private static void applyStockLevelsPatch(
+            ObjectNode stockLevels,
+            StockLevelsPatchRequest patch
+    ) {
+        if (patch.allowStockEditForStockManager() != null) {
+            stockLevels.put(
+                    KEY_ALLOW_EDIT_STOCK_MANAGER,
+                    patch.allowStockEditForStockManager()
+            );
+        }
+        if (patch.allowStockEditForGroceryClerk() != null) {
+            stockLevels.put(
+                    KEY_ALLOW_EDIT_GROCERY_CLERK,
+                    patch.allowStockEditForGroceryClerk()
+            );
+        }
     }
 
     private static void applyStocktakePatch(

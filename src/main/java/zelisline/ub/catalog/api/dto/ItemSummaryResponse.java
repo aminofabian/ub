@@ -35,6 +35,8 @@ public record ItemSummaryResponse(
          */
         BigDecimal baseStockQty,
         String brand,
-        String size
+        String size,
+        /** Catalog shelf / bundle price on the item record (POS may use branch selling price). */
+        BigDecimal bundlePrice
 ) {
 }

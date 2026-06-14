@@ -32,6 +32,9 @@ import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zelisline.ub.catalog.api.dto.CatalogListScope;
+import zelisline.ub.catalog.api.dto.CatalogRowType;
+import zelisline.ub.catalog.api.dto.CatalogRowTypeSum;
+import zelisline.ub.catalog.api.dto.CatalogRowTypeCountsResponse;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.api.dto.CreateVariantRequest;
 import zelisline.ub.catalog.api.dto.ItemImageResponse;
@@ -111,6 +114,7 @@ public class ItemCatalogService {
                 noBarcode,
                 includeInactive,
                 catalogListScope,
+                null,
                 excludeLinkedSupplierId,
                 branchIdForStock,
                 itemTypeId,
@@ -142,58 +146,80 @@ public class ItemCatalogService {
             Collection<String> allowedItemTypeIds,
             Pageable pageable
     ) {
-        String q = blankToNull(search);
-        String bc = blankToNull(barcodeExact);
-        String cat = blankToNull(categoryId);
-        CatalogListScope scope = catalogListScope != null ? catalogListScope : CatalogListScope.ALL;
-        boolean includeAllScopes = scope == CatalogListScope.ALL;
-        boolean parentsOnly = scope == CatalogListScope.PARENTS_ONLY;
-        boolean variantsOnly = scope == CatalogListScope.VARIANTS_ONLY;
-        boolean skusOnly = scope == CatalogListScope.SKUS_ONLY;
-        Sort defaultSort = Sort.by(
-                Sort.Order.asc("name").ignoreCase(),
-                Sort.Order.asc("sku").ignoreCase());
-        Pageable pg = PageRequest.of(
-                pageable.getPageNumber(),
-                pageable.getPageSize(),
-                pageable.getSort().isSorted() ? pageable.getSort() : defaultSort);
-        boolean catUnset = cat == null;
-        Collection<String> categoryIds = List.of("");
-        if (!catUnset) {
-            categoryIds = resolveCategorySubtreeIds(businessId, cat, includeCategoryDescendants);
-            if (categoryIds.isEmpty()) {
-                return Page.empty(pg);
-            }
-        }
-        boolean squashParentGroupsForSearch = includeAllScopes && q != null;
-        String itemType = blankToNull(itemTypeId);
-        boolean itemTypeUnset = itemType == null;
-        boolean restrictByAllowedItemTypes = allowedItemTypeIds != null;
-        if (restrictByAllowedItemTypes && allowedItemTypeIds.isEmpty()) {
-            return Page.empty(pg);
-        }
-        Collection<String> safeAllowedItemTypes = restrictByAllowedItemTypes
-                ? allowedItemTypeIds
-                : List.of("");
-        Page<Item> page = itemRepository.search(
+        return listItems(
                 businessId,
-                q,
-                bc,
-                catUnset,
-                categoryIds,
+                search,
+                barcodeExact,
+                categoryId,
+                includeCategoryDescendants,
                 noBarcode,
                 includeInactive,
-                includeAllScopes,
-                parentsOnly,
-                variantsOnly,
-                skusOnly,
-                blankToNull(excludeLinkedSupplierId),
-                squashParentGroupsForSearch,
-                itemTypeUnset,
-                itemType != null ? itemType : "",
-                restrictByAllowedItemTypes,
-                safeAllowedItemTypes,
-                pg);
+                catalogListScope,
+                null,
+                excludeLinkedSupplierId,
+                branchIdForStock,
+                itemTypeId,
+                allowedItemTypeIds,
+                pageable);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<ItemSummaryResponse> listItems(
+            String businessId,
+            String search,
+            String barcodeExact,
+            String categoryId,
+            boolean includeCategoryDescendants,
+            boolean noBarcode,
+            boolean includeInactive,
+            CatalogListScope catalogListScope,
+            List<CatalogRowType> catalogRowTypes,
+            String excludeLinkedSupplierId,
+            String branchIdForStock,
+            String itemTypeId,
+            Collection<String> allowedItemTypeIds,
+            Pageable pageable
+    ) {
+        CatalogListQueryContext ctx = resolveCatalogListQuery(
+                businessId,
+                search,
+                barcodeExact,
+                categoryId,
+                includeCategoryDescendants,
+                noBarcode,
+                includeInactive,
+                catalogListScope,
+                catalogRowTypes,
+                excludeLinkedSupplierId,
+                itemTypeId,
+                allowedItemTypeIds,
+                pageable);
+        if (ctx.emptyResult()) {
+            return Page.empty(ctx.pageable());
+        }
+        Page<Item> page = itemRepository.search(
+                businessId,
+                ctx.q(),
+                ctx.barcodeExact(),
+                ctx.catUnset(),
+                ctx.categoryIds(),
+                noBarcode,
+                includeInactive,
+                ctx.includeAllScopes(),
+                ctx.parentsOnly(),
+                ctx.variantsOnly(),
+                ctx.skusOnly(),
+                ctx.filterByCatalogRowTypes(),
+                ctx.includeParentRows(),
+                ctx.includeVariantRows(),
+                ctx.includeStandaloneRows(),
+                ctx.excludeLinkedSupplierId(),
+                ctx.squashParentGroupsForSearch(),
+                ctx.itemTypeUnset(),
+                ctx.itemTypeId(),
+                ctx.restrictByAllowedItemTypes(),
+                ctx.allowedItemTypeIds(),
+                ctx.pageable());
         List<String> ids = page.getContent().stream().map(Item::getId).toList();
         Map<String, String> thumbs = firstGalleryImageUrlByItemId(ids);
         Set<String> catIds = page.getContent().stream()
@@ -244,6 +270,97 @@ public class ItemCatalogService {
                     displayStock,
                     baseStock);
         });
+    }
+
+    @Transactional(readOnly = true)
+    public CatalogRowTypeCountsResponse countCatalogRowTypes(
+            String businessId,
+            String search,
+            String barcodeExact,
+            String categoryId,
+            boolean includeCategoryDescendants,
+            boolean noBarcode,
+            boolean includeInactive,
+            CatalogListScope catalogListScope,
+            String excludeLinkedSupplierId,
+            String itemTypeId,
+            Collection<String> allowedItemTypeIds
+    ) {
+        CatalogListQueryContext ctx = resolveCatalogListQuery(
+                businessId,
+                search,
+                barcodeExact,
+                categoryId,
+                includeCategoryDescendants,
+                noBarcode,
+                includeInactive,
+                catalogListScope,
+                null,
+                excludeLinkedSupplierId,
+                itemTypeId,
+                allowedItemTypeIds,
+                PageRequest.of(0, 1));
+        if (ctx.emptyResult()) {
+            return new CatalogRowTypeCountsResponse(0, 0, 0, 0, 0);
+        }
+        CatalogRowTypeSum rowTypes = itemRepository.sumCatalogRowTypes(
+                businessId,
+                ctx.q(),
+                ctx.barcodeExact(),
+                ctx.catUnset(),
+                ctx.categoryIds(),
+                false,
+                true,
+                ctx.includeAllScopes(),
+                ctx.parentsOnly(),
+                ctx.variantsOnly(),
+                ctx.skusOnly(),
+                ctx.excludeLinkedSupplierId(),
+                ctx.itemTypeUnset(),
+                ctx.itemTypeId(),
+                ctx.restrictByAllowedItemTypes(),
+                ctx.allowedItemTypeIds());
+        long missingBarcode = itemRepository.countCatalogMissingBarcodes(
+                businessId,
+                ctx.q(),
+                ctx.barcodeExact(),
+                ctx.catUnset(),
+                ctx.categoryIds(),
+                false,
+                true,
+                ctx.includeAllScopes(),
+                ctx.parentsOnly(),
+                ctx.variantsOnly(),
+                ctx.skusOnly(),
+                ctx.excludeLinkedSupplierId(),
+                ctx.itemTypeUnset(),
+                ctx.itemTypeId(),
+                ctx.restrictByAllowedItemTypes(),
+                ctx.allowedItemTypeIds());
+        long inactive = itemRepository.countCatalogInactive(
+                businessId,
+                ctx.q(),
+                ctx.barcodeExact(),
+                ctx.catUnset(),
+                ctx.categoryIds(),
+                ctx.includeAllScopes(),
+                ctx.parentsOnly(),
+                ctx.variantsOnly(),
+                ctx.skusOnly(),
+                ctx.excludeLinkedSupplierId(),
+                ctx.itemTypeUnset(),
+                ctx.itemTypeId(),
+                ctx.restrictByAllowedItemTypes(),
+                ctx.allowedItemTypeIds());
+        if (rowTypes == null) {
+            return new CatalogRowTypeCountsResponse(0, 0, 0, missingBarcode, inactive);
+        }
+        return new CatalogRowTypeCountsResponse(
+                rowTypes.parents(),
+                rowTypes.variants(),
+                rowTypes.standalones(),
+                missingBarcode,
+                inactive);
     }
 
     @Transactional(readOnly = true)
@@ -1281,7 +1398,8 @@ public class ItemCatalogService {
                 packageVariantStockResolver.unitsPerPackage(i),
                 baseStockQty,
                 i.getBrand(),
-                i.getSize()
+                i.getSize(),
+                i.getBundlePrice()
         );
     }
 
@@ -1394,6 +1512,115 @@ public class ItemCatalogService {
             return t.length() > 9 ? t.substring(0, 7) : t;
         }
         return "#" + t.replace("#", "");
+    }
+
+    private record CatalogListQueryContext(
+            String q,
+            String barcodeExact,
+            boolean catUnset,
+            Collection<String> categoryIds,
+            boolean includeAllScopes,
+            boolean parentsOnly,
+            boolean variantsOnly,
+            boolean skusOnly,
+            boolean filterByCatalogRowTypes,
+            boolean includeParentRows,
+            boolean includeVariantRows,
+            boolean includeStandaloneRows,
+            String excludeLinkedSupplierId,
+            boolean squashParentGroupsForSearch,
+            boolean itemTypeUnset,
+            String itemTypeId,
+            boolean restrictByAllowedItemTypes,
+            Collection<String> allowedItemTypeIds,
+            Pageable pageable,
+            boolean emptyResult
+    ) {
+    }
+
+    private CatalogListQueryContext resolveCatalogListQuery(
+            String businessId,
+            String search,
+            String barcodeExact,
+            String categoryId,
+            boolean includeCategoryDescendants,
+            boolean noBarcode,
+            boolean includeInactive,
+            CatalogListScope catalogListScope,
+            List<CatalogRowType> catalogRowTypes,
+            String excludeLinkedSupplierId,
+            String itemTypeId,
+            Collection<String> allowedItemTypeIds,
+            Pageable pageable
+    ) {
+        String q = blankToNull(search);
+        String bc = blankToNull(barcodeExact);
+        String cat = blankToNull(categoryId);
+        CatalogListScope scope = catalogListScope != null ? catalogListScope : CatalogListScope.ALL;
+        boolean includeAllScopes = scope == CatalogListScope.ALL;
+        boolean parentsOnly = scope == CatalogListScope.PARENTS_ONLY;
+        boolean variantsOnly = scope == CatalogListScope.VARIANTS_ONLY;
+        boolean skusOnly = scope == CatalogListScope.SKUS_ONLY;
+        boolean filterByCatalogRowTypes = false;
+        boolean includeParentRows = false;
+        boolean includeVariantRows = false;
+        boolean includeStandaloneRows = false;
+        if (includeAllScopes && catalogRowTypes != null && !catalogRowTypes.isEmpty()) {
+            Set<CatalogRowType> types = new HashSet<>(catalogRowTypes);
+            if (types.size() < CatalogRowType.values().length) {
+                filterByCatalogRowTypes = true;
+                includeParentRows = types.contains(CatalogRowType.PARENT);
+                includeVariantRows = types.contains(CatalogRowType.VARIANT);
+                includeStandaloneRows = types.contains(CatalogRowType.STANDALONE);
+            }
+        }
+        Sort defaultSort = Sort.by(
+                Sort.Order.asc("name").ignoreCase(),
+                Sort.Order.asc("sku").ignoreCase());
+        Pageable pg = PageRequest.of(
+                pageable.getPageNumber(),
+                pageable.getPageSize(),
+                pageable.getSort().isSorted() ? pageable.getSort() : defaultSort);
+        boolean catUnset = cat == null;
+        Collection<String> categoryIds = List.of("");
+        if (!catUnset) {
+            categoryIds = resolveCategorySubtreeIds(businessId, cat, includeCategoryDescendants);
+            if (categoryIds.isEmpty()) {
+                return new CatalogListQueryContext(
+                        q, bc, catUnset, categoryIds,
+                        includeAllScopes, parentsOnly, variantsOnly, skusOnly,
+                        filterByCatalogRowTypes, includeParentRows, includeVariantRows, includeStandaloneRows,
+                        blankToNull(excludeLinkedSupplierId),
+                        includeAllScopes && q != null,
+                        true, "", false, List.of(""), pg, true);
+            }
+        }
+        boolean squashParentGroupsForSearch = includeAllScopes && q != null;
+        String itemType = blankToNull(itemTypeId);
+        boolean itemTypeUnset = itemType == null;
+        boolean restrictByAllowedItemTypes = allowedItemTypeIds != null;
+        if (restrictByAllowedItemTypes && allowedItemTypeIds.isEmpty()) {
+            return new CatalogListQueryContext(
+                    q, bc, catUnset, categoryIds,
+                    includeAllScopes, parentsOnly, variantsOnly, skusOnly,
+                    filterByCatalogRowTypes, includeParentRows, includeVariantRows, includeStandaloneRows,
+                    blankToNull(excludeLinkedSupplierId),
+                    squashParentGroupsForSearch,
+                    itemTypeUnset, itemType != null ? itemType : "",
+                    restrictByAllowedItemTypes,
+                    List.of(""), pg, true);
+        }
+        Collection<String> safeAllowedItemTypes = restrictByAllowedItemTypes
+                ? allowedItemTypeIds
+                : List.of("");
+        return new CatalogListQueryContext(
+                q, bc, catUnset, categoryIds,
+                includeAllScopes, parentsOnly, variantsOnly, skusOnly,
+                filterByCatalogRowTypes, includeParentRows, includeVariantRows, includeStandaloneRows,
+                blankToNull(excludeLinkedSupplierId),
+                squashParentGroupsForSearch,
+                itemTypeUnset, itemType != null ? itemType : "",
+                restrictByAllowedItemTypes, safeAllowedItemTypes, pg, false);
     }
 
     private static String blankToNull(String s) {

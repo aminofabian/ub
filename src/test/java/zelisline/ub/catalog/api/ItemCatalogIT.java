@@ -323,6 +323,7 @@ class ItemCatalogIT {
     void listItemsCatalogScopeFiltersParentsAndVariants() throws Exception {
         String gid = goodsTypeId(TENANT_A);
         String parent = createItemViaService(TENANT_A, gid, "SKU-SCOPE-P", "Scope parent unique");
+        createItemViaService(TENANT_A, gid, "SKU-SCOPE-S", "Scope standalone unique");
         mockMvc.perform(post("/api/v1/items/" + parent + "/variants")
                         .header("X-Tenant-Id", TENANT_A)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
@@ -342,6 +343,15 @@ class ItemCatalogIT {
                 .andExpect(jsonPath("$.content[0].sku").value("SKU-SCOPE-P"));
 
         mockMvc.perform(get("/api/v1/items")
+                        .param("catalogScope", "PARENTS_ONLY")
+                        .param("search", "Scope standalone unique")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(0));
+
+        mockMvc.perform(get("/api/v1/items")
                         .param("catalogScope", "VARIANTS_ONLY")
                         .param("search", "Scope parent unique")
                         .header("X-Tenant-Id", TENANT_A)
@@ -350,6 +360,69 @@ class ItemCatalogIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content.length()").value(1))
                 .andExpect(jsonPath("$.content[0].sku").value("SKU-SCOPE-V"));
+    }
+
+    @Test
+    void listItemsCatalogRowTypesFilterAndCounts() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        String parent = createItemViaService(TENANT_A, gid, "SKU-ROWTYPE-P", "Row type parent marker");
+        createItemViaService(TENANT_A, gid, "SKU-ROWTYPE-S", "Row type standalone marker");
+        mockMvc.perform(post("/api/v1/items/" + parent + "/variants")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"sku\":\"SKU-ROWTYPE-V\",\"variantName\":\"Size M\"}"))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(get("/api/v1/items/row-type-counts")
+                        .param("search", "Row type")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.parents").value(1))
+                .andExpect(jsonPath("$.variants").value(1))
+                .andExpect(jsonPath("$.standalones").value(1))
+                .andExpect(jsonPath("$.missingBarcode").value(3))
+                .andExpect(jsonPath("$.inactive").value(0));
+
+        String inactiveItem = createItemViaService(TENANT_A, gid, "SKU-ROWTYPE-INACT", "Row type inactive marker");
+        mockMvc.perform(patch("/api/v1/items/" + inactiveItem)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"active\":false}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/items/row-type-counts")
+                        .param("search", "Row type")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inactive").value(1));
+
+        mockMvc.perform(get("/api/v1/items")
+                        .param("catalogRowTypes", "STANDALONE")
+                        .param("search", "Row type")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].sku").value("SKU-ROWTYPE-S"));
+
+        mockMvc.perform(get("/api/v1/items")
+                        .param("catalogRowTypes", "PARENT")
+                        .param("catalogRowTypes", "VARIANT")
+                        .param("search", "Row type")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(2));
     }
 
     @Test

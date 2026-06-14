@@ -586,11 +586,13 @@ public class CatalogTaxonomyService {
                     HttpStatus.CONFLICT,
                     "category id already exists globally; cannot claim for import: " + cid);
         }
+        if (preferredName == null || preferredName.isBlank()) {
+            return;
+        }
         Category entity = new Category();
         entity.setId(cid);
         entity.setBusinessId(businessId);
-        String name =
-                (preferredName == null || preferredName.isBlank()) ? "Imported category" : preferredName.trim();
+        String name = preferredName.trim();
         entity.setName(name);
         entity.setSlug(uniqueSlug(businessId, TaxonomySlug.fromName(name)));
         List<Category> all = categoryRepository.findByBusinessIdOrderByPositionAsc(businessId);

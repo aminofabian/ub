@@ -13,6 +13,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -50,6 +51,8 @@ import zelisline.ub.tenancy.repository.BranchRepository;
 public class CsvImportApplicationService {
 
     private static final BigDecimal QTY_EPS = new BigDecimal("0.00005");
+    private static final Pattern UUID_REGEX = Pattern.compile(
+            "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
 
     private final CatalogBootstrapService catalogBootstrapService;
     private final ItemCatalogService itemCatalogService;
@@ -277,6 +280,10 @@ public class CsvImportApplicationService {
             }
             if (name.isEmpty()) {
                 errors.add(new CsvImportLineError(line, "name is required"));
+            } else if (isUuid(name)) {
+                errors.add(new CsvImportLineError(
+                        line,
+                        "name must be a human-readable product name, not a UUID"));
             }
             String typeKey = itemTypeKey(c);
             if (itemTypeRepository.findByBusinessIdAndTypeKey(businessId, typeKey).isEmpty()) {
@@ -484,5 +491,9 @@ public class CsvImportApplicationService {
         } catch (NumberFormatException e) {
             return null;
         }
+    }
+
+    private static boolean isUuid(String value) {
+        return value != null && UUID_REGEX.matcher(value.trim()).matches();
     }
 }

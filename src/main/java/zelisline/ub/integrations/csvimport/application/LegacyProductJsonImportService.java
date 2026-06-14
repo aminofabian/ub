@@ -268,20 +268,16 @@ public class LegacyProductJsonImportService {
             }
             Optional<zelisline.ub.catalog.domain.Category> global = categoryRepository.findById(legacyCid);
             String label = firstCategoryNameFor(rows, legacyCid);
+            if (label == null || label.isBlank() || isPlaceholderCategoryName(label)) {
+                continue;
+            }
             if (global.isEmpty()) {
                 catalogTaxonomyService.ensureImportedPlaceholderCategory(businessId, legacyCid, label);
                 remap.put(legacyCid, legacyCid);
             } else {
                 CategoryResponse created = catalogTaxonomyService.createCategory(
                         businessId,
-                        new CreateCategoryRequest(
-                                (label != null && !label.isBlank()) ? label : "Imported category",
-                                null,
-                                null,
-                                null,
-                                null,
-                                null,
-                                null));
+                        new CreateCategoryRequest(label.trim(), null, null, null, null, null, null));
                 remap.put(legacyCid, created.id());
             }
         }
@@ -345,8 +341,7 @@ public class LegacyProductJsonImportService {
         if (cid == null) {
             return null;
         }
-        String key = cid.trim();
-        return categoryRemap.getOrDefault(key, key);
+        return categoryRemap.get(cid.trim());
     }
 
     private record PreparedImport(List<NormalizedRow> normalized, Map<String, String> categoryRemap) {}
@@ -623,6 +618,17 @@ public class LegacyProductJsonImportService {
             }
             if (r.name() == null || r.name().isBlank()) {
                 errors.add(new CsvImportLineError(line, "name is required"));
+            } else {
+                String trimmedName = r.name().trim();
+                if (isUuid(trimmedName)) {
+                    errors.add(new CsvImportLineError(
+                            line,
+                            "name must be a human-readable product name, not a UUID"));
+                } else if (trimmedName.equalsIgnoreCase(r.legacyId())) {
+                    errors.add(new CsvImportLineError(
+                            line,
+                            "name must not equal product id; provide a customer-facing title"));
+                }
             }
             String sku = n.sku();
             if (sku == null || sku.isBlank()) {
@@ -664,11 +670,11 @@ public class LegacyProductJsonImportService {
                     errors.add(new CsvImportLineError(line, "category_id must be a UUID when set"));
                 } else {
                     String trimmed = cid.trim();
-                    if (!categoryRemap.containsKey(trimmed)) {
-                        errors.add(new CsvImportLineError(line, "category_id could not be resolved: " + cid));
-                    } else if (categoryRepository
-                            .findByIdAndBusinessId(categoryRemap.get(trimmed), businessId)
-                            .isEmpty()) {
+                    String mapped = categoryRemap.get(trimmed);
+                    if (mapped != null
+                            && categoryRepository
+                                    .findByIdAndBusinessId(mapped, businessId)
+                                    .isEmpty()) {
                         errors.add(new CsvImportLineError(line, "category not found after import prep: " + cid));
                     }
                 }
@@ -842,6 +848,13 @@ public class LegacyProductJsonImportService {
 
     private static boolean isUuid(String s) {
         return s != null && UUID_REGEX.matcher(s).matches();
+    }
+
+    private static boolean isPlaceholderCategoryName(String name) {
+        if (name == null || name.isBlank()) {
+            return true;
+        }
+        return "imported category".equalsIgnoreCase(name.trim());
     }
 
     private static String aisleCode(LegacyRow r) {

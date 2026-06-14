@@ -28,6 +28,8 @@ import lombok.RequiredArgsConstructor;
 
 import zelisline.ub.catalog.api.dto.EffectivePricingContextResponse;
 import zelisline.ub.catalog.api.dto.CatalogListScope;
+import zelisline.ub.catalog.api.dto.CatalogRowType;
+import zelisline.ub.catalog.api.dto.CatalogRowTypeCountsResponse;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.api.dto.CreateVariantRequest;
 import zelisline.ub.catalog.api.dto.GenerateProductDescriptionRequest;
@@ -76,6 +78,7 @@ public class ItemsController {
             @RequestParam(required = false, defaultValue = "false") boolean noBarcode,
             @RequestParam(required = false, defaultValue = "false") boolean includeInactive,
             @RequestParam(required = false, defaultValue = "ALL") CatalogListScope catalogScope,
+            @RequestParam(required = false) List<CatalogRowType> catalogRowTypes,
             @RequestParam(required = false) String excludeLinkedSupplierId,
             @RequestParam(required = false) String branchId,
             @RequestParam(required = false) String itemTypeId,
@@ -93,11 +96,43 @@ public class ItemsController {
                 noBarcode,
                 includeInactive,
                 catalogScope,
+                catalogRowTypes,
                 excludeLinkedSupplierId,
                 branchId,
                 itemTypeId,
                 allowedItemTypes,
                 pageable
+        );
+    }
+
+    @GetMapping("/row-type-counts")
+    @PreAuthorize("hasPermission(null, 'catalog.items.read')")
+    public CatalogRowTypeCountsResponse rowTypeCounts(
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) String barcode,
+            @RequestParam(required = false) String categoryId,
+            @RequestParam(required = false, defaultValue = "false") boolean includeCategoryDescendants,
+            @RequestParam(required = false, defaultValue = "false") boolean noBarcode,
+            @RequestParam(required = false, defaultValue = "false") boolean includeInactive,
+            @RequestParam(required = false, defaultValue = "ALL") CatalogListScope catalogScope,
+            @RequestParam(required = false) String excludeLinkedSupplierId,
+            @RequestParam(required = false) String itemTypeId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        List<String> allowedItemTypes = resolveCallerAllowedItemTypes(request, itemTypeId);
+        return itemCatalogService.countCatalogRowTypes(
+                TenantRequestIds.resolveBusinessId(request),
+                search,
+                barcode,
+                categoryId,
+                includeCategoryDescendants,
+                noBarcode,
+                includeInactive,
+                catalogScope,
+                excludeLinkedSupplierId,
+                itemTypeId,
+                allowedItemTypes
         );
     }
 

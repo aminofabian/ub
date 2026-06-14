@@ -6,7 +6,7 @@ package zelisline.ub.catalog.api.dto;
  */
 public enum CatalogListScope {
     ALL,
-    /** Rows with no parent item (standalone SKUs and group labels). */
+    /** Group-label parents only (root items that have variant children). */
     PARENTS_ONLY,
     VARIANTS_ONLY,
     /**

@@ -11,7 +11,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
-import zelisline.ub.catalog.api.dto.CatalogRowTypeCountsResponse;
 import zelisline.ub.catalog.api.dto.CatalogRowTypeSum;
 import zelisline.ub.catalog.domain.Item;
 
@@ -154,6 +153,17 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                         )))
                and (:itemTypeUnset = true or i.itemTypeId = :itemTypeId)
                and (:restrictByAllowedItemTypes = false or i.itemTypeId in :allowedItemTypeIds)
+               and (:filterNoPrice = false or (
+                    i.sellable = true
+                    and (i.bundlePrice is null or i.bundlePrice <= 0)
+                    and not exists (
+                      select 1 from SellingPrice sp
+                       where sp.itemId = i.id
+                         and sp.businessId = i.businessId
+                         and sp.effectiveTo is null
+                         and sp.price > 0
+                    )))
+               and (:restrictItemIdsUnset = true or i.id in :restrictItemIds)
             """)
     Page<Item> search(
             @Param("businessId") String businessId,
@@ -177,6 +187,9 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("itemTypeId") String itemTypeId,
             @Param("restrictByAllowedItemTypes") boolean restrictByAllowedItemTypes,
             @Param("allowedItemTypeIds") Collection<String> allowedItemTypeIds,
+            @Param("filterNoPrice") boolean filterNoPrice,
+            @Param("restrictItemIdsUnset") boolean restrictItemIdsUnset,
+            @Param("restrictItemIds") Collection<String> restrictItemIds,
             Pageable pageable
     );
 
@@ -376,6 +389,171 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("variantsOnly") boolean variantsOnly,
             @Param("skusOnly") boolean skusOnly,
             @Param("excludeLinkedSupplierId") String excludeLinkedSupplierId,
+            @Param("itemTypeUnset") boolean itemTypeUnset,
+            @Param("itemTypeId") String itemTypeId,
+            @Param("restrictByAllowedItemTypes") boolean restrictByAllowedItemTypes,
+            @Param("allowedItemTypeIds") Collection<String> allowedItemTypeIds
+    );
+
+    @Query("""
+            select count(i) from Item i
+             where i.businessId = :businessId
+               and i.deletedAt is null
+               and (:includeInactive = true or i.active = true)
+               and (:catUnset = true or i.categoryId in :categoryIds)
+               and (:noBarcode = false or i.barcode is null or trim(i.barcode) = '')
+               and (:barcodeExact is null or :barcodeExact = '' or i.barcode = :barcodeExact)
+               and (:includeAllScopes = true
+                    or (:parentsOnly = true and i.variantOfItemId is null
+                        and exists (
+                          select 1 from Item ch
+                          where ch.variantOfItemId = i.id
+                            and ch.businessId = i.businessId
+                            and ch.deletedAt is null
+                        ))
+                    or (:variantsOnly = true and i.variantOfItemId is not null)
+                    or (:skusOnly = true and (
+                         i.variantOfItemId is not null
+                         or not exists (
+                           select 1 from Item ch
+                           where ch.variantOfItemId = i.id
+                             and ch.businessId = i.businessId
+                             and ch.deletedAt is null
+                         )
+                       )))
+               and (:q is null or :q = ''
+                    or lower(i.name) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(i.variantName, '')) like lower(concat('%', :q, '%'))
+                    or lower(i.sku) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(i.barcode, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(i.description, '')) like lower(concat('%', :q, '%')))
+               and (:excludeLinkedSupplierId is null
+                    or not exists (
+                      select 1 from SupplierProduct sp
+                       inner join Supplier s on s.id = sp.supplierId
+                       where sp.itemId = i.id
+                         and sp.supplierId = :excludeLinkedSupplierId
+                         and s.businessId = i.businessId
+                         and sp.deletedAt is null
+                    ))
+               and (:itemTypeUnset = true or i.itemTypeId = :itemTypeId)
+               and (:restrictByAllowedItemTypes = false or i.itemTypeId in :allowedItemTypeIds)
+               and i.sellable = true
+               and (i.bundlePrice is null or i.bundlePrice <= 0)
+               and not exists (
+                 select 1 from SellingPrice sp
+                  where sp.itemId = i.id
+                    and sp.businessId = i.businessId
+                    and sp.effectiveTo is null
+                    and sp.price > 0
+               )
+            """)
+    long countCatalogMissingPrices(
+            @Param("businessId") String businessId,
+            @Param("q") String q,
+            @Param("barcodeExact") String barcodeExact,
+            @Param("catUnset") boolean catUnset,
+            @Param("categoryIds") Collection<String> categoryIds,
+            @Param("noBarcode") boolean noBarcode,
+            @Param("includeInactive") boolean includeInactive,
+            @Param("includeAllScopes") boolean includeAllScopes,
+            @Param("parentsOnly") boolean parentsOnly,
+            @Param("variantsOnly") boolean variantsOnly,
+            @Param("skusOnly") boolean skusOnly,
+            @Param("excludeLinkedSupplierId") String excludeLinkedSupplierId,
+            @Param("itemTypeUnset") boolean itemTypeUnset,
+            @Param("itemTypeId") String itemTypeId,
+            @Param("restrictByAllowedItemTypes") boolean restrictByAllowedItemTypes,
+            @Param("allowedItemTypeIds") Collection<String> allowedItemTypeIds
+    );
+
+    @Query("""
+            select i.id from Item i
+             where i.businessId = :businessId
+               and i.deletedAt is null
+               and i.active = true
+               and i.stocked = true
+               and i.sellable = true
+               and (:catUnset = true or i.categoryId in :categoryIds)
+               and (:noBarcode = false or i.barcode is null or trim(i.barcode) = '')
+               and (:barcodeExact is null or :barcodeExact = '' or i.barcode = :barcodeExact)
+               and (:includeAllScopes = true
+                    or (:parentsOnly = true and i.variantOfItemId is null
+                        and exists (
+                          select 1 from Item ch
+                          where ch.variantOfItemId = i.id
+                            and ch.businessId = i.businessId
+                            and ch.deletedAt is null
+                        ))
+                    or (:variantsOnly = true and i.variantOfItemId is not null)
+                    or (:skusOnly = true and (
+                         i.variantOfItemId is not null
+                         or not exists (
+                           select 1 from Item ch
+                           where ch.variantOfItemId = i.id
+                             and ch.businessId = i.businessId
+                             and ch.deletedAt is null
+                         )
+                       )))
+               and (:filterByCatalogRowTypes = false
+                    or (:includeParentRows = true and i.variantOfItemId is null
+                        and exists (
+                          select 1 from Item chp
+                          where chp.variantOfItemId = i.id
+                            and chp.businessId = i.businessId
+                            and chp.deletedAt is null
+                        ))
+                    or (:includeVariantRows = true and i.variantOfItemId is not null)
+                    or (:includeStandaloneRows = true and i.variantOfItemId is null
+                        and not exists (
+                          select 1 from Item chs
+                          where chs.variantOfItemId = i.id
+                            and chs.businessId = i.businessId
+                            and chs.deletedAt is null
+                        )))
+               and (:q is null or :q = ''
+                    or lower(i.name) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(i.variantName, '')) like lower(concat('%', :q, '%'))
+                    or lower(i.sku) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(i.barcode, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(i.description, '')) like lower(concat('%', :q, '%')))
+               and (:excludeLinkedSupplierId is null
+                    or not exists (
+                      select 1 from SupplierProduct sp
+                       inner join Supplier s on s.id = sp.supplierId
+                       where sp.itemId = i.id
+                         and sp.supplierId = :excludeLinkedSupplierId
+                         and s.businessId = i.businessId
+                         and sp.deletedAt is null
+                    ))
+               and ((:squashParentGroupsForSearch = false)
+                    or (i.variantOfItemId is not null
+                        or not exists (
+                          select 1 from Item ch
+                          where ch.variantOfItemId = i.id
+                            and ch.businessId = i.businessId
+                            and ch.deletedAt is null
+                        )))
+               and (:itemTypeUnset = true or i.itemTypeId = :itemTypeId)
+               and (:restrictByAllowedItemTypes = false or i.itemTypeId in :allowedItemTypeIds)
+            """)
+    List<String> findCatalogStockAttentionItemIds(
+            @Param("businessId") String businessId,
+            @Param("q") String q,
+            @Param("barcodeExact") String barcodeExact,
+            @Param("catUnset") boolean catUnset,
+            @Param("categoryIds") Collection<String> categoryIds,
+            @Param("noBarcode") boolean noBarcode,
+            @Param("includeAllScopes") boolean includeAllScopes,
+            @Param("parentsOnly") boolean parentsOnly,
+            @Param("variantsOnly") boolean variantsOnly,
+            @Param("skusOnly") boolean skusOnly,
+            @Param("filterByCatalogRowTypes") boolean filterByCatalogRowTypes,
+            @Param("includeParentRows") boolean includeParentRows,
+            @Param("includeVariantRows") boolean includeVariantRows,
+            @Param("includeStandaloneRows") boolean includeStandaloneRows,
+            @Param("excludeLinkedSupplierId") String excludeLinkedSupplierId,
+            @Param("squashParentGroupsForSearch") boolean squashParentGroupsForSearch,
             @Param("itemTypeUnset") boolean itemTypeUnset,
             @Param("itemTypeId") String itemTypeId,
             @Param("restrictByAllowedItemTypes") boolean restrictByAllowedItemTypes,

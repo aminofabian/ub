@@ -71,6 +71,7 @@ public class ItemCatalogService {
     public static final String ROUTE_POST_ITEMS = "POST /api/v1/items";
 
     private static final Logger log = LoggerFactory.getLogger(ItemCatalogService.class);
+    private static final BigDecimal CATALOG_LOW_STOCK_THRESHOLD = new BigDecimal("10");
 
     private final ItemRepository itemRepository;
     private final ItemImageRepository itemImageRepository;
@@ -119,6 +120,9 @@ public class ItemCatalogService {
                 branchIdForStock,
                 itemTypeId,
                 null,
+                false,
+                false,
+                false,
                 pageable);
     }
 
@@ -160,6 +164,9 @@ public class ItemCatalogService {
                 branchIdForStock,
                 itemTypeId,
                 allowedItemTypeIds,
+                false,
+                false,
+                false,
                 pageable);
     }
 
@@ -178,6 +185,9 @@ public class ItemCatalogService {
             String branchIdForStock,
             String itemTypeId,
             Collection<String> allowedItemTypeIds,
+            boolean filterNoPrice,
+            boolean filterZeroStock,
+            boolean filterLowStock,
             Pageable pageable
     ) {
         CatalogListQueryContext ctx = resolveCatalogListQuery(
@@ -196,6 +206,27 @@ public class ItemCatalogService {
                 pageable);
         if (ctx.emptyResult()) {
             return Page.empty(ctx.pageable());
+        }
+        Collection<String> restrictItemIds = List.of("");
+        boolean restrictItemIdsUnset = true;
+        if (filterZeroStock || filterLowStock) {
+            StockAttentionSnapshot stockAttention = computeStockAttention(
+                    businessId,
+                    branchIdForStock,
+                    ctx,
+                    noBarcode);
+            Set<String> stockFilterIds = new HashSet<>();
+            if (filterZeroStock) {
+                stockFilterIds.addAll(stockAttention.zeroStockIds());
+            }
+            if (filterLowStock) {
+                stockFilterIds.addAll(stockAttention.lowStockIds());
+            }
+            if (stockFilterIds.isEmpty()) {
+                return Page.empty(ctx.pageable());
+            }
+            restrictItemIds = stockFilterIds;
+            restrictItemIdsUnset = false;
         }
         Page<Item> page = itemRepository.search(
                 businessId,
@@ -219,6 +250,9 @@ public class ItemCatalogService {
                 ctx.itemTypeId(),
                 ctx.restrictByAllowedItemTypes(),
                 ctx.allowedItemTypeIds(),
+                filterNoPrice,
+                restrictItemIdsUnset,
+                restrictItemIds,
                 ctx.pageable());
         List<String> ids = page.getContent().stream().map(Item::getId).toList();
         Map<String, String> thumbs = firstGalleryImageUrlByItemId(ids);
@@ -283,6 +317,7 @@ public class ItemCatalogService {
             boolean includeInactive,
             CatalogListScope catalogListScope,
             String excludeLinkedSupplierId,
+            String branchIdForStock,
             String itemTypeId,
             Collection<String> allowedItemTypeIds
     ) {
@@ -301,7 +336,7 @@ public class ItemCatalogService {
                 allowedItemTypeIds,
                 PageRequest.of(0, 1));
         if (ctx.emptyResult()) {
-            return new CatalogRowTypeCountsResponse(0, 0, 0, 0, 0);
+            return new CatalogRowTypeCountsResponse(0, 0, 0, 0, 0, 0, 0, 0);
         }
         CatalogRowTypeSum rowTypes = itemRepository.sumCatalogRowTypes(
                 businessId,
@@ -352,15 +387,48 @@ public class ItemCatalogService {
                 ctx.itemTypeId(),
                 ctx.restrictByAllowedItemTypes(),
                 ctx.allowedItemTypeIds());
+        long missingPrice = itemRepository.countCatalogMissingPrices(
+                businessId,
+                ctx.q(),
+                ctx.barcodeExact(),
+                ctx.catUnset(),
+                ctx.categoryIds(),
+                false,
+                true,
+                ctx.includeAllScopes(),
+                ctx.parentsOnly(),
+                ctx.variantsOnly(),
+                ctx.skusOnly(),
+                ctx.excludeLinkedSupplierId(),
+                ctx.itemTypeUnset(),
+                ctx.itemTypeId(),
+                ctx.restrictByAllowedItemTypes(),
+                ctx.allowedItemTypeIds());
+        StockAttentionSnapshot stockAttention = computeStockAttention(
+                businessId,
+                branchIdForStock,
+                ctx,
+                false);
         if (rowTypes == null) {
-            return new CatalogRowTypeCountsResponse(0, 0, 0, missingBarcode, inactive);
+            return new CatalogRowTypeCountsResponse(
+                    0,
+                    0,
+                    0,
+                    missingBarcode,
+                    inactive,
+                    missingPrice,
+                    stockAttention.zeroStockCount(),
+                    stockAttention.lowStockCount());
         }
         return new CatalogRowTypeCountsResponse(
                 rowTypes.parents(),
                 rowTypes.variants(),
                 rowTypes.standalones(),
                 missingBarcode,
-                inactive);
+                inactive,
+                missingPrice,
+                stockAttention.zeroStockCount(),
+                stockAttention.lowStockCount());
     }
 
     @Transactional(readOnly = true)
@@ -1503,17 +1571,6 @@ public class ItemCatalogService {
         return out;
     }
 
-    private static String normalizeHex(String hex) {
-        if (hex == null || hex.isBlank()) {
-            return null;
-        }
-        String t = hex.trim();
-        if (t.startsWith("#")) {
-            return t.length() > 9 ? t.substring(0, 7) : t;
-        }
-        return "#" + t.replace("#", "");
-    }
-
     private record CatalogListQueryContext(
             String q,
             String barcodeExact,
@@ -1659,6 +1716,97 @@ public class ItemCatalogService {
             return null;
         }
         return clean;
+    }
+
+    private static String normalizeHex(String hex) {
+        if (hex == null || hex.isBlank()) {
+            return null;
+        }
+        String t = hex.trim();
+        if (t.startsWith("#")) {
+            return t.length() > 9 ? t.substring(0, 7) : t;
+        }
+        return "#" + t.replace("#", "");
+    }
+
+    private record StockAttentionSnapshot(
+            long zeroStockCount,
+            long lowStockCount,
+            Set<String> zeroStockIds,
+            Set<String> lowStockIds
+    ) {
+        private static StockAttentionSnapshot empty() {
+            return new StockAttentionSnapshot(0, 0, Set.of(), Set.of());
+        }
+    }
+
+    private StockAttentionSnapshot computeStockAttention(
+            String businessId,
+            String branchIdForStock,
+            CatalogListQueryContext ctx,
+            boolean noBarcode
+    ) {
+        String stockBranch = blankToNull(branchIdForStock);
+        if (stockBranch == null) {
+            return StockAttentionSnapshot.empty();
+        }
+        branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(stockBranch, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Branch not found"));
+        List<String> candidateIds = itemRepository.findCatalogStockAttentionItemIds(
+                businessId,
+                ctx.q(),
+                ctx.barcodeExact(),
+                ctx.catUnset(),
+                ctx.categoryIds(),
+                noBarcode,
+                ctx.includeAllScopes(),
+                ctx.parentsOnly(),
+                ctx.variantsOnly(),
+                ctx.skusOnly(),
+                ctx.filterByCatalogRowTypes(),
+                ctx.includeParentRows(),
+                ctx.includeVariantRows(),
+                ctx.includeStandaloneRows(),
+                ctx.excludeLinkedSupplierId(),
+                ctx.squashParentGroupsForSearch(),
+                ctx.itemTypeUnset(),
+                ctx.itemTypeId(),
+                ctx.restrictByAllowedItemTypes(),
+                ctx.allowedItemTypeIds());
+        if (candidateIds.isEmpty()) {
+            return StockAttentionSnapshot.empty();
+        }
+        List<Item> candidates = itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(candidateIds, businessId);
+        if (candidates.isEmpty()) {
+            return StockAttentionSnapshot.empty();
+        }
+        Set<String> poolIds = new HashSet<>();
+        for (Item item : candidates) {
+            poolIds.addAll(packageVariantStockResolver.branchStockPoolItemIds(businessId, item));
+        }
+        Map<String, BigDecimal> stockMap = new HashMap<>();
+        if (!poolIds.isEmpty()) {
+            for (Object[] row : inventoryBatchRepository.sumQuantityRemainingForItemsAtBranch(
+                    businessId, stockBranch, "active", poolIds)) {
+                stockMap.put((String) row[0], (BigDecimal) row[1]);
+            }
+        }
+        Set<String> zeroStockIds = new HashSet<>();
+        Set<String> lowStockIds = new HashSet<>();
+        for (Item item : candidates) {
+            BigDecimal holderStock = packageVariantStockResolver.sumPoolStock(item, stockMap);
+            BigDecimal displayStock = packageVariantStockResolver.displayStockQty(item, holderStock);
+            if (displayStock.compareTo(BigDecimal.ZERO) <= 0) {
+                zeroStockIds.add(item.getId());
+            } else if (displayStock.compareTo(CATALOG_LOW_STOCK_THRESHOLD) < 0) {
+                lowStockIds.add(item.getId());
+            }
+        }
+        return new StockAttentionSnapshot(
+                zeroStockIds.size(),
+                lowStockIds.size(),
+                zeroStockIds,
+                lowStockIds);
     }
 
     private void assertBarcodeAvailable(String businessId, String barcode, String ignoreItemId) {

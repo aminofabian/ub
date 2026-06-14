@@ -385,7 +385,10 @@ class ItemCatalogIT {
                 .andExpect(jsonPath("$.variants").value(1))
                 .andExpect(jsonPath("$.standalones").value(1))
                 .andExpect(jsonPath("$.missingBarcode").value(3))
-                .andExpect(jsonPath("$.inactive").value(0));
+                .andExpect(jsonPath("$.inactive").value(0))
+                .andExpect(jsonPath("$.missingPrice").exists())
+                .andExpect(jsonPath("$.zeroStock").exists())
+                .andExpect(jsonPath("$.lowStock").exists());
 
         String inactiveItem = createItemViaService(TENANT_A, gid, "SKU-ROWTYPE-INACT", "Row type inactive marker");
         mockMvc.perform(patch("/api/v1/items/" + inactiveItem)

@@ -77,6 +77,9 @@ public class ItemsController {
             @RequestParam(required = false, defaultValue = "false") boolean includeCategoryDescendants,
             @RequestParam(required = false, defaultValue = "false") boolean noBarcode,
             @RequestParam(required = false, defaultValue = "false") boolean includeInactive,
+            @RequestParam(required = false, defaultValue = "false") boolean noPrice,
+            @RequestParam(required = false, defaultValue = "false") boolean zeroStock,
+            @RequestParam(required = false, defaultValue = "false") boolean lowStock,
             @RequestParam(required = false, defaultValue = "ALL") CatalogListScope catalogScope,
             @RequestParam(required = false) List<CatalogRowType> catalogRowTypes,
             @RequestParam(required = false) String excludeLinkedSupplierId,
@@ -101,6 +104,9 @@ public class ItemsController {
                 branchId,
                 itemTypeId,
                 allowedItemTypes,
+                noPrice,
+                zeroStock,
+                lowStock,
                 pageable
         );
     }
@@ -116,6 +122,7 @@ public class ItemsController {
             @RequestParam(required = false, defaultValue = "false") boolean includeInactive,
             @RequestParam(required = false, defaultValue = "ALL") CatalogListScope catalogScope,
             @RequestParam(required = false) String excludeLinkedSupplierId,
+            @RequestParam(required = false) String branchId,
             @RequestParam(required = false) String itemTypeId,
             HttpServletRequest request
     ) {
@@ -131,6 +138,7 @@ public class ItemsController {
                 includeInactive,
                 catalogScope,
                 excludeLinkedSupplierId,
+                branchId,
                 itemTypeId,
                 allowedItemTypes
         );

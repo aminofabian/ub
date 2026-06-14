@@ -80,6 +80,7 @@ public class ItemsController {
             @RequestParam(required = false, defaultValue = "false") boolean noPrice,
             @RequestParam(required = false, defaultValue = "false") boolean zeroStock,
             @RequestParam(required = false, defaultValue = "false") boolean lowStock,
+            @RequestParam(required = false, defaultValue = "false") boolean inactiveOnly,
             @RequestParam(required = false, defaultValue = "ALL") CatalogListScope catalogScope,
             @RequestParam(required = false) List<CatalogRowType> catalogRowTypes,
             @RequestParam(required = false) String excludeLinkedSupplierId,
@@ -107,6 +108,7 @@ public class ItemsController {
                 noPrice,
                 zeroStock,
                 lowStock,
+                inactiveOnly,
                 pageable
         );
     }

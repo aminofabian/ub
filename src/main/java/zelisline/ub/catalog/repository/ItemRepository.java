@@ -90,7 +90,8 @@ public interface ItemRepository extends JpaRepository<Item, String> {
              left join Item p on p.id = i.variantOfItemId and p.businessId = i.businessId and p.deletedAt is null
              where i.businessId = :businessId
                and i.deletedAt is null
-               and (:includeInactive = true or i.active = true)
+               and (:inactiveOnly = false or i.active = false)
+               and (:inactiveOnly = true or :includeInactive = true or i.active = true)
                and (:catUnset = true or i.categoryId in :categoryIds)
                and (:noBarcode = false or i.barcode is null or trim(i.barcode) = '')
                and (:barcodeExact is null or :barcodeExact = '' or i.barcode = :barcodeExact)
@@ -173,6 +174,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("categoryIds") Collection<String> categoryIds,
             @Param("noBarcode") boolean noBarcode,
             @Param("includeInactive") boolean includeInactive,
+            @Param("inactiveOnly") boolean inactiveOnly,
             @Param("includeAllScopes") boolean includeAllScopes,
             @Param("parentsOnly") boolean parentsOnly,
             @Param("variantsOnly") boolean variantsOnly,
@@ -212,7 +214,8 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             from Item i
              where i.businessId = :businessId
                and i.deletedAt is null
-               and (:includeInactive = true or i.active = true)
+               and (:inactiveOnly = false or i.active = false)
+               and (:inactiveOnly = true or :includeInactive = true or i.active = true)
                and (:catUnset = true or i.categoryId in :categoryIds)
                and (:noBarcode = false or i.barcode is null or trim(i.barcode) = '')
                and (:barcodeExact is null or :barcodeExact = '' or i.barcode = :barcodeExact)
@@ -260,6 +263,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("categoryIds") Collection<String> categoryIds,
             @Param("noBarcode") boolean noBarcode,
             @Param("includeInactive") boolean includeInactive,
+            @Param("inactiveOnly") boolean inactiveOnly,
             @Param("includeAllScopes") boolean includeAllScopes,
             @Param("parentsOnly") boolean parentsOnly,
             @Param("variantsOnly") boolean variantsOnly,
@@ -275,7 +279,8 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             select count(i) from Item i
              where i.businessId = :businessId
                and i.deletedAt is null
-               and (:includeInactive = true or i.active = true)
+               and (:inactiveOnly = false or i.active = false)
+               and (:inactiveOnly = true or :includeInactive = true or i.active = true)
                and (:catUnset = true or i.categoryId in :categoryIds)
                and (:noBarcode = false or i.barcode is null or trim(i.barcode) = '')
                and (:barcodeExact is null or :barcodeExact = '' or i.barcode = :barcodeExact)
@@ -324,6 +329,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("categoryIds") Collection<String> categoryIds,
             @Param("noBarcode") boolean noBarcode,
             @Param("includeInactive") boolean includeInactive,
+            @Param("inactiveOnly") boolean inactiveOnly,
             @Param("includeAllScopes") boolean includeAllScopes,
             @Param("parentsOnly") boolean parentsOnly,
             @Param("variantsOnly") boolean variantsOnly,
@@ -399,7 +405,8 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             select count(i) from Item i
              where i.businessId = :businessId
                and i.deletedAt is null
-               and (:includeInactive = true or i.active = true)
+               and (:inactiveOnly = false or i.active = false)
+               and (:inactiveOnly = true or :includeInactive = true or i.active = true)
                and (:catUnset = true or i.categoryId in :categoryIds)
                and (:noBarcode = false or i.barcode is null or trim(i.barcode) = '')
                and (:barcodeExact is null or :barcodeExact = '' or i.barcode = :barcodeExact)
@@ -456,6 +463,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("categoryIds") Collection<String> categoryIds,
             @Param("noBarcode") boolean noBarcode,
             @Param("includeInactive") boolean includeInactive,
+            @Param("inactiveOnly") boolean inactiveOnly,
             @Param("includeAllScopes") boolean includeAllScopes,
             @Param("parentsOnly") boolean parentsOnly,
             @Param("variantsOnly") boolean variantsOnly,
@@ -471,11 +479,22 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             select i.id from Item i
              where i.businessId = :businessId
                and i.deletedAt is null
-               and i.active = true
+               and (:inactiveOnly = false or i.active = false)
+               and (:inactiveOnly = true or i.active = true)
                and i.stocked = true
                and i.sellable = true
                and (:catUnset = true or i.categoryId in :categoryIds)
                and (:noBarcode = false or i.barcode is null or trim(i.barcode) = '')
+               and (:filterNoPrice = false or (
+                    i.sellable = true
+                    and (i.bundlePrice is null or i.bundlePrice <= 0)
+                    and not exists (
+                      select 1 from SellingPrice sp
+                       where sp.itemId = i.id
+                         and sp.businessId = i.businessId
+                         and sp.effectiveTo is null
+                         and sp.price > 0
+                    )))
                and (:barcodeExact is null or :barcodeExact = '' or i.barcode = :barcodeExact)
                and (:includeAllScopes = true
                     or (:parentsOnly = true and i.variantOfItemId is null
@@ -544,6 +563,8 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("catUnset") boolean catUnset,
             @Param("categoryIds") Collection<String> categoryIds,
             @Param("noBarcode") boolean noBarcode,
+            @Param("filterNoPrice") boolean filterNoPrice,
+            @Param("inactiveOnly") boolean inactiveOnly,
             @Param("includeAllScopes") boolean includeAllScopes,
             @Param("parentsOnly") boolean parentsOnly,
             @Param("variantsOnly") boolean variantsOnly,

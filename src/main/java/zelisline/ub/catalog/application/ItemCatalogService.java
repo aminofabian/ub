@@ -123,6 +123,7 @@ public class ItemCatalogService {
                 false,
                 false,
                 false,
+                false,
                 pageable);
     }
 
@@ -167,6 +168,7 @@ public class ItemCatalogService {
                 false,
                 false,
                 false,
+                false,
                 pageable);
     }
 
@@ -188,6 +190,7 @@ public class ItemCatalogService {
             boolean filterNoPrice,
             boolean filterZeroStock,
             boolean filterLowStock,
+            boolean inactiveOnly,
             Pageable pageable
     ) {
         CatalogListQueryContext ctx = resolveCatalogListQuery(
@@ -214,7 +217,9 @@ public class ItemCatalogService {
                     businessId,
                     branchIdForStock,
                     ctx,
-                    noBarcode);
+                    noBarcode,
+                    filterNoPrice,
+                    inactiveOnly);
             Set<String> stockFilterIds = new HashSet<>();
             if (filterZeroStock) {
                 stockFilterIds.addAll(stockAttention.zeroStockIds());
@@ -236,6 +241,7 @@ public class ItemCatalogService {
                 ctx.categoryIds(),
                 noBarcode,
                 includeInactive,
+                inactiveOnly,
                 ctx.includeAllScopes(),
                 ctx.parentsOnly(),
                 ctx.variantsOnly(),
@@ -346,6 +352,7 @@ public class ItemCatalogService {
                 ctx.categoryIds(),
                 false,
                 true,
+                false,
                 ctx.includeAllScopes(),
                 ctx.parentsOnly(),
                 ctx.variantsOnly(),
@@ -363,6 +370,7 @@ public class ItemCatalogService {
                 ctx.categoryIds(),
                 false,
                 true,
+                false,
                 ctx.includeAllScopes(),
                 ctx.parentsOnly(),
                 ctx.variantsOnly(),
@@ -395,6 +403,7 @@ public class ItemCatalogService {
                 ctx.categoryIds(),
                 false,
                 true,
+                false,
                 ctx.includeAllScopes(),
                 ctx.parentsOnly(),
                 ctx.variantsOnly(),
@@ -408,6 +417,8 @@ public class ItemCatalogService {
                 businessId,
                 branchIdForStock,
                 ctx,
+                false,
+                false,
                 false);
         if (rowTypes == null) {
             return new CatalogRowTypeCountsResponse(
@@ -1744,7 +1755,9 @@ public class ItemCatalogService {
             String businessId,
             String branchIdForStock,
             CatalogListQueryContext ctx,
-            boolean noBarcode
+            boolean noBarcode,
+            boolean filterNoPrice,
+            boolean inactiveOnly
     ) {
         String stockBranch = blankToNull(branchIdForStock);
         if (stockBranch == null) {
@@ -1759,6 +1772,8 @@ public class ItemCatalogService {
                 ctx.catUnset(),
                 ctx.categoryIds(),
                 noBarcode,
+                filterNoPrice,
+                inactiveOnly,
                 ctx.includeAllScopes(),
                 ctx.parentsOnly(),
                 ctx.variantsOnly(),

@@ -234,7 +234,8 @@ public class ItemsController {
         ItemCreateResult result = itemCatalogService.createItem(
                 TenantRequestIds.resolveBusinessId(request),
                 body,
-                idempotencyKey
+                idempotencyKey,
+                CurrentTenantUser.auditActorId(request)
         );
         return ResponseEntity.status(result.httpStatus()).body(result.body());
     }
@@ -260,7 +261,12 @@ public class ItemsController {
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        itemCatalogService.deleteItem(TenantRequestIds.resolveBusinessId(request), id, cascadeVariants);
+        itemCatalogService.deleteItem(
+                TenantRequestIds.resolveBusinessId(request),
+                id,
+                cascadeVariants,
+                CurrentTenantUser.auditActorId(request)
+        );
     }
 
     @PostMapping("/{id}/variants")
@@ -272,7 +278,12 @@ public class ItemsController {
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        return itemCatalogService.createVariant(TenantRequestIds.resolveBusinessId(request), id, body);
+        return itemCatalogService.createVariant(
+                TenantRequestIds.resolveBusinessId(request),
+                id,
+                body,
+                CurrentTenantUser.auditActorId(request)
+        );
     }
 
     @PostMapping("/{id}/images")

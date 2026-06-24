@@ -1,6 +1,9 @@
 package zelisline.ub.suppliers.application;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -12,6 +15,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.suppliers.SupplierCodes;
 import zelisline.ub.suppliers.api.dto.CreateSupplierContactRequest;
 import zelisline.ub.suppliers.api.dto.CreateSupplierRequest;
@@ -32,6 +41,8 @@ public class SupplierService {
 
     private final SupplierRepository supplierRepository;
     private final SupplierContactRepository supplierContactRepository;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
 
     @Transactional(readOnly = true)
     public Page<SupplierResponse> listSuppliers(String businessId, String searchRaw, String statusRaw, Pageable pageable) {
@@ -50,6 +61,11 @@ public class SupplierService {
 
     @Transactional
     public SupplierResponse createSupplier(String businessId, CreateSupplierRequest request) {
+        return createSupplier(businessId, request, null);
+    }
+
+    @Transactional
+    public SupplierResponse createSupplier(String businessId, CreateSupplierRequest request, String actorUserId) {
         assertNameAvailable(businessId, request.name(), null);
         String code = blankToNull(request.code());
         if (code != null) {
@@ -74,13 +90,15 @@ public class SupplierService {
         } catch (DataIntegrityViolationException ex) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Supplier code already in use", ex);
         }
+        publishSupplierEvent(businessId, s, actorUserId, AuditEventTypes.SUPPLIER_CREATED, null);
         return toResponse(s);
     }
 
     @Transactional
-    public SupplierResponse patchSupplier(String businessId, String supplierId, PatchSupplierRequest patch) {
+    public SupplierResponse patchSupplier(String businessId, String supplierId, PatchSupplierRequest patch, String actorUserId) {
         Supplier s = supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(supplierId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
+        Map<String, Object> oldState = supplierSnapshot(s);
         if (SupplierCodes.SYSTEM_UNASSIGNED.equals(s.getCode())) {
             throwSystemSupplierMutationIfRestricted(patch, s);
         }
@@ -144,6 +162,11 @@ public class SupplierService {
         } catch (DataIntegrityViolationException ex) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Supplier code already in use", ex);
         }
+        Map<String, Object> newState = supplierSnapshot(s);
+        Map<String, Object> diff = compactDiff(oldState, newState);
+        if (!diff.isEmpty()) {
+            publishSupplierEvent(businessId, s, actorUserId, AuditEventTypes.SUPPLIER_UPDATED, diff);
+        }
         return toResponse(s);
     }
 
@@ -157,7 +180,12 @@ public class SupplierService {
 
     @Transactional
     public SupplierContactResponse addContact(String businessId, String supplierId, CreateSupplierContactRequest body) {
-        assertSupplierInBusiness(businessId, supplierId);
+        return addContact(businessId, supplierId, body, null);
+    }
+
+    @Transactional
+    public SupplierContactResponse addContact(String businessId, String supplierId, CreateSupplierContactRequest body, String actorUserId) {
+        Supplier supplier = assertSupplierInBusiness(businessId, supplierId);
         if (Boolean.TRUE.equals(body.primaryContact())) {
             demotePrimaryContacts(supplierId);
         }
@@ -169,6 +197,14 @@ public class SupplierService {
         c.setEmail(blankToNull(body.email()));
         c.setPrimaryContact(Boolean.TRUE.equals(body.primaryContact()));
         supplierContactRepository.save(c);
+        publishSupplierEvent(businessId, supplier, actorUserId, AuditEventTypes.SUPPLIER_CONTACT_ADDED,
+                map("contact", map(
+                        "id", c.getId(),
+                        "name", c.getName(),
+                        "roleLabel", c.getRoleLabel(),
+                        "phone", c.getPhone(),
+                        "email", c.getEmail(),
+                        "primaryContact", c.isPrimaryContact())));
         return toContactResponse(c);
     }
 
@@ -179,9 +215,21 @@ public class SupplierService {
             String contactId,
             PatchSupplierContactRequest patch
     ) {
-        assertSupplierInBusiness(businessId, supplierId);
+        return patchContact(businessId, supplierId, contactId, patch, null);
+    }
+
+    @Transactional
+    public SupplierContactResponse patchContact(
+            String businessId,
+            String supplierId,
+            String contactId,
+            PatchSupplierContactRequest patch,
+            String actorUserId
+    ) {
+        Supplier supplier = assertSupplierInBusiness(businessId, supplierId);
         SupplierContact c = supplierContactRepository.findByIdAndSupplierId(contactId, supplierId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Contact not found"));
+        Map<String, Object> oldState = contactSnapshot(c);
         if (Boolean.TRUE.equals(patch.primaryContact())) {
             demotePrimaryContacts(supplierId);
             c.setPrimaryContact(true);
@@ -201,19 +249,29 @@ public class SupplierService {
             c.setEmail(blankToNull(patch.email()));
         }
         supplierContactRepository.save(c);
+        Map<String, Object> newState = contactSnapshot(c);
+        Map<String, Object> diff = compactDiff(oldState, newState);
+        if (!diff.isEmpty()) {
+            publishSupplierEvent(businessId, supplier, actorUserId, AuditEventTypes.SUPPLIER_CONTACT_UPDATED, diff);
+        }
         return toContactResponse(c);
     }
 
     @Transactional
     public void deleteContact(String businessId, String supplierId, String contactId) {
+        deleteContact(businessId, supplierId, contactId, null);
+    }
+
+    @Transactional
+    public void deleteContact(String businessId, String supplierId, String contactId, String actorUserId) {
         assertSupplierInBusiness(businessId, supplierId);
         SupplierContact c = supplierContactRepository.findByIdAndSupplierId(contactId, supplierId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Contact not found"));
         supplierContactRepository.delete(c);
     }
 
-    private void assertSupplierInBusiness(String businessId, String supplierId) {
-        supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(supplierId, businessId)
+    private Supplier assertSupplierInBusiness(String businessId, String supplierId) {
+        return supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(supplierId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
     }
 
@@ -338,5 +396,69 @@ public class SupplierService {
     private static String firstOrDefault(String value, String def) {
         String v = blankToNull(value);
         return v != null ? v : def;
+    }
+
+    private Map<String, Object> supplierSnapshot(Supplier s) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("name", s.getName());
+        snapshot.put("code", s.getCode());
+        snapshot.put("supplierType", s.getSupplierType());
+        snapshot.put("vatPin", s.getVatPin());
+        snapshot.put("taxExempt", s.isTaxExempt());
+        snapshot.put("creditTermsDays", s.getCreditTermsDays());
+        snapshot.put("creditLimit", s.getCreditLimit());
+        snapshot.put("status", s.getStatus());
+        snapshot.put("notes", s.getNotes());
+        snapshot.put("paymentMethodPreferred", s.getPaymentMethodPreferred());
+        snapshot.put("paymentDetails", s.getPaymentDetails());
+        snapshot.put("payoutType", s.getPayoutType());
+        snapshot.put("payoutPhone", s.getPayoutPhone());
+        snapshot.put("kopokopoExternalRecipientUrl", s.getKopokopoExternalRecipientUrl());
+        return snapshot;
+    }
+
+    private Map<String, Object> contactSnapshot(SupplierContact c) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("name", c.getName());
+        snapshot.put("roleLabel", c.getRoleLabel());
+        snapshot.put("phone", c.getPhone());
+        snapshot.put("email", c.getEmail());
+        snapshot.put("primaryContact", c.isPrimaryContact());
+        return snapshot;
+    }
+
+    private Map<String, Object> compactDiff(Map<String, Object> oldState, Map<String, Object> newState) {
+        Map<String, Object> diff = new LinkedHashMap<>();
+        for (String key : oldState.keySet()) {
+            Object oldVal = oldState.get(key);
+            Object newVal = newState.get(key);
+            if (!Objects.equals(oldVal, newVal)) {
+                diff.put(key, map("old", oldVal, "new", newVal));
+            }
+        }
+        return diff;
+    }
+
+    private static Map<String, Object> map(Object... entries) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        for (int i = 0; i < entries.length; i += 2) {
+            map.put((String) entries[i], entries[i + 1]);
+        }
+        return map;
+    }
+
+    private void publishSupplierEvent(String businessId, Supplier s, String actorUserId,
+                                      String eventType, Object diff) {
+        AuditEventActorType actorType = actorUserId != null && !actorUserId.isBlank()
+                ? AuditEventActorType.USER
+                : AuditEventActorType.SYSTEM;
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.SUPPLIERS, eventType, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .actor(actorUserId, actorType)
+                .target("supplier", s.getId())
+                .targetLabel(s.getName() + (s.getCode() != null ? " (" + s.getCode() + ")" : ""))
+                .source("web_admin")
+                .diff(diff)
+                .build());
     }
 }

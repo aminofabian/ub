@@ -19,6 +19,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.pricing.PricingConstants;
@@ -62,6 +68,8 @@ public class PricingService {
     private final ObjectMapper objectMapper;
     private final ApplicationEventPublisher eventPublisher;
     private final BusinessRepository businessRepository;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
 
     /**
      * Keep the pricing module's active selling price aligned with catalog shelf ({@code bundlePrice}).
@@ -131,6 +139,8 @@ public class PricingService {
                 eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.PriceChangedEvent(
                         businessId, branchId, req.itemId(), itemName(businessId, req.itemId()),
                         oldPrice, req.price()));
+                publishPriceEvent(businessId, req.itemId(), branchId, userId,
+                        AuditEventTypes.SELLING_PRICE_CHANGED, oldPrice, req.price());
                 maybePublishSubscriberPriceDrop(businessId, req.itemId(), oldPrice, req.price());
                 return toSellingDto(existing);
             }
@@ -158,6 +168,8 @@ public class PricingService {
         eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.PriceChangedEvent(
                 businessId, branchId, req.itemId(), itemName(businessId, req.itemId()),
                 prior, req.price()));
+        publishPriceEvent(businessId, req.itemId(), branchId, userId,
+                AuditEventTypes.SELLING_PRICE_CHANGED, prior, req.price());
         maybePublishSubscriberPriceDrop(businessId, req.itemId(), prior, req.price());
         return toSellingDto(row);
     }
@@ -189,15 +201,19 @@ public class PricingService {
     public BuyingPriceResponse setBuyingPrice(String businessId, PostBuyingPriceRequest req, String userId) {
         requireItem(businessId, req.itemId());
         requireSupplier(businessId, req.supplierId());
+        BigDecimal priorCost = resolvePriorBuyingPriceForEvent(businessId, req.itemId(), req.supplierId());
         // If an open-ended row already exists for this date, update it instead of throwing
         for (BuyingPrice existing : buyingPriceRepository.findOpenEnded(businessId, req.itemId(), req.supplierId())) {
             if (existing.getEffectiveFrom().equals(req.effectiveFrom())) {
+                BigDecimal oldCost = existing.getUnitCost();
                 existing.setUnitCost(req.unitCost().setScale(4, RoundingMode.HALF_UP));
                 if (req.notes() != null && !req.notes().isBlank()) {
                     existing.setNotes(req.notes());
                 }
                 existing.setSetBy(userId);
                 buyingPriceRepository.save(existing);
+                publishPriceEvent(businessId, req.itemId(), null, userId,
+                        AuditEventTypes.BUYING_PRICE_CHANGED, oldCost, req.unitCost());
                 return toBuyingDto(existing);
             }
             if (!existing.getEffectiveFrom().isBefore(req.effectiveFrom())) {
@@ -223,6 +239,8 @@ public class PricingService {
         row.setSetBy(userId);
         row.setNotes(req.notes());
         buyingPriceRepository.save(row);
+        publishPriceEvent(businessId, req.itemId(), null, userId,
+                AuditEventTypes.BUYING_PRICE_CHANGED, priorCost, req.unitCost());
         return toBuyingDto(row);
     }
 
@@ -443,6 +461,42 @@ public class PricingService {
 
     private BigDecimal resolvePriorSellPriceForEvent(String businessId, String itemId, String branchId) {
         return getCurrentOpenSellingPrice(businessId, itemId, branchId);
+    }
+
+    private BigDecimal resolvePriorBuyingPriceForEvent(String businessId, String itemId, String supplierId) {
+        List<BuyingPrice> open = buyingPriceRepository.findOpenEnded(businessId, itemId, supplierId);
+        if (open.isEmpty()) {
+            return null;
+        }
+        return open.getFirst().getUnitCost();
+    }
+
+    private void publishPriceEvent(String businessId, String itemId, String branchId, String userId,
+                                   String eventType, BigDecimal oldPrice, BigDecimal newPrice) {
+        AuditEventActorType actorType = userId != null && !userId.isBlank()
+                ? AuditEventActorType.USER
+                : AuditEventActorType.SYSTEM;
+        String label = eventType + " " + itemName(businessId, itemId);
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.PRODUCTS, eventType, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .branchId(branchId)
+                .actor(userId, actorType)
+                .target("item", itemId)
+                .targetLabel(label)
+                .source("web_admin")
+                .oldState(map("price", oldPrice != null ? oldPrice.toPlainString() : null))
+                .newState(map("price", newPrice != null ? newPrice.toPlainString() : null))
+                .diff(map("price", map("old", oldPrice != null ? oldPrice.toPlainString() : null,
+                        "new", newPrice != null ? newPrice.toPlainString() : null)))
+                .build());
+    }
+
+    private static Map<String, Object> map(Object... entries) {
+        Map<String, Object> map = new HashMap<>();
+        for (int i = 0; i < entries.length; i += 2) {
+            map.put((String) entries[i], entries[i + 1]);
+        }
+        return map;
     }
 
     @Transactional

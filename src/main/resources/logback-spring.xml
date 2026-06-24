@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <springProfile name="!prod">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{correlationId}] %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+
+        <!-- Audit and security loggers are always INFO so events are visible during development. -->
+        <logger name="zelisline.ub.audit" level="INFO"/>
+        <logger name="zelisline.ub.security" level="INFO"/>
+    </springProfile>
+
+    <springProfile name="prod">
+        <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <includeMdcKeyName>correlationId</includeMdcKeyName>
+                <includeMdcKeyName>businessId</includeMdcKeyName>
+                <includeMdcKeyName>actorId</includeMdcKeyName>
+            </encoder>
+        </appender>
+
+        <root level="WARN">
+            <appender-ref ref="JSON"/>
+        </root>
+
+        <!-- Audit and security events must always be emitted in production. -->
+        <logger name="zelisline.ub.audit" level="INFO"/>
+        <logger name="zelisline.ub.security" level="INFO"/>
+    </springProfile>
+</configuration>

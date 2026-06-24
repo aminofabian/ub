@@ -520,7 +520,8 @@ public class StockTakeService {
         var createResult = itemCatalogService.createItem(
             businessId,
             createReq,
-            null
+            null,
+            userId
         );
         String itemId = createResult.body().id();
 

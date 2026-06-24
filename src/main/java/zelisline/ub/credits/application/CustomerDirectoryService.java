@@ -5,8 +5,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -23,6 +25,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.credits.api.dto.AddCustomerPhoneRequest;
 import zelisline.ub.credits.api.dto.CreateCustomerRequest;
 import zelisline.ub.credits.api.dto.CreditAccountSummaryResponse;
@@ -48,6 +56,8 @@ public class CustomerDirectoryService {
     private final CustomerRepository customerRepository;
     private final CustomerPhoneRepository customerPhoneRepository;
     private final CreditAccountRepository creditAccountRepository;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
 
     @Transactional(readOnly = true)
     public Page<CustomerResponse> list(String businessId, String phoneQuery, Pageable pageable) {
@@ -109,6 +119,11 @@ public class CustomerDirectoryService {
 
     @Transactional
     public CustomerResponse create(String businessId, CreateCustomerRequest request) {
+        return create(businessId, request, null);
+    }
+
+    @Transactional
+    public CustomerResponse create(String businessId, CreateCustomerRequest request, String actorUserId) {
         List<CustomerPhoneDraft> drafts = normalizedPrimaryDrafts(request.phones());
         assertDistinctNormalizedInRequest(drafts);
         for (CustomerPhoneDraft d : drafts) {
@@ -123,12 +138,35 @@ public class CustomerDirectoryService {
 
         persistPhonesFromDrafts(businessId, customer.getId(), drafts);
         openCreditAccount(businessId, customer.getId(), request.creditLimit());
+        publishCustomerEvent(businessId, customer, actorUserId, AuditEventTypes.CUSTOMER_CREATED, null);
+        if (request.creditLimit() != null && request.creditLimit().signum() >= 0) {
+            publishCustomerEvent(businessId, customer, actorUserId, AuditEventTypes.CUSTOMER_CREDIT_LIMIT_CHANGED,
+                    map("creditLimit", map("old", null, "new", request.creditLimit().toPlainString())));
+        }
         return toResponseSingle(businessId, customer);
     }
 
     @Transactional
     public CustomerResponse patch(String businessId, String customerId, PatchCustomerRequest patch) {
+        return patch(businessId, customerId, patch, null);
+    }
+
+    @Transactional
+    public CustomerResponse patch(String businessId, String customerId, PatchCustomerRequest patch, String actorUserId) {
         Customer customer = loadActive(businessId, customerId);
+        Map<String, Object> oldState = customerSnapshot(customer);
+        BigDecimal oldCreditLimit = null;
+        if (patch.creditLimit() != null) {
+            CreditAccount account = creditAccountRepository
+                    .findByCustomerIdAndBusinessId(customerId, businessId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Credit account not found"));
+            oldCreditLimit = account.getCreditLimit();
+            if (patch.creditAccountVersion() != null && patch.creditAccountVersion() != account.getVersion()) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Stale credit account version");
+            }
+            account.setCreditLimit(patch.creditLimit());
+            creditAccountRepository.save(account);
+        }
         if (patch.version() != null && patch.version() != customer.getVersion()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Stale customer version");
         }
@@ -143,30 +181,43 @@ public class CustomerDirectoryService {
         }
         customerRepository.save(customer);
 
-        if (patch.creditLimit() != null) {
-            CreditAccount account = creditAccountRepository
-                    .findByCustomerIdAndBusinessId(customerId, businessId)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Credit account not found"));
-            if (patch.creditAccountVersion() != null && patch.creditAccountVersion() != account.getVersion()) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "Stale credit account version");
-            }
-            account.setCreditLimit(patch.creditLimit());
-            creditAccountRepository.save(account);
+        Map<String, Object> newState = customerSnapshot(customer);
+        Map<String, Object> diff = compactDiff(oldState, newState);
+        if (!diff.isEmpty()) {
+            publishCustomerEvent(businessId, customer, actorUserId, AuditEventTypes.CUSTOMER_UPDATED, diff);
+        }
+        if (patch.creditLimit() != null && oldCreditLimit != null
+                && oldCreditLimit.compareTo(patch.creditLimit()) != 0) {
+            publishCustomerEvent(businessId, customer, actorUserId, AuditEventTypes.CUSTOMER_CREDIT_LIMIT_CHANGED,
+                    map("creditLimit", map(
+                            "old", oldCreditLimit.toPlainString(),
+                            "new", patch.creditLimit().toPlainString())));
         }
         return toResponseSingle(businessId, customer);
     }
 
     @Transactional
     public void softDelete(String businessId, String customerId) {
+        softDelete(businessId, customerId, null);
+    }
+
+    @Transactional
+    public void softDelete(String businessId, String customerId, String actorUserId) {
         Customer customer = loadActive(businessId, customerId);
         customer.setDeletedAt(Instant.now());
         customerRepository.save(customer);
         customerPhoneRepository.deleteByCustomerId(customerId);
+        publishCustomerEvent(businessId, customer, actorUserId, AuditEventTypes.CUSTOMER_DELETED, null);
     }
 
     @Transactional
     public CustomerResponse addPhone(String businessId, String customerId, AddCustomerPhoneRequest request) {
-        loadActive(businessId, customerId);
+        return addPhone(businessId, customerId, request, null);
+    }
+
+    @Transactional
+    public CustomerResponse addPhone(String businessId, String customerId, AddCustomerPhoneRequest request, String actorUserId) {
+        Customer customer = loadActive(businessId, customerId);
         String normalized = normalizedPhoneOrThrow(request.phone());
         assertPhoneAvailable(businessId, normalized);
         boolean wantsPrimary = Boolean.TRUE.equals(request.primary());
@@ -183,18 +234,27 @@ public class CustomerDirectoryService {
         if (primary) {
             demoteOtherPrimaries(customerId, row.getId());
         }
+        publishCustomerEvent(businessId, customer, actorUserId, AuditEventTypes.CUSTOMER_UPDATED,
+                map("phoneAdded", map("phone", normalized, "primary", primary)));
         return toResponseSingle(businessId, customerRepository.findById(customerId).orElseThrow());
     }
 
     @Transactional
     public CustomerResponse setPrimaryPhone(String businessId, String customerId, String phoneId) {
-        loadActive(businessId, customerId);
+        return setPrimaryPhone(businessId, customerId, phoneId, null);
+    }
+
+    @Transactional
+    public CustomerResponse setPrimaryPhone(String businessId, String customerId, String phoneId, String actorUserId) {
+        Customer customer = loadActive(businessId, customerId);
         CustomerPhone row = customerPhoneRepository.findById(phoneId)
                 .filter(p -> businessId.equals(p.getBusinessId()) && customerId.equals(p.getCustomerId()))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Phone not found"));
         clearPrimary(customerId);
         row.setPrimary(true);
         customerPhoneRepository.save(row);
+        publishCustomerEvent(businessId, customer, actorUserId, AuditEventTypes.CUSTOMER_UPDATED,
+                map("primaryPhone", map("phoneId", phoneId, "phone", row.getPhone())));
         return toResponseSingle(businessId, customerRepository.findById(customerId).orElseThrow());
     }
 
@@ -394,5 +454,48 @@ public class CustomerDirectoryService {
             return null;
         }
         return value.trim();
+    }
+
+    private Map<String, Object> customerSnapshot(Customer customer) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("name", customer.getName());
+        snapshot.put("email", customer.getEmail());
+        snapshot.put("notes", customer.getNotes());
+        return snapshot;
+    }
+
+    private Map<String, Object> compactDiff(Map<String, Object> oldState, Map<String, Object> newState) {
+        Map<String, Object> diff = new LinkedHashMap<>();
+        for (String key : oldState.keySet()) {
+            Object oldVal = oldState.get(key);
+            Object newVal = newState.get(key);
+            if (!Objects.equals(oldVal, newVal)) {
+                diff.put(key, map("old", oldVal, "new", newVal));
+            }
+        }
+        return diff;
+    }
+
+    private static Map<String, Object> map(Object... entries) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        for (int i = 0; i < entries.length; i += 2) {
+            map.put((String) entries[i], entries[i + 1]);
+        }
+        return map;
+    }
+
+    private void publishCustomerEvent(String businessId, Customer customer, String actorUserId,
+                                      String eventType, Object diff) {
+        AuditEventActorType actorType = actorUserId != null && !actorUserId.isBlank()
+                ? AuditEventActorType.USER
+                : AuditEventActorType.SYSTEM;
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.CUSTOMERS, eventType, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .actor(actorUserId, actorType)
+                .target("customer", customer.getId())
+                .targetLabel(customer.getName())
+                .source("web_admin")
+                .diff(diff)
+                .build());
     }
 }

@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.credits.application.BusinessCreditMessagingSettingsService;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.CreditSaleReminderDispatch;
 import zelisline.ub.credits.domain.Customer;
@@ -26,11 +27,6 @@ import zelisline.ub.credits.repository.CreditSaleReminderDispatchRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.identity.repository.UserRepository;
-import zelisline.ub.credits.application.BusinessCreditMessagingSettingsService;
-import zelisline.ub.messaging.application.TenantMessagingConfig;
-import zelisline.ub.messaging.infrastructure.MetaWhatsAppMessagingClient;
-import zelisline.ub.messaging.infrastructure.RapidApiWhatsAppLookupClient;
-import zelisline.ub.messaging.infrastructure.SmsMessagingClient;
 import zelisline.ub.notifications.application.NotificationService;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.tenancy.domain.Business;
@@ -43,6 +39,7 @@ public class CreditSaleReminderService {
     private static final Logger log = LoggerFactory.getLogger(CreditSaleReminderService.class);
 
     static final String NOTIFICATION_TYPE = "credit_sale.reminder";
+    static final int MAX_ITEM_LINES = 5;
 
     private final BusinessCreditMessagingSettingsService messagingSettingsService;
     private final CreditSaleReminderDispatchRepository dispatchRepository;
@@ -52,9 +49,7 @@ public class CreditSaleReminderService {
     private final BusinessRepository businessRepository;
     private final UserRepository userRepository;
     private final NotificationService notificationService;
-    private final RapidApiWhatsAppLookupClient whatsAppLookupClient;
-    private final MetaWhatsAppMessagingClient metaWhatsAppClient;
-    private final SmsMessagingClient smsMessagingClient;
+    private final CustomerMessageDispatcher customerMessageDispatcher;
     private final ObjectMapper objectMapper;
 
     @Transactional
@@ -92,12 +87,24 @@ public class CreditSaleReminderService {
         String currency = business != null && business.getCurrency() != null
                 ? business.getCurrency().trim()
                 : "KES";
+        String shopName = business != null && business.getName() != null
+                ? business.getName().trim()
+                : "our shop";
         String paymentUrl = messaging.paymentAccountUrl().trim();
-        String message = buildMessage(event.itemCount(), event.creditAmount(), currency, paymentUrl);
+        BigDecimal balanceOwed = event.balanceOwed() != null ? event.balanceOwed() : BigDecimal.ZERO;
+        String message = buildMessage(
+                customer.getName(),
+                shopName,
+                event.items(),
+                event.itemCount(),
+                event.creditAmount(),
+                balanceOwed,
+                currency,
+                paymentUrl);
 
-        pushInAppNotification(event, customer, message, paymentUrl, currency);
+        pushInAppNotification(event, customer, message, paymentUrl, currency, balanceOwed);
 
-        ExternalDeliveryAttempt delivery = deliverExternalMessage(messaging, phoneDigits, message);
+        CustomerMessageDispatcher.DeliveryResult delivery = customerMessageDispatcher.deliver(messaging, phoneDigits, message);
         saveDispatch(event, delivery.channel(), delivery.outcome(), delivery.detail(), message);
         log.info("credit_sale_reminder sale={} customer={} channel={} outcome={} detail={}",
                 event.saleId(), event.customerId(), delivery.channel(), delivery.outcome(), delivery.detail());
@@ -111,13 +118,21 @@ public class CreditSaleReminderService {
             String rawPhone
     ) {
         TenantMessagingConfig messaging = messagingSettingsService.resolveForDispatch(businessId);
+        String paymentUrl = messaging.paymentAccountUrl().isBlank()
+                ? "https://palmart.co.ke/shop/account"
+                : messaging.paymentAccountUrl();
+        List<CreditSaleReminderLineItem> dummyItems = List.of(
+                new CreditSaleReminderLineItem("Sugar 2kg", new BigDecimal("2"), new BigDecimal("240.00")),
+                new CreditSaleReminderLineItem("Milk 1L", BigDecimal.ONE, new BigDecimal("65.00")));
         String message = buildMessage(
-                2,
-                new BigDecimal("100.00"),
+                "Jane",
+                "Mama's Kiosk",
+                dummyItems,
+                dummyItems.size(),
+                new BigDecimal("305.00"),
+                new BigDecimal("1240.00"),
                 "KES",
-                messaging.paymentAccountUrl().isBlank()
-                        ? "https://palmart.co.ke/shop/account"
-                        : messaging.paymentAccountUrl());
+                paymentUrl);
 
         if (!messaging.enabled()) {
             return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
@@ -150,7 +165,7 @@ public class CreditSaleReminderService {
                     message);
         }
 
-        ExternalDeliveryAttempt attempt = deliverExternalMessage(messaging, phoneDigits, message);
+        CustomerMessageDispatcher.DeliveryResult attempt = customerMessageDispatcher.deliver(messaging, phoneDigits, message);
         return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
                 true,
                 messaging.rapidApiConfigured(),
@@ -165,62 +180,13 @@ public class CreditSaleReminderService {
                 message);
     }
 
-    private ExternalDeliveryAttempt deliverExternalMessage(
-            TenantMessagingConfig messaging,
-            String phoneDigits,
-            String message
-    ) {
-        String e164 = "+" + phoneDigits;
-        String channel;
-        String outcome;
-        String detail;
-
-        var lookup = whatsAppLookupClient.lookup(messaging, e164);
-        if (lookup.onWhatsApp()) {
-            var send = metaWhatsAppClient.sendText(messaging, phoneDigits, message);
-            if (send.sent()) {
-                channel = send.channel();
-                outcome = "sent";
-                detail = send.detail();
-            } else if (send.skipped()) {
-                var sms = smsMessagingClient.sendText(messaging, e164, message);
-                channel = sms.channel();
-                outcome = sms.sent() ? "sent" : (sms.stub() ? "stub" : "failed");
-                detail = "whatsapp_skipped:" + send.detail() + ";" + sms.detail();
-            } else {
-                var sms = smsMessagingClient.sendText(messaging, e164, message);
-                channel = sms.sent() || sms.stub() ? sms.channel() : "sms";
-                outcome = sms.sent() ? "sent" : (sms.stub() ? "stub" : "failed");
-                detail = "whatsapp_failed:" + send.detail() + ";" + sms.detail();
-            }
-        } else if (lookup.skipped()) {
-            var sms = smsMessagingClient.sendText(messaging, e164, message);
-            channel = sms.channel();
-            outcome = sms.sent() ? "sent" : (sms.stub() ? "stub" : "failed");
-            detail = "lookup_skipped:" + lookup.detail() + ";" + sms.detail();
-        } else {
-            var sms = smsMessagingClient.sendText(messaging, e164, message);
-            channel = sms.channel();
-            outcome = sms.sent() ? "sent" : (sms.stub() ? "stub" : "failed");
-            detail = "not_on_whatsapp:" + lookup.detail() + ";" + sms.detail();
-        }
-        return new ExternalDeliveryAttempt(lookup, channel, outcome, detail);
-    }
-
-    private record ExternalDeliveryAttempt(
-            RapidApiWhatsAppLookupClient.LookupResult lookup,
-            String channel,
-            String outcome,
-            String detail
-    ) {
-    }
-
     private void pushInAppNotification(
             CreditSaleReminderEvent event,
             Customer customer,
             String message,
             String paymentUrl,
-            String currency
+            String currency,
+            BigDecimal balanceOwed
     ) {
         String userId = resolveShopperUserId(event.businessId(), customer);
         if (userId == null) {
@@ -234,7 +200,11 @@ public class CreditSaleReminderService {
         payload.put("customerId", event.customerId());
         payload.put("itemCount", event.itemCount());
         payload.put("amount", event.creditAmount().setScale(2, RoundingMode.HALF_UP).toPlainString());
+        payload.put("balanceOwed", balanceOwed.setScale(2, RoundingMode.HALF_UP).toPlainString());
         payload.put("currency", currency);
+        if (event.items() != null && !event.items().isEmpty()) {
+            payload.put("items", event.items());
+        }
         String json;
         try {
             json = objectMapper.writeValueAsString(payload);
@@ -266,12 +236,51 @@ public class CreditSaleReminderService {
         return StkPhoneNormalizer.normalize(pick.getPhone());
     }
 
-    static String buildMessage(int itemCount, BigDecimal amount, String currency, String paymentUrl) {
-        int items = Math.max(1, itemCount);
-        String itemLabel = items == 1 ? "item" : "items";
-        String money = formatMoney(amount, currency);
-        return "You took " + items + " " + itemLabel + " on credit worth " + money + ".\n"
-                + "Pay here: " + paymentUrl;
+    static String buildMessage(
+            String customerName,
+            String shopName,
+            List<CreditSaleReminderLineItem> items,
+            int itemCount,
+            BigDecimal amount,
+            BigDecimal balanceOwed,
+            String currency,
+            String paymentUrl
+    ) {
+        StringBuilder sb = new StringBuilder();
+        String greeting = (customerName == null || customerName.isBlank()) ? "Hi" : "Hi " + customerName.trim();
+        sb.append(greeting).append(",\n\n");
+        sb.append("You took on credit at ").append(shopName).append(":\n");
+
+        List<CreditSaleReminderLineItem> lines = items != null ? items : List.of();
+        if (lines.isEmpty()) {
+            int count = Math.max(1, itemCount);
+            String label = count == 1 ? "item" : "items";
+            sb.append("• ").append(count).append(" ").append(label).append("\n");
+        } else {
+            int shown = 0;
+            for (CreditSaleReminderLineItem line : lines) {
+                if (shown >= MAX_ITEM_LINES) {
+                    break;
+                }
+                sb.append("• ")
+                        .append(line.name() != null ? line.name() : "Item")
+                        .append(" — ")
+                        .append(formatMoney(line.lineTotal(), currency))
+                        .append("\n");
+                shown++;
+            }
+            int remaining = lines.size() - shown;
+            if (remaining > 0) {
+                sb.append("• and ").append(remaining).append(" more\n");
+            }
+        }
+
+        sb.append("\nThis sale: ").append(formatMoney(amount, currency));
+        if (balanceOwed != null && balanceOwed.signum() > 0) {
+            sb.append("\nTotal tab: ").append(formatMoney(balanceOwed, currency));
+        }
+        sb.append("\n\nPay here: ").append(paymentUrl);
+        return sb.toString();
     }
 
     private static String formatMoney(BigDecimal amount, String currency) {
@@ -309,5 +318,4 @@ public class CreditSaleReminderService {
         }
         return s.substring(0, max);
     }
-
 }

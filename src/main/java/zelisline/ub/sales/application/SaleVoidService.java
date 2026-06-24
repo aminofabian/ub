@@ -20,6 +20,12 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.credits.application.BusinessCreditSettingsService;
 import zelisline.ub.credits.application.CreditSaleDebtService;
 import zelisline.ub.credits.application.LoyaltyPointsService;
@@ -76,6 +82,8 @@ public class SaleVoidService {
     private final LoyaltyPointsService loyaltyPointsService;
     private final BusinessCreditSettingsService businessCreditSettingsService;
     private final SaleActorNameService saleActorNameService;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -152,7 +160,45 @@ public class SaleVoidService {
         sale.setVoidJournalEntryId(voidJeId);
         sale.setVoidNotes(blankToNull(req != null ? req.notes() : null));
         saleRepository.save(sale);
+        publishVoidEvents(businessId, sale, shift, userId, cashBack, req != null ? req.notes() : null);
         return responseFor(sale);
+    }
+
+    private void publishVoidEvents(String businessId, Sale sale, Shift shift, String userId, BigDecimal cashBack, String reason) {
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.SALES, AuditEventTypes.SALE_VOIDED, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .branchId(sale.getBranchId())
+                .actor(userId, AuditEventActorType.USER)
+                .target("sale", sale.getId())
+                .targetLabel("Sale " + sale.getId().substring(0, 8))
+                .shiftId(shift != null ? shift.getId() : sale.getShiftId())
+                .oldState(map("status", SalesConstants.SALE_STATUS_COMPLETED, "grandTotal", sale.getGrandTotal().toPlainString()))
+                .newState(map("status", SalesConstants.SALE_STATUS_VOIDED))
+                .source("pos_terminal")
+                .reason(reason)
+                .build());
+
+        if (cashBack.signum() > 0) {
+            auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.CASH_DRAWER, AuditEventTypes.CASH_VOID_REMOVED, AuditEventSeverity.INFO)
+                    .businessId(businessId)
+                    .branchId(sale.getBranchId())
+                    .actor(userId, AuditEventActorType.USER)
+                    .target("shift", shift.getId())
+                    .targetLabel("Shift " + shift.getId().substring(0, 8))
+                    .shiftId(shift.getId())
+                    .newState(map("cashAmount", cashBack.toPlainString()))
+                    .source("pos_terminal")
+                    .reason("Sale void: " + sale.getId())
+                    .build());
+        }
+    }
+
+    private static Map<String, Object> map(Object... entries) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        for (int i = 0; i < entries.length; i += 2) {
+            map.put((String) entries[i], entries[i + 1]);
+        }
+        return map;
     }
 
     private void assertCanVoid(Sale sale, String userId, String roleId) {

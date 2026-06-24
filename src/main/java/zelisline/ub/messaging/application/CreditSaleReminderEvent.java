@@ -1,6 +1,7 @@
 package zelisline.ub.messaging.application;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 /**
  * Published after a POS sale commits with customer tab (credit) tender.
@@ -10,6 +11,8 @@ public record CreditSaleReminderEvent(
         String saleId,
         String customerId,
         BigDecimal creditAmount,
-        int itemCount
+        int itemCount,
+        List<CreditSaleReminderLineItem> items,
+        BigDecimal balanceOwed
 ) {
 }

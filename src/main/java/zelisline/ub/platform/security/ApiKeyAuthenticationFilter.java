@@ -23,6 +23,12 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.identity.application.ApiKeyAuthService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
@@ -42,6 +48,8 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
 
     private final ApiKeyAuthService apiKeyAuthService;
     private final InvalidApiKeyIpRateLimiter invalidApiKeyIpRateLimiter;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
@@ -79,6 +87,7 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
         var principalOpt = apiKeyAuthService.authenticateRawToken(raw);
         if (principalOpt.isEmpty()) {
             invalidApiKeyIpRateLimiter.recordFailure(clientIp);
+            publishApiKeyEvent(request, null, AuditEventTypes.API_KEY_INVALID, "Invalid or revoked API key");
             writeProblem(response, HttpStatus.UNAUTHORIZED, "Invalid or revoked API key", "unauthorized");
             return;
         }
@@ -98,6 +107,7 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
         }
 
         if (!principal.businessId().equals(resolvedTenant)) {
+            publishApiKeyEvent(request, principal, AuditEventTypes.API_KEY_INVALID, "API key tenant mismatch");
             writeProblem(response, HttpStatus.FORBIDDEN,
                     "API key tenant does not match resolved host tenant", "forbidden");
             return;
@@ -105,6 +115,7 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
 
         invalidApiKeyIpRateLimiter.clear(clientIp);
         maybeTouchLastUsed(principal.apiKeyId());
+        publishApiKeyEvent(request, principal, AuditEventTypes.API_KEY_USED, null);
 
         var authentication = new ApiKeyAuthenticationToken(principal);
         SecurityContextHolder.getContext().setAuthentication(authentication);
@@ -129,6 +140,39 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
         if (touch[0]) {
             apiKeyAuthService.touchLastUsed(apiKeyId);
         }
+    }
+
+    private void publishApiKeyEvent(HttpServletRequest request, ApiKeyPrincipal principal, String eventType, String reason) {
+        try {
+            String businessId = principal == null ? resolveBusinessIdSafe(request) : principal.businessId();
+            auditEventPublisher.publishSynchronous(auditEventBuilder.builder(AuditEventCategory.SECURITY, eventType,
+                            AuditEventTypes.API_KEY_USED.equals(eventType) ? AuditEventSeverity.DEBUG : AuditEventSeverity.WARN)
+                    .businessId(businessId == null ? "unknown" : businessId)
+                    .actor(principal == null ? null : principal.apiKeyId(), AuditEventActorType.API_KEY)
+                    .target("api_key", principal == null ? null : principal.apiKeyId())
+                    .ipAddress(ClientIpResolver.resolve(request))
+                    .userAgent(trimToNull(request.getHeader("User-Agent")))
+                    .source("api")
+                    .reason(reason)
+                    .build());
+        } catch (Exception ignored) {
+            // Never fail the request because of an audit write failure.
+        }
+    }
+
+    private String resolveBusinessIdSafe(HttpServletRequest request) {
+        try {
+            return TenantRequestIds.resolveBusinessId(request);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
     }
 
     private static String extractRawApiKey(HttpServletRequest request) {

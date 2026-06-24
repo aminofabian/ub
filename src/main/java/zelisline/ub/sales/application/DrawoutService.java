@@ -4,7 +4,9 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.data.domain.Pageable;
 
@@ -14,6 +16,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.sales.SalesConstants;
@@ -49,6 +57,8 @@ public class DrawoutService {
     private final ShiftExpenseRepository shiftExpenseRepository;
     private final ShiftAuditLogRepository shiftAuditLogRepository;
     private final UserRepository userRepository;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
 
     // ========================================================================
     // INITIATE DRAWOUT
@@ -134,6 +144,7 @@ public class DrawoutService {
                 drawout.getCategory(), drawout.getAmount(), drawout.getRecipientName(),
                 drawout.getApprovalTier(), drawout.getStatus());
         recordAudit(shiftId, SalesConstants.AUDIT_DRAWOUT_INITIATED, userId, auditMeta, null);
+        publishDrawoutEvent(businessId, shift, drawout, userId, AuditEventTypes.DRAWOUT_INITIATED, null);
 
         return toDrawoutResponse(drawout, businessId);
     }
@@ -183,6 +194,7 @@ public class DrawoutService {
                 "{\"approvalMethod\":\"%s\",\"amount\":\"%s\",\"tier\":%d}",
                 request.approvalMethod(), drawout.getAmount(), drawout.getApprovalTier());
         recordAudit(drawout.getShiftId(), SalesConstants.AUDIT_DRAWOUT_APPROVED, userId, auditMeta, null);
+        publishDrawoutEvent(businessId, shift, drawout, userId, AuditEventTypes.DRAWOUT_APPROVED, null);
 
         return toDrawoutResponse(drawout, businessId);
     }
@@ -210,6 +222,7 @@ public class DrawoutService {
                 "{\"rejectionReason\":\"%s\",\"amount\":\"%s\"}",
                 request.rejectionReason(), drawout.getAmount());
         recordAudit(drawout.getShiftId(), SalesConstants.AUDIT_DRAWOUT_REJECTED, userId, auditMeta, null);
+        publishDrawoutEvent(businessId, null, drawout, userId, AuditEventTypes.DRAWOUT_REJECTED, request.rejectionReason());
 
         return toDrawoutResponse(drawout, businessId);
     }
@@ -251,6 +264,7 @@ public class DrawoutService {
                 "{\"voidReason\":\"%s\",\"amountReversed\":\"%s\"}",
                 request.voidReason(), drawout.getAmount());
         recordAudit(drawout.getShiftId(), SalesConstants.AUDIT_DRAWOUT_VOIDED, userId, auditMeta, null);
+        publishDrawoutEvent(businessId, shift, drawout, userId, AuditEventTypes.DRAWOUT_VOIDED, request.voidReason());
 
         return toDrawoutResponse(drawout, businessId);
     }
@@ -406,6 +420,32 @@ public class DrawoutService {
         log.setMetadata(metadata);
         log.setIpAddress(ipAddress);
         shiftAuditLogRepository.save(log);
+    }
+
+    private void publishDrawoutEvent(String businessId, Shift shift, CashDrawout drawout, String userId, String eventType, String reason) {
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.CASH_DRAWER, eventType, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .branchId(shift == null ? null : shift.getBranchId())
+                .actor(userId, AuditEventActorType.USER)
+                .target("drawout", drawout.getId())
+                .targetLabel(drawout.getCategory() + " drawout " + drawout.getAmount().toPlainString())
+                .shiftId(drawout.getShiftId())
+                .newState(map(
+                        "category", drawout.getCategory(),
+                        "amount", drawout.getAmount().toPlainString(),
+                        "status", drawout.getStatus(),
+                        "approvalTier", drawout.getApprovalTier()))
+                .source("pos_terminal")
+                .reason(reason)
+                .build());
+    }
+
+    private static Map<String, Object> map(Object... entries) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        for (int i = 0; i < entries.length; i += 2) {
+            map.put((String) entries[i], entries[i + 1]);
+        }
+        return map;
     }
 
     private String getUserName(String businessId, String userId) {

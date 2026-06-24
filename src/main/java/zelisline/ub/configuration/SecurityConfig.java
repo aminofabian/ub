@@ -32,6 +32,7 @@ import zelisline.ub.identity.repository.UserSessionRepository;
 import zelisline.ub.identity.repository.SuperAdminRepository;
 import zelisline.ub.platform.security.ApiKeyAuthenticationFilter;
 import zelisline.ub.platform.security.ApiKeyRateLimitFilter;
+import zelisline.ub.platform.web.CorrelationIdFilter;
 import zelisline.ub.platform.security.ApiKeyRateLimiter;
 import zelisline.ub.platform.security.InvalidApiKeyIpRateLimiter;
 import zelisline.ub.platform.security.PublicCreditClaimRateLimitFilter;
@@ -89,6 +90,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(
             HttpSecurity http,
+            CorrelationIdFilter correlationIdFilter,
             DomainBusinessResolverFilter domainBusinessResolverFilter,
             PublicStorefrontRateLimitFilter publicStorefrontRateLimitFilter,
             PublicCreditClaimRateLimitFilter publicCreditClaimRateLimitFilter,
@@ -161,6 +163,7 @@ public class SecurityConfig {
                         .anyRequest().denyAll()
                 );
         http.addFilterBefore(domainBusinessResolverFilter, UsernamePasswordAuthenticationFilter.class);
+        http.addFilterBefore(correlationIdFilter, DomainBusinessResolverFilter.class);
         http.addFilterAfter(publicStorefrontRateLimitFilter, DomainBusinessResolverFilter.class);
         http.addFilterAfter(publicCreditClaimRateLimitFilter, PublicStorefrontRateLimitFilter.class);
         http.addFilterAfter(loginRateLimitFilter, PublicCreditClaimRateLimitFilter.class);
@@ -203,17 +206,23 @@ public class SecurityConfig {
             JwtTokenService jwtTokenService,
             UserSessionRepository userSessionRepository,
             UserRepository userRepository,
-            SuperAdminRepository superAdminRepository
+            SuperAdminRepository superAdminRepository,
+            zelisline.ub.audit.application.AuditEventPublisher auditEventPublisher,
+            zelisline.ub.audit.application.AuditEventBuilder auditEventBuilder
     ) {
         return new JwtAuthenticationFilter(
-                jwtTokenService, userSessionRepository, userRepository, superAdminRepository);
+                jwtTokenService, userSessionRepository, userRepository, superAdminRepository,
+                auditEventPublisher, auditEventBuilder);
     }
 
     @Bean
     public ApiKeyAuthenticationFilter apiKeyAuthenticationFilter(
             ApiKeyAuthService apiKeyAuthService,
-            InvalidApiKeyIpRateLimiter invalidApiKeyIpRateLimiter) {
-        return new ApiKeyAuthenticationFilter(apiKeyAuthService, invalidApiKeyIpRateLimiter);
+            InvalidApiKeyIpRateLimiter invalidApiKeyIpRateLimiter,
+            zelisline.ub.audit.application.AuditEventPublisher auditEventPublisher,
+            zelisline.ub.audit.application.AuditEventBuilder auditEventBuilder) {
+        return new ApiKeyAuthenticationFilter(apiKeyAuthService, invalidApiKeyIpRateLimiter,
+                auditEventPublisher, auditEventBuilder);
     }
 
     @Bean

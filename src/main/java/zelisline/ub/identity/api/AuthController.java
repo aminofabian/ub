@@ -107,7 +107,7 @@ public class AuthController {
     @PostMapping("/logout")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<Void> logout(HttpServletRequest http) {
-        authService.logout(CurrentTenantUser.requireHuman(http));
+        authService.logout(CurrentTenantUser.requireHuman(http), http);
         return ResponseEntity.noContent()
                 .headers(refreshTokenCookieSupport.clearCookieHeaders())
                 .build();
@@ -124,7 +124,7 @@ public class AuthController {
     @PostMapping("/logout-all")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<Void> logoutAll(HttpServletRequest http) {
-        authService.logoutAll(CurrentTenantUser.requireHuman(http));
+        authService.logoutAll(CurrentTenantUser.requireHuman(http), http);
         return ResponseEntity.noContent()
                 .headers(refreshTokenCookieSupport.clearCookieHeaders())
                 .build();

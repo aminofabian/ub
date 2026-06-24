@@ -12,6 +12,7 @@ import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.InvalidDataAccessResourceUsageException;
@@ -50,6 +51,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ProblemDetail> handleAccessDenied(AccessDeniedException ex) {
+        log.warn("Access denied: {}", ex.getMessage());
         ProblemDetail body = ProblemDetail.forStatus(HttpStatus.FORBIDDEN);
         body.setTitle("Forbidden");
         body.setType(URI.create(PROBLEM_BASE + "permission-denied"));
@@ -60,6 +62,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<ProblemDetail> handleResponseStatus(ResponseStatusException ex) {
         HttpStatusCode status = ex.getStatusCode();
+        if (status.is4xxClientError()) {
+            log.warn("Client error {}: {}", status.value(), ex.getReason());
+        } else {
+            log.error("Server error {}: {}", status.value(), ex.getReason());
+        }
         ProblemDetail body = ProblemDetail.forStatus(status);
         body.setTitle(reasonOrDefault(status));
         body.setDetail(ex.getReason());
@@ -69,6 +76,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ProblemDetail> handleValidation(MethodArgumentNotValidException ex) {
+        log.warn("Validation failed: {}", ex.getMessage());
         ProblemDetail body = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
         body.setTitle("Validation failed");
         body.setType(URI.create(PROBLEM_BASE + "validation"));
@@ -87,6 +95,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(ConstraintViolationException.class)
     public ResponseEntity<ProblemDetail> handleConstraint(ConstraintViolationException ex) {
+        log.warn("Constraint violation: {}", ex.getMessage());
         ProblemDetail body = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
         body.setTitle("Validation failed");
         body.setType(URI.create(PROBLEM_BASE + "validation"));
@@ -96,6 +105,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
     public ResponseEntity<ProblemDetail> handleOptimisticLock(ObjectOptimisticLockingFailureException ex) {
+        log.warn("Optimistic locking conflict: {}", ex.getMessage());
         ProblemDetail body = ProblemDetail.forStatus(HttpStatus.CONFLICT);
         body.setTitle("Conflict");
         body.setType(URI.create(PROBLEM_BASE + "optimistic-lock"));
@@ -105,6 +115,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ProblemDetail> handleDataIntegrity(DataIntegrityViolationException ex) {
+        log.warn("Data integrity violation: {}", ex.getMessage());
         String m = String.valueOf(ex.getMostSpecificCause().getMessage()) + " " + ex.getMessage();
         if (m.contains("uq_items_business_sku") || m.toLowerCase().contains("business_sku")) {
             ProblemDetail body = ProblemDetail.forStatus(HttpStatus.CONFLICT);
@@ -129,7 +140,8 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ProblemDetail> handleUnexpected(Exception ex) {
-        log.error("Unhandled exception", ex);
+        String correlationId = MDC.get(CorrelationIdFilter.CORRELATION_ID_MDC_KEY);
+        log.error("Unhandled exception (correlationId={})", correlationId, ex);
         ProblemDetail body = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
         body.setTitle("Internal server error");
         body.setType(URI.create(PROBLEM_BASE + "internal-error"));

@@ -20,6 +20,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.finance.LedgerAccountCodes;
 import zelisline.ub.finance.application.LedgerAccountResolver;
 import zelisline.ub.finance.application.LedgerPostingPort;
@@ -27,13 +33,16 @@ import zelisline.ub.finance.domain.JournalEntry;
 import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.inventory.api.dto.BatchAllocationLine;
 import zelisline.ub.inventory.application.InventoryBatchPickerService;
+import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.credits.application.BusinessCreditSettingsService;
 import zelisline.ub.credits.application.CreditSaleDebtService;
 import zelisline.ub.credits.application.LoyaltyPointsService;
 import zelisline.ub.credits.application.WalletLedgerService;
+import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.integrations.webhook.WebhookEventTypes;
 import zelisline.ub.integrations.webhook.application.WebhookEnqueueService;
 import zelisline.ub.messaging.application.CreditSaleReminderEvent;
+import zelisline.ub.messaging.application.CreditSaleReminderLineItem;
 import zelisline.ub.sales.SalePaymentLedger;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.PostSaleLineRequest;
@@ -74,6 +83,10 @@ public class SaleService {
     private final WebhookEnqueueService webhookEnqueueService;
     private final ApplicationEventPublisher eventPublisher;
     private final SaleActorNameService saleActorNameService;
+    private final ItemRepository itemRepository;
+    private final CreditAccountRepository creditAccountRepository;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
 
     @Transactional
     public SaleCreationOutcome createSale(String businessId, String rawIdempotencyKey, PostSaleRequest req, String userId) {
@@ -141,12 +154,8 @@ public class SaleService {
         attachJournalToSale(saleId, businessId, journalId);
         creditSaleDebtService.applyDebtForNewSale(businessId, saleId, customerId, creditTenderTotal);
         if (creditTenderTotal.signum() > 0 && customerId != null && !customerId.isBlank()) {
-            eventPublisher.publishEvent(new CreditSaleReminderEvent(
-                    businessId,
-                    saleId,
-                    customerId,
-                    creditTenderTotal,
-                    countCreditSaleItems(saleItems)));
+            eventPublisher.publishEvent(buildCreditSaleReminderEvent(
+                    businessId, saleId, customerId, creditTenderTotal, saleItems));
         }
         walletLedgerService.applyWalletForCompletedSale(
                 businessId, saleId, customerId, walletTenderTotal, resolved.overpay());
@@ -160,6 +169,7 @@ public class SaleService {
         shiftRepository.save(shift);
 
         SaleResponse completed = toResponse(loadSaleOrThrow(saleId, businessId));
+        publishSaleEvents(businessId, req.branchId(), shift.getId(), saleId, userId, grandTotal, resolved.normalized(), cashIn);
         enqueueSaleCompletedWebhook(businessId, completed, effectiveSoldAt);
 
         // Publish real-time payment.confirmed for each payment method
@@ -285,6 +295,62 @@ public class SaleService {
     private static void applyDrawerCash(Shift shift, BigDecimal cashIn) {
         BigDecimal next = shift.getExpectedClosingCash().add(cashIn).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         shift.setExpectedClosingCash(next);
+    }
+
+    private void publishSaleEvents(String businessId, String branchId, String shiftId, String saleId, String userId,
+                                   BigDecimal grandTotal, List<NormalizedPayment> payments, BigDecimal cashIn) {
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.SALES, AuditEventTypes.SALE_COMPLETED, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .branchId(branchId)
+                .actor(userId, AuditEventActorType.USER)
+                .target("sale", saleId)
+                .targetLabel("Sale " + saleId.substring(0, 8))
+                .shiftId(shiftId)
+                .newState(map("grandTotal", grandTotal.toPlainString(), "paymentMethods", paymentMethodSummary(payments)))
+                .source("pos_terminal")
+                .build());
+
+        if (cashIn.signum() > 0) {
+            auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.CASH_DRAWER, AuditEventTypes.CASH_SALE_ADDED, AuditEventSeverity.INFO)
+                    .businessId(businessId)
+                    .branchId(branchId)
+                    .actor(userId, AuditEventActorType.USER)
+                    .target("shift", shiftId)
+                    .targetLabel("Shift " + shiftId.substring(0, 8))
+                    .shiftId(shiftId)
+                    .newState(map("cashAmount", cashIn.toPlainString()))
+                    .source("pos_terminal")
+                    .build());
+        }
+
+        for (NormalizedPayment p : payments) {
+            auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.SALES, AuditEventTypes.PAYMENT_TENDERED, AuditEventSeverity.INFO)
+                    .businessId(businessId)
+                    .branchId(branchId)
+                    .actor(userId, AuditEventActorType.USER)
+                    .target("sale", saleId)
+                    .targetLabel("Sale " + saleId.substring(0, 8))
+                    .shiftId(shiftId)
+                    .newState(map("method", p.method(), "amount", p.amount().toPlainString(), "reference", p.reference()))
+                    .source("pos_terminal")
+                    .build());
+        }
+    }
+
+    private static Map<String, Object> map(Object... entries) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        for (int i = 0; i < entries.length; i += 2) {
+            map.put((String) entries[i], entries[i + 1]);
+        }
+        return map;
+    }
+
+    private static Map<String, BigDecimal> paymentMethodSummary(List<NormalizedPayment> payments) {
+        Map<String, BigDecimal> summary = new LinkedHashMap<>();
+        for (NormalizedPayment p : payments) {
+            summary.merge(p.method(), p.amount(), BigDecimal::add);
+        }
+        return summary;
     }
 
     private List<SaleItem> pickAndBuildSaleItems(
@@ -522,6 +588,51 @@ public class SaleService {
             return null;
         }
         return raw.trim();
+    }
+
+    private CreditSaleReminderEvent buildCreditSaleReminderEvent(
+            String businessId,
+            String saleId,
+            String customerId,
+            BigDecimal creditTenderTotal,
+            List<SaleItem> saleItems
+    ) {
+        List<CreditSaleReminderLineItem> items = buildReminderLineItems(businessId, saleItems);
+        BigDecimal balanceOwed = creditAccountRepository
+                .findByCustomerIdAndBusinessId(customerId, businessId)
+                .map(acc -> acc.getBalanceOwed())
+                .orElse(BigDecimal.ZERO);
+        return new CreditSaleReminderEvent(
+                businessId,
+                saleId,
+                customerId,
+                creditTenderTotal,
+                countCreditSaleItems(saleItems),
+                items,
+                balanceOwed);
+    }
+
+    private List<CreditSaleReminderLineItem> buildReminderLineItems(String businessId, List<SaleItem> saleItems) {
+        if (saleItems == null || saleItems.isEmpty()) {
+            return List.of();
+        }
+        List<String> itemIds = saleItems.stream()
+                .map(SaleItem::getItemId)
+                .distinct()
+                .toList();
+        Map<String, String> itemNames = itemRepository
+                .findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)
+                .stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        zelisline.ub.catalog.domain.Item::getId,
+                        item -> item.getName() != null ? item.getName() : "Item",
+                        (a, b) -> a));
+        return saleItems.stream()
+                .map(line -> new CreditSaleReminderLineItem(
+                        itemNames.getOrDefault(line.getItemId(), "Item"),
+                        line.getQuantity(),
+                        line.getLineTotal()))
+                .toList();
     }
 
     private static int countCreditSaleItems(List<SaleItem> items) {

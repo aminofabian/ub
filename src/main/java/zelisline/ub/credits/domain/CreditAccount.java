@@ -48,6 +48,12 @@ public class CreditAccount {
     @Column(name = "reminders_opt_out", nullable = false)
     private boolean remindersOptOut;
 
+    @Column(name = "last_balance_reminder_at")
+    private Instant lastBalanceReminderAt;
+
+    @Column(name = "balance_reminder_count", nullable = false)
+    private int balanceReminderCount = 0;
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;

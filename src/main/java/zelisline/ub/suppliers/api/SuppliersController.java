@@ -72,7 +72,8 @@ public class SuppliersController {
     @ResponseStatus(HttpStatus.CREATED)
     public SupplierResponse create(@Valid @RequestBody CreateSupplierRequest body, HttpServletRequest request) {
         CurrentTenantUser.require(request);
-        return supplierService.createSupplier(TenantRequestIds.resolveBusinessId(request), body);
+        return supplierService.createSupplier(
+                TenantRequestIds.resolveBusinessId(request), body, CurrentTenantUser.auditActorId(request));
     }
 
     @PatchMapping("/{supplierId}")
@@ -83,7 +84,12 @@ public class SuppliersController {
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        return supplierService.patchSupplier(TenantRequestIds.resolveBusinessId(request), supplierId, body);
+        return supplierService.patchSupplier(
+                TenantRequestIds.resolveBusinessId(request),
+                supplierId,
+                body,
+                CurrentTenantUser.auditActorId(request)
+        );
     }
 
     @GetMapping("/{supplierId}/item-links")
@@ -128,7 +134,12 @@ public class SuppliersController {
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        return supplierService.addContact(TenantRequestIds.resolveBusinessId(request), supplierId, body);
+        return supplierService.addContact(
+                TenantRequestIds.resolveBusinessId(request),
+                supplierId,
+                body,
+                CurrentTenantUser.auditActorId(request)
+        );
     }
 
     @PatchMapping("/{supplierId}/contacts/{contactId}")
@@ -141,7 +152,12 @@ public class SuppliersController {
     ) {
         CurrentTenantUser.require(request);
         return supplierService.patchContact(
-                TenantRequestIds.resolveBusinessId(request), supplierId, contactId, body);
+                TenantRequestIds.resolveBusinessId(request),
+                supplierId,
+                contactId,
+                body,
+                CurrentTenantUser.auditActorId(request)
+        );
     }
 
     @DeleteMapping("/{supplierId}/contacts/{contactId}")
@@ -153,6 +169,11 @@ public class SuppliersController {
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        supplierService.deleteContact(TenantRequestIds.resolveBusinessId(request), supplierId, contactId);
+        supplierService.deleteContact(
+                TenantRequestIds.resolveBusinessId(request),
+                supplierId,
+                contactId,
+                CurrentTenantUser.auditActorId(request)
+        );
     }
 }

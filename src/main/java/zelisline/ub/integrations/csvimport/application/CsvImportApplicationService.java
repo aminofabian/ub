@@ -138,7 +138,7 @@ public class CsvImportApplicationService {
                     null,
                     null,
                     null, null, null);
-            ItemCreateResult created = itemCatalogService.createItem(businessId, req, null);
+            ItemCreateResult created = itemCatalogService.createItem(businessId, req, null, actorUserId);
             String itemId = created.body().id();
 
             BigDecimal sellPrice = parseMoney(col(c, "selling_price"));
@@ -207,7 +207,8 @@ public class CsvImportApplicationService {
                             null,
                             null,
                             null
-                    )
+                    ),
+                    null
             );
             n++;
             s.onRowCommitted(n);

@@ -156,7 +156,7 @@ public class LegacyProductJsonImportService {
             String itemTypeId = resolveItemTypeId(businessId, r.itemTypeRaw());
             String aisleId = resolveOrCreateAisle(businessId, r, aisleCodeToId);
             CreateItemRequest req = toCreateItemRequest(n, itemTypeId, aisleId, categoryRemap);
-            ItemResponse created = itemCatalogService.createItem(businessId, req, null).body();
+            ItemResponse created = itemCatalogService.createItem(businessId, req, null, actorUserId).body();
             legacyIdToNewItemId.put(r.legacyId(), created.id());
             persistLegacyImportSourceId(businessId, created.id(), r.legacyId());
             finishRow(businessId, r, created.id(), priceEffective, branchIdOrNull, actorUserId);
@@ -205,7 +205,7 @@ public class LegacyProductJsonImportService {
                         null,
                         null
                 );
-                ItemResponse created = itemCatalogService.createVariant(businessId, resolvedParent, vr);
+                ItemResponse created = itemCatalogService.createVariant(businessId, resolvedParent, vr, actorUserId);
                 legacyIdToNewItemId.put(r.legacyId(), created.id());
                 persistLegacyImportSourceId(businessId, created.id(), r.legacyId());
                 patchPostVariant(businessId, r, created.id());

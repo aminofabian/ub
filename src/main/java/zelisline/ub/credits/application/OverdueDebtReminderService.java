@@ -1,11 +1,12 @@
 package zelisline.ub.credits.application;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Duration;
-import java.time.LocalDate;
+import java.time.Instant;
 import java.time.ZoneId;
-import java.time.temporal.WeekFields;
+import java.util.List;
 import java.util.Locale;
 
 import org.slf4j.Logger;
@@ -17,17 +18,22 @@ import org.springframework.transaction.annotation.Transactional;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.CreditReminderRecord;
+import zelisline.ub.credits.domain.Customer;
+import zelisline.ub.credits.domain.CustomerPhone;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CreditReminderRecordRepository;
+import zelisline.ub.credits.repository.CustomerPhoneRepository;
+import zelisline.ub.credits.repository.CustomerRepository;
+import zelisline.ub.messaging.application.CustomerMessageDispatcher;
+import zelisline.ub.messaging.application.TenantMessagingConfig;
+import zelisline.ub.payments.application.StkPhoneNormalizer;
+import zelisline.ub.tenancy.domain.Business;
+import zelisline.ub.tenancy.repository.BusinessRepository;
 
 /**
- * Phase 5 Slice 6 — overdue tab reminder pipeline. The actual SMS/email send is intentionally a
- * stub (Phase 7 ships the real provider adapter) but everything else — query, idempotency,
- * audit, opt-out — is wired so the only swap point in Phase 7 is {@link #dispatch(CreditAccount)}.
- *
- * <p>Idempotency: each (account, ISO-week) pair gets at most one row in {@code credit_reminders}
- * thanks to the unique constraint, so re-runs of {@link #sweep()} within the same week are
- * silent no-ops.
+ * Recurring balance reminder sweep for outstanding tab (credit) accounts.
+ * Runs daily and sends a WhatsApp/SMS reminder to eligible accounts every N days
+ * until the balance is paid, the customer opts out, or the max reminder count is reached.
  */
 @Service
 @RequiredArgsConstructor
@@ -37,64 +43,130 @@ public class OverdueDebtReminderService {
 
     private final CreditAccountRepository creditAccountRepository;
     private final CreditReminderRecordRepository creditReminderRecordRepository;
+    private final CustomerRepository customerRepository;
+    private final CustomerPhoneRepository customerPhoneRepository;
+    private final BusinessRepository businessRepository;
+    private final BusinessCreditMessagingSettingsService messagingSettingsService;
+    private final CustomerMessageDispatcher customerMessageDispatcher;
     private final Clock clock;
 
-    @Value("${app.credits.reminders.overdue-days:30}")
-    private int overdueDays;
+    @Value("${app.credits.reminders.interval-days:3}")
+    private int intervalDays;
 
     @Value("${app.credits.reminders.min-balance:1.00}")
     private BigDecimal minBalance;
 
-    @Value("${app.credits.reminders.zone:UTC}")
+    @Value("${app.credits.reminders.max-count:5}")
+    private int maxCount;
+
+    @Value("${app.credits.reminders.zone:Africa/Nairobi}")
     private String zoneId;
 
     @Transactional
     public ReminderSweepReport sweep() {
-        var staleBefore = clock.instant().minus(Duration.ofDays(Math.max(1, overdueDays)));
-        var overdue = creditAccountRepository.findOverdueForReminder(minBalance, staleBefore);
-        String week = currentWeekBucket();
+        Instant staleBefore = clock.instant().minus(Duration.ofDays(Math.max(1, intervalDays)));
+        List<CreditAccount> eligible = creditAccountRepository.findEligibleForBalanceReminder(
+                minBalance, staleBefore, maxCount);
+
         int sent = 0;
         int skipped = 0;
-        for (CreditAccount acc : overdue) {
-            if (creditReminderRecordRepository.existsByCreditAccountIdAndWeekBucket(acc.getId(), week)) {
+        for (CreditAccount account : eligible) {
+            DispatchOutcome outcome = dispatch(account);
+            if ("skipped".equals(outcome.status())) {
                 skipped++;
-                continue;
+            } else {
+                sent++;
             }
-            DispatchOutcome outcome = dispatch(acc);
+            account.setLastBalanceReminderAt(clock.instant());
+            account.setBalanceReminderCount(account.getBalanceReminderCount() + 1);
+            creditAccountRepository.save(account);
+
             CreditReminderRecord row = new CreditReminderRecord();
-            row.setBusinessId(acc.getBusinessId());
-            row.setCreditAccountId(acc.getId());
-            row.setWeekBucket(week);
+            row.setBusinessId(account.getBusinessId());
+            row.setCreditAccountId(account.getId());
+            row.setWeekBucket(currentDayBucket());
             row.setChannel(outcome.channel());
             row.setOutcome(outcome.status());
             row.setDetail(outcome.detail());
             creditReminderRecordRepository.save(row);
-            sent++;
         }
-        log.info("credits.reminder.sweep accounts={} sent={} skipped={} week={}",
-                overdue.size(), sent, skipped, week);
-        return new ReminderSweepReport(overdue.size(), sent, skipped, week);
+        log.info("credits.balance_reminder.sweep accounts={} sent={} skipped={} intervalDays={} maxCount={}",
+                eligible.size(), sent, skipped, intervalDays, maxCount);
+        return new ReminderSweepReport(eligible.size(), sent, skipped, currentDayBucket());
     }
 
-    /**
-     * Hook for Phase 7 to plug a real SMS/email provider. The stub returns "stub" so audit rows
-     * are still produced and tests can lock in idempotency without a live integration.
-     */
     DispatchOutcome dispatch(CreditAccount account) {
-        return new DispatchOutcome("stub", "logged", "Phase 7 will wire SMS/email provider");
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForDispatch(account.getBusinessId());
+        if (!messaging.enabled()) {
+            return new DispatchOutcome("none", "skipped", "messaging_disabled");
+        }
+
+        Customer customer = customerRepository
+                .findByIdAndBusinessIdAndDeletedAtIsNull(account.getCustomerId(), account.getBusinessId())
+                .orElse(null);
+        if (customer == null) {
+            return new DispatchOutcome("none", "skipped", "customer_not_found");
+        }
+
+        String phoneDigits = resolvePrimaryPhoneDigits(account.getCustomerId());
+        if (phoneDigits == null) {
+            return new DispatchOutcome("none", "skipped", "no_phone");
+        }
+
+        Business business = businessRepository.findById(account.getBusinessId()).orElse(null);
+        String currency = business != null && business.getCurrency() != null
+                ? business.getCurrency().trim()
+                : "KES";
+        String shopName = business != null && business.getName() != null
+                ? business.getName().trim()
+                : "our shop";
+        String paymentUrl = messaging.paymentAccountUrl().isBlank()
+                ? "https://palmart.co.ke/shop/account"
+                : messaging.paymentAccountUrl().trim();
+        String message = buildMessage(
+                customer.getName(),
+                shopName,
+                account.getBalanceOwed(),
+                currency,
+                paymentUrl);
+
+        CustomerMessageDispatcher.DeliveryResult delivery = customerMessageDispatcher.deliver(messaging, phoneDigits, message);
+        log.info("credits.balance_reminder account={} customer={} channel={} outcome={} detail={}",
+                account.getId(), account.getCustomerId(), delivery.channel(), delivery.outcome(), delivery.detail());
+        return new DispatchOutcome(delivery.channel(), delivery.outcome(), delivery.detail());
     }
 
-    private String currentWeekBucket() {
-        LocalDate today = LocalDate.now(clock.withZone(ZoneId.of(zoneId)));
-        WeekFields wf = WeekFields.of(Locale.ROOT);
-        int week = today.get(wf.weekOfWeekBasedYear());
-        int weekYear = today.get(wf.weekBasedYear());
-        return String.format(Locale.ROOT, "%04d-W%02d", weekYear, week);
+    private String buildMessage(String customerName, String shopName, BigDecimal balanceOwed, String currency, String paymentUrl) {
+        String greeting = (customerName == null || customerName.isBlank()) ? "Hi" : "Hi " + customerName.trim();
+        return greeting + ", you still owe " + formatMoney(balanceOwed, currency) + " at " + shopName + ".\n"
+                + "Pay here: " + paymentUrl;
+    }
+
+    private String resolvePrimaryPhoneDigits(String customerId) {
+        List<CustomerPhone> phones = customerPhoneRepository.findByCustomerIdOrderByCreatedAtAsc(customerId);
+        if (phones.isEmpty()) {
+            return null;
+        }
+        CustomerPhone pick = phones.stream().filter(CustomerPhone::isPrimary).findFirst().orElse(phones.getFirst());
+        return StkPhoneNormalizer.normalize(pick.getPhone());
+    }
+
+    private String currentDayBucket() {
+        return clock.instant().atZone(ZoneId.of(zoneId)).toLocalDate()
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd"));
+    }
+
+    private static String formatMoney(BigDecimal amount, String currency) {
+        BigDecimal scaled = amount.setScale(2, RoundingMode.HALF_UP);
+        java.text.NumberFormat nf = java.text.NumberFormat.getNumberInstance(Locale.UK);
+        nf.setMinimumFractionDigits(scaled.scale() > 0 && scaled.remainder(BigDecimal.ONE).signum() != 0 ? 2 : 0);
+        nf.setMaximumFractionDigits(2);
+        return currency + " " + nf.format(scaled);
     }
 
     public record DispatchOutcome(String channel, String status, String detail) {
     }
 
-    public record ReminderSweepReport(int candidates, int sent, int alreadySent, String weekBucket) {
+    public record ReminderSweepReport(int candidates, int sent, int alreadySent, String dayBucket) {
     }
 }

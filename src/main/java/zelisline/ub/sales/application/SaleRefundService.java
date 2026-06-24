@@ -24,6 +24,12 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.inventory.application.BatchNumberGenerator;
 import zelisline.ub.credits.application.BusinessCreditSettingsService;
 import zelisline.ub.credits.application.CreditSaleDebtService;
@@ -92,6 +98,8 @@ public class SaleRefundService {
     private final BusinessCreditSettingsService businessCreditSettingsService;
     private final SaleActorNameService saleActorNameService;
     private final PackageVariantStockResolver packageVariantStockResolver;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
     @PersistenceContext
     private EntityManager entityManager;
 
@@ -153,8 +161,57 @@ public class SaleRefundService {
                 jeId
         );
         finalizeSaleRefundTotals(sale, comp.totalMoney());
+        publishRefundEvents(businessId, sale, refund, shift, userId, pays);
 
         return toRefundResponse(refund);
+    }
+
+    private void publishRefundEvents(String businessId, Sale sale, Refund refund, Shift shift, String userId, List<NormalizedPay> pays) {
+        BigDecimal cashOut = sumCash(pays);
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.SALES, AuditEventTypes.REFUND_ISSUED, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .branchId(sale.getBranchId())
+                .actor(userId, AuditEventActorType.USER)
+                .target("refund", refund.getId())
+                .targetLabel("Refund " + refund.getId().substring(0, 8))
+                .shiftId(shift.getId())
+                .newState(map(
+                        "saleId", sale.getId(),
+                        "totalRefunded", refund.getTotalRefunded().toPlainString(),
+                        "paymentMethods", paymentMethodSummary(pays)))
+                .source("pos_terminal")
+                .reason(refund.getReason())
+                .build());
+
+        if (cashOut.signum() > 0) {
+            auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.CASH_DRAWER, AuditEventTypes.CASH_REFUND_REMOVED, AuditEventSeverity.INFO)
+                    .businessId(businessId)
+                    .branchId(sale.getBranchId())
+                    .actor(userId, AuditEventActorType.USER)
+                    .target("shift", shift.getId())
+                    .targetLabel("Shift " + shift.getId().substring(0, 8))
+                    .shiftId(shift.getId())
+                    .newState(map("cashAmount", cashOut.toPlainString()))
+                    .source("pos_terminal")
+                    .reason("Refund: " + refund.getId())
+                    .build());
+        }
+    }
+
+    private static Map<String, Object> map(Object... entries) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        for (int i = 0; i < entries.length; i += 2) {
+            map.put((String) entries[i], entries[i + 1]);
+        }
+        return map;
+    }
+
+    private static Map<String, BigDecimal> paymentMethodSummary(List<NormalizedPay> pays) {
+        Map<String, BigDecimal> summary = new LinkedHashMap<>();
+        for (NormalizedPay p : pays) {
+            summary.merge(p.method(), p.amount(), BigDecimal::add);
+        }
+        return summary;
     }
 
     private void assertSaleRefundable(Sale sale) {

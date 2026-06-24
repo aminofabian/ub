@@ -64,7 +64,7 @@ public class LegacySupplierJsonImportService {
         }
         int n = 0;
         for (SupplierRow r : rows) {
-            var created = supplierService.createSupplier(businessId, toCreateRequest(r));
+            var created = supplierService.createSupplier(businessId, toCreateRequest(r), null);
             if (r.legacyImportSourceId() != null) {
                 supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(created.id(), businessId).ifPresent(s -> {
                     s.setLegacyImportSourceId(r.legacyImportSourceId());

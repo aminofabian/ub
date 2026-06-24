@@ -58,6 +58,7 @@ dependencies {
 	// MariaDB executes them unchanged. No separate flyway-mariadb dep needed.
 	runtimeOnly 'org.flywaydb:flyway-mysql'
 	runtimeOnly 'org.postgresql:postgresql'
+	implementation 'net.logstash.logback:logstash-logback-encoder:8.0'
 	annotationProcessor 'org.projectlombok:lombok'
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
@@ -72,6 +73,7 @@ dependencies {
 
 tasks.named('test') {
 	useJUnitPlatform()
+	jvmArgs '-Xmx2g', '-XX:MaxMetaspaceSize=512m'
 	// Forward -DexportOpenapi=true from the Gradle CLI to the test worker JVM.
 	def exportOpenapi = System.getProperty('exportOpenapi')
 	if (exportOpenapi != null) {

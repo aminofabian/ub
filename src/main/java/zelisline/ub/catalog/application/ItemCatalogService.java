@@ -31,6 +31,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.catalog.api.dto.CatalogListScope;
 import zelisline.ub.catalog.api.dto.CatalogRowType;
 import zelisline.ub.catalog.api.dto.CatalogRowTypeSum;
@@ -90,6 +96,8 @@ public class ItemCatalogService {
     private final SyncConflictService syncConflictService;
     private final PackageVariantStockResolver packageVariantStockResolver;
     private final SaleItemRepository saleItemRepository;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
 
     @Transactional(readOnly = true)
     public Page<ItemSummaryResponse> listItems(
@@ -524,8 +532,13 @@ public class ItemCatalogService {
 
     @Transactional
     public ItemCreateResult createItem(String businessId, CreateItemRequest request, String idempotencyKeyRaw) {
+        return createItem(businessId, request, idempotencyKeyRaw, null);
+    }
+
+    @Transactional
+    public ItemCreateResult createItem(String businessId, CreateItemRequest request, String idempotencyKeyRaw, String actorUserId) {
         if (idempotencyKeyRaw != null && !idempotencyKeyRaw.isBlank()) {
-            return createItemIdempotent(businessId, request, idempotencyKeyRaw.trim());
+            return createItemIdempotent(businessId, request, idempotencyKeyRaw.trim(), actorUserId);
         }
         Item item = newItemFromCreate(businessId, request);
         try {
@@ -534,10 +547,11 @@ public class ItemCatalogService {
             throw translateDuplicateSku(ex);
         }
         supplierLinkProvisioner.afterItemChanged(businessId, item);
+        publishItemEvent(businessId, item, actorUserId, AuditEventTypes.ITEM_CREATED, null);
         return new ItemCreateResult(HttpStatus.CREATED.value(), toResponse(item, List.of(), null, null));
     }
 
-    private ItemCreateResult createItemIdempotent(String businessId, CreateItemRequest request, String keyRaw) {
+    private ItemCreateResult createItemIdempotent(String businessId, CreateItemRequest request, String keyRaw, String actorUserId) {
         String keyHash = TokenHasher.sha256Hex(keyRaw);
         synchronized ((businessId + "|" + keyHash).intern()) {
             String bodyJson;
@@ -577,6 +591,7 @@ public class ItemCatalogService {
             supplierLinkProvisioner.afterItemChanged(businessId, item);
             ItemResponse body = toResponse(item, List.of(), null, null);
             persistIdempotency(businessId, keyHash, bodyHash, HttpStatus.CREATED.value(), body);
+            publishItemEvent(businessId, item, actorUserId, AuditEventTypes.ITEM_CREATED, null);
             return new ItemCreateResult(HttpStatus.CREATED.value(), body);
         }
     }
@@ -624,6 +639,7 @@ public class ItemCatalogService {
     ) {
         Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Item not found"));
+        Map<String, Object> oldState = itemSnapshot(item);
 
         // Phase 9: Offline conflict detection — reject stale edits when the client's
         // expectedUpdatedAt does not match the server's current updatedAt.
@@ -798,11 +814,18 @@ public class ItemCatalogService {
             throw translateDuplicateSku(ex);
         }
         supplierLinkProvisioner.afterItemChanged(businessId, item);
+        Map<String, Object> newState = itemSnapshot(item);
+        publishItemEvent(businessId, item, actorUserId, AuditEventTypes.ITEM_UPDATED, compactDiff(oldState, newState));
         return toResponseWithVariants(businessId, item);
     }
 
     @Transactional
     public void deleteItem(String businessId, String itemId, boolean cascadeVariants) {
+        deleteItem(businessId, itemId, cascadeVariants, null);
+    }
+
+    @Transactional
+    public void deleteItem(String businessId, String itemId, boolean cascadeVariants, String actorUserId) {
         Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Item not found"));
         if (cascadeVariants && item.getVariantOfItemId() == null) {
@@ -811,12 +834,14 @@ public class ItemCatalogService {
             for (Item child : children) {
                 softDeleteItem(child);
                 removeFromStockTakeChecklist(businessId, child.getId());
+                publishItemEvent(businessId, child, actorUserId, AuditEventTypes.ITEM_DELETED, null);
             }
             itemRepository.saveAll(children);
         }
         softDeleteItem(item);
         itemRepository.save(item);
         removeFromStockTakeChecklist(businessId, item.getId());
+        publishItemEvent(businessId, item, actorUserId, AuditEventTypes.ITEM_DELETED, null);
     }
 
     private void removeFromStockTakeChecklist(String businessId, String itemId) {
@@ -831,6 +856,11 @@ public class ItemCatalogService {
 
     @Transactional
     public ItemResponse createVariant(String businessId, String parentId, CreateVariantRequest request) {
+        return createVariant(businessId, parentId, request, null);
+    }
+
+    @Transactional
+    public ItemResponse createVariant(String businessId, String parentId, CreateVariantRequest request, String actorUserId) {
         Item parent = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(parentId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Parent item not found"));
         if (parent.getVariantOfItemId() != null) {
@@ -929,6 +959,7 @@ public class ItemCatalogService {
             throw translateDuplicateSku(ex);
         }
         supplierLinkProvisioner.afterItemChanged(businessId, child);
+        publishItemEvent(businessId, child, actorUserId, AuditEventTypes.ITEM_CREATED, null);
         return toResponse(child, List.of(), null, null);
     }
 
@@ -994,6 +1025,9 @@ public class ItemCatalogService {
             String altText,
             boolean primary
     ) {
+        if (!cloudinaryImageService.isConfigured()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Image storage not configured");
+        }
         Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Item not found"));
         CloudinaryUploadResult r = cloudinaryImageService.uploadImage(bytes, originalFilename, businessId, itemId);
@@ -1867,5 +1901,77 @@ public class ItemCatalogService {
         aisleRepository.findByIdAndBusinessId(aid, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Aisle not found"));
         return aid;
+    }
+
+    private Map<String, Object> itemSnapshot(Item item) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("sku", item.getSku());
+        snapshot.put("barcode", item.getBarcode());
+        snapshot.put("name", item.getName());
+        snapshot.put("categoryId", item.getCategoryId());
+        snapshot.put("aisleId", item.getAisleId());
+        snapshot.put("itemTypeId", item.getItemTypeId());
+        snapshot.put("unitType", item.getUnitType());
+        snapshot.put("isWeighed", item.isWeighed());
+        snapshot.put("isSellable", item.isSellable());
+        snapshot.put("isStocked", item.isStocked());
+        snapshot.put("isPackageVariant", item.isPackageVariant());
+        snapshot.put("packagingUnitQty", item.getPackagingUnitQty());
+        snapshot.put("bundleQty", item.getBundleQty());
+        snapshot.put("bundlePrice", item.getBundlePrice());
+        snapshot.put("buyingPrice", item.getBuyingPrice());
+        snapshot.put("minStockLevel", item.getMinStockLevel());
+        snapshot.put("reorderLevel", item.getReorderLevel());
+        snapshot.put("reorderQty", item.getReorderQty());
+        snapshot.put("expiresAfterDays", item.getExpiresAfterDays());
+        snapshot.put("hasExpiry", item.isHasExpiry());
+        snapshot.put("active", item.isActive());
+        snapshot.put("webPublished", item.isWebPublished());
+        snapshot.put("brand", item.getBrand());
+        snapshot.put("size", item.getSize());
+        snapshot.put("variantOfItemId", item.getVariantOfItemId());
+        snapshot.put("variantName", item.getVariantName());
+        return snapshot;
+    }
+
+    private Map<String, Object> compactDiff(Map<String, Object> oldState, Map<String, Object> newState) {
+        Map<String, Object> diff = new LinkedHashMap<>();
+        for (String key : oldState.keySet()) {
+            Object oldVal = oldState.get(key);
+            Object newVal = newState.get(key);
+            if (!Objects.equals(oldVal, newVal)) {
+                diff.put(key, map("old", oldVal, "new", newVal));
+            }
+        }
+        return diff;
+    }
+
+    private static Map<String, Object> map(Object... entries) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        for (int i = 0; i < entries.length; i += 2) {
+            map.put((String) entries[i], entries[i + 1]);
+        }
+        return map;
+    }
+
+    private void publishItemEvent(String businessId, Item item, String actorUserId, String eventType, Object diff) {
+        AuditEventActorType actorType = actorUserId != null && !actorUserId.isBlank()
+                ? AuditEventActorType.USER
+                : AuditEventActorType.SYSTEM;
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.PRODUCTS, eventType, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .actor(actorUserId, actorType)
+                .target("item", item.getId())
+                .targetLabel(item.getSku() + " — " + item.getName())
+                .source("web_admin")
+                .metadata(map(
+                        "sku", item.getSku(),
+                        "name", item.getName(),
+                        "barcode", item.getBarcode(),
+                        "categoryId", item.getCategoryId(),
+                        "active", item.isActive()
+                ))
+                .diff(diff)
+                .build());
     }
 }

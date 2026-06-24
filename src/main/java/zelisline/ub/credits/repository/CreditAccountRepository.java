@@ -52,4 +52,23 @@ public interface CreditAccountRepository extends JpaRepository<CreditAccount, St
             @Param("minOwed") BigDecimal minOwed,
             @Param("staleBefore") Instant staleBefore
     );
+
+    /**
+     * Accounts eligible for a recurring balance reminder: positive balance, opted-in,
+     * reminder count below the cap, and either never reminded or last reminder older than
+     * {@code staleBefore}.
+     */
+    @Query("""
+            select c from CreditAccount c
+            where c.balanceOwed >= :minOwed
+              and c.remindersOptOut = false
+              and c.balanceReminderCount < :maxCount
+              and (c.lastBalanceReminderAt is null or c.lastBalanceReminderAt < :staleBefore)
+            order by c.lastBalanceReminderAt asc
+            """)
+    List<CreditAccount> findEligibleForBalanceReminder(
+            @Param("minOwed") BigDecimal minOwed,
+            @Param("staleBefore") Instant staleBefore,
+            @Param("maxCount") int maxCount
+    );
 }

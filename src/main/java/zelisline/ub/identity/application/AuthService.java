@@ -16,6 +16,12 @@ import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.identity.api.dto.AuthUserResponse;
 import zelisline.ub.identity.api.dto.LoginPinRequest;
 import zelisline.ub.identity.api.dto.LoginRequest;
@@ -88,6 +94,8 @@ public class AuthService {
     private final NotificationService notificationService;
     private final FrontendAuthLinkBuilder frontendAuthLinkBuilder;
     private final RefreshTokenCookieSupport refreshTokenCookieSupport;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
 
     @Value("${app.jwt.access-ttl-minutes:60}")
     private long accessTtlMinutes;
@@ -109,11 +117,13 @@ public class AuthService {
         }
         assertCanAuthenticate(user);
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
-            recordLoginFailure(user);
+            recordLoginFailure(user, http, AuditEventTypes.LOGIN_FAILED, "Incorrect password");
             throw invalidCredentials();
         }
         recordLoginSuccess(user);
-        return issueNewSession(user, http);
+        LoginResponse response = issueNewSession(user, http);
+        publishLoginEvent(user, http, response, AuditEventTypes.LOGIN_SUCCEEDED, null);
+        return response;
     }
 
     @Transactional
@@ -131,11 +141,13 @@ public class AuthService {
         assertCanAuthenticate(user);
         String pinPayload = businessId + ":" + request.pin();
         if (!passwordEncoder.matches(pinPayload, user.getPinHash())) {
-            recordLoginFailure(user);
+            recordLoginFailure(user, http, AuditEventTypes.LOGIN_FAILED, "Incorrect PIN");
             throw invalidCredentials();
         }
         recordLoginSuccess(user);
-        return issueNewSession(user, http);
+        LoginResponse response = issueNewSession(user, http);
+        publishLoginEvent(user, http, response, AuditEventTypes.LOGIN_SUCCEEDED, null);
+        return response;
     }
 
     @Transactional
@@ -205,7 +217,7 @@ public class AuthService {
     }
 
     @Transactional
-    public void logout(TenantPrincipal principal) {
+    public void logout(TenantPrincipal principal, HttpServletRequest http) {
         if (principal.accessJti() == null) {
             return;
         }
@@ -214,11 +226,28 @@ public class AuthService {
                     session.setRevokedAt(Instant.now());
                     userSessionRepository.save(session);
                 });
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.SECURITY, AuditEventTypes.LOGOUT, AuditEventSeverity.INFO)
+                .businessId(principal.businessId())
+                .branchId(principal.branchId())
+                .actor(principal.userId(), AuditEventActorType.USER)
+                .sessionId(principal.accessJti())
+                .ipAddress(clientIp(http))
+                .userAgent(trimToNull(http.getHeader("User-Agent")))
+                .source("web_admin")
+                .build());
     }
 
     @Transactional
-    public void logoutAll(TenantPrincipal principal) {
+    public void logoutAll(TenantPrincipal principal, HttpServletRequest http) {
         userSessionRepository.revokeAllActiveForUser(principal.userId(), Instant.now());
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.SECURITY, AuditEventTypes.LOGOUT_ALL, AuditEventSeverity.INFO)
+                .businessId(principal.businessId())
+                .branchId(principal.branchId())
+                .actor(principal.userId(), AuditEventActorType.USER)
+                .ipAddress(clientIp(http))
+                .userAgent(trimToNull(http.getHeader("User-Agent")))
+                .source("web_admin")
+                .build());
     }
 
     /** Always {@code 204} — no tenant user enumeration (§3.3). */
@@ -244,6 +273,17 @@ public class AuthService {
             String link = frontendAuthLinkBuilder.passwordResetLink(http, businessId, raw);
             String body = passwordResetEmailRenderer.renderBody(user.getEmail(), link);
             notificationService.sendPasswordResetEmail(user.getEmail(), "Reset your UB password", body);
+            auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.SECURITY, AuditEventTypes.PASSWORD_RESET_REQUESTED, AuditEventSeverity.INFO)
+                    .businessId(businessId)
+                    .branchId(user.getBranchId())
+                    .actor(user.getId(), AuditEventActorType.USER)
+                    .actorName(user.getEmail())
+                    .target("user", user.getId())
+                    .targetLabel(user.getEmail())
+                    .ipAddress(clientIp(http))
+                    .userAgent(trimToNull(http.getHeader("User-Agent")))
+                    .source("web_admin")
+                    .build());
         });
     }
 
@@ -272,6 +312,17 @@ public class AuthService {
         row.setUsedAt(Instant.now());
         passwordResetTokenRepository.save(row);
         userSessionRepository.revokeAllActiveForUser(user.getId(), Instant.now());
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.SECURITY, AuditEventTypes.PASSWORD_RESET_USED, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .branchId(user.getBranchId())
+                .actor(user.getId(), AuditEventActorType.USER)
+                .actorName(user.getEmail())
+                .target("user", user.getId())
+                .targetLabel(user.getEmail())
+                .ipAddress(clientIp(http))
+                .userAgent(trimToNull(http.getHeader("User-Agent")))
+                .source("web_admin")
+                .build());
     }
 
     @Transactional
@@ -286,6 +337,16 @@ public class AuthService {
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
         userRepository.save(user);
         userSessionRepository.revokeAllActiveForUser(user.getId(), Instant.now());
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.SECURITY, AuditEventTypes.PASSWORD_CHANGED, AuditEventSeverity.INFO)
+                .businessId(principal.businessId())
+                .branchId(principal.branchId())
+                .actor(principal.userId(), AuditEventActorType.USER)
+                .target("user", user.getId())
+                .targetLabel(user.getEmail())
+                .ipAddress(clientIp(http))
+                .userAgent(trimToNull(http.getHeader("User-Agent")))
+                .source("web_admin")
+                .build());
     }
 
     private LoginResponse issueNewSession(User user, HttpServletRequest http) {
@@ -322,7 +383,7 @@ public class AuthService {
         return new SessionBundle(response, session);
     }
 
-    private void recordLoginFailure(User user) {
+    private void recordLoginFailure(User user, HttpServletRequest http, String eventType, String reason) {
         Instant now = Instant.now();
 
         if (user.getAuthSoftWindowStart() == null
@@ -341,16 +402,52 @@ public class AuthService {
             user.setAuthHourFailures(user.getAuthHourFailures() + 1);
         }
 
-        if (user.getFailedAttempts() >= FAILED_ATTEMPTS_SOFT_LOCK) {
+        boolean softLocked = user.getFailedAttempts() >= FAILED_ATTEMPTS_SOFT_LOCK;
+        boolean hardLocked = user.getAuthHourFailures() >= HARD_LOCK_FAILURES;
+        if (softLocked) {
             user.setLockedUntil(now.plus(SOFT_LOCK_MINUTES, ChronoUnit.MINUTES));
         }
         if (user.getFailedAttempts() == FAILED_ATTEMPTS_SOFT_LOCK) {
             notificationService.sendTemporaryLockNotice(user.getEmail());
+            publishSecurityEventSync(user, http, AuditEventTypes.ACCOUNT_LOCKED_SOFT, "Too many failed login attempts");
         }
-        if (user.getAuthHourFailures() >= HARD_LOCK_FAILURES) {
+        if (hardLocked) {
             user.setStatus(UserStatus.LOCKED);
+            publishSecurityEventSync(user, http, AuditEventTypes.ACCOUNT_LOCKED_HARD, "Too many failed login attempts in one hour");
         }
         userRepository.save(user);
+        publishSecurityEventSync(user, http, eventType, reason);
+    }
+
+    private void publishLoginEvent(User user, HttpServletRequest http, LoginResponse response, String eventType, String reason) {
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.SECURITY, eventType,
+                        AuditEventTypes.LOGIN_SUCCEEDED.equals(eventType) ? AuditEventSeverity.INFO : AuditEventSeverity.WARN)
+                .businessId(user.getBusinessId())
+                .branchId(user.getBranchId())
+                .actor(user.getId(), AuditEventActorType.USER)
+                .actorName(user.getEmail())
+                .target("user", user.getId())
+                .targetLabel(user.getEmail())
+                .ipAddress(clientIp(http))
+                .userAgent(trimToNull(http.getHeader("User-Agent")))
+                .source("web_admin")
+                .reason(reason)
+                .build());
+    }
+
+    private void publishSecurityEventSync(User user, HttpServletRequest http, String eventType, String reason) {
+        auditEventPublisher.publishSynchronous(auditEventBuilder.builder(AuditEventCategory.SECURITY, eventType, AuditEventSeverity.WARN)
+                .businessId(user.getBusinessId())
+                .branchId(user.getBranchId())
+                .actor(user.getId(), AuditEventActorType.USER)
+                .actorName(user.getEmail())
+                .target("user", user.getId())
+                .targetLabel(user.getEmail())
+                .ipAddress(clientIp(http))
+                .userAgent(trimToNull(http.getHeader("User-Agent")))
+                .source("web_admin")
+                .reason(reason)
+                .build());
     }
 
     private void recordLoginSuccess(User user) {

@@ -70,7 +70,11 @@ public class CustomersController {
     @ResponseStatus(HttpStatus.CREATED)
     public CustomerResponse create(@Valid @RequestBody CreateCustomerRequest body, HttpServletRequest request) {
         CurrentTenantUser.require(request);
-        return customerDirectoryService.create(TenantRequestIds.resolveBusinessId(request), body);
+        return customerDirectoryService.create(
+                TenantRequestIds.resolveBusinessId(request),
+                body,
+                CurrentTenantUser.auditActorId(request)
+        );
     }
 
     @PatchMapping("/{customerId}")
@@ -83,7 +87,8 @@ public class CustomersController {
         CurrentTenantUser.require(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         String resolved = customerDirectoryService.resolveCustomerIdOrThrow(businessId, customerId);
-        return customerDirectoryService.patch(businessId, resolved, body);
+        return customerDirectoryService.patch(
+                businessId, resolved, body, CurrentTenantUser.auditActorId(request));
     }
 
     @DeleteMapping("/{customerId}")
@@ -93,7 +98,7 @@ public class CustomersController {
         CurrentTenantUser.require(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         String resolved = customerDirectoryService.resolveCustomerIdOrThrow(businessId, customerId);
-        customerDirectoryService.softDelete(businessId, resolved);
+        customerDirectoryService.softDelete(businessId, resolved, CurrentTenantUser.auditActorId(request));
     }
 
     @PostMapping("/{customerId}/phones")
@@ -107,7 +112,8 @@ public class CustomersController {
         CurrentTenantUser.require(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         String resolved = customerDirectoryService.resolveCustomerIdOrThrow(businessId, customerId);
-        return customerDirectoryService.addPhone(businessId, resolved, body);
+        return customerDirectoryService.addPhone(
+                businessId, resolved, body, CurrentTenantUser.auditActorId(request));
     }
 
     @PostMapping("/{customerId}/phones/{phoneId}/set-primary")
@@ -121,7 +127,7 @@ public class CustomersController {
         String businessId = TenantRequestIds.resolveBusinessId(request);
         String resolved = customerDirectoryService.resolveCustomerIdOrThrow(businessId, customerId);
         return customerDirectoryService.setPrimaryPhone(
-                businessId, resolved, phoneId);
+                businessId, resolved, phoneId, CurrentTenantUser.auditActorId(request));
     }
 
     @GetMapping("/{customerId}/credit-statement")

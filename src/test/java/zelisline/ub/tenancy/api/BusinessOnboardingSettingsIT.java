@@ -93,6 +93,7 @@ class BusinessOnboardingSettingsIT {
         mockMvc.perform(patch("/api/v1/businesses/me/onboarding")
                         .header("X-Tenant-Id", TENANT)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
                         .contentType(APPLICATION_JSON)
                         .content("""
                                 {
@@ -112,7 +113,8 @@ class BusinessOnboardingSettingsIT {
 
         mockMvc.perform(get("/api/v1/businesses/me")
                         .header("X-Tenant-Id", TENANT)
-                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId()))
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.profile.storeType").value("mini-mart"))
                 .andExpect(jsonPath("$.onboarding.status").value("active"));
@@ -122,7 +124,8 @@ class BusinessOnboardingSettingsIT {
     void clearAnswersViaPatchAndListStarterKits() throws Exception {
         mockMvc.perform(get("/api/v1/businesses/me/onboarding/store-section-kits")
                         .header("X-Tenant-Id", TENANT)
-                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId()))
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].id").value("mini-mart"))
                 .andExpect(jsonPath("$[0].sections[0]").value("General Shop"));
@@ -132,7 +135,7 @@ class BusinessOnboardingSettingsIT {
         Permission p = new Permission();
         p.setId(id);
         p.setPermissionKey(key);
-        p.setLabel(label);
+        p.setDescription(label);
         return p;
     }
 
@@ -140,15 +143,14 @@ class BusinessOnboardingSettingsIT {
         Role r = new Role();
         r.setId(id);
         r.setRoleKey(key);
-        r.setLabel(key);
+        r.setName(key);
         r.setSystem(true);
         return r;
     }
 
     private void grant(String roleId, String permissionId) {
         RolePermission rp = new RolePermission();
-        rp.setRoleId(roleId);
-        rp.setPermissionId(permissionId);
+        rp.setId(new RolePermission.Id(roleId, permissionId));
         rolePermissionRepository.save(rp);
     }
 

@@ -325,6 +325,8 @@ The skeleton and the rails. Nothing ships to users; everything after this stands
 - 🔲 Public credit claim link with admin review
 - 🔲 SMS + email reminders for overdue credit
 
+**Scope detail:** [Credit tab — WhatsApp receipts & payment reminders](./CREDIT_PAYMENT_REMINDERS_README.md)
+
 **Exit criteria:** Customer buys on credit → self-pays via STK → admin approves claim → journal balances.
 
 ### Phase 6 — Expenses, Cash Drawer, Finance Reports `🔲 Planned`

@@ -25,6 +25,12 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.identity.domain.SuperAdmin;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.domain.UserStatus;
@@ -47,6 +53,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final UserSessionRepository userSessionRepository;
     private final UserRepository userRepository;
     private final SuperAdminRepository superAdminRepository;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
@@ -83,6 +91,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         try {
             claims = jwtTokenService.parseAndValidate(token);
         } catch (JwtException | IllegalArgumentException ex) {
+            publishSecurityEvent(request, null, AuditEventTypes.LOGIN_FAILED, "Invalid or expired access token");
             writeProblem(response, HttpStatus.UNAUTHORIZED, "Invalid or expired access token", "unauthorized", "token_expired");
             return;
         }
@@ -115,6 +124,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         String claimTenant = claims.get(JwtTokenService.CLAIM_BUSINESS_ID, String.class);
         if (claimTenant == null || !claimTenant.equals(resolvedTenant)) {
+            publishSecurityEvent(request, resolvedTenant, AuditEventTypes.LOGIN_FAILED, "Token tenant mismatch");
             writeProblem(response, HttpStatus.FORBIDDEN,
                     "Token tenant does not match resolved host tenant", "forbidden");
             return;
@@ -123,6 +133,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String jti = claims.getId();
         if (jti == null || jti.isBlank()
                 || userSessionRepository.findByAccessTokenJtiAndRevokedAtIsNull(jti).isEmpty()) {
+            publishSecurityEvent(request, resolvedTenant, AuditEventTypes.LOGIN_FAILED, "Session is no longer active");
             writeProblem(response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
             return;
         }
@@ -130,14 +141,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String userId = claims.getSubject();
         User user = userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(userId, resolvedTenant).orElse(null);
         if (user == null || user.getDeletedAt() != null) {
+            publishSecurityEvent(request, resolvedTenant, AuditEventTypes.LOGIN_FAILED, "User not found");
             writeProblem(response, HttpStatus.UNAUTHORIZED, "User not found", "unauthorized");
             return;
         }
         if (user.statusAsEnum() != UserStatus.ACTIVE) {
+            publishSecurityEvent(request, resolvedTenant, AuditEventTypes.LOGIN_FAILED, "Account is not active");
             writeProblem(response, HttpStatus.UNAUTHORIZED, "Account is not active", "unauthorized");
             return;
         }
         if (user.getLockedUntil() != null && user.getLockedUntil().isAfter(Instant.now())) {
+            publishSecurityEvent(request, resolvedTenant, AuditEventTypes.LOGIN_FAILED, "Account is temporarily locked");
             writeProblem(response, HttpStatus.UNAUTHORIZED, "Account is temporarily locked", "unauthorized");
             return;
         }
@@ -158,6 +172,28 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         } finally {
             SecurityContextHolder.clearContext();
         }
+    }
+
+    private void publishSecurityEvent(HttpServletRequest request, String businessId, String eventType, String reason) {
+        try {
+            auditEventPublisher.publishSynchronous(auditEventBuilder.builder(AuditEventCategory.SECURITY, eventType, AuditEventSeverity.WARN)
+                    .businessId(businessId == null ? "unknown" : businessId)
+                    .actor(null, AuditEventActorType.ANONYMOUS)
+                    .ipAddress(ClientIpResolver.resolve(request))
+                    .userAgent(trimToNull(request.getHeader("User-Agent")))
+                    .source("api")
+                    .reason(reason)
+                    .build());
+        } catch (Exception ignored) {
+            // Never fail the request because of an audit write failure.
+        }
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
     }
 
     private boolean authenticateSuperAdmin(Claims claims, HttpServletResponse response) throws IOException {

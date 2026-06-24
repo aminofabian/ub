@@ -8,6 +8,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -23,6 +24,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.finance.LedgerAccountCodes;
 import zelisline.ub.finance.application.CashDrawerSummaryService;
 import zelisline.ub.finance.application.LedgerAccountResolver;
@@ -68,6 +75,8 @@ public class ShiftService {
     private final LedgerPostingPort ledgerPostingPort;
     private final LedgerAccountResolver ledgerAccountResolver;
     private final ApplicationEventPublisher eventPublisher;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
 
     // ========================================================================
     // OPEN SHIFT
@@ -111,11 +120,31 @@ public class ShiftService {
             s.setExpectedClosingCash(denomTotal);
         }
 
-        // Record audit log
+        // Record legacy audit log
         recordAudit(s.getId(), SalesConstants.AUDIT_SHIFT_OPENED, userId,
                 "{\"openingCash\":\"" + s.getOpeningCash() + "\"}", null);
 
+        // Record unified audit event
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.CASH_DRAWER, AuditEventTypes.SHIFT_OPENED, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .branchId(branchId)
+                .actor(userId, AuditEventActorType.USER)
+                .target("shift", s.getId())
+                .targetLabel("Shift " + s.getId().substring(0, 8))
+                .shiftId(s.getId())
+                .newState(map("openingCash", s.getOpeningCash().toPlainString(), "status", s.getStatus()))
+                .source("pos_terminal")
+                .build());
+
         return toDto(s, branch.getName(), userId, openingDenoms, null);
+    }
+
+    private static Map<String, Object> map(Object... entries) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        for (int i = 0; i < entries.length; i += 2) {
+            map.put((String) entries[i], entries[i + 1]);
+        }
+        return map;
     }
 
     // ========================================================================
@@ -191,11 +220,24 @@ public class ShiftService {
 
         cashDrawerSummaryService.upsertForClosedShift(s);
 
-        // Record audit log
+        // Record legacy audit log
         String meta = String.format(
                 "{\"counted\":\"%s\",\"expected\":\"%s\",\"variance\":\"%s\"}",
                 counted, expected, variance);
         recordAudit(s.getId(), SalesConstants.AUDIT_SHIFT_CLOSED, userId, meta, null);
+
+        // Record unified audit event
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.CASH_DRAWER, AuditEventTypes.SHIFT_CLOSED, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .branchId(s.getBranchId())
+                .actor(userId, AuditEventActorType.USER)
+                .target("shift", s.getId())
+                .targetLabel("Shift " + s.getId().substring(0, 8))
+                .shiftId(s.getId())
+                .oldState(map("expectedClosingCash", expected.toPlainString(), "status", SalesConstants.SHIFT_STATUS_OPEN))
+                .newState(map("countedClosingCash", counted.toPlainString(), "expectedClosingCash", expected.toPlainString(), "variance", variance.toPlainString(), "status", s.getStatus()))
+                .source("pos_terminal")
+                .build());
 
         List<DenominationResponse> openingDenoms = shiftDenominationRepository
                 .findByShiftIdAndCountTypeOrderByDenominationDesc(s.getId(), SalesConstants.DENOM_COUNT_TYPE_OPENING)

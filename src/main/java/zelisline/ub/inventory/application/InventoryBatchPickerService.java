@@ -256,6 +256,25 @@ public class InventoryBatchPickerService {
         return businessInventorySettingsReader.costMethodFromSettingsJson(json);
     }
 
+    private boolean allowNegativeStockForSale(String businessId, String movementType) {
+        if (!InventoryConstants.MOVEMENT_SALE.equals(movementType)) {
+            return false;
+        }
+        String json = businessRepository.findById(businessId).map(Business::getSettings).orElse("{}");
+        return businessInventorySettingsReader.allowNegativeStockFromSettingsJson(json);
+    }
+
+    private InventoryBatch resolveCostReferenceBatch(String businessId, String itemId, String branchId) {
+        return inventoryBatchRepository
+                .findFirstByBusinessIdAndItemIdAndBranchIdAndStatusOrderByReceivedAtDescIdDesc(
+                        businessId,
+                        itemId,
+                        branchId,
+                        InventoryConstants.BATCH_STATUS_ACTIVE
+                )
+                .orElse(null);
+    }
+
     private List<InventoryBatch> loadActiveBatchesReadOnly(
             String businessId,
             Item catalogItem,
@@ -323,10 +342,10 @@ public class InventoryBatchPickerService {
         return item;
     }
 
-    private void applyStockDelta(Item item, BigDecimal delta) {
+    private void applyStockDelta(Item item, BigDecimal delta, boolean allowNegative) {
         BigDecimal base = item.getCurrentStock() == null ? BigDecimal.ZERO : item.getCurrentStock();
         BigDecimal next = base.add(delta).setScale(QTY_SCALE, RoundingMode.HALF_UP);
-        if (next.signum() < 0) {
+        if (next.signum() < 0 && !allowNegative) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Stock cannot go negative");
         }
         item.setCurrentStock(next);

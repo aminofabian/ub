@@ -47,6 +47,7 @@ import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.inventory.api.dto.BatchAllocationLine;
 import zelisline.ub.inventory.application.InventoryBatchPickerService;
 import zelisline.ub.inventory.application.BusinessInventorySettingsReader;
+import zelisline.ub.tenancy.application.BusinessInventorySettingsService;
 import zelisline.ub.platform.security.TestAuthenticationFilter;
 import zelisline.ub.purchasing.domain.InventoryBatch;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
@@ -103,6 +104,8 @@ class InventorySlice2IT {
     private TransactionTemplate transactionTemplate;
     @Autowired
     private BusinessInventorySettingsReader businessInventorySettingsReader;
+    @Autowired
+    private BusinessInventorySettingsService businessInventorySettingsService;
 
     @MockitoBean
     @SuppressWarnings("unused")
@@ -309,6 +312,49 @@ class InventorySlice2IT {
             }
         }
         assertThat(foundRse).isTrue();
+    }
+
+    @Test
+    void salePickAllowsNegativeStockWhenConfigured() {
+        Business business = businessRepository.findById(TENANT).orElseThrow();
+        business.setSettings("{\"inventory\":{\"stockLevels\":{\"allowNegativeStock\":true}}}");
+        businessRepository.save(business);
+        businessRepository.flush();
+
+        String rawSettings = businessRepository.findById(TENANT).orElseThrow().getSettings();
+        assertThat(rawSettings).contains("allowNegativeStock");
+        assertThat(businessInventorySettingsService.readFromSettingsJson(rawSettings)
+                .stockLevels().allowNegativeStock()).isTrue();
+
+        Item item = itemRepository.findById(itemId).orElseThrow();
+        item.setHasExpiry(false);
+        itemRepository.save(item);
+        inventoryBatchRepository.deleteAll();
+        stockMovementRepository.deleteAll();
+
+        String sole = UUID.randomUUID().toString();
+        inventoryBatchRepository.save(batch(sole, itemId, Instant.parse("2026-02-01T12:00:00Z"), null, "0"));
+        Item stocked = itemRepository.findById(itemId).orElseThrow();
+        stocked.setCurrentStock(BigDecimal.ZERO);
+        itemRepository.save(stocked);
+
+        transactionTemplate.executeWithoutResult(st -> {
+            List<BatchAllocationLine> lines = inventoryBatchPickerService.pickAndApplyPhysicalDecrement(
+                    TENANT,
+                    itemId,
+                    branchId,
+                    BigDecimal.ONE,
+                    InventoryConstants.REF_OPERATION,
+                    inventoryBatchPickerService.newPickReferenceId(),
+                    InventoryConstants.MOVEMENT_SALE,
+                    owner.getId()
+            );
+            assertThat(lines).hasSize(1);
+            assertThat(lines.getFirst().quantity()).isEqualByComparingTo("1");
+        });
+
+        Item after = itemRepository.findById(itemId).orElseThrow();
+        assertThat(after.getCurrentStock().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("-1");
     }
 
     private InventoryBatch batch(String id, String itId, Instant received, LocalDate expiry, String qty) {

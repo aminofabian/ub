@@ -114,7 +114,34 @@ class BusinessInventorySettingsIT {
                 .andExpect(jsonPath("$.inventory.stockLevels.allowStockEditForStockManager")
                         .value(false))
                 .andExpect(jsonPath("$.inventory.stockLevels.allowStockEditForGroceryClerk")
+                        .value(false))
+                .andExpect(jsonPath("$.inventory.stockLevels.allowNegativeStock")
                         .value(false));
+    }
+
+    @Test
+    void patchAllowNegativeStockPersists() throws Exception {
+        mockMvc.perform(patch("/api/v1/businesses/me")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"inventory":{"stockLevels":{"allowNegativeStock":true}}}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inventory.stockLevels.allowNegativeStock")
+                        .value(true));
+
+        entityManager.clear();
+
+        mockMvc.perform(get("/api/v1/businesses/me")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inventory.stockLevels.allowNegativeStock")
+                        .value(true));
     }
 
     @Test

@@ -33,19 +33,4 @@ public class BusinessInventorySettingsReader {
             return CostMethod.FIFO;
         }
     }
-
-    public boolean allowNegativeStockFromSettingsJson(String settings) {
-        if (settings == null || settings.isBlank()) {
-            return false;
-        }
-        try {
-            JsonNode root = objectMapper.readTree(settings);
-            return root.path("inventory")
-                    .path("stockLevels")
-                    .path("allowNegativeStock")
-                    .asBoolean(false);
-        } catch (Exception e) {
-            return false;
-        }
-    }
 }

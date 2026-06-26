@@ -89,6 +89,20 @@ class BatchAllocationPlannerTest {
                 .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode()).isSameAs(HttpStatus.BAD_REQUEST));
     }
 
+    @Test
+    void allocateInOrderAllowShortage_returnsUnallocated() {
+        Item item = new Item();
+        item.setHasExpiry(false);
+        Instant t0 = Instant.parse("2026-01-01T12:00:00Z");
+        List<InventoryBatch> batches = new ArrayList<>(List.of(batch("a", t0, null, "2")));
+        BatchAllocationPlanner.sortBatchesForPick(batches, item, CostMethod.FIFO);
+        BatchAllocationPlanner.AllocationResult result =
+                BatchAllocationPlanner.allocateInOrderAllowShortage(batches, new BigDecimal("5"));
+        assertThat(result.lines()).hasSize(1);
+        assertThat(result.lines().getFirst().quantity()).isEqualByComparingTo("2");
+        assertThat(result.unallocated()).isEqualByComparingTo("3");
+    }
+
     private static String firstBatchId(List<BatchAllocationLine> lines) {
         return lines.getFirst().batchId();
     }

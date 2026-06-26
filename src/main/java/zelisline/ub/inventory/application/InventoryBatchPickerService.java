@@ -34,6 +34,7 @@ import zelisline.ub.purchasing.domain.InventoryBatch;
 import zelisline.ub.purchasing.domain.StockMovement;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.purchasing.repository.StockMovementRepository;
+import zelisline.ub.tenancy.application.BusinessInventorySettingsService;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.tenancy.repository.BusinessRepository;
@@ -57,6 +58,7 @@ public class InventoryBatchPickerService {
     private final BranchRepository branchRepository;
     private final BusinessRepository businessRepository;
     private final BusinessInventorySettingsReader businessInventorySettingsReader;
+    private final BusinessInventorySettingsService businessInventorySettingsService;
     private final WebhookEnqueueService webhookEnqueueService;
     private final NotificationOutboxService notificationOutboxService;
     private final ApplicationEventPublisher eventPublisher;
@@ -261,7 +263,7 @@ public class InventoryBatchPickerService {
             return false;
         }
         String json = businessRepository.findById(businessId).map(Business::getSettings).orElse("{}");
-        return businessInventorySettingsReader.allowNegativeStockFromSettingsJson(json);
+        return businessInventorySettingsService.readFromSettingsJson(json).stockLevels().allowNegativeStock();
     }
 
     private InventoryBatch resolveCostReferenceBatch(String businessId, String itemId, String branchId) {

@@ -18,6 +18,8 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     Optional<Item> findByIdAndBusinessIdAndDeletedAtIsNull(String id, String businessId);
 
+    List<Item> findByBusinessIdAndDeletedAtIsNull(String businessId);
+
     Optional<Item> findByBusinessIdAndLegacyImportSourceIdAndDeletedAtIsNull(
             String businessId,
             String legacyImportSourceId

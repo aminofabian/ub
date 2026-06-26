@@ -135,6 +135,9 @@ public class Item {
     @Column(name = "legacy_import_source_id", length = 36)
     private String legacyImportSourceId;
 
+    @Column(name = "global_product_source_id", length = 36)
+    private String globalProductSourceId;
+
     @Column(name = "brand", length = 255)
     private String brand;
 

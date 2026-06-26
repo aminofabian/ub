@@ -1,0 +1,125 @@
+package zelisline.ub.globalcatalog.domain;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.UUID;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.PrePersist;
+import jakarta.persistence.PreUpdate;
+import jakarta.persistence.Table;
+import jakarta.persistence.Version;
+import lombok.Getter;
+import lombok.Setter;
+
+@Getter
+@Setter
+@Entity
+@Table(name = "global_products")
+public class GlobalProduct {
+
+    @Id
+    @Column(name = "id", nullable = false, length = 36)
+    private String id;
+
+    @Column(name = "catalog_id", nullable = false, length = 36)
+    private String catalogId;
+
+    @Column(name = "global_category_id", length = 36)
+    private String globalCategoryId;
+
+    @Column(name = "sku_template", length = 191)
+    private String skuTemplate;
+
+    @Column(name = "name", nullable = false, length = 500)
+    private String name;
+
+    @Column(name = "brand", length = 255)
+    private String brand;
+
+    @Column(name = "size", length = 50)
+    private String size;
+
+    @Column(name = "description", columnDefinition = "TEXT")
+    private String description;
+
+    @Column(name = "barcode", length = 191)
+    private String barcode;
+
+    @Column(name = "unit_type", nullable = false, length = 16)
+    private String unitType = "each";
+
+    @Column(name = "is_weighed", nullable = false)
+    private boolean weighed;
+
+    @Column(name = "is_sellable", nullable = false)
+    private boolean sellable = true;
+
+    @Column(name = "is_stocked", nullable = false)
+    private boolean stocked = true;
+
+    @Column(name = "recommended_buying_price", precision = 14, scale = 2)
+    private BigDecimal recommendedBuyingPrice;
+
+    @Column(name = "recommended_selling_price", precision = 14, scale = 2)
+    private BigDecimal recommendedSellingPrice;
+
+    @Column(name = "suggested_margin_pct", precision = 5, scale = 2)
+    private BigDecimal suggestedMarginPct;
+
+    @Column(name = "default_reorder_level", precision = 14, scale = 4)
+    private BigDecimal defaultReorderLevel;
+
+    @Column(name = "default_reorder_qty", precision = 14, scale = 4)
+    private BigDecimal defaultReorderQty;
+
+    @Column(name = "default_min_stock_level", precision = 14, scale = 4)
+    private BigDecimal defaultMinStockLevel;
+
+    @Column(name = "has_expiry", nullable = false)
+    private boolean hasExpiry;
+
+    @Column(name = "expires_after_days")
+    private Integer expiresAfterDays;
+
+    @Column(name = "image_url", length = 2048)
+    private String imageUrl;
+
+    @Column(name = "item_type_key_hint", length = 64)
+    private String itemTypeKeyHint = "goods";
+
+    @Column(name = "status", nullable = false, length = 16)
+    private String status = "published";
+
+    @Column(name = "sort_order", nullable = false)
+    private int sortOrder;
+
+    @Version
+    @Column(name = "version", nullable = false)
+    private long version;
+
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private Instant createdAt;
+
+    @Column(name = "updated_at", nullable = false)
+    private Instant updatedAt;
+
+    @PrePersist
+    void onCreate() {
+        Instant now = Instant.now();
+        if (id == null || id.isBlank()) {
+            id = UUID.randomUUID().toString();
+        }
+        if (createdAt == null) {
+            createdAt = now;
+        }
+        updatedAt = now;
+    }
+
+    @PreUpdate
+    void onUpdate() {
+        updatedAt = Instant.now();
+    }
+}

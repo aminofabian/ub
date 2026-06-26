@@ -218,4 +218,11 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
             @Param("minRemaining") BigDecimal minRemaining,
             @Param("today") LocalDate today
     );
+
+    Optional<InventoryBatch> findFirstByBusinessIdAndItemIdAndBranchIdAndStatusOrderByReceivedAtDescIdDesc(
+            String businessId,
+            String itemId,
+            String branchId,
+            String status
+    );
 }

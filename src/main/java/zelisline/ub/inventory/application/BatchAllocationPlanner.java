@@ -93,4 +93,37 @@ public final class BatchAllocationPlanner {
         }
         return out;
     }
+
+    public record AllocationResult(
+            List<BatchAllocationLine> lines,
+            BigDecimal unallocated
+    ) {
+    }
+
+    /**
+     * Allocates from batches in order; returns any quantity that could not be covered instead of throwing.
+     */
+    public static AllocationResult allocateInOrderAllowShortage(
+            List<InventoryBatch> sortedBatches,
+            BigDecimal quantity
+    ) {
+        if (quantity == null || quantity.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Pick quantity must be positive");
+        }
+        List<BatchAllocationLine> out = new ArrayList<>();
+        BigDecimal remaining = quantity.setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        for (InventoryBatch b : sortedBatches) {
+            if (remaining.signum() <= 0) {
+                break;
+            }
+            BigDecimal onHand = b.getQuantityRemaining().setScale(QTY_SCALE, RoundingMode.HALF_UP);
+            if (onHand.signum() <= 0) {
+                continue;
+            }
+            BigDecimal take = onHand.min(remaining);
+            out.add(new BatchAllocationLine(b.getId(), take, b.getUnitCost()));
+            remaining = remaining.subtract(take);
+        }
+        return new AllocationResult(out, remaining);
+    }
 }

@@ -136,30 +136,46 @@ public class InventoryBatchPickerService {
         StockPickResolution pick = packageVariantStockResolver.resolvePick(businessId, itemId, quantity);
         Item item = requireStockedItem(businessId, pick.stockItemId());
         entityManager.lock(item, LockModeType.PESSIMISTIC_WRITE);
+        boolean allowNegativeStock = allowNegativeStockForSale(businessId, movementType);
         List<InventoryBatch> locked = lockActiveBatchesForPool(
                 businessId, branchId, catalogItem);
         List<InventoryBatch> working = new ArrayList<>(locked);
         // ── Exclude expired batches BEFORE sorting ────────────────────────
         working = new ArrayList<>(BatchAllocationPlanner.excludeExpired(working));
+
+        List<BatchAllocationLine> batchLines;
+        BigDecimal unallocated = BigDecimal.ZERO;
         if (working.isEmpty()) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "No non-expired stock available for this item"
+            if (!allowNegativeStock) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "No non-expired stock available for this item"
+                );
+            }
+            batchLines = List.of();
+            unallocated = pick.stockQuantity();
+        } else {
+            BatchAllocationPlanner.sortBatchesForPick(
+                    working,
+                    item,
+                    costMethodForTenant(businessId)
             );
+            if (allowNegativeStock) {
+                BatchAllocationPlanner.AllocationResult allocation =
+                        BatchAllocationPlanner.allocateInOrderAllowShortage(working, pick.stockQuantity());
+                batchLines = allocation.lines();
+                unallocated = allocation.unallocated();
+            } else {
+                batchLines = BatchAllocationPlanner.allocateInOrder(working, pick.stockQuantity());
+            }
         }
-        BatchAllocationPlanner.sortBatchesForPick(
-                working,
-                item,
-                costMethodForTenant(businessId)
-        );
-        List<BatchAllocationLine> lines = BatchAllocationPlanner.allocateInOrder(working, pick.stockQuantity());
 
         Map<String, InventoryBatch> byId = new HashMap<>();
         for (InventoryBatch b : locked) {
             byId.put(b.getId(), b);
         }
 
-        for (BatchAllocationLine line : lines) {
+        for (BatchAllocationLine line : batchLines) {
             InventoryBatch batch = byId.get(line.batchId());
             if (batch == null) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Batch disappeared");
@@ -196,10 +212,39 @@ public class InventoryBatchPickerService {
             stockMovementRepository.save(sm);
         }
 
+        List<BatchAllocationLine> resultLines = new ArrayList<>(batchLines);
+        if (unallocated.signum() > 0) {
+            InventoryBatch costRef = resolveCostReferenceBatch(businessId, pick.stockItemId(), branchId);
+            if (costRef == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "No inventory batches for this item; receive stock before selling"
+                );
+            }
+            resultLines.add(new BatchAllocationLine(
+                    costRef.getId(),
+                    unallocated,
+                    costRef.getUnitCost()
+            ));
+            StockMovement oversell = new StockMovement();
+            oversell.setBusinessId(businessId);
+            oversell.setBranchId(branchId);
+            oversell.setItemId(pick.stockItemId());
+            oversell.setBatchId(null);
+            oversell.setMovementType(movementType);
+            oversell.setReferenceType(referenceType);
+            oversell.setReferenceId(referenceId);
+            oversell.setQuantityDelta(unallocated.negate());
+            oversell.setUnitCost(costRef.getUnitCost());
+            oversell.setNotes("Sale exceeds on-hand stock (negative stock allowed)");
+            oversell.setCreatedBy(userId);
+            stockMovementRepository.save(oversell);
+        }
+
         BigDecimal stockBefore = item.getCurrentStock() == null ? BigDecimal.ZERO : item.getCurrentStock();
-        applyStockDelta(item, pick.stockQuantity().negate());
+        applyStockDelta(item, pick.stockQuantity().negate(), allowNegativeStock);
         maybeEnqueueLowStockWebhook(businessId, branchId, pick.stockItemId(), item, stockBefore);
-        return lines;
+        return resultLines;
     }
 
     public String newPickReferenceId() {

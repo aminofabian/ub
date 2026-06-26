@@ -275,9 +275,53 @@ public class GlobalCatalogService {
                             : null);
 
             if (sku != null && skuToItemId.containsKey(sku)) {
-                results.add(new AdoptResultLineResponse(gpId, "skip_sku_conflict", null, sku, "SKU already in use"));
-                skippedCount++;
-                continue;
+                String conflictItemId = skuToItemId.get(sku);
+                String resolution = normalizeSkuConflictResolution(line.onSkuConflict());
+
+                if ("merge".equals(resolution)) {
+                    Item conflictItem = tenantItems.stream()
+                            .filter(i -> i.getId().equals(conflictItemId))
+                            .findFirst()
+                            .orElseGet(() -> itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(conflictItemId, businessId)
+                                    .orElse(null));
+                    if (conflictItem == null) {
+                        results.add(new AdoptResultLineResponse(
+                                gpId, "error_not_found", null, sku, "Existing product not found"));
+                        continue;
+                    }
+                    String linkError = globalProductLinkError(conflictItem, gp.getId());
+                    if (linkError != null) {
+                        results.add(new AdoptResultLineResponse(gpId, "error_already_linked", conflictItemId, sku, linkError));
+                        continue;
+                    }
+                    if (dryRun) {
+                        results.add(new AdoptResultLineResponse(
+                                gpId, "ready_merge", conflictItemId, conflictItem.getSku(), "Will link to existing product"));
+                        continue;
+                    }
+                    mergeGlobalProductIntoExisting(
+                            businessId, gp, conflictItem, line, branch, effectiveActor);
+                    matchIndex.register(conflictItem);
+                    importedCount++;
+                    results.add(new AdoptResultLineResponse(
+                            gpId, "merged", conflictItem.getId(), conflictItem.getSku(), "Linked to existing product"));
+                    continue;
+                }
+
+                if ("rename".equals(resolution)) {
+                    String renamed = allocateUniqueSku(businessId, sku, skuToItemId);
+                    if (renamed == null) {
+                        results.add(new AdoptResultLineResponse(
+                                gpId, "error_invalid_sku", null, sku, "Could not find an available SKU suffix"));
+                        continue;
+                    }
+                    sku = renamed;
+                } else {
+                    results.add(new AdoptResultLineResponse(
+                            gpId, "skip_sku_conflict", conflictItemId, sku, "SKU already in use"));
+                    skippedCount++;
+                    continue;
+                }
             }
 
             if (dryRun) {
@@ -354,6 +398,62 @@ public class GlobalCatalogService {
         }
 
         return new AdoptResponse(importedCount, skippedCount, results);
+    }
+
+    private static String normalizeSkuConflictResolution(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "skip";
+        }
+        return raw.trim().toLowerCase();
+    }
+
+    private static String globalProductLinkError(Item existing, String globalProductId) {
+        String linked = existing.getGlobalProductSourceId();
+        if (linked != null && !linked.isBlank() && !linked.equals(globalProductId)) {
+            return "Existing product is already linked to another catalog item";
+        }
+        return null;
+    }
+
+    private String allocateUniqueSku(String businessId, String baseSku, Map<String, String> skuToItemId) {
+        String root = baseSku.trim();
+        for (int suffix = 2; suffix <= 99; suffix++) {
+            String candidate = root + "-" + suffix;
+            if (!skuToItemId.containsKey(candidate)
+                    && !itemRepository.existsByBusinessIdAndSkuAndDeletedAtIsNull(businessId, candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private void mergeGlobalProductIntoExisting(
+            String businessId,
+            GlobalProduct gp,
+            Item existing,
+            AdoptLineRequest line,
+            Branch branch,
+            String actorUserId
+    ) {
+        existing.setGlobalProductSourceId(gp.getId());
+        itemRepository.save(existing);
+
+        BigDecimal sellingPrice = line.sellingPrice() != null
+                ? line.sellingPrice()
+                : gp.getRecommendedSellingPrice();
+        if (sellingPrice != null && sellingPrice.compareTo(BigDecimal.ZERO) > 0) {
+            pricingService.setSellingPrice(
+                    businessId,
+                    new PostSellingPriceRequest(
+                            existing.getId(),
+                            branch.getId(),
+                            sellingPrice,
+                            LocalDate.now(),
+                            "Global catalog merge"
+                    ),
+                    actorUserId
+            );
+        }
     }
 
     private String resolveTenantCategoryId(String businessId, String explicitCategoryId, String slugHint) {

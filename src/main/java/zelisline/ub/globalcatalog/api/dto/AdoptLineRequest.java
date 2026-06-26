@@ -16,6 +16,8 @@ public record AdoptLineRequest(
         @DecimalMin(value = "0.0001", inclusive = true) BigDecimal openingUnitCost,
         BigDecimal reorderLevel,
         BigDecimal reorderQty,
-        BigDecimal minStockLevel
+        BigDecimal minStockLevel,
+        /** When SKU collides: {@code skip} (default), {@code merge} into existing row, or {@code rename} (use {@link #sku}). */
+        @Size(max = 16) String onSkuConflict
 ) {
 }

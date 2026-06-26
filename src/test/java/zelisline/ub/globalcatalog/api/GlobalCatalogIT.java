@@ -525,7 +525,121 @@ class GlobalCatalogIT {
                         .contentType(APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.lines[0].status").value("skip_sku_conflict"));
+                .andExpect(jsonPath("$.lines[0].status").value("skip_sku_conflict"))
+                .andExpect(jsonPath("$.lines[0].itemId").isNotEmpty());
+    }
+
+    @Test
+    void adoptMergeLinksExistingProductBySku() throws Exception {
+        String goodsTypeId = itemTypeRepository.findByBusinessIdAndTypeKey(TENANT_A, "goods")
+                .orElseThrow()
+                .getId();
+
+        var created = itemCatalogService.createItem(
+                TENANT_A,
+                new CreateItemRequest(
+                        "MERGE-ME-SKU",
+                        "9999999999992",
+                        "Existing for merge",
+                        null,
+                        goodsTypeId,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null
+                ),
+                null
+        );
+
+        String body = String.format(
+                "{\"openingBranchId\":\"%s\",\"lines\":[{\"globalProductId\":\"%s\",\"sku\":\"MERGE-ME-SKU\",\"onSkuConflict\":\"merge\",\"sellingPrice\":90,\"buyingPrice\":70}]}",
+                branchId, globalProductId
+        );
+
+        mockMvc.perform(post("/api/v1/global-catalog/adopt")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.importedCount").value(1))
+                .andExpect(jsonPath("$.lines[0].status").value("merged"))
+                .andExpect(jsonPath("$.lines[0].itemId").value(created.body().id()));
+
+        var item = itemRepository.findById(created.body().id()).orElseThrow();
+        org.assertj.core.api.Assertions.assertThat(item.getGlobalProductSourceId()).isEqualTo(globalProductId);
+    }
+
+    @Test
+    void adoptRenameAllocatesSuffixWhenSkuTaken() throws Exception {
+        String goodsTypeId = itemTypeRepository.findByBusinessIdAndTypeKey(TENANT_A, "goods")
+                .orElseThrow()
+                .getId();
+
+        itemCatalogService.createItem(
+                TENANT_A,
+                new CreateItemRequest(
+                        "BASE-SKU",
+                        "9999999999993",
+                        "Blocks base sku",
+                        null,
+                        goodsTypeId,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null
+                ),
+                null
+        );
+
+        String body = String.format(
+                "{\"openingBranchId\":\"%s\",\"lines\":[{\"globalProductId\":\"%s\",\"sku\":\"BASE-SKU\",\"onSkuConflict\":\"rename\",\"sellingPrice\":90,\"buyingPrice\":70}]}",
+                branchId, globalProductId
+        );
+
+        mockMvc.perform(post("/api/v1/global-catalog/adopt")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.importedCount").value(1))
+                .andExpect(jsonPath("$.lines[0].status").value("imported"))
+                .andExpect(jsonPath("$.lines[0].sku").value("BASE-SKU-2"));
     }
 
     @Test

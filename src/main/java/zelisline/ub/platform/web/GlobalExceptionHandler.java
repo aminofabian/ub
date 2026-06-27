@@ -24,6 +24,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.validation.ConstraintViolationException;
 
+import zelisline.ub.platform.persistence.DataIntegrityProblems;
+
 /**
  * Centralised Problem+JSON ({@link ProblemDetail}) translation for Phase 1.
  *
@@ -116,15 +118,14 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ProblemDetail> handleDataIntegrity(DataIntegrityViolationException ex) {
         log.warn("Data integrity violation: {}", ex.getMessage());
-        String m = String.valueOf(ex.getMostSpecificCause().getMessage()) + " " + ex.getMessage();
-        if (m.contains("uq_items_business_sku") || m.toLowerCase().contains("business_sku")) {
+        if (DataIntegrityProblems.isDuplicateSku(ex)) {
             ProblemDetail body = ProblemDetail.forStatus(HttpStatus.CONFLICT);
             body.setTitle("Conflict");
             body.setType(URI.create(PROBLEM_BASE + "duplicate-sku"));
             body.setDetail("SKU already in use");
             return problem(body, HttpStatus.CONFLICT);
         }
-        if (m.contains("uq_customer_phones_business_phone")) {
+        if (DataIntegrityProblems.isDuplicateCustomerPhone(ex)) {
             ProblemDetail body = ProblemDetail.forStatus(HttpStatus.CONFLICT);
             body.setTitle("Conflict");
             body.setType(URI.create(PROBLEM_BASE + "duplicate-customer-phone"));

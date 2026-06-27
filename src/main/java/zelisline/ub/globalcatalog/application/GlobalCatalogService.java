@@ -20,6 +20,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.application.ItemCatalogService;
@@ -47,6 +48,7 @@ import zelisline.ub.globalcatalog.repository.GlobalProductPackRepository;
 import zelisline.ub.globalcatalog.repository.GlobalProductRepository;
 import zelisline.ub.inventory.api.dto.PostOpeningBalanceRequest;
 import zelisline.ub.inventory.application.InventoryLedgerService;
+import zelisline.ub.platform.persistence.DataIntegrityProblems;
 import zelisline.ub.pricing.api.dto.PostSellingPriceRequest;
 import zelisline.ub.pricing.application.PricingService;
 import zelisline.ub.tenancy.domain.Branch;
@@ -75,6 +77,7 @@ public class GlobalCatalogService {
     private final ItemCatalogService itemCatalogService;
     private final PricingService pricingService;
     private final InventoryLedgerService inventoryLedgerService;
+    private final EntityManager entityManager;
 
     @Transactional(readOnly = true)
     public GlobalCatalogMetaResponse getCatalogMeta(String businessId) {
@@ -334,6 +337,21 @@ public class GlobalCatalogService {
                 }
             }
 
+            String barcode = ItemCatalogService.normalizeBarcode(gp.getBarcode());
+            if (barcode != null) {
+                var barcodeHolder = itemRepository.findByBusinessIdAndBarcodeAndDeletedAtIsNull(businessId, barcode);
+                if (barcodeHolder.isPresent()) {
+                    results.add(new AdoptResultLineResponse(
+                            gpId,
+                            "skip_barcode_conflict",
+                            barcodeHolder.get().getId(),
+                            sku,
+                            "Barcode already in use"));
+                    skippedCount++;
+                    continue;
+                }
+            }
+
             if (dryRun) {
                 results.add(new AdoptResultLineResponse(gpId, "ready", null, sku, "Will import"));
                 reserveSkuForBatch(skuToItemId, sku);
@@ -342,7 +360,6 @@ public class GlobalCatalogService {
 
             String slugHint = categorySlugHintById.getOrDefault(gp.getGlobalCategoryId(), "");
             String categoryId = resolveTenantCategoryId(businessId, line.categoryId(), slugHint);
-            String barcode = ItemCatalogService.normalizeBarcode(gp.getBarcode());
 
             CreateItemRequest createReq = new CreateItemRequest(
                     sku,
@@ -409,17 +426,32 @@ public class GlobalCatalogService {
                 skuToItemId.put(item.getSku(), item.getId());
                 matchIndex.register(item);
             } catch (ResponseStatusException ex) {
-                if (!isDuplicateSkuResponse(ex)) {
-                    throw ex;
+                entityManager.clear();
+                if (DataIntegrityProblems.isDuplicateSku(ex)) {
+                    appendSkuConflictSkip(results, gpId, sku, resolveSkuConflictItemId(businessId, sku, skuToItemId));
+                    skippedCount++;
+                    continue;
                 }
-                appendSkuConflictSkip(results, gpId, sku, resolveSkuConflictItemId(businessId, sku, skuToItemId));
-                skippedCount++;
-                continue;
+                if (DataIntegrityProblems.isDuplicateBarcode(ex)) {
+                    appendBarcodeConflictSkip(results, gpId, sku, barcode, businessId);
+                    skippedCount++;
+                    continue;
+                }
+                throw ex;
             } catch (DataIntegrityViolationException ex) {
-                if (!isDuplicateSkuDataIntegrity(ex)) {
-                    throw ex;
+                entityManager.clear();
+                if (DataIntegrityProblems.isDuplicateSku(ex)) {
+                    appendSkuConflictSkip(results, gpId, sku, resolveSkuConflictItemId(businessId, sku, skuToItemId));
+                } else if (DataIntegrityProblems.isDuplicateBarcode(ex)) {
+                    appendBarcodeConflictSkip(results, gpId, sku, barcode, businessId);
+                } else {
+                    results.add(new AdoptResultLineResponse(
+                            gpId,
+                            "error_data_integrity",
+                            null,
+                            sku,
+                            "Could not import this row due to a database constraint"));
                 }
-                appendSkuConflictSkip(results, gpId, sku, resolveSkuConflictItemId(businessId, sku, skuToItemId));
                 skippedCount++;
                 continue;
             }
@@ -483,14 +515,18 @@ public class GlobalCatalogService {
                 gpId, "skip_sku_conflict", conflictItemId, sku, "SKU already in use"));
     }
 
-    private static boolean isDuplicateSkuResponse(ResponseStatusException ex) {
-        return ex.getStatusCode() == HttpStatus.CONFLICT
-                && "SKU already in use".equals(ex.getReason());
-    }
-
-    private static boolean isDuplicateSkuDataIntegrity(DataIntegrityViolationException ex) {
-        String m = String.valueOf(ex.getMostSpecificCause().getMessage()) + " " + ex.getMessage();
-        return m.contains("uq_items_business_sku") || m.toLowerCase().contains("business_sku");
+    private void appendBarcodeConflictSkip(
+            List<AdoptResultLineResponse> results,
+            String gpId,
+            String sku,
+            String barcode,
+            String businessId
+    ) {
+        String conflictItemId = itemRepository.findByBusinessIdAndBarcodeAndDeletedAtIsNull(businessId, barcode)
+                .map(Item::getId)
+                .orElse(null);
+        results.add(new AdoptResultLineResponse(
+                gpId, "skip_barcode_conflict", conflictItemId, sku, "Barcode already in use"));
     }
 
     private static String globalProductLinkError(Item existing, String globalProductId) {

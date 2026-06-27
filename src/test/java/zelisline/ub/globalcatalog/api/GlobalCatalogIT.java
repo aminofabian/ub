@@ -527,6 +527,17 @@ class GlobalCatalogIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.lines[0].status").value("skip_sku_conflict"))
                 .andExpect(jsonPath("$.lines[0].itemId").isNotEmpty());
+
+        mockMvc.perform(post("/api/v1/global-catalog/adopt")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.importedCount").value(0))
+                .andExpect(jsonPath("$.skippedCount").value(1))
+                .andExpect(jsonPath("$.lines[0].status").value("skip_sku_conflict"));
     }
 
     @Test

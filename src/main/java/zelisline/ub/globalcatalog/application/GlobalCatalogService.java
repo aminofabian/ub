@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -54,6 +55,9 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
 @Service
 @RequiredArgsConstructor
 public class GlobalCatalogService {
+
+    /** Placeholder item id for SKUs reserved by earlier lines in the same adopt batch. */
+    private static final String BATCH_SKU_PLACEHOLDER = "__batch_reserved__";
 
     private static final String STATUS_PUBLISHED = "published";
     private static final String DEFAULT_CATALOG_CODE = "default";
@@ -274,16 +278,13 @@ public class GlobalCatalogService {
                             ? gp.getSkuTemplate()
                             : null);
 
-            if (sku != null && skuToItemId.containsKey(sku)) {
-                String conflictItemId = skuToItemId.get(sku);
+            if (sku != null) {
+                String conflictItemId = resolveSkuConflictItemId(businessId, sku, skuToItemId);
+                if (conflictItemId != null) {
                 String resolution = normalizeSkuConflictResolution(line.onSkuConflict());
 
-                if ("merge".equals(resolution)) {
-                    Item conflictItem = tenantItems.stream()
-                            .filter(i -> i.getId().equals(conflictItemId))
-                            .findFirst()
-                            .orElseGet(() -> itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(conflictItemId, businessId)
-                                    .orElse(null));
+                if ("merge".equals(resolution) && !BATCH_SKU_PLACEHOLDER.equals(conflictItemId)) {
+                    Item conflictItem = resolveConflictItem(businessId, conflictItemId, tenantItems);
                     if (conflictItem == null) {
                         results.add(new AdoptResultLineResponse(
                                 gpId, "error_not_found", null, sku, "Existing product not found"));
@@ -322,10 +323,12 @@ public class GlobalCatalogService {
                     skippedCount++;
                     continue;
                 }
+                }
             }
 
             if (dryRun) {
                 results.add(new AdoptResultLineResponse(gpId, "ready", null, sku, "Will import"));
+                reserveSkuForBatch(skuToItemId, sku);
                 continue;
             }
 
@@ -361,9 +364,23 @@ public class GlobalCatalogService {
                     gp.getSize()
             );
 
-            var created = itemCatalogService.createItem(businessId, createReq, null);
-            Item item = itemRepository.findById(created.body().id())
-                    .orElseThrow(() -> new IllegalStateException("Created item not found"));
+            Item item;
+            try {
+                reserveSkuForBatch(skuToItemId, sku);
+                var created = itemCatalogService.createItem(businessId, createReq, null);
+                item = itemRepository.findById(created.body().id())
+                        .orElseThrow(() -> new IllegalStateException("Created item not found"));
+            } catch (ResponseStatusException ex) {
+                if (ex.getStatusCode() != HttpStatus.CONFLICT
+                        || !"SKU already in use".equals(ex.getReason())) {
+                    throw ex;
+                }
+                String conflictItemId = resolveSkuConflictItemId(businessId, sku, skuToItemId);
+                results.add(new AdoptResultLineResponse(
+                        gpId, "skip_sku_conflict", conflictItemId, sku, "SKU already in use"));
+                skippedCount++;
+                continue;
+            }
             item.setGlobalProductSourceId(gp.getId());
             itemRepository.save(item);
 
@@ -405,6 +422,41 @@ public class GlobalCatalogService {
             return "skip";
         }
         return raw.trim().toLowerCase();
+    }
+
+    private String resolveSkuConflictItemId(String businessId, String sku, Map<String, String> skuToItemId) {
+        if (sku == null || sku.isBlank()) {
+            return null;
+        }
+        String trimmed = sku.trim();
+        String fromBatch = skuToItemId.get(trimmed);
+        if (fromBatch != null) {
+            return fromBatch;
+        }
+        return itemRepository.findByBusinessIdAndSkuAndDeletedAtIsNull(businessId, trimmed)
+                .map(Item::getId)
+                .orElse(null);
+    }
+
+    private Item resolveConflictItem(String businessId, String conflictItemId, List<Item> tenantItems) {
+        if (conflictItemId == null || conflictItemId.isBlank() || BATCH_SKU_PLACEHOLDER.equals(conflictItemId)) {
+            return null;
+        }
+        Optional<Item> fromSnapshot = tenantItems.stream()
+                .filter(i -> i.getId().equals(conflictItemId))
+                .findFirst();
+        if (fromSnapshot.isPresent()) {
+            return fromSnapshot.get();
+        }
+        return itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(conflictItemId, businessId)
+                .orElse(null);
+    }
+
+    private static void reserveSkuForBatch(Map<String, String> skuToItemId, String sku) {
+        if (sku == null || sku.isBlank()) {
+            return;
+        }
+        skuToItemId.putIfAbsent(sku.trim(), BATCH_SKU_PLACEHOLDER);
     }
 
     private static String globalProductLinkError(Item existing, String globalProductId) {

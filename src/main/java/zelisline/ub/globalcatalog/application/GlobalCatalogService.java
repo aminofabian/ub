@@ -10,6 +10,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -310,19 +311,26 @@ public class GlobalCatalogService {
                 }
 
                 if ("rename".equals(resolution)) {
-                    String renamed = allocateUniqueSku(businessId, sku, skuToItemId);
-                    if (renamed == null) {
-                        results.add(new AdoptResultLineResponse(
-                                gpId, "error_invalid_sku", null, sku, "Could not find an available SKU suffix"));
-                        continue;
+                    String explicitRename = line.sku() != null ? line.sku().trim() : "";
+                    if (!explicitRename.isBlank()
+                            && !explicitRename.equals(sku)
+                            && resolveSkuConflictItemId(businessId, explicitRename, skuToItemId) == null) {
+                        sku = explicitRename;
+                    } else {
+                        String renamed = allocateUniqueSku(businessId, sku, skuToItemId);
+                        if (renamed == null) {
+                            results.add(new AdoptResultLineResponse(
+                                    gpId, "error_invalid_sku", null, sku, "Could not find an available SKU suffix"));
+                            continue;
+                        }
+                        sku = renamed;
                     }
-                    sku = renamed;
                 } else {
-                    results.add(new AdoptResultLineResponse(
-                            gpId, "skip_sku_conflict", conflictItemId, sku, "SKU already in use"));
+                    appendSkuConflictSkip(results, gpId, sku, conflictItemId);
                     skippedCount++;
                     continue;
                 }
+                reserveSkuForBatch(skuToItemId, sku);
                 }
             }
 
@@ -370,45 +378,51 @@ public class GlobalCatalogService {
                 var created = itemCatalogService.createItem(businessId, createReq, null);
                 item = itemRepository.findById(created.body().id())
                         .orElseThrow(() -> new IllegalStateException("Created item not found"));
+                itemRepository.flush();
+
+                item.setGlobalProductSourceId(gp.getId());
+                itemRepository.save(item);
+
+                BigDecimal sellingPrice = line.sellingPrice() != null
+                        ? line.sellingPrice()
+                        : gp.getRecommendedSellingPrice();
+                if (sellingPrice != null && sellingPrice.compareTo(BigDecimal.ZERO) > 0) {
+                    pricingService.setSellingPrice(
+                            businessId,
+                            new PostSellingPriceRequest(item.getId(), branch.getId(), sellingPrice, LocalDate.now(), "Global catalog adopt"),
+                            effectiveActor
+                    );
+                }
+
+                BigDecimal openingQty = line.openingQty();
+                if (openingQty != null && openingQty.compareTo(BigDecimal.ZERO) > 0) {
+                    BigDecimal unitCost = line.openingUnitCost() != null && line.openingUnitCost().compareTo(BigDecimal.ZERO) > 0
+                            ? line.openingUnitCost()
+                            : (createReq.buyingPrice() != null ? createReq.buyingPrice() : BigDecimal.ONE);
+                    inventoryLedgerService.recordOpeningBalance(
+                            businessId,
+                            new PostOpeningBalanceRequest(branch.getId(), item.getId(), openingQty, unitCost, "Global catalog opening stock"),
+                            effectiveActor
+                    );
+                }
+
+                skuToItemId.put(item.getSku(), item.getId());
+                matchIndex.register(item);
             } catch (ResponseStatusException ex) {
-                if (ex.getStatusCode() != HttpStatus.CONFLICT
-                        || !"SKU already in use".equals(ex.getReason())) {
+                if (!isDuplicateSkuResponse(ex)) {
                     throw ex;
                 }
-                String conflictItemId = resolveSkuConflictItemId(businessId, sku, skuToItemId);
-                results.add(new AdoptResultLineResponse(
-                        gpId, "skip_sku_conflict", conflictItemId, sku, "SKU already in use"));
+                appendSkuConflictSkip(results, gpId, sku, resolveSkuConflictItemId(businessId, sku, skuToItemId));
+                skippedCount++;
+                continue;
+            } catch (DataIntegrityViolationException ex) {
+                if (!isDuplicateSkuDataIntegrity(ex)) {
+                    throw ex;
+                }
+                appendSkuConflictSkip(results, gpId, sku, resolveSkuConflictItemId(businessId, sku, skuToItemId));
                 skippedCount++;
                 continue;
             }
-            item.setGlobalProductSourceId(gp.getId());
-            itemRepository.save(item);
-
-            BigDecimal sellingPrice = line.sellingPrice() != null
-                    ? line.sellingPrice()
-                    : gp.getRecommendedSellingPrice();
-            if (sellingPrice != null && sellingPrice.compareTo(BigDecimal.ZERO) > 0) {
-                pricingService.setSellingPrice(
-                        businessId,
-                        new PostSellingPriceRequest(item.getId(), branch.getId(), sellingPrice, LocalDate.now(), "Global catalog adopt"),
-                        effectiveActor
-                );
-            }
-
-            BigDecimal openingQty = line.openingQty();
-            if (openingQty != null && openingQty.compareTo(BigDecimal.ZERO) > 0) {
-                BigDecimal unitCost = line.openingUnitCost() != null && line.openingUnitCost().compareTo(BigDecimal.ZERO) > 0
-                        ? line.openingUnitCost()
-                        : (createReq.buyingPrice() != null ? createReq.buyingPrice() : BigDecimal.ONE);
-                inventoryLedgerService.recordOpeningBalance(
-                        businessId,
-                        new PostOpeningBalanceRequest(branch.getId(), item.getId(), openingQty, unitCost, "Global catalog opening stock"),
-                        effectiveActor
-                );
-            }
-
-            skuToItemId.put(item.getSku(), item.getId());
-            matchIndex.register(item);
 
             importedCount++;
             results.add(new AdoptResultLineResponse(gpId, "imported", item.getId(), item.getSku(), "Imported successfully"));
@@ -457,6 +471,26 @@ public class GlobalCatalogService {
             return;
         }
         skuToItemId.putIfAbsent(sku.trim(), BATCH_SKU_PLACEHOLDER);
+    }
+
+    private static void appendSkuConflictSkip(
+            List<AdoptResultLineResponse> results,
+            String gpId,
+            String sku,
+            String conflictItemId
+    ) {
+        results.add(new AdoptResultLineResponse(
+                gpId, "skip_sku_conflict", conflictItemId, sku, "SKU already in use"));
+    }
+
+    private static boolean isDuplicateSkuResponse(ResponseStatusException ex) {
+        return ex.getStatusCode() == HttpStatus.CONFLICT
+                && "SKU already in use".equals(ex.getReason());
+    }
+
+    private static boolean isDuplicateSkuDataIntegrity(DataIntegrityViolationException ex) {
+        String m = String.valueOf(ex.getMostSpecificCause().getMessage()) + " " + ex.getMessage();
+        return m.contains("uq_items_business_sku") || m.toLowerCase().contains("business_sku");
     }
 
     private static String globalProductLinkError(Item existing, String globalProductId) {

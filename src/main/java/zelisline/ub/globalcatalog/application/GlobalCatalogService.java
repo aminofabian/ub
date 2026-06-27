@@ -1,8 +1,8 @@
 package zelisline.ub.globalcatalog.application;
 
 import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,7 +20,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.application.ItemCatalogService;
@@ -46,11 +45,7 @@ import zelisline.ub.globalcatalog.repository.GlobalCatalogRepository;
 import zelisline.ub.globalcatalog.repository.GlobalCategoryRepository;
 import zelisline.ub.globalcatalog.repository.GlobalProductPackRepository;
 import zelisline.ub.globalcatalog.repository.GlobalProductRepository;
-import zelisline.ub.inventory.api.dto.PostOpeningBalanceRequest;
-import zelisline.ub.inventory.application.InventoryLedgerService;
 import zelisline.ub.platform.persistence.DataIntegrityProblems;
-import zelisline.ub.pricing.api.dto.PostSellingPriceRequest;
-import zelisline.ub.pricing.application.PricingService;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.tenancy.repository.BusinessRepository;
@@ -74,10 +69,7 @@ public class GlobalCatalogService {
     private final ItemRepository itemRepository;
     private final ItemTypeRepository itemTypeRepository;
     private final CategoryRepository categoryRepository;
-    private final ItemCatalogService itemCatalogService;
-    private final PricingService pricingService;
-    private final InventoryLedgerService inventoryLedgerService;
-    private final EntityManager entityManager;
+    private final GlobalCatalogAdoptLineExecutor adoptLineExecutor;
 
     @Transactional(readOnly = true)
     public GlobalCatalogMetaResponse getCatalogMeta(String businessId) {
@@ -209,7 +201,6 @@ public class GlobalCatalogService {
         return runAdopt(businessId, null, request.lines(), true, null);
     }
 
-    @Transactional
     public AdoptResponse adopt(String businessId, AdoptRequest request, String actorUserId) {
         return runAdopt(businessId, request.openingBranchId(), request.lines(), false, actorUserId);
     }
@@ -245,8 +236,12 @@ public class GlobalCatalogService {
                 .stream()
                 .collect(Collectors.toMap(GlobalCategory::getId, c -> c.getTenantCategorySlugHint() == null ? "" : c.getTenantCategorySlugHint(), (a, b) -> a));
 
-        Map<String, String> skuToItemId = tenantItems.stream()
-                .collect(Collectors.toMap(Item::getSku, Item::getId, (a, b) -> a));
+        Map<String, String> skuToItemId = new HashMap<>();
+        for (Item tenantItem : tenantItems) {
+            if (tenantItem.getSku() != null && !tenantItem.getSku().isBlank()) {
+                skuToItemId.putIfAbsent(tenantItem.getSku().trim(), tenantItem.getId());
+            }
+        }
 
         List<AdoptResultLineResponse> results = new ArrayList<>();
         int importedCount = 0;
@@ -281,6 +276,7 @@ public class GlobalCatalogService {
                     : (gp.getSkuTemplate() != null && !gp.getSkuTemplate().isBlank()
                             ? gp.getSkuTemplate()
                             : null);
+            String barcode = ItemCatalogService.normalizeBarcode(gp.getBarcode());
 
             if (sku != null) {
                 String conflictItemId = resolveSkuConflictItemId(businessId, sku, skuToItemId);
@@ -304,12 +300,26 @@ public class GlobalCatalogService {
                                 gpId, "ready_merge", conflictItemId, conflictItem.getSku(), "Will link to existing product"));
                         continue;
                     }
-                    mergeGlobalProductIntoExisting(
-                            businessId, gp, conflictItem, line, branch, effectiveActor);
-                    matchIndex.register(conflictItem);
-                    importedCount++;
-                    results.add(new AdoptResultLineResponse(
-                            gpId, "merged", conflictItem.getId(), conflictItem.getSku(), "Linked to existing product"));
+                    BigDecimal mergePrice = line.sellingPrice() != null
+                            ? line.sellingPrice()
+                            : gp.getRecommendedSellingPrice();
+                    try {
+                        AdoptResultLineResponse merged = adoptLineExecutor.mergeLine(
+                                businessId,
+                                new GlobalCatalogAdoptLineExecutor.MergeLineCommand(
+                                        gp.getId(),
+                                        conflictItem.getId(),
+                                        branch.getId(),
+                                        mergePrice),
+                                effectiveActor);
+                        itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(conflictItem.getId(), businessId)
+                                .ifPresent(matchIndex::register);
+                        importedCount++;
+                        results.add(merged);
+                    } catch (Exception ex) {
+                        results.add(mapAdoptLineFailure(ex, businessId, gpId, sku, barcode, skuToItemId));
+                        skippedCount++;
+                    }
                     continue;
                 }
 
@@ -337,7 +347,6 @@ public class GlobalCatalogService {
                 }
             }
 
-            String barcode = ItemCatalogService.normalizeBarcode(gp.getBarcode());
             if (barcode != null) {
                 var barcodeHolder = itemRepository.findByBusinessIdAndBarcodeAndDeletedAtIsNull(businessId, barcode);
                 if (barcodeHolder.isPresent()) {
@@ -389,75 +398,38 @@ public class GlobalCatalogService {
                     gp.getSize()
             );
 
-            Item item;
+            reserveSkuForBatch(skuToItemId, sku);
+
+            BigDecimal sellingPrice = line.sellingPrice() != null
+                    ? line.sellingPrice()
+                    : gp.getRecommendedSellingPrice();
+            BigDecimal openingQty = line.openingQty();
+            BigDecimal openingUnitCost = line.openingUnitCost() != null && line.openingUnitCost().compareTo(BigDecimal.ZERO) > 0
+                    ? line.openingUnitCost()
+                    : (createReq.buyingPrice() != null ? createReq.buyingPrice() : null);
+
             try {
-                reserveSkuForBatch(skuToItemId, sku);
-                var created = itemCatalogService.createItem(businessId, createReq, null);
-                item = itemRepository.findById(created.body().id())
-                        .orElseThrow(() -> new IllegalStateException("Created item not found"));
-                itemRepository.flush();
-
-                item.setGlobalProductSourceId(gp.getId());
-                itemRepository.save(item);
-
-                BigDecimal sellingPrice = line.sellingPrice() != null
-                        ? line.sellingPrice()
-                        : gp.getRecommendedSellingPrice();
-                if (sellingPrice != null && sellingPrice.compareTo(BigDecimal.ZERO) > 0) {
-                    pricingService.setSellingPrice(
-                            businessId,
-                            new PostSellingPriceRequest(item.getId(), branch.getId(), sellingPrice, LocalDate.now(), "Global catalog adopt"),
-                            effectiveActor
-                    );
+                AdoptResultLineResponse imported = adoptLineExecutor.importLine(
+                        businessId,
+                        new GlobalCatalogAdoptLineExecutor.ImportLineCommand(
+                                gpId,
+                                createReq,
+                                branch.getId(),
+                                sellingPrice,
+                                openingQty,
+                                openingUnitCost),
+                        effectiveActor);
+                if (imported.sku() != null && !imported.sku().isBlank()) {
+                    skuToItemId.put(imported.sku().trim(), imported.itemId());
                 }
-
-                BigDecimal openingQty = line.openingQty();
-                if (openingQty != null && openingQty.compareTo(BigDecimal.ZERO) > 0) {
-                    BigDecimal unitCost = line.openingUnitCost() != null && line.openingUnitCost().compareTo(BigDecimal.ZERO) > 0
-                            ? line.openingUnitCost()
-                            : (createReq.buyingPrice() != null ? createReq.buyingPrice() : BigDecimal.ONE);
-                    inventoryLedgerService.recordOpeningBalance(
-                            businessId,
-                            new PostOpeningBalanceRequest(branch.getId(), item.getId(), openingQty, unitCost, "Global catalog opening stock"),
-                            effectiveActor
-                    );
-                }
-
-                skuToItemId.put(item.getSku(), item.getId());
-                matchIndex.register(item);
-            } catch (ResponseStatusException ex) {
-                entityManager.clear();
-                if (DataIntegrityProblems.isDuplicateSku(ex)) {
-                    appendSkuConflictSkip(results, gpId, sku, resolveSkuConflictItemId(businessId, sku, skuToItemId));
-                    skippedCount++;
-                    continue;
-                }
-                if (DataIntegrityProblems.isDuplicateBarcode(ex)) {
-                    appendBarcodeConflictSkip(results, gpId, sku, barcode, businessId);
-                    skippedCount++;
-                    continue;
-                }
-                throw ex;
-            } catch (DataIntegrityViolationException ex) {
-                entityManager.clear();
-                if (DataIntegrityProblems.isDuplicateSku(ex)) {
-                    appendSkuConflictSkip(results, gpId, sku, resolveSkuConflictItemId(businessId, sku, skuToItemId));
-                } else if (DataIntegrityProblems.isDuplicateBarcode(ex)) {
-                    appendBarcodeConflictSkip(results, gpId, sku, barcode, businessId);
-                } else {
-                    results.add(new AdoptResultLineResponse(
-                            gpId,
-                            "error_data_integrity",
-                            null,
-                            sku,
-                            "Could not import this row due to a database constraint"));
-                }
+                itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(imported.itemId(), businessId)
+                        .ifPresent(matchIndex::register);
+                importedCount++;
+                results.add(imported);
+            } catch (Exception ex) {
+                results.add(mapAdoptLineFailure(ex, businessId, gpId, sku, barcode, skuToItemId));
                 skippedCount++;
-                continue;
             }
-
-            importedCount++;
-            results.add(new AdoptResultLineResponse(gpId, "imported", item.getId(), item.getSku(), "Imported successfully"));
         }
 
         return new AdoptResponse(importedCount, skippedCount, results);
@@ -529,6 +501,64 @@ public class GlobalCatalogService {
                 gpId, "skip_barcode_conflict", conflictItemId, sku, "Barcode already in use"));
     }
 
+    private AdoptResultLineResponse mapAdoptLineFailure(
+            Exception ex,
+            String businessId,
+            String gpId,
+            String sku,
+            String barcode,
+            Map<String, String> skuToItemId
+    ) {
+        if (ex instanceof ResponseStatusException responseEx) {
+            if (DataIntegrityProblems.isDuplicateSku(responseEx)) {
+                return new AdoptResultLineResponse(
+                        gpId,
+                        "skip_sku_conflict",
+                        resolveSkuConflictItemId(businessId, sku, skuToItemId),
+                        sku,
+                        "SKU already in use");
+            }
+            if (DataIntegrityProblems.isDuplicateBarcode(responseEx)) {
+                String conflictItemId = barcode != null
+                        ? itemRepository.findByBusinessIdAndBarcodeAndDeletedAtIsNull(businessId, barcode)
+                                .map(Item::getId)
+                                .orElse(null)
+                        : null;
+                return new AdoptResultLineResponse(
+                        gpId, "skip_barcode_conflict", conflictItemId, sku, "Barcode already in use");
+            }
+            String message = responseEx.getReason() != null ? responseEx.getReason() : "Could not import this row";
+            return new AdoptResultLineResponse(gpId, "error_import", null, sku, message);
+        }
+        if (ex instanceof DataIntegrityViolationException dataEx) {
+            if (DataIntegrityProblems.isDuplicateSku(dataEx)) {
+                return new AdoptResultLineResponse(
+                        gpId,
+                        "skip_sku_conflict",
+                        resolveSkuConflictItemId(businessId, sku, skuToItemId),
+                        sku,
+                        "SKU already in use");
+            }
+            if (DataIntegrityProblems.isDuplicateBarcode(dataEx)) {
+                String conflictItemId = barcode != null
+                        ? itemRepository.findByBusinessIdAndBarcodeAndDeletedAtIsNull(businessId, barcode)
+                                .map(Item::getId)
+                                .orElse(null)
+                        : null;
+                return new AdoptResultLineResponse(
+                        gpId, "skip_barcode_conflict", conflictItemId, sku, "Barcode already in use");
+            }
+            return new AdoptResultLineResponse(
+                    gpId,
+                    "error_data_integrity",
+                    null,
+                    sku,
+                    "Could not import this row due to a database constraint");
+        }
+        String message = ex.getMessage() != null ? ex.getMessage() : "Could not import this row";
+        return new AdoptResultLineResponse(gpId, "error_import", null, sku, message);
+    }
+
     private static String globalProductLinkError(Item existing, String globalProductId) {
         String linked = existing.getGlobalProductSourceId();
         if (linked != null && !linked.isBlank() && !linked.equals(globalProductId)) {
@@ -547,35 +577,6 @@ public class GlobalCatalogService {
             }
         }
         return null;
-    }
-
-    private void mergeGlobalProductIntoExisting(
-            String businessId,
-            GlobalProduct gp,
-            Item existing,
-            AdoptLineRequest line,
-            Branch branch,
-            String actorUserId
-    ) {
-        existing.setGlobalProductSourceId(gp.getId());
-        itemRepository.save(existing);
-
-        BigDecimal sellingPrice = line.sellingPrice() != null
-                ? line.sellingPrice()
-                : gp.getRecommendedSellingPrice();
-        if (sellingPrice != null && sellingPrice.compareTo(BigDecimal.ZERO) > 0) {
-            pricingService.setSellingPrice(
-                    businessId,
-                    new PostSellingPriceRequest(
-                            existing.getId(),
-                            branch.getId(),
-                            sellingPrice,
-                            LocalDate.now(),
-                            "Global catalog merge"
-                    ),
-                    actorUserId
-            );
-        }
     }
 
     private String resolveTenantCategoryId(String businessId, String explicitCategoryId, String slugHint) {

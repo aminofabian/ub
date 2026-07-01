@@ -24,9 +24,11 @@ import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.ItemImage;
+import zelisline.ub.catalog.domain.ItemType;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.pricing.application.PricingService;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.storefront.api.dto.PublicCatalogItemCardResponse;
@@ -35,6 +37,8 @@ import zelisline.ub.storefront.api.dto.PublicCatalogListResponse;
 import zelisline.ub.storefront.api.dto.PublicCatalogVariantResponse;
 import zelisline.ub.storefront.api.dto.PublicCategoryListResponse;
 import zelisline.ub.storefront.api.dto.PublicCategoryResponse;
+import zelisline.ub.storefront.api.dto.PublicDepartmentListResponse;
+import zelisline.ub.storefront.api.dto.PublicDepartmentResponse;
 import zelisline.ub.storefront.api.dto.PublicItemImageResponse;
 import zelisline.ub.storefront.api.dto.PublicStorefrontResponse;
 import zelisline.ub.tenancy.api.dto.StorefrontSettingsResponse;
@@ -51,6 +55,7 @@ public class PublicStorefrontCatalogService {
     private final PricingService pricingService;
     private final ItemImageRepository itemImageRepository;
     private final CategoryRepository categoryRepository;
+    private final ItemTypeRepository itemTypeRepository;
     private final StorefrontCatalogStockService storefrontCatalogStockService;
 
     public PublicStorefrontCatalogService(
@@ -59,6 +64,7 @@ public class PublicStorefrontCatalogService {
             PricingService pricingService,
             ItemImageRepository itemImageRepository,
             CategoryRepository categoryRepository,
+            ItemTypeRepository itemTypeRepository,
             StorefrontCatalogStockService storefrontCatalogStockService
     ) {
         this.storefrontContextService = storefrontContextService;
@@ -66,6 +72,7 @@ public class PublicStorefrontCatalogService {
         this.pricingService = pricingService;
         this.itemImageRepository = itemImageRepository;
         this.categoryRepository = categoryRepository;
+        this.itemTypeRepository = itemTypeRepository;
         this.storefrontCatalogStockService = storefrontCatalogStockService;
     }
 
@@ -81,12 +88,20 @@ public class PublicStorefrontCatalogService {
                 ctx.catalogBranch().getName(),
                 sf.label(),
                 sf.announcement(),
-                loadFeaturedCards(ctx)
+                loadFeaturedCards(ctx),
+                listPublishedTypes(ctx)
         );
     }
 
     @Transactional(readOnly = true)
-    public PublicCatalogListResponse listItems(String slug, String q, String categoryId, String cursor, int limit) {
+    public PublicCatalogListResponse listItems(
+            String slug,
+            String q,
+            String categoryId,
+            String typeId,
+            String cursor,
+            int limit
+    ) {
         PublicStorefrontContext ctx = storefrontContextService.requireForSlug(slug);
         int sz = clampLimit(limit);
         String qq = blankToNull(q);
@@ -99,12 +114,19 @@ public class PublicStorefrontCatalogService {
                 return new PublicCatalogListResponse(ctx.business().getCurrency(), List.of(), null, 0L);
             }
         }
-        List<Item> items = fetchInStockCatalogPage(ctx, qq, catUnset, categoryIds, blankToNull(cursor), sz);
+        String type = blankToNull(typeId);
+        boolean typeUnset = type == null;
+        if (!typeUnset && itemTypeRepository.findByIdAndBusinessId(type, ctx.business().getId()).isEmpty()) {
+            return new PublicCatalogListResponse(ctx.business().getCurrency(), List.of(), null, 0L);
+        }
+        List<Item> items = fetchInStockCatalogPage(
+                ctx, qq, catUnset, categoryIds, typeUnset, type, blankToNull(cursor), sz);
         String next = null;
-        if (!items.isEmpty() && hasInStockCatalogAfter(ctx, qq, catUnset, categoryIds, items.getLast().getId())) {
+        if (!items.isEmpty()
+                && hasInStockCatalogAfter(ctx, qq, catUnset, categoryIds, typeUnset, type, items.getLast().getId())) {
             next = items.getLast().getId();
         }
-        long total = countInStockCatalog(ctx, qq, catUnset, categoryIds, blankToNull(cursor));
+        long total = countInStockCatalog(ctx, qq, catUnset, categoryIds, typeUnset, type, blankToNull(cursor));
         return new PublicCatalogListResponse(ctx.business().getCurrency(), toCards(ctx, items), next, total);
     }
 
@@ -226,6 +248,30 @@ public class PublicStorefrontCatalogService {
                         subtreeCounts.getOrDefault(c.getId(), 0L)))
                 .toList();
         return new PublicCategoryListResponse(rows);
+    }
+
+    @Transactional(readOnly = true)
+    public PublicDepartmentListResponse listPublishedDepartments(String slug) {
+        PublicStorefrontContext ctx = storefrontContextService.requireForSlug(slug);
+        return new PublicDepartmentListResponse(listPublishedTypes(ctx));
+    }
+
+    private List<PublicDepartmentResponse> listPublishedTypes(PublicStorefrontContext ctx) {
+        List<String> assigned = itemRepository.findDistinctWebPublishedItemTypeIds(ctx.business().getId());
+        if (assigned.isEmpty()) {
+            return List.of();
+        }
+        Map<String, Long> counts = countStorefrontItemsByDepartment(ctx);
+        List<ItemType> types = itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(ctx.business().getId());
+        return types.stream()
+                .filter(t -> t.isActive() && assigned.contains(t.getId()))
+                .map(t -> new PublicDepartmentResponse(
+                        t.getId(),
+                        t.getLabel(),
+                        blankToNull(t.getIcon()),
+                        counts.getOrDefault(t.getId(), 0L)))
+                .filter(r -> r.itemCount() > 0)
+                .toList();
     }
 
     private static int categoryDepth(Category c, Map<String, Category> byId, Map<String, Integer> memo) {
@@ -427,6 +473,8 @@ public class PublicStorefrontCatalogService {
                     null,
                     true,
                     List.of(""),
+                    true,
+                    "",
                     scan,
                     ctx.catalogBranch().getId(),
                     PageRequest.of(0, CATALOG_SCAN_PAGE, Sort.by(Sort.Direction.ASC, "id")));
@@ -453,11 +501,50 @@ public class PublicStorefrontCatalogService {
         return out;
     }
 
+    private Map<String, Long> countStorefrontItemsByDepartment(PublicStorefrontContext ctx) {
+        Map<String, Long> out = new HashMap<>();
+        String scan = null;
+        while (true) {
+            Slice<Item> slice = itemRepository.searchStorefrontCatalog(
+                    ctx.business().getId(),
+                    null,
+                    true,
+                    List.of(""),
+                    true,
+                    "",
+                    scan,
+                    ctx.catalogBranch().getId(),
+                    PageRequest.of(0, CATALOG_SCAN_PAGE, Sort.by(Sort.Direction.ASC, "id")));
+            List<Item> batch = slice.getContent();
+            if (batch.isEmpty()) {
+                break;
+            }
+            Map<String, BigDecimal> qty = storefrontCatalogStockService.displayQtyForItems(
+                    ctx.business().getId(), ctx.catalogBranch().getId(), batch);
+            for (Item item : batch) {
+                if (qty.getOrDefault(item.getId(), BigDecimal.ZERO).compareTo(BigDecimal.ZERO) <= 0) {
+                    continue;
+                }
+                String deptId = item.getItemTypeId();
+                if (deptId != null && !deptId.isBlank()) {
+                    out.merge(deptId, 1L, Long::sum);
+                }
+            }
+            if (!slice.hasNext()) {
+                break;
+            }
+            scan = batch.getLast().getId();
+        }
+        return out;
+    }
+
     private List<Item> fetchInStockCatalogPage(
             PublicStorefrontContext ctx,
             String q,
             boolean catUnset,
             Collection<String> categoryIds,
+            boolean deptUnset,
+            String departmentId,
             String cursor,
             int limit
     ) {
@@ -469,6 +556,8 @@ public class PublicStorefrontCatalogService {
                     q,
                     catUnset,
                     categoryIds,
+                    deptUnset,
+                    departmentId == null ? "" : departmentId,
                     scan,
                     ctx.catalogBranch().getId(),
                     PageRequest.of(0, CATALOG_SCAN_PAGE, Sort.by(Sort.Direction.ASC, "id")));
@@ -499,6 +588,8 @@ public class PublicStorefrontCatalogService {
             String q,
             boolean catUnset,
             Collection<String> categoryIds,
+            boolean deptUnset,
+            String departmentId,
             String afterItemId
     ) {
         String scan = afterItemId;
@@ -508,6 +599,8 @@ public class PublicStorefrontCatalogService {
                     q,
                     catUnset,
                     categoryIds,
+                    deptUnset,
+                    departmentId == null ? "" : departmentId,
                     scan,
                     ctx.catalogBranch().getId(),
                     PageRequest.of(0, CATALOG_SCAN_PAGE, Sort.by(Sort.Direction.ASC, "id")));
@@ -535,6 +628,8 @@ public class PublicStorefrontCatalogService {
             String q,
             boolean catUnset,
             Collection<String> categoryIds,
+            boolean deptUnset,
+            String departmentId,
             String cursor
     ) {
         long count = 0;
@@ -545,6 +640,8 @@ public class PublicStorefrontCatalogService {
                     q,
                     catUnset,
                     categoryIds,
+                    deptUnset,
+                    departmentId == null ? "" : departmentId,
                     scan,
                     ctx.catalogBranch().getId(),
                     PageRequest.of(0, CATALOG_SCAN_PAGE, Sort.by(Sort.Direction.ASC, "id")));

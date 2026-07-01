@@ -614,6 +614,17 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             """)
     List<String> findDistinctWebPublishedCategoryIds(@Param("businessId") String businessId);
 
+    @Query("""
+            select distinct i.itemTypeId from Item i
+             where i.businessId = :businessId
+               and i.deletedAt is null
+               and i.active = true
+               and i.webPublished = true
+               and i.itemTypeId is not null
+               and i.itemTypeId <> ''
+            """)
+    List<String> findDistinctWebPublishedItemTypeIds(@Param("businessId") String businessId);
+
     boolean existsByBusinessIdAndItemTypeIdAndDeletedAtIsNull(String businessId, String itemTypeId);
 
     @Query("""
@@ -623,6 +634,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                and i.active = true
                and i.webPublished = true
                and (:catUnset = true or i.categoryId in :categoryIds)
+               and (:deptUnset = true or i.itemTypeId = :departmentId)
                and (:q is null or :q = ''
                     or lower(i.name) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.variantName, '')) like lower(concat('%', :q, '%'))
@@ -643,6 +655,8 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("q") String q,
             @Param("catUnset") boolean catUnset,
             @Param("categoryIds") Collection<String> categoryIds,
+            @Param("deptUnset") boolean deptUnset,
+            @Param("departmentId") String departmentId,
             @Param("cursor") String cursor,
             @Param("catalogBranchId") String catalogBranchId,
             Pageable pageable
@@ -655,6 +669,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                and i.active = true
                and i.webPublished = true
                and (:catUnset = true or i.categoryId in :categoryIds)
+               and (:deptUnset = true or i.itemTypeId = :departmentId)
                and (:q is null or :q = ''
                     or lower(i.name) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.variantName, '')) like lower(concat('%', :q, '%'))
@@ -674,6 +689,8 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("q") String q,
             @Param("catUnset") boolean catUnset,
             @Param("categoryIds") Collection<String> categoryIds,
+            @Param("deptUnset") boolean deptUnset,
+            @Param("departmentId") String departmentId,
             @Param("cursor") String cursor,
             @Param("catalogBranchId") String catalogBranchId
     );

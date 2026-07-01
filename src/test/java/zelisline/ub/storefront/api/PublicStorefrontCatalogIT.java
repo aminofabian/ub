@@ -196,6 +196,22 @@ class PublicStorefrontCatalogIT {
     }
 
     @Test
+    void catalog_types_listsPublishedStockedTypes() throws Exception {
+        mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/catalog/types"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.types.length()").value(1))
+                .andExpect(jsonPath("$.types[0].itemCount").value(1));
+    }
+
+    @Test
+    void storefront_includesPublishedTypes() throws Exception {
+        mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/storefront"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.types.length()").value(1))
+                .andExpect(jsonPath("$.types[0].itemCount").value(1));
+    }
+
+    @Test
     void paymentDisplayInstructions_returnsOkWithoutAuth() throws Exception {
         mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/payments/display-instructions"))
                 .andExpect(status().isOk())

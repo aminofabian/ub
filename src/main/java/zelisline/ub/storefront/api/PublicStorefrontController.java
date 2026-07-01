@@ -17,6 +17,7 @@ import zelisline.ub.storefront.api.dto.PublicCatalogItemDetailResponse;
 import zelisline.ub.storefront.api.dto.PublicCatalogListResponse;
 import zelisline.ub.storefront.api.dto.PublicCategoryListResponse;
 import zelisline.ub.storefront.api.dto.PublicCheckoutPaymentOptions;
+import zelisline.ub.storefront.api.dto.PublicDepartmentListResponse;
 import zelisline.ub.storefront.api.dto.PublicStorefrontResponse;
 import zelisline.ub.storefront.application.PublicMobileConfigService;
 import zelisline.ub.storefront.application.PublicStorefrontCatalogService;
@@ -46,6 +47,18 @@ public class PublicStorefrontController {
         return ResponseEntity.ok().cacheControl(CacheControl.maxAge(Duration.ofSeconds(60))).body(body);
     }
 
+    @GetMapping("/catalog/types")
+    public ResponseEntity<PublicDepartmentListResponse> types(@PathVariable String slug) {
+        PublicDepartmentListResponse body = publicStorefrontCatalogService.listPublishedDepartments(slug);
+        return ResponseEntity.ok().cacheControl(CacheControl.maxAge(Duration.ofSeconds(60))).body(body);
+    }
+
+    /** @deprecated Prefer {@link #types(String)}. */
+    @GetMapping("/catalog/departments")
+    public ResponseEntity<PublicDepartmentListResponse> departments(@PathVariable String slug) {
+        return types(slug);
+    }
+
     @GetMapping("/catalog/categories")
     public ResponseEntity<PublicCategoryListResponse> categories(@PathVariable String slug) {
         PublicCategoryListResponse body = publicStorefrontCatalogService.listPublishedCategories(slug);
@@ -57,11 +70,15 @@ public class PublicStorefrontController {
             @PathVariable String slug,
             @RequestParam(required = false) String q,
             @RequestParam(required = false) String categoryId,
+            @RequestParam(required = false) String typeId,
+            @RequestParam(required = false) String departmentId,
             @RequestParam(required = false) String cursor,
             @RequestParam(required = false, defaultValue = "24") int limit
     ) {
         int lim = Math.min(Math.max(limit, 1), MAX_PAGE);
-        PublicCatalogListResponse body = publicStorefrontCatalogService.listItems(slug, q, categoryId, cursor, lim);
+        String resolvedTypeId = typeId != null && !typeId.isBlank() ? typeId : departmentId;
+        PublicCatalogListResponse body = publicStorefrontCatalogService.listItems(
+                slug, q, categoryId, resolvedTypeId, cursor, lim);
         return ResponseEntity.ok().cacheControl(CacheControl.maxAge(Duration.ofSeconds(60))).body(body);
     }
 

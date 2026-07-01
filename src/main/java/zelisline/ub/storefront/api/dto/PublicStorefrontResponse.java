@@ -10,6 +10,7 @@ public record PublicStorefrontResponse(
         String catalogBranchName,
         String label,
         String announcement,
-        List<PublicCatalogItemCardResponse> featured
+        List<PublicCatalogItemCardResponse> featured,
+        List<PublicDepartmentResponse> types
 ) {
 }

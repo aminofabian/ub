@@ -513,7 +513,19 @@ All configuration is via environment variables. `.env` files are for dev only; p
 | `SMS_PROVIDER`               | optional       | `africas_talking` / `twilio` / `gammu`    | Queued in outbox when `none`.                        |
 | `SMS_API_KEY`                | optional       | `…`                                       | Provider API key.                                    |
 
-### Observability
+### Mobile tenant publish (optional)
+
+One-click App Store / Play builds from **Organization → Store app**. Requires GitHub Actions workflow `mobile-tenant-publish`.
+
+| Key | Required | Example | Description |
+|-----|----------|---------|-------------|
+| `APP_MOBILE_PUBLISH_GITHUB_TOKEN` | optional | `ghp_…` | PAT with `repo` + `workflow` — dispatches the build workflow via `repository_dispatch`. |
+| `APP_MOBILE_PUBLISH_GITHUB_REPO` | optional | `owner/palmart` | Target repo for workflow dispatch. |
+| `APP_MOBILE_PUBLISH_CALLBACK_SECRET` | optional | `openssl rand -base64 32` | Shared with GitHub secret `MOBILE_PUBLISH_CALLBACK_SECRET`; secures `POST /webhooks/mobile-publish/status`. |
+| `API_PUBLIC_BASE_URL` | optional | `https://api.kiosk.ke` | Also set as GitHub secret — CI reports `building` / `submitted` / `failed` to the API. |
+
+GitHub repo secrets: `EXPO_TOKEN` (EAS cloud builds), `API_PUBLIC_BASE_URL`, `MOBILE_PUBLISH_CALLBACK_SECRET` (same value as API server).
+
 
 | Key                       | Required   | Example                          | Description                                          |
 |---------------------------|------------|----------------------------------|------------------------------------------------------|

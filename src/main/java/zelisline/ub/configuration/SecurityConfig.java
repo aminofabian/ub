@@ -147,6 +147,8 @@ public class SecurityConfig {
 
                         .requestMatchers("/api/v1/public/**").permitAll()
 
+                        .requestMatchers(HttpMethod.GET, "/api/v1/platform/mobile-schema-version").permitAll()
+
                         .requestMatchers("/api/v1/super-admin/**").hasRole("SUPER_ADMIN")
 
                         .requestMatchers("/api/v1/admin/**")

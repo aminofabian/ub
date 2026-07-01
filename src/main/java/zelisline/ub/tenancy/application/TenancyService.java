@@ -61,6 +61,7 @@ public class TenancyService {
     private final BusinessInventorySettingsService businessInventorySettingsService;
     private final BusinessProfileSettingsService businessProfileSettingsService;
     private final BusinessOnboardingSettingsService businessOnboardingSettingsService;
+    private final BusinessMobileSettingsService businessMobileSettingsService;
     private final BranchReceiptSettingsService branchReceiptSettingsService;
     private final MediaStore cloudinaryImageService;
     private final UserRepository userRepository;
@@ -93,6 +94,13 @@ public class TenancyService {
         Business saved = businessRepository.save(business);
         saved.setSettings(
                 businessOnboardingSettingsService.mergeInitialPending(saved.getSettings())
+        );
+        saved.setSettings(
+                businessMobileSettingsService.mergeInitialProvision(
+                        saved.getSettings(),
+                        normalizedSlug,
+                        saved.getName()
+                )
         );
         saved = businessRepository.save(saved);
         catalogBootstrapService.seedDefaultItemTypesIfMissing(saved.getId());

@@ -40,6 +40,7 @@ public class PublicHostResolverService {
     private final StorefrontSettingsService storefrontSettingsService;
     private final CatalogBootstrapService catalogBootstrapService;
     private final BusinessOnboardingSettingsService businessOnboardingSettingsService;
+    private final BusinessMobileSettingsService businessMobileSettingsService;
     private final UserRepository userRepository;
 
     public PublicHostResolverService(
@@ -48,12 +49,14 @@ public class PublicHostResolverService {
             StorefrontSettingsService storefrontSettingsService,
             CatalogBootstrapService catalogBootstrapService,
             BusinessOnboardingSettingsService businessOnboardingSettingsService,
+            BusinessMobileSettingsService businessMobileSettingsService,
             UserRepository userRepository) {
         this.domainMappingRepository = domainMappingRepository;
         this.businessRepository = businessRepository;
         this.storefrontSettingsService = storefrontSettingsService;
         this.catalogBootstrapService = catalogBootstrapService;
         this.businessOnboardingSettingsService = businessOnboardingSettingsService;
+        this.businessMobileSettingsService = businessMobileSettingsService;
         this.userRepository = userRepository;
     }
 
@@ -135,6 +138,13 @@ public class PublicHostResolverService {
         Business saved = businessRepository.save(business);
         saved.setSettings(
                 businessOnboardingSettingsService.mergeInitialPending(saved.getSettings())
+        );
+        saved.setSettings(
+                businessMobileSettingsService.mergeInitialProvision(
+                        saved.getSettings(),
+                        slug,
+                        saved.getName()
+                )
         );
         saved = businessRepository.save(saved);
         catalogBootstrapService.seedDefaultItemTypesIfMissing(saved.getId());

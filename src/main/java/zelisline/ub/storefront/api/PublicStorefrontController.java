@@ -18,8 +18,10 @@ import zelisline.ub.storefront.api.dto.PublicCatalogListResponse;
 import zelisline.ub.storefront.api.dto.PublicCategoryListResponse;
 import zelisline.ub.storefront.api.dto.PublicCheckoutPaymentOptions;
 import zelisline.ub.storefront.api.dto.PublicStorefrontResponse;
+import zelisline.ub.storefront.application.PublicMobileConfigService;
 import zelisline.ub.storefront.application.PublicStorefrontCatalogService;
 import zelisline.ub.storefront.application.PublicStorefrontPaymentService;
+import zelisline.ub.storefront.api.dto.PublicMobileConfigResponse;
 
 @RestController
 @RequestMapping("/api/v1/public/businesses/{slug}")
@@ -30,10 +32,17 @@ public class PublicStorefrontController {
 
     private final PublicStorefrontCatalogService publicStorefrontCatalogService;
     private final PublicStorefrontPaymentService publicStorefrontPaymentService;
+    private final PublicMobileConfigService publicMobileConfigService;
 
     @GetMapping("/storefront")
     public ResponseEntity<PublicStorefrontResponse> storefront(@PathVariable String slug) {
         PublicStorefrontResponse body = publicStorefrontCatalogService.getStorefront(slug);
+        return ResponseEntity.ok().cacheControl(CacheControl.maxAge(Duration.ofSeconds(60))).body(body);
+    }
+
+    @GetMapping("/mobile")
+    public ResponseEntity<PublicMobileConfigResponse> mobile(@PathVariable String slug) {
+        PublicMobileConfigResponse body = publicMobileConfigService.getForSlug(slug);
         return ResponseEntity.ok().cacheControl(CacheControl.maxAge(Duration.ofSeconds(60))).body(body);
     }
 

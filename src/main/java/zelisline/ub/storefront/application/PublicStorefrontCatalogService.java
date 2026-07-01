@@ -145,6 +145,7 @@ public class PublicStorefrontCatalogService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found");
         }
         String parentId = item.getVariantOfItemId() != null ? item.getVariantOfItemId() : item.getId();
+        Item parent = loadParentItem(ctx, item);
         return new PublicCatalogItemDetailResponse(
                 item.getId(),
                 item.getSku(),
@@ -156,7 +157,7 @@ public class PublicStorefrontCatalogService {
                 pricingService.getCurrentOpenSellingPrice(
                         ctx.business().getId(), item.getId(), ctx.catalogBranch().getId()),
                 onHand,
-                listImagesForItem(item.getId()),
+                listImagesForItem(item, parent),
                 listPublishedVariants(ctx, parentId)
         );
     }
@@ -175,6 +176,7 @@ public class PublicStorefrontCatalogService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found");
         }
         String parentId = item.getVariantOfItemId() != null ? item.getVariantOfItemId() : item.getId();
+        Item parent = loadParentItem(ctx, item);
         return new PublicCatalogItemDetailResponse(
                 item.getId(),
                 item.getSku(),
@@ -186,7 +188,7 @@ public class PublicStorefrontCatalogService {
                 pricingService.getCurrentOpenSellingPrice(
                         ctx.business().getId(), item.getId(), ctx.catalogBranch().getId()),
                 onHand,
-                listImagesForItem(item.getId()),
+                listImagesForItem(item, parent),
                 listPublishedVariants(ctx, parentId)
         );
     }
@@ -326,7 +328,7 @@ public class PublicStorefrontCatalogService {
                 ctx.business().getId(), ctx.catalogBranch().getId(), items);
         Map<String, BigDecimal> buyingPrices = pricingService.getLatestBuyingPricesForItems(
                 ctx.business().getId(), itemIds);
-        Map<String, String> thumbs = firstGalleryUrlByItemIds(itemIds);
+        Map<String, String> thumbs = resolveThumbnailUrlsForItems(items);
         return items.stream()
                 .map(i -> {
                     BigDecimal latestBuying = buyingPrices.get(i.getId());
@@ -350,7 +352,39 @@ public class PublicStorefrontCatalogService {
                 ctx.business().getId(), ctx.catalogBranch().getId(), itemIds);
     }
 
-    private List<PublicItemImageResponse> listImagesForItem(String itemId) {
+    private Item loadParentItem(PublicStorefrontContext ctx, Item item) {
+        String parentId = item.getVariantOfItemId();
+        if (parentId == null || parentId.isBlank()) {
+            return null;
+        }
+        return itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(parentId, ctx.business().getId())
+                .orElse(null);
+    }
+
+    private List<PublicItemImageResponse> listImagesForItem(Item item, Item parentOrNull) {
+        List<PublicItemImageResponse> own = loadGalleryImages(item.getId());
+        if (!own.isEmpty()) {
+            return own;
+        }
+        String fromKey = publicUrlFromImageKey(item.getImageKey());
+        if (fromKey != null) {
+            return List.of(new PublicItemImageResponse(fromKey, null, null, null));
+        }
+        if (parentOrNull == null) {
+            return List.of();
+        }
+        List<PublicItemImageResponse> inherited = loadGalleryImages(parentOrNull.getId());
+        if (!inherited.isEmpty()) {
+            return inherited;
+        }
+        fromKey = publicUrlFromImageKey(parentOrNull.getImageKey());
+        if (fromKey != null) {
+            return List.of(new PublicItemImageResponse(fromKey, null, null, null));
+        }
+        return List.of();
+    }
+
+    private List<PublicItemImageResponse> loadGalleryImages(String itemId) {
         List<ItemImage> imgs = itemImageRepository.findByItemIdOrderBySortOrderAscIdAsc(itemId);
         List<PublicItemImageResponse> out = new ArrayList<>();
         for (ItemImage img : imgs) {
@@ -361,6 +395,68 @@ public class PublicStorefrontCatalogService {
             out.add(new PublicItemImageResponse(url, blankToNull(img.getAltText()), img.getWidth(), img.getHeight()));
         }
         return out;
+    }
+
+    private Map<String, String> resolveThumbnailUrlsForItems(List<Item> items) {
+        if (items.isEmpty()) {
+            return Map.of();
+        }
+        List<String> galleryIds = new ArrayList<>();
+        for (Item item : items) {
+            galleryIds.add(item.getId());
+            String parentId = item.getVariantOfItemId();
+            if (parentId != null && !parentId.isBlank()) {
+                galleryIds.add(parentId);
+            }
+        }
+        Map<String, String> gallery = firstGalleryUrlByItemIds(galleryIds);
+        Map<String, Item> parentsById = new LinkedHashMap<>();
+        for (Item item : items) {
+            String parentId = item.getVariantOfItemId();
+            if (parentId == null || parentId.isBlank() || parentsById.containsKey(parentId)) {
+                continue;
+            }
+            itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(parentId, item.getBusinessId())
+                    .ifPresent(parent -> parentsById.put(parentId, parent));
+        }
+        Map<String, String> out = new LinkedHashMap<>();
+        for (Item item : items) {
+            String thumb = resolveItemThumbnail(item, gallery, parentsById.get(item.getVariantOfItemId()));
+            if (thumb != null) {
+                out.put(item.getId(), thumb);
+            }
+        }
+        return out;
+    }
+
+    private static String resolveItemThumbnail(Item item, Map<String, String> galleryByItemId, Item parentOrNull) {
+        String own = thumbnailFromItem(item, galleryByItemId);
+        if (own != null) {
+            return own;
+        }
+        if (parentOrNull == null) {
+            return null;
+        }
+        return thumbnailFromItem(parentOrNull, galleryByItemId);
+    }
+
+    private static String thumbnailFromItem(Item item, Map<String, String> galleryByItemId) {
+        String fromKey = publicUrlFromImageKey(item.getImageKey());
+        if (fromKey != null) {
+            return fromKey;
+        }
+        return galleryByItemId.get(item.getId());
+    }
+
+    private static String publicUrlFromImageKey(String imageKey) {
+        if (imageKey == null || imageKey.isBlank()) {
+            return null;
+        }
+        String k = imageKey.trim();
+        if (k.startsWith("http://") || k.startsWith("https://")) {
+            return k;
+        }
+        return null;
     }
 
     private List<PublicCatalogVariantResponse> listPublishedVariants(PublicStorefrontContext ctx, String parentItemId) {
@@ -380,7 +476,7 @@ public class PublicStorefrontCatalogService {
         }
         List<String> inStockIds = publishedInStock.stream().map(Item::getId).toList();
         Map<String, BigDecimal> prices = loadPrices(ctx, inStockIds);
-        Map<String, String> thumbs = firstGalleryUrlByItemIds(inStockIds);
+        Map<String, String> thumbs = resolveThumbnailUrlsForItems(publishedInStock);
         return publishedInStock.stream()
                 .map(v -> new PublicCatalogVariantResponse(
                         v.getId(),

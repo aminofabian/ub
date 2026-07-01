@@ -25,7 +25,9 @@ import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.domain.ItemImage;
 import zelisline.ub.catalog.repository.CategoryRepository;
+import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.pricing.domain.SellingPrice;
@@ -61,6 +63,9 @@ class PublicStorefrontCatalogIT {
 
     @Autowired
     private ItemRepository itemRepository;
+
+    @Autowired
+    private ItemImageRepository itemImageRepository;
 
     @Autowired
     private CategoryRepository categoryRepository;
@@ -449,5 +454,120 @@ class PublicStorefrontCatalogIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.qtyOnHand").value(3))
                 .andExpect(jsonPath("$.variantName").value("30-pack tray"));
+    }
+
+    @Test
+    void variantDetail_inheritsParentGalleryImage() throws Exception {
+        String goodsTypeId = itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(TENANT).getFirst().getId();
+        String categoryId =
+                categoryRepository.findByBusinessIdOrderByPositionAsc(TENANT).getFirst().getId();
+
+        String parentId = itemCatalogService
+                .createItem(
+                        TENANT,
+                        new CreateItemRequest(
+                                "SKU-EGG-PARENT",
+                                null,
+                                "Eggs",
+                                null,
+                                goodsTypeId,
+                                categoryId,
+                                null,
+                                null,
+                                false,
+                                true,
+                                true,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                false,
+                                null,
+                                null,
+                                null),
+                        null)
+                .body()
+                .id();
+
+        patchWebPublished(parentId, true);
+
+        String variantId = itemCatalogService
+                .createVariant(
+                        TENANT,
+                        parentId,
+                        new CreateVariantRequest(
+                                "SKU-EGG-SINGLE",
+                                "Egg (Single)",
+                                null,
+                                null,
+                                null,
+                                categoryId,
+                                null,
+                                null,
+                                null,
+                                true,
+                                null,
+                                true,
+                                "single",
+                                BigDecimal.ONE,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null))
+                .id();
+
+        patchWebPublished(variantId, true);
+
+        ItemImage parentImage = new ItemImage();
+        parentImage.setItemId(parentId);
+        parentImage.setSecureUrl("https://cdn.example.com/eggs.jpg");
+        parentImage.setProvider("cloudinary");
+        parentImage.setSortOrder(0);
+        itemImageRepository.save(parentImage);
+
+        SellingPrice variantPrice = new SellingPrice();
+        variantPrice.setBusinessId(TENANT);
+        variantPrice.setItemId(variantId);
+        variantPrice.setBranchId(branchId);
+        variantPrice.setPrice(new BigDecimal("15.00"));
+        variantPrice.setEffectiveFrom(LocalDate.of(2026, 1, 1));
+        sellingPriceRepository.save(variantPrice);
+
+        InventoryBatch variantBatch = new InventoryBatch();
+        variantBatch.setBusinessId(TENANT);
+        variantBatch.setBranchId(branchId);
+        variantBatch.setItemId(variantId);
+        variantBatch.setBatchNumber("IT-EGG-SINGLE");
+        variantBatch.setSourceType("test");
+        variantBatch.setSourceId(UUID.randomUUID().toString());
+        BigDecimal qty = new BigDecimal("5");
+        variantBatch.setInitialQuantity(qty);
+        variantBatch.setQuantityRemaining(qty);
+        variantBatch.setUnitCost(new BigDecimal("1.0000"));
+        variantBatch.setReceivedAt(Instant.parse("2026-01-02T12:00:00Z"));
+        variantBatch.setStatus("active");
+        inventoryBatchRepository.save(variantBatch);
+
+        mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/catalog/items/SKU-EGG-SINGLE"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.images.length()").value(1))
+                .andExpect(jsonPath("$.images[0].url").value("https://cdn.example.com/eggs.jpg"));
+
+        mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/catalog/items"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[?(@.id=='" + variantId + "')].imageUrl")
+                        .value("https://cdn.example.com/eggs.jpg"));
     }
 }

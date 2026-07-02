@@ -483,7 +483,7 @@ Clients detect gaps via `eventId` sequence numbers. On gap detection, the client
 
 - Run **Redis** in Coolify when horizontally scaling API replicas (cloud profile only).
 - **Sticky sessions are not required** — every instance subscribes to the relevant Redis pub/sub channels and fans out to its local sessions.
-- Nginx/Coolify proxy must allow **`Upgrade: websocket`** and **disable buffering** on `/api/v1/realtime`.
+- **Nginx/Coolify proxy must allow WebSocket upgrades.** The browser opens `wss://kiosk.zelisline.com/api/v1/realtime` directly against the Java backend; the reverse proxy must forward `Upgrade: websocket` and `Connection: upgrade`, disable buffering, and keep long read/send timeouts. A concrete Nginx snippet and Coolify/Traefik guidance are in the monorepo [`DEPLOYMENT.md`](../../DEPLOYMENT.md#websocket-proxy-configuration-critical).
 - Health: WS endpoint **excluded** from liveness probes; use **`/actuator/health`** as today.
 - **Rate limits per connection:**
   - Max **5 concurrent connections** per user.

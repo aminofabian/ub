@@ -24,6 +24,10 @@ final class InMemoryTicketStore {
         return store.remove(ticketHash);
     }
 
+    static TicketRecord get(String ticketHash) {
+        return store.get(ticketHash);
+    }
+
     /** For observability — exposed via actuator or debug endpoint. */
     static int size() {
         return store.size();

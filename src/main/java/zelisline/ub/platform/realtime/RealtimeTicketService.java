@@ -69,6 +69,51 @@ public class RealtimeTicketService {
     }
 
     public TicketRecord validateAndConsume(String ticket) {
+        TicketRecord record = peek(ticket);
+        if (record == null) {
+            return null;
+        }
+        return consume(ticket);
+    }
+
+    /**
+     * Read ticket metadata without consuming it. Used during the WS handshake so
+     * connection-limit rejections do not burn single-use tickets.
+     */
+    public TicketRecord peek(String ticket) {
+        if (ticket == null || ticket.isBlank()) {
+            return null;
+        }
+        String ticketHash = sha256(ticket);
+        TicketRecord record = null;
+
+        if (redisAvailable && !redisFailed) {
+            try {
+                String raw = redisTemplate.opsForValue().get(redisKey(ticketHash));
+                if (raw != null) {
+                    record = deserializeRecord(raw);
+                }
+            } catch (Exception e) {
+                log.warn("Redis unavailable for ticket peek, falling back to in-memory: {}", e.getMessage());
+                redisFailed = true;
+            }
+        }
+
+        if (record == null) {
+            record = InMemoryTicketStore.get(ticketHash);
+        }
+
+        if (record == null) {
+            return null;
+        }
+        if (Instant.now().isAfter(record.expiresAt())) {
+            return null;
+        }
+        return record;
+    }
+
+    /** Consume a ticket after handshake checks pass. */
+    public TicketRecord consume(String ticket) {
         String ticketHash = sha256(ticket);
         TicketRecord record = null;
 
@@ -88,8 +133,12 @@ public class RealtimeTicketService {
             record = InMemoryTicketStore.remove(ticketHash);
         }
 
-        if (record == null) return null;
-        if (Instant.now().isAfter(record.expiresAt())) return null;
+        if (record == null) {
+            return null;
+        }
+        if (Instant.now().isAfter(record.expiresAt())) {
+            return null;
+        }
 
         return record;
     }

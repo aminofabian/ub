@@ -95,7 +95,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
                     return false;
                 }
 
-                TicketRecord record = ticketService.validateAndConsume(ticket);
+                TicketRecord record = ticketService.peek(ticket);
                 if (record == null) {
                     response.setStatusCode(HttpStatus.UNAUTHORIZED);
                     meterRegistry.counter("realtime.tickets.rejected", "reason", "invalid").increment();
@@ -103,7 +103,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
                     return false;
                 }
 
-                // ── Connection limits ──
+                // ── Connection limits (peek first — do not burn the ticket on 429) ──
                 int userSessions = (int) sessionRegistry.findSessionsByUser(
                         record.businessId(), record.userId()).stream()
                         .map(sessionRegistry::getSession)
@@ -123,6 +123,14 @@ public class WebSocketConfig implements WebSocketConfigurer {
                     meterRegistry.counter("realtime.tickets.rejected", "reason", "business_limit").increment();
                     log.debug("WS handshake rejected: business connection limit reached business={} count={}",
                             record.businessId(), businessSessions);
+                    return false;
+                }
+
+                record = ticketService.consume(ticket);
+                if (record == null) {
+                    response.setStatusCode(HttpStatus.UNAUTHORIZED);
+                    meterRegistry.counter("realtime.tickets.rejected", "reason", "invalid").increment();
+                    log.debug("WS handshake rejected: ticket consumed concurrently");
                     return false;
                 }
 

@@ -18,8 +18,9 @@ import org.springframework.stereotype.Service;
 /**
  * Mints single-use, short-lived opaque tickets that authorize a WebSocket upgrade.
  *
- * <p>Cloud profile: tickets stored hashed in Redis with TTL.
- * Local profile (or Redis down): tickets stored in-memory via {@link InMemoryTicketStore}.
+ * <p>Cloud profile: tickets stored hashed in Redis with TTL when available.
+ * Without Redis, tickets are stored in MySQL so all API replicas share the same store.
+ * Local profile (single JVM): in-memory fallback via {@link InMemoryTicketStore}.
  */
 @Service
 public class RealtimeTicketService {
@@ -31,17 +32,22 @@ public class RealtimeTicketService {
 
     private final SecureRandom secureRandom = new SecureRandom();
     private final StringRedisTemplate redisTemplate;
+    private final DatabaseRealtimeTicketStore databaseStore;
     private final boolean redisAvailable;
+    private final boolean databaseAvailable;
     private final long ticketTtlSeconds;
     private volatile boolean redisFailed = false;
 
     public RealtimeTicketService(
             @Value("${app.realtime.ticket.ttl-seconds:60}") long ticketTtlSeconds,
-            @org.springframework.beans.factory.annotation.Autowired(required = false) StringRedisTemplate redisTemplate
+            @org.springframework.beans.factory.annotation.Autowired(required = false) StringRedisTemplate redisTemplate,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) DatabaseRealtimeTicketStore databaseStore
     ) {
         this.ticketTtlSeconds = ticketTtlSeconds > 0 ? ticketTtlSeconds : TICKET_TTL_SECONDS;
         this.redisAvailable = redisTemplate != null;
         this.redisTemplate = redisTemplate;
+        this.databaseStore = databaseStore;
+        this.databaseAvailable = databaseStore != null;
     }
 
     public TicketRecord mint(String userId, String businessId, String branchId, Set<String> allowedChannels) {
@@ -60,9 +66,13 @@ public class RealtimeTicketService {
                         redisKey(ticketHash), serializeRecord(record), ticketTtlSeconds, TimeUnit.SECONDS);
                 return record;
             } catch (Exception e) {
-                log.warn("Redis unavailable for ticket mint, falling back to in-memory: {}", e.getMessage());
+                log.warn("Redis unavailable for ticket mint, falling back to shared store: {}", e.getMessage());
                 redisFailed = true;
             }
+        }
+        if (databaseAvailable) {
+            databaseStore.put(ticketHash, record);
+            return record;
         }
         InMemoryTicketStore.put(ticketHash, record);
         return record;
@@ -99,6 +109,10 @@ public class RealtimeTicketService {
             }
         }
 
+        if (record == null && databaseAvailable) {
+            record = databaseStore.peek(ticketHash);
+        }
+
         if (record == null) {
             record = InMemoryTicketStore.get(ticketHash);
         }
@@ -127,6 +141,10 @@ public class RealtimeTicketService {
                 log.warn("Redis unavailable for ticket validation, falling back to in-memory: {}", e.getMessage());
                 redisFailed = true;
             }
+        }
+
+        if (record == null && databaseAvailable) {
+            record = databaseStore.consume(ticketHash);
         }
 
         if (record == null) {

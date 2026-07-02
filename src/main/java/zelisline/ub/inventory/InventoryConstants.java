@@ -9,6 +9,7 @@ public final class InventoryConstants {
     public static final String MOVEMENT_SALE = "sale";
     public static final String MOVEMENT_SALE_VOID = "sale_void";
     public static final String MOVEMENT_REFUND = "refund";
+    public static final String MOVEMENT_REFUND_WASTAGE = "refund_wastage";
     public static final String BATCH_SOURCE_OPENING = "opening_balance";
     public static final String BATCH_SOURCE_STOCK_GAIN = "stock_count_gain";
     public static final String REF_OPERATION = "inventory_operation";

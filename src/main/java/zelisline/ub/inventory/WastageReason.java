@@ -30,6 +30,9 @@ public enum WastageReason {
     /** Discrepancy found during stock-take (counting error). */
     COUNTING_ERROR,
 
+    /** Returned goods that cannot be put back on sale (e.g. butcher counter refunds). */
+    CUSTOMER_RETURN,
+
     /** Anything that doesn't fit the categories above. */
     OTHER;
 

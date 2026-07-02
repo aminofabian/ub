@@ -74,6 +74,9 @@ class ItemCatalogIT {
     private MockMvc mockMvc;
 
     @Autowired
+    private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+
+    @Autowired
     private BusinessRepository businessRepository;
 
     @Autowired
@@ -420,7 +423,6 @@ class ItemCatalogIT {
         mockMvc.perform(get("/api/v1/items")
                         .param("catalogRowTypes", "PARENT")
                         .param("catalogRowTypes", "VARIANT")
-                        .param("search", "Row type")
                         .header("X-Tenant-Id", TENANT_A)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
@@ -690,6 +692,76 @@ class ItemCatalogIT {
         assertThat(itemRepository.findById(id).orElseThrow().getDeletedAt()).isNotNull();
     }
 
+    @Test
+    void createWeighedItem_withKgUnit_succeedsAndReturnsWeightFields() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        CreateItemRequest req = weighedItem("SKU-BEEF", "Beef Mince", gid, "kg");
+
+        mockMvc.perform(post("/api/v1/items")
+                        .contentType(APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req))
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.isWeighed").value(true))
+                .andExpect(jsonPath("$.unitType").value("kg"))
+                .andExpect(jsonPath("$.itemTypeId").value(gid));
+    }
+
+    @Test
+    void createWeighedItem_withInvalidUnit_fails() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        CreateItemRequest req = weighedItem("SKU-BAD", "Bad Mince", gid, "bottle");
+
+        mockMvc.perform(post("/api/v1/items")
+                        .contentType(APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req))
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void patchItem_toWeighedWithInvalidUnit_fails() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        String id = createItemViaService(TENANT_A, gid, "SKU-PATCH", "Patchable");
+
+        PatchItemRequest patch = new PatchItemRequest(
+                null, null, null, null, null, null, null, null,
+                "box",
+                true,
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+
+        mockMvc.perform(patch("/api/v1/items/" + id)
+                        .contentType(APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(patch))
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void listItems_filteredByIsWeighed_returnsOnlyWeighedItems() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        createItemViaService(TENANT_A, gid, "SKU-NORMAL", "Normal");
+        CreateItemRequest weighedReq = weighedItem("SKU-WEIGHED", "Beef Mince", gid, "kg");
+        itemCatalogService.createItem(TENANT_A, weighedReq, null);
+
+        mockMvc.perform(get("/api/v1/items")
+                        .param("isWeighed", "true")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].isWeighed").value(true))
+                .andExpect(jsonPath("$.content[0].unitType").value("kg"))
+                .andExpect(jsonPath("$.content[0].itemTypeId").value(gid));
+    }
+
     private boolean runConcurrentBarcodePatchesOnce(String itemId) throws InterruptedException {
         CountDownLatch start = new CountDownLatch(1);
         AtomicInteger conflicts = new AtomicInteger();
@@ -810,6 +882,35 @@ class ItemCatalogIT {
                 null,
                 null,
                 null, null, null, null);
+    }
+
+    private static CreateItemRequest weighedItem(String sku, String name, String itemTypeId, String unitType) {
+        return new CreateItemRequest(
+                sku,
+                null,
+                name,
+                null,
+                itemTypeId,
+                null,
+                null,
+                unitType,
+                true,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null);
     }
 
     private String goodsTypeId(String tenant) {

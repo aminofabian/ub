@@ -34,7 +34,7 @@ public class BranchResolutionService {
 
     /** Role keys that are locked to their assigned branch — cannot switch or see other branches. */
     private static final Set<String> BRANCH_LOCKED_ROLE_KEYS = Set.of(
-            "stock_manager", "cashier", "grocery_clerk");
+            "stock_manager", "cashier", "grocery_clerk", "butcher_cashier");
 
     /** Role key for grocery counter staff (read scoped to invoices they themselves created). */
     private static final String GROCERY_CLERK_ROLE_KEY = "grocery_clerk";
@@ -77,7 +77,7 @@ public class BranchResolutionService {
      * <p>Stock managers and cashiers are locked to their assigned branch.
      */
     public String resolveEffectiveBranch(String businessId, String sessionBranchId, String roleId) {
-        // Stock managers and cashiers are locked to their assigned branch.
+        // Stock managers, cashiers, grocery clerks, and butcher cashiers are locked to their assigned branch.
         if (isBranchLockedRole(roleId)) {
             if (sessionBranchId != null && !sessionBranchId.isBlank()) {
                 return sessionBranchId;
@@ -135,7 +135,7 @@ public class BranchResolutionService {
             String sessionBranchId,
             String explicitBranchId
     ) {
-        // Stock managers and cashiers are locked to their assigned branch.
+        // Stock managers, cashiers, grocery clerks, and butcher cashiers are locked to their assigned branch.
         if (isBranchLockedRole(roleId)) {
             if (sessionBranchId != null && !sessionBranchId.isBlank()) {
                 return sessionBranchId;
@@ -179,7 +179,7 @@ public class BranchResolutionService {
     /**
      * Validates that the requested branch is allowed for the user's role.
      *
-     * <p>For stock managers and cashiers, the requested branch MUST match
+     * <p>For stock managers, cashiers, grocery clerks, and butcher cashiers, the requested branch MUST match
      * their assigned branch (from the JWT). Returns the validated branch ID
      * or throws {@link ResponseStatusException#FORBIDDEN}.</p>
      *

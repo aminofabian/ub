@@ -86,6 +86,7 @@ public class SaleReceiptService {
             lines.add(new ReceiptLineRow(
                     desc,
                     si.getQuantity().stripTrailingZeros().toPlainString(),
+                    it != null ? it.getUnitType() : null,
                     money(si.getUnitPrice()),
                     money(si.getLineTotal())
             ));

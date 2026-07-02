@@ -330,7 +330,8 @@ public class GroceryInvoiceService {
             String businessId,
             String invoiceId,
             PayGroceryInvoiceRequest request,
-            String userId
+            String userId,
+            String roleId
     ) {
         GroceryInvoice invoice = loadInvoiceOrThrow(businessId, invoiceId);
 
@@ -378,7 +379,7 @@ public class GroceryInvoiceService {
         );
 
         String idempotencyKey = "grocery:" + invoice.getId() + ":" + UUID.randomUUID().toString().substring(0, 8);
-        SaleCreationOutcome outcome = saleService.createSale(businessId, idempotencyKey, saleRequest, userId);
+        SaleCreationOutcome outcome = saleService.createSale(businessId, idempotencyKey, saleRequest, userId, roleId);
 
         invoice.setStatus(GroceryConstants.STATUS_PAID);
         invoice.setPaidBy(userId);

@@ -52,6 +52,9 @@ public class FeatureFlagService {
     /** Local IndexedDB mirror and offline mutation replay. */
     public static final String FLAG_POS_DRAFTS_OFFLINE_MIRROR = "pos_drafts.offline_mirror";
 
+    /** Butcher counter POS workspace and weighed-sale features. */
+    public static final String FLAG_BUTCHER_POS_ENABLED = "butcher_pos.enabled";
+
     /** Grocery counter draft cart persistence (master kill-switch). */
     public static final String FLAG_GROCERY_DRAFTS_ENABLED = "grocery_drafts.enabled";
 
@@ -74,6 +77,13 @@ public class FeatureFlagService {
                 .map(s -> storefrontSettingsService.readTenantConfig(s, ""))
                 .map(c -> c.featureFlags())
                 .orElse(Map.of());
+    }
+
+    /**
+     * Check whether the butcher POS vertical is enabled for the business.
+     */
+    public boolean isButcherPosEnabled(String businessId) {
+        return isEnabled(businessId, FLAG_BUTCHER_POS_ENABLED);
     }
 
     /**

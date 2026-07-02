@@ -238,7 +238,8 @@ public class PosDraftService {
             String draftId,
             CompletePosDraftRequest request,
             String idempotencyKey,
-            String userId
+            String userId,
+            String roleId
     ) {
         requireFeatureEnabled(businessId);
         PosDraft draft = loadDraftOrThrow(businessId, draftId);
@@ -299,7 +300,8 @@ public class PosDraftService {
                 businessId,
                 idempotencyKey,
                 saleRequest,
-                userId
+                userId,
+                roleId
         );
 
         draft.setStatus(PosDraftConstants.STATUS_COMPLETED);

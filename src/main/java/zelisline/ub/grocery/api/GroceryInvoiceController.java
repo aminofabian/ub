@@ -166,7 +166,8 @@ public class GroceryInvoiceController {
                 TenantRequestIds.resolveBusinessId(request),
                 id,
                 body,
-                principal.userId()
+                principal.userId(),
+                principal.roleId()
         );
     }
 

@@ -156,7 +156,8 @@ public class PosDraftController {
                 id,
                 body,
                 idempotencyKey,
-                principal.userId()
+                principal.userId(),
+                principal.roleId()
         );
         HttpStatus status = response.createdNew() ? HttpStatus.CREATED : HttpStatus.OK;
         return ResponseEntity.status(status).body(response);

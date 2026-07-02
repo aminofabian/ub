@@ -30,7 +30,12 @@ public final class ReceiptEscPosRenderer {
             for (String row : wrap(strip(line.description()), w)) {
                 out.add(row);
             }
-            String amt = strip(line.quantity()) + " x " + strip(line.unitPrice()) + " = " + strip(line.lineTotal());
+            String qty = strip(line.quantity());
+            String unit = strip(line.unitType());
+            if (!unit.isEmpty() && !"each".equalsIgnoreCase(unit)) {
+                qty = qty + " " + unit;
+            }
+            String amt = qty + " x " + strip(line.unitPrice()) + " = " + strip(line.lineTotal());
             out.add(padLeft(amt, w));
         }
         out.add(repeat('-', w));

@@ -37,6 +37,12 @@ public record ItemSummaryResponse(
         String brand,
         String size,
         /** Catalog shelf / bundle price on the item record (POS may use branch selling price). */
-        BigDecimal bundlePrice
+        BigDecimal bundlePrice,
+        /** Department / item type ID. */
+        String itemTypeId,
+        /** True when the item is sold by weight (kg, g, lb). */
+        boolean isWeighed,
+        /** Unit of measure: each, kg, g, lb, etc. */
+        String unitType
 ) {
 }

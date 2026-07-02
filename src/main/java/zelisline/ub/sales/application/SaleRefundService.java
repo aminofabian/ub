@@ -25,6 +25,8 @@ import jakarta.persistence.LockModeType;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.identity.application.RequestPermissionService;
+import zelisline.ub.inventory.WastageReason;
 import zelisline.ub.audit.application.AuditEventBuilder;
 import zelisline.ub.audit.application.AuditEventPublisher;
 import zelisline.ub.audit.domain.AuditEventActorType;
@@ -76,6 +78,8 @@ public class SaleRefundService {
     private static final BigDecimal TOLERANCE = new BigDecimal("0.01");
     private static final int MONEY_SCALE = 2;
     private static final int QTY_SCALE = 4;
+    private static final int WEIGHTED_QTY_SCALE = 3;
+    private static final String WEIGHED_REFUND_PERMISSION = "sales.weighed.refund";
 
     private final BatchNumberGenerator batchNumberGenerator;
 
@@ -100,6 +104,7 @@ public class SaleRefundService {
     private final PackageVariantStockResolver packageVariantStockResolver;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
+    private final RequestPermissionService requestPermissionService;
     @PersistenceContext
     private EntityManager entityManager;
 
@@ -110,6 +115,18 @@ public class SaleRefundService {
             String rawIdempotencyKey,
             PostRefundRequest req,
             String userId
+    ) {
+        return createRefund(businessId, saleId, rawIdempotencyKey, req, userId, null);
+    }
+
+    @Transactional
+    public RefundResponse createRefund(
+            String businessId,
+            String saleId,
+            String rawIdempotencyKey,
+            PostRefundRequest req,
+            String userId,
+            String roleId
     ) {
         String idemKey = normalizeIdempotencyKey(rawIdempotencyKey);
         var existingRefund = refundRepository.findByBusinessIdAndIdempotencyKey(businessId, idemKey);
@@ -122,6 +139,7 @@ public class SaleRefundService {
         assertSaleRefundable(sale);
 
         RefundComputation comp = computeRefund(sale, req);
+        assertWeighedRefundAllowed(comp.rows(), roleId);
         List<NormalizedPay> pays = normalizeRefundPayments(req.payments(), comp.totalMoney());
         BigDecimal walletRefundShare = sumPayMethod(pays, SalesConstants.PAYMENT_METHOD_CUSTOMER_WALLET);
         assertWalletRefundAllowed(sale, walletRefundShare);
@@ -137,7 +155,7 @@ public class SaleRefundService {
 
         applyDrawerRefund(shift, pays);
 
-        String jeId = postRefundJournal(businessId, refundId, comp.totalMoney(), comp.totalCogs(), pays);
+        String jeId = postRefundJournal(businessId, refundId, comp, pays);
         creditSaleDebtService.reduceDebtForCreditRefund(
                 businessId, saleId, sale.getCustomerId(), sumCustomerCreditPay(pays));
         walletLedgerService.refundToWallet(businessId, saleId, sale.getCustomerId(), walletRefundShare);
@@ -247,9 +265,16 @@ public class SaleRefundService {
             }
             SaleItem si = saleItemRepository.findByIdAndSaleId(sid, sale.getId())
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown sale line"));
+            Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(si.getItemId(), sale.getBusinessId())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
+            boolean weighed = item.isWeighed();
             BigDecimal q = line.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
             if (q.signum() <= 0 || q.compareTo(si.getQuantity()) > 0) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid refund quantity for line");
+            }
+            if (weighed && line.quantity().scale() > WEIGHTED_QTY_SCALE) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Weighed refund quantity may have at most " + WEIGHTED_QTY_SCALE + " decimal places");
             }
             BigDecimal already = refundLineRepository.sumRefundedQuantityForSaleItem(sid, sale.getId())
                     .setScale(QTY_SCALE, RoundingMode.HALF_UP);
@@ -264,7 +289,7 @@ public class SaleRefundService {
                     .divide(si.getQuantity(), MONEY_SCALE, RoundingMode.HALF_UP);
             totalMoney = totalMoney.add(money);
             totalCogs = totalCogs.add(cogs);
-            rows.add(new RefundRow(si, q, money, cogs));
+            rows.add(new RefundRow(si, item, q, money, cogs, weighed));
         }
 
         totalMoney = totalMoney.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
@@ -273,6 +298,17 @@ public class SaleRefundService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Refund total exceeds remaining sale total");
         }
         return new RefundComputation(rows, totalMoney, totalCogs);
+    }
+
+    private void assertWeighedRefundAllowed(List<RefundRow> rows, String roleId) {
+        boolean hasWeighed = rows.stream().anyMatch(RefundRow::weighed);
+        if (!hasWeighed) {
+            return;
+        }
+        if (roleId == null || !requestPermissionService.hasPermission(roleId, WEIGHED_REFUND_PERMISSION)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Weighed refund requires manager approval");
+        }
     }
 
     private void applyDrawerRefund(Shift shift, List<NormalizedPay> pays) {
@@ -307,8 +343,11 @@ public class SaleRefundService {
         String lastStockHolderId = null;
         for (RefundRow row : sorted) {
             SaleItem si = row.saleItem();
-            Item sold = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(si.getItemId(), businessId)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
+            Item sold = row.item();
+            if (row.weighed()) {
+                recordWeighedRefundWastageMovement(businessId, sale, refundId, si, row.quantity(), userId);
+                continue;
+            }
             String stockHolderId = packageVariantStockResolver.stockHolderItemId(sold);
             if (!stockHolderId.equals(lastStockHolderId)) {
                 if (item != null) {
@@ -343,6 +382,32 @@ public class SaleRefundService {
         if (item != null) {
             itemRepository.save(item);
         }
+    }
+
+    private void recordWeighedRefundWastageMovement(
+            String businessId,
+            Sale sale,
+            String refundId,
+            SaleItem si,
+            BigDecimal quantity,
+            String userId
+    ) {
+        StockMovement sm = new StockMovement();
+        sm.setBusinessId(businessId);
+        sm.setBranchId(sale.getBranchId());
+        sm.setItemId(packageVariantStockResolver.stockHolderItemId(
+                itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(si.getItemId(), businessId)
+                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"))));
+        sm.setBatchId(si.getBatchId());
+        sm.setMovementType(InventoryConstants.MOVEMENT_REFUND_WASTAGE);
+        sm.setReferenceType(SalesConstants.STOCK_REFERENCE_TYPE_SALE_REFUND);
+        sm.setReferenceId(refundId);
+        sm.setQuantityDelta(BigDecimal.ZERO.setScale(QTY_SCALE, RoundingMode.HALF_UP));
+        sm.setUnitCost(si.getUnitCost());
+        sm.setNotes("Weighed refund — returned stock written off (" + quantity.stripTrailingZeros().toPlainString() + ")");
+        sm.setWastageReason(WastageReason.CUSTOMER_RETURN.name());
+        sm.setCreatedBy(userId);
+        stockMovementRepository.save(sm);
     }
 
     private StockTarget resolveReturnBatch(
@@ -417,8 +482,7 @@ public class SaleRefundService {
     private String postRefundJournal(
             String businessId,
             String refundId,
-            BigDecimal grandRefund,
-            BigDecimal cogs,
+            RefundComputation comp,
             List<NormalizedPay> pays
     ) {
         Map<String, BigDecimal> tenderCr = new LinkedHashMap<>();
@@ -426,6 +490,15 @@ public class SaleRefundService {
             String code = SalePaymentLedger.ledgerCodeForPaymentMethod(p.method());
             tenderCr.merge(code, p.amount(), BigDecimal::add);
         }
+
+        BigDecimal weighedCogs = BigDecimal.ZERO;
+        for (RefundRow row : comp.rows()) {
+            if (row.weighed()) {
+                weighedCogs = weighedCogs.add(row.cogs());
+            }
+        }
+        weighedCogs = weighedCogs.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal nonWeighedCogs = comp.totalCogs().subtract(weighedCogs).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
 
         JournalEntry entry = new JournalEntry();
         entry.setBusinessId(businessId);
@@ -438,9 +511,14 @@ public class SaleRefundService {
             BigDecimal amt = e.getValue().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
             entry.credit(ledgerAccountResolver.resolveId(businessId, e.getKey()), amt);
         }
-        entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SALES_REVENUE), grandRefund);
-        entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.COST_OF_GOODS_SOLD), cogs);
-        entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY), cogs);
+        entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SALES_REVENUE), comp.totalMoney());
+        entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.COST_OF_GOODS_SOLD), comp.totalCogs());
+        if (nonWeighedCogs.signum() != 0) {
+            entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY), nonWeighedCogs);
+        }
+        if (weighedCogs.signum() != 0) {
+            entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY_SHRINKAGE), weighedCogs);
+        }
 
         return ledgerPostingPort.post(entry);
     }
@@ -644,7 +722,7 @@ public class SaleRefundService {
     private record NormalizedPay(String method, BigDecimal amount, String reference) {
     }
 
-    private record RefundRow(SaleItem saleItem, BigDecimal quantity, BigDecimal money, BigDecimal cogs) {
+    private record RefundRow(SaleItem saleItem, Item item, BigDecimal quantity, BigDecimal money, BigDecimal cogs, boolean weighed) {
     }
 
     private record RefundComputation(List<RefundRow> rows, BigDecimal totalMoney, BigDecimal totalCogs) {

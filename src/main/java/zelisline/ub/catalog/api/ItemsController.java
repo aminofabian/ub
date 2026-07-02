@@ -86,6 +86,7 @@ public class ItemsController {
             @RequestParam(required = false) String excludeLinkedSupplierId,
             @RequestParam(required = false) String branchId,
             @RequestParam(required = false) String itemTypeId,
+            @RequestParam(required = false) Boolean isWeighed,
             Pageable pageable,
             HttpServletRequest request
     ) {
@@ -109,6 +110,7 @@ public class ItemsController {
                 zeroStock,
                 lowStock,
                 inactiveOnly,
+                isWeighed,
                 pageable
         );
     }

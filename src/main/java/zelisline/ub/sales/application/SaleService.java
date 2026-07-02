@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
@@ -21,6 +22,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.identity.application.RequestPermissionService;
+import zelisline.ub.pricing.application.PricingService;
 import zelisline.ub.audit.application.AuditEventBuilder;
 import zelisline.ub.audit.application.AuditEventPublisher;
 import zelisline.ub.audit.domain.AuditEventActorType;
@@ -67,6 +70,12 @@ public class SaleService {
     private static final int MONEY_SCALE = 2;
     private static final int QTY_SCALE = 4;
     private static final long MAX_CLIENT_SOLD_AT_SKEW_SECONDS = 3600;
+    private static final String PRICE_OVERRIDE_PERMISSION = "pricing.sell_price.set";
+
+    /** Supported weight units for weighed sale items (v1 = kg only). */
+    private static final Set<String> WEIGHT_UNITS = Set.of("kg", "g", "lb");
+    /** Maximum decimal scale for kg/lb weight entry at the POS. */
+    private static final int WEIGHTED_QTY_SCALE = 3;
 
     private final SaleRepository saleRepository;
     private final SaleItemRepository saleItemRepository;
@@ -87,15 +96,22 @@ public class SaleService {
     private final CreditAccountRepository creditAccountRepository;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
+    private final PricingService pricingService;
+    private final RequestPermissionService requestPermissionService;
 
     @Transactional
     public SaleCreationOutcome createSale(String businessId, String rawIdempotencyKey, PostSaleRequest req, String userId) {
+        return createSale(businessId, rawIdempotencyKey, req, userId, null);
+    }
+
+    @Transactional
+    public SaleCreationOutcome createSale(String businessId, String rawIdempotencyKey, PostSaleRequest req, String userId, String roleId) {
         String idempotencyKey = normalizeIdempotencyKey(rawIdempotencyKey);
         var existing = saleRepository.findByBusinessIdAndIdempotencyKey(businessId, idempotencyKey);
         if (existing.isPresent()) {
             return new SaleCreationOutcome(toResponse(existing.get()), false);
         }
-        return new SaleCreationOutcome(completeNewSale(businessId, idempotencyKey, req, userId), true);
+        return new SaleCreationOutcome(completeNewSale(businessId, idempotencyKey, req, userId, roleId), true);
     }
 
     @Transactional(readOnly = true)
@@ -106,8 +122,13 @@ public class SaleService {
     }
 
     private SaleResponse completeNewSale(String businessId, String idempotencyKey, PostSaleRequest req, String userId) {
+        return completeNewSale(businessId, idempotencyKey, req, userId, null);
+    }
+
+    private SaleResponse completeNewSale(String businessId, String idempotencyKey, PostSaleRequest req, String userId, String roleId) {
         var creditSettingsResolved = businessCreditSettingsService.resolveForBusiness(businessId);
         requireBranch(businessId, req.branchId());
+        validateSaleLines(businessId, req.branchId(), req.lines(), roleId);
         BigDecimal grandTotal = computeCartTotal(req.lines());
         validatePositiveMoney(grandTotal);
         ResolvedPayments resolved = normalizeAndResolvePayments(req.payments(), grandTotal);
@@ -494,6 +515,79 @@ public class SaleService {
         if (grandTotal.signum() <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Grand total must be positive");
         }
+    }
+
+    private void validateSaleLines(String businessId, String branchId, List<PostSaleLineRequest> lines, String roleId) {
+        if (lines == null || lines.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Sale must contain at least one line");
+        }
+        List<String> itemIds = lines.stream().map(PostSaleLineRequest::itemId).distinct().toList();
+        Map<String, zelisline.ub.catalog.domain.Item> itemsById = itemRepository
+                .findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)
+                .stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        zelisline.ub.catalog.domain.Item::getId,
+                        item -> item,
+                        (a, b) -> a));
+
+        Map<String, BigDecimal> shelfPrices = pricingService.getCurrentOpenSellingPricesForItems(
+                businessId, branchId, itemIds);
+
+        for (int i = 0; i < lines.size(); i++) {
+            PostSaleLineRequest line = lines.get(i);
+            zelisline.ub.catalog.domain.Item item = itemsById.get(line.itemId());
+            if (item == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Line " + (i + 1) + ": item not found");
+            }
+            if (line.quantity() == null || line.quantity().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Line " + (i + 1) + ": quantity must be positive");
+            }
+            if (line.unitPrice() == null || line.unitPrice().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Line " + (i + 1) + ": unit price must be positive");
+            }
+
+            if (item.isWeighed()) {
+                String unit = item.getUnitType() == null ? "each" : item.getUnitType().trim().toLowerCase(Locale.ROOT);
+                if (!WEIGHT_UNITS.contains(unit)) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "Line " + (i + 1) + ": weighed item must use a weight unit (kg, g, lb)");
+                }
+                // v1: kg only for weighed sale lines to avoid unit-conversion complexity.
+                if (!"kg".equals(unit)) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "Line " + (i + 1) + ": weighed items currently sell in kg only");
+                }
+                if (line.quantity().scale() > WEIGHTED_QTY_SCALE) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "Line " + (i + 1) + ": weight may have at most " + WEIGHTED_QTY_SCALE + " decimal places");
+                }
+            } else {
+                // Non-weighed items must be sold with integer quantities.
+                BigDecimal stripped = line.quantity().stripTrailingZeros();
+                if (stripped.scale() > 0) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "Line " + (i + 1) + ": non-weighed items must have a whole-number quantity");
+                }
+            }
+
+            BigDecimal shelfPrice = shelfPrices.get(line.itemId());
+            if (shelfPrice != null && isPriceOverride(line.unitPrice(), shelfPrice)
+                    && !hasPriceOverridePermission(roleId)) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                        "Line " + (i + 1) + ": price override requires manager approval");
+            }
+        }
+    }
+
+    private boolean isPriceOverride(BigDecimal unitPrice, BigDecimal shelfPrice) {
+        return unitPrice.subtract(shelfPrice).abs().compareTo(TOLERANCE) > 0;
+    }
+
+    private boolean hasPriceOverridePermission(String roleId) {
+        return roleId != null && requestPermissionService.hasPermission(roleId, PRICE_OVERRIDE_PERMISSION);
     }
 
     private ResolvedPayments normalizeAndResolvePayments(

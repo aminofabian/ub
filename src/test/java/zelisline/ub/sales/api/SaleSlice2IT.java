@@ -5,6 +5,7 @@ import static org.hamcrest.Matchers.containsString;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -50,6 +51,7 @@ import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
+import zelisline.ub.finance.LedgerAccountCodes;
 import zelisline.ub.finance.domain.JournalLine;
 import zelisline.ub.finance.domain.LedgerAccount;
 import zelisline.ub.finance.repository.JournalEntryRepository;
@@ -71,7 +73,9 @@ import zelisline.ub.purchasing.domain.StockMovement;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.purchasing.repository.StockMovementRepository;
 import zelisline.ub.sales.SalesConstants;
+import zelisline.ub.sales.domain.Refund;
 import zelisline.ub.sales.domain.Sale;
+import zelisline.ub.sales.domain.SaleItem;
 import zelisline.ub.sales.domain.SalePayment;
 import zelisline.ub.sales.repository.RefundLineRepository;
 import zelisline.ub.sales.repository.RefundPaymentRepository;
@@ -100,8 +104,12 @@ class SaleSlice2IT {
     private static final String P_VOID_OWN = "11111111-0000-0000-0000-000000000068";
     private static final String P_VOID_ANY = "11111111-0000-0000-0000-000000000069";
     private static final String P_REFUND = "11111111-0000-0000-0000-000000000070";
+    private static final String P_PRICE = "11111111-0000-0000-0000-000000000071";
+    private static final String P_WEIGHED_REFUND = "11111111-0000-0000-0000-000000000072";
     private static final String ROLE_POS = "22222222-0000-0000-0000-0000000000bb";
     private static final String ROLE_POS_OWNONLY = "22222222-0000-0000-0000-0000000000cc";
+    private static final String ROLE_POS_PRICE = "22222222-0000-0000-0000-0000000000dd";
+    private static final String ROLE_POS_WEIGHED_REFUND = "22222222-0000-0000-0000-0000000000ee";
 
     @Autowired
     private MockMvc mockMvc;
@@ -175,6 +183,8 @@ class SaleSlice2IT {
     private DomainMappingRepository domainMappingRepository;
 
     private User cashier;
+    private User cashierWithPrice;
+    private User managerCashier;
     private String branchId;
     private String itemId;
     private String goodsTypeId;
@@ -233,6 +243,8 @@ class SaleSlice2IT {
         permissionRepository.save(perm(P_VOID_OWN, "sales.void.own", "vo"));
         permissionRepository.save(perm(P_VOID_ANY, "sales.void.any", "va"));
         permissionRepository.save(perm(P_REFUND, "sales.refund.create", "rf"));
+        permissionRepository.save(perm(P_PRICE, "pricing.sell_price.set", "price"));
+        permissionRepository.save(perm(P_WEIGHED_REFUND, "sales.weighed.refund", "wrf"));
 
         Role r = new Role();
         r.setId(ROLE_POS);
@@ -270,6 +282,52 @@ class SaleSlice2IT {
         cashier.setPasswordHash("$2a$10$stubstubstubstubstubstubstubstubst");
         userRepository.save(cashier);
 
+        Role priceRole = new Role();
+        priceRole.setId(ROLE_POS_PRICE);
+        priceRole.setBusinessId(null);
+        priceRole.setRoleKey("pos_sale_price");
+        priceRole.setName("POS Sale Price");
+        priceRole.setSystem(true);
+        roleRepository.save(priceRole);
+        for (String pid : List.of(P_SELL, P_PRICE)) {
+            RolePermission rp = new RolePermission();
+            rp.setId(new RolePermission.Id(ROLE_POS_PRICE, pid));
+            rolePermissionRepository.save(rp);
+        }
+
+        cashierWithPrice = new User();
+        cashierWithPrice.setBusinessId(TENANT);
+        cashierWithPrice.setEmail("cashier-price@test");
+        cashierWithPrice.setName("Cashier With Price");
+        cashierWithPrice.setRoleId(ROLE_POS_PRICE);
+        cashierWithPrice.setBranchId(branchId);
+        cashierWithPrice.setStatus(UserStatus.ACTIVE);
+        cashierWithPrice.setPasswordHash("$2a$10$stubstubstubstubstubstubstubstubst");
+        userRepository.save(cashierWithPrice);
+
+        Role weighedRefundRole = new Role();
+        weighedRefundRole.setId(ROLE_POS_WEIGHED_REFUND);
+        weighedRefundRole.setBusinessId(null);
+        weighedRefundRole.setRoleKey("pos_weighed_refund");
+        weighedRefundRole.setName("POS Weighed Refund");
+        weighedRefundRole.setSystem(true);
+        roleRepository.save(weighedRefundRole);
+        for (String pid : List.of(P_SELL, P_REFUND, P_WEIGHED_REFUND)) {
+            RolePermission rp = new RolePermission();
+            rp.setId(new RolePermission.Id(ROLE_POS_WEIGHED_REFUND, pid));
+            rolePermissionRepository.save(rp);
+        }
+
+        managerCashier = new User();
+        managerCashier.setBusinessId(TENANT);
+        managerCashier.setEmail("manager-cashier@test");
+        managerCashier.setName("Manager Cashier");
+        managerCashier.setRoleId(ROLE_POS_WEIGHED_REFUND);
+        managerCashier.setBranchId(branchId);
+        managerCashier.setStatus(UserStatus.ACTIVE);
+        managerCashier.setPasswordHash("$2a$10$stubstubstubstubstubstubstubstubst");
+        userRepository.save(managerCashier);
+
         itemId = itemCatalogService.createItem(
                 TENANT,
                 new CreateItemRequest(
@@ -285,10 +343,12 @@ class SaleSlice2IT {
         itemRepository.save(item);
 
         Instant base = Instant.parse("2026-02-10T12:00:00Z");
-        inventoryBatchRepository.save(batch("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1", itemId, base, LocalDate.of(2026, 4, 1), "5"));
-        inventoryBatchRepository.save(batch("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2", itemId, base.plusSeconds(600), LocalDate.of(2026, 9, 1), "5"));
+        inventoryBatchRepository.save(batch("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1", itemId, base, LocalDate.of(2030, 4, 1), "5"));
+        inventoryBatchRepository.save(batch("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2", itemId, base.plusSeconds(600), LocalDate.of(2030, 9, 1), "5"));
         item.setCurrentStock(new BigDecimal("10"));
         itemRepository.save(item);
+
+        seedLedger(TENANT);
     }
 
     @Test
@@ -1009,6 +1069,76 @@ class SaleSlice2IT {
     }
 
     @Test
+    void postSale_weighedItemInKg_succeedsAndDeductsDecimalStock() throws Exception {
+        String weighedItemId = createWeighedItem("10");
+        openShift(new BigDecimal("100.00"));
+
+        String body = """
+                {"branchId":"%s","lines":[{"itemId":"%s","quantity":0.347,"unitPrice":1200}],"payments":[{"method":"cash","amount":416.40}]}
+                """.formatted(branchId, weighedItemId);
+
+        MvcResult res = mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("Idempotency-Key", "wt-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        String saleId = objectMapper.readTree(res.getResponse().getContentAsString()).get("id").asText();
+        Sale sale = saleRepository.findById(saleId).orElseThrow();
+        assertThat(sale.getGrandTotal()).isEqualByComparingTo(new BigDecimal("416.40"));
+
+        var weighedItem = itemRepository.findById(weighedItemId).orElseThrow();
+        assertThat(weighedItem.getCurrentStock()).isEqualByComparingTo(new BigDecimal("9.653"));
+
+        List<SaleItem> saleItems = saleItemRepository.findBySaleIdOrderByLineIndexAsc(saleId);
+        assertThat(saleItems).hasSize(1);
+        assertThat(saleItems.get(0).getQuantity()).isEqualByComparingTo(new BigDecimal("0.3470"));
+    }
+
+    @Test
+    void postSale_weighedItemTooManyDecimals_fails() throws Exception {
+        String weighedItemId = createWeighedItem("10");
+        openShift(new BigDecimal("100.00"));
+
+        String body = """
+                {"branchId":"%s","lines":[{"itemId":"%s","quantity":0.3471,"unitPrice":1200}],"payments":[{"method":"cash","amount":416.52}]}
+                """.formatted(branchId, weighedItemId);
+
+        mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("Idempotency-Key", "wt-bad-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(containsString("decimal places")));
+    }
+
+    @Test
+    void postSale_nonWeighedItemFractionalQty_fails() throws Exception {
+        openShift(new BigDecimal("100.00"));
+
+        String body = """
+                {"branchId":"%s","lines":[{"itemId":"%s","quantity":1.5,"unitPrice":5}],"payments":[{"method":"cash","amount":7.5}]}
+                """.formatted(branchId, itemId);
+
+        mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("Idempotency-Key", "frac-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(containsString("whole-number")));
+    }
+
+    @Test
     void postSale_clientSoldAtBeyondOneHourSkew_usesServerTime() throws Exception {
         openShift(new BigDecimal("100.00"));
         Instant clientClaim = Instant.now().minusSeconds(7200);
@@ -1054,6 +1184,220 @@ class SaleSlice2IT {
         assertThat(msSkew).isLessThan(2000L);
     }
 
+    @Test
+    void postSale_weighedItemAtShelfPrice_succeeds() throws Exception {
+        String weighedItemId = createWeighedItemWithPrice("10", new BigDecimal("1200.00"));
+        openShift(new BigDecimal("100.00"));
+
+        String body = """
+                {"branchId":"%s","lines":[{"itemId":"%s","quantity":0.5,"unitPrice":1200}],"payments":[{"method":"cash","amount":600}]}
+                """.formatted(branchId, weighedItemId);
+
+        MvcResult res = mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("Idempotency-Key", "wt-shelf-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        String saleId = objectMapper.readTree(res.getResponse().getContentAsString()).get("id").asText();
+        Sale sale = saleRepository.findById(saleId).orElseThrow();
+        assertThat(sale.getGrandTotal()).isEqualByComparingTo(new BigDecimal("600.00"));
+    }
+
+    @Test
+    void postSale_weighedItemPriceOverride_withoutPermission_fails() throws Exception {
+        String weighedItemId = createWeighedItemWithPrice("10", new BigDecimal("1200.00"));
+        openShift(new BigDecimal("100.00"));
+
+        String body = """
+                {"branchId":"%s","lines":[{"itemId":"%s","quantity":0.5,"unitPrice":1100}],"payments":[{"method":"cash","amount":550}]}
+                """.formatted(branchId, weighedItemId);
+
+        mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("Idempotency-Key", "wt-override-denied-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isForbidden())
+                .andExpect(content().string(containsString("price override")));
+    }
+
+    @Test
+    void postSale_weighedItemPriceOverride_withPermission_succeeds() throws Exception {
+        String weighedItemId = createWeighedItemWithPrice("10", new BigDecimal("1200.00"));
+        openShift(new BigDecimal("100.00"));
+
+        String body = """
+                {"branchId":"%s","lines":[{"itemId":"%s","quantity":0.5,"unitPrice":1100}],"payments":[{"method":"cash","amount":550}]}
+                """.formatted(branchId, weighedItemId);
+
+        MvcResult res = mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("Idempotency-Key", "wt-override-ok-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashierWithPrice.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS_PRICE))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        String saleId = objectMapper.readTree(res.getResponse().getContentAsString()).get("id").asText();
+        Sale sale = saleRepository.findById(saleId).orElseThrow();
+        assertThat(sale.getGrandTotal()).isEqualByComparingTo(new BigDecimal("550.00"));
+    }
+
+    @Test
+    void postRefund_weighedItem_withoutPermission_fails() throws Exception {
+        String weighedItemId = createWeighedItemWithPrice("10", new BigDecimal("1200.00"));
+        openShift(new BigDecimal("100.00"));
+
+        String saleBody = """
+                {"branchId":"%s","lines":[{"itemId":"%s","quantity":0.5,"unitPrice":1200}],"payments":[{"method":"cash","amount":600}]}
+                """.formatted(branchId, weighedItemId);
+
+        MvcResult saleRes = mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(saleBody)
+                        .header("Idempotency-Key", "wt-sale-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        String saleId = objectMapper.readTree(saleRes.getResponse().getContentAsString()).get("id").asText();
+        String saleItemId = objectMapper.readTree(saleRes.getResponse().getContentAsString())
+                .get("items").get(0).get("id").asText();
+
+        String refundBody = """
+                {"lines":[{"saleItemId":"%s","quantity":0.5}],"payments":[{"method":"cash","amount":600}],"reason":"customer return"}
+                """.formatted(saleItemId);
+
+        mockMvc.perform(post("/api/v1/sales/{saleId}/refund", saleId)
+                        .contentType(APPLICATION_JSON)
+                        .content(refundBody)
+                        .header("Idempotency-Key", "wt-refund-denied-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isForbidden())
+                .andExpect(content().string(containsString("Weighed refund")));
+    }
+
+    @Test
+    void postRefund_weighedItem_withPermission_writesOffAsWastage() throws Exception {
+        String weighedItemId = createWeighedItemWithPrice("10", new BigDecimal("1200.00"));
+        openShift(new BigDecimal("100.00"));
+
+        String saleBody = """
+                {"branchId":"%s","lines":[{"itemId":"%s","quantity":0.5,"unitPrice":1200}],"payments":[{"method":"cash","amount":600}]}
+                """.formatted(branchId, weighedItemId);
+
+        MvcResult saleRes = mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(saleBody)
+                        .header("Idempotency-Key", "wt-sale-mgr-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, managerCashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS_WEIGHED_REFUND))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        String saleId = objectMapper.readTree(saleRes.getResponse().getContentAsString()).get("id").asText();
+        String saleItemId = objectMapper.readTree(saleRes.getResponse().getContentAsString())
+                .get("items").get(0).get("id").asText();
+
+        String refundBody = """
+                {"lines":[{"saleItemId":"%s","quantity":0.5}],"payments":[{"method":"cash","amount":600}],"reason":"customer return"}
+                """.formatted(saleItemId);
+
+        MvcResult refundRes = mockMvc.perform(post("/api/v1/sales/{saleId}/refund", saleId)
+                        .contentType(APPLICATION_JSON)
+                        .content(refundBody)
+                        .header("Idempotency-Key", "wt-refund-ok-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, managerCashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS_WEIGHED_REFUND))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        String refundId = objectMapper.readTree(refundRes.getResponse().getContentAsString()).get("id").asText();
+
+        // Stock must NOT be restored — returned meat is wastage.
+        var weighedItem = itemRepository.findById(weighedItemId).orElseThrow();
+        assertThat(weighedItem.getCurrentStock()).isEqualByComparingTo(new BigDecimal("9.500"));
+
+        // A zero-delta wastage movement should exist for audit.
+        StockMovement wastageMovement = stockMovementRepository.findAll().stream()
+                .filter(m -> InventoryConstants.MOVEMENT_REFUND_WASTAGE.equals(m.getMovementType()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(wastageMovement.getReferenceId()).isEqualTo(refundId);
+        assertThat(wastageMovement.getQuantityDelta()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(wastageMovement.getWastageReason()).isEqualTo("CUSTOMER_RETURN");
+
+        // Journal must debit shrinkage, not inventory.
+        Refund refund = refundRepository.findById(refundId).orElseThrow();
+        List<JournalLine> lines = journalLineRepository.findByJournalEntryId(refund.getJournalEntryId());
+        assertJournalBalanced(lines);
+        LedgerAccount shrinkageAccount = ledgerAccountRepository
+                .findByBusinessIdAndCode(TENANT, LedgerAccountCodes.INVENTORY_SHRINKAGE).orElseThrow();
+        boolean hasShrinkageDebit = lines.stream().anyMatch(l ->
+                l.getLedgerAccountId().equals(shrinkageAccount.getId()) && l.getDebit().signum() > 0);
+        assertThat(hasShrinkageDebit).isTrue();
+    }
+
+    @Test
+    void postRefund_weighedItem_partialRefund_writesOffPartialWeight() throws Exception {
+        String weighedItemId = createWeighedItemWithPrice("10", new BigDecimal("1200.00"));
+        openShift(new BigDecimal("100.00"));
+
+        String saleBody = """
+                {"branchId":"%s","lines":[{"itemId":"%s","quantity":0.5,"unitPrice":1200}],"payments":[{"method":"cash","amount":600}]}
+                """.formatted(branchId, weighedItemId);
+
+        MvcResult saleRes = mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(saleBody)
+                        .header("Idempotency-Key", "wt-sale-partial-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, managerCashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS_WEIGHED_REFUND))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        String saleId = objectMapper.readTree(saleRes.getResponse().getContentAsString()).get("id").asText();
+        String saleItemId = objectMapper.readTree(saleRes.getResponse().getContentAsString())
+                .get("items").get(0).get("id").asText();
+
+        String refundBody = """
+                {"lines":[{"saleItemId":"%s","quantity":0.2}],"payments":[{"method":"cash","amount":240}],"reason":"partial return"}
+                """.formatted(saleItemId);
+
+        MvcResult refundRes = mockMvc.perform(post("/api/v1/sales/{saleId}/refund", saleId)
+                        .contentType(APPLICATION_JSON)
+                        .content(refundBody)
+                        .header("Idempotency-Key", "wt-refund-partial-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, managerCashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS_WEIGHED_REFUND))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode refundJson = objectMapper.readTree(refundRes.getResponse().getContentAsString());
+        assertThat(refundJson.get("totalRefunded").decimalValue()).isEqualByComparingTo(new BigDecimal("240.00"));
+
+        // Stock still reflects the original sale; the 0.2 kg returned is not restocked.
+        var weighedItem = itemRepository.findById(weighedItemId).orElseThrow();
+        assertThat(weighedItem.getCurrentStock()).isEqualByComparingTo(new BigDecimal("9.500"));
+    }
+
     private void openShift(BigDecimal opening) throws Exception {
         mockMvc.perform(post("/api/v1/shifts/open")
                         .contentType(APPLICATION_JSON)
@@ -1084,12 +1428,79 @@ class SaleSlice2IT {
         return b;
     }
 
+    private void seedLedger(String businessId) {
+        String[][] rows = {
+                {LedgerAccountCodes.OPERATING_CASH, "Operating cash", "asset"},
+                {LedgerAccountCodes.INVENTORY, "Inventory", "asset"},
+                {LedgerAccountCodes.ACCOUNTS_RECEIVABLE_CUSTOMERS, "AR", "asset"},
+                {LedgerAccountCodes.CUSTOMER_WALLET_LIABILITY, "Wallet", "liability"},
+                {LedgerAccountCodes.MPESA_CLEARING, "M-Pesa clearing", "asset"},
+                {LedgerAccountCodes.SALES_REVENUE, "Sales revenue", "revenue"},
+                {LedgerAccountCodes.COST_OF_GOODS_SOLD, "COGS", "expense"},
+                {LedgerAccountCodes.INVENTORY_SHRINKAGE, "Inventory shrinkage", "expense"},
+        };
+        for (String[] row : rows) {
+            var a = new LedgerAccount();
+            a.setBusinessId(businessId);
+            a.setCode(row[0]);
+            a.setName(row[1]);
+            a.setAccountType(row[2]);
+            ledgerAccountRepository.save(a);
+        }
+    }
+
     private static Permission perm(String id, String key, String desc) {
         Permission p = new Permission();
         p.setId(id);
         p.setPermissionKey(key);
         p.setDescription(desc);
         return p;
+    }
+
+    private String createWeighedItem(String stockKg) throws Exception {
+        String weighedItemId = itemCatalogService.createItem(
+                TENANT,
+                new CreateItemRequest(
+                        "SKU-WEIGHED", null, "Beef Mince", null, goodsTypeId, null, null, "kg",
+                        true, true, true,
+                        null, null, null, null, null, null, null, null, null, null, true, null, null, null),
+                null
+        ).body().id();
+
+        var item = itemRepository.findById(weighedItemId).orElseThrow();
+        item.setCurrentStock(BigDecimal.ZERO);
+        item.setHasExpiry(true);
+        itemRepository.save(item);
+
+        Instant base = Instant.parse("2026-02-10T12:00:00Z");
+        inventoryBatchRepository.save(batch("cccccccc-cccc-cccc-cccc-ccccccccccc1", weighedItemId, base,
+                LocalDate.of(2030, 4, 1), stockKg));
+        item.setCurrentStock(new BigDecimal(stockKg));
+        itemRepository.save(item);
+        return weighedItemId;
+    }
+
+    private String createWeighedItemWithPrice(String stockKg, BigDecimal price) throws Exception {
+        String weighedItemId = itemCatalogService.createItem(
+                TENANT,
+                new CreateItemRequest(
+                        "SKU-WEIGHED-PRICE", null, "Beef Mince Priced", null, goodsTypeId, null, null, "kg",
+                        true, true, true,
+                        null, null, null, price, null, null, null, null, null, null, true, null, null, null),
+                null
+        ).body().id();
+
+        var item = itemRepository.findById(weighedItemId).orElseThrow();
+        item.setCurrentStock(BigDecimal.ZERO);
+        item.setHasExpiry(true);
+        itemRepository.save(item);
+
+        Instant base = Instant.parse("2026-02-10T12:00:00Z");
+        inventoryBatchRepository.save(batch("dddddddd-dddd-dddd-dddd-dddddddddd1", weighedItemId, base,
+                LocalDate.of(2030, 4, 1), stockKg));
+        item.setCurrentStock(new BigDecimal(stockKg));
+        itemRepository.save(item);
+        return weighedItemId;
     }
 
     private static void assertJournalBalanced(List<JournalLine> lines) {

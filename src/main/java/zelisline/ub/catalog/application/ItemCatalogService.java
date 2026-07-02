@@ -59,6 +59,7 @@ import zelisline.ub.catalog.repository.IdempotencyKeyRepository;
 import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
+import zelisline.ub.catalog.application.ItemWeightValidation;
 import zelisline.ub.identity.application.TokenHasher;
 import zelisline.ub.platform.media.CloudinaryUploadResult;
 import zelisline.ub.platform.media.MediaStore;
@@ -132,6 +133,7 @@ public class ItemCatalogService {
                 false,
                 false,
                 false,
+                null,
                 pageable);
     }
 
@@ -177,6 +179,7 @@ public class ItemCatalogService {
                 false,
                 false,
                 false,
+                null,
                 pageable);
     }
 
@@ -199,6 +202,7 @@ public class ItemCatalogService {
             boolean filterZeroStock,
             boolean filterLowStock,
             boolean inactiveOnly,
+            Boolean isWeighed,
             Pageable pageable
     ) {
         CatalogListQueryContext ctx = resolveCatalogListQuery(
@@ -214,6 +218,7 @@ public class ItemCatalogService {
                 excludeLinkedSupplierId,
                 itemTypeId,
                 allowedItemTypeIds,
+                isWeighed,
                 pageable);
         if (ctx.emptyResult()) {
             return Page.empty(ctx.pageable());
@@ -267,6 +272,8 @@ public class ItemCatalogService {
                 filterNoPrice,
                 restrictItemIdsUnset,
                 restrictItemIds,
+                ctx.isWeighedUnset(),
+                ctx.isWeighed(),
                 ctx.pageable());
         List<String> ids = page.getContent().stream().map(Item::getId).toList();
         Map<String, String> thumbs = firstGalleryImageUrlByItemId(ids);
@@ -348,6 +355,7 @@ public class ItemCatalogService {
                 excludeLinkedSupplierId,
                 itemTypeId,
                 allowedItemTypeIds,
+                null,
                 PageRequest.of(0, 1));
         if (ctx.emptyResult()) {
             return new CatalogRowTypeCountsResponse(0, 0, 0, 0, 0, 0, 0, 0);
@@ -807,6 +815,8 @@ public class ItemCatalogService {
             }
             item.setVariantName(raw);
         }
+
+        ItemWeightValidation.validate(item);
 
         try {
             itemRepository.save(item);
@@ -1372,6 +1382,7 @@ public class ItemCatalogService {
         item.setBrand(blankToNull(request.brand()));
         item.setSize(blankToNull(request.size()));
         item.setWebPublished(true);
+        ItemWeightValidation.validate(item);
         return item;
     }
 
@@ -1512,7 +1523,10 @@ public class ItemCatalogService {
                 baseStockQty,
                 i.getBrand(),
                 i.getSize(),
-                i.getBundlePrice()
+                i.getBundlePrice(),
+                i.getItemTypeId(),
+                i.isWeighed(),
+                i.getUnitType()
         );
     }
 
@@ -1635,6 +1649,8 @@ public class ItemCatalogService {
             String itemTypeId,
             boolean restrictByAllowedItemTypes,
             Collection<String> allowedItemTypeIds,
+            boolean isWeighedUnset,
+            boolean isWeighed,
             Pageable pageable,
             boolean emptyResult
     ) {
@@ -1653,6 +1669,7 @@ public class ItemCatalogService {
             String excludeLinkedSupplierId,
             String itemTypeId,
             Collection<String> allowedItemTypeIds,
+            Boolean isWeighed,
             Pageable pageable
     ) {
         String q = blankToNull(search);
@@ -1694,7 +1711,8 @@ public class ItemCatalogService {
                         filterByCatalogRowTypes, includeParentRows, includeVariantRows, includeStandaloneRows,
                         blankToNull(excludeLinkedSupplierId),
                         includeAllScopes && q != null,
-                        true, "", false, List.of(""), pg, true);
+                        true, "", false, List.of(""),
+                        isWeighed == null, isWeighed != null && isWeighed, pg, true);
             }
         }
         boolean squashParentGroupsForSearch = includeAllScopes && q != null;
@@ -1710,7 +1728,8 @@ public class ItemCatalogService {
                     squashParentGroupsForSearch,
                     itemTypeUnset, itemType != null ? itemType : "",
                     restrictByAllowedItemTypes,
-                    List.of(""), pg, true);
+                    List.of(""),
+                    isWeighed == null, isWeighed != null && isWeighed, pg, true);
         }
         Collection<String> safeAllowedItemTypes = restrictByAllowedItemTypes
                 ? allowedItemTypeIds
@@ -1722,7 +1741,8 @@ public class ItemCatalogService {
                 blankToNull(excludeLinkedSupplierId),
                 squashParentGroupsForSearch,
                 itemTypeUnset, itemType != null ? itemType : "",
-                restrictByAllowedItemTypes, safeAllowedItemTypes, pg, false);
+                restrictByAllowedItemTypes, safeAllowedItemTypes,
+                isWeighed == null, isWeighed != null && isWeighed, pg, false);
     }
 
     private static String blankToNull(String s) {

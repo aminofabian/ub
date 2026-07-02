@@ -156,6 +156,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                         )))
                and (:itemTypeUnset = true or i.itemTypeId = :itemTypeId)
                and (:restrictByAllowedItemTypes = false or i.itemTypeId in :allowedItemTypeIds)
+               and (:isWeighedUnset = true or i.weighed = :isWeighed)
                and (:filterNoPrice = false or (
                     i.sellable = true
                     and (i.bundlePrice is null or i.bundlePrice <= 0)
@@ -194,6 +195,8 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("filterNoPrice") boolean filterNoPrice,
             @Param("restrictItemIdsUnset") boolean restrictItemIdsUnset,
             @Param("restrictItemIds") Collection<String> restrictItemIds,
+            @Param("isWeighedUnset") boolean isWeighedUnset,
+            @Param("isWeighed") boolean isWeighed,
             Pageable pageable
     );
 

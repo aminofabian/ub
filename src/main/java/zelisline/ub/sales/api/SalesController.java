@@ -62,7 +62,8 @@ public class SalesController {
                 TenantRequestIds.resolveBusinessId(request),
                 idempotencyKey,
                 safe,
-                principal.userId()
+                principal.userId(),
+                principal.roleId()
         );
         HttpStatus status = out.createdNew() ? HttpStatus.CREATED : HttpStatus.OK;
         return ResponseEntity.status(status).body(out.response());
@@ -100,7 +101,8 @@ public class SalesController {
                 saleId,
                 idempotencyKey,
                 body,
-                user.userId()
+                user.userId(),
+                user.roleId()
         );
     }
 

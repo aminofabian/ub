@@ -47,7 +47,7 @@ public final class ReceiptPdfRenderer {
             table.setWidths(new float[]{3f, 1.2f, 1.4f, 1.4f});
             for (ReceiptLineRow line : s.lines()) {
                 table.addCell(cell(line.description(), body));
-                table.addCell(cell(line.quantity(), body));
+                table.addCell(cell(formatQuantity(line), body));
                 table.addCell(cell(line.unitPrice(), body));
                 table.addCell(cell(line.lineTotal(), body));
             }
@@ -122,5 +122,14 @@ public final class ReceiptPdfRenderer {
         c.setBorder(0);
         c.setPadding(2);
         return c;
+    }
+
+    private static String formatQuantity(ReceiptLineRow line) {
+        String qty = line.quantity();
+        String unit = line.unitType();
+        if (unit == null || unit.isBlank() || "each".equalsIgnoreCase(unit)) {
+            return qty;
+        }
+        return qty + " " + unit;
     }
 }

@@ -585,12 +585,15 @@ public class StorefrontSettingsService {
         String currentSettings,
         FeatureFlagsPatchRequest patch
     ) {
-        if (patch == null || patch.posDrafts() == null) {
+        if (patch == null || (patch.posDrafts() == null && patch.butcherPosEnabled() == null)) {
             return currentSettings;
         }
         ObjectNode root = parseRoot(currentSettings);
         ObjectNode flags = copyFeatureFlags(root);
-        applyPosDraftsFlags(flags, patch.posDrafts());
+        if (patch.posDrafts() != null) {
+            applyPosDraftsFlags(flags, patch.posDrafts());
+        }
+        putFlagIfPresent(flags, FeatureFlagService.FLAG_BUTCHER_POS_ENABLED, patch.butcherPosEnabled());
         root.set(KEY_FEATURES, flags);
         return writeRoot(root);
     }

@@ -44,6 +44,7 @@ import zelisline.ub.purchasing.api.dto.AddPathBLineRequest;
 import zelisline.ub.purchasing.api.dto.CreatePathBSessionRequest;
 import zelisline.ub.purchasing.api.dto.PathBLineResponse;
 import zelisline.ub.purchasing.api.dto.PathBSessionDetailResponse;
+import zelisline.ub.purchasing.api.dto.PathBSessionListRow;
 import zelisline.ub.purchasing.api.dto.PostPathBLineBreakdown;
 import zelisline.ub.purchasing.api.dto.PostPathBRequest;
 import zelisline.ub.purchasing.api.dto.PostPathBResponse;
@@ -116,6 +117,33 @@ public class PathBPurchaseService {
     public PathBSessionDetailResponse getSession(String businessId, String sessionId) {
         RawPurchaseSession s = loadSession(businessId, sessionId);
         return detailOf(s);
+    }
+
+    @Transactional(readOnly = true)
+    public List<PathBSessionListRow> listSessions(String businessId, String supplierId, String status) {
+        String effectiveStatus = status != null && !status.isBlank() ? status.trim() : PurchasingConstants.SESSION_DRAFT;
+        List<RawPurchaseSession> sessions = supplierId != null && !supplierId.isBlank()
+                ? sessionRepository.findByBusinessIdAndSupplierIdAndStatusOrderByCreatedAtDesc(
+                        businessId, supplierId.trim(), effectiveStatus)
+                : sessionRepository.findByBusinessIdAndStatusOrderByCreatedAtDesc(businessId, effectiveStatus);
+        return sessions.stream().map(this::toListRow).toList();
+    }
+
+    private PathBSessionListRow toListRow(RawPurchaseSession s) {
+        List<RawPurchaseLine> lines = lineRepository.findBySessionIdOrderBySortOrderAscIdAsc(s.getId());
+        BigDecimal total = lines.stream()
+                .map(RawPurchaseLine::getAmountMoney)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(2, RoundingMode.HALF_UP);
+        return new PathBSessionListRow(
+                s.getId(),
+                s.getSupplierId(),
+                s.getBranchId(),
+                s.getReceivedAt(),
+                s.getStatus(),
+                lines.size(),
+                total
+        );
     }
 
     @Transactional
@@ -254,18 +282,19 @@ public class PathBPurchaseService {
         validateBreakdown(dbLines, req);
         LedgerAccountResolver lar = ledgerAccountResolver; // local alias for brevity
 
+        Map<String, PostPathBLineBreakdown> breakdownByLineId = req.lines().stream()
+                .collect(Collectors.toMap(PostPathBLineBreakdown::lineId, b -> b));
+        List<RawPurchaseLine> postedLines = new ArrayList<>();
         BigDecimal sumInv = BigDecimal.ZERO;
         BigDecimal sumWaste = BigDecimal.ZERO;
         BigDecimal apTotal = BigDecimal.ZERO;
         List<LinePostPlan> plans = new ArrayList<>();
         for (RawPurchaseLine line : dbLines) {
-            PostPathBLineBreakdown br = req.lines().stream()
-                    .filter(b -> b.lineId().equals(line.getId()))
-                    .findFirst()
-                    .orElseThrow();
-            if (br.usableQty().signum() <= 0 && br.wastageQty().signum() <= 0) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Each line needs usable or wastage quantity");
+            PostPathBLineBreakdown br = breakdownByLineId.get(line.getId());
+            if (br == null) {
+                continue;
             }
+            postedLines.add(line);
             Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(br.itemId(), businessId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
             CostSplit split = splitLine(line.getAmountMoney(), br.usableQty(), br.wastageQty());
@@ -273,6 +302,9 @@ public class PathBPurchaseService {
             sumInv = sumInv.add(split.inventoryMoney());
             sumWaste = sumWaste.add(split.wastageMoney());
             apTotal = apTotal.add(line.getAmountMoney());
+        }
+        if (postedLines.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "No lines selected to receive");
         }
         if (sumInv.add(sumWaste).compareTo(apTotal) != 0) {
             throw new IllegalStateException("Journal allocation rounding drift");
@@ -325,7 +357,7 @@ public class PathBPurchaseService {
         supplierInvoiceRepository.save(inv);
 
         int sort = 0;
-        for (RawPurchaseLine line : dbLines) {
+        for (RawPurchaseLine line : postedLines) {
             BigDecimal qty = line.getUsableQty().add(line.getWastageQty());
             BigDecimal unit = line.getAmountMoney().divide(qty, UNIT_SCALE, RoundingMode.HALF_UP);
             SupplierInvoiceLine sil = new SupplierInvoiceLine();
@@ -358,10 +390,12 @@ public class PathBPurchaseService {
         entry.credit(lar.resolveId(businessId, LedgerAccountCodes.ACCOUNTS_PAYABLE), ap2);
         String jeId = ledgerPostingPort.post(entry);
 
-        session.setStatus(PurchasingConstants.SESSION_POSTED);
+        int pendingRemaining = lineRepository.countBySessionIdAndLineStatus(sessionId, PurchasingConstants.LINE_PENDING);
+        String sessionStatus = pendingRemaining == 0 ? PurchasingConstants.SESSION_POSTED : PurchasingConstants.SESSION_DRAFT;
+        session.setStatus(sessionStatus);
         sessionRepository.save(session);
 
-        return new PostPathBResponse(inv.getId(), invoiceNumber, jeId, ap2, dbLines.size(), sb.getId());
+        return new PostPathBResponse(session.getId(), sessionStatus, inv.getId(), invoiceNumber, jeId, ap2, postedLines.size(), sb.getId());
     }
 
 
@@ -465,18 +499,27 @@ public class PathBPurchaseService {
     }
 
     private static void validateBreakdown(List<RawPurchaseLine> dbLines, PostPathBRequest req) {
-        if (req.lines().size() != dbLines.size()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Breakdown must include every line");
+        if (req.lines().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Breakdown must include at least one line");
         }
-        Set<String> ids = dbLines.stream().map(RawPurchaseLine::getId).collect(Collectors.toCollection(HashSet::new));
+        Map<String, RawPurchaseLine> dbById = dbLines.stream()
+                .collect(Collectors.toMap(RawPurchaseLine::getId, l -> l));
         Set<String> seenLineIds = new HashSet<>();
         Set<String> seenItemIds = new HashSet<>();
         for (PostPathBLineBreakdown b : req.lines()) {
-            if (!ids.contains(b.lineId())) {
+            RawPurchaseLine dbLine = dbById.get(b.lineId());
+            if (dbLine == null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown line id");
+            }
+            if (PurchasingConstants.LINE_POSTED.equals(dbLine.getLineStatus())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Line " + b.lineId() + " has already been received");
             }
             if (!seenLineIds.add(b.lineId())) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Duplicate line in breakdown");
+            }
+            if (b.usableQty().signum() <= 0 && b.wastageQty().signum() <= 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Each line needs usable or wastage quantity");
             }
             if (!seenItemIds.add(b.itemId())) {
                 throw new ResponseStatusException(

@@ -41,6 +41,7 @@ import zelisline.ub.purchasing.api.dto.AddPathAPurchaseOrderLineRequest;
 import zelisline.ub.purchasing.api.dto.CreatePathAPurchaseOrderRequest;
 import zelisline.ub.purchasing.api.dto.PathAPurchaseOrderDetailResponse;
 import zelisline.ub.purchasing.api.dto.PathAPurchaseOrderLineResponse;
+import zelisline.ub.purchasing.api.dto.PathAPurchaseOrderListRow;
 import zelisline.ub.purchasing.api.dto.PostGoodsReceiptLineInput;
 import zelisline.ub.purchasing.api.dto.PostGoodsReceiptRequest;
 import zelisline.ub.purchasing.api.dto.PostGoodsReceiptResponse;
@@ -110,6 +111,38 @@ public class PathAPurchaseService {
     public PathAPurchaseOrderDetailResponse getPurchaseOrder(String businessId, String purchaseOrderId) {
         PurchaseOrder po = loadPo(businessId, purchaseOrderId);
         return detailOf(po);
+    }
+
+    @Transactional(readOnly = true)
+    public List<PathAPurchaseOrderListRow> listPurchaseOrders(String businessId, String supplierId, String status) {
+        String effectiveStatus = status != null && !status.isBlank() ? status.trim() : PurchasingConstants.PO_SENT;
+        List<PurchaseOrder> orders = supplierId != null && !supplierId.isBlank()
+                ? purchaseOrderRepository.findByBusinessIdAndSupplierIdAndStatusOrderByCreatedAtDesc(
+                        businessId, supplierId.trim(), effectiveStatus)
+                : purchaseOrderRepository.findByBusinessIdAndStatusOrderByCreatedAtDesc(businessId, effectiveStatus);
+        return orders.stream().map(this::toListRow).toList();
+    }
+
+    private PathAPurchaseOrderListRow toListRow(PurchaseOrder po) {
+        List<PurchaseOrderLine> lines = purchaseOrderLineRepository
+                .findByPurchaseOrderIdOrderBySortOrderAscIdAsc(po.getId());
+        BigDecimal totalOrdered = BigDecimal.ZERO;
+        BigDecimal totalReceived = BigDecimal.ZERO;
+        for (PurchaseOrderLine l : lines) {
+            totalOrdered = totalOrdered.add(l.getQtyOrdered());
+            totalReceived = totalReceived.add(l.getQtyReceived());
+        }
+        return new PathAPurchaseOrderListRow(
+                po.getId(),
+                po.getSupplierId(),
+                po.getBranchId(),
+                po.getPoNumber(),
+                po.getExpectedDate(),
+                po.getStatus(),
+                lines.size(),
+                totalOrdered.setScale(4, RoundingMode.HALF_UP),
+                totalReceived.setScale(4, RoundingMode.HALF_UP)
+        );
     }
 
     @Transactional

@@ -51,6 +51,7 @@ import zelisline.ub.purchasing.repository.StockMovementRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
 import zelisline.ub.purchasing.domain.SupplierInvoiceLine;
+import zelisline.ub.finance.application.LedgerBootstrapService;
 import zelisline.ub.finance.repository.JournalEntryRepository;
 import zelisline.ub.finance.repository.LedgerAccountRepository;
 import zelisline.ub.suppliers.domain.Supplier;
@@ -112,6 +113,8 @@ class PathBPurchaseIT {
     private JournalEntryRepository journalEntryRepository;
     @Autowired
     private LedgerAccountRepository ledgerAccountRepository;
+    @Autowired
+    private LedgerBootstrapService ledgerBootstrapService;
     @Autowired
     private SupplierInvoiceRepository supplierInvoiceRepository;
     @Autowired
@@ -175,6 +178,7 @@ class PathBPurchaseIT {
         branchId = br.getId();
 
         catalogBootstrapService.seedDefaultItemTypesIfMissing(TENANT);
+        ledgerBootstrapService.ensureStandardAccounts(TENANT);
         goodsTypeId = itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(TENANT).getFirst().getId();
 
         permissionRepository.save(perm(P_READ, "catalog.items.read", "r"));
@@ -247,7 +251,7 @@ class PathBPurchaseIT {
         var item = itemRepository.findById(itemId).orElseThrow();
         assertThat(item.getCurrentStock().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo(new BigDecimal("90.00"));
 
-        assertThat(inventoryBatchRepository.count()).isEqualTo(1);
+        assertThat(inventoryBatchRepository.count()).isEqualTo(2);
         assertThat(stockMovementRepository.count()).isEqualTo(2);
 
         List<JournalLine> lines = journalLineRepository.findByJournalEntryId(journalId);
@@ -404,6 +408,68 @@ class PathBPurchaseIT {
 
         assertThat(second.getResponse().getContentAsString()).isEqualTo(first.getResponse().getContentAsString());
         assertThat(supplierInvoiceRepository.count()).isEqualTo(1);
+    }
+
+    @Test
+    void listSessions_bySupplierAndDraftStatus_returnsOpenDrafts() throws Exception {
+        String sessionId = createSession();
+        addLine(sessionId, "Crate tomatoes", "100.00");
+
+        MvcResult list = mockMvc.perform(get("/api/v1/purchasing/path-b/sessions")
+                        .param("supplierId", supplierId)
+                        .param("status", "draft")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode arr = objectMapper.readTree(list.getResponse().getContentAsString());
+        assertThat(arr.isArray()).isTrue();
+        assertThat(arr.size()).isEqualTo(1);
+        assertThat(arr.get(0).get("id").asText()).isEqualTo(sessionId);
+        assertThat(arr.get(0).get("supplierId").asText()).isEqualTo(supplierId);
+        assertThat(arr.get(0).get("lineCount").asInt()).isEqualTo(1);
+        assertThat(arr.get(0).get("totalAmount").decimalValue()).isEqualByComparingTo(new BigDecimal("100.00"));
+    }
+
+    @Test
+    void postSession_partialReceive_postsSelectedLinesAndKeepsSessionDraft() throws Exception {
+        String sessionId = createSession();
+        String line1 = addLine(sessionId, "Crate tomatoes", "100.00");
+        String line2 = addLine(sessionId, "Beans", "50.00");
+
+        String postBody = """
+                {"lines":[{"lineId":"%s","itemId":"%s","usableQty":90,"wastageQty":10}]}
+                """.formatted(line1, itemId);
+
+        MvcResult r = mockMvc.perform(post("/api/v1/purchasing/path-b/sessions/" + sessionId + "/post")
+                        .contentType(APPLICATION_JSON)
+                        .content(postBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode json = objectMapper.readTree(r.getResponse().getContentAsString());
+        assertThat(json.get("sessionStatus").asText()).isEqualTo("draft");
+        assertThat(json.get("linesPosted").asInt()).isEqualTo(1);
+        assertThat(json.get("grandTotal").decimalValue()).isEqualByComparingTo(new BigDecimal("100.00"));
+
+        // One line posted, one still pending.
+        assertThat(rawPurchaseLineRepository.countBySessionIdAndLineStatus(sessionId, "posted")).isEqualTo(1);
+        assertThat(rawPurchaseLineRepository.countBySessionIdAndLineStatus(sessionId, "pending")).isEqualTo(1);
+
+        // Session should still be editable.
+        MvcResult detail = mockMvc.perform(get("/api/v1/purchasing/path-b/sessions/" + sessionId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(objectMapper.readTree(detail.getResponse().getContentAsString()).get("status").asText())
+                .isEqualTo("draft");
     }
 
     private String createSession() throws Exception {

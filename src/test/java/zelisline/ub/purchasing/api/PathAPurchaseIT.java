@@ -34,6 +34,7 @@ import zelisline.ub.catalog.repository.IdempotencyKeyRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.finance.domain.JournalLine;
+import zelisline.ub.finance.application.LedgerBootstrapService;
 import zelisline.ub.finance.repository.JournalEntryRepository;
 import zelisline.ub.finance.repository.JournalLineRepository;
 import zelisline.ub.finance.repository.LedgerAccountRepository;
@@ -114,6 +115,8 @@ class PathAPurchaseIT {
     @Autowired
     private LedgerAccountRepository ledgerAccountRepository;
     @Autowired
+    private LedgerBootstrapService ledgerBootstrapService;
+    @Autowired
     private SupplierInvoiceRepository supplierInvoiceRepository;
     @Autowired
     private SupplierInvoiceLineRepository supplierInvoiceLineRepository;
@@ -183,6 +186,7 @@ class PathAPurchaseIT {
         branchId = br.getId();
 
         catalogBootstrapService.seedDefaultItemTypesIfMissing(TENANT);
+        ledgerBootstrapService.ensureStandardAccounts(TENANT);
         goodsTypeId = itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(TENANT).getFirst().getId();
 
         permissionRepository.save(perm(P_READ, "catalog.items.read", "r"));
@@ -390,6 +394,31 @@ class PathAPurchaseIT {
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void listSentPurchaseOrders_bySupplier_returnsOrders() throws Exception {
+        String poId = createPo();
+        addPoLine(poId, "100", "10");
+        sendPo(poId);
+
+        MvcResult list = mockMvc.perform(get("/api/v1/purchasing/path-a/purchase-orders")
+                        .param("supplierId", supplierId)
+                        .param("status", "sent")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode arr = objectMapper.readTree(list.getResponse().getContentAsString());
+        assertThat(arr.isArray()).isTrue();
+        assertThat(arr.size()).isEqualTo(1);
+        assertThat(arr.get(0).get("id").asText()).isEqualTo(poId);
+        assertThat(arr.get(0).get("supplierId").asText()).isEqualTo(supplierId);
+        assertThat(arr.get(0).get("lineCount").asInt()).isEqualTo(1);
+        assertThat(arr.get(0).get("totalOrdered").decimalValue()).isEqualByComparingTo(new BigDecimal("100.0000"));
+        assertThat(arr.get(0).get("totalReceived").decimalValue()).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
     private String createPo() throws Exception {

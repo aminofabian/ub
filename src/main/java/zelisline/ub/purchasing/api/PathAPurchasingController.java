@@ -6,11 +6,14 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -21,6 +24,7 @@ import zelisline.ub.purchasing.api.dto.AddPathAPurchaseOrderLineRequest;
 import zelisline.ub.purchasing.api.dto.CreatePathAPurchaseOrderRequest;
 import zelisline.ub.purchasing.api.dto.PathAPurchaseOrderDetailResponse;
 import zelisline.ub.purchasing.api.dto.PathAPurchaseOrderLineResponse;
+import zelisline.ub.purchasing.api.dto.PathAPurchaseOrderListRow;
 import zelisline.ub.purchasing.api.dto.PostGoodsReceiptRequest;
 import zelisline.ub.purchasing.api.dto.PostGoodsReceiptResponse;
 import zelisline.ub.purchasing.api.dto.PostGrnSupplierInvoiceRequest;
@@ -51,6 +55,18 @@ public class PathAPurchasingController {
         CreatePathAPurchaseOrderRequest safe = new CreatePathAPurchaseOrderRequest(
                 body.supplierId(), validatedBranch, body.expectedDate(), body.poNumber(), body.notes());
         return pathAPurchaseService.createPurchaseOrder(TenantRequestIds.resolveBusinessId(request), safe);
+    }
+
+    @GetMapping("/purchase-orders")
+    @PreAuthorize("hasPermission(null, 'purchasing.path_a.read')")
+    public List<PathAPurchaseOrderListRow> listPurchaseOrders(
+            @RequestParam(required = false) String supplierId,
+            @RequestParam(required = false) String status,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return pathAPurchaseService.listPurchaseOrders(
+                TenantRequestIds.resolveBusinessId(request), supplierId, status);
     }
 
     @GetMapping("/purchase-orders/{purchaseOrderId}")

@@ -18,7 +18,7 @@ public record MessagingProperties(
             rapidApiWhatsApp = new RapidApiWhatsApp("", "whatsapp-osint.p.rapidapi.com", "https://whatsapp-osint.p.rapidapi.com/bizos");
         }
         if (metaWhatsApp == null) {
-            metaWhatsApp = new MetaWhatsApp("", "", "v25.0");
+            metaWhatsApp = new MetaWhatsApp("", "", "v25.0", "", "");
         }
         if (sms == null) {
             sms = new Sms("none", "", "");
@@ -35,10 +35,20 @@ public record MessagingProperties(
         }
     }
 
-    public record MetaWhatsApp(String accessToken, String phoneNumberId, String graphVersion) {
+    public record MetaWhatsApp(
+            String accessToken,
+            String phoneNumberId,
+            String graphVersion,
+            String webhookVerifyToken,
+            String appSecret
+    ) {
         public boolean configured() {
             return accessToken != null && !accessToken.isBlank()
                     && phoneNumberId != null && !phoneNumberId.isBlank();
+        }
+
+        public boolean webhookVerifyConfigured() {
+            return webhookVerifyToken != null && !webhookVerifyToken.isBlank();
         }
     }
 

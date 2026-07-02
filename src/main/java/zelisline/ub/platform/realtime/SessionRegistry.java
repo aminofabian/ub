@@ -121,9 +121,18 @@ public class SessionRegistry {
     }
 
     public int activeSessionCountForBusiness(String businessId) {
+        return activeOpenSessionCountForBusiness(businessId);
+    }
+
+    /** Count only open sessions — stale registry entries must not block new handshakes. */
+    public int activeOpenSessionCountForBusiness(String businessId) {
         int count = 0;
-        for (RealtimeSession meta : sessionMeta.values()) {
-            if (businessId.equals(meta.businessId())) {
+        for (Map.Entry<String, RealtimeSession> entry : sessionMeta.entrySet()) {
+            if (!businessId.equals(entry.getValue().businessId())) {
+                continue;
+            }
+            WebSocketSession session = sessions.get(entry.getKey());
+            if (session != null && session.isOpen()) {
                 count++;
             }
         }

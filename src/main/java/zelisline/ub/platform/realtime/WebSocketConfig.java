@@ -83,7 +83,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
                 if (query == null || !query.contains("ticket=")) {
                     response.setStatusCode(HttpStatus.UNAUTHORIZED);
                     meterRegistry.counter("realtime.tickets.rejected", "reason", "missing").increment();
-                    log.debug("WS handshake rejected: no ticket parameter");
+                    log.warn("WS handshake rejected: missing ticket parameter");
                     return false;
                 }
 
@@ -91,7 +91,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
                 if (ticket == null || ticket.isBlank()) {
                     response.setStatusCode(HttpStatus.UNAUTHORIZED);
                     meterRegistry.counter("realtime.tickets.rejected", "reason", "empty").increment();
-                    log.debug("WS handshake rejected: empty ticket");
+                    log.warn("WS handshake rejected: empty ticket");
                     return false;
                 }
 
@@ -99,7 +99,8 @@ public class WebSocketConfig implements WebSocketConfigurer {
                 if (record == null) {
                     response.setStatusCode(HttpStatus.UNAUTHORIZED);
                     meterRegistry.counter("realtime.tickets.rejected", "reason", "invalid").increment();
-                    log.debug("WS handshake rejected: invalid/expired ticket");
+                    log.warn(
+                            "WS handshake rejected: invalid or expired ticket (often multi-instance in-memory store — deploy V129 MySQL tickets or REDIS_URL)");
                     return false;
                 }
 
@@ -112,17 +113,17 @@ public class WebSocketConfig implements WebSocketConfigurer {
                 if (userSessions >= maxConnectionsPerUser) {
                     response.setStatusCode(HttpStatus.TOO_MANY_REQUESTS);
                     meterRegistry.counter("realtime.tickets.rejected", "reason", "user_limit").increment();
-                    log.debug("WS handshake rejected: user connection limit reached user={} count={}",
-                            record.userId(), userSessions);
+                    log.warn("WS handshake rejected: user connection limit reached user={} count={} max={}",
+                            record.userId(), userSessions, maxConnectionsPerUser);
                     return false;
                 }
 
-                int businessSessions = sessionRegistry.activeSessionCountForBusiness(record.businessId());
+                int businessSessions = sessionRegistry.activeOpenSessionCountForBusiness(record.businessId());
                 if (businessSessions >= maxConnectionsPerBusiness) {
                     response.setStatusCode(HttpStatus.TOO_MANY_REQUESTS);
                     meterRegistry.counter("realtime.tickets.rejected", "reason", "business_limit").increment();
-                    log.debug("WS handshake rejected: business connection limit reached business={} count={}",
-                            record.businessId(), businessSessions);
+                    log.warn("WS handshake rejected: business connection limit reached business={} count={} max={}",
+                            record.businessId(), businessSessions, maxConnectionsPerBusiness);
                     return false;
                 }
 
@@ -130,7 +131,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
                 if (record == null) {
                     response.setStatusCode(HttpStatus.UNAUTHORIZED);
                     meterRegistry.counter("realtime.tickets.rejected", "reason", "invalid").increment();
-                    log.debug("WS handshake rejected: ticket consumed concurrently");
+                    log.warn("WS handshake rejected: ticket consumed concurrently");
                     return false;
                 }
 

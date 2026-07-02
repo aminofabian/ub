@@ -9,6 +9,7 @@ import java.util.Base64;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -48,6 +49,18 @@ public class RealtimeTicketService {
         this.redisTemplate = redisTemplate;
         this.databaseStore = databaseStore;
         this.databaseAvailable = databaseStore != null;
+    }
+
+    @PostConstruct
+    void logActiveTicketStore() {
+        if (redisAvailable) {
+            log.info("Realtime tickets: primary store=redis, mysql-fallback={}", databaseAvailable);
+        } else if (databaseAvailable) {
+            log.info("Realtime tickets: primary store=mysql (shared across API replicas)");
+        } else {
+            log.warn(
+                    "Realtime tickets: in-memory only — WebSocket will fail when mint and upgrade hit different API instances");
+        }
     }
 
     public TicketRecord mint(String userId, String businessId, String branchId, Set<String> allowedChannels) {

@@ -69,6 +69,7 @@ class ItemCatalogIT {
     private static final String PERM_READ = "11111111-0000-0000-0000-000000000040";
     private static final String PERM_WRITE = "11111111-0000-0000-0000-000000000041";
     private static final String ROLE_OWNER = "22222222-0000-0000-0000-000000000001";
+    private static final String ROLE_BUTCHER_CASHIER = "22222222-0000-0000-0000-000000000009";
 
     @Autowired
     private MockMvc mockMvc;
@@ -252,7 +253,7 @@ class ItemCatalogIT {
                         null,
                         null,
                         null,
-                        null, null, null, null),
+                        null, null, null, null, null),
                 null);
 
         mockMvc.perform(get("/api/v1/items/next-sku")
@@ -451,6 +452,42 @@ class ItemCatalogIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content.length()").value(1))
                 .andExpect(jsonPath("$.content[0].sku").value("SKU-TREE-V"));
+    }
+
+    @Test
+    void butcherCashier_canListSkusOnlyCatalog() throws Exception {
+        Role butcherRole = new Role();
+        butcherRole.setId(ROLE_BUTCHER_CASHIER);
+        butcherRole.setBusinessId(null);
+        butcherRole.setRoleKey("butcher_cashier");
+        butcherRole.setName("Butcher Cashier");
+        butcherRole.setSystem(true);
+        roleRepository.save(butcherRole);
+        grant(ROLE_BUTCHER_CASHIER, PERM_READ);
+
+        User butcherCashier = new User();
+        butcherCashier.setBusinessId(TENANT_A);
+        butcherCashier.setEmail("butcher-cashier@test");
+        butcherCashier.setName("Butcher Cashier");
+        butcherCashier.setRoleId(ROLE_BUTCHER_CASHIER);
+        butcherCashier.setStatus(UserStatus.ACTIVE);
+        butcherCashier.setPasswordHash("$2a$10$stubstubstubstubstubstubstubstubst");
+        userRepository.save(butcherCashier);
+
+        String gid = goodsTypeId(TENANT_A);
+        String itemId = createItemViaService(TENANT_A, gid, "SKU-BUTCHER-CUT", "Ribeye");
+
+        mockMvc.perform(get("/api/v1/items")
+                        .param("catalogScope", "SKUS_ONLY")
+                        .param("itemTypeId", gid)
+                        .param("search", "Ribeye")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, butcherCashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_BUTCHER_CASHIER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].id").value(itemId))
+                .andExpect(jsonPath("$.content[0].name").value("Ribeye"));
     }
 
     @Test
@@ -732,7 +769,7 @@ class ItemCatalogIT {
                 null, null, null, null, null, null, null, null,
                 "box",
                 true,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
 
         mockMvc.perform(patch("/api/v1/items/" + id)
                         .contentType(APPLICATION_JSON)
@@ -819,7 +856,7 @@ class ItemCatalogIT {
                 null,
                 null,
                 null,
-                null, null, null, null);
+                null, null, null, null, null);
         return itemCatalogService.createItem(tenant, req, null).body().id();
     }
 
@@ -854,7 +891,8 @@ class ItemCatalogIT {
                 null,    // webPublished
                 null,    // brand
                 null,    // size
-                null     // variantName
+                null,    // variantName
+                null     // pluCode
         );
     }
 
@@ -881,7 +919,7 @@ class ItemCatalogIT {
                 null,
                 null,
                 null,
-                null, null, null, null);
+                null, null, null, null, null);
     }
 
     private static CreateItemRequest weighedItem(String sku, String name, String itemTypeId, String unitType) {
@@ -910,7 +948,7 @@ class ItemCatalogIT {
                 null,
                 null,
                 null,
-                null);
+                null, null);
     }
 
     private String goodsTypeId(String tenant) {

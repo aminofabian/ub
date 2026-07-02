@@ -21,6 +21,7 @@ public class LedgerBootstrapService {
         ensure(businessId, LedgerAccountCodes.ACCOUNTS_RECEIVABLE_CUSTOMERS, "Accounts receivable — customers", "asset");
         ensure(businessId, LedgerAccountCodes.CUSTOMER_WALLET_LIABILITY, "Customer prepaid wallet", "liability");
         ensure(businessId, LedgerAccountCodes.MPESA_CLEARING, "M-Pesa / mobile money clearing", "asset");
+        ensure(businessId, LedgerAccountCodes.CARD_CLEARING, "Card terminal clearing", "asset");
         ensure(businessId, LedgerAccountCodes.INVENTORY, "Inventory", "asset");
         ensure(businessId, LedgerAccountCodes.SALES_REVENUE, "Sales revenue", "revenue");
         ensure(businessId, LedgerAccountCodes.COST_OF_GOODS_SOLD, "Cost of goods sold", "expense");

@@ -17,6 +17,7 @@ public record PublicCatalogItemDetailResponse(
         BigDecimal price,
         BigDecimal qtyOnHand,
         List<PublicItemImageResponse> images,
-        List<PublicCatalogVariantResponse> variants
+        List<PublicCatalogVariantResponse> variants,
+        String onlinePurchaseMode
 ) {
 }

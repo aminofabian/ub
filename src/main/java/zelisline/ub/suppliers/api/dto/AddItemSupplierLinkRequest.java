@@ -9,6 +9,8 @@ public record AddItemSupplierLinkRequest(
         @NotBlank @Size(max = 36) String supplierId,
         @Size(max = 191) String supplierSku,
         BigDecimal defaultCostPrice,
+        BigDecimal packSize,
+        @Size(max = 32) String packUnit,
         Boolean setPrimary
 ) {
 }

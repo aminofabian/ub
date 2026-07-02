@@ -11,6 +11,9 @@ public final class SalePaymentLedger {
         if (SalesConstants.PAYMENT_METHOD_MPESA_MANUAL.equals(method)) {
             return LedgerAccountCodes.MPESA_CLEARING;
         }
+        if (SalesConstants.PAYMENT_METHOD_CARD.equals(method)) {
+            return LedgerAccountCodes.CARD_CLEARING;
+        }
         if (SalesConstants.PAYMENT_METHOD_CUSTOMER_CREDIT.equals(method)) {
             return LedgerAccountCodes.ACCOUNTS_RECEIVABLE_CUSTOMERS;
         }

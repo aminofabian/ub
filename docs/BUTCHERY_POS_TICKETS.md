@@ -18,17 +18,21 @@ These are **done** in the repo; listed here so open tickets are not duplicated.
 | **FE-4** | Counter POS `/butcher` — pills, grid, weight sheet, charge sale | `butcher-cashier-workspace.tsx`, `butcher-product-tile.tsx`, `butcher-pos.ts` |
 | **FE-5** | Suppliers `/butcher/suppliers` — split-pane UI | `butcher-suppliers-workspace.tsx`, `app/butcher/suppliers/page.tsx` |
 | **FE-6** | Add stock modal — live totals, draft vs receive | `butcher-add-stock-dialog.tsx`, `purchase-unit-conversion.ts` |
+| **FE-8** | Draft resume + partial receive in add stock | `butcher-add-stock-dialog.tsx`, `fetchPathBSessions` |
+| **FE-9** | `butcher_pos.enabled` nav wiring | `butcher-feature.ts`, `app-shell.tsx` |
+| **FE-10** | Counter hold/recall, cash change, split pay; supplier tags from `item_types`; catalog weighed templates | `butcher-cashier-workspace.tsx`, `butcher-suppliers-workspace.tsx`, `ProductCreateDrawer.tsx`, `butcher-product-templates.ts` |
+| **FE-11** | Variable-weight barcode scan on `/butcher` | `butcher-cashier-workspace.tsx`, `fetchVariableWeightBarcode`, `VariableWeightBarcodeParser.java` |
 | **FE-7** | App shell route gates + redirect `cashier` / `butcher_cashier` | `app-shell.tsx`, `cashier-shell.tsx`, `shell-page-titles.ts` |
 
 ### Shipped behaviour notes (for QA / support)
 
 - Counter uses `GET /api/v1/items` + `fetchPosShelfPrice` + `POST /api/v1/sales` (same pipeline as retail POS).
 - Add stock **Save as draft** = Path B `SESSION_DRAFT` only; **Receive stock** = `postPathBSession` (inventory + AP).
-- **Open orders per supplier** can be listed from Path B drafts (`GET /api/v1/purchasing/path-b/sessions?supplierId=&status=draft`) or Path A sent POs (`GET /api/v1/purchasing/path-a/purchase-orders?supplierId=&status=sent`). Path B is the canonical butcher add-stock path.
+- **Open orders per supplier** can be listed from Path B drafts (`GET /api/v1/purchasing/path-b/sessions?supplierId=&status=draft`) or Path A sent POs (`GET /api/v1/purchasing/path-a/purchase-orders?supplierId=&status=sent`). Path B is the canonical butcher add-stock path; Path A PO receive (GRN + invoice) is available in the add-stock dialog when the user has `purchasing.path_a.write`.
 - **Partial receive** is supported for Path B: post a subset of lines and the session stays `SESSION_DRAFT` with the remaining lines `LINE_PENDING`.
-- Purchase **unit** column is separate from sale unit; conversion in `purchase-unit-conversion.ts` (package variant, weight, fallback + toast).
-- **Cost/unit** on receive is buy price, not shelf price; margin UI not built.
-- Card payment chip on butcher counter posts as `cash` until card tender exists in API.
+- Purchase **unit** uses `supplier_products.pack_unit` / `pack_size` when set; server validates on Path B post when `purchaseQty` + `purchaseUnit` are sent.
+- **Cost/unit** on receive is buy price; margin % vs shelf price shown per line in add-stock dialog.
+- Card payment on butcher counter posts as `card` tender (card clearing ledger; no drawer cash).
 
 ---
 
@@ -118,7 +122,7 @@ Frontend reuses **`GET /api/v1/items`** with `catalogScope=SKUS_ONLY`, `itemType
 ### Acceptance criteria
 - [x] Reuse `GET /api/v1/items` with query params: `itemTypeId`, search, `branchId`, sellable SKUs.
 - [x] Response fields used: `id`, `name`, `barcode`, `isWeighed`, `unitType`, `bundlePrice`, `stockQty`, `imageKey` / `thumbnailUrl`, `itemTypeId`.
-- [ ] Verify RBAC in integration test: `butcher_cashier` can call the endpoint with `catalog.items.read`.
+- [x] Verify RBAC in integration test: `butcher_cashier` can call the endpoint with `catalog.items.read`.
 
 ### Files
 - `frontend/components/butcher/butcher-cashier-workspace.tsx`
@@ -161,10 +165,13 @@ Use a feature flag (`butcher_pos.enabled`) stored in `businesses.settings` JSON.
 - [x] Add `FLAG_BUTCHER_POS_ENABLED` + `isButcherPosEnabled(...)` helper.
 - [x] Extend `FeatureFlagsPatchRequest` and `StorefrontSettingsService.mergeFeatureFlags` so the flag can be toggled via `PATCH /api/v1/businesses/me`.
 - [x] Expose flag in `BusinessResponse.featureFlags` and `PublicHostResolveResponse.featureFlags`.
+- [x] **Frontend:** `app-shell.tsx` hides grocery nav when flag is on; shows **Butcher counter** link in Sales section and header POS links.
 - [x] Add unit tests for read and merge.
 
 ### Files
 - `src/main/java/zelisline/ub/tenancy/application/FeatureFlagService.java`
+- `frontend/lib/butcher-feature.ts`
+- `frontend/components/app-shell.tsx`
 - `src/main/java/zelisline/ub/tenancy/api/dto/FeatureFlagsPatchRequest.java`
 - `src/main/java/zelisline/ub/tenancy/application/StorefrontSettingsService.java`
 - `src/test/java/zelisline/ub/tenancy/application/FeatureFlagServiceTest.java`
@@ -230,43 +237,80 @@ Reuse existing `pricing.sell_price.set` instead of introducing `sales.weighed.ov
 ## Ticket 9 — Variable-weight barcode parser (P3)
 **Phase:** P3  
 **Owner:** Backend + Frontend  
-**Status:** Open
+**Status:** ✅ **Done** (enable per tenant in business settings)
 
 ### Problem
 No variable-weight barcode parser exists. Scale labels encode PLU + weight/price. Shipped `/butcher` scan field does not intercept variable-weight EAN yet.
 
 ### Acceptance criteria
-- [ ] Add `plu_code` column to `items`.
-- [ ] Add business setting for barcode format (prefix length, PLU position, weight digit count, price digit count).
-- [ ] Implement `VariableWeightBarcodeParser`.
-- [ ] Integrate scan intercept in `/butcher` and public barcode lookup.
-- [ ] Error clearly on unknown PLU or mismatched item type.
+- [x] Add `plu_code` column to `items`.
+- [x] Add business setting for barcode format (prefix length, PLU position, weight digit count, price digit count).
+- [x] Implement `VariableWeightBarcodeParser`.
+- [x] Integrate scan intercept in `/butcher` and public barcode lookup.
+- [x] Error clearly on unknown PLU or mismatched item type.
+- [x] Products admin: **Scale PLU** field on create/edit for weighed items.
 
 ### Files
-- New: `src/main/java/zelisline/ub/sales/application/VariableWeightBarcodeParser.java`
+- `src/main/java/zelisline/ub/sales/application/VariableWeightBarcodeParser.java`
+- `src/main/java/zelisline/ub/sales/application/VariableWeightBarcodeService.java`
 - `src/main/java/zelisline/ub/catalog/domain/Item.java`
-- `src/main/java/zelisline/ub/catalog/api/PublicBarcodeController.java`
+- `src/main/java/zelisline/ub/storefront/application/PublicBarcodeLookupService.java`
 - `frontend/components/butcher/butcher-cashier-workspace.tsx`
+- `frontend/lib/api.ts` (`fetchVariableWeightBarcode`)
+- `frontend/app/(dashboard)/products/_components/ProductCreateDrawer.tsx`, `ProductEditDrawer.tsx`
+- `V127__items_plu_code.sql`
+
+### Tenant config
+Enable in `businesses.settings`:
+
+```json
+{
+  "butcher": {
+    "variableWeightBarcode": {
+      "enabled": true,
+      "prefixDigit": "2",
+      "pluStart": 1,
+      "pluLength": 5,
+      "valueStart": 6,
+      "valueLength": 5,
+      "embeddedField": "weight",
+      "weightUnit": "grams",
+      "validateCheckDigit": true
+    }
+  }
+}
+```
+
+Assign `pluCode` on weighed items (products admin or API). Scan a 13-digit prefix-2 label on `/butcher` to add a kg line with parsed weight.
 
 ---
 
 ## Ticket 10 — Scale integration (P4)
 **Phase:** P4  
 **Owner:** Backend + Frontend + Hardware  
-**Status:** Open
+**Status:** 🟡 **In progress** — Web Serial v1 shipped; validate on named hardware
 
 ### Problem
 Highest engineering risk. Depends on scale brand/protocol. Butcher weight sheet uses manual entry only.
 
+### v1 decision (see `BUTCHERY_SCALE_V1.md`)
+- **Transport:** Web Serial API (Chrome / Edge desktop)
+- **Protocol:** Generic continuous ASCII lines @ 9600 baud
+- **Stable gate:** 600 ms ±2 g, or hardware `S` / `ST` prefix
+- **Tare:** Per-session in browser
+
 ### Acceptance criteria
-- [ ] Choose v1 scale brand/model and protocol (USB/RS-232).
-- [ ] Implement local bridge or Web Serial integration.
-- [ ] Tare handling (per session / per container SKU).
-- [ ] Stable-weight gate before accepting weight.
-- [ ] Document supported hardware.
+- [x] Choose v1 scale brand/model and protocol (USB/RS-232).
+- [x] Implement local bridge or Web Serial integration.
+- [x] Tare handling (per session / per container SKU).
+- [x] Stable-weight gate before accepting weight.
+- [x] Document supported hardware.
+- [ ] Field-validate on customer-named scale model.
 
 ### Files
-- TBD based on hardware choice
+- `backend/docs/BUTCHERY_SCALE_V1.md`
+- `frontend/lib/butcher-scale.ts`, `butcher-scale.test.ts`
+- `frontend/hooks/use-butcher-serial-scale.ts`
 - `frontend/components/butcher/butcher-cashier-workspace.tsx` (weight sheet)
 
 ---
@@ -274,7 +318,7 @@ Highest engineering risk. Depends on scale brand/protocol. Butcher weight sheet 
 ## Ticket 11 — Draft stock session list & partial receiving
 **Phase:** P2+  
 **Owner:** Frontend + Backend  
-**Status:** ✅ **Done (backend)**
+**Status:** ✅ **Done**
 
 ### Decision
 Keep **Path B** as the canonical butcher add-stock path (fast receipt from supplier), but expose both Path B drafts and Path A sent POs so the frontend can show a unified “open orders” list per supplier.
@@ -282,70 +326,68 @@ Keep **Path B** as the canonical butcher add-stock path (fast receipt from suppl
 ### Acceptance criteria
 - [x] List open Path B draft sessions per supplier: `GET /api/v1/purchasing/path-b/sessions?supplierId={id}&status=draft`.
 - [x] List sent Path A POs per supplier: `GET /api/v1/purchasing/path-a/purchase-orders?supplierId={id}&status=sent`.
-- [x] Existing `GET /api/v1/purchasing/path-b/sessions/{id}` and `GET /api/v1/purchasing/path-a/purchase-orders/{id}` provide full detail for resuming/editing before receive.
-- [x] Path B partial receive: `POST /api/v1/purchasing/path-b/sessions/{id}/post` accepts a subset of lines; posted lines become `LINE_POSTED`, unselected lines stay `LINE_PENDING`, and the session remains `SESSION_DRAFT` until all lines are received.
-- [x] Path A partial receive already supported via multiple GRNs; listed for completeness.
-- [x] Documented canonical path in scope doc.
-- [x] Integration tests for listing drafts/POs and Path B partial receive.
+- [x] Existing `GET /api/v1/purchasing/path-b/sessions/{id}` provides full detail for resuming/editing before receive.
+- [x] Path B partial receive: `POST /api/v1/purchasing/path-b/sessions/{id}/post` accepts a subset of lines; session stays `SESSION_DRAFT` until all lines received.
+- [x] **Frontend:** `butcher-add-stock-dialog.tsx` — open orders panel, resume draft, per-line receive checkboxes, patch/delete lines on save.
+- [x] Supplier detail shows draft count badge.
 
 ### Files
+- `frontend/components/butcher/butcher-add-stock-dialog.tsx`
+- `frontend/components/butcher/butcher-suppliers-workspace.tsx`
+- `frontend/lib/api.ts` (`fetchPathBSessions`, `fetchPathAPurchaseOrders`)
 - `src/main/java/zelisline/ub/purchasing/application/PathBPurchaseService.java`
-- `src/main/java/zelisline/ub/purchasing/api/PathBPurchasingController.java`
-- `src/main/java/zelisline/ub/purchasing/application/PathAPurchaseService.java`
-- `src/main/java/zelisline/ub/purchasing/api/PathAPurchasingController.java`
-- `src/main/java/zelisline/ub/purchasing/repository/RawPurchaseSessionRepository.java`
-- `src/main/java/zelisline/ub/purchasing/repository/PurchaseOrderRepository.java`
-- `src/main/java/zelisline/ub/purchasing/api/dto/PathBSessionListRow.java`
-- `src/main/java/zelisline/ub/purchasing/api/dto/PathAPurchaseOrderListRow.java`
-- `src/test/java/zelisline/ub/purchasing/api/PathBPurchaseIT.java`
-- `src/test/java/zelisline/ub/purchasing/api/PathAPurchaseIT.java`
 
 ---
 
 ## Ticket 12 — Purchase unit conversion hardening
 **Phase:** P2  
 **Owner:** Frontend + Backend  
-**Status:** Partial (client-side v1 shipped)
+**Status:** ✅ **Done** (uses existing `supplier_products.pack_unit` / `pack_size`)
 
 ### Problem
 `purchase-unit-conversion.ts` maps crate/tray/weight on the client. Ambiguous units fall back with a toast; server `resolveInbound` may disagree if package variants are missing.
 
 ### Acceptance criteria
-- [ ] Store supplier-specific purchase unit + conversion on `supplier_products` or item link (e.g. 1 crate = 25 kg).
-- [ ] Server validates posted `usableQty` against purchase unit on receive.
-- [ ] Admin UI to set buy unit per supplier–product link.
+- [x] Store supplier-specific purchase unit + conversion on `supplier_products` (`pack_unit`, `pack_size` — schema already existed).
+- [x] Server validates posted `usableQty` against purchase unit on receive (`purchaseQty` + `purchaseUnit` on Path B post).
+- [x] Admin UI to set buy unit per supplier–product link (Suppliers → edit link drawer).
 
 ### Files
 - `frontend/lib/purchase-unit-conversion.ts`
-- `PackageVariantStockResolver.java`
-- Supplier product / item link schema
+- `frontend/components/butcher/butcher-add-stock-dialog.tsx`
+- `frontend/app/(dashboard)/suppliers/_components/SupplierCatalogColumn.tsx`
+- `src/main/java/zelisline/ub/purchasing/application/PurchaseUnitConversionService.java`
+- `src/main/java/zelisline/ub/purchasing/application/PathBPurchaseService.java`
+- `src/main/java/zelisline/ub/suppliers/application/ItemSupplierLinkService.java`
 
 ---
 
 ## Ticket 13 — Butcher counter UX gaps
 **Phase:** P2+  
 **Owner:** Frontend  
-**Status:** Open
+**Status:** ✅ **Done** — POS draft-backed hold/recall, split pay, change due, supplier category tags, catalog weighed UX, card tender
 
 ### Problem
 Shipped counter lacks features called out in scope Phases 2–4.
 
 ### Acceptance criteria
-- [ ] Held / suspended orders on `/butcher`
-- [ ] Split payment + change due
-- [ ] Portrait tablet layout polish
-- [ ] Card tender when API supports it (replace cash stub)
-- [ ] Supplier category tags from `item_types` not item name heuristics
+- [x] Held / suspended orders on `/butcher` (POS drafts-backed when enabled)
+- [x] Split payment + change due
+- [x] Portrait tablet layout polish (order panel height on md)
+- [x] Card tender (`card` payment method → card clearing ledger, not drawer cash)
+- [x] Supplier category tags from `item_types` not item name heuristics
+- [x] Catalog create: “Price per kg” + meat quick templates (Phase 1 UX)
 
 ### Files
 - `butcher-cashier-workspace.tsx`
 - `butcher-suppliers-workspace.tsx`
+- `ProductCreateDrawer.tsx`, `ProductCreatePricingSection.tsx`, `butcher-product-templates.ts`
 
 ---
 
 ## Deferred / future
 
-- **P5:** Pre-packed + online shop filtering.
-- **P6:** Carcass breakdown / production BOM.
-- **Analytics:** kg-sold reports, shrinkage by reason, margin per kg (buy price from receive → sell price).
+- **P5:** Pre-packed + online shop filtering — ✅ **Done** (see `BUTCHERY_P5_P6_ANALYTICS.md`)
+- **P6:** Carcass breakdown / production BOM — planned; ~4–8 weeks
+- **Analytics:** kg-sold reports, shrinkage by reason, margin per kg — planned; ~1–2 weeks
 - **Retail `/cashier` weighed UX:** optional; butcher tenants should use `/butcher` instead.

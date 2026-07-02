@@ -38,7 +38,7 @@ Snapshot of what is **built in the repo** vs still scoped. See `BUTCHERY_POS_TIC
 | **Branch lock for butcher cashiers** | ✅ | `BranchResolutionService`, `branch-access.ts` |
 | **Post-login redirect** | ✅ → `/butcher` | `post-auth-destination.ts` (+ test) |
 | **Butcher shell** | ✅ Dark chrome, tenant brand (`--pos-primary`), PWA layout | `butcher-shell.tsx`, `butcher-pos-chrome.ts` |
-| **Counter POS `/butcher`** | ✅ Category pills, product grid with images, weight sheet vs tap-to-add, order panel, charge sale | `butcher-cashier-workspace.tsx`, `butcher-product-tile.tsx`, `butcher-pos.ts` |
+| **Counter POS `/butcher`** | ✅ Category pills, product grid with images, weight sheet vs tap-to-add, order panel, hold/recall, cash change + split pay, card/cash/M-Pesa tender, charge sale | `butcher-cashier-workspace.tsx`, `butcher-product-tile.tsx`, `butcher-pos.ts` |
 | **Suppliers `/butcher/suppliers`** | ✅ Split-pane list + detail (mockup-aligned) | `butcher-suppliers-workspace.tsx`, `butcher-nav.tsx` |
 | **Add stock modal** | ✅ Live line totals, draft vs receive, purchase-unit conversion | `butcher-add-stock-dialog.tsx`, `purchase-unit-conversion.ts` |
 | **App shell / nav gates** | ✅ Role-restricted nav, bottom tabs, route allowlists | `app-shell.tsx`, `cashier-shell.tsx` (redirect butcher away from `/cashier`) |
@@ -47,16 +47,11 @@ Snapshot of what is **built in the repo** vs still scoped. See `BUTCHERY_POS_TIC
 
 | Gap | Notes |
 |-----|-------|
-| Server-side weighed sale validation | Client sends decimal kg; `SaleService` does not yet enforce weighed rules (Ticket 2) |
-| Receipt unit labels | No `kg` on printed lines yet (Ticket 3) |
-| Card tender | Butcher UI shows Card; posts as `cash` until card tender exists in API |
-| Scale / variable-weight barcode | Not wired on `/butcher` (Phases 3–4) |
-| Held orders, split pay, change due | Not on butcher workspace |
-| Catalog admin weighed enforcement | Product form + API validation still open (Ticket 5) |
-| `business_type = butcher` / feature flag | Nav not auto-hidden for grocery; no vertical flag (Ticket 6) |
-| Draft PO list / partial receive (backend) | Backend list endpoints + Path B partial receive done; frontend resume/edit dialog remains open |
-| Supplier category tags | Derived from first word of linked item names, not `item_types` |
-| Margin from buy price | `cost/unit` on receive is stored on supplier invoice; no margin UI yet |
+| Scale hardware (live weight) | Web Serial v1 in weight sheet (generic ASCII @ 9600); manual entry fallback — see `BUTCHERY_SCALE_V1.md` |
+| Held orders persistence | ✅ POS drafts-backed hold/recall when `pos_drafts.*` is enabled; otherwise session-local |
+| Margin from buy price | Per-line margin % vs shelf price in **Add stock** dialog (stock-unit cost from purchase conversion) |
+| Path A PO receive in butcher UI | Sent POs open in add-stock dialog; GRN + supplier invoice when `purchasing.path_a.write` |
+| Online shop (P5) | Weighed SKUs: `in_store_only` on `/shop`; pre-packed / piece items use web cart |
 
 ### API contracts used by shipped UI
 
@@ -69,6 +64,7 @@ Snapshot of what is **built in the repo** vs still scoped. See `BUTCHERY_POS_TIC
 | Add stock (draft) | `POST /api/v1/purchasing/path-b/sessions` + `…/lines` (session stays `SESSION_DRAFT`) |
 | Add stock (receive) | `POST /api/v1/purchasing/path-b/sessions/{id}/post` → inventory batches + supplier invoice |
 | List open drafts / sent POs | `GET /api/v1/purchasing/path-b/sessions?supplierId=&status=draft` (Path B drafts); `GET /api/v1/purchasing/path-a/purchase-orders?supplierId=&status=sent` (Path A sent POs) |
+| Path A PO receive (butcher UI) | `GET /api/v1/purchasing/path-a/purchase-orders/{id}` → `POST /api/v1/purchasing/path-a/goods-receipts` → `POST …/goods-receipts/{id}/supplier-invoice` |
 | Partial receive | `POST /api/v1/purchasing/path-b/sessions/{id}/post` with subset of lines; unposted lines stay `LINE_PENDING`, session stays `SESSION_DRAFT` |
 
 ---
@@ -183,7 +179,7 @@ Butcher counter staff must **not** use the generic `/cashier` quick-sale UI. The
 - Dark, counter-first chrome (`ButcherShell`) with **dynamic brand colours** from Business → Branding (`posBrandThemeStyle` → `--pos-primary`).
 - Weighed lines: weight sheet with quick keys (`BUTCHER_QUICK_WEIGHTS_KG`), line total = weight × price/kg.
 - Piece lines: tap to add; +/- in order panel adjusts integer qty.
-- Payments: Cash, M-Pesa (`mpesa_manual`), Card (UI only → posts as `cash` until card tender exists).
+- Payments: Cash, M-Pesa (`mpesa_manual`), Card (`card` → card clearing ledger; no drawer cash).
 - **Not** multi-cart tabs, not grocery `GI-*` flow, not package-tray modal copy from retail POS.
 
 #### vs `/cashier`
@@ -241,14 +237,14 @@ Back-office supplier directory for butcher tenants — same split-pane pattern a
 | Line grid (product, qty, unit, cost/unit) | Live **order total** = Σ(qty × cost/unit); **+ Add line** / trash remove rows |
 | Product picker | Supplier-linked items (`fetchSupplierItemLinks`); loads item detail + variants for unit options |
 | Cost/unit | **Buy price** — prefilled from link `lastCostPrice` / `defaultCostPrice` or item `buyingPrice`; distinct from shelf/sale price |
-| Unit column | Independent of sale unit; on **Receive stock**, `resolveStockReceiptLine()` maps purchase unit → stock qty (package variant SKU, weight conversion, or fallback with toast) |
+| Unit column | Uses `supplier_products.pack_unit` / `pack_size` when set; server validates on Path B post |
 | Save as draft | `createPathBSession` + `addPathBLine` per row; session stays `SESSION_DRAFT` — **no** inventory or AP |
 | Receive stock | Same session setup, then `postPathBSession` → inventory batches + supplier invoice; detail panel refreshes outstanding balance |
 
 **Design notes (product):**
 
 - Draft vs receive are **different actions**, not button styling — draft logs intent before delivery; receive is the inventory + AP event.
-- Buy `cost/unit` should eventually feed margin visibility (not built in UI yet).
+- Buy `cost/unit` feeds per-line margin % in the add-stock dialog (stock-unit cost vs shelf/bundle price).
 - Crate → kg (and similar) needs explicit conversion rules; package variants preferred when catalog has them.
 
 **Deferred:** editing existing draft lines in the add-stock dialog (read/list/resume is done; full in-dialog edit remains frontend work), linking Path B receive to formal Path A PO.
@@ -362,7 +358,8 @@ Mobile apps (`public-mobile-config.ts`): **`cashier`** and **`stock`** apps map 
 | Server-side weighed line validation | P2 | ✅ Done | `SaleService` (Ticket 2) |
 | Receipt kg labels | P2 | ✅ Done | Receipt renderers (Ticket 3) |
 | Weighed refund policy | P2 | ✅ Done | `SaleRefundService` writes off as wastage via `sales.weighed.refund` (Ticket 8) |
-| Draft PO list / partial receive | P2+ | ✅ Done (backend) | `GET /purchasing/path-b/sessions` (draft), `GET /purchasing/path-a/purchase-orders` (sent), Path B partial receive in `PathBPurchaseService` |
+| Draft PO list / partial receive | P2+ | ✅ Done | `butcher-add-stock-dialog.tsx` — open drafts, resume, line checkboxes, partial post |
+| `butcher_pos.enabled` nav | P1 | ✅ Done | `butcher-feature.ts`, `app-shell.tsx` — hide grocery, show butcher counter link |
 | Prep-label permissions | P3 | Open | `butcher.labels.*` seed + role grants |
 | Hide grocery nav for butcher tenants | P1 | ✅ Done | `app-shell.tsx` + `butcher_pos.enabled` feature flag (Ticket 6) |
 | Department scope for cashiers | P2 | Open | Extend `user_item_types` filter beyond `grocery_clerk` |

@@ -261,7 +261,7 @@ class SalesIntelligenceIT {
                         new CreateItemRequest(
                                 "SKU-DRINK", null, "Cola", null, goodsTypeId, categoryDrinksId, null, null,
                                 false, true, true,
-                                null, null, null, null, null, null, null, null, null, null, true, null, null, null),
+                                null, null, null, null, null, null, null, null, null, null, true, null, null, null, null),
                         null)
                 .body()
                 .id();
@@ -271,7 +271,7 @@ class SalesIntelligenceIT {
                         new CreateItemRequest(
                                 "SKU-SNACK", null, "Chips", null, goodsTypeId, categorySnacksId, null, null,
                                 false, true, true,
-                                null, null, null, null, null, null, null, null, null, null, true, null, null, null),
+                                null, null, null, null, null, null, null, null, null, null, true, null, null, null, null),
                         null)
                 .body()
                 .id();

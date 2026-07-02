@@ -210,11 +210,18 @@ public class TenancyService {
                 business.getSettings(),
                 patch
         );
-        if (patch.answers() != null && patch.answers().storeType() != null) {
-            settings = businessProfileSettingsService.mergeStoreType(
-                    settings,
-                    patch.answers().storeType()
-            );
+        if (patch.answers() != null) {
+            if (patch.answers().storeTypes() != null && !patch.answers().storeTypes().isEmpty()) {
+                settings = businessProfileSettingsService.mergeStoreTypes(
+                        settings,
+                        patch.answers().storeTypes()
+                );
+            } else if (patch.answers().storeType() != null) {
+                settings = businessProfileSettingsService.mergeStoreType(
+                        settings,
+                        patch.answers().storeType()
+                );
+            }
         }
         business.setSettings(settings);
         Business saved = businessRepository.save(business);

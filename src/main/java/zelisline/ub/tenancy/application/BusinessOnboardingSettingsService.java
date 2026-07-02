@@ -34,6 +34,7 @@ public class BusinessOnboardingSettingsService {
     private static final String KEY_BRANCH_COUNT = "branchCount";
     private static final String KEY_BRANCH_LOCALITIES = "branchLocalities";
     private static final String KEY_STORE_TYPE = "storeType";
+    private static final String KEY_STORE_TYPES = "storeTypes";
     private static final String KEY_SELECTED_DEPARTMENTS = "selectedDepartments";
     private static final String KEY_ONLINE_STORE = "onlineStore";
     private static final String KEY_DISPLAY_NAME = "displayName";
@@ -132,10 +133,11 @@ public class BusinessOnboardingSettingsService {
         }
         List<String> localities = readStringList(answers.path(KEY_BRANCH_LOCALITIES));
         List<String> departments = readStringList(answers.path(KEY_SELECTED_DEPARTMENTS));
+        List<String> storeTypes = readStoreTypes(answers);
         if (
                 answers.path(KEY_BRANCH_COUNT).isMissingNode()
                         && localities.isEmpty()
-                        && answers.path(KEY_STORE_TYPE).isMissingNode()
+                        && storeTypes.isEmpty()
                         && departments.isEmpty()
                         && answers.path(KEY_ONLINE_STORE).isMissingNode()
                         && answers.path(KEY_DISPLAY_NAME).isMissingNode()
@@ -147,13 +149,26 @@ public class BusinessOnboardingSettingsService {
         return new OnboardingAnswersDto(
                 textOrNull(answers.path(KEY_BRANCH_COUNT)),
                 localities.isEmpty() ? null : localities,
-                textOrNull(answers.path(KEY_STORE_TYPE)),
+                storeTypes.isEmpty() ? null : storeTypes.get(0),
+                storeTypes.isEmpty() ? null : storeTypes,
                 departments.isEmpty() ? null : departments,
                 textOrNull(answers.path(KEY_ONLINE_STORE)),
                 textOrNull(answers.path(KEY_DISPLAY_NAME)),
                 textOrNull(answers.path(KEY_PRIMARY_COLOR)),
                 textOrNull(answers.path(KEY_ACCENT_COLOR))
         );
+    }
+
+    private static List<String> readStoreTypes(JsonNode answers) {
+        List<String> storeTypes = readStringList(answers.path(KEY_STORE_TYPES));
+        if (!storeTypes.isEmpty()) {
+            return storeTypes;
+        }
+        String legacy = textOrNull(answers.path(KEY_STORE_TYPE));
+        if (legacy == null) {
+            return List.of();
+        }
+        return List.of(legacy);
     }
 
     private static List<String> readStringList(JsonNode arrayNode) {
@@ -179,8 +194,15 @@ public class BusinessOnboardingSettingsService {
         if (patch.branchLocalities() != null) {
             answers.set(KEY_BRANCH_LOCALITIES, toArray(patch.branchLocalities()));
         }
-        if (patch.storeType() != null) {
-            answers.put(KEY_STORE_TYPE, patch.storeType().trim());
+        if (patch.storeTypes() != null) {
+            answers.set(KEY_STORE_TYPES, toArray(patch.storeTypes()));
+            if (!patch.storeTypes().isEmpty()) {
+                answers.put(KEY_STORE_TYPE, patch.storeTypes().get(0).trim());
+            }
+        } else if (patch.storeType() != null) {
+            String storeType = patch.storeType().trim();
+            answers.put(KEY_STORE_TYPE, storeType);
+            answers.set(KEY_STORE_TYPES, toArray(List.of(storeType)));
         }
         if (patch.selectedDepartments() != null) {
             answers.set(KEY_SELECTED_DEPARTMENTS, toArray(patch.selectedDepartments()));

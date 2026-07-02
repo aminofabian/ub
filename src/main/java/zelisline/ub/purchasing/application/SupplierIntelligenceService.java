@@ -85,6 +85,20 @@ public class SupplierIntelligenceService {
              ORDER BY i.sku
             """;
 
+    private static final String INVOICE_BRANCH_FILTER = """
+            AND COALESCE(
+                (SELECT rps.branch_id FROM raw_purchase_sessions rps WHERE rps.id = si.raw_purchase_session_id LIMIT 1),
+                (SELECT gr.branch_id FROM goods_receipts gr WHERE gr.id = si.goods_receipt_id LIMIT 1)
+            ) = ?
+            """;
+
+    private static String withInvoiceBranchFilter(String sql, String branchId) {
+        if (branchId == null || branchId.isBlank()) {
+            return sql;
+        }
+        return sql + INVOICE_BRANCH_FILTER;
+    }
+
     @Transactional(readOnly = true)
     public List<SpendBySupplierCategoryRow> spendBySupplierAndCategory(
             String businessId,
@@ -172,14 +186,17 @@ public class SupplierIntelligenceService {
     public PurchasingIntelligenceDashboardResponse getDashboard(
             String businessId,
             LocalDate fromInclusive,
-            LocalDate toInclusive
+            LocalDate toInclusive,
+            String branchId
     ) {
         LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
         Date fromDate = Date.valueOf(w[0]);
         Date toDate = Date.valueOf(w[1]);
+        String branchFilter = branchId != null ? branchId.trim() : "";
 
         // Summary
-        var summaryRow = jdbc.queryForMap("""
+        var summaryRow = jdbc.queryForMap(
+                withInvoiceBranchFilter("""
                 SELECT COALESCE(SUM(sil.line_total), 0) AS total_spend,
                        COUNT(DISTINCT si.supplier_id) AS supplier_count,
                        COUNT(*) AS line_count,
@@ -192,7 +209,10 @@ public class SupplierIntelligenceService {
                    AND si.invoice_date >= ?
                    AND si.invoice_date <= ?
                    AND s.deleted_at IS NULL
-                """, businessId, fromDate, toDate);
+                """, branchFilter),
+                branchFilter.isEmpty()
+                        ? new Object[] {businessId, fromDate, toDate}
+                        : new Object[] {businessId, fromDate, toDate, branchFilter});
 
         BigDecimal totalSpend = ((Number) summaryRow.get("total_spend")).doubleValue() == 0.0
                 ? BigDecimal.ZERO
@@ -208,7 +228,9 @@ public class SupplierIntelligenceService {
         int[] abovePrimary = { 0 };
         int[] belowPrimary = { 0 };
 
-        jdbc.query(Q_PRICE, rs -> {
+        jdbc.query(
+                withInvoiceBranchFilter(Q_PRICE, branchFilter),
+                rs -> {
             BigDecimal paid = rs.getBigDecimal("paid_unit_cost");
             BigDecimal primaryCost = rs.getBigDecimal("primary_last_cost");
             BigDecimal variance = null;
@@ -238,7 +260,10 @@ public class SupplierIntelligenceService {
                         variance,
                         fromPrimary));
             }
-        }, businessId, fromDate, toDate);
+        },
+                branchFilter.isEmpty()
+                        ? new Object[] {businessId, fromDate, toDate}
+                        : new Object[] {businessId, fromDate, toDate, branchFilter});
 
         // Sort price alerts by absolute variance descending and limit
         priceAlerts.sort((a, b) -> b.variancePercent().abs().compareTo(a.variancePercent().abs()));
@@ -250,7 +275,8 @@ public class SupplierIntelligenceService {
                 : BigDecimal.ZERO;
 
         // Spend trend by week
-        List<PurchasingIntelligenceDashboardResponse.SpendTrendPoint> spendTrend = jdbc.query("""
+        List<PurchasingIntelligenceDashboardResponse.SpendTrendPoint> spendTrend = jdbc.query(
+                withInvoiceBranchFilter("""
                 SELECT DATE_FORMAT(si.invoice_date, '%Y-%m-%d') AS dt,
                        COALESCE(SUM(sil.line_total), 0) AS spend
                   FROM supplier_invoice_lines sil
@@ -261,14 +287,17 @@ public class SupplierIntelligenceService {
                    AND si.invoice_date <= ?
                  GROUP BY DATE_FORMAT(si.invoice_date, '%Y-%m-%d')
                  ORDER BY dt
-                """,
+                """, branchFilter),
                 (rs, rowNum) -> new PurchasingIntelligenceDashboardResponse.SpendTrendPoint(
                         rs.getString("dt"),
                         new BigDecimal(rs.getString("spend")).setScale(2, RoundingMode.HALF_UP)),
-                businessId, fromDate, toDate);
+                branchFilter.isEmpty()
+                        ? new Object[] {businessId, fromDate, toDate}
+                        : new Object[] {businessId, fromDate, toDate, branchFilter});
 
         // Top suppliers
-        List<PurchasingIntelligenceDashboardResponse.SupplierSpendPoint> topSuppliers = jdbc.query("""
+        List<PurchasingIntelligenceDashboardResponse.SupplierSpendPoint> topSuppliers = jdbc.query(
+                withInvoiceBranchFilter("""
                 SELECT si.supplier_id,
                        s.name AS supplier_name,
                        COALESCE(SUM(sil.line_total), 0) AS spend,
@@ -284,16 +313,19 @@ public class SupplierIntelligenceService {
                  GROUP BY si.supplier_id, s.name
                  ORDER BY spend DESC
                  LIMIT 10
-                """,
+                """, branchFilter),
                 (rs, rowNum) -> new PurchasingIntelligenceDashboardResponse.SupplierSpendPoint(
                         rs.getString("supplier_id"),
                         rs.getString("supplier_name"),
                         new BigDecimal(rs.getString("spend")).setScale(2, RoundingMode.HALF_UP),
                         rs.getInt("line_count")),
-                businessId, fromDate, toDate);
+                branchFilter.isEmpty()
+                        ? new Object[] {businessId, fromDate, toDate}
+                        : new Object[] {businessId, fromDate, toDate, branchFilter});
 
         // Top categories
-        List<PurchasingIntelligenceDashboardResponse.CategorySpendPoint> topCategories = jdbc.query("""
+        List<PurchasingIntelligenceDashboardResponse.CategorySpendPoint> topCategories = jdbc.query(
+                withInvoiceBranchFilter("""
                 SELECT COALESCE(i.category_id, '_none') AS category_id,
                        COALESCE(c.name, 'Uncategorised') AS category_name,
                        COALESCE(SUM(sil.line_total), 0) AS spend,
@@ -311,13 +343,15 @@ public class SupplierIntelligenceService {
                  GROUP BY COALESCE(i.category_id, '_none'), COALESCE(c.name, 'Uncategorised')
                  ORDER BY spend DESC
                  LIMIT 10
-                """,
+                """, branchFilter),
                 (rs, rowNum) -> new PurchasingIntelligenceDashboardResponse.CategorySpendPoint(
                         rs.getString("category_id"),
                         rs.getString("category_name"),
                         new BigDecimal(rs.getString("spend")).setScale(2, RoundingMode.HALF_UP),
                         rs.getInt("line_count")),
-                businessId, fromDate, toDate);
+                branchFilter.isEmpty()
+                        ? new Object[] {businessId, fromDate, toDate}
+                        : new Object[] {businessId, fromDate, toDate, branchFilter});
 
         // Single source risks
         List<SingleSourceRiskRow> risks = singleSourceRiskItems(businessId);

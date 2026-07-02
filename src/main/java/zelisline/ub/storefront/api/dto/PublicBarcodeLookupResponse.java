@@ -27,6 +27,12 @@ public record PublicBarcodeLookupResponse(
         /** When this item is a variant, the parent item's name. {@code null} for standalone items. */
         String parentName,
         /** The variant's own label (e.g. "500ml", "1L"). {@code null} for standalone items. */
-        String variantName
+        String variantName,
+        /** Scale PLU when resolved from a variable-weight label. */
+        String pluCode,
+        /** Parsed sell quantity in kg from a variable-weight label. */
+        BigDecimal parsedWeightKg,
+        /** Parsed line total from a price-embedded variable-weight label. */
+        BigDecimal parsedLineTotal
 ) {
 }

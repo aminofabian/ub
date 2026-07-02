@@ -17,6 +17,8 @@ public record PathBSupplyListRow(
         BigDecimal amountPaid,
         BigDecimal balanceOpen,
         /** {@code PAID}, {@code PARTIAL}, or {@code UNPAID} */
-        String paymentStatus
+        String paymentStatus,
+        /** Receiving branch from the underlying Path B session. */
+        String branchId
 ) {
 }

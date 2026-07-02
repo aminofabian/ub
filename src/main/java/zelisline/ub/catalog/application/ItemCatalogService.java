@@ -41,6 +41,7 @@ import zelisline.ub.catalog.api.dto.CatalogListScope;
 import zelisline.ub.catalog.api.dto.CatalogRowType;
 import zelisline.ub.catalog.api.dto.CatalogRowTypeSum;
 import zelisline.ub.catalog.api.dto.CatalogRowTypeCountsResponse;
+import zelisline.ub.sales.application.VariableWeightBarcodeService;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.api.dto.CreateVariantRequest;
 import zelisline.ub.catalog.api.dto.ItemImageResponse;
@@ -691,6 +692,11 @@ public class ItemCatalogService {
             String next = normalizeBarcode(patch.barcode());
             assertBarcodeAvailable(businessId, next, item.getId());
             item.setBarcode(next);
+        }
+        if (patch.pluCode() != null) {
+            String next = VariableWeightBarcodeService.normalizePluCode(patch.pluCode());
+            assertPluAvailable(businessId, next, item.getId());
+            item.setPluCode(next);
         }
         if (patch.name() != null && !patch.name().isBlank()) {
             item.setName(patch.name().trim());
@@ -1345,6 +1351,8 @@ public class ItemCatalogService {
         }
         String barcode = normalizeBarcode(request.barcode());
         assertBarcodeAvailable(businessId, barcode, null);
+        String pluCode = VariableWeightBarcodeService.normalizePluCode(request.pluCode());
+        assertPluAvailable(businessId, pluCode, null);
 
         String aisleId = blankToNull(request.aisleId());
         if (aisleId != null) {
@@ -1356,6 +1364,7 @@ public class ItemCatalogService {
         item.setBusinessId(businessId);
         item.setSku(sku);
         item.setBarcode(barcode);
+        item.setPluCode(pluCode);
         item.setName(request.name().trim());
         item.setDescription(blankToNull(request.description()));
         item.setItemTypeId(itemTypeId);
@@ -1540,6 +1549,7 @@ public class ItemCatalogService {
                 i.getId(),
                 i.getSku(),
                 i.getBarcode(),
+                i.getPluCode(),
                 i.getName(),
                 i.getDescription(),
                 i.getVariantOfItemId(),
@@ -1886,6 +1896,17 @@ public class ItemCatalogService {
                 .filter(other -> ignoreItemId == null || !other.getId().equals(ignoreItemId))
                 .ifPresent(other -> {
                     throw new ResponseStatusException(HttpStatus.CONFLICT, "Barcode already in use");
+                });
+    }
+
+    private void assertPluAvailable(String businessId, String pluCode, String ignoreItemId) {
+        if (pluCode == null) {
+            return;
+        }
+        itemRepository.findByBusinessIdAndPluCodeAndDeletedAtIsNull(businessId, pluCode)
+                .filter(other -> ignoreItemId == null || !other.getId().equals(ignoreItemId))
+                .ifPresent(other -> {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, "PLU code already in use");
                 });
     }
 

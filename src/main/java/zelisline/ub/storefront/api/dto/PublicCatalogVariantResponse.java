@@ -12,6 +12,7 @@ public record PublicCatalogVariantResponse(
         String variantName,
         String imageUrl,
         BigDecimal price,
-        BigDecimal qtyOnHand
+        BigDecimal qtyOnHand,
+        String onlinePurchaseMode
 ) {
 }

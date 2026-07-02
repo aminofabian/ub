@@ -1,5 +1,8 @@
 package zelisline.ub.tenancy.application;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -7,6 +10,7 @@ import org.springframework.web.server.ResponseStatusException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import lombok.RequiredArgsConstructor;
@@ -19,6 +23,7 @@ public class BusinessProfileSettingsService {
 
     static final String KEY_PROFILE = "profile";
     private static final String KEY_STORE_TYPE = "storeType";
+    private static final String KEY_STORE_TYPES = "storeTypes";
 
     private final ObjectMapper objectMapper;
 
@@ -35,29 +40,100 @@ public class BusinessProfileSettingsService {
             if (!profile.isObject()) {
                 return ProfileSettingsResponse.empty();
             }
-            String storeType = textOrNull(profile.path(KEY_STORE_TYPE));
-            return new ProfileSettingsResponse(storeType);
+            List<String> storeTypes = readStoreTypes(profile);
+            String storeType = storeTypes.isEmpty() ? null : storeTypes.get(0);
+            return new ProfileSettingsResponse(storeType, storeTypes.isEmpty() ? null : storeTypes);
         } catch (Exception e) {
             return ProfileSettingsResponse.empty();
         }
     }
 
     public String merge(String currentSettings, ProfilePatchRequest patch) {
-        if (patch == null || patch.storeType() == null) {
+        if (patch == null) {
             return currentSettings;
         }
-        ObjectNode root = parseRoot(currentSettings);
-        ObjectNode profile = copyNamespace(root, KEY_PROFILE);
-        profile.put(KEY_STORE_TYPE, patch.storeType().trim());
-        root.set(KEY_PROFILE, profile);
-        return writeRoot(root);
+        if (patch.storeTypes() != null) {
+            return mergeStoreTypes(currentSettings, patch.storeTypes());
+        }
+        if (patch.storeType() != null) {
+            return mergeStoreTypes(currentSettings, List.of(patch.storeType().trim()));
+        }
+        return currentSettings;
     }
 
     public String mergeStoreType(String currentSettings, String storeType) {
         if (storeType == null || storeType.isBlank()) {
             return currentSettings;
         }
-        return merge(currentSettings, new ProfilePatchRequest(storeType.trim()));
+        return mergeStoreTypes(currentSettings, List.of(storeType.trim()));
+    }
+
+    public String mergeStoreTypes(String currentSettings, List<String> storeTypes) {
+        if (storeTypes == null || storeTypes.isEmpty()) {
+            return currentSettings;
+        }
+        List<String> normalized = normalizeStoreTypes(storeTypes);
+        if (normalized.isEmpty()) {
+            return currentSettings;
+        }
+        ObjectNode root = parseRoot(currentSettings);
+        ObjectNode profile = copyNamespace(root, KEY_PROFILE);
+        profile.put(KEY_STORE_TYPE, normalized.get(0));
+        profile.set(KEY_STORE_TYPES, toArray(normalized));
+        root.set(KEY_PROFILE, profile);
+        return writeRoot(root);
+    }
+
+    private static List<String> readStoreTypes(JsonNode profile) {
+        List<String> storeTypes = readStringList(profile.path(KEY_STORE_TYPES));
+        if (!storeTypes.isEmpty()) {
+            return storeTypes;
+        }
+        String legacy = textOrNull(profile.path(KEY_STORE_TYPE));
+        if (legacy == null) {
+            return List.of();
+        }
+        return List.of(legacy);
+    }
+
+    private static List<String> readStringList(JsonNode arrayNode) {
+        if (!arrayNode.isArray()) {
+            return List.of();
+        }
+        List<String> out = new ArrayList<>();
+        for (JsonNode item : arrayNode) {
+            if (item.isTextual()) {
+                String value = item.asText().trim();
+                if (!value.isEmpty()) {
+                    out.add(value);
+                }
+            }
+        }
+        return out;
+    }
+
+    private static List<String> normalizeStoreTypes(List<String> storeTypes) {
+        List<String> out = new ArrayList<>();
+        for (String storeType : storeTypes) {
+            if (storeType == null) {
+                continue;
+            }
+            String trimmed = storeType.trim();
+            if (!trimmed.isEmpty() && !out.contains(trimmed)) {
+                out.add(trimmed);
+            }
+        }
+        return out;
+    }
+
+    private ArrayNode toArray(List<String> values) {
+        ArrayNode array = objectMapper.createArrayNode();
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                array.add(value.trim());
+            }
+        }
+        return array;
     }
 
     private static String textOrNull(JsonNode node) {

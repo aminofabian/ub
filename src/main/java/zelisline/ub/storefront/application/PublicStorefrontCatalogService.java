@@ -158,7 +158,8 @@ public class PublicStorefrontCatalogService {
                         ctx.business().getId(), item.getId(), ctx.catalogBranch().getId()),
                 onHand,
                 listImagesForItem(item, parent),
-                listPublishedVariants(ctx, parentId)
+                listPublishedVariants(ctx, parentId),
+                StorefrontOnlinePurchaseRules.resolveMode(item)
         );
     }
 
@@ -189,7 +190,8 @@ public class PublicStorefrontCatalogService {
                         ctx.business().getId(), item.getId(), ctx.catalogBranch().getId()),
                 onHand,
                 listImagesForItem(item, parent),
-                listPublishedVariants(ctx, parentId)
+                listPublishedVariants(ctx, parentId),
+                StorefrontOnlinePurchaseRules.resolveMode(item)
         );
     }
 
@@ -341,7 +343,8 @@ public class PublicStorefrontCatalogService {
                             thumbs.get(i.getId()),
                             prices.get(i.getId()),
                             qty.getOrDefault(i.getId(), BigDecimal.ZERO).setScale(4, RoundingMode.HALF_UP),
-                            fallbackBuying
+                            fallbackBuying,
+                            StorefrontOnlinePurchaseRules.resolveMode(i)
                     );
                 })
                 .toList();
@@ -485,7 +488,8 @@ public class PublicStorefrontCatalogService {
                         blankToNull(v.getVariantName()),
                         thumbs.get(v.getId()),
                         prices.get(v.getId()),
-                        qtyByItem.getOrDefault(v.getId(), BigDecimal.ZERO).setScale(4, RoundingMode.HALF_UP)
+                        qtyByItem.getOrDefault(v.getId(), BigDecimal.ZERO).setScale(4, RoundingMode.HALF_UP),
+                        StorefrontOnlinePurchaseRules.resolveMode(v)
                 ))
                 .toList();
     }

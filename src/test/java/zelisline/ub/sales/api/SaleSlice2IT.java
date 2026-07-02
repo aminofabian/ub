@@ -105,7 +105,7 @@ class SaleSlice2IT {
     private static final String P_VOID_ANY = "11111111-0000-0000-0000-000000000069";
     private static final String P_REFUND = "11111111-0000-0000-0000-000000000070";
     private static final String P_PRICE = "11111111-0000-0000-0000-000000000071";
-    private static final String P_WEIGHED_REFUND = "11111111-0000-0000-0000-000000000072";
+    private static final String P_WEIGHED_REFUND = "11111111-0000-0000-0000-000000000074";
     private static final String ROLE_POS = "22222222-0000-0000-0000-0000000000bb";
     private static final String ROLE_POS_OWNONLY = "22222222-0000-0000-0000-0000000000cc";
     private static final String ROLE_POS_PRICE = "22222222-0000-0000-0000-0000000000dd";
@@ -333,7 +333,7 @@ class SaleSlice2IT {
                 new CreateItemRequest(
                         "SKU-SALE", null, "Sale Item", null, goodsTypeId, null, null, null,
                         false, true, true,
-                        null, null, null, null, null, null, null, null, null, null, true, null, null, null),
+                        null, null, null, null, null, null, null, null, null, null, true, null, null, null, null),
                 null
         ).body().id();
 
@@ -576,6 +576,35 @@ class SaleSlice2IT {
                         .contentType(APPLICATION_JSON)
                         .content(body)
                         .header("Idempotency-Key", "mpesa-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isCreated());
+
+        MvcResult cur = mockMvc.perform(get("/api/v1/shifts/current")
+                        .param("branchId", branchId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(objectMapper.readTree(cur.getResponse().getContentAsString())
+                .get("expectedClosingCash")
+                .decimalValue()).isEqualByComparingTo(new BigDecimal("50.00"));
+    }
+
+    @Test
+    void postSale_card_doesNotIncreaseDrawerExpectation() throws Exception {
+        openShift(new BigDecimal("50.00"));
+
+        String body = """
+                {"branchId":"%s","lines":[{"itemId":"%s","quantity":1,"unitPrice":4}],"payments":[{"method":"card","amount":4}]}
+                """.formatted(branchId, itemId);
+
+        mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("Idempotency-Key", "card-" + UUID.randomUUID())
                         .header("X-Tenant-Id", TENANT)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
@@ -1435,6 +1464,7 @@ class SaleSlice2IT {
                 {LedgerAccountCodes.ACCOUNTS_RECEIVABLE_CUSTOMERS, "AR", "asset"},
                 {LedgerAccountCodes.CUSTOMER_WALLET_LIABILITY, "Wallet", "liability"},
                 {LedgerAccountCodes.MPESA_CLEARING, "M-Pesa clearing", "asset"},
+                {LedgerAccountCodes.CARD_CLEARING, "Card clearing", "asset"},
                 {LedgerAccountCodes.SALES_REVENUE, "Sales revenue", "revenue"},
                 {LedgerAccountCodes.COST_OF_GOODS_SOLD, "COGS", "expense"},
                 {LedgerAccountCodes.INVENTORY_SHRINKAGE, "Inventory shrinkage", "expense"},
@@ -1463,7 +1493,7 @@ class SaleSlice2IT {
                 new CreateItemRequest(
                         "SKU-WEIGHED", null, "Beef Mince", null, goodsTypeId, null, null, "kg",
                         true, true, true,
-                        null, null, null, null, null, null, null, null, null, null, true, null, null, null),
+                        null, null, null, null, null, null, null, null, null, null, true, null, null, null, null),
                 null
         ).body().id();
 
@@ -1486,7 +1516,7 @@ class SaleSlice2IT {
                 new CreateItemRequest(
                         "SKU-WEIGHED-PRICE", null, "Beef Mince Priced", null, goodsTypeId, null, null, "kg",
                         true, true, true,
-                        null, null, null, price, null, null, null, null, null, null, true, null, null, null),
+                        null, null, null, price, null, null, null, null, null, null, true, null, null, null, null),
                 null
         ).body().id();
 

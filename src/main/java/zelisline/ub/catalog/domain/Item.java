@@ -33,6 +33,10 @@ public class Item {
     @Column(name = "barcode", length = 191)
     private String barcode;
 
+    /** Scale PLU (typically 5 digits) for variable-weight EAN-13 labels. */
+    @Column(name = "plu_code", length = 16)
+    private String pluCode;
+
     @Column(name = "name", nullable = false, length = 500)
     private String name;
 

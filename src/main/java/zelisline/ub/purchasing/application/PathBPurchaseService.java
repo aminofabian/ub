@@ -91,6 +91,7 @@ public class PathBPurchaseService {
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final ObjectMapper objectMapper;
     private final PackageVariantStockResolver packageVariantStockResolver;
+    private final PurchaseUnitConversionService purchaseUnitConversionService;
     private final SupplierPaymentAllocationRepository allocationRepository;
     private final SupplyBatchRepository supplyBatchRepository;
 
@@ -297,6 +298,14 @@ public class PathBPurchaseService {
             postedLines.add(line);
             Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(br.itemId(), businessId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
+            purchaseUnitConversionService.assertMatchesPosted(
+                    businessId,
+                    session.getSupplierId(),
+                    br.itemId(),
+                    br.usableQty(),
+                    br.purchaseQty(),
+                    br.purchaseUnit()
+            );
             CostSplit split = splitLine(line.getAmountMoney(), br.usableQty(), br.wastageQty());
             plans.add(new LinePostPlan(line, item, br.itemId(), br.usableQty(), br.wastageQty(), split, br.expiryDate()));
             sumInv = sumInv.add(split.inventoryMoney());

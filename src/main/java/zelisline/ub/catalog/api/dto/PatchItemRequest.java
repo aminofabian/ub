@@ -39,6 +39,7 @@ public record PatchItemRequest(
         @Size(max = 255) String brand,
         @Size(max = 50) String size,
         /** Option / variant label; only applied when the item is a variant (has {@code variantOfItemId}). */
-        @Size(max = 255) String variantName
+        @Size(max = 255) String variantName,
+        @Size(max = 16) String pluCode
 ) {
 }

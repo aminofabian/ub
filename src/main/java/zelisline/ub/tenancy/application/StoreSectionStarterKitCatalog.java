@@ -13,6 +13,26 @@ public final class StoreSectionStarterKitCatalog {
 
     public static final List<StoreSectionStarterKitResponse> KITS = List.of(
             new StoreSectionStarterKitResponse(
+                    "butchery",
+                    "Butchery",
+                    List.of(
+                            "Beef",
+                            "Goat (Chevon)",
+                            "Mutton",
+                            "Chicken",
+                            "Pork",
+                            "Fish",
+                            "Smoked Meat",
+                            "Sausages",
+                            "Smokies",
+                            "Eggs",
+                            "Offals",
+                            "Bones",
+                            "Minced Meat",
+                            "Value-added Meat"
+                    )
+            ),
+            new StoreSectionStarterKitResponse(
                     "mini-mart",
                     "Mini mart",
                     List.of(

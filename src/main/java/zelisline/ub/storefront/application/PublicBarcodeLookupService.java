@@ -21,6 +21,9 @@ import zelisline.ub.catalog.domain.ItemImage;
 import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.pricing.application.PricingService;
+import zelisline.ub.sales.application.VariableWeightBarcodeConfig;
+import zelisline.ub.sales.application.VariableWeightBarcodeParseResult;
+import zelisline.ub.sales.application.VariableWeightBarcodeParser;
 import zelisline.ub.storefront.api.dto.PublicBarcodeLookupResponse;
 import zelisline.ub.storefront.api.dto.PublicItemImageResponse;
 import zelisline.ub.tenancy.domain.Business;
@@ -39,6 +42,12 @@ public class PublicBarcodeLookupService {
 
     @Transactional(readOnly = true)
     public PublicBarcodeLookupResponse lookup(String barcode) {
+        VariableWeightBarcodeConfig vwConfig = VariableWeightBarcodeConfig.standardEnabled();
+        var parsed = VariableWeightBarcodeParser.parse(barcode, vwConfig);
+        if (parsed.isPresent()) {
+            return lookupVariableWeightPublished(parsed.get());
+        }
+
         String normalized = ItemCatalogService.normalizeBarcode(barcode);
         if (normalized == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found");
@@ -120,7 +129,81 @@ public class PublicBarcodeLookupService {
                 null,
                 images,
                 parentName,
-                variantLabel);
+                variantLabel,
+                null,
+                null,
+                null);
+    }
+
+    private PublicBarcodeLookupResponse lookupVariableWeightPublished(
+            VariableWeightBarcodeParseResult parsed
+    ) {
+        Item item = itemRepository.findFirstPublishedByPluCode(parsed.pluCode())
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Unknown PLU " + parsed.pluCode()));
+        if (!item.isWeighed()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "PLU " + parsed.pluCode() + " is not a weighed item");
+        }
+        Business business = businessRepository.findByIdAndDeletedAtIsNull(item.getBusinessId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found"));
+
+        String catalogBranchId = resolveCatalogBranchId(business);
+        BigDecimal price = null;
+        if (catalogBranchId != null) {
+            price = pricingService.getCurrentOpenSellingPrice(
+                    business.getId(), item.getId(), catalogBranchId);
+        }
+        if (price == null) {
+            price = item.getBundlePrice();
+        }
+
+        BigDecimal parsedWeightKg = parsed.embeddedWeightKg();
+        BigDecimal parsedLineTotal = parsed.embeddedPrice();
+        if (parsed.embeddedField() == VariableWeightBarcodeConfig.EmbeddedField.WEIGHT
+                && parsedWeightKg != null
+                && price != null) {
+            parsedLineTotal = parsedWeightKg.multiply(price);
+        }
+
+        List<PublicItemImageResponse> images = new ArrayList<>();
+        List<ItemImage> imgs = itemImageRepository.findByItemIdOrderBySortOrderAscIdAsc(item.getId());
+        for (ItemImage img : imgs) {
+            String url = resolveImagePublicUrl(img);
+            if (url != null) {
+                images.add(new PublicItemImageResponse(
+                        url,
+                        img.getAltText() != null && !img.getAltText().isBlank()
+                                ? img.getAltText().trim() : null,
+                        img.getWidth(),
+                        img.getHeight()));
+            }
+        }
+
+        return new PublicBarcodeLookupResponse(
+                item.getId(),
+                item.getSku(),
+                item.getBarcode(),
+                item.getName(),
+                item.getDescription() != null && !item.getDescription().isBlank()
+                        ? item.getDescription().trim() : null,
+                item.getBrand() != null && !item.getBrand().isBlank()
+                        ? item.getBrand().trim() : null,
+                item.getSize() != null && !item.getSize().isBlank()
+                        ? item.getSize().trim() : null,
+                business.getName(),
+                business.getSlug(),
+                business.getCurrency(),
+                price,
+                null,
+                images,
+                null,
+                null,
+                parsed.pluCode(),
+                parsedWeightKg,
+                parsedLineTotal);
     }
 
     private static final int MAX_SEARCH_RESULTS = 25;
@@ -219,7 +302,10 @@ public class PublicBarcodeLookupService {
                             null,
                             images,
                             parentName,
-                            variantLabel);
+                            variantLabel,
+                            null,
+                            null,
+                            null);
                 })
                 .filter(r -> r != null)
                 .sorted(Comparator.comparing(PublicBarcodeLookupResponse::name))

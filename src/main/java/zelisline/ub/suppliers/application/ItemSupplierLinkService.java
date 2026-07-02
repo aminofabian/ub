@@ -71,6 +71,7 @@ public class ItemSupplierLinkService {
             created.setItemId(itemId);
             created.setSupplierSku(blankToNull(body.supplierSku()));
             created.setDefaultCostPrice(body.defaultCostPrice());
+            applyPackFields(created, body.packSize(), body.packUnit());
             created.setActive(true);
             created.setDeletedAt(null);
             created.setPrimaryLink(Boolean.TRUE.equals(body.setPrimary()));
@@ -91,6 +92,9 @@ public class ItemSupplierLinkService {
         sp.setSupplierSku(blankToNull(body.supplierSku()));
         if (body.defaultCostPrice() != null) {
             sp.setDefaultCostPrice(body.defaultCostPrice());
+        }
+        if (body.packSize() != null || body.packUnit() != null) {
+            applyPackFields(sp, body.packSize(), body.packUnit());
         }
         if (Boolean.TRUE.equals(body.setPrimary())) {
             sp.setPrimaryLink(true);
@@ -139,6 +143,9 @@ public class ItemSupplierLinkService {
         if (body.defaultCostPrice() != null) {
             sp.setDefaultCostPrice(body.defaultCostPrice());
         }
+        if (body.packSize() != null || body.packUnit() != null) {
+            applyPackFields(sp, body.packSize(), body.packUnit());
+        }
         supplierProductRepository.save(sp);
         Supplier supplier = supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(sp.getSupplierId(), businessId)
                 .orElse(null);
@@ -178,6 +185,8 @@ public class ItemSupplierLinkService {
                 sp.getSupplierSku(),
                 sp.getDefaultCostPrice(),
                 sp.getLastCostPrice(),
+                sp.getPackSize(),
+                sp.getPackUnit(),
                 sp.isActive(),
                 sp.getVersion(),
                 sp.getCreatedAt(),
@@ -238,11 +247,29 @@ public class ItemSupplierLinkService {
                 sp.getSupplierSku(),
                 sp.getDefaultCostPrice(),
                 sp.getLastCostPrice(),
+                sp.getPackSize(),
+                sp.getPackUnit(),
                 sp.isActive(),
                 sp.getVersion(),
                 sp.getCreatedAt(),
                 sp.getUpdatedAt()
         );
+    }
+
+    private static void applyPackFields(SupplierProduct sp, BigDecimal packSize, String packUnit) {
+        if (packSize != null) {
+            if (packSize.signum() <= 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "packSize must be positive");
+            }
+            sp.setPackSize(packSize);
+        }
+        if (packUnit != null) {
+            String unit = blankToNull(packUnit);
+            sp.setPackUnit(unit);
+            if (unit == null) {
+                sp.setPackSize(null);
+            }
+        }
     }
 
     private static String blankToNull(String s) {

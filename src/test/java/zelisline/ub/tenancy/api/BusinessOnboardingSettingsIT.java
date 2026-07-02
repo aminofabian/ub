@@ -100,15 +100,16 @@ class BusinessOnboardingSettingsIT {
                                   "status": "active",
                                   "step": 3,
                                   "answers": {
-                                    "storeType": "mini-mart",
-                                    "selectedDepartments": ["Grocery", "Beverages"]
+                                    "storeTypes": ["mini-mart", "butchery"],
+                                    "selectedDepartments": ["Grocery", "Beef"]
                                   }
                                 }
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("active"))
                 .andExpect(jsonPath("$.step").value(3))
-                .andExpect(jsonPath("$.answers.storeType").value("mini-mart"))
+                .andExpect(jsonPath("$.answers.storeTypes[0]").value("mini-mart"))
+                .andExpect(jsonPath("$.answers.storeTypes[1]").value("butchery"))
                 .andExpect(jsonPath("$.answers.selectedDepartments[0]").value("Grocery"));
 
         mockMvc.perform(get("/api/v1/businesses/me")
@@ -117,6 +118,8 @@ class BusinessOnboardingSettingsIT {
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.profile.storeType").value("mini-mart"))
+                .andExpect(jsonPath("$.profile.storeTypes[0]").value("mini-mart"))
+                .andExpect(jsonPath("$.profile.storeTypes[1]").value("butchery"))
                 .andExpect(jsonPath("$.onboarding.status").value("active"));
     }
 
@@ -127,8 +130,8 @@ class BusinessOnboardingSettingsIT {
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].id").value("mini-mart"))
-                .andExpect(jsonPath("$[0].sections[0]").value("General Shop"));
+                .andExpect(jsonPath("$[0].id").value("butchery"))
+                .andExpect(jsonPath("$[0].sections[0]").value("Beef"));
     }
 
     private static Permission perm(String id, String key, String label) {

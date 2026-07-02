@@ -7,6 +7,7 @@ public record ItemResponse(
         String id,
         String sku,
         String barcode,
+        String pluCode,
         String name,
         String description,
         String variantOfItemId,

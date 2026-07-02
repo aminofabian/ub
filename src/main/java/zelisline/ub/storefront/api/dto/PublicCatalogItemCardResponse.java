@@ -15,6 +15,8 @@ public record PublicCatalogItemCardResponse(
         /** On-hand quantity at the storefront catalog branch (active inventory batches). */
         BigDecimal qtyOnHand,
         /** Latest buying price across all suppliers (most recent effectiveFrom). */
-        BigDecimal buyingPrice
+        BigDecimal buyingPrice,
+        /** {@link zelisline.ub.storefront.application.StorefrontOnlinePurchaseRules#WEB_CART} or IN_STORE_ONLY. */
+        String onlinePurchaseMode
 ) {
 }

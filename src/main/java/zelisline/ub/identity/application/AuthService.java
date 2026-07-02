@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import jakarta.persistence.EntityManager;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.audit.AuditEventTypes;
@@ -87,6 +88,7 @@ public class AuthService {
     private final UserRepository userRepository;
     private final UserSessionRepository userSessionRepository;
     private final UserSessionRevocation userSessionRevocation;
+    private final EntityManager entityManager;
     private final PasswordResetTokenRepository passwordResetTokenRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenService jwtTokenService;
@@ -158,30 +160,29 @@ public class AuthService {
         }
         String businessId = TenantRequestIds.resolveBusinessId(http);
         String hash = TokenHasher.sha256Hex(refreshRaw);
+
+        // Read without row lock first so reuse revocation cannot deadlock with
+        // another refresh holding FOR UPDATE on a sibling session row.
+        UserSession peek = userSessionRepository.findByRefreshTokenHash(hash)
+                .orElseThrow(this::invalidCredentials);
+
+        if (!peek.getBusinessId().equals(businessId)) {
+            throw invalidCredentials();
+        }
+
+        if (handleRevokedOrExpiredRefresh(peek)) {
+            throw invalidCredentials();
+        }
+
         UserSession old = userSessionRepository.findByRefreshTokenHashForUpdate(hash)
                 .orElseThrow(this::invalidCredentials);
+        entityManager.refresh(old);
 
         if (!old.getBusinessId().equals(businessId)) {
             throw invalidCredentials();
         }
 
-        if (old.getRevokedAt() != null) {
-            if (isWithinRotationGrace(old)) {
-                /*
-                 * Concurrent legitimate refresh: another in-flight request from the
-                 * same client (or another tab) already rotated this token within the
-                 * grace window and its successor is still active. Returning 401
-                 * without cascading the revoke lets the loser read the new tokens
-                 * from shared storage / single-flight queue and recover.
-                 */
-                throw invalidCredentials();
-            }
-            userSessionRevocation.revokeAllActiveForUserNow(old.getUserId());
-            throw invalidCredentials();
-        }
-        if (old.getRefreshExpiresAt().isBefore(Instant.now())) {
-            old.setRevokedAt(Instant.now());
-            userSessionRepository.save(old);
+        if (handleRevokedOrExpiredRefresh(old)) {
             throw invalidCredentials();
         }
 
@@ -195,6 +196,25 @@ public class AuthService {
         userSessionRepository.save(old);
 
         return neu.tokens();
+    }
+
+    /**
+     * @return {@code true} when the refresh must fail (caller throws {@code invalidCredentials})
+     */
+    private boolean handleRevokedOrExpiredRefresh(UserSession session) {
+        if (session.getRevokedAt() != null) {
+            if (isWithinRotationGrace(session)) {
+                return true;
+            }
+            userSessionRevocation.revokeAllActiveForUserNow(session.getUserId());
+            return true;
+        }
+        if (session.getRefreshExpiresAt().isBefore(Instant.now())) {
+            session.setRevokedAt(Instant.now());
+            userSessionRepository.save(session);
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -350,6 +370,7 @@ public class AuthService {
     }
 
     private LoginResponse issueNewSession(User user, HttpServletRequest http) {
+        userSessionRevocation.revokeAllActiveForUserNow(user.getId());
         return issueNewSessionWithSession(user, http).tokens();
     }
 

@@ -24,6 +24,8 @@ public final class SalesConstants {
 
     public static final String PAYMENT_METHOD_CASH = "cash";
     public static final String PAYMENT_METHOD_MPESA_MANUAL = "mpesa_manual";
+    /** Card terminal / POS card reader — clears to card clearing, not drawer cash. */
+    public static final String PAYMENT_METHOD_CARD = "card";
     /** Tab / pay-later — posts to customer AR and credit_accounts.balance_owed (Phase 5). */
     public static final String PAYMENT_METHOD_CUSTOMER_CREDIT = "customer_credit";
     /** Prepaid customer wallet debit at checkout (Phase 5). */

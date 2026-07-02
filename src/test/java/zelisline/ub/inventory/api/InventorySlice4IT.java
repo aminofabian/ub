@@ -181,7 +181,7 @@ class InventorySlice4IT {
                 new CreateItemRequest(
                         "SKU-ST", null, "Stocktake Item", null, goodsTypeId, null, null, null,
                         false, true, true,
-                        null, null, null, null, null, null, null, null, null, null, false, null, null, null),
+                        null, null, null, null, null, null, null, null, null, null, false, null, null, null, null),
                 null
         ).body().id();
 
@@ -267,7 +267,7 @@ class InventorySlice4IT {
                         itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(TENANT).getFirst().getId(),
                         null, null, null,
                         false, true, true,
-                        null, null, null, null, null, null, null, null, null, null, false, null, null, null),
+                        null, null, null, null, null, null, null, null, null, null, false, null, null, null, null),
                 null
         ).body().id();
         Item emptyItem = itemRepository.findById(itemNoBatch).orElseThrow();

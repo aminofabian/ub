@@ -133,7 +133,7 @@ class PublicStorefrontCatalogIT {
                 new CreateItemRequest(
                         "SKU-PUB", null, "Published Item", null, goodsTypeId, categoryId, null, null,
                         false, true, true,
-                        null, null, null, null, null, null, null, null, null, null, false, null, null, null),
+                        null, null, null, null, null, null, null, null, null, null, false, null, null, null, null),
                 null
         ).body().id();
 
@@ -144,7 +144,7 @@ class PublicStorefrontCatalogIT {
                 new CreateItemRequest(
                         "SKU-HID", null, "Hidden Item", null, goodsTypeId, null, null, null,
                         false, true, true,
-                        null, null, null, null, null, null, null, null, null, null, false, null, null, null),
+                        null, null, null, null, null, null, null, null, null, null, false, null, null, null, null),
                 null
         ).body().id();
 
@@ -304,7 +304,7 @@ class PublicStorefrontCatalogIT {
                                 null,
                                 null,
                                 false,
-                                null, null, null),
+                                null, null, null, null),
                         null)
                 .body()
                 .id();
@@ -372,6 +372,7 @@ class PublicStorefrontCatalogIT {
                                 null,
                                 null,
                                 false,
+                                null,
                                 null,
                                 null,
                                 null),
@@ -488,6 +489,7 @@ class PublicStorefrontCatalogIT {
                                 null,
                                 null,
                                 false,
+                                null,
                                 null,
                                 null,
                                 null),

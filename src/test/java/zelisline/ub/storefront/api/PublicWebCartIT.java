@@ -147,7 +147,7 @@ class PublicWebCartIT {
                 new CreateItemRequest(
                         "SKU-PUB", null, "Published Item", null, goodsTypeId, categoryId, null, null,
                         false, true, true,
-                        null, null, null, null, null, null, null, null, null, null, false, null, null, null),
+                        null, null, null, null, null, null, null, null, null, null, false, null, null, null, null),
                 null
         ).body().id();
 
@@ -158,7 +158,7 @@ class PublicWebCartIT {
                 new CreateItemRequest(
                         "SKU-HID", null, "Hidden Item", null, goodsTypeId, null, null, null,
                         false, true, true,
-                        null, null, null, null, null, null, null, null, null, null, false, null, null, null),
+                        null, null, null, null, null, null, null, null, null, null, false, null, null, null, null),
                 null
         ).body().id();
 
@@ -286,6 +286,60 @@ class PublicWebCartIT {
                                         + publishedItemId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.lines.length()").value(0));
+    }
+
+    @Test
+    void upsertWeighedItem_returns400() throws Exception {
+        String goodsTypeId = itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(TENANT).getFirst().getId();
+        String weighedId = itemCatalogService.createItem(
+                TENANT,
+                new CreateItemRequest(
+                        "SKU-KG", null, "Ribeye per kg", null, goodsTypeId, null, null, "kg",
+                        true, true, true,
+                        null, null, null, null, null, null, null, null, null, null, null, null, null, null, null),
+                null
+        ).body().id();
+        patchWebPublished(weighedId, true);
+
+        SellingPrice sp = new SellingPrice();
+        sp.setBusinessId(TENANT);
+        sp.setItemId(weighedId);
+        sp.setBranchId(branchId);
+        sp.setPrice(new BigDecimal("1200.00"));
+        sp.setEffectiveFrom(LocalDate.of(2026, 1, 1));
+        sellingPriceRepository.save(sp);
+
+        InventoryBatch batch = new InventoryBatch();
+        batch.setBusinessId(TENANT);
+        batch.setBranchId(branchId);
+        batch.setItemId(weighedId);
+        batch.setBatchNumber("CART-WEIGHED");
+        batch.setSourceType("test");
+        batch.setSourceId(UUID.randomUUID().toString());
+        batch.setInitialQuantity(new BigDecimal("50"));
+        batch.setQuantityRemaining(new BigDecimal("50"));
+        batch.setUnitCost(new BigDecimal("800"));
+        batch.setReceivedAt(Instant.parse("2026-01-01T12:00:00Z"));
+        batch.setStatus("active");
+        inventoryBatchRepository.save(batch);
+
+        String cartId = createCartId();
+        mockMvc.perform(
+                        post("/api/v1/public/businesses/" + SLUG + "/carts/" + cartId + "/lines")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("{\"itemId\":\"%s\",\"quantity\":1}".formatted(weighedId)))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void upsertDecimalQuantity_returns400() throws Exception {
+        String cartId = createCartId();
+        mockMvc.perform(
+                        post("/api/v1/public/businesses/" + SLUG + "/carts/" + cartId + "/lines")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(
+                                        "{\"itemId\":\"%s\",\"quantity\":1.5}".formatted(publishedItemId)))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

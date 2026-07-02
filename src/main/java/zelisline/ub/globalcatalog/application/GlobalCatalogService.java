@@ -395,7 +395,8 @@ public class GlobalCatalogService {
                     gp.isHasExpiry(),
                     gp.getImageUrl(),
                     gp.getBrand(),
-                    gp.getSize()
+                    gp.getSize(),
+                    null
             );
 
             reserveSkuForBatch(skuToItemId, sku);

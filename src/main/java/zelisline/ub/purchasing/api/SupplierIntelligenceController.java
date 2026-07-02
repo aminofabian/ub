@@ -65,10 +65,11 @@ public class SupplierIntelligenceController {
     public PurchasingIntelligenceDashboardResponse dashboard(
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) String branchId,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
         return supplierIntelligenceService.getDashboard(
-                TenantRequestIds.resolveBusinessId(request), from, to);
+                TenantRequestIds.resolveBusinessId(request), from, to, branchId);
     }
 }

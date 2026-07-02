@@ -16,6 +16,8 @@ public final class LedgerAccountCodes {
     public static final String CUSTOMER_WALLET_LIABILITY = "1175";
     /** Till-side M-Pesa / mobile money clearing (manual reference in Phase 4). */
     public static final String MPESA_CLEARING = "1020";
+    /** Card terminal / acquirer clearing — POS card tender (butchery / retail). */
+    public static final String CARD_CLEARING = "1025";
     /** Points redeemed at POS clear this liability (paired with {@link #LOYALTY_MARKETING_EXPENSE} on earn). */
     public static final String LOYALTY_REDEMPTION_LIABILITY = "2196";
     /**

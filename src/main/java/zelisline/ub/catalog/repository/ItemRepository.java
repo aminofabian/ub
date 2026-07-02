@@ -36,6 +36,20 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     Optional<Item> findByBusinessIdAndBarcodeAndDeletedAtIsNull(String businessId, String barcode);
 
+    Optional<Item> findByBusinessIdAndPluCodeAndDeletedAtIsNull(String businessId, String pluCode);
+
+    /** First published item matching scale PLU across all businesses. */
+    @Query("""
+            select i from Item i
+             where i.pluCode = :pluCode
+               and i.deletedAt is null
+               and i.active = true
+               and i.webPublished = true
+             order by i.name asc
+             limit 1
+            """)
+    Optional<Item> findFirstPublishedByPluCode(@Param("pluCode") String pluCode);
+
     /**
      * Published items whose name or variant name contains the query, across all businesses.
      * <p>

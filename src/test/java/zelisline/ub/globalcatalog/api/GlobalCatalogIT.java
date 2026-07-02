@@ -307,6 +307,7 @@ class GlobalCatalogIT {
                         null,
                         null,
                         null,
+                        null,
                         null
                 ),
                 null
@@ -344,6 +345,7 @@ class GlobalCatalogIT {
                         "Test Cola 500ml",
                         null,
                         goodsTypeId,
+                        null,
                         null,
                         null,
                         null,
@@ -410,6 +412,7 @@ class GlobalCatalogIT {
                         null,
                         null,
                         null,
+                        null,
                         null
                 ),
                 null
@@ -438,6 +441,7 @@ class GlobalCatalogIT {
                         "Unrelated product label",
                         null,
                         goodsTypeId,
+                        null,
                         null,
                         null,
                         null,
@@ -489,6 +493,7 @@ class GlobalCatalogIT {
                         "Existing product",
                         null,
                         goodsTypeId,
+                        null,
                         null,
                         null,
                         null,
@@ -573,6 +578,7 @@ class GlobalCatalogIT {
                         null,
                         null,
                         null,
+                        null,
                         null
                 ),
                 null
@@ -612,6 +618,7 @@ class GlobalCatalogIT {
                         "Blocks base sku",
                         null,
                         goodsTypeId,
+                        null,
                         null,
                         null,
                         null,

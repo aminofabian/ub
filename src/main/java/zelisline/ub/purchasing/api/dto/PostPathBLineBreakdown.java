@@ -14,6 +14,9 @@ public record PostPathBLineBreakdown(
         @NotNull @PositiveOrZero BigDecimal usableQty,
         @NotNull @PositiveOrZero BigDecimal wastageQty,
         /** Optional; stored on the inventory batch when {@code usableQty} &gt; 0. */
-        LocalDate expiryDate
+        LocalDate expiryDate,
+        /** Optional purchase qty as entered by receiver — validated against supplier pack conversion. */
+        @PositiveOrZero BigDecimal purchaseQty,
+        @Size(max = 32) String purchaseUnit
 ) {
 }

@@ -29,6 +29,8 @@ import zelisline.ub.sales.api.dto.SaleResponse;
 import zelisline.ub.sales.application.SaleRefundService;
 import zelisline.ub.sales.application.SaleService;
 import zelisline.ub.sales.application.SaleVoidService;
+import zelisline.ub.sales.application.VariableWeightBarcodeService;
+import zelisline.ub.sales.api.dto.VariableWeightBarcodeLookupResponse;
 import zelisline.ub.sales.receipt.SaleReceiptService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 import zelisline.ub.tenancy.application.BranchResolutionService;
@@ -44,6 +46,24 @@ public class SalesController {
     private final SaleRefundService saleRefundService;
     private final SaleReceiptService saleReceiptService;
     private final BranchResolutionService branchResolutionService;
+    private final VariableWeightBarcodeService variableWeightBarcodeService;
+
+    @GetMapping("/variable-weight-barcode")
+    @PreAuthorize("hasPermission(null, 'sales.sell')")
+    public VariableWeightBarcodeLookupResponse lookupVariableWeightBarcode(
+            @RequestParam @NotBlank String barcode,
+            @RequestParam @NotBlank String branchId,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String validatedBranch = branchResolutionService.requireBranchForLockedRole(
+                principal.roleId(), principal.branchId(), branchId);
+        return variableWeightBarcodeService.lookupForPos(
+                TenantRequestIds.resolveBusinessId(request),
+                validatedBranch,
+                barcode
+        );
+    }
 
     @PostMapping
     @PreAuthorize("hasPermission(null, 'sales.sell')")

@@ -38,11 +38,12 @@ public class SalesIntelligenceController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam(required = false) String categoryId,
+            @RequestParam(required = false) String branchId,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
         return salesIntelligenceService.netRevenueByCategory(
-                TenantRequestIds.resolveBusinessId(request), from, to, categoryId);
+                TenantRequestIds.resolveBusinessId(request), from, to, categoryId, branchId);
     }
 
     @GetMapping("/revenue-by-category/{categoryId}/daily")

@@ -389,7 +389,8 @@ public class LegacyProductJsonImportService {
                         null, // webPublished
                         null, // brand
                         null, // size
-                        null  // variantName
+                        null, // variantName
+                        null  // pluCode
                 )
         );
     }
@@ -416,7 +417,7 @@ public class LegacyProductJsonImportService {
                             null, null, null, null, null, null, null, null, null, null,
                             // 21-30: reorderLevel, reorderQty, expiresAfterDays, hasExpiry,
                             //        imageKey, active, webPublished, brand, size, variantName
-                            null, null, null, null, null, false, null, null, null, null));
+                            null, null, null, null, null, false, null, null, null, null, null));
         }
         BigDecimal sell = sanitizeMoney14_2(r.sellPrice());
         if (sell != null && sell.compareTo(new BigDecimal("0.01")) >= 0) {
@@ -523,7 +524,7 @@ public class LegacyProductJsonImportService {
                 null,
                 sanitizeExpiresDays(r.expiresAfterDays()),
                 r.hasExpiryOverride(),
-                imageKeyOrNull(r.imageUrl()), null, null);
+                imageKeyOrNull(r.imageUrl()), null, null, null);
     }
 
     private String resolveItemTypeId(String businessId, String itemTypeRaw) {

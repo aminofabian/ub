@@ -514,7 +514,8 @@ public class StockTakeService {
             null,
             null,
             req.brand(),
-            req.size()
+            req.size(),
+            null
         );
 
         var createResult = itemCatalogService.createItem(

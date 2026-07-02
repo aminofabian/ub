@@ -317,7 +317,7 @@ class SuppliersApiIT {
         return new CreateItemRequest(
                 sku, null, name, null, goodsTypeIdA, null, null, null,
                 false, true, true,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private String createSupplier(String tenantId, String name) throws Exception {

@@ -55,6 +55,7 @@ import zelisline.ub.finance.application.LedgerBootstrapService;
 import zelisline.ub.finance.repository.JournalEntryRepository;
 import zelisline.ub.finance.repository.LedgerAccountRepository;
 import zelisline.ub.suppliers.domain.Supplier;
+import zelisline.ub.suppliers.domain.SupplierProduct;
 import zelisline.ub.suppliers.repository.SupplierContactRepository;
 import zelisline.ub.suppliers.repository.SupplierProductRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
@@ -221,7 +222,7 @@ class PathBPurchaseIT {
                 new CreateItemRequest(
                         "SKU-TOM", null, "Tomatoes", null, goodsTypeId, null, null, null,
                         false, true, true,
-                        null, null, null, null, null, null, null, null, null, null, null, null, null, null),
+                        null, null, null, null, null, null, null, null, null, null, null, null, null, null, null),
                 null
         ).body().id();
     }
@@ -408,6 +409,72 @@ class PathBPurchaseIT {
 
         assertThat(second.getResponse().getContentAsString()).isEqualTo(first.getResponse().getContentAsString());
         assertThat(supplierInvoiceRepository.count()).isEqualTo(1);
+    }
+
+    @Test
+    void postWithPurchaseUnit_validatesPackConversion() throws Exception {
+        SupplierProduct link = supplierProductRepository.findBySupplierIdAndItemId(supplierId, itemId)
+                .orElseGet(() -> {
+                    SupplierProduct created = new SupplierProduct();
+                    created.setSupplierId(supplierId);
+                    created.setItemId(itemId);
+                    created.setActive(true);
+                    created.setPrimaryLink(true);
+                    return created;
+                });
+        link.setPackUnit("crate");
+        link.setPackSize(new BigDecimal("25"));
+        supplierProductRepository.save(link);
+
+        String sessionId = createSession();
+        String lineId = addLine(sessionId, "2 crates beef", "200.00");
+
+        String postBody = """
+                {"lines":[{"lineId":"%s","itemId":"%s","usableQty":50,"wastageQty":0,"purchaseQty":2,"purchaseUnit":"crate"}]}
+                """.formatted(lineId, itemId);
+
+        mockMvc.perform(post("/api/v1/purchasing/path-b/sessions/" + sessionId + "/post")
+                        .contentType(APPLICATION_JSON)
+                        .content(postBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        var item = itemRepository.findById(itemId).orElseThrow();
+        assertThat(item.getCurrentStock().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo(new BigDecimal("50.00"));
+    }
+
+    @Test
+    void postWithPurchaseUnit_rejectsUsableQtyMismatch() throws Exception {
+        SupplierProduct link = supplierProductRepository.findBySupplierIdAndItemId(supplierId, itemId)
+                .orElseGet(() -> {
+                    SupplierProduct created = new SupplierProduct();
+                    created.setSupplierId(supplierId);
+                    created.setItemId(itemId);
+                    created.setActive(true);
+                    created.setPrimaryLink(true);
+                    return created;
+                });
+        link.setPackUnit("crate");
+        link.setPackSize(new BigDecimal("25"));
+        supplierProductRepository.save(link);
+
+        String sessionId = createSession();
+        String lineId = addLine(sessionId, "2 crates beef", "200.00");
+
+        String postBody = """
+                {"lines":[{"lineId":"%s","itemId":"%s","usableQty":40,"wastageQty":0,"purchaseQty":2,"purchaseUnit":"crate"}]}
+                """.formatted(lineId, itemId);
+
+        mockMvc.perform(post("/api/v1/purchasing/path-b/sessions/" + sessionId + "/post")
+                        .contentType(APPLICATION_JSON)
+                        .content(postBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

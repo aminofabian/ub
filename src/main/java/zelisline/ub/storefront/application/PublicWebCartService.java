@@ -101,6 +101,7 @@ public class PublicWebCartService {
             return buildResponse(ctx, cart, webCartLineRepository.findByCartIdOrderByCreatedAtAsc(cartId));
         }
         requireWebItem(ctx, itemId);
+        StorefrontOnlinePurchaseRules.requireWholeUnitQuantity(q);
         BigDecimal available = availableQtyAtCatalogBranch(ctx, itemId);
         if (available.compareTo(BigDecimal.ZERO) <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "This item is out of stock at this store");
@@ -163,6 +164,7 @@ public class PublicWebCartService {
         if (!item.isWebPublished() || !item.isActive()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not available");
         }
+        StorefrontOnlinePurchaseRules.requireWebCartEligible(item);
     }
 
     private BigDecimal availableQtyAtCatalogBranch(PublicStorefrontContext ctx, String itemId) {
@@ -209,6 +211,8 @@ public class PublicWebCartService {
             if (it == null || !it.isWebPublished() || !it.isActive()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item no longer available");
             }
+            StorefrontOnlinePurchaseRules.requireWebCartEligible(it);
+            StorefrontOnlinePurchaseRules.requireWholeUnitQuantity(row.getQuantity());
             BigDecimal avail = availableQtyAtCatalogBranch(ctx, row.getItemId());
             if (row.getQuantity().compareTo(avail) > 0) {
                 throw new ResponseStatusException(

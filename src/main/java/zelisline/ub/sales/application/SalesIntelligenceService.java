@@ -47,6 +47,7 @@ public class SalesIntelligenceService {
                AND s.status IN (?, ?)
                AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
                AND (? IS NULL OR i.category_id = ?)
+               AND (? IS NULL OR s.branch_id = ?)
           GROUP BY COALESCE(i.category_id, '_none'), COALESCE(c.name, 'Uncategorised')
             """;
 
@@ -65,6 +66,7 @@ public class SalesIntelligenceService {
                AND r.status = ?
                AND CAST(r.refunded_at AS DATE) BETWEEN ? AND ?
                AND (? IS NULL OR i.category_id = ?)
+               AND (? IS NULL OR s.branch_id = ?)
           GROUP BY COALESCE(i.category_id, '_none'), COALESCE(c.name, 'Uncategorised')
             """;
 
@@ -163,12 +165,14 @@ public class SalesIntelligenceService {
             String businessId,
             LocalDate fromInclusive,
             LocalDate toInclusive,
-            String categoryId
+            String categoryId,
+            String branchId
     ) {
         LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
         Date from = Date.valueOf(w[0]);
         Date to = Date.valueOf(w[1]);
         String catFilter = (categoryId != null && !categoryId.isBlank()) ? categoryId : null;
+        String branchFilter = (branchId != null && !branchId.isBlank()) ? branchId : null;
 
         Map<String, Agg> byCat = new HashMap<>();
 
@@ -187,7 +191,9 @@ public class SalesIntelligenceService {
                 from,
                 to,
                 catFilter,
-                catFilter);
+                catFilter,
+                branchFilter,
+                branchFilter);
 
         jdbc.query(
                 Q_REFUNDS,
@@ -203,7 +209,9 @@ public class SalesIntelligenceService {
                 from,
                 to,
                 catFilter,
-                catFilter);
+                catFilter,
+                branchFilter,
+                branchFilter);
 
         List<RevenueByCategoryRow> out = new ArrayList<>();
         for (Map.Entry<String, Agg> e : byCat.entrySet()) {

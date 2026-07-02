@@ -657,6 +657,7 @@ public class SaleService {
         String m = raw.trim().toLowerCase(Locale.ROOT);
         if (!SalesConstants.PAYMENT_METHOD_CASH.equals(m)
                 && !SalesConstants.PAYMENT_METHOD_MPESA_MANUAL.equals(m)
+                && !SalesConstants.PAYMENT_METHOD_CARD.equals(m)
                 && !SalesConstants.PAYMENT_METHOD_CUSTOMER_CREDIT.equals(m)
                 && !SalesConstants.PAYMENT_METHOD_CUSTOMER_WALLET.equals(m)
                 && !SalesConstants.PAYMENT_METHOD_LOYALTY_REDEEM.equals(m)) {

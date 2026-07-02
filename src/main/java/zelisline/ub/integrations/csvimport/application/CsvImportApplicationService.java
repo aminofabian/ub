@@ -137,7 +137,7 @@ public class CsvImportApplicationService {
                     null,
                     null,
                     null,
-                    null, null, null);
+                    null, null, null, null);
             ItemCreateResult created = itemCatalogService.createItem(businessId, req, null, actorUserId);
             String itemId = created.body().id();
 

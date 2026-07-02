@@ -11,6 +11,8 @@ public record ItemSupplierLinkResponse(
         String supplierSku,
         BigDecimal defaultCostPrice,
         BigDecimal lastCostPrice,
+        BigDecimal packSize,
+        String packUnit,
         boolean active,
         long version,
         Instant createdAt,

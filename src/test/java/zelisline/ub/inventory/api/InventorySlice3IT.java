@@ -188,7 +188,7 @@ class InventorySlice3IT {
                 new CreateItemRequest(
                         "SKU-XFER", null, "Xfer Item", null, goodsTypeId, null, null, null,
                         false, true, true,
-                        null, null, null, null, null, null, null, null, null, null, false, null, null, null),
+                        null, null, null, null, null, null, null, null, null, null, false, null, null, null, null),
                 null
         ).body().id();
 

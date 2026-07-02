@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -41,9 +42,14 @@ public class PurchasingSuppliesController {
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'purchasing.path_b.read') or hasPermission(null, 'purchasing.payment.read')")
-    public List<PathBSupplyListRow> list(HttpServletRequest request) {
+    public List<PathBSupplyListRow> list(
+            @RequestParam(required = false) String branchId,
+            HttpServletRequest request
+    ) {
         CurrentTenantUser.require(request);
-        return supplyReceiptQueryService.listPathBSupplies(TenantRequestIds.resolveBusinessId(request));
+        return supplyReceiptQueryService.listPathBSupplies(
+                TenantRequestIds.resolveBusinessId(request),
+                branchId);
     }
 
     @GetMapping("/{invoiceId}")

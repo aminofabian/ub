@@ -54,6 +54,9 @@ public class UserSession {
     @Column(name = "rotated_to", length = 36)
     private String rotatedToId;
 
+    @Column(name = "last_seen_at", nullable = false)
+    private Instant lastSeenAt;
+
     @PrePersist
     void onCreate() {
         if (id == null || id.isBlank()) {
@@ -62,6 +65,9 @@ public class UserSession {
         Instant now = Instant.now();
         if (issuedAt == null) {
             issuedAt = now;
+        }
+        if (lastSeenAt == null) {
+            lastSeenAt = now;
         }
     }
 }

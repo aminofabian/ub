@@ -85,6 +85,12 @@ public class AuthService {
     public static final String LOGIN_EMAIL_NOT_VERIFIED_DETAIL =
             "Email not verified. Open the link we sent you or use resend verification, then try again.";
 
+    /** Returned when a just-rotated refresh token is replayed inside the grace window. */
+    public static final String REFRESH_ALREADY_ROTATED_TITLE = "Refresh token already rotated";
+
+    /** Returned when {@link #idleTimeoutHours} of inactivity have elapsed. */
+    public static final String SESSION_IDLE_EXPIRED_TITLE = "Session idle timeout expired";
+
     private final UserRepository userRepository;
     private final UserSessionRepository userSessionRepository;
     private final UserSessionRevocation userSessionRevocation;
@@ -105,6 +111,9 @@ public class AuthService {
     @Value("${app.jwt.refresh-ttl-days:30}")
     private long refreshTtlDays;
 
+    @Value("${app.auth.idle-timeout-hours:12}")
+    private long idleTimeoutHours;
+
     @Value("${app.auth.password-reset-ttl-hours:1}")
     private long passwordResetTtlHours;
 
@@ -123,7 +132,7 @@ public class AuthService {
             throw invalidCredentials();
         }
         recordLoginSuccess(user);
-        LoginResponse response = issueNewSession(user, http);
+        LoginResponse response = issueNewSessionWithSession(user, http).tokens();
         publishLoginEvent(user, http, response, AuditEventTypes.LOGIN_SUCCEEDED, null);
         return response;
     }
@@ -147,7 +156,7 @@ public class AuthService {
             throw invalidCredentials();
         }
         recordLoginSuccess(user);
-        LoginResponse response = issueNewSession(user, http);
+        LoginResponse response = issueNewSessionWithSession(user, http).tokens();
         publishLoginEvent(user, http, response, AuditEventTypes.LOGIN_SUCCEEDED, null);
         return response;
     }
@@ -170,9 +179,7 @@ public class AuthService {
             throw invalidCredentials();
         }
 
-        if (handleRevokedOrExpiredRefresh(peek)) {
-            throw invalidCredentials();
-        }
+        assertRefreshSessionValid(peek);
 
         UserSession old = userSessionRepository.findByRefreshTokenHashForUpdate(hash)
                 .orElseThrow(this::invalidCredentials);
@@ -182,9 +189,7 @@ public class AuthService {
             throw invalidCredentials();
         }
 
-        if (handleRevokedOrExpiredRefresh(old)) {
-            throw invalidCredentials();
-        }
+        assertRefreshSessionValid(old);
 
         User user = userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(old.getUserId(), old.getBusinessId())
                 .orElseThrow(this::invalidCredentials);
@@ -199,22 +204,29 @@ public class AuthService {
     }
 
     /**
-     * @return {@code true} when the refresh must fail (caller throws {@code invalidCredentials})
+     * Validates that a refresh token's session row can still mint a new access token.
+     * Throws {@link #REFRESH_ALREADY_ROTATED_TITLE} inside the rotation grace window
+     * (benign duplicate) instead of cascading a family-wide revocation.
      */
-    private boolean handleRevokedOrExpiredRefresh(UserSession session) {
+    private void assertRefreshSessionValid(UserSession session) {
         if (session.getRevokedAt() != null) {
             if (isWithinRotationGrace(session)) {
-                return true;
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, REFRESH_ALREADY_ROTATED_TITLE);
             }
             userSessionRevocation.revokeAllActiveForUserNow(session.getUserId());
-            return true;
+            throw invalidCredentials();
         }
         if (session.getRefreshExpiresAt().isBefore(Instant.now())) {
             session.setRevokedAt(Instant.now());
             userSessionRepository.save(session);
-            return true;
+            throw invalidCredentials();
         }
-        return false;
+        Instant lastSeen = session.getLastSeenAt() != null ? session.getLastSeenAt() : session.getIssuedAt();
+        if (lastSeen.plus(idleTimeoutHours, ChronoUnit.HOURS).isBefore(Instant.now())) {
+            session.setRevokedAt(Instant.now());
+            userSessionRepository.save(session);
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, SESSION_IDLE_EXPIRED_TITLE);
+        }
     }
 
     /**
@@ -369,11 +381,6 @@ public class AuthService {
                 .build());
     }
 
-    private LoginResponse issueNewSession(User user, HttpServletRequest http) {
-        userSessionRevocation.revokeAllActiveForUserNow(user.getId());
-        return issueNewSessionWithSession(user, http).tokens();
-    }
-
     private SessionBundle issueNewSessionWithSession(User user, HttpServletRequest http) {
         String jti = UUID.randomUUID().toString();
         String refreshRaw = newSecureRefresh();
@@ -391,6 +398,7 @@ public class AuthService {
         session.setIp(clientIp(http));
         session.setExpiresAt(accessExp);
         session.setRefreshExpiresAt(refreshExp);
+        session.setLastSeenAt(now);
         userSessionRepository.save(session);
 
         String access = jwtTokenService.createAccessToken(

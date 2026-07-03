@@ -52,7 +52,7 @@ public class DatabaseRealtimeTicketStore {
                     """
                     SELECT user_id, business_id, branch_id, allowed_channels, issued_at, expires_at
                     FROM realtime_ws_tickets
-                    WHERE ticket_hash = ? AND expires_at > UTC_TIMESTAMP(3)
+                    WHERE ticket_hash = ?
                     """,
                     (rs, rowNum) -> mapRow(ticketHash, rs),
                     ticketHash

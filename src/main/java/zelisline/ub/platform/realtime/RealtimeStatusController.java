@@ -21,24 +21,39 @@ import org.springframework.web.bind.annotation.RestController;
 public class RealtimeStatusController {
 
     private final RealtimeTicketService ticketService;
+    private final SessionRegistry sessionRegistry;
     private final JdbcTemplate jdbcTemplate;
 
     public RealtimeStatusController(
             RealtimeTicketService ticketService,
+            SessionRegistry sessionRegistry,
             @Autowired(required = false) JdbcTemplate jdbcTemplate
     ) {
         this.ticketService = ticketService;
+        this.sessionRegistry = sessionRegistry;
         this.jdbcTemplate = jdbcTemplate;
     }
 
     @GetMapping("/status")
     public ResponseEntity<Map<String, Object>> status() {
         Map<String, Object> body = new LinkedHashMap<>();
+        boolean roundTripOk = ticketService.selfTestRoundTrip();
+        int activeConnections = sessionRegistry.activeSessionCount();
+
         body.put("ticketStore", ticketService.activeTicketStore());
         body.put("redisConfigured", ticketService.isRedisConfigured());
         body.put("mysqlTicketTable", mysqlTicketTablePresent());
         body.put("ticketTtlSeconds", ticketService.ticketTtlSeconds());
+        body.put("ticketRoundTripOk", roundTripOk);
+        body.put("activeConnectionsThisInstance", activeConnections);
         body.put("wsPath", WebSocketConfig.WS_PATH);
+        if (!roundTripOk) {
+            body.put("hint", "Ticket mint/peek failed on this instance — check MySQL connectivity and timezone");
+        } else if (activeConnections >= 5) {
+            body.put("hint", "Many open sessions on this instance — close extra tabs or restart the API container");
+        } else {
+            body.put("hint", "Ticket store OK — if browsers still fail WS, check nginx Connection upgrade map (see DEPLOYMENT.md)");
+        }
         return ResponseEntity.ok(body);
     }
 

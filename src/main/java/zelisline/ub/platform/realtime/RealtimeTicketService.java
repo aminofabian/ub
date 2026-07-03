@@ -196,6 +196,32 @@ public class RealtimeTicketService {
         return redisAvailable;
     }
 
+    /**
+     * Insert → peek → consume against MySQL/Redis/memory. Used by the ops status probe.
+     * Returns false when the round-trip fails (often timezone or connectivity issues).
+     */
+    public boolean selfTestRoundTrip() {
+        try {
+            String probeUser = "00000000-0000-0000-0000-000000000099";
+            String probeBusiness = "00000000-0000-0000-0000-000000000098";
+            TicketRecord minted = mint(probeUser, probeBusiness, null, Set.of("notifications"));
+            TicketRecord peeked = peek(minted.ticket());
+            if (peeked == null) {
+                log.warn("Ticket self-test failed: peek returned null after mint");
+                return false;
+            }
+            TicketRecord consumed = consume(minted.ticket());
+            if (consumed == null) {
+                log.warn("Ticket self-test failed: consume returned null after peek");
+                return false;
+            }
+            return true;
+        } catch (Exception ex) {
+            log.warn("Ticket self-test failed: {}", ex.getMessage());
+            return false;
+        }
+    }
+
     private void cacheInRedis(String ticketHash, TicketRecord record) {
         if (!redisAvailable || redisFailed) {
             return;

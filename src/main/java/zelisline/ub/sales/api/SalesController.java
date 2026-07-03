@@ -15,6 +15,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -24,8 +26,10 @@ import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.sales.api.dto.PostRefundRequest;
 import zelisline.ub.sales.api.dto.PostSaleRequest;
 import zelisline.ub.sales.api.dto.PostVoidSaleRequest;
+import zelisline.ub.sales.api.dto.PosTopProductResponse;
 import zelisline.ub.sales.api.dto.RefundResponse;
 import zelisline.ub.sales.api.dto.SaleResponse;
+import zelisline.ub.sales.application.PosTopProductsService;
 import zelisline.ub.sales.application.SaleRefundService;
 import zelisline.ub.sales.application.SaleService;
 import zelisline.ub.sales.application.SaleVoidService;
@@ -47,6 +51,37 @@ public class SalesController {
     private final SaleReceiptService saleReceiptService;
     private final BranchResolutionService branchResolutionService;
     private final VariableWeightBarcodeService variableWeightBarcodeService;
+    private final PosTopProductsService posTopProductsService;
+
+    /**
+     * Server-aggregated top sellers for the POS catalog. Ranks items by units
+     * sold (sum of quantities) across completed, non-voided sales at the
+     * resolved branch.
+     *
+     * <p>{@code branchId} defaults to the caller's assigned branch when
+     * omitted; {@code limit} clamps to 1..100 and defaults to 20.</p>
+     */
+    @GetMapping("/top-products")
+    @PreAuthorize("hasPermission(null, 'sales.sell')")
+    public List<PosTopProductResponse> topProducts(
+            @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) String itemTypeId,
+            @RequestParam(required = false, defaultValue = "20") int limit,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String effectiveBranch = branchResolutionService.resolveEffectiveBranch(
+                businessId, branchId, principal.roleId());
+        String resolvedBranch = effectiveBranch != null
+                ? effectiveBranch
+                : principal.branchId();
+        if (resolvedBranch == null) {
+            return List.of();
+        }
+        return posTopProductsService.topProductsForBranch(
+                businessId, resolvedBranch, itemTypeId, limit);
+    }
 
     @GetMapping("/variable-weight-barcode")
     @PreAuthorize("hasPermission(null, 'sales.sell')")

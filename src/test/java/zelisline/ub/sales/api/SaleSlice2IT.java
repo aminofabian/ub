@@ -1427,6 +1427,40 @@ class SaleSlice2IT {
         assertThat(weighedItem.getCurrentStock()).isEqualByComparingTo(new BigDecimal("9.500"));
     }
 
+    @Test
+    void topProducts_ranksByUnitsSoldAtBranch() throws Exception {
+        openShift(new BigDecimal("100.00"));
+
+        String body = """
+                {"branchId":"%s","lines":[{"itemId":"%s","quantity":5,"unitPrice":5}],"payments":[{"method":"cash","amount":25}]}
+                """.formatted(branchId, itemId);
+
+        mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("Idempotency-Key", "top-products-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isCreated());
+
+        MvcResult top = mockMvc.perform(get("/api/v1/sales/top-products")
+                        .param("branchId", branchId)
+                        .param("limit", "20")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode rows = objectMapper.readTree(top.getResponse().getContentAsString());
+        assertThat(rows.isArray()).isTrue();
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).get("id").asText()).isEqualTo(itemId);
+        assertThat(rows.get(0).get("totalQuantity").decimalValue())
+                .isEqualByComparingTo(new BigDecimal("5"));
+    }
+
     private void openShift(BigDecimal opening) throws Exception {
         mockMvc.perform(post("/api/v1/shifts/open")
                         .contentType(APPLICATION_JSON)

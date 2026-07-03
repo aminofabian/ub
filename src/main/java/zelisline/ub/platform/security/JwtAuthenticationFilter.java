@@ -31,6 +31,7 @@ import zelisline.ub.audit.application.AuditEventPublisher;
 import zelisline.ub.audit.domain.AuditEventActorType;
 import zelisline.ub.audit.domain.AuditEventCategory;
 import zelisline.ub.audit.domain.AuditEventSeverity;
+import zelisline.ub.identity.application.UserSessionActivity;
 import zelisline.ub.identity.domain.SuperAdmin;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.domain.UserStatus;
@@ -55,6 +56,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final SuperAdminRepository superAdminRepository;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
+    private final UserSessionActivity userSessionActivity;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
@@ -166,6 +168,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         var principal = new TenantPrincipal(userId, resolvedTenant, roleId, branchId, jti);
         var authentication = new TenantAuthenticationToken(principal);
         SecurityContextHolder.getContext().setAuthentication(authentication);
+
+        try {
+            userSessionActivity.recordActivity(jti);
+        } catch (Exception ignored) {
+            // Never fail the request because of a last_seen write failure.
+        }
 
         try {
             filterChain.doFilter(request, response);

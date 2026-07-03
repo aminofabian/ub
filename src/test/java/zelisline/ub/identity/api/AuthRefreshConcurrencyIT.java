@@ -167,6 +167,9 @@ class AuthRefreshConcurrencyIT {
             assertThat(c200).isEqualTo(1);
             assertThat(c401).isEqualTo(1);
 
+            HttpResponse<String> loser = r1.statusCode() == 401 ? r1 : r2;
+            assertThat(loser.body()).contains("Refresh token already rotated");
+
             String newRefresh = null;
             if (r1.statusCode() == 200) {
                 newRefresh = objectMapper.readTree(r1.body()).get("refreshToken").asText();

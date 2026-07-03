@@ -42,4 +42,17 @@ public interface UserSessionRepository extends JpaRepository<UserSession, String
     int revokeAllActiveForBusiness(
             @Param("businessId") String businessId,
             @Param("revokedAt") Instant revokedAt);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        update UserSession s
+           set s.lastSeenAt = :seenAt
+         where s.accessTokenJti = :jti
+           and s.revokedAt is null
+           and (s.lastSeenAt is null or s.lastSeenAt < :threshold)
+        """)
+    int touchLastSeenIfStale(
+            @Param("jti") String jti,
+            @Param("seenAt") Instant seenAt,
+            @Param("threshold") Instant threshold);
 }

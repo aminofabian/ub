@@ -211,11 +211,12 @@ public class SecurityConfig {
             UserRepository userRepository,
             SuperAdminRepository superAdminRepository,
             zelisline.ub.audit.application.AuditEventPublisher auditEventPublisher,
-            zelisline.ub.audit.application.AuditEventBuilder auditEventBuilder
+            zelisline.ub.audit.application.AuditEventBuilder auditEventBuilder,
+            zelisline.ub.identity.application.UserSessionActivity userSessionActivity
     ) {
         return new JwtAuthenticationFilter(
                 jwtTokenService, userSessionRepository, userRepository, superAdminRepository,
-                auditEventPublisher, auditEventBuilder);
+                auditEventPublisher, auditEventBuilder, userSessionActivity);
     }
 
     @Bean

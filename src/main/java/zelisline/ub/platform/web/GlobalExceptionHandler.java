@@ -70,8 +70,13 @@ public class GlobalExceptionHandler {
             log.error("Server error {}: {}", status.value(), ex.getReason());
         }
         ProblemDetail body = ProblemDetail.forStatus(status);
-        body.setTitle(reasonOrDefault(status));
-        body.setDetail(ex.getReason());
+        String reason = ex.getReason();
+        if (reason != null && !reason.isBlank()) {
+            body.setTitle(reason.trim());
+        } else {
+            body.setTitle(reasonOrDefault(status));
+        }
+        body.setDetail(reason);
         body.setType(URI.create(PROBLEM_BASE + slug(reasonOrDefault(status))));
         return problem(body, status);
     }

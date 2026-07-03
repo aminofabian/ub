@@ -65,6 +65,7 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
     private static final List<String> NON_TENANT_PATH_PREFIXES = List.of(
             "/api/v1/super-admin/",
             "/api/v1/public/",
+            "/api/v1/realtime",
             "/actuator/",
             "/api/v1/openapi",
             "/v3/api-docs",

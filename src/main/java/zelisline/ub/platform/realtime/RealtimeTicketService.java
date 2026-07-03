@@ -19,9 +19,9 @@ import org.springframework.stereotype.Service;
 /**
  * Mints single-use, short-lived opaque tickets that authorize a WebSocket upgrade.
  *
- * <p>Cloud profile: tickets stored hashed in Redis with TTL when available.
- * Without Redis, tickets are stored in MySQL so all API replicas share the same store.
- * Local profile (single JVM): in-memory fallback via {@link InMemoryTicketStore}.
+ * <p>MySQL ({@code realtime_ws_tickets}) is the primary shared store when migration V129
+ * is applied — all API replicas read/write the same rows. Redis is an optional accelerator.
+ * Local single-JVM: in-memory fallback via {@link InMemoryTicketStore}.
  */
 @Service
 public class RealtimeTicketService {
@@ -53,10 +53,11 @@ public class RealtimeTicketService {
 
     @PostConstruct
     void logActiveTicketStore() {
-        if (redisAvailable) {
-            log.info("Realtime tickets: primary store=redis, mysql-fallback={}", databaseAvailable);
-        } else if (databaseAvailable) {
-            log.info("Realtime tickets: primary store=mysql (shared across API replicas)");
+        if (databaseAvailable) {
+            log.info("Realtime tickets: primary store=mysql (shared across API replicas), redis-cache={}",
+                    redisAvailable);
+        } else if (redisAvailable) {
+            log.info("Realtime tickets: primary store=redis (mysql table not available)");
         } else {
             log.warn(
                     "Realtime tickets: in-memory only — WebSocket will fail when mint and upgrade hit different API instances");
@@ -73,19 +74,21 @@ public class RealtimeTicketService {
                 ticket, ticketHash, userId, businessId, branchId,
                 allowedChannels, Instant.now(), Instant.now().plusSeconds(ticketTtlSeconds));
 
+        // MySQL first — always shared across replicas; avoids Redis-only tickets on multi-instance deploys.
+        if (databaseAvailable) {
+            databaseStore.put(ticketHash, record);
+            cacheInRedis(ticketHash, record);
+            return record;
+        }
         if (redisAvailable && !redisFailed) {
             try {
                 redisTemplate.opsForValue().set(
                         redisKey(ticketHash), serializeRecord(record), ticketTtlSeconds, TimeUnit.SECONDS);
                 return record;
             } catch (Exception e) {
-                log.warn("Redis unavailable for ticket mint, falling back to shared store: {}", e.getMessage());
+                log.warn("Redis unavailable for ticket mint, falling back to in-memory: {}", e.getMessage());
                 redisFailed = true;
             }
-        }
-        if (databaseAvailable) {
-            databaseStore.put(ticketHash, record);
-            return record;
         }
         InMemoryTicketStore.put(ticketHash, record);
         return record;
@@ -110,20 +113,20 @@ public class RealtimeTicketService {
         String ticketHash = sha256(ticket);
         TicketRecord record = null;
 
-        if (redisAvailable && !redisFailed) {
+        if (databaseAvailable) {
+            record = databaseStore.peek(ticketHash);
+        }
+
+        if (record == null && redisAvailable && !redisFailed) {
             try {
                 String raw = redisTemplate.opsForValue().get(redisKey(ticketHash));
                 if (raw != null) {
                     record = deserializeRecord(raw);
                 }
             } catch (Exception e) {
-                log.warn("Redis unavailable for ticket peek, falling back to in-memory: {}", e.getMessage());
+                log.warn("Redis unavailable for ticket peek: {}", e.getMessage());
                 redisFailed = true;
             }
-        }
-
-        if (record == null && databaseAvailable) {
-            record = databaseStore.peek(ticketHash);
         }
 
         if (record == null) {
@@ -144,20 +147,20 @@ public class RealtimeTicketService {
         String ticketHash = sha256(ticket);
         TicketRecord record = null;
 
-        if (redisAvailable && !redisFailed) {
+        if (databaseAvailable) {
+            record = databaseStore.consume(ticketHash);
+        }
+
+        if (record == null && redisAvailable && !redisFailed) {
             try {
                 String raw = redisTemplate.opsForValue().getAndDelete(redisKey(ticketHash));
                 if (raw != null) {
                     record = deserializeRecord(raw);
                 }
             } catch (Exception e) {
-                log.warn("Redis unavailable for ticket validation, falling back to in-memory: {}", e.getMessage());
+                log.warn("Redis unavailable for ticket consume: {}", e.getMessage());
                 redisFailed = true;
             }
-        }
-
-        if (record == null && databaseAvailable) {
-            record = databaseStore.consume(ticketHash);
         }
 
         if (record == null) {
@@ -176,6 +179,34 @@ public class RealtimeTicketService {
 
     public long ticketTtlSeconds() {
         return ticketTtlSeconds;
+    }
+
+    /** Which backing store mint/peek/consume use after startup (for ops probes). */
+    public String activeTicketStore() {
+        if (databaseAvailable) {
+            return "mysql";
+        }
+        if (redisAvailable && !redisFailed) {
+            return "redis";
+        }
+        return "in-memory";
+    }
+
+    public boolean isRedisConfigured() {
+        return redisAvailable;
+    }
+
+    private void cacheInRedis(String ticketHash, TicketRecord record) {
+        if (!redisAvailable || redisFailed) {
+            return;
+        }
+        try {
+            redisTemplate.opsForValue().set(
+                    redisKey(ticketHash), serializeRecord(record), ticketTtlSeconds, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.warn("Redis cache write failed for ticket (mysql is authoritative): {}", e.getMessage());
+            redisFailed = true;
+        }
     }
 
     private String redisKey(String ticketHash) {

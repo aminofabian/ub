@@ -1,5 +1,7 @@
 package zelisline.ub.platform.realtime;
 
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 import org.slf4j.Logger;
@@ -149,7 +151,9 @@ public class WebSocketConfig implements WebSocketConfigurer {
                     WebSocketHandler wsHandler,
                     Exception exception
             ) {
-                // no-op
+                if (exception != null) {
+                    log.warn("WS handshake completed with exception: {}", exception.getMessage(), exception);
+                }
             }
         };
     }
@@ -158,7 +162,8 @@ public class WebSocketConfig implements WebSocketConfigurer {
         for (String pair : query.split("&")) {
             int eq = pair.indexOf('=');
             if (eq > 0 && param.equals(pair.substring(0, eq))) {
-                return pair.substring(eq + 1);
+                String raw = pair.substring(eq + 1);
+                return URLDecoder.decode(raw, StandardCharsets.UTF_8);
             }
         }
         return null;

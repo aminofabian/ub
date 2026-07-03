@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.application.ItemSellability;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.pricing.application.PricingService;
@@ -52,8 +53,9 @@ public class VariableWeightBarcodeService {
                     HttpStatus.BAD_REQUEST,
                     "PLU " + parsed.pluCode() + " is not a weighed item");
         }
-        if (!item.isSellable() || !item.isActive()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item is not sellable");
+        String sellabilityViolation = ItemSellability.sellabilityViolation(item);
+        if (sellabilityViolation != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, sellabilityViolation);
         }
 
         BigDecimal shelfPrice = pricingService.getCurrentOpenSellingPrice(businessId, item.getId(), branchId);

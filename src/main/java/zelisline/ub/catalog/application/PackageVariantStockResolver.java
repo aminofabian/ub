@@ -38,10 +38,8 @@ public class PackageVariantStockResolver {
 
     public Item requireSellableItem(String businessId, String itemId) {
         Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
-        if (!item.isSellable()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item is not sellable");
-        }
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found: " + itemId));
+        ItemSellability.requireSellable(item);
         return item;
     }
 

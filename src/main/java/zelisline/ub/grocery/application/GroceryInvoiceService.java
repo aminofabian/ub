@@ -24,6 +24,7 @@ import org.springframework.data.domain.PageRequest;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.application.ItemCatalogService;
+import zelisline.ub.catalog.application.ItemSellability;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.grocery.GroceryConstants;
@@ -90,9 +91,9 @@ public class GroceryInvoiceService {
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
                             "Item not found: " + lineReq.itemId()));
 
-            if (!item.isSellable()) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "Item is not sellable: " + item.getName());
+            String sellabilityViolation = ItemSellability.sellabilityViolation(item);
+            if (sellabilityViolation != null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, sellabilityViolation);
             }
 
             BigDecimal qty = lineReq.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);

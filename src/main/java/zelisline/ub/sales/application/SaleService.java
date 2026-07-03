@@ -36,6 +36,7 @@ import zelisline.ub.finance.domain.JournalEntry;
 import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.inventory.api.dto.BatchAllocationLine;
 import zelisline.ub.inventory.application.InventoryBatchPickerService;
+import zelisline.ub.catalog.application.ItemSellability;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.credits.application.BusinessCreditSettingsService;
 import zelisline.ub.credits.application.CreditSaleDebtService;
@@ -539,6 +540,11 @@ public class SaleService {
             if (item == null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "Line " + (i + 1) + ": item not found");
+            }
+            String sellabilityViolation = ItemSellability.sellabilityViolation(item);
+            if (sellabilityViolation != null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        ItemSellability.linePrefixed(i + 1, sellabilityViolation));
             }
             if (line.quantity() == null || line.quantity().compareTo(BigDecimal.ZERO) <= 0) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,

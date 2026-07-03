@@ -268,11 +268,14 @@ public class InventoryBatchPickerService {
 
     private InventoryBatch resolveCostReferenceBatch(String businessId, String itemId, String branchId) {
         return inventoryBatchRepository
-                .findFirstByBusinessIdAndItemIdAndBranchIdAndStatusOrderByReceivedAtDescIdDesc(
+                .findFirstByBusinessIdAndItemIdAndBranchIdAndStatusInOrderByReceivedAtDescIdDesc(
                         businessId,
                         itemId,
                         branchId,
-                        InventoryConstants.BATCH_STATUS_ACTIVE
+                        List.of(
+                                InventoryConstants.BATCH_STATUS_ACTIVE,
+                                InventoryConstants.BATCH_STATUS_DEPLETED
+                        )
                 )
                 .orElse(null);
     }

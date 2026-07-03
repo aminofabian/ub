@@ -225,4 +225,12 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
             String branchId,
             String status
     );
+
+    /** Most recent batch for COGS reference when overselling (includes fully depleted lines). */
+    Optional<InventoryBatch> findFirstByBusinessIdAndItemIdAndBranchIdAndStatusInOrderByReceivedAtDescIdDesc(
+            String businessId,
+            String itemId,
+            String branchId,
+            List<String> statuses
+    );
 }

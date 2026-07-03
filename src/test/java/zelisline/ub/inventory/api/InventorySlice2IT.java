@@ -357,6 +357,48 @@ class InventorySlice2IT {
         assertThat(after.getCurrentStock().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("-1");
     }
 
+    @Test
+    void salePickAllowsNegativeStockAfterBatchesDepleted() {
+        Business business = businessRepository.findById(TENANT).orElseThrow();
+        business.setSettings("{\"inventory\":{\"stockLevels\":{\"allowNegativeStock\":true}}}");
+        businessRepository.save(business);
+
+        Item item = itemRepository.findById(itemId).orElseThrow();
+        item.setHasExpiry(false);
+        itemRepository.save(item);
+        inventoryBatchRepository.deleteAll();
+        stockMovementRepository.deleteAll();
+
+        String depletedBatchId = UUID.randomUUID().toString();
+        InventoryBatch depleted = batch(
+                depletedBatchId, itemId, Instant.parse("2026-02-01T12:00:00Z"), null, "0");
+        depleted.setStatus(InventoryConstants.BATCH_STATUS_DEPLETED);
+        inventoryBatchRepository.save(depleted);
+
+        Item stocked = itemRepository.findById(itemId).orElseThrow();
+        stocked.setCurrentStock(BigDecimal.ZERO);
+        itemRepository.save(stocked);
+
+        transactionTemplate.executeWithoutResult(st -> {
+            List<BatchAllocationLine> lines = inventoryBatchPickerService.pickAndApplyPhysicalDecrement(
+                    TENANT,
+                    itemId,
+                    branchId,
+                    BigDecimal.ONE,
+                    InventoryConstants.REF_OPERATION,
+                    inventoryBatchPickerService.newPickReferenceId(),
+                    InventoryConstants.MOVEMENT_SALE,
+                    owner.getId()
+            );
+            assertThat(lines).hasSize(1);
+            assertThat(lines.getFirst().batchId()).isEqualTo(depletedBatchId);
+            assertThat(lines.getFirst().quantity()).isEqualByComparingTo("1");
+        });
+
+        Item after = itemRepository.findById(itemId).orElseThrow();
+        assertThat(after.getCurrentStock().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("-1");
+    }
+
     private InventoryBatch batch(String id, String itId, Instant received, LocalDate expiry, String qty) {
         InventoryBatch b = new InventoryBatch();
         b.setId(id);

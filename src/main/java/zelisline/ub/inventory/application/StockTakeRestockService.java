@@ -15,6 +15,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -94,12 +95,13 @@ public class StockTakeRestockService {
                         .toList();
 
         StockTakeRestockItemResponse pending = null;
-        if (ctx.session().getDailyAuditId() != null) {
+        String dailyAuditId = resolveDailyAuditId(businessId, ctx.session());
+        if (dailyAuditId != null) {
             List<StockTakeRestockItem> pendingRows =
                     restockItemRepository.findPendingForAuditItem(
                             businessId,
                             ctx.session().getBranchId(),
-                            ctx.session().getDailyAuditId(),
+                            dailyAuditId,
                             ctx.line().getItemId(),
                             InventoryConstants.RESTOCK_STATUS_PENDING);
             if (!pendingRows.isEmpty()) {
@@ -123,21 +125,21 @@ public class StockTakeRestockService {
                 .findByIdAndBusinessIdAndDeletedAtIsNull(body.supplierId(), businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
 
-        String dailyAuditId = ctx.session().getDailyAuditId();
-        StockTakeRestockItem row =
-                dailyAuditId == null
-                        ? null
-                        : restockItemRepository
-                                .findByBusinessIdAndBranchIdAndDailyAuditIdAndItemIdAndSupplierIdAndStatus(
-                                        businessId,
-                                        ctx.session().getBranchId(),
-                                        dailyAuditId,
-                                        ctx.line().getItemId(),
-                                        body.supplierId(),
-                                        InventoryConstants.RESTOCK_STATUS_PENDING)
-                                .orElse(null);
-
+        String dailyAuditId = resolveDailyAuditId(businessId, ctx.session());
+        if (dailyAuditId == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Daily audit context is missing for this session. Restart the daily audit count and try again.");
+        }
         Instant now = Instant.now();
+        StockTakeRestockItem row =
+                findExistingPending(
+                        businessId,
+                        ctx.session().getBranchId(),
+                        dailyAuditId,
+                        ctx.line().getItemId(),
+                        body.supplierId());
+
         if (row == null) {
             row = new StockTakeRestockItem();
             row.setBusinessId(businessId);
@@ -153,13 +155,79 @@ public class StockTakeRestockService {
         } else {
             row.setStockTakeSessionId(sessionId);
             row.setStockTakeLineId(body.lineId());
+            if (row.getDailyAuditId() == null && dailyAuditId != null) {
+                row.setDailyAuditId(dailyAuditId);
+            }
         }
 
         row.setSuggestedQty(body.suggestedQty());
         row.setNote(blankToNull(body.note()));
         applySupplierSnapshot(row, link, supplier);
-        restockItemRepository.save(row);
+        row = savePendingUpsert(row, () ->
+                findExistingPending(
+                        businessId,
+                        ctx.session().getBranchId(),
+                        dailyAuditId,
+                        ctx.line().getItemId(),
+                        body.supplierId()));
         return toItemResponse(row, loadContextMaps(List.of(row)));
+    }
+
+    private StockTakeRestockItem savePendingUpsert(
+            StockTakeRestockItem row,
+            java.util.function.Supplier<StockTakeRestockItem> reloadPending
+    ) {
+        try {
+            return restockItemRepository.save(row);
+        } catch (DataIntegrityViolationException ex) {
+            StockTakeRestockItem existing = reloadPending.get();
+            if (existing == null || existing.getId().equals(row.getId())) {
+                throw ex;
+            }
+            existing.setStockTakeSessionId(row.getStockTakeSessionId());
+            existing.setStockTakeLineId(row.getStockTakeLineId());
+            existing.setSuggestedQty(row.getSuggestedQty());
+            existing.setNote(row.getNote());
+            existing.setBuyingPrice(row.getBuyingPrice());
+            existing.setSupplierPackSize(row.getSupplierPackSize());
+            existing.setSupplierPackUnit(row.getSupplierPackUnit());
+            if (existing.getDailyAuditId() == null && row.getDailyAuditId() != null) {
+                existing.setDailyAuditId(row.getDailyAuditId());
+            }
+            return restockItemRepository.save(existing);
+        }
+    }
+
+    private StockTakeRestockItem findExistingPending(
+            String businessId,
+            String branchId,
+            String dailyAuditId,
+            String itemId,
+            String supplierId
+    ) {
+        if (dailyAuditId == null) {
+            return null;
+        }
+        List<StockTakeRestockItem> rows =
+                restockItemRepository.findPendingForAuditItemAndSupplier(
+                        businessId,
+                        branchId,
+                        dailyAuditId,
+                        itemId,
+                        supplierId,
+                        InventoryConstants.RESTOCK_STATUS_PENDING);
+        return rows.isEmpty() ? null : rows.getFirst();
+    }
+
+    private String resolveDailyAuditId(String businessId, StockTakeSession session) {
+        if (session.getDailyAuditId() != null && !session.getDailyAuditId().isBlank()) {
+            return session.getDailyAuditId();
+        }
+        return dailyStockAuditRepository
+                .findByBusinessBranchAndDateFetchItems(
+                        businessId, session.getBranchId(), session.getSessionDate())
+                .map(DailyStockAudit::getId)
+                .orElse(null);
     }
 
     @Transactional(readOnly = true)
@@ -651,7 +719,10 @@ public class StockTakeRestockService {
         if (user.getName() != null && !user.getName().isBlank()) {
             return user.getName().trim();
         }
-        return user.getEmail();
+        if (user.getEmail() != null && !user.getEmail().isBlank()) {
+            return user.getEmail().trim();
+        }
+        return "User";
     }
 
     private Map<String, Supplier> loadSuppliers(List<String> supplierIds) {

@@ -15,7 +15,9 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.IncorrectResultSizeDataAccessException;
 import org.springframework.dao.InvalidDataAccessResourceUsageException;
+import org.springframework.jdbc.BadSqlGrammarException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -45,10 +47,28 @@ public class GlobalExceptionHandler {
         ProblemDetail body = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
         body.setTitle("Database not ready");
         body.setType(URI.create(PROBLEM_BASE + "schema-mismatch"));
-        body.setDetail(
-                "A required database migration may be missing. Redeploy the API so Flyway can run "
-                        + "pending migrations (e.g. V93 supplier payout, V95–V97 credit sale reminder settings).");
+        body.setDetail(schemaMismatchDetail(ex));
         return problem(body, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    @ExceptionHandler(BadSqlGrammarException.class)
+    public ResponseEntity<ProblemDetail> handleBadSqlGrammar(BadSqlGrammarException ex) {
+        log.error("SQL grammar error", ex);
+        ProblemDetail body = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
+        body.setTitle("Database not ready");
+        body.setType(URI.create(PROBLEM_BASE + "schema-mismatch"));
+        body.setDetail(schemaMismatchDetail(ex));
+        return problem(body, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    @ExceptionHandler(IncorrectResultSizeDataAccessException.class)
+    public ResponseEntity<ProblemDetail> handleIncorrectResultSize(IncorrectResultSizeDataAccessException ex) {
+        log.warn("Non-unique query result: {}", ex.getMessage());
+        ProblemDetail body = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+        body.setTitle("Conflict");
+        body.setType(URI.create(PROBLEM_BASE + "non-unique-result"));
+        body.setDetail("Multiple matching records were found where one was expected. Retry the request.");
+        return problem(body, HttpStatus.CONFLICT);
     }
 
     @ExceptionHandler(AccessDeniedException.class)
@@ -169,5 +189,16 @@ public class GlobalExceptionHandler {
 
     private String slug(String reason) {
         return reason.toLowerCase().replaceAll("[^a-z0-9]+", "-").replaceAll("(^-|-$)", "");
+    }
+
+    private static String schemaMismatchDetail(Throwable ex) {
+        String message = ex.getMessage() != null ? ex.getMessage().toLowerCase() : "";
+        if (message.contains("stock_take_restock_items")) {
+            return "Restock tables are missing. Redeploy the API so Flyway can apply migration V134__stock_take_restock_items.sql.";
+        }
+        if (message.contains("daily_stock_audit")) {
+            return "Daily audit tables are missing. Redeploy the API so Flyway can apply migration V133__daily_stock_audit.sql.";
+        }
+        return "A required database migration may be missing. Redeploy the API so Flyway can run pending migrations.";
     }
 }

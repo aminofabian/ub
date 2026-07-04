@@ -14,6 +14,25 @@ public interface StockTakeRestockItemRepository extends JpaRepository<StockTakeR
 
     Optional<StockTakeRestockItem> findByIdAndBusinessId(String id, String businessId);
 
+    @Query("""
+            select r from StockTakeRestockItem r
+             where r.businessId = :businessId
+               and r.branchId = :branchId
+               and r.dailyAuditId = :dailyAuditId
+               and r.itemId = :itemId
+               and r.supplierId = :supplierId
+               and r.status = :status
+             order by r.addedAt desc
+            """)
+    List<StockTakeRestockItem> findPendingForAuditItemAndSupplier(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("dailyAuditId") String dailyAuditId,
+            @Param("itemId") String itemId,
+            @Param("supplierId") String supplierId,
+            @Param("status") String status
+    );
+
     Optional<StockTakeRestockItem> findByBusinessIdAndBranchIdAndDailyAuditIdAndItemIdAndSupplierIdAndStatus(
             String businessId,
             String branchId,

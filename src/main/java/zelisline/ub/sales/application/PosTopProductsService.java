@@ -3,9 +3,11 @@ package zelisline.ub.sales.application;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -61,13 +63,14 @@ public class PosTopProductsService {
                 itemsById.put(item.getId(), item);
             }
         }
+        Set<String> groupParentIds = groupLabelParentIds(businessId, itemsById.values());
         Map<String, String> thumbs = itemCatalogService.resolveThumbnailUrls(businessId, itemIds);
 
         List<PosTopProductResponse> out = new ArrayList<>(rows.size());
         for (Object[] row : rows) {
             String itemId = (String) row[0];
             Item item = itemsById.get(itemId);
-            if (item == null) {
+            if (item == null || groupParentIds.contains(itemId) || !item.isSellable()) {
                 continue;
             }
             String name = item.getName() != null ? item.getName() : itemId;
@@ -89,5 +92,19 @@ public class PosTopProductsService {
             ));
         }
         return out;
+    }
+
+    /** Root items that only group variant SKUs — not sellable POS tiles. */
+    private Set<String> groupLabelParentIds(String businessId, Iterable<Item> items) {
+        Set<String> rootIds = new HashSet<>();
+        for (Item item : items) {
+            if (item.getVariantOfItemId() == null) {
+                rootIds.add(item.getId());
+            }
+        }
+        if (rootIds.isEmpty()) {
+            return Set.of();
+        }
+        return new HashSet<>(itemRepository.findParentIdsHavingVariants(businessId, rootIds));
     }
 }

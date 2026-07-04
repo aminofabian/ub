@@ -46,7 +46,17 @@ public interface SaleItemRepository extends JpaRepository<SaleItem, String> {
                and s.branchId = :branchId
                and s.status = 'completed'
                and s.voidedAt is null
+               and item.deletedAt is null
+               and item.active = true
+               and item.sellable = true
                and (:itemTypeId is null or :itemTypeId = '' or item.itemTypeId = :itemTypeId)
+               and (item.variantOfItemId is not null
+                    or not exists (
+                      select 1 from Item ch
+                       where ch.variantOfItemId = item.id
+                         and ch.businessId = item.businessId
+                         and ch.deletedAt is null
+                    ))
              group by si.itemId
              order by coalesce(sum(si.quantity), 0) desc,
                       count(distinct s.id) desc,

@@ -1,5 +1,7 @@
 package zelisline.ub.platform.security;
 
+import java.util.Optional;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -56,6 +58,23 @@ public final class CurrentTenantUser {
             return akp.apiKeyId();
         }
         throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Not authenticated");
+    }
+
+    public static Optional<TenantPrincipal> optionalHuman(HttpServletRequest request) {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated()) {
+            return Optional.empty();
+        }
+        Object principal = authentication.getPrincipal();
+        if (!(principal instanceof TenantPrincipal tp)) {
+            return Optional.empty();
+        }
+        try {
+            TenantRequestIds.requireMatchingTenant(request, tp.businessId());
+        } catch (ResponseStatusException ex) {
+            return Optional.empty();
+        }
+        return Optional.of(tp);
     }
 
     private static Object requireAuthenticatedPrincipal(HttpServletRequest request) {

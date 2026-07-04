@@ -139,6 +139,12 @@ public class PublicWebCartService {
         return line;
     }
 
+    /** Validates slug + cart belong together and the cart has not expired. */
+    @Transactional(readOnly = true)
+    public WebCart requireActiveCart(PublicStorefrontContext ctx, String cartId) {
+        return loadActiveCart(ctx, cartId);
+    }
+
     private WebCart loadActiveCart(PublicStorefrontContext ctx, String cartId) {
         WebCart cart = webCartRepository.findByIdAndBusinessId(cartId, ctx.business().getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found"));

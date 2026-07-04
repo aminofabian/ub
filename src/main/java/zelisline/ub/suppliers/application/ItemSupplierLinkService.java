@@ -188,6 +188,7 @@ public class ItemSupplierLinkService {
                 sp.getPackSize(),
                 sp.getPackUnit(),
                 sp.isActive(),
+                sp.getLastPurchaseAt(),
                 sp.getVersion(),
                 sp.getCreatedAt(),
                 sp.getUpdatedAt()

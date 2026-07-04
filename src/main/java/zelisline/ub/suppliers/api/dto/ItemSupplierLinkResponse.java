@@ -14,6 +14,7 @@ public record ItemSupplierLinkResponse(
         BigDecimal packSize,
         String packUnit,
         boolean active,
+        Instant lastPurchaseAt,
         long version,
         Instant createdAt,
         Instant updatedAt

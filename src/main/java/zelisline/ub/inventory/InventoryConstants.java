@@ -32,6 +32,12 @@ public final class InventoryConstants {
     public static final String DAILY_AUDIT_REVIEW_APPROVED = "approved";
     public static final String DAILY_AUDIT_REVIEW_ESCALATED = "escalated";
     public static final int DAILY_AUDIT_SAMPLE_SIZE = 25;
+    public static final String RESTOCK_STATUS_PENDING = "pending";
+    public static final String RESTOCK_STATUS_APPROVED = "approved";
+    public static final String RESTOCK_STATUS_ORDER_DRAFTED = "order_drafted";
+    public static final String RESTOCK_STATUS_ORDERED = "ordered";
+    public static final String RESTOCK_STATUS_RECEIVED = "received";
+    public static final String RESTOCK_STATUS_REJECTED = "rejected";
     public static final String STOCKTAKE_CHECKLIST_BOTH = "both";
     public static final String ADJUSTMENT_REQUEST_PENDING = "pending";
     public static final String ADJUSTMENT_REQUEST_APPROVED = "approved";

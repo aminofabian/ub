@@ -34,6 +34,12 @@ public final class StockTakeRestockRequests {
             List<String> supplierIds,
             List<String> itemIds,
             @Size(max = 2000) String adminNotes,
-            Boolean createPathAPurchaseOrders
+            Boolean createPathAPurchaseOrders,
+            Boolean sendPurchaseOrders
+    ) {}
+
+    public record ConvertRestockOrderRequest(
+            @Size(max = 2000) String adminNotes,
+            Boolean sendPurchaseOrder
     ) {}
 }

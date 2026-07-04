@@ -87,6 +87,14 @@ public final class StockTakeRestockDtos {
             int itemCount,
             BigDecimal supplierSubtotal,
             String status,
-            Instant orderDraftedAt
+            Instant orderDraftedAt,
+            String purchaseOrderId
+    ) {}
+
+    public record ConvertRestockOrderResponse(
+            String orderNumber,
+            String purchaseOrderId,
+            String poNumber,
+            String status
     ) {}
 }

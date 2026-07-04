@@ -2,11 +2,16 @@ package zelisline.ub.inventory.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
+import static org.hamcrest.Matchers.containsString;
+import static org.springframework.http.HttpHeaders;
+import static org.springframework.http.MediaType;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -327,6 +332,102 @@ class StockTakeRestockIT {
                                 .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                                 .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void orderPdfAndConvertToPo() throws Exception {
+        JsonNode session = startMorningSession(manager, ROLE_MANAGER);
+        String sessionId = session.get("sessionId").asText();
+        String lineId = session.get("lines").get(0).get("lineId").asText();
+
+        MvcResult create =
+                mockMvc.perform(
+                                post(
+                                                "/api/v1/inventory/stock-take/restock-items/daily-audit/sessions/"
+                                                        + sessionId)
+                                        .contentType(APPLICATION_JSON)
+                                        .content(
+                                                """
+                                                {
+                                                  "lineId": "%s",
+                                                  "supplierId": "%s",
+                                                  "suggestedQty": 6,
+                                                  "note": "Reorder"
+                                                }
+                                                """
+                                                        .formatted(lineId, supplierId))
+                                        .header("X-Tenant-Id", TENANT)
+                                        .header(TestAuthenticationFilter.HEADER_USER_ID, manager.getId())
+                                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_MANAGER))
+                        .andExpect(status().isCreated())
+                        .andReturn();
+        String restockItemId =
+                objectMapper.readTree(create.getResponse().getContentAsString()).get("id").asText();
+
+        mockMvc.perform(
+                        post(
+                                        "/api/v1/inventory/stock-take/restock-items/"
+                                                + restockItemId
+                                                + "/approve")
+                                .header("X-Tenant-Id", TENANT)
+                                .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                                .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        MvcResult generated =
+                mockMvc.perform(
+                                post("/api/v1/inventory/stock-take/restock-items/generate-order")
+                                        .param("branchId", branchId)
+                                        .param("auditDate", auditDate.toString())
+                                        .contentType(APPLICATION_JSON)
+                                        .content("{}")
+                                        .header("X-Tenant-Id", TENANT)
+                                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                        .andExpect(status().isOk())
+                        .andReturn();
+
+        String orderNumber =
+                objectMapper
+                        .readTree(generated.getResponse().getContentAsString())
+                        .get("orders")
+                        .get(0)
+                        .get("orderNumber")
+                        .asText();
+
+        MvcResult pdf =
+                mockMvc.perform(
+                                get(
+                                                "/api/v1/inventory/stock-take/restock-items/orders/"
+                                                        + orderNumber
+                                                        + "/pdf")
+                                        .header("X-Tenant-Id", TENANT)
+                                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                        .andExpect(status().isOk())
+                        .andExpect(header().string(HttpHeaders.CONTENT_TYPE, containsString(MediaType.APPLICATION_PDF_VALUE)))
+                        .andReturn();
+        assertThat(pdf.getResponse().getContentAsByteArray())
+                .startsWith("%PDF".getBytes(StandardCharsets.US_ASCII));
+
+        MvcResult converted =
+                mockMvc.perform(
+                                post(
+                                                "/api/v1/inventory/stock-take/restock-items/orders/"
+                                                        + orderNumber
+                                                        + "/convert-to-po")
+                                        .contentType(APPLICATION_JSON)
+                                        .content("{\"sendPurchaseOrder\":true}")
+                                        .header("X-Tenant-Id", TENANT)
+                                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                        .andExpect(status().isOk())
+                        .andReturn();
+
+        JsonNode convertBody =
+                objectMapper.readTree(converted.getResponse().getContentAsString());
+        assertThat(convertBody.get("purchaseOrderId").asText()).isNotBlank();
+        assertThat(convertBody.get("status").asText()).isEqualTo("ordered");
     }
 
     private JsonNode startMorningSession(User user, String roleId) throws Exception {

@@ -8,7 +8,10 @@ import java.time.LocalDate;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -21,15 +24,18 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import zelisline.ub.inventory.api.dto.StockTakeRestockDtos.ConvertRestockOrderResponse;
 import zelisline.ub.inventory.api.dto.StockTakeRestockDtos.GenerateRestockOrderResponse;
 import zelisline.ub.inventory.api.dto.StockTakeRestockDtos.RestockOrderSummary;
 import zelisline.ub.inventory.api.dto.StockTakeRestockDtos.StockTakeRestockItemResponse;
 import zelisline.ub.inventory.api.dto.StockTakeRestockDtos.StockTakeRestockReviewResponse;
 import zelisline.ub.inventory.api.dto.StockTakeRestockDtos.StockTakeRestockSupplierOptionsResponse;
+import zelisline.ub.inventory.api.dto.StockTakeRestockRequests.ConvertRestockOrderRequest;
 import zelisline.ub.inventory.api.dto.StockTakeRestockRequests.GenerateRestockOrderRequest;
 import zelisline.ub.inventory.api.dto.StockTakeRestockRequests.PatchStockTakeRestockRequest;
 import zelisline.ub.inventory.api.dto.StockTakeRestockRequests.PostDailyAuditRestockRequest;
 import zelisline.ub.inventory.api.dto.StockTakeRestockRequests.RejectStockTakeRestockRequest;
+import zelisline.ub.inventory.application.StockTakeRestockOrderService;
 import zelisline.ub.inventory.application.StockTakeRestockService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
@@ -43,6 +49,7 @@ import zelisline.ub.tenancy.application.BranchResolutionService;
 public class StockTakeRestockController {
 
     private final StockTakeRestockService stockTakeRestockService;
+    private final StockTakeRestockOrderService stockTakeRestockOrderService;
     private final BranchResolutionService branchResolutionService;
 
     @GetMapping("/daily-audit/sessions/{sessionId}/lines/{lineId}/supplier-options")
@@ -159,6 +166,32 @@ public class StockTakeRestockController {
     ) {
         String businessId = TenantRequestIds.resolveBusinessId(request);
         return stockTakeRestockService.listOrders(businessId, from, to, supplierId, status);
+    }
+
+    @GetMapping("/orders/{orderId}/pdf")
+    @PreAuthorize("hasPermission(null, 'stocktake.approve')")
+    public ResponseEntity<byte[]> orderPdf(@PathVariable String orderId, HttpServletRequest request) {
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        byte[] body = stockTakeRestockOrderService.buildOrderPdf(businessId, orderId);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=restock-order-" + orderId + ".pdf")
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(body);
+    }
+
+    @PostMapping("/orders/{orderId}/convert-to-po")
+    @PreAuthorize("hasPermission(null, 'stocktake.approve')")
+    public ConvertRestockOrderResponse convertToPurchaseOrder(
+            @PathVariable String orderId,
+            @Valid @RequestBody(required = false) ConvertRestockOrderRequest body,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        boolean send = body != null && Boolean.TRUE.equals(body.sendPurchaseOrder());
+        String notes = body != null ? body.adminNotes() : null;
+        return stockTakeRestockOrderService.convertToPathAPurchaseOrder(
+                businessId, orderId, principal.userId(), send, notes);
     }
 
     @PostMapping("/orders/{orderId}/mark-ordered")

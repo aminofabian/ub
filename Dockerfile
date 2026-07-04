@@ -22,13 +22,15 @@ RUN ./gradlew bootJar --no-daemon -x test --stacktrace
 
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
-RUN apk add --no-cache curl \
+# curl = Dockerfile HEALTHCHECK; wget = Coolify deployment probe (uses wget by default).
+RUN apk add --no-cache curl wget \
 	&& addgroup -g 1000 -S spring && adduser -u 1000 -S spring -G spring
 COPY --from=builder /app/build/libs/*.jar app.jar
 USER spring:spring
 EXPOSE 5050
 ENV SERVER_PORT=5050
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=75.0"
-HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=5 \
-	CMD curl -fsS http://127.0.0.1:5050/actuator/health >/dev/null || exit 1
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -Dserver.port=5050 -jar app.jar"]
+# Spring Boot prod profile + Flyway can take 60–120s on cold start; Coolify must use the same grace period.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=5 \
+	CMD wget -qO- http://127.0.0.1:5050/actuator/health >/dev/null || exit 1
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -Dserver.port=${SERVER_PORT:-5050} -jar app.jar"]

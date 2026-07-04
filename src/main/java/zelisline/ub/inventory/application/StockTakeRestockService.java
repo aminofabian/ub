@@ -67,6 +67,7 @@ public class StockTakeRestockService {
     private final SupplierContactRepository supplierContactRepository;
     private final ItemRepository itemRepository;
     private final UserRepository userRepository;
+    private final StockTakeRestockOrderService stockTakeRestockOrderService;
 
     @Transactional(readOnly = true)
     public StockTakeRestockSupplierOptionsResponse getSupplierOptions(
@@ -379,7 +380,30 @@ public class StockTakeRestockService {
                             entry.getValue().size(),
                             subtotal,
                             InventoryConstants.RESTOCK_STATUS_ORDER_DRAFTED,
-                            now));
+                            now,
+                            null));
+        }
+
+        if (body != null && Boolean.TRUE.equals(body.createPathAPurchaseOrders())) {
+            boolean send = Boolean.TRUE.equals(body.sendPurchaseOrders());
+            String notes = body.adminNotes();
+            List<RestockOrderSummary> converted = new ArrayList<>();
+            for (RestockOrderSummary order : orders) {
+                var po =
+                        stockTakeRestockOrderService.convertToPathAPurchaseOrder(
+                                businessId, order.orderNumber(), userId, send, notes);
+                converted.add(
+                        new RestockOrderSummary(
+                                order.orderNumber(),
+                                order.supplierId(),
+                                order.supplierName(),
+                                order.itemCount(),
+                                order.supplierSubtotal(),
+                                po.status(),
+                                order.orderDraftedAt(),
+                                po.purchaseOrderId()));
+            }
+            return new GenerateRestockOrderResponse(converted);
         }
 
         return new GenerateRestockOrderResponse(orders);
@@ -430,7 +454,8 @@ public class StockTakeRestockService {
                             items.size(),
                             subtotal,
                             first.getStatus(),
-                            first.getOrderDraftedAt()));
+                            first.getOrderDraftedAt(),
+                            first.getPurchaseOrderId()));
         }
         return summaries;
     }

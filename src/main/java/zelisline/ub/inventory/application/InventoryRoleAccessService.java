@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.tenancy.api.dto.StockLevelsSettingsResponse;
+import zelisline.ub.tenancy.api.dto.StocktakeSettingsResponse;
 import zelisline.ub.tenancy.application.BusinessInventorySettingsService;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
@@ -43,6 +44,39 @@ public class InventoryRoleAccessService {
             return false;
         }
         return readStockLevels(businessId).allowStockEditForGroceryClerk();
+    }
+
+    /**
+     * Whether counters may see on-hand system quantity during stock take / daily audit.
+     * Owners, admins, and users with {@code stocktake.approve} always see it.
+     */
+    public boolean canSeeSystemStockDuringCount(
+            String businessId,
+            String roleId,
+            boolean hasStocktakeApprove
+    ) {
+        if (hasStocktakeApprove) {
+            return true;
+        }
+        String roleKey = resolveRoleKey(roleId);
+        if ("owner".equals(roleKey) || "admin".equals(roleKey)) {
+            return true;
+        }
+        if (!STOCK_MANAGER.equals(roleKey)) {
+            return false;
+        }
+        return readStocktake(businessId).showSystemStockToStockManager();
+    }
+
+    private StocktakeSettingsResponse readStocktake(String businessId) {
+        if (businessId == null || businessId.isBlank()) {
+            return StocktakeSettingsResponse.defaults();
+        }
+        return businessRepository.findById(businessId.trim())
+                .map(Business::getSettings)
+                .map(businessInventorySettingsService::readFromSettingsJson)
+                .map(inventory -> inventory.stocktake())
+                .orElse(StocktakeSettingsResponse.defaults());
     }
 
     private StockLevelsSettingsResponse readStockLevels(String businessId) {

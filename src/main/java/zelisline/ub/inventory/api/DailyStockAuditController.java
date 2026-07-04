@@ -30,6 +30,7 @@ import zelisline.ub.inventory.api.dto.DailyStockAuditRequests.PostDailyAuditSess
 import zelisline.ub.inventory.application.DailyStockAuditService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
+import zelisline.ub.identity.application.RequestPermissionService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 import zelisline.ub.tenancy.application.BranchResolutionService;
 
@@ -39,8 +40,11 @@ import zelisline.ub.tenancy.application.BranchResolutionService;
 @RequiredArgsConstructor
 public class DailyStockAuditController {
 
+    private static final String PERMISSION_STOCKTAKE_APPROVE = "stocktake.approve";
+
     private final DailyStockAuditService dailyStockAuditService;
     private final BranchResolutionService branchResolutionService;
+    private final RequestPermissionService permissionService;
 
     @GetMapping("/today")
     @PreAuthorize("hasPermission(null, 'stocktake.read')")
@@ -72,7 +76,9 @@ public class DailyStockAuditController {
                 effectiveBranch,
                 body.sessionType().trim(),
                 date,
-                principal.userId()
+                principal.userId(),
+                principal.roleId(),
+                canApprove(principal)
         );
     }
 
@@ -82,8 +88,14 @@ public class DailyStockAuditController {
             @PathVariable String sessionId,
             HttpServletRequest request
     ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
-        return dailyStockAuditService.getSession(businessId, sessionId);
+        return dailyStockAuditService.getSession(
+                businessId,
+                sessionId,
+                principal.roleId(),
+                canApprove(principal)
+        );
     }
 
     @PatchMapping("/sessions/{sessionId}/lines/{lineId}")
@@ -102,7 +114,9 @@ public class DailyStockAuditController {
                 lineId,
                 body.countedQty(),
                 body.note(),
-                principal.userId()
+                principal.userId(),
+                principal.roleId(),
+                canApprove(principal)
         );
     }
 
@@ -113,11 +127,14 @@ public class DailyStockAuditController {
             @Valid @RequestBody PatchDailyAuditProgressRequest body,
             HttpServletRequest request
     ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         return dailyStockAuditService.updateProgress(
                 businessId,
                 sessionId,
-                body.currentLineIndex()
+                body.currentLineIndex(),
+                principal.roleId(),
+                canApprove(principal)
         );
     }
 
@@ -201,6 +218,13 @@ public class DailyStockAuditController {
                 principal.roleId(),
                 principal.branchId(),
                 branchId
+        );
+    }
+
+    private boolean canApprove(TenantPrincipal principal) {
+        return permissionService.hasPermission(
+                principal.roleId(),
+                PERMISSION_STOCKTAKE_APPROVE
         );
     }
 }

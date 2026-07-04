@@ -56,6 +56,7 @@ public class DailyStockAuditService {
     private final SalesIntelligenceService salesIntelligenceService;
     private final BranchRepository branchRepository;
     private final BusinessRepository businessRepository;
+    private final InventoryRoleAccessService inventoryRoleAccessService;
 
     @Value("${app.inventory.daily-stock-audit.sample-size:25}")
     private int sampleSize;
@@ -173,9 +174,16 @@ public class DailyStockAuditService {
             String branchId,
             String sessionType,
             LocalDate auditDate,
-            String userId
+            String userId,
+            String roleId,
+            boolean hasStocktakeApprove
     ) {
         requireValidSessionType(sessionType);
+        boolean showSystemStock = inventoryRoleAccessService.canSeeSystemStockDuringCount(
+                businessId,
+                roleId,
+                hasStocktakeApprove
+        );
         DailyStockAudit audit = requireManifest(businessId, branchId, auditDate, userId);
 
         Optional<StockTakeSession> existing =
@@ -188,7 +196,12 @@ public class DailyStockAuditService {
                         audit.getId()
                 );
         if (existing.isPresent()) {
-            return toSessionResponse(businessId, existing.get(), audit);
+            return toSessionResponse(
+                    businessId,
+                    existing.get(),
+                    audit,
+                    showSystemStock
+            );
         }
 
         List<String> itemIds = audit.getItems().stream()
@@ -206,7 +219,7 @@ public class DailyStockAuditService {
         StockTakeSession session = stockTakeSessionRepository
                 .findByIdAndBusinessIdFetchLines(created.id(), businessId)
                 .orElseThrow();
-        return toSessionResponse(businessId, session, audit);
+        return toSessionResponse(businessId, session, audit, showSystemStock);
     }
 
     @Transactional
@@ -216,7 +229,9 @@ public class DailyStockAuditService {
             String lineId,
             BigDecimal countedQty,
             String note,
-            String userId
+            String userId,
+            String roleId,
+            boolean hasStocktakeApprove
     ) {
         loadDailyAuditSession(businessId, sessionId);
         stockTakeService.applySingleCountWithNote(
@@ -233,14 +248,21 @@ public class DailyStockAuditService {
                 .findByIdAndBusinessIdFetchLines(sessionId, businessId)
                 .orElseThrow();
         DailyStockAudit audit = loadAudit(businessId, session.getDailyAuditId());
-        return toSessionResponse(businessId, session, audit);
+        boolean showSystemStock = inventoryRoleAccessService.canSeeSystemStockDuringCount(
+                businessId,
+                roleId,
+                hasStocktakeApprove
+        );
+        return toSessionResponse(businessId, session, audit, showSystemStock);
     }
 
     @Transactional
     public DailyStockAuditDtos.DailyStockAuditSessionResponse updateProgress(
             String businessId,
             String sessionId,
-            int currentLineIndex
+            int currentLineIndex,
+            String roleId,
+            boolean hasStocktakeApprove
     ) {
         StockTakeSession session = loadDailyAuditSession(businessId, sessionId);
         stockTakeService.updateSessionProgress(
@@ -252,17 +274,29 @@ public class DailyStockAuditService {
                 .findByIdAndBusinessIdFetchLines(sessionId, businessId)
                 .orElseThrow();
         DailyStockAudit audit = loadAudit(businessId, session.getDailyAuditId());
-        return toSessionResponse(businessId, session, audit);
+        boolean showSystemStock = inventoryRoleAccessService.canSeeSystemStockDuringCount(
+                businessId,
+                roleId,
+                hasStocktakeApprove
+        );
+        return toSessionResponse(businessId, session, audit, showSystemStock);
     }
 
     @Transactional(readOnly = true)
     public DailyStockAuditDtos.DailyStockAuditSessionResponse getSession(
             String businessId,
-            String sessionId
+            String sessionId,
+            String roleId,
+            boolean hasStocktakeApprove
     ) {
         StockTakeSession session = loadDailyAuditSession(businessId, sessionId);
         DailyStockAudit audit = loadAudit(businessId, session.getDailyAuditId());
-        return toSessionResponse(businessId, session, audit);
+        boolean showSystemStock = inventoryRoleAccessService.canSeeSystemStockDuringCount(
+                businessId,
+                roleId,
+                hasStocktakeApprove
+        );
+        return toSessionResponse(businessId, session, audit, showSystemStock);
     }
 
     @Transactional
@@ -618,7 +652,8 @@ public class DailyStockAuditService {
     private DailyStockAuditDtos.DailyStockAuditSessionResponse toSessionResponse(
             String businessId,
             StockTakeSession session,
-            DailyStockAudit audit
+            DailyStockAudit audit,
+            boolean showSystemStock
     ) {
         List<String> itemIds = session.getLines().stream()
                 .map(StockTakeLine::getItemId)
@@ -650,7 +685,8 @@ public class DailyStockAuditService {
                             line.getNote(),
                             line.getStatus(),
                             line.getSubmittedAt(),
-                            line.getSortOrder()
+                            line.getSortOrder(),
+                            showSystemStock ? line.getSystemQtySnapshot() : null
                     )
             );
         }

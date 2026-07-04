@@ -273,7 +273,7 @@ class DailyStockAuditIT {
                 TENANT, branchId, auditDate, "system");
 
         JsonNode session = startMorningSession(manager, ROLE_MANAGER);
-        assertThat(session.get("lines").get(0).has("systemStock")).isFalse();
+        assertThat(session.get("lines").get(0).get("systemStock").isNull()).isTrue();
         assertThat(session.get("lines").get(0).get("itemName").asText())
                 .isEqualTo("Daily Audit Item");
     }

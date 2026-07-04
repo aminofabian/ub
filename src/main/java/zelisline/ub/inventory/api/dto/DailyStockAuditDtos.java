@@ -67,7 +67,8 @@ public final class DailyStockAuditDtos {
             String note,
             String status,
             Instant submittedAt,
-            int sortOrder
+            int sortOrder,
+            BigDecimal systemStock
     ) {}
 
     public record DailyStockAuditReviewResponse(

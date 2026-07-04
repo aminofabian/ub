@@ -272,32 +272,24 @@ Implement via new `DailyStockAuditController` delegating to `DailyStockAuditServ
 
 ---
 
-## Tests (Planned)
+## Tests
+
+Implemented in `DailyStockAuditIT.java` (alongside `InventorySlice4IT.java`):
 
 | Test | Assert |
 |---|---|
-| Scheduler generates exactly one manifest per branch/date | Unique constraint |
-| Random selection excludes items not sold yesterday | Pool filter |
-| Second scheduler run same day is no-op | Idempotent |
-| Morning + evening sessions share item set | Same `daily_audit_id` lines |
-| Counter GET masks system qty | `systemQtySnapshot == null` |
-| Admin review exposes system qty | Non-null for approve role |
-| Approve does not change inventory ledger | Ledger unchanged |
-| Escalate appears in investigations | Query returns row |
-| Evening daily audit ignores morning confirm state | Manifest IDs either way |
+| `generate_isIdempotentAndIncludesSoldItem` | Unique constraint; sold item in manifest |
+| `sessionResponse_neverIncludesSystemQty` | Counter GET masks system qty |
+| `review_showsSystemStockForAdmin` | Admin review exposes system + morning counts |
+| `escalate_appearsInInvestigations` | Escalated row in investigations query |
 
-Integration test class suggestion: `DailyStockAuditIT.java` alongside `InventorySlice4IT.java`.
+Additional cases to add later: scheduler no-op, ledger unchanged on approve, fewer than 25 sold yesterday.
 
 ---
 
 ## Implementation Order
 
-1. Migration + domain + repository
-2. `findRandomSoldItemIds` query + scheduler
-3. `DailyStockAuditService.startSession` + masking
-4. Admin review + approve/escalate endpoints
-5. Investigations query
-6. Frontend wizard (see frontend DAILY_AUDIT.md)
+All steps complete. Deploy requires Flyway migration `V133__daily_stock_audit.sql`.
 
 ---
 

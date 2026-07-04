@@ -246,6 +246,28 @@ class DailyStockAuditIT {
     }
 
     @Test
+    void getToday_generatesManifestOnDemand() throws Exception {
+        MvcResult result =
+                mockMvc.perform(
+                                get("/api/v1/inventory/stock-take/daily-audits/today")
+                                        .param("branchId", branchId)
+                                        .param("auditDate", auditDate.toString())
+                                        .header("X-Tenant-Id", TENANT)
+                                        .header(
+                                                TestAuthenticationFilter.HEADER_USER_ID,
+                                                owner.getId())
+                                        .header(
+                                                TestAuthenticationFilter.HEADER_ROLE_ID,
+                                                ROLE_OWNER))
+                        .andExpect(status().isOk())
+                        .andReturn();
+
+        JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString());
+        assertThat(body.get("itemCount").asInt()).isEqualTo(1);
+        assertThat(body.get("items").get(0).get("itemId").asText()).isEqualTo(itemId);
+    }
+
+    @Test
     void sessionResponse_neverIncludesSystemQty() throws Exception {
         dailyStockAuditService.generateForBranchIfAbsent(
                 TENANT, branchId, auditDate, "system");

@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -58,6 +59,13 @@ public class DailyStockAuditService {
 
     @Value("${app.inventory.daily-stock-audit.sample-size:25}")
     private int sampleSize;
+
+    @Value("${app.inventory.daily-stock-audit.zone:Africa/Nairobi}")
+    private String auditZoneId;
+
+    public LocalDate resolveAuditDate(LocalDate auditDate) {
+        return auditDate != null ? auditDate : LocalDate.now(ZoneId.of(auditZoneId));
+    }
 
     @Transactional
     public Optional<DailyStockAudit> generateForBranchIfAbsent(
@@ -149,21 +157,13 @@ public class DailyStockAuditService {
         }
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public DailyStockAuditDtos.DailyStockAuditTodayResponse getToday(
             String businessId,
             String branchId,
             LocalDate auditDate
     ) {
-        requireBranch(businessId, branchId);
-        DailyStockAudit audit = dailyStockAuditRepository
-                .findByBusinessBranchAndDateFetchItems(businessId, branchId, auditDate)
-                .orElseThrow(() ->
-                        new ResponseStatusException(
-                                HttpStatus.NOT_FOUND,
-                                "No daily audit manifest for this branch and date"
-                        )
-                );
+        DailyStockAudit audit = requireManifest(businessId, branchId, auditDate, "system");
         return buildTodayResponse(businessId, audit);
     }
 
@@ -176,14 +176,7 @@ public class DailyStockAuditService {
             String userId
     ) {
         requireValidSessionType(sessionType);
-        DailyStockAudit audit = dailyStockAuditRepository
-                .findByBusinessBranchAndDateFetchItems(businessId, branchId, auditDate)
-                .orElseThrow(() ->
-                        new ResponseStatusException(
-                                HttpStatus.NOT_FOUND,
-                                "No daily audit manifest for this branch and date"
-                        )
-                );
+        DailyStockAudit audit = requireManifest(businessId, branchId, auditDate, userId);
 
         Optional<StockTakeSession> existing =
                 stockTakeSessionRepository.findActiveDailyAuditSessionFetchLines(
@@ -272,20 +265,13 @@ public class DailyStockAuditService {
         return toSessionResponse(businessId, session, audit);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public DailyStockAuditDtos.DailyStockAuditReviewResponse getReview(
             String businessId,
             String branchId,
             LocalDate auditDate
     ) {
-        DailyStockAudit audit = dailyStockAuditRepository
-                .findByBusinessBranchAndDateFetchItems(businessId, branchId, auditDate)
-                .orElseThrow(() ->
-                        new ResponseStatusException(
-                                HttpStatus.NOT_FOUND,
-                                "No daily audit manifest for this branch and date"
-                        )
-                );
+        DailyStockAudit audit = requireManifest(businessId, branchId, auditDate, "system");
 
         List<StockTakeSession> sessions =
                 stockTakeSessionRepository.findByDailyAuditIdAndBusinessIdFetchLines(
@@ -752,6 +738,31 @@ public class DailyStockAuditService {
                         new ResponseStatusException(
                                 HttpStatus.NOT_FOUND,
                                 "Daily audit not found"
+                        )
+                );
+    }
+
+    private DailyStockAudit requireManifest(
+            String businessId,
+            String branchId,
+            LocalDate auditDate,
+            String generatedBy
+    ) {
+        requireBranch(businessId, branchId);
+        return dailyStockAuditRepository
+                .findByBusinessBranchAndDateFetchItems(businessId, branchId, auditDate)
+                .or(() ->
+                        generateForBranchIfAbsent(
+                                businessId,
+                                branchId,
+                                auditDate,
+                                generatedBy
+                        )
+                )
+                .orElseThrow(() ->
+                        new ResponseStatusException(
+                                HttpStatus.NOT_FOUND,
+                                "No products were sold yesterday at this branch, so there is no daily audit for this date."
                         )
                 );
     }

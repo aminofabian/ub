@@ -52,7 +52,7 @@ public class DailyStockAuditController {
         TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         String effectiveBranch = resolveBranch(principal, branchId);
-        LocalDate date = auditDate != null ? auditDate : LocalDate.now();
+        LocalDate date = dailyStockAuditService.resolveAuditDate(auditDate);
         return dailyStockAuditService.getToday(businessId, effectiveBranch, date);
     }
 
@@ -66,7 +66,7 @@ public class DailyStockAuditController {
         TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         String effectiveBranch = resolveBranch(principal, body.branchId());
-        LocalDate date = body.auditDate() != null ? body.auditDate() : LocalDate.now();
+        LocalDate date = dailyStockAuditService.resolveAuditDate(body.auditDate());
         return dailyStockAuditService.startOrResumeSession(
                 businessId,
                 effectiveBranch,
@@ -131,7 +131,7 @@ public class DailyStockAuditController {
         TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         String effectiveBranch = resolveBranch(principal, branchId);
-        LocalDate date = auditDate != null ? auditDate : LocalDate.now();
+        LocalDate date = dailyStockAuditService.resolveAuditDate(auditDate);
         return dailyStockAuditService.getReview(businessId, effectiveBranch, date);
     }
 

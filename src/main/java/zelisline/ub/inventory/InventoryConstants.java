@@ -26,6 +26,12 @@ public final class InventoryConstants {
     public static final String STOCKTAKE_LINE_PENDING = "pending";
     public static final String STOCKTAKE_LINE_SUBMITTED = "submitted";
     public static final String STOCKTAKE_LINE_CONFIRMED = "confirmed";
+    public static final String STOCKTAKE_SOURCE_MANUAL = "manual";
+    public static final String STOCKTAKE_SOURCE_DAILY_AUDIT = "daily_audit";
+    public static final String DAILY_AUDIT_REVIEW_PENDING = "pending";
+    public static final String DAILY_AUDIT_REVIEW_APPROVED = "approved";
+    public static final String DAILY_AUDIT_REVIEW_ESCALATED = "escalated";
+    public static final int DAILY_AUDIT_SAMPLE_SIZE = 25;
     public static final String STOCKTAKE_CHECKLIST_BOTH = "both";
     public static final String ADJUSTMENT_REQUEST_PENDING = "pending";
     public static final String ADJUSTMENT_REQUEST_APPROVED = "approved";

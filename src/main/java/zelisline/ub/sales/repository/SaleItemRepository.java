@@ -7,6 +7,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDate;
+
 import zelisline.ub.sales.domain.SaleItem;
 
 public interface SaleItemRepository extends JpaRepository<SaleItem, String> {
@@ -67,5 +69,44 @@ public interface SaleItemRepository extends JpaRepository<SaleItem, String> {
             @Param("branchId") String branchId,
             @Param("itemTypeId") String itemTypeId,
             Pageable pageable
+    );
+
+    /**
+     * Random sample of distinct items sold on a calendar day at a branch.
+     * Uses native SQL for {@code ORDER BY RAND()}.
+     */
+    @Query(
+            value = """
+                    SELECT pool.item_id FROM (
+                        SELECT DISTINCT si.item_id AS item_id
+                          FROM sale_items si
+                          INNER JOIN sales s ON s.id = si.sale_id
+                          INNER JOIN items item ON item.id = si.item_id
+                         WHERE s.business_id = :businessId
+                           AND s.branch_id = :branchId
+                           AND s.status = 'completed'
+                           AND s.voided_at IS NULL
+                           AND DATE(s.sold_at) = :soldOn
+                           AND item.deleted_at IS NULL
+                           AND item.active = true
+                           AND item.is_sellable = true
+                           AND (item.variant_of_item_id IS NOT NULL
+                                OR NOT EXISTS (
+                                    SELECT 1 FROM items ch
+                                     WHERE ch.variant_of_item_id = item.id
+                                       AND ch.business_id = item.business_id
+                                       AND ch.deleted_at IS NULL
+                                ))
+                    ) pool
+                    ORDER BY RAND()
+                    LIMIT :limit
+                    """,
+            nativeQuery = true
+    )
+    List<String> findRandomSoldItemIds(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("soldOn") LocalDate soldOn,
+            @Param("limit") int limit
     );
 }

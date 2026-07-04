@@ -18,6 +18,7 @@ import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 import lombok.Getter;
 import lombok.Setter;
+import zelisline.ub.inventory.InventoryConstants;
 
 @Getter
 @Setter
@@ -68,6 +69,15 @@ public class StockTakeSession {
 
     @Column(name = "closed_by", length = 36)
     private String closedBy;
+
+    @Column(name = "source", nullable = false, length = 32)
+    private String source = InventoryConstants.STOCKTAKE_SOURCE_MANUAL;
+
+    @Column(name = "daily_audit_id", length = 36)
+    private String dailyAuditId;
+
+    @Column(name = "current_line_index")
+    private Integer currentLineIndex;
 
     @OneToMany(mappedBy = "session", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("sortOrder ASC, id ASC")

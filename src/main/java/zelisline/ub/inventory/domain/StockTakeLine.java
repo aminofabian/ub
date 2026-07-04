@@ -19,6 +19,7 @@ import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
+import zelisline.ub.inventory.InventoryConstants;
 
 @Getter
 @Setter
@@ -72,6 +73,18 @@ public class StockTakeLine {
 
     @Column(name = "updated_at")
     private Instant updatedAt;
+
+    @Column(name = "review_status", nullable = false, length = 32)
+    private String reviewStatus = InventoryConstants.DAILY_AUDIT_REVIEW_PENDING;
+
+    @Column(name = "review_notes", columnDefinition = "TEXT")
+    private String reviewNotes;
+
+    @Column(name = "reviewed_by", length = 36)
+    private String reviewedBy;
+
+    @Column(name = "reviewed_at")
+    private Instant reviewedAt;
 
     @OneToMany(mappedBy = "line", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     @OrderBy("sortOrder ASC, id ASC")

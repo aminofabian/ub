@@ -114,4 +114,37 @@ public interface StockTakeSessionRepository extends JpaRepository<StockTakeSessi
     // COALESCE handles the case where no sessions exist yet (returns 1).
     @Query("select coalesce(max(s.sessionNumber), 0) + 1 from StockTakeSession s where s.businessId = :businessId")
     int nextSessionNumber(@Param("businessId") String businessId);
+
+    @Query("""
+            select s from StockTakeSession s
+             left join fetch s.lines
+             where s.businessId = :businessId
+               and s.branchId = :branchId
+               and s.sessionDate = :sessionDate
+               and s.sessionType = :sessionType
+               and s.source = :source
+               and s.dailyAuditId = :dailyAuditId
+               and s.status = 'in_progress'
+             order by s.createdAt desc
+            """)
+    Optional<StockTakeSession> findActiveDailyAuditSessionFetchLines(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("sessionDate") LocalDate sessionDate,
+            @Param("sessionType") String sessionType,
+            @Param("source") String source,
+            @Param("dailyAuditId") String dailyAuditId
+    );
+
+    @Query("""
+            select s from StockTakeSession s
+             left join fetch s.lines
+             where s.businessId = :businessId
+               and s.dailyAuditId = :dailyAuditId
+             order by s.sessionType asc, s.createdAt desc
+            """)
+    List<StockTakeSession> findByDailyAuditIdAndBusinessIdFetchLines(
+            @Param("businessId") String businessId,
+            @Param("dailyAuditId") String dailyAuditId
+    );
 }

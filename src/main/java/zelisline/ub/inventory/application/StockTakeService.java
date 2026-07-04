@@ -206,6 +206,122 @@ public class StockTakeService {
     }
 
     @Transactional
+    public StockTakeSessionResponse startDailyAuditSession(
+        String businessId,
+        String branchId,
+        String sessionType,
+        LocalDate sessionDate,
+        String dailyAuditId,
+        List<String> itemIds,
+        String userId
+    ) {
+        requireBranch(businessId, branchId);
+        requireValidSessionType(sessionType);
+        if (itemIds == null || itemIds.isEmpty()) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Daily audit manifest has no items"
+            );
+        }
+
+        List<String> activeIds = filterActiveItemIds(businessId, itemIds);
+        Map<String, BigDecimal> onHand = loadOnHandByItem(businessId, branchId);
+        int sessionNumber = stockTakeSessionRepository.nextSessionNumber(
+            businessId
+        );
+
+        Map<String, List<InventoryBatch>> batchesByItem =
+            inventoryBatchRepository
+                .findActiveBatchesForItems(
+                    businessId,
+                    branchId,
+                    InventoryConstants.BATCH_STATUS_ACTIVE,
+                    activeIds,
+                    BigDecimal.ZERO
+                )
+                .stream()
+                .collect(Collectors.groupingBy(InventoryBatch::getItemId));
+
+        StockTakeSession session = new StockTakeSession();
+        session.setBusinessId(businessId);
+        session.setBranchId(branchId);
+        session.setSessionType(sessionType);
+        session.setSessionDate(sessionDate);
+        session.setStatus(InventoryConstants.STOCKTAKE_SESSION_IN_PROGRESS);
+        session.setStartedBy(userId);
+        session.setSessionNumber(sessionNumber);
+        session.setSource(InventoryConstants.STOCKTAKE_SOURCE_DAILY_AUDIT);
+        session.setDailyAuditId(dailyAuditId);
+        session.setCurrentLineIndex(0);
+
+        int order = 0;
+        for (String itemId : activeIds) {
+            BigDecimal sys = onHand
+                .getOrDefault(itemId, BigDecimal.ZERO)
+                .setScale(QTY_SCALE, RoundingMode.HALF_UP);
+            StockTakeLine line = new StockTakeLine();
+            line.setSession(session);
+            line.setItemId(itemId);
+            line.setSystemQtySnapshot(sys);
+            line.setStatus(InventoryConstants.STOCKTAKE_LINE_PENDING);
+            line.setSortOrder(order++);
+            resolveAisleName(businessId, itemId).ifPresent(line::setAisle);
+
+            List<InventoryBatch> itemBatches = batchesByItem.getOrDefault(
+                itemId,
+                List.of()
+            );
+            int batchOrder = 0;
+            for (InventoryBatch ib : itemBatches) {
+                StockTakeLineBatch slb = new StockTakeLineBatch();
+                slb.setLine(line);
+                slb.setBatchId(ib.getId());
+                slb.setBatchNumber(ib.getBatchNumber());
+                slb.setExpiryDate(ib.getExpiryDate());
+                slb.setSystemQtySnapshot(
+                    ib.getQuantityRemaining()
+                        .setScale(QTY_SCALE, RoundingMode.HALF_UP)
+                );
+                slb.setSortOrder(batchOrder++);
+                line.getBatches().add(slb);
+            }
+            session.getLines().add(line);
+        }
+        stockTakeSessionRepository.save(session);
+        return buildResponse(session);
+    }
+
+    @Transactional
+    public StockTakeSessionResponse updateSessionProgress(
+        String businessId,
+        String sessionId,
+        int currentLineIndex
+    ) {
+        StockTakeSession session = loadSessionInProgress(businessId, sessionId);
+        if (
+            !InventoryConstants.STOCKTAKE_SOURCE_DAILY_AUDIT.equals(
+                session.getSource()
+            )
+        ) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Progress tracking is only supported for daily audit sessions"
+            );
+        }
+        session.setCurrentLineIndex(Math.max(0, currentLineIndex));
+        stockTakeSessionRepository.save(session);
+        return buildResponse(session);
+    }
+
+    @Transactional(readOnly = true)
+    public StockTakeSessionResponse getSessionForDailyAudit(
+        String businessId,
+        String sessionId
+    ) {
+        return getSession(businessId, sessionId);
+    }
+
+    @Transactional
     public StockTakeSessionResponse getSession(
         String businessId,
         String sessionId
@@ -354,6 +470,29 @@ public class StockTakeService {
         List<PatchStockTakeCountsRequest.BatchCounted> batches,
         String userId
     ) {
+        return applySingleCountWithNote(
+            businessId,
+            sessionId,
+            lineId,
+            countedQty,
+            aisle,
+            null,
+            batches,
+            userId
+        );
+    }
+
+    @Transactional
+    public StockTakeSessionResponse applySingleCountWithNote(
+        String businessId,
+        String sessionId,
+        String lineId,
+        BigDecimal countedQty,
+        String aisle,
+        String note,
+        List<PatchStockTakeCountsRequest.BatchCounted> batches,
+        String userId
+    ) {
         StockTakeSession session = loadSessionInProgress(businessId, sessionId);
         StockTakeLine line = session
             .getLines()
@@ -380,6 +519,9 @@ public class StockTakeService {
         );
         if (aisle != null && !aisle.isBlank()) {
             line.setAisle(aisle.trim());
+        }
+        if (note != null) {
+            line.setNote(note.isBlank() ? null : note.trim());
         }
         line.setStatus(InventoryConstants.STOCKTAKE_LINE_SUBMITTED);
         line.setSubmittedBy(userId);

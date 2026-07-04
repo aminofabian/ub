@@ -20,6 +20,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.identity.api.dto.EmailLookupRequest;
+import zelisline.ub.identity.api.dto.EmailLookupResponse;
 import zelisline.ub.identity.api.dto.PasswordForgotRequest;
 import zelisline.ub.identity.api.dto.RegisterRequest;
 import zelisline.ub.identity.api.dto.RegisterResponse;
@@ -180,6 +182,22 @@ public class AuthRegistrationService {
             return Optional.empty();
         }
         return Optional.of(issueVerificationEmail(user, http));
+    }
+
+    /**
+     * Checkout helper: tells the storefront whether to show sign-in or sign-up for a contact email.
+     * Intentionally reveals registration status for the current tenant only.
+     */
+    @Transactional(readOnly = true)
+    public EmailLookupResponse lookupEmail(HttpServletRequest http, EmailLookupRequest request) {
+        assertSignupEnabled();
+        String businessId = TenantRequestIds.resolveBusinessId(http);
+        if (!businessRepository.findByIdAndDeletedAtIsNull(businessId).isPresent()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found");
+        }
+        String email = normaliseEmail(request.email());
+        boolean registered = userRepository.existsByBusinessIdAndEmailAndDeletedAtIsNull(businessId, email);
+        return new EmailLookupResponse(registered);
     }
 
     private void assertSignupEnabled() {

@@ -10,6 +10,7 @@ public final class PublicAuthEndpoints {
 
     private static final Set<String> PATHS = Set.of(
             "/api/v1/auth/register",
+            "/api/v1/auth/email-lookup",
             "/api/v1/auth/login",
             "/api/v1/auth/login-pin",
             "/api/v1/auth/branches",

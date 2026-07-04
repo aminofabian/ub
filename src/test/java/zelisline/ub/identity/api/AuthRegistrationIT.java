@@ -89,6 +89,35 @@ class AuthRegistrationIT {
     }
 
     @Test
+    void emailLookup_reportsRegistrationStatusForTenant() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/email-lookup")
+                        .header("X-Tenant-Id", TENANT)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"email":"unknown@example.com"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.registered").value(false));
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .header("X-Tenant-Id", TENANT)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"email":"known@example.com","name":"Known User","password":"secretpass"}
+                                """))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/v1/auth/email-lookup")
+                        .header("X-Tenant-Id", TENANT)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"email":"known@example.com"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.registered").value(true));
+    }
+
+    @Test
     void registerVerifyThenLogin() throws Exception {
         mockMvc.perform(post("/api/v1/auth/register")
                         .header("X-Tenant-Id", TENANT)

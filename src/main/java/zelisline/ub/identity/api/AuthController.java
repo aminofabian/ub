@@ -17,6 +17,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import zelisline.ub.identity.api.dto.EmailLookupRequest;
+import zelisline.ub.identity.api.dto.EmailLookupResponse;
 import zelisline.ub.identity.api.dto.LoginPinRequest;
 import zelisline.ub.identity.api.dto.LoginRequest;
 import zelisline.ub.identity.api.dto.LoginResponse;
@@ -53,6 +55,14 @@ public class AuthController {
     @ResponseStatus(HttpStatus.CREATED)
     public RegisterResponse register(@Valid @RequestBody RegisterRequest body, HttpServletRequest http) {
         return authRegistrationService.register(http, body);
+    }
+
+    @PostMapping("/email-lookup")
+    public EmailLookupResponse emailLookup(
+            @Valid @RequestBody EmailLookupRequest body,
+            HttpServletRequest http
+    ) {
+        return authRegistrationService.lookupEmail(http, body);
     }
 
     @PostMapping("/verify-email")

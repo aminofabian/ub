@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.servlet.http.HttpServletRequest;
-import lombok.RequiredArgsConstructor;
+import zelisline.ub.messaging.application.WhatsAppInboundProcessor;
 import zelisline.ub.messaging.config.MessagingProperties;
 import zelisline.ub.messaging.infrastructure.MetaWhatsAppWebhookSignatureVerifier;
 
@@ -28,13 +28,19 @@ import zelisline.ub.messaging.infrastructure.MetaWhatsAppWebhookSignatureVerifie
  */
 @RestController
 @RequestMapping("/webhooks/whatsapp")
-@RequiredArgsConstructor
 public class MetaWhatsAppWebhookController {
 
     private static final Logger log = LoggerFactory.getLogger(MetaWhatsAppWebhookController.class);
     private static final String SIGNATURE_HEADER = "X-Hub-Signature-256";
 
     private final MessagingProperties messagingProperties;
+    private final WhatsAppInboundProcessor whatsAppInboundProcessor;
+
+    public MetaWhatsAppWebhookController(MessagingProperties messagingProperties,
+                                          WhatsAppInboundProcessor whatsAppInboundProcessor) {
+        this.messagingProperties = messagingProperties;
+        this.whatsAppInboundProcessor = whatsAppInboundProcessor;
+    }
 
     @GetMapping
     public ResponseEntity<String> verifySubscription(
@@ -77,6 +83,12 @@ public class MetaWhatsAppWebhookController {
         }
         if (appSecret == null || appSecret.isBlank()) {
             log.warn("Meta WhatsApp webhook: WHATSAPP_META_APP_SECRET not set — signature not verified");
+        }
+
+        try {
+            whatsAppInboundProcessor.process(rawBody);
+        } catch (Exception ex) {
+            log.error("Meta WhatsApp webhook: processor threw exception (still returning 200)", ex);
         }
 
         log.debug("Meta WhatsApp webhook payload: {}", truncate(rawBody));

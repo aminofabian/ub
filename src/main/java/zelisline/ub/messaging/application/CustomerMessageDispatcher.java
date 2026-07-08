@@ -42,13 +42,38 @@ public class CustomerMessageDispatcher {
     }
 
     /**
-     * Attempts Meta WhatsApp directly (bypassing the OSINT lookup gate), then SMS
-     * fallback. Used for admin test sends where the target number is chosen deliberately.
+     * Attempts Meta WhatsApp directly (bypassing the OSINT lookup gate). Used for
+     * admin test sends — does not fall back to the SMS log-only stub.
      */
     public DeliveryResult deliverDirect(TenantMessagingConfig messaging, String phoneDigits, String message) {
         String e164 = "+" + phoneDigits;
         var lookup = RapidApiWhatsAppLookupClient.LookupResult.lookupSkipped("direct_send");
-        return attemptWhatsAppThenSms(messaging, phoneDigits, e164, message, lookup);
+        var send = metaWhatsAppClient.sendText(messaging, phoneDigits, message);
+        if (send.sent()) {
+            return new DeliveryResult(lookup, send.channel(), "sent", send.detail());
+        }
+        if (send.authFailure()) {
+            return new DeliveryResult(
+                    lookup,
+                    "whatsapp",
+                    "failed",
+                    "whatsapp_failed:" + send.detail()
+                            + ". Paste a fresh permanent token from Meta Business → WhatsApp → API setup, save, then retry.");
+        }
+        if (messaging.smsConfigured()) {
+            var sms = smsMessagingClient.sendText(messaging, e164, message);
+            String channel = sms.sent() ? sms.channel() : "sms";
+            String outcome = sms.sent() ? "sent" : "failed";
+            String prefix = send.skipped() ? "whatsapp_skipped:" : "whatsapp_failed:";
+            String detail = prefix + send.detail() + ";" + sms.detail();
+            return new DeliveryResult(lookup, channel, outcome, detail);
+        }
+        return new DeliveryResult(
+                lookup,
+                "whatsapp",
+                "failed",
+                "whatsapp_failed:" + send.detail()
+                        + (send.skipped() ? "" : ". SMS fallback is not configured."));
     }
 
     private DeliveryResult attemptWhatsAppThenSms(
@@ -61,6 +86,20 @@ public class CustomerMessageDispatcher {
         var send = metaWhatsAppClient.sendText(messaging, phoneDigits, message);
         if (send.sent()) {
             return new DeliveryResult(lookup, send.channel(), "sent", send.detail());
+        }
+        if (send.authFailure()) {
+            return new DeliveryResult(
+                    lookup,
+                    "whatsapp",
+                    "failed",
+                    "whatsapp_failed:" + send.detail());
+        }
+        if (!messaging.smsConfigured()) {
+            return new DeliveryResult(
+                    lookup,
+                    "whatsapp",
+                    "failed",
+                    "whatsapp_failed:" + send.detail());
         }
         var sms = smsMessagingClient.sendText(messaging, e164, message);
         String channel = sms.sent() || sms.stub() ? sms.channel() : "sms";

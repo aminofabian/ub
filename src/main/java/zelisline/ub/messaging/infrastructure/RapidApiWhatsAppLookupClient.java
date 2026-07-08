@@ -44,18 +44,18 @@ public class RapidApiWhatsAppLookupClient {
                     .asString();
             if (response.getStatus() < 200 || response.getStatus() >= 300) {
                 log.warn("WhatsApp lookup HTTP {} for {}", response.getStatus(), maskPhone(phone));
-                return LookupResult.notRegistered("http_" + response.getStatus());
+                return LookupResult.lookupSkipped("http_" + response.getStatus());
             }
             return parseExists(response.getBody());
         } catch (Exception ex) {
             log.warn("WhatsApp lookup failed for {}: {}", maskPhone(phone), ex.getMessage());
-            return LookupResult.notRegistered("error");
+            return LookupResult.lookupSkipped("error");
         }
     }
 
     private LookupResult parseExists(String rawBody) {
         if (rawBody == null || rawBody.isBlank()) {
-            return LookupResult.notRegistered("empty_body");
+            return LookupResult.lookupSkipped("empty_body");
         }
         try {
             JsonNode root = objectMapper.readTree(rawBody);
@@ -86,10 +86,12 @@ public class RapidApiWhatsAppLookupClient {
             if (message != null && message.toLowerCase(Locale.ROOT).contains("not found")) {
                 return LookupResult.notRegistered("not_found");
             }
-            return LookupResult.notRegistered("unrecognized_response");
+            // Response shape we don't recognize: treat as inconclusive (skip the gate)
+            // rather than a hard "not on WhatsApp", so delivery still attempts WhatsApp.
+            return LookupResult.lookupSkipped("unrecognized_response");
         } catch (Exception ex) {
             log.debug("WhatsApp lookup parse error: {}", ex.getMessage());
-            return LookupResult.notRegistered("parse_error");
+            return LookupResult.lookupSkipped("parse_error");
         }
     }
 

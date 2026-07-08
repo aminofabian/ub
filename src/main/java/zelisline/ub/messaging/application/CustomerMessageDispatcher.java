@@ -24,39 +24,49 @@ public class CustomerMessageDispatcher {
      */
     public DeliveryResult deliver(TenantMessagingConfig messaging, String phoneDigits, String message) {
         String e164 = "+" + phoneDigits;
-        String channel;
-        String outcome;
-        String detail;
-
         var lookup = whatsAppLookupClient.lookup(messaging, e164);
-        if (lookup.onWhatsApp()) {
-            var send = metaWhatsAppClient.sendText(messaging, phoneDigits, message);
-            if (send.sent()) {
-                channel = send.channel();
-                outcome = "sent";
-                detail = send.detail();
-            } else if (send.skipped()) {
-                var sms = smsMessagingClient.sendText(messaging, e164, message);
-                channel = sms.channel();
-                outcome = sms.sent() ? "sent" : (sms.stub() ? "stub" : "failed");
-                detail = "whatsapp_skipped:" + send.detail() + ";" + sms.detail();
-            } else {
-                var sms = smsMessagingClient.sendText(messaging, e164, message);
-                channel = sms.sent() || sms.stub() ? sms.channel() : "sms";
-                outcome = sms.sent() ? "sent" : (sms.stub() ? "stub" : "failed");
-                detail = "whatsapp_failed:" + send.detail() + ";" + sms.detail();
-            }
-        } else if (lookup.skipped()) {
-            var sms = smsMessagingClient.sendText(messaging, e164, message);
-            channel = sms.channel();
-            outcome = sms.sent() ? "sent" : (sms.stub() ? "stub" : "failed");
-            detail = "lookup_skipped:" + lookup.detail() + ";" + sms.detail();
-        } else {
-            var sms = smsMessagingClient.sendText(messaging, e164, message);
-            channel = sms.channel();
-            outcome = sms.sent() ? "sent" : (sms.stub() ? "stub" : "failed");
-            detail = "not_on_whatsapp:" + lookup.detail() + ";" + sms.detail();
+
+        // Attempt WhatsApp unless the lookup is a *definitive* "not on WhatsApp".
+        // Inconclusive lookups (RapidAPI unconfigured, unrecognized responses, HTTP
+        // or parse errors) must not block delivery — Meta rejects genuine non-WhatsApp
+        // numbers and we fall back to SMS from there.
+        if (lookup.onWhatsApp() || lookup.skipped()) {
+            return attemptWhatsAppThenSms(messaging, phoneDigits, e164, message, lookup);
         }
+
+        var sms = smsMessagingClient.sendText(messaging, e164, message);
+        String channel = sms.channel();
+        String outcome = sms.sent() ? "sent" : (sms.stub() ? "stub" : "failed");
+        String detail = "not_on_whatsapp:" + lookup.detail() + ";" + sms.detail();
+        return new DeliveryResult(lookup, channel, outcome, detail);
+    }
+
+    /**
+     * Attempts Meta WhatsApp directly (bypassing the OSINT lookup gate), then SMS
+     * fallback. Used for admin test sends where the target number is chosen deliberately.
+     */
+    public DeliveryResult deliverDirect(TenantMessagingConfig messaging, String phoneDigits, String message) {
+        String e164 = "+" + phoneDigits;
+        var lookup = RapidApiWhatsAppLookupClient.LookupResult.lookupSkipped("direct_send");
+        return attemptWhatsAppThenSms(messaging, phoneDigits, e164, message, lookup);
+    }
+
+    private DeliveryResult attemptWhatsAppThenSms(
+            TenantMessagingConfig messaging,
+            String phoneDigits,
+            String e164,
+            String message,
+            RapidApiWhatsAppLookupClient.LookupResult lookup
+    ) {
+        var send = metaWhatsAppClient.sendText(messaging, phoneDigits, message);
+        if (send.sent()) {
+            return new DeliveryResult(lookup, send.channel(), "sent", send.detail());
+        }
+        var sms = smsMessagingClient.sendText(messaging, e164, message);
+        String channel = sms.sent() || sms.stub() ? sms.channel() : "sms";
+        String outcome = sms.sent() ? "sent" : (sms.stub() ? "stub" : "failed");
+        String prefix = send.skipped() ? "whatsapp_skipped:" : "whatsapp_failed:";
+        String detail = prefix + send.detail() + ";" + sms.detail();
         return new DeliveryResult(lookup, channel, outcome, detail);
     }
 

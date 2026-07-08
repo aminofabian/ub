@@ -241,7 +241,7 @@ public class CreditSaleReminderService {
                     message);
         }
 
-        CustomerMessageDispatcher.DeliveryResult attempt = customerMessageDispatcher.deliver(messaging, phoneDigits, message);
+        CustomerMessageDispatcher.DeliveryResult attempt = customerMessageDispatcher.deliverDirect(messaging, phoneDigits, message);
         log.info("whatsapp_test business={} channel={} outcome={} detail={}",
                 businessId, attempt.channel(), attempt.outcome(), attempt.detail());
         return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(

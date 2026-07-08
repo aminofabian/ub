@@ -16,6 +16,7 @@ import zelisline.ub.credits.api.dto.CreditSaleReminderSettingsResponse;
 import zelisline.ub.credits.api.dto.CreditSaleReminderTestRequest;
 import zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse;
 import zelisline.ub.credits.api.dto.UpdateCreditSaleReminderSettingsRequest;
+import zelisline.ub.credits.api.dto.WhatsAppTestSendRequest;
 import zelisline.ub.credits.application.BusinessCreditMessagingSettingsService;
 import zelisline.ub.messaging.application.CreditSaleReminderService;
 import zelisline.ub.platform.security.CurrentTenantUser;
@@ -57,5 +58,18 @@ public class CreditSaleReminderSettingsController {
         return creditSaleReminderService.sendTest(
                 TenantRequestIds.resolveBusinessId(request),
                 body.phone());
+    }
+
+    @PostMapping("/test-whatsapp")
+    @PreAuthorize("hasPermission(null, 'credits.settings.write')")
+    public CreditSaleReminderTestResponse testWhatsApp(
+            @Valid @RequestBody WhatsAppTestSendRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return creditSaleReminderService.sendWhatsAppTest(
+                TenantRequestIds.resolveBusinessId(request),
+                body.phone(),
+                body.message());
     }
 }

@@ -180,6 +180,95 @@ public class CreditSaleReminderService {
                 message);
     }
 
+    /**
+     * Standalone admin WhatsApp/SMS test. Works regardless of the "reminders
+     * enabled" toggle so an admin can verify delivery, and sends a custom message
+     * (falling back to a friendly default) rather than the reminder template.
+     */
+    public zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse sendWhatsAppTest(
+            String businessId,
+            String rawPhone,
+            String customMessage
+    ) {
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForTest(businessId);
+        String message = buildTestMessage(businessId, customMessage);
+
+        if (!messaging.secretsReadable()) {
+            return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
+                    true,
+                    messaging.rapidApiConfigured(),
+                    messaging.metaWhatsAppConfigured(),
+                    messaging.smsConfigured(),
+                    false,
+                    false,
+                    "secrets_unreadable",
+                    "none",
+                    "failed",
+                    messaging.secretsReadError() != null
+                            ? messaging.secretsReadError()
+                            : "Stored API keys could not be read on the server.",
+                    message);
+        }
+
+        if (!messaging.metaWhatsAppConfigured() && !messaging.smsConfigured()) {
+            return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
+                    true,
+                    messaging.rapidApiConfigured(),
+                    messaging.metaWhatsAppConfigured(),
+                    messaging.smsConfigured(),
+                    false,
+                    false,
+                    "not_configured",
+                    "none",
+                    "skipped",
+                    "Add a Meta WhatsApp phone number ID + access token (or an SMS provider), save, then retry.",
+                    message);
+        }
+
+        String phoneDigits = StkPhoneNormalizer.normalize(rawPhone);
+        if (phoneDigits == null) {
+            return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
+                    true,
+                    messaging.rapidApiConfigured(),
+                    messaging.metaWhatsAppConfigured(),
+                    messaging.smsConfigured(),
+                    false,
+                    false,
+                    "invalid_phone",
+                    "none",
+                    "failed",
+                    "Use a Kenyan number e.g. 0712345678 or 254712345678",
+                    message);
+        }
+
+        CustomerMessageDispatcher.DeliveryResult attempt = customerMessageDispatcher.deliver(messaging, phoneDigits, message);
+        log.info("whatsapp_test business={} channel={} outcome={} detail={}",
+                businessId, attempt.channel(), attempt.outcome(), attempt.detail());
+        return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
+                true,
+                messaging.rapidApiConfigured(),
+                messaging.metaWhatsAppConfigured(),
+                messaging.smsConfigured(),
+                attempt.lookup().skipped(),
+                attempt.lookup().onWhatsApp(),
+                attempt.lookup().detail(),
+                attempt.channel(),
+                attempt.outcome(),
+                attempt.detail(),
+                message);
+    }
+
+    private String buildTestMessage(String businessId, String customMessage) {
+        if (customMessage != null && !customMessage.isBlank()) {
+            return customMessage.trim();
+        }
+        Business business = businessRepository.findById(businessId).orElse(null);
+        String shopName = business != null && business.getName() != null && !business.getName().isBlank()
+                ? business.getName().trim()
+                : "our shop";
+        return "Test message from " + shopName + " via Palmart. If you received this, WhatsApp messaging is set up correctly.";
+    }
+
     private void pushInAppNotification(
             CreditSaleReminderEvent event,
             Customer customer,

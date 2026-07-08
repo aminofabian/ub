@@ -44,13 +44,32 @@ public class BusinessCreditMessagingSettingsService {
         if (!s.isCreditSaleReminderEnabled()) {
             return disabledConfig(null);
         }
+        return buildConfig(s, true);
+    }
+
+    /**
+     * Resolves messaging credentials for an admin-triggered test send. Unlike
+     * {@link #resolveForDispatch}, this ignores the "reminders enabled" toggle so
+     * an admin can verify WhatsApp/SMS delivery before turning reminders on.
+     */
+    @Transactional(readOnly = true)
+    public TenantMessagingConfig resolveForTest(String businessId) {
+        BusinessCreditSettings s = businessCreditSettingsService.resolveForBusiness(businessId);
+        SecretRead read = readSecrets(s);
+        if (!read.readable()) {
+            return disabledConfig(read.errorMessage());
+        }
+        return buildConfig(s, true);
+    }
+
+    private TenantMessagingConfig buildConfig(BusinessCreditSettings s, boolean enabled) {
         var env = messagingProperties;
         String paymentUrl = firstNonBlank(
                 trimToNull(s.getCreditSaleReminderPaymentUrl()),
                 env.creditSaleReminder().paymentAccountUrl(),
                 defaultPaymentUrl());
         return new TenantMessagingConfig(
-                true,
+                enabled,
                 paymentUrl,
                 firstNonBlank(
                         decryptOrNull(s.getRapidapiKeyEnc()),

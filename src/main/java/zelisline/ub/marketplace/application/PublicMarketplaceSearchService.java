@@ -175,6 +175,15 @@ public class PublicMarketplaceSearchService {
         }
         boolean found = detail.products().stream().anyMatch(p -> needle.equalsIgnoreCase(p.slug()));
         if (!found) {
+            String idPrefix = MarketplaceSlugService.extractIdPrefix(needle);
+            if (idPrefix != null) {
+                long matches = detail.products().stream()
+                        .filter(p -> idPrefix.equals(MarketplaceSlugService.idPrefix(p.id())))
+                        .count();
+                found = matches == 1;
+            }
+        }
+        if (!found) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found");
         }
         return detail;

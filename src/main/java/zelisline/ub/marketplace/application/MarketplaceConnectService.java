@@ -12,6 +12,7 @@ import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.marketplace.api.dto.MarketplaceConnectResponse;
 import zelisline.ub.marketplace.api.dto.MarketplaceSupplierDetailResponse;
+import zelisline.ub.suppliers.SupplierCodes;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierContact;
 import zelisline.ub.suppliers.domain.SupplierProduct;
@@ -44,7 +45,8 @@ public class MarketplaceConnectService {
     public MarketplaceConnectResponse connect(String businessId, String sourceSupplierId) {
         Supplier source = supplierRepository.findByIdAndDeletedAtIsNull(sourceSupplierId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
-        if (!"active".equalsIgnoreCase(source.getStatus())) {
+        if (!"active".equalsIgnoreCase(source.getStatus())
+                || SupplierCodes.SYSTEM_UNASSIGNED.equals(source.getCode())) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier is not available");
         }
         if (businessId.equals(source.getBusinessId())) {

@@ -58,6 +58,7 @@ public interface SupplierRepository extends JpaRepository<Supplier, String> {
             SELECT s FROM Supplier s
              WHERE s.deletedAt IS NULL
                AND LOWER(s.status) = 'active'
+               AND (s.code IS NULL OR s.code <> 'SYS-UNASSIGNED')
                AND EXISTS (
                  SELECT 1 FROM SupplierProduct sp
                   JOIN Item i ON i.id = sp.itemId

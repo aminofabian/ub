@@ -22,6 +22,7 @@ public interface SupplierProductRepository extends JpaRepository<SupplierProduct
             JOIN Item i ON i.id = sp.itemId
             WHERE s.deletedAt IS NULL
               AND LOWER(s.status) = 'active'
+              AND (s.code IS NULL OR s.code <> 'SYS-UNASSIGNED')
               AND sp.deletedAt IS NULL
               AND sp.active = TRUE
               AND i.deletedAt IS NULL

@@ -26,6 +26,7 @@ import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.marketplace.api.dto.MarketplaceSupplierDetailResponse;
 import zelisline.ub.marketplace.api.dto.PublicMarketplaceProductSearchRow;
 import zelisline.ub.marketplace.api.dto.PublicMarketplaceSupplierSearchRow;
+import zelisline.ub.suppliers.SupplierCodes;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierContact;
 import zelisline.ub.suppliers.domain.SupplierProduct;
@@ -92,7 +93,8 @@ public class PublicMarketplaceSearchService {
     public MarketplaceSupplierDetailResponse getSupplierDetail(String supplierId) {
         Supplier supplier = supplierRepository.findByIdAndDeletedAtIsNull(supplierId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
-        if (!"active".equalsIgnoreCase(supplier.getStatus())) {
+        if (!"active".equalsIgnoreCase(supplier.getStatus())
+                || SupplierCodes.SYSTEM_UNASSIGNED.equals(supplier.getCode())) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier is not available");
         }
 

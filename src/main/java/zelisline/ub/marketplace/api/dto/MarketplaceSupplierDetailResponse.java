@@ -7,19 +7,37 @@ public record MarketplaceSupplierDetailResponse(
         String id,
         String name,
         String description,
+        String supplierType,
+        String listedBy,
+        String status,
         String contactEmail,
         String contactPhone,
-        String status,
+        List<MarketplaceContactPreview> contacts,
+        String paymentMethodPreferred,
+        String paymentDetails,
+        String payoutType,
+        String payoutPhone,
+        Integer creditTermsDays,
         List<String> deliveryRegions,
         List<String> categoryTags,
         List<MarketplaceCatalogProductPreview> products
 ) {
+    public record MarketplaceContactPreview(
+            String name,
+            String roleLabel,
+            String phone,
+            String email,
+            boolean primaryContact
+    ) {
+    }
+
     public record MarketplaceCatalogProductPreview(
             String id,
             String name,
             String barcode,
             String sku,
             String categoryName,
+            String imageUrl,
             BigDecimal packSize,
             String packUnit,
             BigDecimal minOrderQty,

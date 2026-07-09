@@ -50,6 +50,17 @@ public interface SupplierProductRepository extends JpaRepository<SupplierProduct
     List<SupplierProduct> listActivePublicForSupplier(@Param("supplierId") String supplierId);
 
     @Query("""
+            SELECT COUNT(sp) FROM SupplierProduct sp
+            JOIN Item i ON i.id = sp.itemId
+            WHERE sp.supplierId = :supplierId
+              AND sp.deletedAt IS NULL
+              AND sp.active = TRUE
+              AND i.deletedAt IS NULL
+              AND i.active = TRUE
+            """)
+    long countActivePublicForSupplier(@Param("supplierId") String supplierId);
+
+    @Query("""
             SELECT sp FROM SupplierProduct sp
             JOIN Supplier s ON s.id = sp.supplierId
             WHERE sp.itemId = :itemId AND s.businessId = :businessId

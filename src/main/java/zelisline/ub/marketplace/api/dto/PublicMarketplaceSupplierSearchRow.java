@@ -6,6 +6,14 @@ public record PublicMarketplaceSupplierSearchRow(
         String id,
         String name,
         String description,
+        String supplierType,
+        String listedBy,
+        int productCount,
+        String contactName,
+        String contactPhone,
+        String contactEmail,
+        String paymentMethodPreferred,
+        String payoutType,
         List<String> deliveryRegions,
         List<String> categoryTags
 ) {

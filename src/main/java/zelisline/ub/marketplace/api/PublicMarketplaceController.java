@@ -12,7 +12,6 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.marketplace.api.dto.MarketplaceSupplierDetailResponse;
 import zelisline.ub.marketplace.api.dto.PublicMarketplaceProductSearchRow;
 import zelisline.ub.marketplace.api.dto.PublicMarketplaceSupplierSearchRow;
-import zelisline.ub.marketplace.application.MarketplaceConnectService;
 import zelisline.ub.marketplace.application.PublicMarketplaceSearchService;
 
 @RestController
@@ -21,7 +20,6 @@ import zelisline.ub.marketplace.application.PublicMarketplaceSearchService;
 public class PublicMarketplaceController {
 
     private final PublicMarketplaceSearchService publicMarketplaceSearchService;
-    private final MarketplaceConnectService marketplaceConnectService;
 
     @GetMapping("/suppliers/search")
     public Page<PublicMarketplaceSupplierSearchRow> searchSuppliers(
@@ -37,9 +35,9 @@ public class PublicMarketplaceController {
         return publicMarketplaceSearchService.searchProducts(q, pageable);
     }
 
-    /** Public storefront preview for an active marketplace supplier. */
+    /** Public storefront preview for an active tenant supplier. */
     @GetMapping("/suppliers/{id}")
     public MarketplaceSupplierDetailResponse getSupplier(@PathVariable String id) {
-        return marketplaceConnectService.getSupplierDetail(id);
+        return publicMarketplaceSearchService.getSupplierDetail(id);
     }
 }

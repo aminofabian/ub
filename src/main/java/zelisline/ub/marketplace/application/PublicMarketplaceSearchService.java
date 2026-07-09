@@ -104,6 +104,7 @@ public class PublicMarketplaceSearchService {
                 links.stream().map(SupplierProduct::getSupplierId).toList());
         Map<String, ListingLocation> locationsByBusiness = resolveLocationsByBusinessId(
                 suppliersById.values().stream().map(Supplier::getBusinessId).toList());
+        Map<String, Integer> productCounts = productCountsBySupplierId(suppliersById.keySet());
         Map<String, String> thumbs = resolveThumbnailUrls(itemsById.values());
         Map<String, String> categories = categoryNamesById(
                 itemsById.values().stream().map(Item::getCategoryId).filter(Objects::nonNull).toList());
@@ -124,7 +125,9 @@ public class PublicMarketplaceSearchService {
             String categoryName = item.getCategoryId() != null
                     ? categories.get(item.getCategoryId())
                     : null;
-            rows.add(toProductRow(link, item, supplier, imageUrl, categoryName, loc));
+            int supplierProductCount = productCounts.getOrDefault(supplier.getId(), 0);
+            rows.add(toProductRow(
+                    link, item, supplier, imageUrl, categoryName, loc, supplierProductCount));
         }
         if (locationFilter != null) {
             return slicePage(rows, pageable);
@@ -270,7 +273,8 @@ public class PublicMarketplaceSearchService {
             Supplier supplier,
             String imageUrl,
             String categoryName,
-            ListingLocation loc
+            ListingLocation loc,
+            int supplierProductCount
     ) {
         BigDecimal price = resolveBuyingPrice(link, item);
         return new PublicMarketplaceProductSearchRow(
@@ -285,6 +289,7 @@ public class PublicMarketplaceSearchService {
                 link.getSupplierId(),
                 supplier.getName(),
                 blankToNull(supplier.getSupplierType()),
+                supplierProductCount,
                 loc.primary(),
                 loc.locations(),
                 link.getPackSize(),
@@ -293,6 +298,24 @@ public class PublicMarketplaceSearchService {
                 price,
                 price != null ? currencyFor(supplier.getBusinessId()) : null,
                 link.isActive());
+    }
+
+    private Map<String, Integer> productCountsBySupplierId(Collection<String> supplierIds) {
+        Map<String, Integer> out = new LinkedHashMap<>();
+        if (supplierIds == null || supplierIds.isEmpty()) {
+            return out;
+        }
+        for (String supplierId : supplierIds) {
+            if (supplierId == null) {
+                continue;
+            }
+            out.put(
+                    supplierId,
+                    (int) Math.min(
+                            Integer.MAX_VALUE,
+                            supplierProductRepository.countActivePublicForSupplier(supplierId)));
+        }
+        return out;
     }
 
     private static BigDecimal resolveBuyingPrice(SupplierProduct link, Item item) {

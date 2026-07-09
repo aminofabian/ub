@@ -13,6 +13,7 @@ public record PublicMarketplaceProductSearchRow(
         String supplierId,
         String supplierName,
         String supplierType,
+        int supplierProductCount,
         String location,
         List<String> locations,
         BigDecimal packSize,

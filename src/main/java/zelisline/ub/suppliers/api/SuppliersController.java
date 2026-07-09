@@ -21,12 +21,15 @@ import org.springframework.web.bind.annotation.RestController;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.marketplace.application.SupplierDuplicateCheckService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.suppliers.api.dto.CreateSupplierContactRequest;
 import zelisline.ub.suppliers.api.dto.CreateSupplierRequest;
 import zelisline.ub.suppliers.api.dto.PatchSupplierContactRequest;
 import zelisline.ub.suppliers.api.dto.PatchSupplierRequest;
 import zelisline.ub.suppliers.api.dto.SupplierContactResponse;
+import zelisline.ub.suppliers.api.dto.SupplierDuplicateCheckRequest;
+import zelisline.ub.suppliers.api.dto.SupplierDuplicateCheckResponse;
 import zelisline.ub.suppliers.api.dto.SupplierPurchaseHistoryResponse;
 import zelisline.ub.suppliers.api.dto.SupplierResponse;
 import zelisline.ub.suppliers.api.dto.SupplierItemLinkResponse;
@@ -44,6 +47,18 @@ public class SuppliersController {
     private final SupplierService supplierService;
     private final ItemSupplierLinkService itemSupplierLinkService;
     private final SupplierPurchaseHistoryService supplierPurchaseHistoryService;
+    private final SupplierDuplicateCheckService supplierDuplicateCheckService;
+
+    @PostMapping("/duplicate-check")
+    @PreAuthorize("hasPermission(null, 'suppliers.write')")
+    public SupplierDuplicateCheckResponse duplicateCheck(
+            @Valid @RequestBody SupplierDuplicateCheckRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return supplierDuplicateCheckService.check(
+                TenantRequestIds.resolveBusinessId(request), body);
+    }
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'suppliers.read')")

@@ -95,6 +95,7 @@ public final class StockTakeRestockDtos {
             String orderNumber,
             String purchaseOrderId,
             String poNumber,
-            String status
+            String status,
+            boolean sentToSupplierPortal
     ) {}
 }

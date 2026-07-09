@@ -26,10 +26,13 @@ import zelisline.ub.inventory.repository.StockTakeRestockItemRepository;
 import zelisline.ub.inventory.restock.RestockOrderLineRow;
 import zelisline.ub.inventory.restock.RestockOrderPdfRenderer;
 import zelisline.ub.inventory.restock.RestockOrderSnapshot;
+import zelisline.ub.marketplace.application.MarketplacePurchaseOrderService;
+import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.api.dto.AddPathAPurchaseOrderLineRequest;
 import zelisline.ub.purchasing.api.dto.CreatePathAPurchaseOrderRequest;
 import zelisline.ub.purchasing.api.dto.PathAPurchaseOrderDetailResponse;
 import zelisline.ub.purchasing.application.PathAPurchaseService;
+import zelisline.ub.purchasing.repository.PurchaseOrderRepository;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierContact;
 import zelisline.ub.suppliers.repository.SupplierContactRepository;
@@ -54,6 +57,8 @@ public class StockTakeRestockOrderService {
     private final SupplierContactRepository supplierContactRepository;
     private final ItemRepository itemRepository;
     private final PathAPurchaseService pathAPurchaseService;
+    private final MarketplacePurchaseOrderService marketplacePurchaseOrderService;
+    private final PurchaseOrderRepository purchaseOrderRepository;
 
     @Transactional(readOnly = true)
     public byte[] buildOrderPdf(String businessId, String orderNumber) {
@@ -95,6 +100,7 @@ public class StockTakeRestockOrderService {
                         supplierId, branchId, null, orderNumber, notes);
         PathAPurchaseOrderDetailResponse po =
                 pathAPurchaseService.createPurchaseOrder(businessId, createReq);
+        markPoRestockSource(businessId, po.id());
 
         for (StockTakeRestockItem row : rows) {
             pathAPurchaseService.addPurchaseOrderLine(
@@ -106,9 +112,15 @@ public class StockTakeRestockOrderService {
                             row.getBuyingPrice()));
         }
 
+        // One "send" action: portal-connected suppliers get the marketplace flow
+        // (line-level response); private suppliers keep the plain status flip + PDF fallback.
+        boolean portalConnected =
+                marketplacePurchaseOrderService.isPortalConnected(businessId, supplierId);
         PathAPurchaseOrderDetailResponse finalPo = po;
         if (sendPurchaseOrder) {
-            finalPo = pathAPurchaseService.sendPurchaseOrder(businessId, po.id());
+            finalPo = portalConnected
+                    ? marketplacePurchaseOrderService.sendToSupplier(businessId, po.id())
+                    : pathAPurchaseService.sendPurchaseOrder(businessId, po.id());
         }
 
         Instant now = Instant.now();
@@ -128,7 +140,16 @@ public class StockTakeRestockOrderService {
                 finalPo.poNumber(),
                 sendPurchaseOrder
                         ? InventoryConstants.RESTOCK_STATUS_ORDERED
-                        : InventoryConstants.RESTOCK_STATUS_ORDER_DRAFTED);
+                        : InventoryConstants.RESTOCK_STATUS_ORDER_DRAFTED,
+                sendPurchaseOrder && portalConnected);
+    }
+
+    private void markPoRestockSource(String businessId, String purchaseOrderId) {
+        purchaseOrderRepository.findByIdAndBusinessId(purchaseOrderId, businessId)
+                .ifPresent(entity -> {
+                    entity.setSource(PurchasingConstants.PO_SOURCE_RESTOCK);
+                    purchaseOrderRepository.save(entity);
+                });
     }
 
     RestockOrderSnapshot loadSnapshot(String businessId, String orderNumber, String adminNotes) {

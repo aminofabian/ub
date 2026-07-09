@@ -41,6 +41,10 @@ public class DataPermissionEvaluator implements PermissionEvaluator {
             return apiKey.scopes() != null && apiKey.scopes().contains(perm);
         }
         if (!(authentication.getPrincipal() instanceof TenantPrincipal tenant)) {
+            if (authentication.getPrincipal() instanceof SupplierPrincipal supplier) {
+                return zelisline.ub.marketplace.domain.SupplierUserRoles.permissionsFor(supplier.roleKey())
+                        .contains(perm);
+            }
             return false;
         }
         RequestPermissionService permissions = permissionService.getObject();

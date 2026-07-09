@@ -284,6 +284,10 @@ public class PathAPurchaseService {
         if (!PurchasingConstants.PO_SENT.equals(po.getStatus())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Purchase order must be sent to receive goods");
         }
+        if (po.getSentToSupplierAt() != null && po.getSupplierResponseAt() == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Waiting for supplier response before goods can be received");
+        }
         if (req.lines().isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Goods receipt must have lines");
         }
@@ -329,9 +333,11 @@ public class PathAPurchaseService {
             if (in.qtyReceived().signum() <= 0) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quantity must be positive");
             }
-            BigDecimal remaining = pol.getQtyOrdered().subtract(pol.getQtyReceived());
+            BigDecimal maxReceivable = maxReceivableQty(pol, po);
+            BigDecimal remaining = maxReceivable.subtract(pol.getQtyReceived());
             if (in.qtyReceived().compareTo(remaining) > 0) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Receive quantity exceeds open quantity on line");
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Receive quantity exceeds supplier-accepted quantity on line");
             }
             PackageVariantStockResolver.StockPickResolution inbound = packageVariantStockResolver.resolveInbound(
                     businessId, pol.getItemId(), in.qtyReceived());
@@ -675,6 +681,10 @@ public class PathAPurchaseService {
                 po.getExpectedDate(),
                 po.getStatus(),
                 po.getNotes(),
+                po.getSource() == null ? PurchasingConstants.PO_SOURCE_MANUAL : po.getSource(),
+                po.getSentToSupplierAt(),
+                po.getSupplierResponseAt(),
+                po.getDeliveryStatus() == null ? PurchasingConstants.DELIVERY_NOT_SHIPPED : po.getDeliveryStatus(),
                 lines
         );
     }
@@ -686,8 +696,28 @@ public class PathAPurchaseService {
                 l.getItemId(),
                 l.getQtyOrdered(),
                 l.getQtyReceived(),
-                l.getUnitEstimatedCost()
+                l.getUnitEstimatedCost(),
+                l.getSupplierLineStatus() == null
+                        ? PurchasingConstants.SUPPLIER_LINE_PENDING : l.getSupplierLineStatus(),
+                l.getQtyAccepted(),
+                l.getSupplierNote()
         );
+    }
+
+    private static BigDecimal maxReceivableQty(PurchaseOrderLine pol, PurchaseOrder po) {
+        if (po.getSentToSupplierAt() == null) {
+            return pol.getQtyOrdered();
+        }
+        String status = pol.getSupplierLineStatus() == null
+                ? PurchasingConstants.SUPPLIER_LINE_PENDING : pol.getSupplierLineStatus();
+        if (PurchasingConstants.SUPPLIER_LINE_REJECTED.equals(status)) {
+            return BigDecimal.ZERO;
+        }
+        if (PurchasingConstants.SUPPLIER_LINE_ACCEPTED.equals(status)
+                || PurchasingConstants.SUPPLIER_LINE_PARTIALLY_ACCEPTED.equals(status)) {
+            return pol.getQtyAccepted() == null ? pol.getQtyOrdered() : pol.getQtyAccepted();
+        }
+        return pol.getQtyOrdered();
     }
 
     private static String blankToNull(String s) {

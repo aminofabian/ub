@@ -45,6 +45,20 @@ public class PurchaseOrder {
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
 
+    /** manual | restock | marketplace */
+    @Column(name = "source", nullable = false, length = 16)
+    private String source = "manual";
+
+    @Column(name = "sent_to_supplier_at")
+    private Instant sentToSupplierAt;
+
+    @Column(name = "supplier_response_at")
+    private Instant supplierResponseAt;
+
+    /** not_shipped | in_transit | delivered */
+    @Column(name = "delivery_status", nullable = false, length = 16)
+    private String deliveryStatus = "not_shipped";
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;

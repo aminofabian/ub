@@ -41,6 +41,16 @@ public class PurchaseOrderLine {
     @Column(name = "unit_estimated_cost", nullable = false, precision = 14, scale = 4)
     private BigDecimal unitEstimatedCost;
 
+    /** pending | accepted | rejected | partially_accepted */
+    @Column(name = "supplier_line_status", nullable = false, length = 32)
+    private String supplierLineStatus = "pending";
+
+    @Column(name = "qty_accepted", precision = 14, scale = 4)
+    private BigDecimal qtyAccepted;
+
+    @Column(name = "supplier_note", columnDefinition = "TEXT")
+    private String supplierNote;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

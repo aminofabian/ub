@@ -122,6 +122,7 @@ public class SecurityConfig {
 
                         .requestMatchers("/api/v1/auth/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/super-admin/auth/login").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/supplier-portal/auth/login").permitAll()
 
                         .requestMatchers(
                                 "/actuator/health",
@@ -151,6 +152,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/platform/mobile-schema-version").permitAll()
 
                         .requestMatchers("/api/v1/super-admin/**").hasRole("SUPER_ADMIN")
+
+                        .requestMatchers("/api/v1/supplier-portal/**").hasRole("SUPPLIER")
 
                         .requestMatchers("/api/v1/admin/**")
                             .hasAnyRole("OWNER", "ADMIN", "SUPER_ADMIN")
@@ -210,12 +213,14 @@ public class SecurityConfig {
             UserSessionRepository userSessionRepository,
             UserRepository userRepository,
             SuperAdminRepository superAdminRepository,
+            zelisline.ub.marketplace.repository.SupplierUserRepository supplierUserRepository,
             zelisline.ub.audit.application.AuditEventPublisher auditEventPublisher,
             zelisline.ub.audit.application.AuditEventBuilder auditEventBuilder,
             zelisline.ub.identity.application.UserSessionActivity userSessionActivity
     ) {
         return new JwtAuthenticationFilter(
                 jwtTokenService, userSessionRepository, userRepository, superAdminRepository,
+                supplierUserRepository,
                 auditEventPublisher, auditEventBuilder, userSessionActivity);
     }
 

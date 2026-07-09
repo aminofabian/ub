@@ -94,6 +94,10 @@ public class Supplier {
     @Column(name = "legacy_import_source_id", length = 36)
     private String legacyImportSourceId;
 
+    /** Nullable link to platform marketplace supplier when connected via directory. */
+    @Column(name = "marketplace_supplier_id", length = 36)
+    private String marketplaceSupplierId;
+
     @PrePersist
     void onCreate() {
         Instant now = Instant.now();

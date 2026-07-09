@@ -28,6 +28,7 @@ import zelisline.ub.suppliers.api.dto.PatchSupplierContactRequest;
 import zelisline.ub.suppliers.api.dto.PatchSupplierRequest;
 import zelisline.ub.suppliers.api.dto.SupplierContactResponse;
 import zelisline.ub.suppliers.api.dto.SupplierResponse;
+import zelisline.ub.marketplace.application.SupplierIdentityIndexService;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierContact;
@@ -41,6 +42,7 @@ public class SupplierService {
 
     private final SupplierRepository supplierRepository;
     private final SupplierContactRepository supplierContactRepository;
+    private final SupplierIdentityIndexService supplierIdentityIndexService;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
 
@@ -90,6 +92,7 @@ public class SupplierService {
         } catch (DataIntegrityViolationException ex) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Supplier code already in use", ex);
         }
+        supplierIdentityIndexService.upsertTenantSupplier(s, s.getPayoutPhone(), null);
         publishSupplierEvent(businessId, s, actorUserId, AuditEventTypes.SUPPLIER_CREATED, null);
         return toResponse(s);
     }
@@ -162,6 +165,7 @@ public class SupplierService {
         } catch (DataIntegrityViolationException ex) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Supplier code already in use", ex);
         }
+        supplierIdentityIndexService.upsertTenantSupplier(s, s.getPayoutPhone(), null);
         Map<String, Object> newState = supplierSnapshot(s);
         Map<String, Object> diff = compactDiff(oldState, newState);
         if (!diff.isEmpty()) {

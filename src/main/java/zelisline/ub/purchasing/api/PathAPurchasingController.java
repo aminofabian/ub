@@ -29,7 +29,9 @@ import zelisline.ub.purchasing.api.dto.PostGoodsReceiptRequest;
 import zelisline.ub.purchasing.api.dto.PostGoodsReceiptResponse;
 import zelisline.ub.purchasing.api.dto.PostGrnSupplierInvoiceRequest;
 import zelisline.ub.purchasing.api.dto.PostGrnSupplierInvoiceResponse;
+import zelisline.ub.purchasing.api.dto.PathAPurchaseOrderSupplierResponse;
 import zelisline.ub.purchasing.application.PathAPurchaseService;
+import zelisline.ub.marketplace.application.MarketplacePurchaseOrderService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 import zelisline.ub.tenancy.application.BranchResolutionService;
 
@@ -40,6 +42,7 @@ import zelisline.ub.tenancy.application.BranchResolutionService;
 public class PathAPurchasingController {
 
     private final PathAPurchaseService pathAPurchaseService;
+    private final MarketplacePurchaseOrderService marketplacePurchaseOrderService;
     private final BranchResolutionService branchResolutionService;
 
     @PostMapping("/purchase-orders")
@@ -103,6 +106,28 @@ public class PathAPurchasingController {
     ) {
         CurrentTenantUser.require(request);
         return pathAPurchaseService.sendPurchaseOrder(TenantRequestIds.resolveBusinessId(request), purchaseOrderId);
+    }
+
+    @PostMapping("/purchase-orders/{purchaseOrderId}/send-to-supplier")
+    @PreAuthorize("hasPermission(null, 'purchasing.path_a.write')")
+    public PathAPurchaseOrderDetailResponse sendToSupplier(
+            @PathVariable String purchaseOrderId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return marketplacePurchaseOrderService.sendToSupplier(
+                TenantRequestIds.resolveBusinessId(request), purchaseOrderId);
+    }
+
+    @GetMapping("/purchase-orders/{purchaseOrderId}/supplier-response")
+    @PreAuthorize("hasPermission(null, 'purchasing.path_a.read')")
+    public PathAPurchaseOrderSupplierResponse supplierResponse(
+            @PathVariable String purchaseOrderId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return marketplacePurchaseOrderService.getSupplierResponse(
+                TenantRequestIds.resolveBusinessId(request), purchaseOrderId);
     }
 
     @PostMapping("/purchase-orders/{purchaseOrderId}/cancel")

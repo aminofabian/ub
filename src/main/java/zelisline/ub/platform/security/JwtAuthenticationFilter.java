@@ -38,6 +38,8 @@ import zelisline.ub.identity.domain.UserStatus;
 import zelisline.ub.identity.repository.SuperAdminRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.identity.repository.UserSessionRepository;
+import zelisline.ub.marketplace.domain.SupplierUser;
+import zelisline.ub.marketplace.repository.SupplierUserRepository;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
 /**
@@ -54,6 +56,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final UserSessionRepository userSessionRepository;
     private final UserRepository userRepository;
     private final SuperAdminRepository superAdminRepository;
+    private final SupplierUserRepository supplierUserRepository;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
     private final UserSessionActivity userSessionActivity;
@@ -101,6 +104,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String kind = claims.get(JwtTokenService.CLAIM_PRINCIPAL_KIND, String.class);
         if (JwtTokenService.PRINCIPAL_SUPER_ADMIN.equals(kind)) {
             if (!authenticateSuperAdmin(claims, response)) {
+                return;
+            }
+            try {
+                filterChain.doFilter(request, response);
+            } finally {
+                SecurityContextHolder.clearContext();
+            }
+            return;
+        }
+        if (JwtTokenService.PRINCIPAL_SUPPLIER.equals(kind)) {
+            if (!authenticateSupplier(claims, response)) {
                 return;
             }
             try {
@@ -224,6 +238,35 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 "",
                 List.of(new SimpleGrantedAuthority("ROLE_SUPER_ADMIN"))
         );
+        SecurityContextHolder.getContext().setAuthentication(authentication);
+        return true;
+    }
+
+    private boolean authenticateSupplier(Claims claims, HttpServletResponse response) throws IOException {
+        String id = claims.getSubject();
+        String marketplaceSupplierId = claims.get(JwtTokenService.CLAIM_MARKETPLACE_SUPPLIER_ID, String.class);
+        String roleKey = claims.get(JwtTokenService.CLAIM_SUPPLIER_ROLE, String.class);
+        if (id == null || id.isBlank() || marketplaceSupplierId == null || marketplaceSupplierId.isBlank()) {
+            writeProblem(response, HttpStatus.UNAUTHORIZED, "Invalid token claims", "unauthorized");
+            return false;
+        }
+        SupplierUser user = supplierUserRepository.findByIdAndMarketplaceSupplierId(id, marketplaceSupplierId).orElse(null);
+        if (user == null || !user.isActive()) {
+            writeProblem(response, HttpStatus.UNAUTHORIZED, "Account is not active", "unauthorized");
+            return false;
+        }
+        if (user.getLockedUntil() != null && user.getLockedUntil().isAfter(Instant.now())) {
+            writeProblem(response, HttpStatus.UNAUTHORIZED, "Account is temporarily locked", "unauthorized");
+            return false;
+        }
+        String resolvedRole = roleKey == null || roleKey.isBlank() ? user.getRoleKey() : roleKey;
+        var principal = new SupplierPrincipal(user.getId(), marketplaceSupplierId, resolvedRole);
+        var authorities = new java.util.ArrayList<SimpleGrantedAuthority>();
+        authorities.add(new SimpleGrantedAuthority("ROLE_SUPPLIER"));
+        zelisline.ub.marketplace.domain.SupplierUserRoles.permissionsFor(resolvedRole).stream()
+                .map(p -> new SimpleGrantedAuthority("PERM_" + p))
+                .forEach(authorities::add);
+        var authentication = new SupplierAuthenticationToken(principal, authorities);
         SecurityContextHolder.getContext().setAuthentication(authentication);
         return true;
     }

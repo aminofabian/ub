@@ -20,6 +20,19 @@ public final class PurchasingConstants {
     public static final String PO_SENT = "sent";
     public static final String PO_CANCELLED = "cancelled";
 
+    public static final String PO_SOURCE_MANUAL = "manual";
+    public static final String PO_SOURCE_RESTOCK = "restock";
+    public static final String PO_SOURCE_MARKETPLACE = "marketplace";
+
+    public static final String SUPPLIER_LINE_PENDING = "pending";
+    public static final String SUPPLIER_LINE_ACCEPTED = "accepted";
+    public static final String SUPPLIER_LINE_REJECTED = "rejected";
+    public static final String SUPPLIER_LINE_PARTIALLY_ACCEPTED = "partially_accepted";
+
+    public static final String DELIVERY_NOT_SHIPPED = "not_shipped";
+    public static final String DELIVERY_IN_TRANSIT = "in_transit";
+    public static final String DELIVERY_DELIVERED = "delivered";
+
     public static final String GRN_DRAFT = "draft";
     public static final String GRN_POSTED = "posted";
 

@@ -26,6 +26,9 @@ public class JwtTokenService {
     public static final String CLAIM_BRANCH_ID = "branch_id";
     public static final String CLAIM_PRINCIPAL_KIND = "principal_kind";
     public static final String PRINCIPAL_SUPER_ADMIN = "SUPER_ADMIN";
+    public static final String PRINCIPAL_SUPPLIER = "SUPPLIER";
+    public static final String CLAIM_MARKETPLACE_SUPPLIER_ID = "marketplace_supplier_id";
+    public static final String CLAIM_SUPPLIER_ROLE = "supplier_role";
 
     /**
      * Tolerated clock skew during JWT validation. Mobile browsers, sleeping
@@ -83,6 +86,27 @@ public class JwtTokenService {
                 .id(jti)
                 .subject(superAdminId)
                 .claim(CLAIM_PRINCIPAL_KIND, PRINCIPAL_SUPER_ADMIN)
+                .issuedAt(Date.from(now))
+                .expiration(Date.from(exp))
+                .signWith(key)
+                .compact();
+    }
+
+    /** Stateless supplier portal access token scoped to one marketplace supplier. */
+    public String createSupplierAccessToken(
+            String supplierUserId,
+            String marketplaceSupplierId,
+            String roleKey,
+            String jti
+    ) {
+        Instant now = Instant.now();
+        Instant exp = now.plusSeconds(accessTtlMinutes * 60);
+        return Jwts.builder()
+                .id(jti)
+                .subject(supplierUserId)
+                .claim(CLAIM_PRINCIPAL_KIND, PRINCIPAL_SUPPLIER)
+                .claim(CLAIM_MARKETPLACE_SUPPLIER_ID, marketplaceSupplierId)
+                .claim(CLAIM_SUPPLIER_ROLE, roleKey)
                 .issuedAt(Date.from(now))
                 .expiration(Date.from(exp))
                 .signWith(key)

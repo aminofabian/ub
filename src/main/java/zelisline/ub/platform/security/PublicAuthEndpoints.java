@@ -19,7 +19,8 @@ public final class PublicAuthEndpoints {
             "/api/v1/auth/resend-verification",
             "/api/v1/auth/password/forgot",
             "/api/v1/auth/password/reset",
-            "/api/v1/auth/clear-session-cookie"
+            "/api/v1/auth/clear-session-cookie",
+            "/api/v1/supplier-portal/auth/login"
     );
 
     private PublicAuthEndpoints() {

@@ -5,10 +5,22 @@ import java.util.Optional;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import zelisline.ub.purchasing.domain.SupplierInvoice;
 
 public interface SupplierInvoiceRepository extends JpaRepository<SupplierInvoice, String> {
+
+    /** Read-only supplier portal view: invoices for local suppliers linked to this marketplace supplier. */
+    @Query("""
+            SELECT si FROM SupplierInvoice si
+            JOIN Supplier s ON s.id = si.supplierId
+            WHERE s.marketplaceSupplierId = :marketplaceSupplierId
+              AND s.deletedAt IS NULL
+            ORDER BY si.invoiceDate DESC, si.createdAt DESC
+            """)
+    List<SupplierInvoice> findForSupplierPortal(@Param("marketplaceSupplierId") String marketplaceSupplierId);
 
     boolean existsByGoodsReceiptId(String goodsReceiptId);
 

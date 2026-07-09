@@ -1,70 +1,95 @@
 package zelisline.ub.marketplace.application;
 
+import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.suppliers.SupplierCodes;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.repository.SupplierRepository;
 
+/**
+ * Deterministic public marketplace slugs derived from name + id prefix.
+ * No DB column required — keeps production bootable without a schema migration.
+ */
 @Service
 @RequiredArgsConstructor
 public class MarketplaceSlugService {
 
     private final SupplierRepository supplierRepository;
 
-    /**
-     * Ensures the supplier has a stable public slug; persists when newly generated.
-     * Synthetic unassigned suppliers never get a public slug.
-     */
-    @Transactional
-    public String ensureSupplierSlug(Supplier supplier) {
-        if (supplier == null) {
+    public String supplierSlug(Supplier supplier) {
+        if (supplier == null || SupplierCodes.SYSTEM_UNASSIGNED.equals(supplier.getCode())) {
             return null;
         }
-        if (SupplierCodes.SYSTEM_UNASSIGNED.equals(supplier.getCode())) {
-            return null;
+        return buildSlug(supplier.getName(), supplier.getId(), "supplier");
+    }
+
+    public static String productSlug(String name, String productId) {
+        return buildSlug(name, productId, "product");
+    }
+
+    @Transactional(readOnly = true)
+    public Supplier resolveSupplierBySlug(String slug) {
+        String needle = blankToNull(slug);
+        if (needle == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found");
         }
-        if (supplier.getPublicSlug() != null && !supplier.getPublicSlug().isBlank()) {
-            return supplier.getPublicSlug();
+        String idPrefix = extractIdPrefix(needle);
+        if (idPrefix == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found");
         }
-        String base = slugify(supplier.getName());
+        List<Supplier> candidates = supplierRepository.findPublicActiveByIdPrefix(idPrefix);
+        Optional<Supplier> exact = candidates.stream()
+                .filter(s -> needle.equalsIgnoreCase(supplierSlug(s)))
+                .findFirst();
+        if (exact.isPresent()) {
+            return exact.get();
+        }
+        // Fallback: unique id-prefix match (name may have changed after URL was shared).
+        if (candidates.size() == 1) {
+            return candidates.get(0);
+        }
+        throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found");
+    }
+
+    private static String buildSlug(String name, String id, String fallbackBase) {
+        String base = slugify(name);
         if (base.isBlank()) {
-            base = "supplier";
+            base = fallbackBase;
         }
-        String suffix = supplier.getId() == null
-                ? Integer.toHexString(Math.abs(supplier.getName().hashCode()))
-                : supplier.getId().replace("-", "");
+        String suffix = idPrefix(id);
+        String out = (base + "-" + suffix).toLowerCase(Locale.ROOT);
+        return out.length() > 96 ? out.substring(0, 96) : out;
+    }
+
+    private static String idPrefix(String id) {
+        if (id == null || id.isBlank()) {
+            return "x";
+        }
+        String suffix = id.replace("-", "");
         if (suffix.length() > 8) {
             suffix = suffix.substring(0, 8);
         }
-        String candidate = (base + "-" + suffix).toLowerCase(Locale.ROOT);
-        if (candidate.length() > 96) {
-            candidate = candidate.substring(0, 96);
+        return suffix.toLowerCase(Locale.ROOT);
+    }
+
+    private static String extractIdPrefix(String slug) {
+        int dash = slug.lastIndexOf('-');
+        if (dash < 0 || dash >= slug.length() - 1) {
+            return null;
         }
-        int n = 0;
-        String trySlug = candidate;
-        while (supplierRepository.existsByPublicSlugAndDeletedAtIsNull(trySlug)) {
-            n += 1;
-            String extra = "-" + n;
-            trySlug = candidate;
-            if (trySlug.length() + extra.length() > 96) {
-                trySlug = trySlug.substring(0, 96 - extra.length());
-            }
-            trySlug = trySlug + extra;
-            if (n > 50) {
-                trySlug = "s-" + (supplier.getId() == null
-                        ? Long.toHexString(System.nanoTime())
-                        : supplier.getId().replace("-", ""));
-                break;
-            }
+        String suffix = slug.substring(dash + 1).toLowerCase(Locale.ROOT);
+        if (!suffix.matches("[0-9a-f]{6,12}")) {
+            return null;
         }
-        supplier.setPublicSlug(trySlug);
-        supplierRepository.save(supplier);
-        return trySlug;
+        return suffix.length() > 8 ? suffix.substring(0, 8) : suffix;
     }
 
     public static String slugify(String raw) {
@@ -82,16 +107,10 @@ public class MarketplaceSlugService {
         return cleaned;
     }
 
-    public static String productSlug(String name, String productId) {
-        String base = slugify(name);
-        if (base.isBlank()) {
-            base = "product";
+    private static String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
         }
-        String suffix = productId == null ? "x" : productId.replace("-", "");
-        if (suffix.length() > 8) {
-            suffix = suffix.substring(0, 8);
-        }
-        String out = base + "-" + suffix;
-        return out.length() > 96 ? out.substring(0, 96) : out;
+        return value.trim();
     }
 }

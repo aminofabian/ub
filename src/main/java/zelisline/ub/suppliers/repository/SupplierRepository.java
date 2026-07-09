@@ -1,5 +1,6 @@
 package zelisline.ub.suppliers.repository;
 
+import java.util.List;
 import java.util.Optional;
 
 import java.math.BigDecimal;
@@ -96,9 +97,26 @@ public interface SupplierRepository extends JpaRepository<Supplier, String> {
 
     Optional<Supplier> findByBusinessIdAndCodeAndDeletedAtIsNull(String businessId, String code);
 
-    Optional<Supplier> findByPublicSlugAndDeletedAtIsNull(String publicSlug);
-
-    boolean existsByPublicSlugAndDeletedAtIsNull(String publicSlug);
+    /**
+     * Resolve a public marketplace supplier from the hex id prefix used in deterministic slugs.
+     */
+    @Query("""
+            SELECT s FROM Supplier s
+             WHERE s.deletedAt IS NULL
+               AND LOWER(s.status) = 'active'
+               AND (s.code IS NULL OR s.code <> 'SYS-UNASSIGNED')
+               AND LOWER(REPLACE(s.id, '-', '')) LIKE CONCAT(LOWER(:idPrefix), '%')
+               AND EXISTS (
+                 SELECT 1 FROM SupplierProduct sp
+                  JOIN Item i ON i.id = sp.itemId
+                  WHERE sp.supplierId = s.id
+                    AND sp.deletedAt IS NULL
+                    AND sp.active = TRUE
+                    AND i.deletedAt IS NULL
+                    AND i.active = TRUE
+               )
+            """)
+    List<Supplier> findPublicActiveByIdPrefix(@Param("idPrefix") String idPrefix);
 
     @Query("""
             SELECT COUNT(s) > 0 FROM Supplier s

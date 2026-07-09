@@ -62,7 +62,7 @@ public class PublicMarketplaceSearchService {
     private final BusinessOnboardingSettingsService businessOnboardingSettingsService;
     private final MarketplaceSlugService marketplaceSlugService;
 
-    @Transactional
+    @Transactional(readOnly = true)
     public Page<PublicMarketplaceSupplierSearchRow> searchSuppliers(
             String q, String location, Pageable pageable) {
         String query = blankToNull(q);
@@ -90,7 +90,7 @@ public class PublicMarketplaceSearchService {
         return new PageImpl<>(rows, pageable, page.getTotalElements());
     }
 
-    @Transactional
+    @Transactional(readOnly = true)
     public Page<PublicMarketplaceProductSearchRow> searchProducts(
             String q, String location, Pageable pageable) {
         String query = blankToNull(q);
@@ -149,29 +149,23 @@ public class PublicMarketplaceSearchService {
         return List.copyOf(out);
     }
 
-    @Transactional
+    @Transactional(readOnly = true)
     public MarketplaceSupplierDetailResponse getSupplierDetail(String supplierId) {
         Supplier supplier = supplierRepository.findByIdAndDeletedAtIsNull(supplierId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
         return buildSupplierDetail(supplier);
     }
 
-    @Transactional
+    @Transactional(readOnly = true)
     public MarketplaceSupplierDetailResponse getSupplierDetailBySlug(String slug) {
-        String needle = blankToNull(slug);
-        if (needle == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found");
-        }
-        Supplier supplier = supplierRepository.findByPublicSlugAndDeletedAtIsNull(needle)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
-        return buildSupplierDetail(supplier);
+        return buildSupplierDetail(marketplaceSlugService.resolveSupplierBySlug(slug));
     }
 
     /**
      * Resolves a public product URL under a supplier slug.
      * Returns the supplier detail; callers match {@code productSlug} against catalogue product slugs.
      */
-    @Transactional
+    @Transactional(readOnly = true)
     public MarketplaceSupplierDetailResponse getSupplierDetailForProductSlug(
             String supplierSlug, String productSlug) {
         MarketplaceSupplierDetailResponse detail = getSupplierDetailBySlug(supplierSlug);
@@ -191,7 +185,7 @@ public class PublicMarketplaceSearchService {
                 || SupplierCodes.SYSTEM_UNASSIGNED.equals(supplier.getCode())) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier is not available");
         }
-        String supplierSlug = marketplaceSlugService.ensureSupplierSlug(supplier);
+        String supplierSlug = marketplaceSlugService.supplierSlug(supplier);
 
         ListingLocation loc = resolveLocationsByBusinessId(List.of(supplier.getBusinessId()))
                 .getOrDefault(supplier.getBusinessId(), ListingLocation.empty());
@@ -286,7 +280,7 @@ public class PublicMarketplaceSearchService {
         int productCount = (int) Math.min(
                 Integer.MAX_VALUE,
                 supplierProductRepository.countActivePublicForSupplier(supplier.getId()));
-        String slug = marketplaceSlugService.ensureSupplierSlug(supplier);
+        String slug = marketplaceSlugService.supplierSlug(supplier);
 
         return new PublicMarketplaceSupplierSearchRow(
                 supplier.getId(),
@@ -318,7 +312,7 @@ public class PublicMarketplaceSearchService {
     ) {
         BigDecimal price = resolveBuyingPrice(link, item);
         String displayName = displayItemName(item);
-        String supplierSlug = marketplaceSlugService.ensureSupplierSlug(supplier);
+        String supplierSlug = marketplaceSlugService.supplierSlug(supplier);
         return new PublicMarketplaceProductSearchRow(
                 link.getId(),
                 displayName,

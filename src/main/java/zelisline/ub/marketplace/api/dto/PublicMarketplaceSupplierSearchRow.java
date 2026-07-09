@@ -8,6 +8,8 @@ public record PublicMarketplaceSupplierSearchRow(
         String description,
         String supplierType,
         String listedBy,
+        String location,
+        List<String> locations,
         int productCount,
         String contactName,
         String contactPhone,

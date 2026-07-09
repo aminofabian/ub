@@ -1,5 +1,7 @@
 package zelisline.ub.marketplace.api;
 
+import java.util.List;
+
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -24,15 +26,23 @@ public class PublicMarketplaceController {
     @GetMapping("/suppliers/search")
     public Page<PublicMarketplaceSupplierSearchRow> searchSuppliers(
             @RequestParam(required = false) String q,
+            @RequestParam(required = false) String location,
             Pageable pageable) {
-        return publicMarketplaceSearchService.searchSuppliers(q, pageable);
+        return publicMarketplaceSearchService.searchSuppliers(q, location, pageable);
     }
 
     @GetMapping("/products/search")
     public Page<PublicMarketplaceProductSearchRow> searchProducts(
             @RequestParam(required = false) String q,
+            @RequestParam(required = false) String location,
             Pageable pageable) {
-        return publicMarketplaceSearchService.searchProducts(q, pageable);
+        return publicMarketplaceSearchService.searchProducts(q, location, pageable);
+    }
+
+    /** Distinct listing locations for marketplace filters. */
+    @GetMapping("/locations")
+    public List<String> listLocations() {
+        return publicMarketplaceSearchService.listLocations();
     }
 
     /** Public storefront preview for an active tenant supplier. */

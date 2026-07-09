@@ -1,6 +1,7 @@
 package zelisline.ub.marketplace.api.dto;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 public record PublicMarketplaceProductSearchRow(
         String productId,
@@ -12,6 +13,8 @@ public record PublicMarketplaceProductSearchRow(
         String supplierId,
         String supplierName,
         String supplierType,
+        String location,
+        List<String> locations,
         BigDecimal packSize,
         String packUnit,
         BigDecimal minOrderQty,

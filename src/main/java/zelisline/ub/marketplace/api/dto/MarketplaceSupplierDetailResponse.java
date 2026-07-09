@@ -9,6 +9,8 @@ public record MarketplaceSupplierDetailResponse(
         String description,
         String supplierType,
         String listedBy,
+        String location,
+        List<String> locations,
         String status,
         String contactEmail,
         String contactPhone,

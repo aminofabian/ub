@@ -96,6 +96,10 @@ public interface SupplierRepository extends JpaRepository<Supplier, String> {
 
     Optional<Supplier> findByBusinessIdAndCodeAndDeletedAtIsNull(String businessId, String code);
 
+    Optional<Supplier> findByPublicSlugAndDeletedAtIsNull(String publicSlug);
+
+    boolean existsByPublicSlugAndDeletedAtIsNull(String publicSlug);
+
     @Query("""
             SELECT COUNT(s) > 0 FROM Supplier s
              WHERE s.businessId = :businessId

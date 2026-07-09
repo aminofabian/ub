@@ -6,6 +6,7 @@ import java.util.List;
 public record MarketplaceSupplierDetailResponse(
         String id,
         String name,
+        String slug,
         String description,
         String supplierType,
         String listedBy,
@@ -36,6 +37,7 @@ public record MarketplaceSupplierDetailResponse(
     public record MarketplaceCatalogProductPreview(
             String id,
             String name,
+            String slug,
             String barcode,
             String sku,
             String categoryName,

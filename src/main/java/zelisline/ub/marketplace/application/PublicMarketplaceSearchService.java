@@ -60,8 +60,9 @@ public class PublicMarketplaceSearchService {
     private final BusinessRepository businessRepository;
     private final BranchRepository branchRepository;
     private final BusinessOnboardingSettingsService businessOnboardingSettingsService;
+    private final MarketplaceSlugService marketplaceSlugService;
 
-    @Transactional(readOnly = true)
+    @Transactional
     public Page<PublicMarketplaceSupplierSearchRow> searchSuppliers(
             String q, String location, Pageable pageable) {
         String query = blankToNull(q);
@@ -89,7 +90,7 @@ public class PublicMarketplaceSearchService {
         return new PageImpl<>(rows, pageable, page.getTotalElements());
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public Page<PublicMarketplaceProductSearchRow> searchProducts(
             String q, String location, Pageable pageable) {
         String query = blankToNull(q);
@@ -148,14 +149,49 @@ public class PublicMarketplaceSearchService {
         return List.copyOf(out);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public MarketplaceSupplierDetailResponse getSupplierDetail(String supplierId) {
         Supplier supplier = supplierRepository.findByIdAndDeletedAtIsNull(supplierId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
+        return buildSupplierDetail(supplier);
+    }
+
+    @Transactional
+    public MarketplaceSupplierDetailResponse getSupplierDetailBySlug(String slug) {
+        String needle = blankToNull(slug);
+        if (needle == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found");
+        }
+        Supplier supplier = supplierRepository.findByPublicSlugAndDeletedAtIsNull(needle)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
+        return buildSupplierDetail(supplier);
+    }
+
+    /**
+     * Resolves a public product URL under a supplier slug.
+     * Returns the supplier detail; callers match {@code productSlug} against catalogue product slugs.
+     */
+    @Transactional
+    public MarketplaceSupplierDetailResponse getSupplierDetailForProductSlug(
+            String supplierSlug, String productSlug) {
+        MarketplaceSupplierDetailResponse detail = getSupplierDetailBySlug(supplierSlug);
+        String needle = blankToNull(productSlug);
+        if (needle == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found");
+        }
+        boolean found = detail.products().stream().anyMatch(p -> needle.equalsIgnoreCase(p.slug()));
+        if (!found) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found");
+        }
+        return detail;
+    }
+
+    private MarketplaceSupplierDetailResponse buildSupplierDetail(Supplier supplier) {
         if (!"active".equalsIgnoreCase(supplier.getStatus())
                 || SupplierCodes.SYSTEM_UNASSIGNED.equals(supplier.getCode())) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier is not available");
         }
+        String supplierSlug = marketplaceSlugService.ensureSupplierSlug(supplier);
 
         ListingLocation loc = resolveLocationsByBusinessId(List.of(supplier.getBusinessId()))
                 .getOrDefault(supplier.getBusinessId(), ListingLocation.empty());
@@ -181,6 +217,7 @@ public class PublicMarketplaceSearchService {
             products.add(new MarketplaceSupplierDetailResponse.MarketplaceCatalogProductPreview(
                     link.getId(),
                     displayName,
+                    MarketplaceSlugService.productSlug(displayName, link.getId()),
                     item.getBarcode(),
                     link.getSupplierSku() != null && !link.getSupplierSku().isBlank()
                             ? link.getSupplierSku()
@@ -217,6 +254,7 @@ public class PublicMarketplaceSearchService {
         return new MarketplaceSupplierDetailResponse(
                 supplier.getId(),
                 supplier.getName(),
+                supplierSlug,
                 description,
                 blankToNull(supplier.getSupplierType()),
                 businessName,
@@ -248,10 +286,12 @@ public class PublicMarketplaceSearchService {
         int productCount = (int) Math.min(
                 Integer.MAX_VALUE,
                 supplierProductRepository.countActivePublicForSupplier(supplier.getId()));
+        String slug = marketplaceSlugService.ensureSupplierSlug(supplier);
 
         return new PublicMarketplaceSupplierSearchRow(
                 supplier.getId(),
                 supplier.getName(),
+                slug,
                 description,
                 blankToNull(supplier.getSupplierType()),
                 businessName,
@@ -277,9 +317,12 @@ public class PublicMarketplaceSearchService {
             int supplierProductCount
     ) {
         BigDecimal price = resolveBuyingPrice(link, item);
+        String displayName = displayItemName(item);
+        String supplierSlug = marketplaceSlugService.ensureSupplierSlug(supplier);
         return new PublicMarketplaceProductSearchRow(
                 link.getId(),
-                displayItemName(item),
+                displayName,
+                MarketplaceSlugService.productSlug(displayName, link.getId()),
                 item.getBarcode(),
                 link.getSupplierSku() != null && !link.getSupplierSku().isBlank()
                         ? link.getSupplierSku()
@@ -288,6 +331,7 @@ public class PublicMarketplaceSearchService {
                 imageUrl,
                 link.getSupplierId(),
                 supplier.getName(),
+                supplierSlug,
                 blankToNull(supplier.getSupplierType()),
                 supplierProductCount,
                 loc.primary(),

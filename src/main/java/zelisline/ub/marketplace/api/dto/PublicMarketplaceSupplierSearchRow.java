@@ -5,6 +5,7 @@ import java.util.List;
 public record PublicMarketplaceSupplierSearchRow(
         String id,
         String name,
+        String slug,
         String description,
         String supplierType,
         String listedBy,

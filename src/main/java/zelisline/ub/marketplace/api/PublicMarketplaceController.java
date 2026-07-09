@@ -45,7 +45,21 @@ public class PublicMarketplaceController {
         return publicMarketplaceSearchService.listLocations();
     }
 
-    /** Public storefront preview for an active tenant supplier. */
+    /** Public storefront by supplier slug: /marketplace/s/{slug} */
+    @GetMapping("/s/{slug}")
+    public MarketplaceSupplierDetailResponse getSupplierBySlug(@PathVariable String slug) {
+        return publicMarketplaceSearchService.getSupplierDetailBySlug(slug);
+    }
+
+    /** Public product under supplier: /marketplace/s/{supplierSlug}/p/{productSlug} */
+    @GetMapping("/s/{supplierSlug}/p/{productSlug}")
+    public MarketplaceSupplierDetailResponse getProductBySlug(
+            @PathVariable String supplierSlug,
+            @PathVariable String productSlug) {
+        return publicMarketplaceSearchService.getSupplierDetailForProductSlug(supplierSlug, productSlug);
+    }
+
+    /** Public storefront preview for an active tenant supplier (by id). */
     @GetMapping("/suppliers/{id}")
     public MarketplaceSupplierDetailResponse getSupplier(@PathVariable String id) {
         return publicMarketplaceSearchService.getSupplierDetail(id);

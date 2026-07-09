@@ -33,6 +33,10 @@ public class Supplier {
     @Column(name = "code", length = 64)
     private String code;
 
+    /** Cross-tenant unique slug for public marketplace URLs. */
+    @Column(name = "public_slug", length = 96)
+    private String publicSlug;
+
     @Column(name = "supplier_type", nullable = false, length = 32)
     private String supplierType = "distributor";
 

@@ -3,13 +3,16 @@ package zelisline.ub.marketplace.api;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.marketplace.api.dto.MarketplaceSupplierDetailResponse;
 import zelisline.ub.marketplace.api.dto.PublicMarketplaceProductSearchRow;
 import zelisline.ub.marketplace.api.dto.PublicMarketplaceSupplierSearchRow;
+import zelisline.ub.marketplace.application.MarketplaceConnectService;
 import zelisline.ub.marketplace.application.PublicMarketplaceSearchService;
 
 @RestController
@@ -18,6 +21,7 @@ import zelisline.ub.marketplace.application.PublicMarketplaceSearchService;
 public class PublicMarketplaceController {
 
     private final PublicMarketplaceSearchService publicMarketplaceSearchService;
+    private final MarketplaceConnectService marketplaceConnectService;
 
     @GetMapping("/suppliers/search")
     public Page<PublicMarketplaceSupplierSearchRow> searchSuppliers(
@@ -31,5 +35,11 @@ public class PublicMarketplaceController {
             @RequestParam(required = false) String q,
             Pageable pageable) {
         return publicMarketplaceSearchService.searchProducts(q, pageable);
+    }
+
+    /** Public storefront preview for an active marketplace supplier. */
+    @GetMapping("/suppliers/{id}")
+    public MarketplaceSupplierDetailResponse getSupplier(@PathVariable String id) {
+        return marketplaceConnectService.getSupplierDetail(id);
     }
 }

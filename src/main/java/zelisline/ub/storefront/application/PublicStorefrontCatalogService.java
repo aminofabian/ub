@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import zelisline.ub.catalog.application.CatalogSearchSupport;
 import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.ItemImage;
@@ -119,6 +120,10 @@ public class PublicStorefrontCatalogService {
         if (!typeUnset && itemTypeRepository.findByIdAndBusinessId(type, ctx.business().getId()).isEmpty()) {
             return new PublicCatalogListResponse(ctx.business().getCurrency(), List.of(), null, 0L);
         }
+        if (qq != null && !CatalogSearchSupport.isBlankQuery(qq)) {
+            return listItemsRankedSearch(
+                    ctx, qq, catUnset, categoryIds, typeUnset, type, blankToNull(cursor), sz);
+        }
         List<Item> items = fetchInStockCatalogPage(
                 ctx, qq, catUnset, categoryIds, typeUnset, type, blankToNull(cursor), sz);
         String next = null;
@@ -128,6 +133,96 @@ public class PublicStorefrontCatalogService {
         }
         long total = countInStockCatalog(ctx, qq, catUnset, categoryIds, typeUnset, type, blankToNull(cursor));
         return new PublicCatalogListResponse(ctx.business().getCurrency(), toCards(ctx, items), next, total);
+    }
+
+    private PublicCatalogListResponse listItemsRankedSearch(
+            PublicStorefrontContext ctx,
+            String query,
+            boolean catUnset,
+            Collection<String> categoryIds,
+            boolean typeUnset,
+            String type,
+            String cursor,
+            int limit
+    ) {
+        List<Item> ranked = fetchRankedInStockSearchHits(
+                ctx, query, catUnset, categoryIds, typeUnset, type);
+        int start = 0;
+        if (cursor != null) {
+            for (int i = 0; i < ranked.size(); i++) {
+                if (ranked.get(i).getId().equals(cursor)) {
+                    start = i + 1;
+                    break;
+                }
+            }
+        }
+        if (start >= ranked.size()) {
+            return new PublicCatalogListResponse(ctx.business().getCurrency(), List.of(), null, 0L);
+        }
+        int end = Math.min(start + limit, ranked.size());
+        List<Item> page = ranked.subList(start, end);
+        String next = end < ranked.size() && !page.isEmpty() ? page.getLast().getId() : null;
+        long total = ranked.size() - start;
+        return new PublicCatalogListResponse(ctx.business().getCurrency(), toCards(ctx, page), next, total);
+    }
+
+    private List<Item> fetchRankedInStockSearchHits(
+            PublicStorefrontContext ctx,
+            String query,
+            boolean catUnset,
+            Collection<String> categoryIds,
+            boolean typeUnset,
+            String type
+    ) {
+        String candidate = CatalogSearchSupport.candidateToken(query);
+        List<Item> ranked = rankInStockCandidates(
+                ctx, query, candidate, catUnset, categoryIds, typeUnset, type);
+        if (!ranked.isEmpty()) {
+            return ranked;
+        }
+        for (String fuzzyToken : CatalogSearchSupport.fuzzyCandidateTokens(query)) {
+            if (fuzzyToken.equals(candidate)) {
+                continue;
+            }
+            ranked = rankInStockCandidates(
+                    ctx, query, fuzzyToken, catUnset, categoryIds, typeUnset, type);
+            if (!ranked.isEmpty()) {
+                return ranked;
+            }
+        }
+        return List.of();
+    }
+
+    private List<Item> rankInStockCandidates(
+            PublicStorefrontContext ctx,
+            String query,
+            String dbQuery,
+            boolean catUnset,
+            Collection<String> categoryIds,
+            boolean typeUnset,
+            String type
+    ) {
+        if (dbQuery == null || dbQuery.isBlank()) {
+            return List.of();
+        }
+        List<Item> candidates = fetchInStockCatalogPage(
+                ctx,
+                dbQuery,
+                catUnset,
+                categoryIds,
+                typeUnset,
+                type,
+                null,
+                CatalogSearchSupport.CANDIDATE_FETCH_SIZE);
+        return CatalogSearchSupport.rankAndFilter(
+                candidates,
+                item -> CatalogSearchSupport.SearchableText.of(
+                        item.getName(),
+                        item.getVariantName(),
+                        item.getSku(),
+                        item.getBarcode(),
+                        item.getDescription()),
+                query);
     }
 
     @Transactional(readOnly = true)

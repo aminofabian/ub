@@ -20,9 +20,9 @@ import java.util.regex.Pattern;
  *   <li>Fuzzy / edit-distance on the primary token</li>
  * </ol>
  */
-final class CatalogSearchSupport {
+public final class CatalogSearchSupport {
 
-    static final int CANDIDATE_FETCH_SIZE = 500;
+    public static final int CANDIDATE_FETCH_SIZE = 500;
     private static final int MIN_FUZZY_PREFIX_LEN = 3;
     private static final Pattern TOKEN_SPLIT = Pattern.compile("[\\s/_\\-]+");
     private static final Pattern NON_ALNUM = Pattern.compile("[^a-z0-9]+");
@@ -30,14 +30,14 @@ final class CatalogSearchSupport {
     private CatalogSearchSupport() {
     }
 
-    record SearchableText(
+    public record SearchableText(
             String name,
             String variantName,
             String sku,
             String barcode,
             String description
     ) {
-        static SearchableText of(
+        public static SearchableText of(
                 String name,
                 String variantName,
                 String sku,
@@ -48,7 +48,7 @@ final class CatalogSearchSupport {
         }
     }
 
-    static List<String> tokenize(String query) {
+    public static List<String> tokenize(String query) {
         if (query == null || query.isBlank()) {
             return List.of();
         }
@@ -72,7 +72,7 @@ final class CatalogSearchSupport {
      * Multi-word queries like {@code "supa s"} become {@code "supa"} so variants
      * are still retrieved before in-memory ranking.
      */
-    static String candidateToken(String query) {
+    public static String candidateToken(String query) {
         List<String> tokens = tokenize(query);
         if (tokens.isEmpty()) {
             return null;
@@ -86,7 +86,7 @@ final class CatalogSearchSupport {
      * Progressively shorter prefixes used when the candidate token returns no rows
      * (typos such as {@code suap} → try {@code sua}, then {@code su}).
      */
-    static List<String> fuzzyCandidateTokens(String query) {
+    public static List<String> fuzzyCandidateTokens(String query) {
         String primary = candidateToken(query);
         if (primary == null || primary.length() < 2) {
             return List.of();
@@ -102,14 +102,14 @@ final class CatalogSearchSupport {
         return prefixes;
     }
 
-    static boolean isBlankQuery(String query) {
+    public static boolean isBlankQuery(String query) {
         return query == null || query.isBlank() || tokenize(query).isEmpty();
     }
 
     /**
      * Relevance score; {@code 0} means the item should be excluded.
      */
-    static int score(SearchableText item, String query) {
+    public static int score(SearchableText item, String query) {
         if (item == null || isBlankQuery(query)) {
             return 0;
         }
@@ -197,7 +197,7 @@ final class CatalogSearchSupport {
         return best;
     }
 
-    static <T> List<T> rankAndFilter(List<T> items, java.util.function.Function<T, SearchableText> textOf, String query) {
+    public static <T> List<T> rankAndFilter(List<T> items, java.util.function.Function<T, SearchableText> textOf, String query) {
         if (items == null || items.isEmpty() || isBlankQuery(query)) {
             return items == null ? List.of() : List.copyOf(items);
         }
@@ -306,7 +306,7 @@ final class CatalogSearchSupport {
         return best == Integer.MAX_VALUE ? -1 : best;
     }
 
-    static int maxEdits(int length) {
+    public static int maxEdits(int length) {
         if (length <= 2) {
             return 0;
         }
@@ -323,7 +323,7 @@ final class CatalogSearchSupport {
      * Optimal string alignment distance (Damerau–Levenshtein with adjacent
      * transpositions), enough for common POS typos like {@code suap} → {@code supa}.
      */
-    static int damerauLevenshtein(String a, String b) {
+    public static int damerauLevenshtein(String a, String b) {
         Objects.requireNonNull(a);
         Objects.requireNonNull(b);
         if (a.equals(b)) {

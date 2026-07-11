@@ -17,6 +17,7 @@ import java.util.stream.Collectors;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -247,9 +248,16 @@ public class ItemCatalogService {
             restrictItemIds = stockFilterIds;
             restrictItemIdsUnset = false;
         }
+        final Collection<String> restrictIds = restrictItemIds;
+        final boolean restrictIdsUnset = restrictItemIdsUnset;
+        boolean intelligentSearch = ctx.q() != null && !CatalogSearchSupport.isBlankQuery(ctx.q());
+        String searchCandidate = intelligentSearch ? dbSearchToken(ctx.q()) : ctx.q();
+        Pageable fetchPageable = intelligentSearch
+                ? PageRequest.of(0, CatalogSearchSupport.CANDIDATE_FETCH_SIZE)
+                : ctx.pageable();
         Page<Item> page = itemRepository.search(
                 businessId,
-                ctx.q(),
+                searchCandidate,
                 ctx.barcodeExact(),
                 ctx.catUnset(),
                 ctx.categoryIds(),
@@ -271,11 +279,42 @@ public class ItemCatalogService {
                 ctx.restrictByAllowedItemTypes(),
                 ctx.allowedItemTypeIds(),
                 filterNoPrice,
-                restrictItemIdsUnset,
-                restrictItemIds,
+                restrictIdsUnset,
+                restrictIds,
                 ctx.isWeighedUnset(),
                 ctx.isWeighed(),
-                ctx.pageable());
+                fetchPageable);
+        if (intelligentSearch) {
+            page = rankCatalogSearchPage(page, ctx.q(), ctx.pageable(), fuzzyToken -> itemRepository.search(
+                    businessId,
+                    fuzzyToken,
+                    ctx.barcodeExact(),
+                    ctx.catUnset(),
+                    ctx.categoryIds(),
+                    noBarcode,
+                    includeInactive,
+                    inactiveOnly,
+                    ctx.includeAllScopes(),
+                    ctx.parentsOnly(),
+                    ctx.variantsOnly(),
+                    ctx.skusOnly(),
+                    ctx.filterByCatalogRowTypes(),
+                    ctx.includeParentRows(),
+                    ctx.includeVariantRows(),
+                    ctx.includeStandaloneRows(),
+                    ctx.excludeLinkedSupplierId(),
+                    ctx.squashParentGroupsForSearch(),
+                    ctx.itemTypeUnset(),
+                    ctx.itemTypeId(),
+                    ctx.restrictByAllowedItemTypes(),
+                    ctx.allowedItemTypeIds(),
+                    filterNoPrice,
+                    restrictIdsUnset,
+                    restrictIds,
+                    ctx.isWeighedUnset(),
+                    ctx.isWeighed(),
+                    PageRequest.of(0, CatalogSearchSupport.CANDIDATE_FETCH_SIZE)));
+        }
         List<String> ids = page.getContent().stream().map(Item::getId).toList();
         Map<String, String> thumbs = firstGalleryImageUrlByItemId(ids);
         Set<String> catIds = page.getContent().stream()
@@ -363,7 +402,7 @@ public class ItemCatalogService {
         }
         CatalogRowTypeSum rowTypes = itemRepository.sumCatalogRowTypes(
                 businessId,
-                ctx.q(),
+                dbSearchToken(ctx.q()),
                 ctx.barcodeExact(),
                 ctx.catUnset(),
                 ctx.categoryIds(),
@@ -381,7 +420,7 @@ public class ItemCatalogService {
                 ctx.allowedItemTypeIds());
         long missingBarcode = itemRepository.countCatalogMissingBarcodes(
                 businessId,
-                ctx.q(),
+                dbSearchToken(ctx.q()),
                 ctx.barcodeExact(),
                 ctx.catUnset(),
                 ctx.categoryIds(),
@@ -399,7 +438,7 @@ public class ItemCatalogService {
                 ctx.allowedItemTypeIds());
         long inactive = itemRepository.countCatalogInactive(
                 businessId,
-                ctx.q(),
+                dbSearchToken(ctx.q()),
                 ctx.barcodeExact(),
                 ctx.catUnset(),
                 ctx.categoryIds(),
@@ -414,7 +453,7 @@ public class ItemCatalogService {
                 ctx.allowedItemTypeIds());
         long missingPrice = itemRepository.countCatalogMissingPrices(
                 businessId,
-                ctx.q(),
+                dbSearchToken(ctx.q()),
                 ctx.barcodeExact(),
                 ctx.catUnset(),
                 ctx.categoryIds(),
@@ -1762,6 +1801,59 @@ public class ItemCatalogService {
         return s.trim();
     }
 
+    /** Broad {@code LIKE} token for SQL candidate fetch (longest query token). */
+    private static String dbSearchToken(String query) {
+        if (query == null || CatalogSearchSupport.isBlankQuery(query)) {
+            return query;
+        }
+        String token = CatalogSearchSupport.candidateToken(query);
+        return token != null ? token : query;
+    }
+
+    private Page<Item> rankCatalogSearchPage(
+            Page<Item> candidates,
+            String query,
+            Pageable pageable,
+            java.util.function.Function<String, Page<Item>> fuzzyFallback
+    ) {
+        List<Item> ranked = CatalogSearchSupport.rankAndFilter(
+                candidates.getContent(),
+                item -> CatalogSearchSupport.SearchableText.of(
+                        item.getName(),
+                        item.getVariantName(),
+                        item.getSku(),
+                        item.getBarcode(),
+                        item.getDescription()),
+                query);
+        if (ranked.isEmpty()) {
+            String candidateToken = CatalogSearchSupport.candidateToken(query);
+            for (String fuzzyToken : CatalogSearchSupport.fuzzyCandidateTokens(query)) {
+                if (fuzzyToken.equals(candidateToken)) {
+                    continue;
+                }
+                Page<Item> fuzzyPage = fuzzyFallback.apply(fuzzyToken);
+                ranked = CatalogSearchSupport.rankAndFilter(
+                        fuzzyPage.getContent(),
+                        item -> CatalogSearchSupport.SearchableText.of(
+                                item.getName(),
+                                item.getVariantName(),
+                                item.getSku(),
+                                item.getBarcode(),
+                                item.getDescription()),
+                        query);
+                if (!ranked.isEmpty()) {
+                    break;
+                }
+            }
+        }
+        if (pageable.isUnpaged()) {
+            return new PageImpl<>(ranked);
+        }
+        int from = (int) Math.min(pageable.getOffset(), ranked.size());
+        int to = Math.min(from + pageable.getPageSize(), ranked.size());
+        return new PageImpl<>(ranked.subList(from, to), pageable, ranked.size());
+    }
+
     private static String firstNonBlank(String preferred, String fallback) {
         if (preferred != null && !preferred.isBlank()) {
             return preferred.trim();
@@ -1831,7 +1923,7 @@ public class ItemCatalogService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Branch not found"));
         List<String> candidateIds = itemRepository.findCatalogStockAttentionItemIds(
                 businessId,
-                ctx.q(),
+                dbSearchToken(ctx.q()),
                 ctx.barcodeExact(),
                 ctx.catUnset(),
                 ctx.categoryIds(),

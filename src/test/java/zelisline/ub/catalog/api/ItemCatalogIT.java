@@ -324,6 +324,44 @@ class ItemCatalogIT {
     }
 
     @Test
+    void searchRanksPartialTokensAndTypos() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        createItemViaService(TENANT_A, gid, "SKU-SUPA-PLAIN", "Supa Loaf");
+        createItemViaService(TENANT_A, gid, "SKU-SUPA-S", "Supa Loaf Small");
+        createItemViaService(TENANT_A, gid, "SKU-SUPA-M", "Supa Loaf Medium");
+        createItemViaService(TENANT_A, gid, "SKU-BREAD", "Bread Rolls");
+
+        mockMvc.perform(get("/api/v1/items")
+                        .param("catalogScope", "SKUS_ONLY")
+                        .param("search", "supa s")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(3))
+                .andExpect(jsonPath("$.content[0].name").value("Supa Loaf Small"));
+
+        mockMvc.perform(get("/api/v1/items")
+                        .param("catalogScope", "SKUS_ONLY")
+                        .param("search", "supa m")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].name").value("Supa Loaf Medium"));
+
+        mockMvc.perform(get("/api/v1/items")
+                        .param("catalogScope", "SKUS_ONLY")
+                        .param("search", "suap")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(1)))
+                .andExpect(jsonPath("$.content[0].name").value(org.hamcrest.Matchers.containsString("Supa")));
+    }
+
+    @Test
     void listItemsCatalogScopeFiltersParentsAndVariants() throws Exception {
         String gid = goodsTypeId(TENANT_A);
         String parent = createItemViaService(TENANT_A, gid, "SKU-SCOPE-P", "Scope parent unique");

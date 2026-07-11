@@ -19,6 +19,7 @@ public class BranchReceiptSettingsService {
     private static final String KEY_WEBSITE = "website";
     private static final String KEY_TILL_NUMBER = "tillNumber";
     private static final String KEY_FOOTER_NOTE = "footerNote";
+    private static final String KEY_PRINTER_CUPS_NAME = "printerCupsName";
 
     private final ObjectMapper objectMapper;
 
@@ -36,7 +37,8 @@ public class BranchReceiptSettingsService {
                     textOrNull(root.get(KEY_EMAIL)),
                     textOrNull(root.get(KEY_WEBSITE)),
                     textOrNull(root.get(KEY_TILL_NUMBER)),
-                    textOrNull(root.get(KEY_FOOTER_NOTE))
+                    textOrNull(root.get(KEY_FOOTER_NOTE)),
+                    textOrNull(root.get(KEY_PRINTER_CUPS_NAME))
             );
         } catch (Exception e) {
             return BranchReceiptSettingsResponse.empty();
@@ -62,6 +64,9 @@ public class BranchReceiptSettingsService {
         }
         if (patch.footerNote() != null) {
             putOrRemove(root, KEY_FOOTER_NOTE, patch.footerNote());
+        }
+        if (patch.printerCupsName() != null) {
+            putOrRemove(root, KEY_PRINTER_CUPS_NAME, patch.printerCupsName());
         }
         if (root.isEmpty()) {
             return null;

@@ -9,7 +9,13 @@ import java.util.List;
 public final class ReceiptEscPosRenderer {
 
     private static final byte[] INIT = new byte[]{0x1B, 0x40};
-    private static final byte[] CUT = new byte[]{0x1D, 0x56, 0x00};
+    /** Feed n lines so content clears the cutter (print head sits above the blade). */
+    private static final byte[] FEED_LINES = new byte[]{0x1B, 0x64, 0x04};
+    /**
+     * GS V 66 0 — feed to cut position then partial cut. More widely supported than
+     * bare full cut (GS V 0), which many clone thermals ignore.
+     */
+    private static final byte[] CUT = new byte[]{0x1D, 0x56, 0x42, 0x00};
 
     private ReceiptEscPosRenderer() {
     }
@@ -60,7 +66,6 @@ public final class ReceiptEscPosRenderer {
             }
         }
         out.add(center("Thank you", w));
-        out.add("");
 
         try {
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -68,6 +73,7 @@ public final class ReceiptEscPosRenderer {
             for (String line : out) {
                 baos.write((line + "\n").getBytes(StandardCharsets.US_ASCII));
             }
+            baos.write(FEED_LINES);
             baos.write(CUT);
             return baos.toByteArray();
         } catch (IOException e) {

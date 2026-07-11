@@ -69,6 +69,18 @@ class ReceiptRendererTest {
     }
 
     @Test
+    void escPos_endsWithFeedAndPartialCut() {
+        ReceiptSnapshot s = sampleSnapshot(List.of(
+                new ReceiptLineRow("Soda", "1", "each", "5.00", "5.00")
+        ));
+
+        byte[] bytes = ReceiptEscPosRenderer.render(s, 58);
+
+        // ESC d 4 (feed 4 lines) then GS V 66 0 (partial cut with feed)
+        assertThat(bytes).endsWith(new byte[]{0x1B, 0x64, 0x04, 0x1D, 0x56, 0x42, 0x00});
+    }
+
+    @Test
     void pdf_weighedLine_renders() {
         ReceiptSnapshot s = sampleSnapshot(List.of(
                 new ReceiptLineRow("Beef Mince", "0.347", "kg", "1200.00", "416.40")

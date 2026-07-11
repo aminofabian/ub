@@ -62,6 +62,13 @@ public final class ReceiptPdfRenderer {
             doc.add(new Phrase("Total: ", bold));
             doc.add(new Phrase(s.grandTotalDisplay() + " " + s.currency(), bold));
             doc.add(new Paragraph(" "));
+            if (s.cashReceivedDisplay() != null && !s.cashReceivedDisplay().isBlank()) {
+                doc.add(new Paragraph("Received: " + s.cashReceivedDisplay(), body));
+                doc.add(new Paragraph(
+                        "Change: " + (s.changeGivenDisplay() != null ? s.changeGivenDisplay() : "0.00"),
+                        body));
+                doc.add(new Paragraph(" "));
+            }
 
             if (s.footerNote() != null && !s.footerNote().isBlank()) {
                 doc.add(new Paragraph(s.footerNote(), bold));

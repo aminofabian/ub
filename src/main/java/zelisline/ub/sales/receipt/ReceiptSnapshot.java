@@ -22,6 +22,10 @@ public record ReceiptSnapshot(
         List<ReceiptLineRow> lines,
         List<ReceiptPaymentRow> payments,
         String grandTotalDisplay,
+        /** Cash handed over; null when not applicable. */
+        String cashReceivedDisplay,
+        /** Change = cashReceived - grandTotal; null when cashReceived is null. */
+        String changeGivenDisplay,
         String footerNote
 ) {
 

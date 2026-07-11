@@ -112,7 +112,12 @@ public class SalesController {
                 principal.roleId(), principal.branchId(), body.branchId());
         // Replace request branch with validated one
         PostSaleRequest safe = new PostSaleRequest(
-                validatedBranch, body.lines(), body.payments(), body.clientSoldAt(), body.customerId());
+                validatedBranch,
+                body.lines(),
+                body.payments(),
+                body.clientSoldAt(),
+                body.customerId(),
+                body.cashReceived());
         var out = saleService.createSale(
                 TenantRequestIds.resolveBusinessId(request),
                 idempotencyKey,

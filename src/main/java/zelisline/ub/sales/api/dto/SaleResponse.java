@@ -13,6 +13,8 @@ public record SaleResponse(
         String shiftId,
         String status,
         BigDecimal grandTotal,
+        /** Cash handed over (full cash sales); null otherwise. */
+        BigDecimal cashReceived,
         BigDecimal refundedTotal,
         String journalEntryId,
         List<SalePaymentResponse> payments,

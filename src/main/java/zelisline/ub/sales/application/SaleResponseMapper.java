@@ -48,6 +48,7 @@ public final class SaleResponseMapper {
                 sale.getShiftId(),
                 sale.getStatus(),
                 sale.getGrandTotal(),
+                sale.getCashReceived(),
                 sale.getRefundedTotal(),
                 sale.getJournalEntryId(),
                 paymentDtos,

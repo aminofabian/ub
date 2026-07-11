@@ -293,7 +293,8 @@ public class PosDraftService {
                 saleLines,
                 request.payments(),
                 request.clientSoldAt(),
-                customerId
+                customerId,
+                null
         );
 
         SaleCreationOutcome outcome = saleService.createSale(

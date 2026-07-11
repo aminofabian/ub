@@ -29,6 +29,8 @@ class ReceiptRendererTest {
                 lines,
                 List.of(new ReceiptPaymentRow("cash", "416.40", null)),
                 "416.40",
+                "500.00",
+                "83.60",
                 ""
         );
     }
@@ -44,6 +46,8 @@ class ReceiptRendererTest {
 
         assertThat(text).contains("0.347 kg x 1200.00 = 416.40");
         assertThat(text).contains("Receipt #42");
+        assertThat(text).contains("Received 500.00");
+        assertThat(text).contains("Change 83.60");
     }
 
     @Test

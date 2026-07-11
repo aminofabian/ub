@@ -167,7 +167,8 @@ public class SaleService {
                 userId,
                 resolved.normalized(),
                 effectiveSoldAt,
-                customerId
+                customerId,
+                resolveCashReceived(req.cashReceived(), grandTotal, resolved.normalized())
         );
         saleItemRepository.saveAll(saleItems);
 
@@ -251,7 +252,8 @@ public class SaleService {
             String userId,
             List<NormalizedPayment> paymentsNorm,
             Instant soldAt,
-            String customerIdOrNull
+            String customerIdOrNull,
+            BigDecimal cashReceivedOrNull
     ) {
         Sale sale = new Sale();
         sale.setId(saleId);
@@ -262,6 +264,7 @@ public class SaleService {
         sale.setStatus(SalesConstants.SALE_STATUS_COMPLETED);
         sale.setIdempotencyKey(idempotencyKey);
         sale.setGrandTotal(grandTotal);
+        sale.setCashReceived(cashReceivedOrNull);
         sale.setJournalEntryId(null);
         sale.setSoldBy(userId);
         sale.setSoldAt(soldAt);
@@ -280,6 +283,33 @@ public class SaleService {
             row.setSortOrder(order++);
             salePaymentRepository.save(row);
         }
+    }
+
+    /**
+     * Persist cash tendered for receipt "Received" / "Change". Only accepted when
+     * the sale is a single cash payment covering the total (no split / wallet overpay).
+     */
+    private static BigDecimal resolveCashReceived(
+            BigDecimal requested,
+            BigDecimal grandTotal,
+            List<NormalizedPayment> paymentsNorm
+    ) {
+        if (requested == null) {
+            return null;
+        }
+        BigDecimal cash = requested.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal gp = grandTotal.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        if (cash.compareTo(gp) < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "cashReceived must be at least the sale total");
+        }
+        boolean singleCash = paymentsNorm.size() == 1
+                && SalesConstants.PAYMENT_METHOD_CASH.equals(paymentsNorm.get(0).method());
+        if (!singleCash) {
+            return null;
+        }
+        return cash;
     }
 
     private void attachJournalToSale(String saleId, String businessId, String journalId) {

@@ -53,6 +53,13 @@ public class Sale {
     @Column(name = "grand_total", nullable = false, precision = 14, scale = 2)
     private BigDecimal grandTotal;
 
+    /**
+     * Cash handed over by the customer (may exceed grand total). Receipt-only;
+     * ledger still posts the sale total. Null when not a cash tender with change.
+     */
+    @Column(name = "cash_received", precision = 14, scale = 2)
+    private BigDecimal cashReceived;
+
     @Column(name = "journal_entry_id", length = 36)
     private String journalEntryId;
 

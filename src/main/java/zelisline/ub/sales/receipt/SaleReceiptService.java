@@ -114,6 +114,15 @@ public class SaleReceiptService {
                 .branding()
                 .logoUrl();
 
+        String cashReceivedDisplay = null;
+        String changeGivenDisplay = null;
+        if (sale.getCashReceived() != null
+                && sale.getCashReceived().compareTo(sale.getGrandTotal()) >= 0) {
+            cashReceivedDisplay = money(sale.getCashReceived());
+            changeGivenDisplay = money(
+                    sale.getCashReceived().subtract(sale.getGrandTotal()));
+        }
+
         return new ReceiptSnapshot(
                 business.getName(),
                 blankToNull(logoUrl),
@@ -133,6 +142,8 @@ public class SaleReceiptService {
                 lines,
                 payments,
                 money(sale.getGrandTotal()),
+                cashReceivedDisplay,
+                changeGivenDisplay,
                 footer
         );
     }

@@ -376,6 +376,7 @@ public class GroceryInvoiceService {
                 saleLines,
                 request.payments(),
                 null,
+                null,
                 null
         );
 

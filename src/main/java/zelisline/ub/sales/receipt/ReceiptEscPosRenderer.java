@@ -52,6 +52,12 @@ public final class ReceiptEscPosRenderer {
         }
         out.add(repeat('-', w));
         out.add(padLeft("TOTAL " + strip(s.grandTotalDisplay()) + " " + strip(s.currency()), w));
+        if (s.cashReceivedDisplay() != null && !s.cashReceivedDisplay().isBlank()) {
+            out.add(padLeft("Received " + strip(s.cashReceivedDisplay()), w));
+            out.add(padLeft(
+                    "Change " + strip(s.changeGivenDisplay() != null ? s.changeGivenDisplay() : "0.00"),
+                    w));
+        }
         if (s.footerNote() != null && !s.footerNote().isBlank()) {
             out.add(center(strip(s.footerNote()), w));
         }

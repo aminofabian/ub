@@ -7,6 +7,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -1814,33 +1815,21 @@ public class ItemCatalogService {
             Page<Item> candidates,
             String query,
             Pageable pageable,
-            java.util.function.Function<String, Page<Item>> fuzzyFallback
+            java.util.function.Function<String, Page<Item>> candidateFallback
     ) {
-        List<Item> ranked = CatalogSearchSupport.rankAndFilter(
-                candidates.getContent(),
-                item -> CatalogSearchSupport.SearchableText.of(
-                        item.getName(),
-                        item.getVariantName(),
-                        item.getSku(),
-                        item.getBarcode(),
-                        item.getDescription()),
-                query);
+        List<Item> ranked = rankSearchHits(candidates.getContent(), query);
         if (ranked.isEmpty()) {
-            String candidateToken = CatalogSearchSupport.candidateToken(query);
-            for (String fuzzyToken : CatalogSearchSupport.fuzzyCandidateTokens(query)) {
-                if (fuzzyToken.equals(candidateToken)) {
+            LinkedHashSet<String> tried = new LinkedHashSet<>();
+            String first = dbSearchToken(query);
+            if (first != null) {
+                tried.add(first);
+            }
+            for (String token : CatalogSearchSupport.dbCandidateTokens(query)) {
+                if (!tried.add(token)) {
                     continue;
                 }
-                Page<Item> fuzzyPage = fuzzyFallback.apply(fuzzyToken);
-                ranked = CatalogSearchSupport.rankAndFilter(
-                        fuzzyPage.getContent(),
-                        item -> CatalogSearchSupport.SearchableText.of(
-                                item.getName(),
-                                item.getVariantName(),
-                                item.getSku(),
-                                item.getBarcode(),
-                                item.getDescription()),
-                        query);
+                Page<Item> next = candidateFallback.apply(token);
+                ranked = rankSearchHits(next.getContent(), query);
                 if (!ranked.isEmpty()) {
                     break;
                 }
@@ -1852,6 +1841,20 @@ public class ItemCatalogService {
         int from = (int) Math.min(pageable.getOffset(), ranked.size());
         int to = Math.min(from + pageable.getPageSize(), ranked.size());
         return new PageImpl<>(ranked.subList(from, to), pageable, ranked.size());
+    }
+
+    private static List<Item> rankSearchHits(List<Item> candidates, String query) {
+        return CatalogSearchSupport.rankAndFilter(
+                candidates,
+                item -> CatalogSearchSupport.SearchableText.of(
+                        item.getName(),
+                        item.getVariantName(),
+                        item.getSku(),
+                        item.getBarcode(),
+                        item.getDescription(),
+                        item.getBrand(),
+                        item.getSize()),
+                query);
     }
 
     private static String firstNonBlank(String preferred, String fallback) {

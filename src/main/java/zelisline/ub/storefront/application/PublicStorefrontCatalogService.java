@@ -174,18 +174,9 @@ public class PublicStorefrontCatalogService {
             boolean typeUnset,
             String type
     ) {
-        String candidate = CatalogSearchSupport.candidateToken(query);
-        List<Item> ranked = rankInStockCandidates(
-                ctx, query, candidate, catUnset, categoryIds, typeUnset, type);
-        if (!ranked.isEmpty()) {
-            return ranked;
-        }
-        for (String fuzzyToken : CatalogSearchSupport.fuzzyCandidateTokens(query)) {
-            if (fuzzyToken.equals(candidate)) {
-                continue;
-            }
-            ranked = rankInStockCandidates(
-                    ctx, query, fuzzyToken, catUnset, categoryIds, typeUnset, type);
+        for (String token : CatalogSearchSupport.dbCandidateTokens(query)) {
+            List<Item> ranked = rankInStockCandidates(
+                    ctx, query, token, catUnset, categoryIds, typeUnset, type);
             if (!ranked.isEmpty()) {
                 return ranked;
             }
@@ -221,7 +212,9 @@ public class PublicStorefrontCatalogService {
                         item.getVariantName(),
                         item.getSku(),
                         item.getBarcode(),
-                        item.getDescription()),
+                        item.getDescription(),
+                        item.getBrand(),
+                        item.getSize()),
                 query);
     }
 

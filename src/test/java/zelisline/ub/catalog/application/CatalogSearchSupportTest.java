@@ -12,6 +12,15 @@ class CatalogSearchSupportTest {
         return CatalogSearchSupport.SearchableText.of(name, variant, "SKU", null, null);
     }
 
+    private static CatalogSearchSupport.SearchableText item(
+            String name,
+            String variant,
+            String brand,
+            String size
+    ) {
+        return CatalogSearchSupport.SearchableText.of(name, variant, "SKU", null, null, brand, size);
+    }
+
     @Test
     void candidateToken_usesLongestToken() {
         assertThat(CatalogSearchSupport.candidateToken("supa s")).isEqualTo("supa");
@@ -88,5 +97,61 @@ class CatalogSearchSupportTest {
     @Test
     void unrelatedQuery_scoresZero() {
         assertThat(CatalogSearchSupport.score(item("Supa Loaf", null), "xyzzy")).isZero();
+    }
+
+    @Test
+    void score_matchesInitials() {
+        assertThat(CatalogSearchSupport.score(item("Supa Loaf", null), "sl")).isGreaterThan(0);
+        assertThat(CatalogSearchSupport.score(item("Fanta Orange", null), "fo")).isGreaterThan(0);
+        assertThat(CatalogSearchSupport.score(item("Coca Cola", null), "cc")).isGreaterThan(0);
+    }
+
+    @Test
+    void score_matchesAliases() {
+        assertThat(CatalogSearchSupport.score(item("Coca Cola 500ml", null), "coke")).isGreaterThan(0);
+        assertThat(CatalogSearchSupport.score(item("UHT Milk 1L", null, "Brookside", "1L"), "uht"))
+                .isGreaterThan(0);
+        assertThat(CatalogSearchSupport.score(item("Maize Flour 2kg", null), "unga")).isGreaterThan(0);
+        assertThat(CatalogSearchSupport.score(item("Tomato Sauce", null), "catchup")).isGreaterThan(0);
+    }
+
+    @Test
+    void score_matchesBrandPrefix() {
+        int brook = CatalogSearchSupport.score(
+                item("Full Cream Milk", null, "Brookside", "500ml"), "brook");
+        assertThat(brook).isGreaterThan(0);
+    }
+
+    @Test
+    void score_normalizesSizes() {
+        var coke500 = item("Coca Cola", "500ml", "Coca Cola", "500ml");
+        assertThat(CatalogSearchSupport.score(coke500, "500")).isGreaterThan(0);
+        assertThat(CatalogSearchSupport.score(coke500, "500ml")).isGreaterThan(0);
+        assertThat(CatalogSearchSupport.normalizeSizeToken("500ml"))
+                .isEqualTo(CatalogSearchSupport.normalizeSizeToken("0.5l"));
+        assertThat(CatalogSearchSupport.normalizeSizeToken("1kg"))
+                .isEqualTo(CatalogSearchSupport.normalizeSizeToken("1000g"));
+    }
+
+    @Test
+    void score_ignoresWordOrder() {
+        int a = CatalogSearchSupport.score(item("Fanta Orange", null), "orange fanta");
+        int b = CatalogSearchSupport.score(item("Fanta Orange", null), "fanta orange");
+        assertThat(a).isGreaterThan(0);
+        assertThat(b).isGreaterThan(0);
+    }
+
+    @Test
+    void score_singularPlural() {
+        assertThat(CatalogSearchSupport.score(item("Egg Tray", null), "eggs")).isGreaterThan(0);
+        assertThat(CatalogSearchSupport.score(item("Eggs", null), "egg")).isGreaterThan(0);
+    }
+
+    @Test
+    void dbCandidateTokens_includesAliasExpansions() {
+        assertThat(CatalogSearchSupport.dbCandidateTokens("coke"))
+                .contains("coke", "coca", "cola");
+        assertThat(CatalogSearchSupport.dbCandidateTokens("sl"))
+                .contains("sl", "supa", "loaf");
     }
 }

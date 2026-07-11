@@ -2,22 +2,30 @@ package zelisline.ub.catalog.application;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
  * Tokenizes catalog search queries and ranks items by relevance so partial
- * names, abbreviations, and light typos still surface the closest products.
+ * names, abbreviations, typos, initials, and size variants still surface the
+ * closest products.
  *
  * <p>Matching priority (highest first):
  * <ol>
- *   <li>Exact / phrase match</li>
- *   <li>All tokens as word prefixes (greedy, one word per token)</li>
- *   <li>All tokens as substrings</li>
- *   <li>Significant tokens only (length ≥ 2) — keeps results while typing</li>
- *   <li>Fuzzy / edit-distance on the primary token</li>
+ *   <li>Exact / phrase / SKU / barcode</li>
+ *   <li>Alias / synonym / abbreviation</li>
+ *   <li>Initials ({@code sl} → Supa Loaf)</li>
+ *   <li>All tokens as word prefixes</li>
+ *   <li>Contains / size-normalized tokens</li>
+ *   <li>Significant tokens only (keeps results while typing)</li>
+ *   <li>Fuzzy / edit-distance</li>
  * </ol>
  */
 public final class CatalogSearchSupport {
@@ -25,7 +33,17 @@ public final class CatalogSearchSupport {
     public static final int CANDIDATE_FETCH_SIZE = 500;
     private static final int MIN_FUZZY_PREFIX_LEN = 3;
     private static final Pattern TOKEN_SPLIT = Pattern.compile("[\\s/_\\-]+");
-    private static final Pattern NON_ALNUM = Pattern.compile("[^a-z0-9]+");
+    private static final Pattern NON_ALNUM = Pattern.compile("[^a-z0-9.]+");
+    private static final Pattern SIZE_TOKEN = Pattern.compile(
+            "^(\\d+(?:\\.\\d+)?)(ml|l|litre|liter|g|gm|gram|grams|kg|kilogram|kilograms|pcs?|pack)?$");
+    private static final Pattern SIZE_IN_TEXT = Pattern.compile(
+            "(?i)(\\d+(?:\\.\\d+)?)\\s*(ml|l|litre|liter|g|gm|gram|grams|kg|kilogram|kilograms|pcs?|pack)?");
+
+    /**
+     * Built-in POS aliases / local names → expansion terms used for DB candidate
+     * fetch and relevance scoring. Keep values as searchable catalog fragments.
+     */
+    private static final Map<String, List<String>> ALIASES = buildAliases();
 
     private CatalogSearchSupport() {
     }
@@ -35,7 +53,9 @@ public final class CatalogSearchSupport {
             String variantName,
             String sku,
             String barcode,
-            String description
+            String description,
+            String brand,
+            String size
     ) {
         public static SearchableText of(
                 String name,
@@ -44,7 +64,19 @@ public final class CatalogSearchSupport {
                 String barcode,
                 String description
         ) {
-            return new SearchableText(name, variantName, sku, barcode, description);
+            return of(name, variantName, sku, barcode, description, null, null);
+        }
+
+        public static SearchableText of(
+                String name,
+                String variantName,
+                String sku,
+                String barcode,
+                String description,
+                String brand,
+                String size
+        ) {
+            return new SearchableText(name, variantName, sku, barcode, description, brand, size);
         }
     }
 
@@ -68,9 +100,7 @@ public final class CatalogSearchSupport {
     }
 
     /**
-     * Longest token used for the DB {@code LIKE} candidate fetch.
-     * Multi-word queries like {@code "supa s"} become {@code "supa"} so variants
-     * are still retrieved before in-memory ranking.
+     * Longest token used for the first DB {@code LIKE} candidate fetch.
      */
     public static String candidateToken(String query) {
         List<String> tokens = tokenize(query);
@@ -83,8 +113,45 @@ public final class CatalogSearchSupport {
     }
 
     /**
-     * Progressively shorter prefixes used when the candidate token returns no rows
-     * (typos such as {@code suap} → try {@code sua}, then {@code su}).
+     * Ordered DB candidate tokens: primary token, alias expansions, numeric size
+     * fragments, then fuzzy prefixes. Callers should try these until ranking
+     * returns hits.
+     */
+    public static List<String> dbCandidateTokens(String query) {
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        String primary = candidateToken(query);
+        if (primary != null) {
+            out.add(primary);
+        }
+        for (String token : tokenize(query)) {
+            List<String> expansions = ALIASES.get(token);
+            if (expansions != null) {
+                out.addAll(expansions);
+            }
+            String singular = singularize(token);
+            if (!singular.equals(token)) {
+                out.add(singular);
+                List<String> singularExp = ALIASES.get(singular);
+                if (singularExp != null) {
+                    out.addAll(singularExp);
+                }
+            }
+            String sizeKey = normalizeSizeToken(token);
+            if (sizeKey != null) {
+                // Prefer the numeric fragment for LIKE recall (500ml → 500).
+                int colon = sizeKey.indexOf(':');
+                if (colon > 0) {
+                    out.add(sizeKey.substring(colon + 1));
+                }
+            }
+        }
+        out.addAll(fuzzyCandidateTokens(query));
+        out.removeIf(t -> t == null || t.isBlank() || t.length() < 2);
+        return List.copyOf(out);
+    }
+
+    /**
+     * Progressively shorter prefixes used when the candidate token returns no rows.
      */
     public static List<String> fuzzyCandidateTokens(String query) {
         String primary = candidateToken(query);
@@ -123,20 +190,31 @@ public final class CatalogSearchSupport {
         String sku = norm(item.sku());
         String barcode = norm(item.barcode());
         String description = norm(item.description());
+        String brand = norm(item.brand());
+        String size = norm(item.size());
         String phrase = String.join(" ", tokens);
-        String primaryHaystack = joinHaystack(name, variant);
-        String haystack = joinHaystack(name, variant, sku, barcode, description);
+        String compactPhrase = compact(phrase);
+
+        String primaryHaystack = joinHaystack(name, variant, brand, size);
+        String haystack = joinHaystack(name, variant, brand, size, sku, barcode, description);
         String[] primaryWords = splitWords(primaryHaystack);
         String[] words = splitWords(haystack);
-        String compactPhrase = compact(phrase);
+        String initials = initialsOf(primaryWords);
+        Set<String> itemSizeKeys = extractSizeKeys(joinHaystack(name, variant, size, description));
 
         int best = 0;
 
         if (!name.isBlank() && name.equals(phrase)) {
             best = Math.max(best, 50_000);
         }
+        if (!brand.isBlank() && brand.equals(phrase)) {
+            best = Math.max(best, 48_000);
+        }
         if (!name.isBlank() && name.startsWith(phrase)) {
             best = Math.max(best, 45_000);
+        }
+        if (!brand.isBlank() && brand.startsWith(phrase)) {
+            best = Math.max(best, 44_000);
         }
         if (primaryHaystack.contains(phrase)) {
             best = Math.max(best, 40_000 - Math.min(5_000, primaryHaystack.indexOf(phrase)));
@@ -151,8 +229,17 @@ public final class CatalogSearchSupport {
             best = Math.max(best, 42_000);
         }
 
-        // Prefer name/variant words so short tokens like "s"/"m" hit Small/Medium,
-        // not incidental SKU/barcode characters.
+        int aliasScore = aliasScore(tokens, primaryHaystack, primaryWords, brand, name);
+        best = Math.max(best, aliasScore);
+
+        if (!initials.isBlank() && compactPhrase.length() >= 2) {
+            if (initials.equals(compactPhrase)) {
+                best = Math.max(best, 36_000);
+            } else if (initials.startsWith(compactPhrase)) {
+                best = Math.max(best, 28_000);
+            }
+        }
+
         int prefixCost = greedyTokenCost(tokens, primaryWords, MatchMode.WORD_PREFIX);
         if (prefixCost >= 0) {
             best = Math.max(best, 30_000 - prefixCost);
@@ -163,18 +250,31 @@ public final class CatalogSearchSupport {
             best = Math.max(best, 22_000 - substringCost);
         }
 
-        List<String> significant = tokens.stream().filter(t -> t.length() >= 2).toList();
-        if (!significant.isEmpty() && significant.size() < tokens.size()) {
+        int sizeScore = sizeMatchScore(tokens, itemSizeKeys);
+        best = Math.max(best, sizeScore);
+
+        // Ignore word order: same tokens in any order against primary words.
+        if (tokens.size() > 1) {
+            int unordered = greedyTokenCost(tokens, primaryWords, MatchMode.WORD_PREFIX);
+            if (unordered >= 0) {
+                best = Math.max(best, 29_000 - unordered);
+            }
+        }
+
+        List<String> significant = expandSignificantTokens(tokens);
+        if (!significant.isEmpty() && significant.size() <= tokens.size()) {
+            boolean droppedShort = significant.size() < tokens.size();
             int sigPrefix = greedyTokenCost(significant, primaryWords, MatchMode.WORD_PREFIX);
             if (sigPrefix >= 0) {
-                best = Math.max(best, 16_000 - sigPrefix);
+                best = Math.max(best, (droppedShort ? 16_000 : 30_000) - sigPrefix);
             }
             int sigSub = greedyTokenCost(significant, primaryWords, MatchMode.SUBSTRING);
             if (sigSub >= 0) {
-                best = Math.max(best, 14_000 - sigSub);
+                best = Math.max(best, (droppedShort ? 14_000 : 22_000) - sigSub);
             }
-        } else if (prefixCost < 0 && substringCost < 0) {
-            // Longer single-token queries may match SKU/barcode words.
+        }
+
+        if (prefixCost < 0 && substringCost < 0 && aliasScore == 0 && sizeScore == 0) {
             int skuPrefix = greedyTokenCost(tokens, words, MatchMode.WORD_PREFIX);
             if (skuPrefix >= 0) {
                 best = Math.max(best, 18_000 - skuPrefix);
@@ -188,7 +288,7 @@ public final class CatalogSearchSupport {
         String primary = tokens.stream()
                 .max(Comparator.comparingInt(String::length))
                 .orElse(tokens.get(0));
-        int fuzzy = bestFuzzyDistance(primary, primaryWords, name, variant);
+        int fuzzy = bestFuzzyDistance(primary, primaryWords, name, variant, brand);
         int maxEdits = maxEdits(primary.length());
         if (fuzzy >= 0 && fuzzy <= maxEdits) {
             best = Math.max(best, 10_000 - fuzzy * 400);
@@ -232,10 +332,90 @@ public final class CatalogSearchSupport {
         SUBSTRING
     }
 
-    /**
-     * Greedy assignment of tokens (longest first) to distinct words.
-     * Returns a small cost (lower is better) or {@code -1} when unmatched.
-     */
+    private static int aliasScore(
+            List<String> tokens,
+            String primaryHaystack,
+            String[] primaryWords,
+            String brand,
+            String name
+    ) {
+        int best = 0;
+        List<String> expanded = new ArrayList<>();
+        for (String token : tokens) {
+            List<String> aliases = ALIASES.get(token);
+            if (aliases != null) {
+                expanded.addAll(aliases);
+            }
+            String singular = singularize(token);
+            if (!singular.equals(token)) {
+                List<String> singularAliases = ALIASES.get(singular);
+                if (singularAliases != null) {
+                    expanded.addAll(singularAliases);
+                }
+            }
+        }
+        if (expanded.isEmpty()) {
+            return 0;
+        }
+        for (String expansion : expanded) {
+            String exp = norm(expansion);
+            if (exp.isBlank()) {
+                continue;
+            }
+            if (name.equals(exp) || brand.equals(exp)) {
+                best = Math.max(best, 41_000);
+            }
+            if (name.startsWith(exp) || brand.startsWith(exp) || primaryHaystack.contains(exp)) {
+                best = Math.max(best, 34_000);
+            }
+            String[] expWords = splitWords(exp);
+            if (expWords.length > 0) {
+                int cost = greedyTokenCost(java.util.Arrays.asList(expWords), primaryWords, MatchMode.WORD_PREFIX);
+                if (cost >= 0) {
+                    best = Math.max(best, 33_000 - cost);
+                }
+            }
+        }
+        return best;
+    }
+
+    private static int sizeMatchScore(List<String> tokens, Set<String> itemSizeKeys) {
+        if (itemSizeKeys.isEmpty()) {
+            return 0;
+        }
+        int matched = 0;
+        for (String token : tokens) {
+            String key = normalizeSizeToken(token);
+            if (key != null && itemSizeKeys.contains(key)) {
+                matched++;
+            } else if (token.chars().allMatch(Character::isDigit) && itemSizeKeys.stream()
+                    .anyMatch(k -> k.endsWith(":" + token) || k.equals("n:" + token))) {
+                matched++;
+            }
+        }
+        if (matched == 0) {
+            return 0;
+        }
+        if (matched == tokens.size()) {
+            return 32_000;
+        }
+        return 15_000 + matched * 500;
+    }
+
+    private static List<String> expandSignificantTokens(List<String> tokens) {
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        for (String token : tokens) {
+            if (token.length() >= 2) {
+                out.add(token);
+                String singular = singularize(token);
+                if (!singular.equals(token) && singular.length() >= 2) {
+                    out.add(singular);
+                }
+            }
+        }
+        return List.copyOf(out);
+    }
+
     private static int greedyTokenCost(List<String> tokens, String[] words, MatchMode mode) {
         if (tokens.isEmpty() || words.length == 0) {
             return -1;
@@ -267,14 +447,13 @@ public final class CatalogSearchSupport {
     }
 
     private static int tokenWordCost(String token, String word, MatchMode mode) {
-        if (word.equals(token)) {
+        if (word.equals(token) || word.equals(singularize(token)) || singularize(word).equals(token)) {
             return 0;
         }
-        if (word.startsWith(token)) {
+        if (word.startsWith(token) || singularize(word).startsWith(token)) {
             return 1;
         }
         if (mode == MatchMode.SUBSTRING) {
-            // Single-character substring matches are too noisy; require word prefix.
             if (token.length() == 1) {
                 return Integer.MAX_VALUE;
             }
@@ -285,7 +464,13 @@ public final class CatalogSearchSupport {
         return Integer.MAX_VALUE;
     }
 
-    private static int bestFuzzyDistance(String token, String[] words, String name, String variant) {
+    private static int bestFuzzyDistance(
+            String token,
+            String[] words,
+            String name,
+            String variant,
+            String brand
+    ) {
         int best = Integer.MAX_VALUE;
         for (String word : words) {
             best = Math.min(best, damerauLevenshtein(token, word));
@@ -293,15 +478,14 @@ public final class CatalogSearchSupport {
                 best = Math.min(best, damerauLevenshtein(token, word.substring(0, token.length())));
             }
         }
-        if (!name.isBlank()) {
-            best = Math.min(best, damerauLevenshtein(token, name));
-            String[] nameWords = splitWords(name);
-            for (String word : nameWords) {
+        for (String field : List.of(name, variant, brand)) {
+            if (field == null || field.isBlank()) {
+                continue;
+            }
+            best = Math.min(best, damerauLevenshtein(token, field));
+            for (String word : splitWords(field)) {
                 best = Math.min(best, damerauLevenshtein(token, word));
             }
-        }
-        if (!variant.isBlank()) {
-            best = Math.min(best, damerauLevenshtein(token, variant));
         }
         return best == Integer.MAX_VALUE ? -1 : best;
     }
@@ -319,10 +503,6 @@ public final class CatalogSearchSupport {
         return Math.min(3, length / 3);
     }
 
-    /**
-     * Optimal string alignment distance (Damerau–Levenshtein with adjacent
-     * transpositions), enough for common POS typos like {@code suap} → {@code supa}.
-     */
     public static int damerauLevenshtein(String a, String b) {
         Objects.requireNonNull(a);
         Objects.requireNonNull(b);
@@ -358,6 +538,106 @@ public final class CatalogSearchSupport {
             }
         }
         return dp[n][m];
+    }
+
+    static String normalizeSizeToken(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String token = raw.trim().toLowerCase(Locale.ROOT).replace(" ", "");
+        Matcher m = SIZE_TOKEN.matcher(token);
+        if (!m.matches()) {
+            return null;
+        }
+        double amount;
+        try {
+            amount = Double.parseDouble(m.group(1));
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+        String unit = m.group(2);
+        if (unit == null || unit.isBlank()) {
+            return "n:" + stripTrailingZero(amount);
+        }
+        return switch (canonicalUnit(unit)) {
+            case "ml" -> "ml:" + stripTrailingZero(amount);
+            case "l" -> "ml:" + stripTrailingZero(amount * 1000d);
+            case "g" -> "g:" + stripTrailingZero(amount);
+            case "kg" -> "g:" + stripTrailingZero(amount * 1000d);
+            case "pc" -> "pc:" + stripTrailingZero(amount);
+            default -> "n:" + stripTrailingZero(amount);
+        };
+    }
+
+    static Set<String> extractSizeKeys(String text) {
+        LinkedHashSet<String> keys = new LinkedHashSet<>();
+        if (text == null || text.isBlank()) {
+            return keys;
+        }
+        Matcher m = SIZE_IN_TEXT.matcher(text.toLowerCase(Locale.ROOT));
+        while (m.find()) {
+            String raw = m.group(2) == null ? m.group(1) : m.group(1) + m.group(2);
+            String key = normalizeSizeToken(raw);
+            if (key != null) {
+                keys.add(key);
+            }
+        }
+        return keys;
+    }
+
+    private static String canonicalUnit(String unit) {
+        String token = unit.toLowerCase(Locale.ROOT);
+        if (token.startsWith("millilitre") || token.equals("ml")) {
+            return "ml";
+        }
+        if (token.startsWith("litre") || token.startsWith("liter") || token.equals("l")) {
+            return "l";
+        }
+        if (token.startsWith("kilogram") || token.equals("kg")) {
+            return "kg";
+        }
+        if (token.startsWith("gram") || token.equals("gm") || token.equals("g")) {
+            return "g";
+        }
+        if (token.startsWith("pc") || token.equals("pack")) {
+            return "pc";
+        }
+        return token;
+    }
+
+    private static String stripTrailingZero(double amount) {
+        if (Math.rint(amount) == amount) {
+            return Long.toString(Math.round(amount));
+        }
+        return Double.toString(amount);
+    }
+
+    private static String singularize(String token) {
+        if (token == null || token.length() < 4 || !token.endsWith("s") || token.endsWith("ss")) {
+            return token == null ? "" : token;
+        }
+        if (token.endsWith("ies") && token.length() > 4) {
+            return token.substring(0, token.length() - 3) + "y";
+        }
+        return token.substring(0, token.length() - 1);
+    }
+
+    private static String initialsOf(String[] words) {
+        if (words == null || words.length == 0) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String word : words) {
+            if (word == null || word.isBlank()) {
+                continue;
+            }
+            // Skip pure numeric size tokens in initials (Supa Loaf 800g → sl, not sl8).
+            if (word.chars().allMatch(Character::isDigit) || normalizeSizeToken(word) != null) {
+                continue;
+            }
+            sb.append(word.charAt(0));
+        }
+        return sb.toString();
     }
 
     private static String norm(String value) {
@@ -396,6 +676,41 @@ public final class CatalogSearchSupport {
         if (value == null || value.isBlank()) {
             return "";
         }
-        return NON_ALNUM.matcher(value).replaceAll("");
+        return value.replaceAll("[^a-z0-9]", "");
+    }
+
+    private static Map<String, List<String>> buildAliases() {
+        Map<String, List<String>> map = new LinkedHashMap<>();
+        putAlias(map, "coke", "coca", "cola", "coca cola");
+        putAlias(map, "coca", "coca cola", "coke");
+        putAlias(map, "cc", "coca", "cola", "coca cola");
+        putAlias(map, "fanta", "fanta");
+        putAlias(map, "fo", "fanta", "orange");
+        putAlias(map, "sl", "supa", "loaf");
+        putAlias(map, "uht", "uht", "milk");
+        putAlias(map, "pw", "power", "king");
+        putAlias(map, "bm", "brookside", "milk");
+        putAlias(map, "brook", "brookside");
+        putAlias(map, "soda", "soft drink", "coke", "fanta", "sprite");
+        putAlias(map, "chips", "fries", "crisps");
+        putAlias(map, "fries", "chips");
+        putAlias(map, "unga", "maize", "flour");
+        putAlias(map, "tissue", "toilet", "paper");
+        putAlias(map, "oil", "cooking oil", "salad oil");
+        putAlias(map, "smokie", "smokey", "sausage");
+        putAlias(map, "smokey", "smokie", "sausage");
+        putAlias(map, "mayai", "egg", "eggs");
+        putAlias(map, "egg", "eggs", "mayai");
+        putAlias(map, "eggs", "egg", "mayai");
+        putAlias(map, "kienyeji", "kienyeji");
+        putAlias(map, "ketchup", "catchup", "tomato sauce");
+        putAlias(map, "catchup", "ketchup", "tomato sauce");
+        putAlias(map, "ketepa", "ketepa", "tea");
+        putAlias(map, "delmonte", "del monte", "delmonte");
+        return Map.copyOf(map);
+    }
+
+    private static void putAlias(Map<String, List<String>> map, String key, String... expansions) {
+        map.put(key, List.of(expansions));
     }
 }

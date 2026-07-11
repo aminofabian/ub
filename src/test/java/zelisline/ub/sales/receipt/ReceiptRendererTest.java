@@ -77,14 +77,8 @@ class ReceiptRendererTest {
 
         byte[] bytes = ReceiptEscPosRenderer.render(s, 58);
 
-        // ESC d 5 then multi-dialect cut tail
-        assertThat(bytes).endsWith(new byte[]{
-                0x1B, 0x64, 0x05,
-                0x1D, 0x56, 0x42, 0x00,
-                0x1D, 0x56, 0x01,
-                0x1D, 0x56, 0x00,
-                0x1B, 0x69
-        });
+        // ESC d 8 then GS V 1 (partial cut) — matches Caysn CN811-UB
+        assertThat(bytes).endsWith(new byte[]{0x1B, 0x64, 0x08, 0x1D, 0x56, 0x01});
     }
 
     @Test

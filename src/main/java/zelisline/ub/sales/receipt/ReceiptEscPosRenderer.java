@@ -10,17 +10,12 @@ public final class ReceiptEscPosRenderer {
 
     private static final byte[] INIT = new byte[]{0x1B, 0x40};
     /** Feed n lines so content clears the cutter (print head sits above the blade). */
-    private static final byte[] FEED_LINES = new byte[]{0x1B, 0x64, 0x05};
+    private static final byte[] FEED_LINES = new byte[]{0x1B, 0x64, 0x08};
     /**
-     * Multiple cut dialects — clone thermals vary (GS V 66, GS V 1, GS V 0, ESC i).
-     * Extra cuts after the first are harmless (empty paper).
+     * GS V 1 — partial cut. Proven on Caysn CN811-UB; avoid stacking multiple
+     * cut dialects that some clones mishandle.
      */
-    private static final byte[] CUT = new byte[]{
-            0x1D, 0x56, 0x42, 0x00, // GS V 66 0 — feed + partial
-            0x1D, 0x56, 0x01,       // GS V 1 — partial
-            0x1D, 0x56, 0x00,       // GS V 0 — full
-            0x1B, 0x69              // ESC i — Epson-style full cut
-    };
+    private static final byte[] CUT = new byte[]{0x1D, 0x56, 0x01};
 
     private ReceiptEscPosRenderer() {
     }

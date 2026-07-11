@@ -83,7 +83,7 @@ public class InventoryBatchPickerService {
         if (working.isEmpty()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "No non-expired stock available for this item"
+                    "No non-expired stock available for " + itemLabel(catalogItem)
             );
         }
         BatchAllocationPlanner.sortBatchesForPick(
@@ -151,7 +151,7 @@ public class InventoryBatchPickerService {
             if (!allowNegativeStock) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_REQUEST,
-                        "No non-expired stock available for this item"
+                        "No non-expired stock available for " + itemLabel(catalogItem)
                 );
             }
             batchLines = List.of();
@@ -220,7 +220,7 @@ public class InventoryBatchPickerService {
             if (costRef == null) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_REQUEST,
-                        "No inventory batches for this item; receive stock before selling"
+                        "No inventory batches for " + itemLabel(catalogItem) + "; receive stock before selling"
                 );
             }
             resultLines.add(new BatchAllocationLine(
@@ -345,6 +345,22 @@ public class InventoryBatchPickerService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item is not stocked");
         }
         return item;
+    }
+
+    /** Cashier-facing label: name, optionally with SKU. */
+    static String itemLabel(Item item) {
+        String name = item.getName() == null ? "" : item.getName().trim();
+        String sku = item.getSku() == null ? "" : item.getSku().trim();
+        if (!name.isEmpty() && !sku.isEmpty() && !name.equalsIgnoreCase(sku)) {
+            return name + " (" + sku + ")";
+        }
+        if (!name.isEmpty()) {
+            return name;
+        }
+        if (!sku.isEmpty()) {
+            return sku;
+        }
+        return item.getId() == null || item.getId().isBlank() ? "this item" : item.getId();
     }
 
     private void applyStockDelta(Item item, BigDecimal delta, boolean allowNegative) {

@@ -10,6 +10,7 @@ public record ReceiptSnapshot(
         String branchPhone,
         String branchEmail,
         String branchWebsite,
+        String tillNumber,
         String branchReceiptMessage,
         String servedByName,
         String currency,

@@ -17,6 +17,7 @@ public class BranchReceiptSettingsService {
     private static final String KEY_PHONE = "phone";
     private static final String KEY_EMAIL = "email";
     private static final String KEY_WEBSITE = "website";
+    private static final String KEY_TILL_NUMBER = "tillNumber";
     private static final String KEY_FOOTER_NOTE = "footerNote";
 
     private final ObjectMapper objectMapper;
@@ -34,6 +35,7 @@ public class BranchReceiptSettingsService {
                     textOrNull(root.get(KEY_PHONE)),
                     textOrNull(root.get(KEY_EMAIL)),
                     textOrNull(root.get(KEY_WEBSITE)),
+                    textOrNull(root.get(KEY_TILL_NUMBER)),
                     textOrNull(root.get(KEY_FOOTER_NOTE))
             );
         } catch (Exception e) {
@@ -54,6 +56,9 @@ public class BranchReceiptSettingsService {
         }
         if (patch.website() != null) {
             putOrRemove(root, KEY_WEBSITE, patch.website());
+        }
+        if (patch.tillNumber() != null) {
+            putOrRemove(root, KEY_TILL_NUMBER, patch.tillNumber());
         }
         if (patch.footerNote() != null) {
             putOrRemove(root, KEY_FOOTER_NOTE, patch.footerNote());

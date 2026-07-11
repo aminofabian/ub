@@ -20,6 +20,7 @@ class ReceiptRendererTest {
                 null,
                 null,
                 null,
+                null,
                 "KES",
                 "sale-123",
                 "2026-07-01 12:00 UTC",

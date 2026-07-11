@@ -100,6 +100,7 @@ public final class ReceiptPdfRenderer {
         doc.add(new Paragraph(" "));
         addIfPresent(doc, s.branchAddress(), body);
         addIfPresent(doc, formatContactLine("Tel", s.branchPhone()), body);
+        addIfPresent(doc, formatContactLine("M-Pesa Till", s.tillNumber()), body);
         addIfPresent(doc, formatContactLine("Email", s.branchEmail()), body);
         addIfPresent(doc, formatContactLine("Web", s.branchWebsite()), body);
     }

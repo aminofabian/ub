@@ -122,6 +122,7 @@ public class SaleReceiptService {
                 receiptSettings.phone(),
                 receiptSettings.email(),
                 receiptSettings.website(),
+                receiptSettings.tillNumber(),
                 receiptSettings.footerNote(),
                 saleActorNameService.resolveSoldByName(businessId, sale.getSoldBy()),
                 blankToDefault(business.getCurrency(), "KES").trim().toUpperCase(Locale.ROOT),

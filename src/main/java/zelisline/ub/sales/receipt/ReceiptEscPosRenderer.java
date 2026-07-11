@@ -63,6 +63,7 @@ public final class ReceiptEscPosRenderer {
         out.add(repeat('-', w));
         addCenteredIfPresent(out, s.branchAddress(), w);
         addCenteredIfPresent(out, contactLine("Tel", s.branchPhone()), w);
+        addCenteredIfPresent(out, contactLine("M-Pesa Till", s.tillNumber()), w);
         addCenteredIfPresent(out, contactLine("Email", s.branchEmail()), w);
         addCenteredIfPresent(out, contactLine("Web", s.branchWebsite()), w);
         if (s.branchReceiptMessage() != null && !s.branchReceiptMessage().isBlank()) {

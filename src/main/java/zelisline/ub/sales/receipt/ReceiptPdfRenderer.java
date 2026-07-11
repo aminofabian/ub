@@ -35,7 +35,7 @@ public final class ReceiptPdfRenderer {
             addLogoIfPresent(doc, s.logoUrl());
             doc.add(new Paragraph(s.businessName(), title));
             doc.add(new Paragraph(s.branchName(), body));
-            doc.add(new Paragraph("Sale " + s.saleId(), body));
+            doc.add(new Paragraph(s.receiptLabel(), body));
             doc.add(new Paragraph(s.soldAtDisplay() + " · " + s.saleStatus(), body));
             if (s.servedByName() != null && !s.servedByName().isBlank()) {
                 doc.add(new Paragraph("Served by: " + s.servedByName(), body));

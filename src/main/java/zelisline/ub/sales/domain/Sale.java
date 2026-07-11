@@ -34,6 +34,10 @@ public class Sale {
     @Column(name = "business_id", nullable = false, length = 36)
     private String businessId;
 
+    /** Short sequential receipt number per business (1, 2, 3, ...) shown on receipts. */
+    @Column(name = "receipt_no")
+    private Long receiptNo;
+
     @Column(name = "branch_id", nullable = false, length = 36)
     private String branchId;
 

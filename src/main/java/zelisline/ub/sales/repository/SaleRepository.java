@@ -24,4 +24,16 @@ public interface SaleRepository extends JpaRepository<Sale, String> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select s from Sale s where s.id = :id and s.businessId = :businessId")
     Optional<Sale> findByIdAndBusinessIdForUpdate(@Param("id") String id, @Param("businessId") String businessId);
+
+    /**
+     * Next sequential receipt number for the business. FOR UPDATE takes a
+     * next-key lock on the (business_id, receipt_no) index so concurrent
+     * sales for the same business serialize instead of colliding; the unique
+     * index is the backstop.
+     */
+    @Query(
+            value = "SELECT COALESCE(MAX(receipt_no), 0) + 1 FROM sales WHERE business_id = :businessId FOR UPDATE",
+            nativeQuery = true
+    )
+    long nextReceiptNo(@Param("businessId") String businessId);
 }

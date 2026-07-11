@@ -5,6 +5,8 @@ import java.time.Instant;
 
 public record RecentSaleRow(
         String saleId,
+        /** Short sequential receipt number (POS sales); null for web orders / older sales. */
+        Long receiptNo,
         Instant soldAt,
         String cashierName,
         String customerName,

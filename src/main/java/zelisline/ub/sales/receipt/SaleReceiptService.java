@@ -127,6 +127,7 @@ public class SaleReceiptService {
                 saleActorNameService.resolveSoldByName(businessId, sale.getSoldBy()),
                 blankToDefault(business.getCurrency(), "KES").trim().toUpperCase(Locale.ROOT),
                 sale.getId(),
+                sale.getReceiptNo(),
                 soldAt,
                 sale.getStatus(),
                 lines,

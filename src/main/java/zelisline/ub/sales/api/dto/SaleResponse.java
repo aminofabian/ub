@@ -6,6 +6,8 @@ import java.util.List;
 
 public record SaleResponse(
         String id,
+        /** Short sequential receipt number per business (1, 2, 3, ...). */
+        Long receiptNo,
         String branchId,
         String customerId,
         String shiftId,

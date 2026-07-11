@@ -23,6 +23,7 @@ class ReceiptRendererTest {
                 null,
                 "KES",
                 "sale-123",
+                42L,
                 "2026-07-01 12:00 UTC",
                 "completed",
                 lines,
@@ -42,6 +43,7 @@ class ReceiptRendererTest {
         String text = new String(bytes, StandardCharsets.US_ASCII);
 
         assertThat(text).contains("0.347 kg x 1200.00 = 416.40");
+        assertThat(text).contains("Receipt #42");
     }
 
     @Test

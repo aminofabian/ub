@@ -256,6 +256,7 @@ public class SaleService {
         Sale sale = new Sale();
         sale.setId(saleId);
         sale.setBusinessId(businessId);
+        sale.setReceiptNo(saleRepository.nextReceiptNo(businessId));
         sale.setBranchId(branchId);
         sale.setShiftId(shiftId);
         sale.setStatus(SalesConstants.SALE_STATUS_COMPLETED);

@@ -392,6 +392,7 @@ public class SalesIntelligenceService {
 
     private static final String Q_RECENT_SALES = """
             SELECT s.id AS sale_id,
+                   s.receipt_no,
                    s.sold_at,
                    COALESCE(NULLIF(TRIM(u.name), ''), u.email, s.sold_by) AS cashier_name,
                    COALESCE(cu.name, '') AS customer_name,
@@ -497,8 +498,10 @@ public class SalesIntelligenceService {
         jdbc.query(
                 Q_RECENT_SALES,
                 rs -> {
+                    long receiptNo = rs.getLong("receipt_no");
                     out.add(new RecentSaleRow(
                             rs.getString("sale_id"),
+                            rs.wasNull() ? null : receiptNo,
                             rs.getTimestamp("sold_at").toInstant(),
                             rs.getString("cashier_name"),
                             rs.getString("customer_name"),
@@ -542,6 +545,7 @@ public class SalesIntelligenceService {
                 rs -> {
                     out.add(new RecentSaleRow(
                             rs.getString("sale_id"),
+                            null,
                             rs.getTimestamp("sold_at").toInstant(),
                             rs.getString("cashier_name"),
                             rs.getString("customer_name"),

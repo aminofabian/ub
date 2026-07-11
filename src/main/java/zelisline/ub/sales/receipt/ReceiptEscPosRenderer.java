@@ -26,7 +26,7 @@ public final class ReceiptEscPosRenderer {
         out.add(center(strip(s.businessName()), w));
         out.add(center(strip(s.branchName()), w));
         out.add(repeat('-', w));
-        out.add(center("Sale " + s.saleId(), w));
+        out.add(center(s.receiptLabel(), w));
         out.add(center(strip(s.soldAtDisplay()) + " | " + strip(s.saleStatus()), w));
         if (s.servedByName() != null && !s.servedByName().isBlank()) {
             out.add(center("Served by: " + strip(s.servedByName()), w));

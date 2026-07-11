@@ -10,12 +10,17 @@ public final class ReceiptEscPosRenderer {
 
     private static final byte[] INIT = new byte[]{0x1B, 0x40};
     /** Feed n lines so content clears the cutter (print head sits above the blade). */
-    private static final byte[] FEED_LINES = new byte[]{0x1B, 0x64, 0x04};
+    private static final byte[] FEED_LINES = new byte[]{0x1B, 0x64, 0x05};
     /**
-     * GS V 66 0 — feed to cut position then partial cut. More widely supported than
-     * bare full cut (GS V 0), which many clone thermals ignore.
+     * Multiple cut dialects — clone thermals vary (GS V 66, GS V 1, GS V 0, ESC i).
+     * Extra cuts after the first are harmless (empty paper).
      */
-    private static final byte[] CUT = new byte[]{0x1D, 0x56, 0x42, 0x00};
+    private static final byte[] CUT = new byte[]{
+            0x1D, 0x56, 0x42, 0x00, // GS V 66 0 — feed + partial
+            0x1D, 0x56, 0x01,       // GS V 1 — partial
+            0x1D, 0x56, 0x00,       // GS V 0 — full
+            0x1B, 0x69              // ESC i — Epson-style full cut
+    };
 
     private ReceiptEscPosRenderer() {
     }

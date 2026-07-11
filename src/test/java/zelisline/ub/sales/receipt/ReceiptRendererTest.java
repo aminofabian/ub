@@ -76,8 +76,14 @@ class ReceiptRendererTest {
 
         byte[] bytes = ReceiptEscPosRenderer.render(s, 58);
 
-        // ESC d 4 (feed 4 lines) then GS V 66 0 (partial cut with feed)
-        assertThat(bytes).endsWith(new byte[]{0x1B, 0x64, 0x04, 0x1D, 0x56, 0x42, 0x00});
+        // ESC d 5 then multi-dialect cut tail
+        assertThat(bytes).endsWith(new byte[]{
+                0x1B, 0x64, 0x05,
+                0x1D, 0x56, 0x42, 0x00,
+                0x1D, 0x56, 0x01,
+                0x1D, 0x56, 0x00,
+                0x1B, 0x69
+        });
     }
 
     @Test

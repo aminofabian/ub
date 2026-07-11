@@ -1,5 +1,5 @@
--- Short sequential receipt number per business (1, 2, 3, ...) for humans.
--- UUID stays the primary key. Idempotent for MySQL 8.4 / MariaDB.
+-- Repair: ensure sales.receipt_no exists if V137 failed mid-flight or was skipped.
+-- Safe to re-run; follows V97/V133 idempotent column pattern.
 
 SET @tbl := 'sales';
 
@@ -10,7 +10,6 @@ SET @s := IF(
   'SELECT 1');
 PREPARE stmt FROM @s; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
--- MySQL 1093 workaround: double-nested subquery (cannot UPDATE sales FROM sales directly).
 UPDATE sales s
 INNER JOIN (
   SELECT id, rn FROM (

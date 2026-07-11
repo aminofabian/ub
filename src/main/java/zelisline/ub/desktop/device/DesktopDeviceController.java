@@ -1,5 +1,7 @@
 package zelisline.ub.desktop.device;
 
+import java.math.BigDecimal;
+
 import org.springframework.context.annotation.Profile;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -26,13 +28,15 @@ public class DesktopDeviceController {
     public void printSaleReceipt(
         @PathVariable String saleId,
         @RequestParam(defaultValue = "58") int widthMm,
+        @RequestParam(required = false) BigDecimal cashReceived,
         HttpServletRequest request
     ) {
         CurrentTenantUser.requireHuman(request);
         deviceService.printSaleReceipt(
             TenantRequestIds.resolveBusinessId(request),
             saleId,
-            widthMm
+            widthMm,
+            cashReceived
         );
     }
 

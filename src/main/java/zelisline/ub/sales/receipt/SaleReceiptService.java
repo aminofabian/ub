@@ -50,17 +50,25 @@ public class SaleReceiptService {
     private final StorefrontSettingsService storefrontSettingsService;
 
     public byte[] buildPdf(String businessId, String saleId) {
-        return ReceiptPdfRenderer.render(loadSnapshot(businessId, saleId));
+        return ReceiptPdfRenderer.render(loadSnapshot(businessId, saleId, null));
     }
 
     public byte[] buildEscPos(String businessId, String saleId, int widthMm) {
+        return buildEscPos(businessId, saleId, widthMm, null);
+    }
+
+    public byte[] buildEscPos(String businessId, String saleId, int widthMm, BigDecimal cashReceivedOverride) {
         if (widthMm != 50 && widthMm != 58 && widthMm != 80) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "widthMm must be 50, 58, or 80");
         }
-        return ReceiptEscPosRenderer.render(loadSnapshot(businessId, saleId), widthMm);
+        return ReceiptEscPosRenderer.render(loadSnapshot(businessId, saleId, cashReceivedOverride), widthMm);
     }
 
     private ReceiptSnapshot loadSnapshot(String businessId, String saleId) {
+        return loadSnapshot(businessId, saleId, null);
+    }
+
+    private ReceiptSnapshot loadSnapshot(String businessId, String saleId, BigDecimal cashReceivedOverride) {
         Sale sale = saleRepository.findByIdAndBusinessId(saleId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Sale not found"));
         Business business = businessRepository.findById(businessId)
@@ -116,11 +124,11 @@ public class SaleReceiptService {
 
         String cashReceivedDisplay = null;
         String changeGivenDisplay = null;
-        if (sale.getCashReceived() != null
-                && sale.getCashReceived().compareTo(sale.getGrandTotal()) >= 0) {
-            cashReceivedDisplay = money(sale.getCashReceived());
-            changeGivenDisplay = money(
-                    sale.getCashReceived().subtract(sale.getGrandTotal()));
+        BigDecimal cashReceived = resolveCashReceivedForReceipt(
+                sale, pays, cashReceivedOverride);
+        if (cashReceived != null && cashReceived.compareTo(sale.getGrandTotal()) >= 0) {
+            cashReceivedDisplay = money(cashReceived);
+            changeGivenDisplay = money(cashReceived.subtract(sale.getGrandTotal()));
         }
 
         return new ReceiptSnapshot(
@@ -168,6 +176,31 @@ public class SaleReceiptService {
 
     private static String money(BigDecimal v) {
         return v.setScale(MONEY_SCALE, RoundingMode.HALF_UP).toPlainString();
+    }
+
+    /**
+     * Stored cash_received wins; else optional query/body override when the sale is
+     * a single cash payment (full cash checkout).
+     */
+    private static BigDecimal resolveCashReceivedForReceipt(
+            Sale sale,
+            List<SalePayment> pays,
+            BigDecimal override
+    ) {
+        if (sale.getCashReceived() != null) {
+            return sale.getCashReceived();
+        }
+        if (override == null) {
+            return null;
+        }
+        BigDecimal cash = override.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        if (cash.compareTo(sale.getGrandTotal()) < 0) {
+            return null;
+        }
+        if (pays.size() != 1 || !SalesConstants.PAYMENT_METHOD_CASH.equals(pays.get(0).getMethod())) {
+            return null;
+        }
+        return cash;
     }
 
     private static String blankToDefault(String raw, String def) {

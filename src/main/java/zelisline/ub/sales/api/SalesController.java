@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -185,13 +186,15 @@ public class SalesController {
     public ResponseEntity<byte[]> receiptThermal(
             @PathVariable String saleId,
             @RequestParam(defaultValue = "58") int widthMm,
+            @RequestParam(required = false) BigDecimal cashReceived,
             HttpServletRequest request
     ) {
         CurrentTenantUser.requireHuman(request);
         byte[] body = saleReceiptService.buildEscPos(
                 TenantRequestIds.resolveBusinessId(request),
                 saleId,
-                widthMm
+                widthMm,
+                cashReceived
         );
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=receipt-" + saleId + ".bin")

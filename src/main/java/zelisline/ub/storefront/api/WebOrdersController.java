@@ -3,6 +3,9 @@ package zelisline.ub.storefront.api;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -10,6 +13,7 @@ import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -21,6 +25,7 @@ import zelisline.ub.storefront.api.dto.WebOrderDetailResponse;
 import zelisline.ub.storefront.api.dto.WebOrderSummaryResponse;
 import zelisline.ub.storefront.application.WebOrderAdminService;
 import zelisline.ub.storefront.application.WebOrderFulfillmentService;
+import zelisline.ub.storefront.application.WebOrderReceiptService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
 @Validated
@@ -31,6 +36,7 @@ public class WebOrdersController {
 
     private final WebOrderAdminService webOrderAdminService;
     private final WebOrderFulfillmentService webOrderFulfillmentService;
+    private final WebOrderReceiptService webOrderReceiptService;
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'storefront.orders.read')")
@@ -47,6 +53,29 @@ public class WebOrdersController {
     public WebOrderDetailResponse detail(@PathVariable String orderId, HttpServletRequest request) {
         CurrentTenantUser.require(request);
         return webOrderAdminService.getOrder(TenantRequestIds.resolveBusinessId(request), orderId.trim());
+    }
+
+    /**
+     * ESC/POS pickup ticket for thermal printers. Cashiers with {@code sales.sell} can print
+     * without needing storefront admin read permission.
+     */
+    @GetMapping("/{orderId}/receipt/thermal")
+    @PreAuthorize("hasPermission(null, 'sales.sell') or hasPermission(null, 'storefront.orders.read')")
+    public ResponseEntity<byte[]> receiptThermal(
+            @PathVariable String orderId,
+            @RequestParam(defaultValue = "80") int widthMm,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        byte[] body = webOrderReceiptService.buildEscPos(
+                TenantRequestIds.resolveBusinessId(request),
+                orderId.trim(),
+                widthMm
+        );
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=web-order-" + orderId + ".bin")
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .body(body);
     }
 
     @PatchMapping("/{orderId}/fulfillment")

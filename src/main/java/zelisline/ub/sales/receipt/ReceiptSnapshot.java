@@ -17,8 +17,16 @@ public record ReceiptSnapshot(
         String saleId,
         /** Short sequential receipt number per business; null for pre-migration sales. */
         Long receiptNo,
+        /**
+         * When set, used as the document title instead of {@link #receiptLabel()} defaults
+         * (e.g. web order pickup tickets).
+         */
+        String explicitReceiptLabel,
         String soldAtDisplay,
         String saleStatus,
+        /** Optional customer block for web / pickup tickets; null for POS sales. */
+        String customerName,
+        String customerPhone,
         List<ReceiptLineRow> lines,
         List<ReceiptPaymentRow> payments,
         String grandTotalDisplay,
@@ -31,6 +39,9 @@ public record ReceiptSnapshot(
 
     /** "Receipt #12" when numbered, else short sale id for pre-migration sales. */
     public String receiptLabel() {
+        if (explicitReceiptLabel != null && !explicitReceiptLabel.isBlank()) {
+            return explicitReceiptLabel.trim();
+        }
         if (receiptNo != null) {
             return "Receipt #" + receiptNo;
         }

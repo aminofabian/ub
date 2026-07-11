@@ -40,6 +40,21 @@ public class DesktopDeviceController {
         );
     }
 
+    @PostMapping("/print/web-order/{orderId}")
+    @PreAuthorize("hasPermission(null, 'sales.sell') or hasPermission(null, 'storefront.orders.read')")
+    public void printWebOrderReceipt(
+        @PathVariable String orderId,
+        @RequestParam(defaultValue = "80") int widthMm,
+        HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        deviceService.printWebOrderReceipt(
+            TenantRequestIds.resolveBusinessId(request),
+            orderId,
+            widthMm
+        );
+    }
+
     @PostMapping("/drawer/kick")
     @PreAuthorize("hasPermission(null, 'sales.sell')")
     public void kickDrawer(HttpServletRequest request) {

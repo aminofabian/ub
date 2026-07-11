@@ -24,8 +24,11 @@ class ReceiptRendererTest {
                 "KES",
                 "sale-123",
                 42L,
+                null,
                 "2026-07-01 12:00 UTC",
                 "completed",
+                null,
+                null,
                 lines,
                 List.of(new ReceiptPaymentRow("cash", "416.40", null)),
                 "416.40",
@@ -85,6 +88,44 @@ class ReceiptRendererTest {
 
         // ESC d 8 then GS V 1 (partial cut) — matches Caysn CN811-UB
         assertThat(bytes).endsWith(new byte[]{0x1B, 0x64, 0x08, 0x1D, 0x56, 0x01});
+    }
+
+    @Test
+    void escPos_webOrder_showsCustomerAndLabel() {
+        ReceiptSnapshot s = new ReceiptSnapshot(
+                "Butcher Shop",
+                null,
+                "Main Branch",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                "KES",
+                "order-abcdef12",
+                null,
+                "Web Order order-ab",
+                "2026-07-11 22:00 EAT",
+                "pending_payment",
+                "Jane Doe",
+                "0712345678",
+                List.of(new ReceiptLineRow("Soda", "1", "each", "5.00", "5.00")),
+                List.of(new ReceiptPaymentRow("pending payment", "5.00", null)),
+                "5.00",
+                null,
+                null,
+                "Online order — prepare for pickup"
+        );
+
+        byte[] bytes = ReceiptEscPosRenderer.render(s, 58);
+        String text = new String(bytes, StandardCharsets.US_ASCII);
+
+        assertThat(text).contains("Web Order order-ab");
+        assertThat(text).contains("Customer: Jane Doe");
+        assertThat(text).contains("Phone: 0712345678");
+        assertThat(text).contains("Online order");
     }
 
     @Test

@@ -31,6 +31,12 @@ public final class ReceiptEscPosRenderer {
         if (s.servedByName() != null && !s.servedByName().isBlank()) {
             out.add(center("Served by: " + strip(s.servedByName()), w));
         }
+        if (s.customerName() != null && !s.customerName().isBlank()) {
+            out.add(center("Customer: " + strip(s.customerName()), w));
+        }
+        if (s.customerPhone() != null && !s.customerPhone().isBlank()) {
+            out.add(center("Phone: " + strip(s.customerPhone()), w));
+        }
         out.add(repeat('-', w));
         for (ReceiptLineRow line : s.lines()) {
             for (String row : wrap(strip(line.description()), w)) {

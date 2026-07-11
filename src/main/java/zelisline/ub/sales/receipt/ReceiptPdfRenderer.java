@@ -40,6 +40,12 @@ public final class ReceiptPdfRenderer {
             if (s.servedByName() != null && !s.servedByName().isBlank()) {
                 doc.add(new Paragraph("Served by: " + s.servedByName(), body));
             }
+            if (s.customerName() != null && !s.customerName().isBlank()) {
+                doc.add(new Paragraph("Customer: " + s.customerName(), body));
+            }
+            if (s.customerPhone() != null && !s.customerPhone().isBlank()) {
+                doc.add(new Paragraph("Phone: " + s.customerPhone(), body));
+            }
             doc.add(new Paragraph(" "));
 
             PdfPTable table = new PdfPTable(4);

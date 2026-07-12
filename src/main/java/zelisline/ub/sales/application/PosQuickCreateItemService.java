@@ -12,6 +12,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
+import zelisline.ub.catalog.api.dto.CreateVariantRequest;
 import zelisline.ub.catalog.api.dto.ItemResponse;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.identity.application.RequestPermissionService;
@@ -79,6 +80,52 @@ public class PosQuickCreateItemService {
             );
         }
 
+        ItemResponse item;
+        String relatedId = blankToNull(req.relatedItemId());
+        if (relatedId != null) {
+            item = createAsVariant(businessId, actorUserId, req, relatedId);
+        } else {
+            item = createStandalone(businessId, actorUserId, req, idempotencyKey);
+        }
+
+        pricingService.setSellingPrice(
+                businessId,
+                new PostSellingPriceRequest(
+                        item.id(),
+                        branchId,
+                        req.unitPrice(),
+                        LocalDate.now(),
+                        "POS cashier quick-create"
+                ),
+                actorUserId
+        );
+
+        // Opening batch so checkout can allocate cost/qty immediately.
+        BigDecimal openingQty = req.initialStockQty() != null
+                ? req.initialStockQty()
+                : DEFAULT_OPENING_QTY;
+        BigDecimal unitCost = resolveUnitCost(req.buyingPrice());
+        inventoryLedgerService.recordOpeningBalance(
+                businessId,
+                new PostOpeningBalanceRequest(
+                        branchId,
+                        item.id(),
+                        openingQty,
+                        unitCost,
+                        "POS cashier quick-create opening stock"
+                ),
+                actorUserId
+        );
+
+        return item;
+    }
+
+    private ItemResponse createStandalone(
+            String businessId,
+            String actorUserId,
+            PosQuickCreateItemRequest req,
+            String idempotencyKey
+    ) {
         // Dedicated unique SKU — avoids colliding with soft-deleted "SKU-xxxxx" rows
         // that still occupy the business_id+sku unique index.
         String sku = "POS-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase();
@@ -112,44 +159,64 @@ public class PosQuickCreateItemService {
                 null
         );
 
-        var result = itemCatalogService.createItem(
+        return itemCatalogService.createItem(
                 businessId,
                 createReq,
                 idempotencyKey,
                 actorUserId
-        );
-        ItemResponse item = result.body();
+        ).body();
+    }
 
-        pricingService.setSellingPrice(
+    private ItemResponse createAsVariant(
+            String businessId,
+            String actorUserId,
+            PosQuickCreateItemRequest req,
+            String relatedItemId
+    ) {
+        ItemResponse related = itemCatalogService.getItem(businessId, relatedItemId);
+        // Parent → child; existing variant → sibling under the same parent.
+        String parentId = blankToNull(related.variantOfItemId()) != null
+                ? related.variantOfItemId()
+                : related.id();
+
+        String optionLabel = blankToNull(req.variantName());
+        if (optionLabel == null) {
+            optionLabel = req.name().trim();
+        }
+
+        CreateVariantRequest variantReq = new CreateVariantRequest(
+                "POS-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase(),
+                optionLabel,
+                blankToNull(req.barcode()),
+                req.name().trim(),
+                null,
+                blankToNull(req.categoryId()),
+                null,
+                blankToNull(req.unitType()) != null ? req.unitType().trim() : "each",
+                false,
+                true,
+                true,
+                false,
+                null,
+                null,
+                null,
+                null,
+                req.buyingPrice(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+        );
+
+        return itemCatalogService.createVariant(
                 businessId,
-                new PostSellingPriceRequest(
-                        item.id(),
-                        branchId,
-                        req.unitPrice(),
-                        LocalDate.now(),
-                        "POS cashier quick-create"
-                ),
+                parentId,
+                variantReq,
                 actorUserId
         );
-
-        // Opening batch so checkout can allocate cost/qty immediately.
-        BigDecimal openingQty = req.initialStockQty() != null
-                ? req.initialStockQty()
-                : DEFAULT_OPENING_QTY;
-        BigDecimal unitCost = resolveUnitCost(req.buyingPrice());
-        inventoryLedgerService.recordOpeningBalance(
-                businessId,
-                new PostOpeningBalanceRequest(
-                        branchId,
-                        item.id(),
-                        openingQty,
-                        unitCost,
-                        "POS cashier quick-create opening stock"
-                ),
-                actorUserId
-        );
-
-        return item;
     }
 
     private static BigDecimal resolveUnitCost(BigDecimal buyingPrice) {

@@ -990,7 +990,8 @@ public class ItemCatalogService {
             child.setPackagingUnitQty(parent.getPackagingUnitQty());
             child.setBundleQty(parent.getBundleQty());
             child.setBundlePrice(parent.getBundlePrice());
-            child.setBuyingPrice(parent.getBuyingPrice());
+            child.setBuyingPrice(
+                    request.buyingPrice() != null ? request.buyingPrice() : parent.getBuyingPrice());
             child.setBundleName(parent.getBundleName());
         }
         if (request.minStockLevel() != null) {

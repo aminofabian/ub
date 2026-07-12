@@ -22,6 +22,16 @@ public record PosQuickCreateItemRequest(
          * Opening on-hand qty at the till branch so the item can be sold immediately.
          * Defaults to 1 when omitted.
          */
-        @DecimalMin("0.0001") BigDecimal initialStockQty
+        @DecimalMin("0.0001") BigDecimal initialStockQty,
+        /**
+         * Optional existing catalog item to link as a variant under.
+         * Pass a parent (creates a child) or another variant (creates a sibling under the same parent).
+         */
+        @Size(max = 36) String relatedItemId,
+        /**
+         * Option label for the new variant (e.g. "500ml", "Tray").
+         * Defaults to {@code name} when linking and this is blank.
+         */
+        @Size(max = 255) String variantName
 ) {
 }

@@ -240,7 +240,7 @@ public class KopokopoPaymentGateway implements PaymentGateway {
         // For now, return a pending status — the polling scheduler will use
         // the stored config to decrypt credentials and call the API directly.
         return new StkStatusResponse("PENDING", "Status unknown without credentials",
-                false, false, null);
+                false, false, null, null);
     }
 
     /**
@@ -260,40 +260,34 @@ public class KopokopoPaymentGateway implements PaymentGateway {
                     .asString();
 
             if (response.getStatus() != 200) {
+                // Transient HTTP errors must not fail the STK permanently — keep pending.
                 return new StkStatusResponse("ERROR", "HTTP " + response.getStatus(),
-                        false, true, response.getBody());
+                        false, false, null, response.getBody());
             }
 
             var root = objectMapper.readTree(response.getBody());
             var data = root.get("data");
             if (data == null) {
-                return new StkStatusResponse("PENDING", "No data", false, false, response.getBody());
+                return new StkStatusResponse("PENDING", "No data", false, false, null, response.getBody());
             }
 
             var attrs = data.get("attributes");
             if (attrs == null) {
-                return new StkStatusResponse("PENDING", "No attributes", false, false, response.getBody());
+                return new StkStatusResponse("PENDING", "No attributes", false, false, null, response.getBody());
             }
 
-            String status = attrs.has("status") ? attrs.get("status").asText() : "Pending";
-
-            boolean completed = "Success".equalsIgnoreCase(status)
-                    || "Received".equalsIgnoreCase(status);
-            boolean failed = isTerminalStkFailureStatus(status)
-                    || hasIncomingPaymentErrors(attrs);
-
-            String description = status;
-            if (failed && hasIncomingPaymentErrors(attrs)) {
-                String fromErrors = firstIncomingPaymentError(attrs);
-                if (fromErrors != null) {
-                    description = fromErrors;
-                }
-            }
-
-            return new StkStatusResponse(status, description, completed, failed, response.getBody());
+            IncomingPaymentOutcome outcome = evaluateIncomingPaymentAttributes(attrs);
+            return new StkStatusResponse(
+                    outcome.status(),
+                    outcome.description(),
+                    outcome.completed(),
+                    outcome.failed(),
+                    outcome.mpesaReceipt(),
+                    response.getBody());
         } catch (Exception e) {
             log.error("KopoKopo status query failed: paymentId={}", paymentId, e);
-            return new StkStatusResponse("ERROR", e.getMessage(), false, true, null);
+            // Network/parse errors are transient — leave the push pending for the next poll.
+            return new StkStatusResponse("ERROR", e.getMessage(), false, false, null, null);
         }
     }
 
@@ -329,13 +323,16 @@ public class KopokopoPaymentGateway implements PaymentGateway {
                 String reference = textOrNull(resource, "reference");
                 String status = textOrNull(resource, "status");
 
+                // Till/buygoods: only confirm when we have a real M-Pesa receipt reference.
                 boolean success = "buygoods_transaction_received".equals(topic)
-                        && "Received".equalsIgnoreCase(status);
+                        && "Received".equalsIgnoreCase(status)
+                        && reference != null
+                        && !reference.isBlank();
                 boolean failed = isTerminalStkFailureStatus(status);
 
                 return new WebhookResult(
                         null,
-                        gatewayTxnId,
+                        success ? reference : gatewayTxnId,
                         phone,
                         amount,
                         reference,
@@ -408,43 +405,105 @@ public class KopokopoPaymentGateway implements PaymentGateway {
                     null, null, null, null, null, false, false, checkoutId, webhookEventId, null, rawBody);
         }
 
-        String status = textOrNull(attrs, "status");
-        String reference = null;
+        // Merchant metadata.reference is used to match our STK row — keep it separate
+        // from the M-Pesa receipt on event.resource.reference.
+        String merchantReference = null;
         if (attrs.has("metadata") && attrs.get("metadata").isObject()) {
-            reference = textOrNull(attrs.get("metadata"), "reference");
+            merchantReference = textOrNull(attrs.get("metadata"), "reference");
         }
 
         String phone = null;
         BigDecimal amount = null;
-        String gatewayTxnId = null;
         if (attrs.has("event") && attrs.get("event").has("resource")) {
             var resource = attrs.get("event").get("resource");
             if (resource != null && !resource.isNull()) {
-                gatewayTxnId = textOrNull(resource, "id");
                 phone = normalizeWebhookPhone(textOrNull(resource, "sender_phone_number"));
                 amount = parseAmount(textOrNull(resource, "amount"));
-                if (reference == null || reference.isBlank()) {
-                    reference = textOrNull(resource, "reference");
-                }
             }
         }
 
-        boolean success = "Success".equalsIgnoreCase(status)
-                || "Received".equalsIgnoreCase(status);
-        boolean failed = isTerminalStkFailureStatus(status);
+        IncomingPaymentOutcome outcome = evaluateIncomingPaymentAttributes(attrs);
+        // Prefer the M-Pesa receipt as the stored transaction id for cashiers.
+        String gatewayTxnId = outcome.mpesaReceipt() != null
+                ? outcome.mpesaReceipt()
+                : outcome.resourceId();
 
         return new WebhookResult(
                 null,
                 gatewayTxnId,
                 phone,
                 amount,
-                reference,
-                success,
-                failed,
+                merchantReference,
+                outcome.completed(),
+                outcome.failed(),
                 checkoutId,
                 webhookEventId,
                 "incoming_payment",
                 rawBody);
+    }
+
+    /**
+     * Paid only when attributes.status is Success <em>and</em> KopoKopo included
+     * {@code event.resource.reference} (the M-Pesa receipt). Status alone is not
+     * enough — declines/cancels must not light up "M-Pesa confirmed".
+     */
+    static IncomingPaymentOutcome evaluateIncomingPaymentAttributes(
+            com.fasterxml.jackson.databind.JsonNode attrs
+    ) {
+        if (attrs == null || attrs.isNull()) {
+            return IncomingPaymentOutcome.pending("Pending");
+        }
+
+        String status = textOrNull(attrs, "status");
+        if (status == null) {
+            status = "Pending";
+        }
+
+        String mpesaReceipt = null;
+        String resourceId = null;
+        if (attrs.has("event") && attrs.get("event") != null && !attrs.get("event").isNull()) {
+            var resource = attrs.get("event").get("resource");
+            if (resource != null && !resource.isNull()) {
+                mpesaReceipt = textOrNull(resource, "reference");
+                resourceId = textOrNull(resource, "id");
+            }
+        }
+
+        boolean failed = isTerminalStkFailureStatus(status) || hasIncomingPaymentErrors(attrs);
+        String description = status;
+        if (failed && hasIncomingPaymentErrors(attrs)) {
+            String fromErrors = firstIncomingPaymentError(attrs);
+            if (fromErrors != null) {
+                description = fromErrors;
+            }
+        }
+
+        boolean statusSuccess = "Success".equalsIgnoreCase(status);
+        boolean hasReceipt = mpesaReceipt != null && !mpesaReceipt.isBlank();
+        boolean completed = !failed && statusSuccess && hasReceipt;
+
+        if (statusSuccess && !hasReceipt && !failed) {
+            // Anomalous Success without a receipt — keep pending rather than confirming.
+            log.warn("KopoKopo incoming payment status=Success without M-Pesa receipt — treating as pending");
+            return new IncomingPaymentOutcome(
+                    status, description, false, false, null, resourceId);
+        }
+
+        return new IncomingPaymentOutcome(
+                status, description, completed, failed, completed ? mpesaReceipt : null, resourceId);
+    }
+
+    record IncomingPaymentOutcome(
+            String status,
+            String description,
+            boolean completed,
+            boolean failed,
+            String mpesaReceipt,
+            String resourceId
+    ) {
+        static IncomingPaymentOutcome pending(String status) {
+            return new IncomingPaymentOutcome(status, status, false, false, null, null);
+        }
     }
 
     /** Declines, cancels, and other non-success terminal STK outcomes from KopoKopo. */

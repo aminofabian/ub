@@ -181,7 +181,13 @@ public class GatewayStkPushService {
         pushRepository.save(push);
 
         if (status.completed()) {
-            confirmPush(push, push.getGatewayCheckoutId(), push.getAmount());
+            String receipt = status.mpesaReceipt();
+            if (receipt == null || receipt.isBlank()) {
+                log.warn("STK poll completed without M-Pesa receipt — leaving pending pushId={}",
+                        push.getId());
+                return Optional.of(push);
+            }
+            confirmPush(push, receipt.trim(), push.getAmount());
             return Optional.of(pushRepository.findById(push.getId()).orElse(push));
         }
         if (status.failed()) {
@@ -300,8 +306,15 @@ public class GatewayStkPushService {
 
             if (status.completed()) {
                 if (localPending) {
-                    confirmPush(push, push.getGatewayCheckoutId(), push.getAmount());
-                    terminalUpdates++;
+                    String receipt = status.mpesaReceipt();
+                    if (receipt == null || receipt.isBlank()) {
+                        log.warn("STK settle completed without M-Pesa receipt — leaving pending pushId={}",
+                                push.getId());
+                        gatewayPending = true;
+                    } else {
+                        confirmPush(push, receipt.trim(), push.getAmount());
+                        terminalUpdates++;
+                    }
                 }
             } else if (status.failed()) {
                 if (localPending) {

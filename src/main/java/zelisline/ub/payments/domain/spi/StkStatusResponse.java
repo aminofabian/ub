@@ -16,6 +16,12 @@ public record StkStatusResponse(
         /** Whether the customer cancelled or the request timed out. */
         boolean failed,
 
+        /**
+         * M-Pesa receipt / till reference when {@link #completed} is true
+         * (KopoKopo {@code event.resource.reference}, e.g. {@code OJL7OW3J59}).
+         */
+        String mpesaReceipt,
+
         /** Raw JSON from the gateway, for debugging. */
         String rawPayload
 ) {

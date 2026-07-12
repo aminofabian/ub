@@ -45,11 +45,12 @@ public class PosTopProductsService {
         }
         int bounded = Math.max(1, Math.min(limit, 100));
         String scopedType = itemTypeId != null && !itemTypeId.isBlank() ? itemTypeId.trim() : null;
+        // Over-fetch so skipping group-label parents still fills the shelf.
         List<Object[]> rows = saleItemRepository.topItemsByUnitsSold(
                 businessId,
                 branchId,
                 scopedType,
-                PageRequest.of(0, bounded));
+                PageRequest.of(0, Math.min(bounded * 3, 300)));
         if (rows.isEmpty()) {
             return List.of();
         }
@@ -66,8 +67,11 @@ public class PosTopProductsService {
         Set<String> groupParentIds = groupLabelParentIds(businessId, itemsById.values());
         Map<String, String> thumbs = itemCatalogService.resolveThumbnailUrls(businessId, itemIds);
 
-        List<PosTopProductResponse> out = new ArrayList<>(rows.size());
+        List<PosTopProductResponse> out = new ArrayList<>(bounded);
         for (Object[] row : rows) {
+            if (out.size() >= bounded) {
+                break;
+            }
             String itemId = (String) row[0];
             Item item = itemsById.get(itemId);
             if (item == null || groupParentIds.contains(itemId) || !item.isSellable()) {
@@ -81,6 +85,7 @@ public class PosTopProductsService {
                     ? bd
                     : BigDecimal.valueOf(((Number) row[2]).doubleValue());
             Instant lastAt = (Instant) row[3];
+            BigDecimal packUnits = item.getPackagingUnitQty();
             out.add(new PosTopProductResponse(
                     itemId,
                     name,
@@ -88,7 +93,13 @@ public class PosTopProductsService {
                     thumb,
                     saleCount,
                     totalQty,
-                    lastAt
+                    lastAt,
+                    blankToNull(item.getVariantName()),
+                    blankToNull(item.getBrand()),
+                    blankToNull(item.getSize()),
+                    blankToNull(item.getVariantOfItemId()),
+                    item.isPackageVariant() ? Boolean.TRUE : Boolean.FALSE,
+                    packUnits
             ));
         }
         return out;
@@ -106,5 +117,13 @@ public class PosTopProductsService {
             return Set.of();
         }
         return new HashSet<>(itemRepository.findParentIdsHavingVariants(businessId, rootIds));
+    }
+
+    private static String blankToNull(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String t = raw.trim();
+        return t.isEmpty() ? null : t;
     }
 }

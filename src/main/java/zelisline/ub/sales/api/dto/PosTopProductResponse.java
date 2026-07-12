@@ -17,6 +17,13 @@ public record PosTopProductResponse(
         /** Sum of quantities sold across considered sales. */
         BigDecimal totalQuantity,
         /** {@code sold_at} of the most recent sale this item appears on. */
-        Instant lastSoldAt
+        Instant lastSoldAt,
+        /** Variant option label (Tray, 400g, …) when this SKU is a child of a parent item. */
+        String variantName,
+        String brand,
+        String size,
+        String variantOfItemId,
+        Boolean packageVariant,
+        BigDecimal packageUnitsPerSale
 ) {
 }

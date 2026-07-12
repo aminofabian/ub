@@ -30,6 +30,7 @@ import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.inventory.CostMethod;
 import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.inventory.api.dto.BatchAllocationLine;
+import zelisline.ub.inventory.api.dto.PostOpeningBalanceRequest;
 import zelisline.ub.purchasing.domain.InventoryBatch;
 import zelisline.ub.purchasing.domain.StockMovement;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
@@ -64,6 +65,7 @@ public class InventoryBatchPickerService {
     private final ApplicationEventPublisher eventPublisher;
     private final SupplyBatchLifecycleService supplyBatchLifecycleService;
     private final PackageVariantStockResolver packageVariantStockResolver;
+    private final InventoryLedgerService inventoryLedgerService;
 
     @Transactional(readOnly = true)
     public List<BatchAllocationLine> previewAllocation(
@@ -145,6 +147,21 @@ public class InventoryBatchPickerService {
         // ── Exclude expired batches BEFORE sorting ────────────────────────
         working = new ArrayList<>(BatchAllocationPlanner.excludeExpired(working));
 
+        // Items never received at this branch (e.g. POS quick-create before opening stock)
+        // have no active/depleted batches — seed opening stock for this sale so checkout can proceed.
+        if (working.isEmpty()
+                && resolveCostReferenceBatch(businessId, pick.stockItemId(), branchId) == null) {
+            seedOpeningStockForFirstSale(
+                    businessId,
+                    branchId,
+                    item,
+                    pick.stockQuantity(),
+                    userId
+            );
+            locked = lockActiveBatchesForPool(businessId, branchId, catalogItem);
+            working = new ArrayList<>(BatchAllocationPlanner.excludeExpired(new ArrayList<>(locked)));
+        }
+
         List<BatchAllocationLine> batchLines;
         BigDecimal unallocated = BigDecimal.ZERO;
         if (working.isEmpty()) {
@@ -218,6 +235,17 @@ public class InventoryBatchPickerService {
         if (unallocated.signum() > 0) {
             InventoryBatch costRef = resolveCostReferenceBatch(businessId, pick.stockItemId(), branchId);
             if (costRef == null) {
+                // Last resort: seed a cost-reference batch then oversell against it.
+                seedOpeningStockForFirstSale(
+                        businessId,
+                        branchId,
+                        item,
+                        unallocated,
+                        userId
+                );
+                costRef = resolveCostReferenceBatch(businessId, pick.stockItemId(), branchId);
+            }
+            if (costRef == null) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_REQUEST,
                         "No inventory batches for " + itemLabel(catalogItem) + "; receive stock before selling"
@@ -247,6 +275,38 @@ public class InventoryBatchPickerService {
         applyStockDelta(item, pick.stockQuantity().negate(), allowNegativeStock);
         maybeEnqueueLowStockWebhook(businessId, branchId, pick.stockItemId(), item, stockBefore);
         return resultLines;
+    }
+
+    /**
+     * Creates opening stock when an item has never been received at the branch
+     * (common for cashier quick-created products).
+     */
+    private void seedOpeningStockForFirstSale(
+            String businessId,
+            String branchId,
+            Item item,
+            BigDecimal quantity,
+            String userId
+    ) {
+        BigDecimal qty = quantity == null || quantity.signum() <= 0
+                ? BigDecimal.ONE
+                : quantity.setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal unitCost = item.getBuyingPrice() != null && item.getBuyingPrice().signum() > 0
+                ? item.getBuyingPrice().setScale(QTY_SCALE, RoundingMode.HALF_UP)
+                : new BigDecimal("0.01");
+        inventoryLedgerService.recordOpeningBalance(
+                businessId,
+                new PostOpeningBalanceRequest(
+                        branchId,
+                        item.getId(),
+                        qty,
+                        unitCost,
+                        "Auto opening stock — first sale / POS quick-create"
+                ),
+                userId
+        );
+        // Opening balance updates item.currentStock; reload locked item state.
+        entityManager.refresh(item);
     }
 
     public String newPickReferenceId() {

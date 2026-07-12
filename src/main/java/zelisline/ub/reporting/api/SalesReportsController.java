@@ -39,12 +39,13 @@ public class SalesReportsController {
             @RequestParam("from") LocalDate from,
             @RequestParam("to") LocalDate to,
             @RequestParam(value = "branchId", required = false) String branchId,
+            @RequestParam(value = "itemTypeId", required = false) String itemTypeId,
             HttpServletRequest request
     ) {
         TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         String effectiveBranch = branchResolutionService.resolveBranchForReport(
                 businessId, principal.roleId(), principal.branchId(), branchId);
-        return salesReportsService.salesRegister(businessId, from, to, effectiveBranch);
+        return salesReportsService.salesRegister(businessId, from, to, effectiveBranch, itemTypeId);
     }
 }

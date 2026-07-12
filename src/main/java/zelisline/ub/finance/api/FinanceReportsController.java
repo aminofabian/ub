@@ -37,10 +37,12 @@ public class FinanceReportsController {
     public FinancePulseResponse pulse(
             @RequestParam(value = "date", required = false) LocalDate date,
             @RequestParam(value = "branchId", required = false) String branchId,
+            @RequestParam(value = "itemTypeId", required = false) String itemTypeId,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        return financeReportsService.pulse(TenantRequestIds.resolveBusinessId(request), date, branchId);
+        return financeReportsService.pulse(
+                TenantRequestIds.resolveBusinessId(request), date, branchId, itemTypeId);
     }
 
     @GetMapping("/pl")
@@ -49,10 +51,12 @@ public class FinanceReportsController {
             @RequestParam("from") LocalDate from,
             @RequestParam("to") LocalDate to,
             @RequestParam(value = "branchId", required = false) String branchId,
+            @RequestParam(value = "itemTypeId", required = false) String itemTypeId,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        return financeReportsService.profitAndLoss(TenantRequestIds.resolveBusinessId(request), from, to, branchId);
+        return financeReportsService.profitAndLoss(
+                TenantRequestIds.resolveBusinessId(request), from, to, branchId, itemTypeId);
     }
 
     @GetMapping("/balance-sheet")

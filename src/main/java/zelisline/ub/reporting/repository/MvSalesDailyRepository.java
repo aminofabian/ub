@@ -47,8 +47,8 @@ public interface MvSalesDailyRepository extends JpaRepository<MvSalesDaily, MvSa
     }
 
     /**
-     * Per-day per-branch totals for the sales register read facade. Branch filter is
-     * optional; pass {@code null} to roll up across the tenant.
+     * Per-day per-branch totals for the sales register read facade. Branch / item-type
+     * filters are optional; pass {@code null} to roll up across the tenant / all departments.
      */
     @Query(value = """
             SELECT m.business_day    AS business_day,
@@ -58,10 +58,12 @@ public interface MvSalesDailyRepository extends JpaRepository<MvSalesDaily, MvSa
                    COALESCE(SUM(m.cost), 0)    AS cost,
                    COALESCE(SUM(m.profit), 0)  AS profit
               FROM mv_sales_daily m
+              JOIN items i ON i.id = m.item_id AND i.business_id = m.business_id AND i.deleted_at IS NULL
              WHERE m.business_id = :businessId
                AND m.business_day >= :from
                AND m.business_day <= :to
                AND (:branchId IS NULL OR m.branch_id = :branchId)
+               AND (:itemTypeId IS NULL OR i.item_type_id = :itemTypeId)
              GROUP BY m.business_day, m.branch_id
              ORDER BY m.business_day, m.branch_id
             """, nativeQuery = true)
@@ -69,7 +71,8 @@ public interface MvSalesDailyRepository extends JpaRepository<MvSalesDaily, MvSa
             @Param("businessId") String businessId,
             @Param("from") LocalDate from,
             @Param("to") LocalDate to,
-            @Param("branchId") String branchId
+            @Param("branchId") String branchId,
+            @Param("itemTypeId") String itemTypeId
     );
 
     @Query(value = """
@@ -95,17 +98,20 @@ public interface MvSalesDailyRepository extends JpaRepository<MvSalesDaily, MvSa
                    COALESCE(SUM(si.profit), 0)     AS profit
               FROM sales s
               JOIN sale_items si ON si.sale_id = s.id
+              JOIN items i ON i.id = si.item_id AND i.business_id = s.business_id AND i.deleted_at IS NULL
              WHERE s.business_id = :businessId
                AND s.status = 'completed'
                AND CAST(s.sold_at AS DATE) = :targetDay
                AND (:branchId IS NULL OR s.branch_id = :branchId)
+               AND (:itemTypeId IS NULL OR i.item_type_id = :itemTypeId)
              GROUP BY CAST(s.sold_at AS DATE), s.branch_id
              ORDER BY s.branch_id
             """, nativeQuery = true)
     List<DailyRollup> sumOltpForDay(
             @Param("businessId") String businessId,
             @Param("targetDay") LocalDate targetDay,
-            @Param("branchId") String branchId
+            @Param("branchId") String branchId,
+            @Param("itemTypeId") String itemTypeId
     );
 
     interface ItemRevenue {
@@ -118,9 +124,12 @@ public interface MvSalesDailyRepository extends JpaRepository<MvSalesDaily, MvSa
             SELECT m.item_id AS itemId,
                    COALESCE(SUM(m.revenue), 0) AS revenue
               FROM mv_sales_daily m
+              JOIN items i ON i.id = m.item_id AND i.business_id = m.business_id AND i.deleted_at IS NULL
              WHERE m.business_id = :businessId
                AND m.business_day >= :from
                AND m.business_day <= :to
+               AND (:branchId IS NULL OR m.branch_id = :branchId)
+               AND (:itemTypeId IS NULL OR i.item_type_id = :itemTypeId)
              GROUP BY m.item_id
              ORDER BY revenue DESC
              LIMIT :limit
@@ -129,6 +138,8 @@ public interface MvSalesDailyRepository extends JpaRepository<MvSalesDaily, MvSa
             @Param("businessId") String businessId,
             @Param("from") LocalDate from,
             @Param("to") LocalDate to,
+            @Param("branchId") String branchId,
+            @Param("itemTypeId") String itemTypeId,
             @Param("limit") int limit
     );
 

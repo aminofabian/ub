@@ -71,12 +71,24 @@ public class InventoryReportsService {
 
     @Transactional(readOnly = true)
     public InventoryExpiryPipelineResponse expiryPipeline(String businessId, String branchId, LocalDate today) {
+        return expiryPipeline(businessId, branchId, null, today);
+    }
+
+    @Transactional(readOnly = true)
+    public InventoryExpiryPipelineResponse expiryPipeline(
+            String businessId,
+            String branchId,
+            String itemTypeId,
+            LocalDate today
+    ) {
         String resolvedBranch = resolveBranch(businessId, branchId);
+        String resolvedType = blankToNull(itemTypeId);
         LocalDate asOf = today != null ? today : LocalDate.now();
         LocalDate horizon = asOf.plusDays(365);
         List<InventoryBatch> batches = inventoryBatchRepository.findExpiringOnOrBefore(
                 businessId,
                 resolvedBranch,
+                resolvedType,
                 horizon
         );
 
@@ -134,5 +146,9 @@ public class InventoryReportsService {
         branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(trimmed, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Branch not found"));
         return trimmed;
+    }
+
+    private static String blankToNull(String value) {
+        return value != null && !value.isBlank() ? value.trim() : null;
     }
 }

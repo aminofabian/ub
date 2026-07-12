@@ -39,11 +39,12 @@ public class SalesIntelligenceController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam(required = false) String categoryId,
             @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) String itemTypeId,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
         return salesIntelligenceService.netRevenueByCategory(
-                TenantRequestIds.resolveBusinessId(request), from, to, categoryId, branchId);
+                TenantRequestIds.resolveBusinessId(request), from, to, categoryId, branchId, itemTypeId);
     }
 
     @GetMapping("/revenue-by-category/{categoryId}/daily")
@@ -91,11 +92,12 @@ public class SalesIntelligenceController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) String itemTypeId,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
         return salesIntelligenceService.recentSales(
-                TenantRequestIds.resolveBusinessId(request), from, to, branchId);
+                TenantRequestIds.resolveBusinessId(request), from, to, branchId, itemTypeId);
     }
 
     @GetMapping("/payments-by-method")
@@ -104,11 +106,12 @@ public class SalesIntelligenceController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) String itemTypeId,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
         return salesIntelligenceService.paymentsByMethod(
-                TenantRequestIds.resolveBusinessId(request), from, to, branchId);
+                TenantRequestIds.resolveBusinessId(request), from, to, branchId, itemTypeId);
     }
 
     @GetMapping("/staff-performance")
@@ -117,10 +120,11 @@ public class SalesIntelligenceController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) String itemTypeId,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
         return salesIntelligenceService.staffPerformance(
-                TenantRequestIds.resolveBusinessId(request), from, to, branchId);
+                TenantRequestIds.resolveBusinessId(request), from, to, branchId, itemTypeId);
     }
 }

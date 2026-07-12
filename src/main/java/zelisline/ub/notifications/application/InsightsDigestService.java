@@ -97,7 +97,7 @@ public class InsightsDigestService {
         for (Business business : activeBusinesses()) {
             try {
                 List<MvSalesDailyRepository.ItemRevenue> top = mvSalesDailyRepository.topItemsByRevenue(
-                        business.getId(), from, weekEnding, 5);
+                        business.getId(), from, weekEnding, null, null, 5);
                 if (top.isEmpty()) {
                     continue;
                 }

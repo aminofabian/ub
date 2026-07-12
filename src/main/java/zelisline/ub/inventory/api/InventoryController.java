@@ -208,6 +208,7 @@ public class InventoryController {
     @PreAuthorize("hasPermission(null, 'inventory.read')")
     public InventoryValuationResponse valuation(
             @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) String itemTypeId,
             HttpServletRequest request
     ) {
         TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
@@ -217,6 +218,6 @@ public class InventoryController {
             effectiveBranchId = branchResolutionService.resolveBranchForReport(
                     businessId, principal.roleId(), principal.branchId(), branchId);
         }
-        return inventoryValuationService.valuation(businessId, effectiveBranchId);
+        return inventoryValuationService.valuation(businessId, effectiveBranchId, itemTypeId);
     }
 }

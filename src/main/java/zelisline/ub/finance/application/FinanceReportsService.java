@@ -42,21 +42,32 @@ public class FinanceReportsService {
 
     @Transactional(readOnly = true)
     public FinancePulseResponse pulse(String businessId, LocalDate date, String branchId) {
+        return pulse(businessId, date, branchId, null);
+    }
+
+    @Transactional(readOnly = true)
+    public FinancePulseResponse pulse(String businessId, LocalDate date, String branchId, String itemTypeId) {
         LocalDate day = date != null ? date : LocalDate.now(ZoneOffset.UTC);
         String resolvedBranch = resolveBranch(businessId, branchId);
+        String resolvedType = blankToNull(itemTypeId);
 
         SaleAggregate sales = journalReportRepository.sumSalesForWindow(
                 businessId,
                 day.atStartOfDay(ZoneOffset.UTC).toInstant(),
                 day.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant(),
-                resolvedBranch
+                resolvedBranch,
+                resolvedType
         );
         BigDecimal revenue = money(sales != null ? sales.getRevenue() : null);
         BigDecimal cogs = money(sales != null ? sales.getCogs() : null);
         BigDecimal profit = money(sales != null ? sales.getProfit() : null);
         long saleCount = sales != null ? sales.getSaleCount() : 0L;
 
-        BigDecimal expensesTotal = money(journalReportRepository.sumExpensesForDate(businessId, day, resolvedBranch));
+        // Expenses are not department-attributed; omit them when a department filter is active
+        // so net operating stays meaningful for the scoped revenue.
+        BigDecimal expensesTotal = resolvedType != null
+                ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP)
+                : money(journalReportRepository.sumExpensesForDate(businessId, day, resolvedBranch));
         BigDecimal grossMarginPct = revenue.signum() == 0
                 ? BigDecimal.ZERO
                 : profit.multiply(HUNDRED).divide(revenue, 2, RoundingMode.HALF_UP);
@@ -79,6 +90,17 @@ public class FinanceReportsService {
 
     @Transactional(readOnly = true)
     public ProfitAndLossResponse profitAndLoss(String businessId, LocalDate from, LocalDate to, String branchId) {
+        return profitAndLoss(businessId, from, to, branchId, null);
+    }
+
+    @Transactional(readOnly = true)
+    public ProfitAndLossResponse profitAndLoss(
+            String businessId,
+            LocalDate from,
+            LocalDate to,
+            String branchId,
+            String itemTypeId
+    ) {
         if (from == null || to == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "from and to are required");
         }
@@ -86,6 +108,30 @@ public class FinanceReportsService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "to must be on or after from");
         }
         String resolvedBranch = resolveBranch(businessId, branchId);
+        String resolvedType = blankToNull(itemTypeId);
+
+        // Department-scoped P&L has no journal dimension — use sale-line revenue/COGS instead.
+        if (resolvedType != null) {
+            SaleAggregate sales = journalReportRepository.sumSalesForPeriod(
+                    businessId, from, to, resolvedBranch, resolvedType);
+            BigDecimal revenue = money(sales != null ? sales.getRevenue() : null);
+            BigDecimal cogs = money(sales != null ? sales.getCogs() : null);
+            BigDecimal grossProfit = revenue.subtract(cogs).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal operatingExpenses = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+            return new ProfitAndLossResponse(
+                    from,
+                    to,
+                    resolvedBranch,
+                    revenue,
+                    cogs,
+                    grossProfit,
+                    operatingExpenses,
+                    grossProfit,
+                    List.of(),
+                    List.of(),
+                    List.of()
+            );
+        }
 
         List<AccountBalance> rows = journalReportRepository.sumByAccountForPeriod(businessId, from, to);
         BigDecimal revenue = BigDecimal.ZERO;
@@ -225,6 +271,10 @@ public class FinanceReportsService {
         branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(trimmed, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Branch not found"));
         return trimmed;
+    }
+
+    private static String blankToNull(String value) {
+        return value != null && !value.isBlank() ? value.trim() : null;
     }
 
     private static ProfitAndLossResponse.LineItem line(AccountBalance row, BigDecimal amount) {

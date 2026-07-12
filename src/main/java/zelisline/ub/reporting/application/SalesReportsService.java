@@ -36,6 +36,17 @@ public class SalesReportsService {
 
     @Transactional(readOnly = true)
     public SalesRegisterResponse salesRegister(String businessId, LocalDate from, LocalDate to, String branchId) {
+        return salesRegister(businessId, from, to, branchId, null);
+    }
+
+    @Transactional(readOnly = true)
+    public SalesRegisterResponse salesRegister(
+            String businessId,
+            LocalDate from,
+            LocalDate to,
+            String branchId,
+            String itemTypeId
+    ) {
         if (from == null || to == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "from and to are required");
         }
@@ -43,17 +54,20 @@ public class SalesReportsService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "to must be on or after from");
         }
         String resolvedBranch = resolveBranch(businessId, branchId);
+        String resolvedType = blankToNull(itemTypeId);
         LocalDate today = LocalDate.now(ZoneOffset.UTC);
 
         // MV side: covers any past day in [from, min(to, today-1)].
         LocalDate mvUpper = to.isBefore(today) ? to : today.minusDays(1);
         List<SalesRegisterResponse.Day> days = new ArrayList<>();
         if (!mvUpper.isBefore(from)) {
-            mvRepository.sumByDay(businessId, from, mvUpper, resolvedBranch).forEach(r -> days.add(map(r)));
+            mvRepository.sumByDay(businessId, from, mvUpper, resolvedBranch, resolvedType)
+                    .forEach(r -> days.add(map(r)));
         }
         // OLTP side: today, only if the request spans into today.
         if (!today.isBefore(from) && !today.isAfter(to)) {
-            mvRepository.sumOltpForDay(businessId, today, resolvedBranch).forEach(r -> days.add(map(r)));
+            mvRepository.sumOltpForDay(businessId, today, resolvedBranch, resolvedType)
+                    .forEach(r -> days.add(map(r)));
         }
 
         BigDecimal totalQty = QTY_ZERO;
@@ -98,6 +112,10 @@ public class SalesReportsService {
         branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(trimmed, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Branch not found"));
         return trimmed;
+    }
+
+    private static String blankToNull(String value) {
+        return value != null && !value.isBlank() ? value.trim() : null;
     }
 
     private static BigDecimal money4(BigDecimal v) {

@@ -82,7 +82,8 @@ public interface JournalReportRepository extends JpaRepository<JournalLine, Stri
     /**
      * Revenue, COGS, profit, and sale count for completed sales whose {@code sold_at} falls
      * within the supplied UTC window — pulse uses the OLTP side (PHASE_7_PLAN.md In Scope:
-     * "today" hybrid). Pass {@code null} for {@code branchId} to aggregate across the tenant.
+     * "today" hybrid). Pass {@code null} for {@code branchId} / {@code itemTypeId} to aggregate
+     * across the tenant (or all departments).
      */
     @Query(value = """
             select coalesce(sum(si.line_total), 0) as revenue,
@@ -91,17 +92,47 @@ public interface JournalReportRepository extends JpaRepository<JournalLine, Stri
                    count(distinct s.id)             as saleCount
               from sales s
               join sale_items si on si.sale_id = s.id
+              join items i on i.id = si.item_id and i.business_id = s.business_id and i.deleted_at is null
              where s.business_id = :businessId
                and s.status = 'completed'
                and s.sold_at >= :startInclusive
                and s.sold_at <  :endExclusive
                and (:branchId is null or s.branch_id = :branchId)
+               and (:itemTypeId is null or i.item_type_id = :itemTypeId)
             """, nativeQuery = true)
     SaleAggregate sumSalesForWindow(
             @Param("businessId") String businessId,
             @Param("startInclusive") Instant startInclusive,
             @Param("endExclusive") Instant endExclusive,
-            @Param("branchId") String branchId
+            @Param("branchId") String branchId,
+            @Param("itemTypeId") String itemTypeId
+    );
+
+    /**
+     * Period rollup used when P&amp;L is scoped to a department (journal lines have no
+     * item-type dimension). Same status/date rules as the sales register OLTP path.
+     */
+    @Query(value = """
+            select coalesce(sum(si.line_total), 0) as revenue,
+                   coalesce(sum(si.cost_total), 0) as cogs,
+                   coalesce(sum(si.profit), 0)     as profit,
+                   count(distinct s.id)             as saleCount
+              from sales s
+              join sale_items si on si.sale_id = s.id
+              join items i on i.id = si.item_id and i.business_id = s.business_id and i.deleted_at is null
+             where s.business_id = :businessId
+               and s.status = 'completed'
+               and cast(s.sold_at as date) >= :from
+               and cast(s.sold_at as date) <= :to
+               and (:branchId is null or s.branch_id = :branchId)
+               and (:itemTypeId is null or i.item_type_id = :itemTypeId)
+            """, nativeQuery = true)
+    SaleAggregate sumSalesForPeriod(
+            @Param("businessId") String businessId,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to,
+            @Param("branchId") String branchId,
+            @Param("itemTypeId") String itemTypeId
     );
 
     interface SaleAggregate {

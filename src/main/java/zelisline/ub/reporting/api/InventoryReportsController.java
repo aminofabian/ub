@@ -43,6 +43,7 @@ public class InventoryReportsController {
     @PreAuthorize("hasPermission(null, 'reports.inventory.read')")
     public InventoryExpiryPipelineResponse expiry(
             @RequestParam(value = "branchId", required = false) String branchId,
+            @RequestParam(value = "itemTypeId", required = false) String itemTypeId,
             @RequestParam(value = "asOf", required = false) LocalDate asOf,
             HttpServletRequest request
     ) {
@@ -50,6 +51,6 @@ public class InventoryReportsController {
         String businessId = TenantRequestIds.resolveBusinessId(request);
         String effectiveBranch = branchResolutionService.resolveBranchForReport(
                 businessId, principal.roleId(), principal.branchId(), branchId);
-        return inventoryReportsService.expiryPipeline(businessId, effectiveBranch, asOf);
+        return inventoryReportsService.expiryPipeline(businessId, effectiveBranch, itemTypeId, asOf);
     }
 }

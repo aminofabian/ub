@@ -31,7 +31,13 @@ public class InventoryValuationService {
 
     @Transactional(readOnly = true)
     public InventoryValuationResponse valuation(String businessId, String branchIdFilter) {
+        return valuation(businessId, branchIdFilter, null);
+    }
+
+    @Transactional(readOnly = true)
+    public InventoryValuationResponse valuation(String businessId, String branchIdFilter, String itemTypeId) {
         String branchId = blankToNull(branchIdFilter);
+        String typeId = blankToNull(itemTypeId);
         if (branchId != null) {
             branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(branchId, businessId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Branch not found"));
@@ -42,13 +48,15 @@ public class InventoryValuationService {
                 .stream()
                 .collect(Collectors.toMap(Branch::getId, Branch::getName));
         List<BranchValuationLine> lines = new ArrayList<>();
-        for (Object[] row : inventoryBatchRepository.sumExtensionValueByBranch(businessId, status, branchId)) {
+        for (Object[] row : inventoryBatchRepository.sumExtensionValueByBranch(
+                businessId, status, branchId, typeId)) {
             String bid = (String) row[0];
             BigDecimal ext = toBigDecimal(row[1]).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
             String name = branchNames.getOrDefault(bid, bid);
             lines.add(new BranchValuationLine(bid, name, ext));
         }
-        BigDecimal total = inventoryBatchRepository.sumTotalExtensionValue(businessId, status, branchId);
+        BigDecimal total = inventoryBatchRepository.sumTotalExtensionValue(
+                businessId, status, branchId, typeId);
         if (total == null) {
             total = BigDecimal.ZERO;
         }

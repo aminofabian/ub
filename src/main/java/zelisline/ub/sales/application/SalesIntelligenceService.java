@@ -48,6 +48,7 @@ public class SalesIntelligenceService {
                AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
                AND (? IS NULL OR i.category_id = ?)
                AND (? IS NULL OR s.branch_id = ?)
+               AND (? IS NULL OR i.item_type_id = ?)
           GROUP BY COALESCE(i.category_id, '_none'), COALESCE(c.name, 'Uncategorised')
             """;
 
@@ -67,6 +68,7 @@ public class SalesIntelligenceService {
                AND CAST(r.refunded_at AS DATE) BETWEEN ? AND ?
                AND (? IS NULL OR i.category_id = ?)
                AND (? IS NULL OR s.branch_id = ?)
+               AND (? IS NULL OR i.item_type_id = ?)
           GROUP BY COALESCE(i.category_id, '_none'), COALESCE(c.name, 'Uncategorised')
             """;
 
@@ -166,13 +168,15 @@ public class SalesIntelligenceService {
             LocalDate fromInclusive,
             LocalDate toInclusive,
             String categoryId,
-            String branchId
+            String branchId,
+            String itemTypeId
     ) {
         LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
         Date from = Date.valueOf(w[0]);
         Date to = Date.valueOf(w[1]);
         String catFilter = (categoryId != null && !categoryId.isBlank()) ? categoryId : null;
         String branchFilter = (branchId != null && !branchId.isBlank()) ? branchId : null;
+        String typeFilter = blankToNull(itemTypeId);
 
         Map<String, Agg> byCat = new HashMap<>();
 
@@ -193,7 +197,9 @@ public class SalesIntelligenceService {
                 catFilter,
                 catFilter,
                 branchFilter,
-                branchFilter);
+                branchFilter,
+                typeFilter,
+                typeFilter);
 
         jdbc.query(
                 Q_REFUNDS,
@@ -211,7 +217,9 @@ public class SalesIntelligenceService {
                 catFilter,
                 catFilter,
                 branchFilter,
-                branchFilter);
+                branchFilter,
+                typeFilter,
+                typeFilter);
 
         List<RevenueByCategoryRow> out = new ArrayList<>();
         for (Map.Entry<String, Agg> e : byCat.entrySet()) {
@@ -422,6 +430,7 @@ public class SalesIntelligenceService {
                AND s.status IN (?, ?)
                AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
                AND (? IS NULL OR s.branch_id = ?)
+               AND (? IS NULL OR i.item_type_id = ?)
           ORDER BY s.sold_at DESC
              LIMIT 500
             """;
@@ -453,13 +462,39 @@ public class SalesIntelligenceService {
     private static final String Q_PAYMENT_METHODS = """
             SELECT sp.method,
                    COUNT(DISTINCT s.id) AS txn_count,
-                   COALESCE(SUM(sp.amount), 0) AS total_amount
+                   COALESCE(SUM(
+                     CASE
+                       WHEN ? IS NULL THEN sp.amount
+                       ELSE sp.amount * (
+                         SELECT COALESCE(SUM(sil.line_total), 0)
+                           FROM sale_items sil
+                           JOIN items i ON i.id = sil.item_id
+                                          AND i.business_id = s.business_id
+                                          AND i.deleted_at IS NULL
+                          WHERE sil.sale_id = s.id
+                            AND i.item_type_id = ?
+                       ) / NULLIF((
+                         SELECT COALESCE(SUM(sil2.line_total), 0)
+                           FROM sale_items sil2
+                          WHERE sil2.sale_id = s.id
+                       ), 0)
+                     END
+                   ), 0) AS total_amount
               FROM sale_payments sp
               JOIN sales s ON s.id = sp.sale_id
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
                AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
                AND (? IS NULL OR s.branch_id = ?)
+               AND (? IS NULL OR EXISTS (
+                     SELECT 1
+                       FROM sale_items sil
+                       JOIN items i ON i.id = sil.item_id
+                                      AND i.business_id = s.business_id
+                                      AND i.deleted_at IS NULL
+                      WHERE sil.sale_id = s.id
+                        AND i.item_type_id = ?
+                   ))
           GROUP BY sp.method
           ORDER BY total_amount DESC
             """;
@@ -473,11 +508,13 @@ public class SalesIntelligenceService {
                    COALESCE(SUM(sil.profit), 0) AS total_profit
               FROM sales s
               JOIN sale_items sil ON sil.sale_id = s.id
+              JOIN items i ON i.id = sil.item_id AND i.business_id = s.business_id AND i.deleted_at IS NULL
          LEFT JOIN users u ON u.id = s.sold_by AND u.business_id = s.business_id AND u.deleted_at IS NULL
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
                AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
                AND (? IS NULL OR s.branch_id = ?)
+               AND (? IS NULL OR i.item_type_id = ?)
           GROUP BY s.sold_by, COALESCE(NULLIF(TRIM(u.name), ''), u.email, s.sold_by)
           ORDER BY total_revenue DESC
             """;
@@ -487,12 +524,14 @@ public class SalesIntelligenceService {
             String businessId,
             LocalDate fromInclusive,
             LocalDate toInclusive,
-            String branchId
+            String branchId,
+            String itemTypeId
     ) {
         LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
         Date from = Date.valueOf(w[0]);
         Date to = Date.valueOf(w[1]);
         String branchFilter = (branchId != null && !branchId.isBlank()) ? branchId : null;
+        String typeFilter = blankToNull(itemTypeId);
 
         List<RecentSaleRow> out = new ArrayList<>();
         jdbc.query(
@@ -523,7 +562,9 @@ public class SalesIntelligenceService {
                 from,
                 to,
                 branchFilter,
-                branchFilter);
+                branchFilter,
+                typeFilter,
+                typeFilter);
         return out;
     }
 
@@ -574,12 +615,14 @@ public class SalesIntelligenceService {
             String businessId,
             LocalDate fromInclusive,
             LocalDate toInclusive,
-            String branchId
+            String branchId,
+            String itemTypeId
     ) {
         LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
         Date from = Date.valueOf(w[0]);
         Date to = Date.valueOf(w[1]);
         String branchFilter = (branchId != null && !branchId.isBlank()) ? branchId : null;
+        String typeFilter = blankToNull(itemTypeId);
 
         List<PaymentMethodBreakdownRow> out = new ArrayList<>();
         jdbc.query(
@@ -591,13 +634,17 @@ public class SalesIntelligenceService {
                             rs.getBigDecimal("total_amount").setScale(2, RoundingMode.HALF_UP)
                     ));
                 },
+                typeFilter,
+                typeFilter,
                 businessId,
                 SalesConstants.SALE_STATUS_COMPLETED,
                 SalesConstants.SALE_STATUS_REFUNDED,
                 from,
                 to,
                 branchFilter,
-                branchFilter);
+                branchFilter,
+                typeFilter,
+                typeFilter);
         return out;
     }
 
@@ -606,12 +653,14 @@ public class SalesIntelligenceService {
             String businessId,
             LocalDate fromInclusive,
             LocalDate toInclusive,
-            String branchId
+            String branchId,
+            String itemTypeId
     ) {
         LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
         Date from = Date.valueOf(w[0]);
         Date to = Date.valueOf(w[1]);
         String branchFilter = (branchId != null && !branchId.isBlank()) ? branchId : null;
+        String typeFilter = blankToNull(itemTypeId);
 
         List<StaffPerformanceRow> out = new ArrayList<>();
         jdbc.query(
@@ -632,8 +681,14 @@ public class SalesIntelligenceService {
                 from,
                 to,
                 branchFilter,
-                branchFilter);
+                branchFilter,
+                typeFilter,
+                typeFilter);
         return out;
+    }
+
+    private static String blankToNull(String value) {
+        return value != null && !value.isBlank() ? value.trim() : null;
     }
 
     private static LocalDate[] resolveWindow(LocalDate fromInclusive, LocalDate toInclusive) {

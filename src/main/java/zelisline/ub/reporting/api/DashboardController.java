@@ -4,6 +4,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -32,11 +33,16 @@ public class DashboardController {
     @GetMapping("/owner-summary")
     @PreAuthorize("hasPermission(null, 'finance.reports.read')")
     @ResponseStatus(HttpStatus.OK)
-    public OwnerDashboardResponse ownerSummary(HttpServletRequest request) {
+    public OwnerDashboardResponse ownerSummary(
+            @RequestParam(value = "branchId", required = false) String branchId,
+            @RequestParam(value = "itemTypeId", required = false) String itemTypeId,
+            HttpServletRequest request
+    ) {
         CurrentTenantUser.require(request);
         Timer.Sample sample = Timer.start(meterRegistry);
         try {
-            return dashboardService.ownerSummary(TenantRequestIds.resolveBusinessId(request));
+            return dashboardService.ownerSummary(
+                    TenantRequestIds.resolveBusinessId(request), branchId, itemTypeId);
         } finally {
             sample.stop(ownerSummaryTimer);
         }

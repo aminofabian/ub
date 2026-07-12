@@ -31,15 +31,22 @@ public class DashboardService {
 
     @Transactional(readOnly = true)
     public OwnerDashboardResponse ownerSummary(String businessId) {
+        return ownerSummary(businessId, null, null);
+    }
+
+    @Transactional(readOnly = true)
+    public OwnerDashboardResponse ownerSummary(String businessId, String branchId, String itemTypeId) {
         LocalDate today = LocalDate.now(ZoneOffset.UTC);
         LocalDate from = today.minusDays(30);
+        String resolvedBranch = blankToNull(branchId);
+        String resolvedType = blankToNull(itemTypeId);
 
-        var pulse = financeReportsService.pulse(businessId, today, null);
+        var pulse = financeReportsService.pulse(businessId, today, resolvedBranch, resolvedType);
         var ap = supplierPaymentService.apAging(businessId, today, null);
 
         List<OwnerDashboardResponse.TopSkuByRevenue> top = new ArrayList<>();
         for (MvSalesDailyRepository.ItemRevenue row : mvSalesDailyRepository.topItemsByRevenue(
-                businessId, from, today, TOP_SKU_LIMIT)) {
+                businessId, from, today, resolvedBranch, resolvedType, TOP_SKU_LIMIT)) {
             BigDecimal rev = row.getRevenue() == null
                     ? BigDecimal.ZERO
                     : row.getRevenue().setScale(2, RoundingMode.HALF_UP);
@@ -50,5 +57,9 @@ public class DashboardService {
             top.add(new OwnerDashboardResponse.TopSkuByRevenue(row.getItemId(), name, rev));
         }
         return new OwnerDashboardResponse(pulse, ap, List.copyOf(top));
+    }
+
+    private static String blankToNull(String value) {
+        return value != null && !value.isBlank() ? value.trim() : null;
     }
 }

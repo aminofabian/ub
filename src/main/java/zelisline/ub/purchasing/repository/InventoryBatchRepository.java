@@ -141,47 +141,62 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
 
     @Query("""
             select b.branchId, sum(b.quantityRemaining * b.unitCost)
-             from InventoryBatch b
+             from InventoryBatch b, Item i
              where b.businessId = :businessId
+               and i.id = b.itemId
+               and i.businessId = :businessId
+               and i.deletedAt is null
                and b.status = :status
                and b.quantityRemaining > 0
                and (:branchId is null or b.branchId = :branchId)
+               and (:itemTypeId is null or i.itemTypeId = :itemTypeId)
              group by b.branchId
              order by b.branchId asc
             """)
     List<Object[]> sumExtensionValueByBranch(
             @Param("businessId") String businessId,
             @Param("status") String status,
-            @Param("branchId") String branchId
+            @Param("branchId") String branchId,
+            @Param("itemTypeId") String itemTypeId
     );
 
     @Query("""
             select coalesce(sum(b.quantityRemaining * b.unitCost), 0)
-             from InventoryBatch b
+             from InventoryBatch b, Item i
              where b.businessId = :businessId
+               and i.id = b.itemId
+               and i.businessId = :businessId
+               and i.deletedAt is null
                and b.status = :status
                and b.quantityRemaining > 0
                and (:branchId is null or b.branchId = :branchId)
+               and (:itemTypeId is null or i.itemTypeId = :itemTypeId)
             """)
     BigDecimal sumTotalExtensionValue(
             @Param("businessId") String businessId,
             @Param("status") String status,
-            @Param("branchId") String branchId
+            @Param("branchId") String branchId,
+            @Param("itemTypeId") String itemTypeId
     );
 
     @Query("""
-            select b from InventoryBatch b
+            select b from InventoryBatch b, Item i
              where b.businessId = :businessId
+               and i.id = b.itemId
+               and i.businessId = :businessId
+               and i.deletedAt is null
                and b.status = 'active'
                and b.quantityRemaining > 0
                and b.expiryDate is not null
                and b.expiryDate <= :until
                and (:branchId is null or b.branchId = :branchId)
+               and (:itemTypeId is null or i.itemTypeId = :itemTypeId)
              order by b.expiryDate asc, b.id asc
             """)
     List<InventoryBatch> findExpiringOnOrBefore(
             @Param("businessId") String businessId,
             @Param("branchId") String branchId,
+            @Param("itemTypeId") String itemTypeId,
             @Param("until") LocalDate until
     );
 

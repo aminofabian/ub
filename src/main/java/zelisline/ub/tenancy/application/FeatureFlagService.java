@@ -55,6 +55,12 @@ public class FeatureFlagService {
     /** Butcher counter POS workspace and weighed-sale features. */
     public static final String FLAG_BUTCHER_POS_ENABLED = "butcher_pos.enabled";
 
+    /** Allow cashiers (sales.sell) to override shelf prices on POS lines. */
+    public static final String FLAG_POS_CASHIER_PRICE_EDIT = "pos.cashier_price_edit";
+
+    /** Allow cashiers (sales.sell) to quick-create products from the POS. */
+    public static final String FLAG_POS_CASHIER_CREATE_PRODUCT = "pos.cashier_create_product";
+
     /** Grocery counter draft cart persistence (master kill-switch). */
     public static final String FLAG_GROCERY_DRAFTS_ENABLED = "grocery_drafts.enabled";
 

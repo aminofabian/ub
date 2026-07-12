@@ -61,6 +61,7 @@ import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.sales.repository.SalePaymentRepository;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
+import zelisline.ub.tenancy.application.FeatureFlagService;
 import zelisline.ub.tenancy.repository.BranchRepository;
 
 @Service
@@ -99,6 +100,7 @@ public class SaleService {
     private final AuditEventBuilder auditEventBuilder;
     private final PricingService pricingService;
     private final RequestPermissionService requestPermissionService;
+    private final FeatureFlagService featureFlagService;
 
     @Transactional
     public SaleCreationOutcome createSale(String businessId, String rawIdempotencyKey, PostSaleRequest req, String userId) {
@@ -612,7 +614,7 @@ public class SaleService {
 
             BigDecimal shelfPrice = shelfPrices.get(line.itemId());
             if (shelfPrice != null && isPriceOverride(line.unitPrice(), shelfPrice)
-                    && !hasPriceOverridePermission(roleId)) {
+                    && !hasPriceOverridePermission(businessId, roleId)) {
                 throw new ResponseStatusException(HttpStatus.FORBIDDEN,
                         "Line " + (i + 1) + ": price override requires manager approval");
             }
@@ -623,8 +625,12 @@ public class SaleService {
         return unitPrice.subtract(shelfPrice).abs().compareTo(TOLERANCE) > 0;
     }
 
-    private boolean hasPriceOverridePermission(String roleId) {
-        return roleId != null && requestPermissionService.hasPermission(roleId, PRICE_OVERRIDE_PERMISSION);
+    private boolean hasPriceOverridePermission(String businessId, String roleId) {
+        if (roleId != null && requestPermissionService.hasPermission(roleId, PRICE_OVERRIDE_PERMISSION)) {
+            return true;
+        }
+        return businessId != null
+                && featureFlagService.isEnabled(businessId, FeatureFlagService.FLAG_POS_CASHIER_PRICE_EDIT);
     }
 
     private ResolvedPayments normalizeAndResolvePayments(

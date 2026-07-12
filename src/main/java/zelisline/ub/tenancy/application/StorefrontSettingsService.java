@@ -585,7 +585,11 @@ public class StorefrontSettingsService {
         String currentSettings,
         FeatureFlagsPatchRequest patch
     ) {
-        if (patch == null || (patch.posDrafts() == null && patch.butcherPosEnabled() == null)) {
+        if (patch == null
+                || (patch.posDrafts() == null
+                        && patch.butcherPosEnabled() == null
+                        && patch.posCashierPriceEdit() == null
+                        && patch.posCashierCreateProduct() == null)) {
             return currentSettings;
         }
         ObjectNode root = parseRoot(currentSettings);
@@ -594,6 +598,16 @@ public class StorefrontSettingsService {
             applyPosDraftsFlags(flags, patch.posDrafts());
         }
         putFlagIfPresent(flags, FeatureFlagService.FLAG_BUTCHER_POS_ENABLED, patch.butcherPosEnabled());
+        putFlagIfPresent(
+                flags,
+                FeatureFlagService.FLAG_POS_CASHIER_PRICE_EDIT,
+                patch.posCashierPriceEdit()
+        );
+        putFlagIfPresent(
+                flags,
+                FeatureFlagService.FLAG_POS_CASHIER_CREATE_PRODUCT,
+                patch.posCashierCreateProduct()
+        );
         root.set(KEY_FEATURES, flags);
         return writeRoot(root);
     }

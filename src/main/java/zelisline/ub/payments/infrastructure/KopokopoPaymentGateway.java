@@ -278,7 +278,7 @@ public class KopokopoPaymentGateway implements PaymentGateway {
             String status = attrs.has("status") ? attrs.get("status").asText() : "Pending";
 
             boolean completed = "Success".equalsIgnoreCase(status);
-            boolean failed = "Failed".equalsIgnoreCase(status);
+            boolean failed = isTerminalStkFailureStatus(status);
 
             return new StkStatusResponse(status, status, completed, failed, response.getBody());
         } catch (Exception e) {
@@ -321,7 +321,7 @@ public class KopokopoPaymentGateway implements PaymentGateway {
 
                 boolean success = "buygoods_transaction_received".equals(topic)
                         && "Received".equalsIgnoreCase(status);
-                boolean failed = "Failed".equalsIgnoreCase(status);
+                boolean failed = isTerminalStkFailureStatus(status);
 
                 return new WebhookResult(
                         null,
@@ -421,7 +421,7 @@ public class KopokopoPaymentGateway implements PaymentGateway {
 
         boolean success = "Success".equalsIgnoreCase(status)
                 || "Received".equalsIgnoreCase(status);
-        boolean failed = "Failed".equalsIgnoreCase(status);
+        boolean failed = isTerminalStkFailureStatus(status);
 
         return new WebhookResult(
                 null,
@@ -435,6 +435,22 @@ public class KopokopoPaymentGateway implements PaymentGateway {
                 webhookEventId,
                 "incoming_payment",
                 rawBody);
+    }
+
+    /** Declines, cancels, and other non-success terminal STK outcomes from KopoKopo. */
+    static boolean isTerminalStkFailureStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return false;
+        }
+        String s = status.trim();
+        return "Failed".equalsIgnoreCase(s)
+                || "Cancelled".equalsIgnoreCase(s)
+                || "Canceled".equalsIgnoreCase(s)
+                || "Declined".equalsIgnoreCase(s)
+                || "Rejected".equalsIgnoreCase(s)
+                || "Expired".equalsIgnoreCase(s)
+                || "Timeout".equalsIgnoreCase(s)
+                || "Error".equalsIgnoreCase(s);
     }
 
     private static String textOrNull(com.fasterxml.jackson.databind.JsonNode node, String field) {

@@ -89,10 +89,12 @@ public class MpesaStkIntentApiController {
         GatewayStkPushService.ReconcileResult reconcile =
                 gatewayStkPushService.reconcilePendingForPhone(businessId, phone);
         if (reconcile.hasOpenPending()) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "This phone number already has an active M-Pesa prompt. "
-                            + "Ask the customer to complete or cancel it on their phone, then try again.");
+            // Cashier is explicitly sending again after decline/timeout/failure.
+            // Do not block on a local PENDING row — supersede it and initiate.
+            gatewayStkPushService.cancelPendingForPhone(
+                    businessId,
+                    phone,
+                    "Replaced by a new M-Pesa prompt");
         }
 
         PaymentGatewayStkService.StkPushOutcome outcome = paymentGatewayStkService.initiate(
@@ -104,7 +106,10 @@ public class MpesaStkIntentApiController {
                 description);
 
         if (!outcome.accepted() && GatewayStkPushService.isKopokopoPendingPhoneError(outcome.message())) {
-            gatewayStkPushService.expireStalePendingForPhone(businessId, phone);
+            gatewayStkPushService.cancelPendingForPhone(
+                    businessId,
+                    phone,
+                    "Cleared after gateway rejected duplicate pending prompt");
             gatewayStkPushService.reconcilePendingForPhone(businessId, phone);
             outcome = paymentGatewayStkService.initiate(
                     businessId,

@@ -130,7 +130,10 @@ public class PublicStorefrontPaymentService {
         );
 
         if (!outcome.accepted() && GatewayStkPushService.isKopokopoPendingPhoneError(outcome.message())) {
-            gatewayStkPushService.expireStalePendingForPhone(business.getId(), phone);
+            gatewayStkPushService.cancelPendingForPhone(
+                    business.getId(),
+                    phone,
+                    "Cleared after gateway rejected duplicate pending prompt");
             gatewayStkPushService.reconcilePendingForPhone(business.getId(), phone);
             outcome = paymentGatewayStkService.initiate(
                     business.getId(),

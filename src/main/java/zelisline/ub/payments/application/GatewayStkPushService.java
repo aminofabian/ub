@@ -244,12 +244,49 @@ public class GatewayStkPushService {
         }
     }
 
+    /**
+     * Marks every still-pending STK for this phone as failed so a cashier/customer
+     * can send a new prompt after a decline, cancel, or timeout — without waiting
+     * for the stale-pending window.
+     */
+    @Transactional
+    public int cancelPendingForPhone(String businessId, String rawPhone, String reason) {
+        String phone = StkPhoneNormalizer.normalize(rawPhone);
+        if (phone == null || businessId == null || businessId.isBlank()) {
+            return 0;
+        }
+        Instant since = Instant.now().minus(RECONCILE_LOOKBACK_HOURS, ChronoUnit.HOURS);
+        List<GatewayStkPush> pending = pushRepository
+                .findByBusinessIdAndPhoneNumberAndStatusAndCreatedAtAfterOrderByCreatedAtAsc(
+                        businessId, phone, GatewayStkPushStatuses.PENDING, since);
+        String failReason = reason != null && !reason.isBlank()
+                ? reason.trim()
+                : "Replaced by a new M-Pesa prompt";
+        int cancelled = 0;
+        for (GatewayStkPush push : pending) {
+            if (GatewayStkPushStatuses.PENDING.equals(push.getStatus())) {
+                markFailed(push, failReason);
+                cancelled++;
+            }
+        }
+        if (cancelled > 0) {
+            log.info("Cancelled {} pending STK push(es) for phone={} business={}", cancelled, phone, businessId);
+        }
+        return cancelled;
+    }
+
     public static boolean isKopokopoPendingPhoneError(String message) {
         if (message == null || message.isBlank()) {
             return false;
         }
         String m = message.toLowerCase(Locale.ROOT);
-        return m.contains("pending request") && m.contains("phone");
+        boolean mentionsPhone = m.contains("phone");
+        boolean mentionsPending = m.contains("pending request")
+                || m.contains("pending payment")
+                || m.contains("another pending")
+                || m.contains("already has an active")
+                || (m.contains("pending") && m.contains("request"));
+        return mentionsPhone && mentionsPending;
     }
 
     public record ReconcileResult(int terminalUpdates, boolean hasOpenPending) {

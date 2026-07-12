@@ -17,6 +17,11 @@ public record PosQuickCreateItemRequest(
         @Size(max = 36) String branchId,
         @NotNull @DecimalMin("0.01") BigDecimal unitPrice,
         /** Optional cost / buying price stored on the item. */
-        @DecimalMin("0.00") BigDecimal buyingPrice
+        @DecimalMin("0.00") BigDecimal buyingPrice,
+        /**
+         * Opening on-hand qty at the till branch so the item can be sold immediately.
+         * Defaults to 1 when omitted.
+         */
+        @DecimalMin("0.0001") BigDecimal initialStockQty
 ) {
 }

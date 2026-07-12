@@ -1,5 +1,7 @@
 package zelisline.ub.sales.application;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.UUID;
 
@@ -13,6 +15,8 @@ import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.api.dto.ItemResponse;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.identity.application.RequestPermissionService;
+import zelisline.ub.inventory.api.dto.PostOpeningBalanceRequest;
+import zelisline.ub.inventory.application.InventoryLedgerService;
 import zelisline.ub.pricing.api.dto.PostSellingPriceRequest;
 import zelisline.ub.pricing.application.PricingService;
 import zelisline.ub.sales.api.dto.PosQuickCreateItemRequest;
@@ -24,11 +28,14 @@ public class PosQuickCreateItemService {
 
     private static final String CATALOG_WRITE = "catalog.items.write";
     private static final String PRICING_SET = "pricing.sell_price.set";
+    private static final BigDecimal DEFAULT_OPENING_QTY = BigDecimal.ONE;
+    private static final BigDecimal MIN_UNIT_COST = new BigDecimal("0.01");
 
     private final FeatureFlagService featureFlagService;
     private final RequestPermissionService requestPermissionService;
     private final ItemCatalogService itemCatalogService;
     private final PricingService pricingService;
+    private final InventoryLedgerService inventoryLedgerService;
 
     @Transactional
     public ItemResponse create(
@@ -58,11 +65,17 @@ public class PosQuickCreateItemService {
                 FeatureFlagService.FLAG_POS_CASHIER_PRICE_EDIT
         );
         if (!canSetPrice && !priceFlagOn && !flagOn) {
-            // Creating a sellable POS item without a shelf price is not useful;
-            // allow when create-product flag is on (sets price as part of create).
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
                     "Setting a sell price from cashier is not enabled"
+            );
+        }
+
+        String branchId = blankToNull(req.branchId());
+        if (branchId == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Select a branch before adding a product — stock is received at the till branch"
             );
         }
 
@@ -107,7 +120,6 @@ public class PosQuickCreateItemService {
         );
         ItemResponse item = result.body();
 
-        String branchId = blankToNull(req.branchId());
         pricingService.setSellingPrice(
                 businessId,
                 new PostSellingPriceRequest(
@@ -120,7 +132,31 @@ public class PosQuickCreateItemService {
                 actorUserId
         );
 
+        // Opening batch so checkout can allocate cost/qty immediately.
+        BigDecimal openingQty = req.initialStockQty() != null
+                ? req.initialStockQty()
+                : DEFAULT_OPENING_QTY;
+        BigDecimal unitCost = resolveUnitCost(req.buyingPrice());
+        inventoryLedgerService.recordOpeningBalance(
+                businessId,
+                new PostOpeningBalanceRequest(
+                        branchId,
+                        item.id(),
+                        openingQty,
+                        unitCost,
+                        "POS cashier quick-create opening stock"
+                ),
+                actorUserId
+        );
+
         return item;
+    }
+
+    private static BigDecimal resolveUnitCost(BigDecimal buyingPrice) {
+        if (buyingPrice == null || buyingPrice.signum() <= 0) {
+            return MIN_UNIT_COST;
+        }
+        return buyingPrice.setScale(4, RoundingMode.HALF_UP);
     }
 
     private static String blankToNull(String s) {

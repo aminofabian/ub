@@ -722,7 +722,7 @@ public class ItemCatalogService {
         if (patch.sku() != null) {
             String next = patch.sku().trim();
             if (!next.isEmpty() && !next.equals(item.getSku())) {
-                if (itemRepository.existsByBusinessIdAndSkuAndDeletedAtIsNull(businessId, next)) {
+                if (itemRepository.existsByBusinessIdAndSku(businessId, next)) {
                     throw new ResponseStatusException(HttpStatus.CONFLICT, "SKU already in use");
                 }
                 item.setSku(next);
@@ -941,7 +941,7 @@ public class ItemCatalogService {
         } else {
             sku = rawSku;
         }
-        if (itemRepository.existsByBusinessIdAndSkuAndDeletedAtIsNull(businessId, sku)) {
+        if (itemRepository.existsByBusinessIdAndSku(businessId, sku)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "SKU already in use");
         }
         String barcode = normalizeBarcode(request.barcode());
@@ -1248,7 +1248,8 @@ public class ItemCatalogService {
         String pfx = prefix.toUpperCase(Locale.ROOT) + "-";
         long max = 0;
         boolean any = false;
-        for (String sku : itemRepository.findSkusByBusinessIdActive(businessId)) {
+        // Include soft-deleted SKUs: uq_items_business_sku is not filtered by deleted_at.
+        for (String sku : itemRepository.findSkusByBusinessIdAll(businessId)) {
             if (sku == null || sku.isBlank() || !sku.startsWith(pfx)) {
                 continue;
             }
@@ -1274,7 +1275,7 @@ public class ItemCatalogService {
             return pfx + candidate;
         }
         int guard = 0;
-        while (itemRepository.existsByBusinessIdAndSkuAndDeletedAtIsNull(businessId, pfx + candidate)) {
+        while (itemRepository.existsByBusinessIdAndSku(businessId, pfx + candidate)) {
             candidate++;
             if (++guard > 10_000) {
                 throw new ResponseStatusException(
@@ -1297,7 +1298,7 @@ public class ItemCatalogService {
                         "Variant SKU would exceed max length; shorten the parent SKU or the option label."
                 );
             }
-            if (!itemRepository.existsByBusinessIdAndSkuAndDeletedAtIsNull(businessId, candidate)) {
+            if (!itemRepository.existsByBusinessIdAndSku(businessId, candidate)) {
                 return candidate;
             }
         }
@@ -1386,7 +1387,7 @@ public class ItemCatalogService {
         } else {
             sku = rawSku;
         }
-        if (itemRepository.existsByBusinessIdAndSkuAndDeletedAtIsNull(businessId, sku)) {
+        if (itemRepository.existsByBusinessIdAndSku(businessId, sku)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "SKU already in use");
         }
         String barcode = normalizeBarcode(request.barcode());

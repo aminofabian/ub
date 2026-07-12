@@ -196,16 +196,14 @@ public class SkuGenerationService {
     }
 
     private String resolveUniqueSku(String businessId, String base) {
-        if (!itemRepository.existsByBusinessIdAndSkuAndDeletedAtIsNull(businessId, base)) {
+        if (!itemRepository.existsByBusinessIdAndSku(businessId, base)) {
             return base;
         }
-        // Check if an identical product already exists with this exact SKU
-        // If so, reuse it (handled by caller via exists check before creation)
-        // Otherwise append numeric suffix
+        // Soft-deleted rows still occupy uq_items_business_sku — skip those too.
         for (int i = 1; i <= 99; i++) {
             String suffix = String.format("-%02d", i);
             String candidate = base + suffix;
-            if (!itemRepository.existsByBusinessIdAndSkuAndDeletedAtIsNull(businessId, candidate)) {
+            if (!itemRepository.existsByBusinessIdAndSku(businessId, candidate)) {
                 return candidate;
             }
         }

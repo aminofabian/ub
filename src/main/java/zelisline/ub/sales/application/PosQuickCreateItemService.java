@@ -1,7 +1,7 @@
 package zelisline.ub.sales.application;
 
-import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -66,8 +66,12 @@ public class PosQuickCreateItemService {
             );
         }
 
+        // Dedicated unique SKU — avoids colliding with soft-deleted "SKU-xxxxx" rows
+        // that still occupy the business_id+sku unique index.
+        String sku = "POS-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase();
+
         CreateItemRequest createReq = new CreateItemRequest(
-                null,
+                sku,
                 blankToNull(req.barcode()),
                 req.name().trim(),
                 null,
@@ -82,7 +86,7 @@ public class PosQuickCreateItemService {
                 null,
                 null,
                 null,
-                null,
+                req.buyingPrice(),
                 null,
                 null,
                 null,

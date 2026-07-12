@@ -15,6 +15,8 @@ public record PosQuickCreateItemRequest(
         @Size(max = 36) String categoryId,
         @Size(max = 16) String unitType,
         @Size(max = 36) String branchId,
-        @NotNull @DecimalMin("0.01") BigDecimal unitPrice
+        @NotNull @DecimalMin("0.01") BigDecimal unitPrice,
+        /** Optional cost / buying price stored on the item. */
+        @DecimalMin("0.00") BigDecimal buyingPrice
 ) {
 }

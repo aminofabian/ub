@@ -29,8 +29,15 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     boolean existsByBusinessIdAndSkuAndDeletedAtIsNull(String businessId, String sku);
 
+    /** Includes soft-deleted rows — SKU unique key is business-wide regardless of deleted_at. */
+    boolean existsByBusinessIdAndSku(String businessId, String sku);
+
     @Query("select i.sku from Item i where i.businessId = :businessId and i.deletedAt is null")
     List<String> findSkusByBusinessIdActive(@Param("businessId") String businessId);
+
+    /** All SKUs for a business (including soft-deleted) for sequence allocation. */
+    @Query("select i.sku from Item i where i.businessId = :businessId")
+    List<String> findSkusByBusinessIdAll(@Param("businessId") String businessId);
 
     Optional<Item> findByBusinessIdAndSkuAndDeletedAtIsNull(String businessId, String sku);
 

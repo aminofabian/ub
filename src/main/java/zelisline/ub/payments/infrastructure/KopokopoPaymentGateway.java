@@ -277,10 +277,20 @@ public class KopokopoPaymentGateway implements PaymentGateway {
 
             String status = attrs.has("status") ? attrs.get("status").asText() : "Pending";
 
-            boolean completed = "Success".equalsIgnoreCase(status);
-            boolean failed = isTerminalStkFailureStatus(status);
+            boolean completed = "Success".equalsIgnoreCase(status)
+                    || "Received".equalsIgnoreCase(status);
+            boolean failed = isTerminalStkFailureStatus(status)
+                    || hasIncomingPaymentErrors(attrs);
 
-            return new StkStatusResponse(status, status, completed, failed, response.getBody());
+            String description = status;
+            if (failed && hasIncomingPaymentErrors(attrs)) {
+                String fromErrors = firstIncomingPaymentError(attrs);
+                if (fromErrors != null) {
+                    description = fromErrors;
+                }
+            }
+
+            return new StkStatusResponse(status, description, completed, failed, response.getBody());
         } catch (Exception e) {
             log.error("KopoKopo status query failed: paymentId={}", paymentId, e);
             return new StkStatusResponse("ERROR", e.getMessage(), false, true, null);
@@ -451,6 +461,43 @@ public class KopokopoPaymentGateway implements PaymentGateway {
                 || "Expired".equalsIgnoreCase(s)
                 || "Timeout".equalsIgnoreCase(s)
                 || "Error".equalsIgnoreCase(s);
+    }
+
+    /**
+     * Failed STK callbacks often keep useful detail under {@code event.errors}
+     * even when {@code attributes.status} is already Failed — and sometimes the
+     * errors array is the only signal.
+     */
+    static boolean hasIncomingPaymentErrors(com.fasterxml.jackson.databind.JsonNode attrs) {
+        if (attrs == null || !attrs.has("event") || attrs.get("event").isNull()) {
+            return false;
+        }
+        var errors = attrs.get("event").get("errors");
+        return errors != null && errors.isArray() && !errors.isEmpty();
+    }
+
+    static String firstIncomingPaymentError(com.fasterxml.jackson.databind.JsonNode attrs) {
+        if (!hasIncomingPaymentErrors(attrs)) {
+            return null;
+        }
+        var first = attrs.get("event").get("errors").get(0);
+        if (first == null || first.isNull()) {
+            return null;
+        }
+        if (first.isTextual()) {
+            String t = first.asText();
+            return t == null || t.isBlank() ? null : t.trim();
+        }
+        if (first.has("detail") && !first.get("detail").isNull()) {
+            return first.get("detail").asText();
+        }
+        if (first.has("message") && !first.get("message").isNull()) {
+            return first.get("message").asText();
+        }
+        if (first.has("code") && !first.get("code").isNull()) {
+            return first.get("code").asText();
+        }
+        return first.toString();
     }
 
     private static String textOrNull(com.fasterxml.jackson.databind.JsonNode node, String field) {

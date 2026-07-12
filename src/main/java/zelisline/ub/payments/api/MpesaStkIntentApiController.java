@@ -25,6 +25,7 @@ import zelisline.ub.payments.api.dto.PosStkPushResponse;
 import zelisline.ub.payments.api.dto.StkPushStatusResponse;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.PaymentGatewayStkService;
+import zelisline.ub.payments.application.StkPushRetryHelper;
 import zelisline.ub.payments.domain.GatewayStkPush;
 import zelisline.ub.payments.domain.GatewayStkPushStatuses;
 import zelisline.ub.payments.domain.GatewayType;
@@ -39,8 +40,8 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class MpesaStkIntentApiController {
 
     private final MpesaStkIntentService mpesaStkIntentService;
-    private final PaymentGatewayStkService paymentGatewayStkService;
     private final GatewayStkPushService gatewayStkPushService;
+    private final StkPushRetryHelper stkPushRetryHelper;
 
     @PostMapping("/intents")
     @PreAuthorize("hasPermission(null, 'payments.stk.initiate')")
@@ -86,18 +87,7 @@ public class MpesaStkIntentApiController {
                 ? body.description().trim()
                 : "POS payment";
 
-        GatewayStkPushService.ReconcileResult reconcile =
-                gatewayStkPushService.reconcilePendingForPhone(businessId, phone);
-        if (reconcile.hasOpenPending()) {
-            // Cashier is explicitly sending again after decline/timeout/failure.
-            // Do not block on a local PENDING row — supersede it and initiate.
-            gatewayStkPushService.cancelPendingForPhone(
-                    businessId,
-                    phone,
-                    "Replaced by a new M-Pesa prompt");
-        }
-
-        PaymentGatewayStkService.StkPushOutcome outcome = paymentGatewayStkService.initiate(
+        PaymentGatewayStkService.StkPushOutcome outcome = stkPushRetryHelper.initiateAfterClearingPhone(
                 businessId,
                 null,
                 phone,
@@ -105,20 +95,6 @@ public class MpesaStkIntentApiController {
                 reference,
                 description);
 
-        if (!outcome.accepted() && GatewayStkPushService.isKopokopoPendingPhoneError(outcome.message())) {
-            gatewayStkPushService.cancelPendingForPhone(
-                    businessId,
-                    phone,
-                    "Cleared after gateway rejected duplicate pending prompt");
-            gatewayStkPushService.reconcilePendingForPhone(businessId, phone);
-            outcome = paymentGatewayStkService.initiate(
-                    businessId,
-                    null,
-                    phone,
-                    body.amount(),
-                    reference + "-r",
-                    description);
-        }
         if (outcome.accepted() && outcome.checkoutRequestId() != null) {
             GatewayType gatewayType = GatewayType.valueOf(outcome.gatewayType());
             gatewayStkPushService.registerPush(

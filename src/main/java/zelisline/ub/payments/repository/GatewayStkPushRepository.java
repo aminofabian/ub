@@ -38,4 +38,10 @@ public interface GatewayStkPushRepository extends JpaRepository<GatewayStkPush, 
             String status,
             Instant createdAfter
     );
+
+    List<GatewayStkPush> findByBusinessIdAndPhoneNumberAndCreatedAtAfterOrderByCreatedAtDesc(
+            String businessId,
+            String phoneNumber,
+            Instant createdAfter
+    );
 }

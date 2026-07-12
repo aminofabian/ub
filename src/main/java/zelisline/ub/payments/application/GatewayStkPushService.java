@@ -245,6 +245,89 @@ public class GatewayStkPushService {
     }
 
     /**
+     * Polls KopoKopo for recent STK pushes on this phone (including rows we already
+     * marked failed locally) so we know whether Safaricom still holds a prompt lock.
+     */
+    @Transactional
+    public PhoneClearResult settleRecentPushesForPhone(String businessId, String rawPhone) {
+        String phone = StkPhoneNormalizer.normalize(rawPhone);
+        if (phone == null || businessId == null || businessId.isBlank()) {
+            return new PhoneClearResult(false, 0);
+        }
+        Instant since = Instant.now().minus(RECONCILE_LOOKBACK_HOURS, ChronoUnit.HOURS);
+        Instant forcePollFailedSince = Instant.now().minus(20, ChronoUnit.MINUTES);
+        List<GatewayStkPush> recent = pushRepository
+                .findByBusinessIdAndPhoneNumberAndCreatedAtAfterOrderByCreatedAtDesc(
+                        businessId, phone, since);
+        int terminalUpdates = 0;
+        boolean gatewayPending = false;
+        for (GatewayStkPush push : recent) {
+            if (push.getGatewayCheckoutId() == null || push.getGatewayCheckoutId().isBlank()) {
+                continue;
+            }
+            if (GatewayStkPushStatuses.SUCCESS.equals(push.getStatus())) {
+                continue;
+            }
+            boolean localPending = GatewayStkPushStatuses.PENDING.equals(push.getStatus());
+            boolean recentFailed = GatewayStkPushStatuses.FAILED.equals(push.getStatus())
+                    && push.getCreatedAt() != null
+                    && push.getCreatedAt().isAfter(forcePollFailedSince);
+            if (!localPending && !recentFailed) {
+                continue;
+            }
+            if (push.getGatewayType() != GatewayType.KOPOKOPO) {
+                if (localPending) {
+                    gatewayPending = true;
+                }
+                continue;
+            }
+
+            PaymentGatewayConfig cfg = resolveConfig(push);
+            Map<String, String> creds = cfg != null ? decryptCredentials(cfg) : null;
+            if (creds == null) {
+                if (localPending) {
+                    gatewayPending = true;
+                }
+                continue;
+            }
+
+            var status = kopokopoGateway.queryStkStatus(push.getGatewayCheckoutId(), creds);
+            if (localPending) {
+                push.setLastPolledAt(Instant.now());
+                push.setPollCount(push.getPollCount() + 1);
+                pushRepository.save(push);
+            }
+
+            if (status.completed()) {
+                if (localPending) {
+                    confirmPush(push, push.getGatewayCheckoutId(), push.getAmount());
+                    terminalUpdates++;
+                }
+            } else if (status.failed()) {
+                if (localPending) {
+                    String reason = status.resultDescription() != null
+                            ? status.resultDescription()
+                            : "STK payment failed";
+                    markFailed(push, reason);
+                    terminalUpdates++;
+                }
+            } else {
+                gatewayPending = true;
+            }
+        }
+        if (!gatewayPending) {
+            expireStalePendingForPhone(businessId, phone);
+            boolean stillLocalPending = pushRepository
+                    .findByBusinessIdAndPhoneNumberAndStatusAndCreatedAtAfterOrderByCreatedAtAsc(
+                            businessId, phone, GatewayStkPushStatuses.PENDING, since)
+                    .stream()
+                    .anyMatch(p -> GatewayStkPushStatuses.PENDING.equals(p.getStatus()));
+            gatewayPending = stillLocalPending;
+        }
+        return new PhoneClearResult(gatewayPending, terminalUpdates);
+    }
+
+    /**
      * Marks every still-pending STK for this phone as failed so a cashier/customer
      * can send a new prompt after a decline, cancel, or timeout — without waiting
      * for the stale-pending window.
@@ -289,7 +372,15 @@ public class GatewayStkPushService {
         return mentionsPhone && mentionsPending;
     }
 
+    public static String pendingPhoneUserMessage() {
+        return "Previous M-Pesa prompt is still open on this phone. "
+                + "Ask the customer to Cancel it (or wait about a minute), then try again.";
+    }
+
     public record ReconcileResult(int terminalUpdates, boolean hasOpenPending) {
+    }
+
+    public record PhoneClearResult(boolean hasGatewayPending, int terminalUpdates) {
     }
 
     @Transactional

@@ -17,11 +17,11 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.PaymentGatewayStkService;
 import zelisline.ub.payments.application.PlatformPaymentGatewayService;
+import zelisline.ub.payments.application.StkPushRetryHelper;
 import zelisline.ub.payments.domain.GatewayStkPush;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.StkPushContextType;
 import zelisline.ub.payments.domain.GatewayStatus;
-import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
 import zelisline.ub.payments.domain.PlatformPaymentGateway;
 import zelisline.ub.payments.domain.spi.DisplayInstructions;
@@ -51,8 +51,8 @@ public class PublicStorefrontPaymentService {
     private final PaymentGatewayConfigRepository configRepository;
     private final PlatformPaymentGatewayService platformPaymentGatewayService;
     private final WebOrderRepository webOrderRepository;
-    private final PaymentGatewayStkService paymentGatewayStkService;
     private final GatewayStkPushService gatewayStkPushService;
+    private final StkPushRetryHelper stkPushRetryHelper;
     private final ObjectMapper objectMapper;
 
     @Transactional(readOnly = true)
@@ -97,7 +97,10 @@ public class PublicStorefrontPaymentService {
         return new PublicCheckoutPaymentOptions(manual, online);
     }
 
-    @Transactional
+    /**
+     * Not {@code @Transactional}: may wait/poll KopoKopo for several seconds before
+     * initiating. Persistence happens in nested transactional services.
+     */
     public PublicWebStkPushResponse initiateOrderStkPush(
             String slug,
             String orderId,
@@ -118,9 +121,7 @@ public class PublicStorefrontPaymentService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customer phone is required for M-Pesa payment");
         }
 
-        gatewayStkPushService.reconcilePendingForPhone(business.getId(), phone);
-
-        PaymentGatewayStkService.StkPushOutcome outcome = paymentGatewayStkService.initiate(
+        PaymentGatewayStkService.StkPushOutcome outcome = stkPushRetryHelper.initiateAfterClearingPhone(
                 business.getId(),
                 preferredConfigId,
                 phone,
@@ -128,21 +129,6 @@ public class PublicStorefrontPaymentService {
                 order.getId(),
                 "Web order " + order.getId()
         );
-
-        if (!outcome.accepted() && GatewayStkPushService.isKopokopoPendingPhoneError(outcome.message())) {
-            gatewayStkPushService.cancelPendingForPhone(
-                    business.getId(),
-                    phone,
-                    "Cleared after gateway rejected duplicate pending prompt");
-            gatewayStkPushService.reconcilePendingForPhone(business.getId(), phone);
-            outcome = paymentGatewayStkService.initiate(
-                    business.getId(),
-                    preferredConfigId,
-                    phone,
-                    order.getGrandTotal(),
-                    order.getId() + "-r",
-                    "Web order " + order.getId());
-        }
 
         if (outcome.accepted()) {
             GatewayType gatewayType = GatewayType.valueOf(outcome.gatewayType());

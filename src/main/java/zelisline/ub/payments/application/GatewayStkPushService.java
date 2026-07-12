@@ -262,11 +262,15 @@ public class GatewayStkPushService {
         }
         Instant since = Instant.now().minus(RECONCILE_LOOKBACK_HOURS, ChronoUnit.HOURS);
         Instant forcePollFailedSince = Instant.now().minus(20, ChronoUnit.MINUTES);
+        // After this age, a gateway "Pending" on an already-failed local row is treated as a
+        // stale status ghost — the phone UI is usually gone even if KopoKopo is slow to flip.
+        Instant ghostPendingBefore = Instant.now().minus(75, ChronoUnit.SECONDS);
         List<GatewayStkPush> recent = pushRepository
                 .findByBusinessIdAndPhoneNumberAndCreatedAtAfterOrderByCreatedAtDesc(
                         businessId, phone, since);
         int terminalUpdates = 0;
         boolean gatewayPending = false;
+        boolean gatewayJustFailed = false;
         for (GatewayStkPush push : recent) {
             if (push.getGatewayCheckoutId() == null || push.getGatewayCheckoutId().isBlank()) {
                 continue;
@@ -324,20 +328,34 @@ public class GatewayStkPushService {
                     markFailed(push, reason);
                     terminalUpdates++;
                 }
+                gatewayJustFailed = true;
             } else {
-                gatewayPending = true;
+                // Still Pending (or transient query error treated as non-terminal).
+                boolean staleGhost = !localPending
+                        && push.getCreatedAt() != null
+                        && push.getCreatedAt().isBefore(ghostPendingBefore);
+                if (staleGhost) {
+                    log.info(
+                            "Ignoring stale Pending gateway status for failed STK pushId={} phone={}",
+                            push.getId(),
+                            phone);
+                } else {
+                    gatewayPending = true;
+                }
             }
         }
-        if (!gatewayPending) {
-            expireStalePendingForPhone(businessId, phone);
-            boolean stillLocalPending = pushRepository
-                    .findByBusinessIdAndPhoneNumberAndStatusAndCreatedAtAfterOrderByCreatedAtAsc(
-                            businessId, phone, GatewayStkPushStatuses.PENDING, since)
-                    .stream()
-                    .anyMatch(p -> GatewayStkPushStatuses.PENDING.equals(p.getStatus()));
-            gatewayPending = stillLocalPending;
+        // Always expire our local stale rows so cashiers can retry even while
+        // Safaricom's MSISDN lock is still draining.
+        expireStalePendingForPhone(businessId, phone);
+        boolean stillLocalPending = pushRepository
+                .findByBusinessIdAndPhoneNumberAndStatusAndCreatedAtAfterOrderByCreatedAtAsc(
+                        businessId, phone, GatewayStkPushStatuses.PENDING, since)
+                .stream()
+                .anyMatch(p -> GatewayStkPushStatuses.PENDING.equals(p.getStatus()));
+        if (stillLocalPending) {
+            gatewayPending = true;
         }
-        return new PhoneClearResult(gatewayPending, terminalUpdates);
+        return new PhoneClearResult(gatewayPending, terminalUpdates, gatewayJustFailed);
     }
 
     /**
@@ -386,14 +404,17 @@ public class GatewayStkPushService {
     }
 
     public static String pendingPhoneUserMessage() {
-        return "Previous M-Pesa prompt is still open on this phone. "
-                + "Ask the customer to Cancel it (or wait about a minute), then try again.";
+        return "Safaricom is still holding a lock on this phone from the previous prompt "
+                + "(the PIN screen can already be gone). Wait about a minute, then send again.";
     }
 
     public record ReconcileResult(int terminalUpdates, boolean hasOpenPending) {
     }
 
-    public record PhoneClearResult(boolean hasGatewayPending, int terminalUpdates) {
+    public record PhoneClearResult(boolean hasGatewayPending, int terminalUpdates, boolean gatewayJustFailed) {
+        public PhoneClearResult(boolean hasGatewayPending, int terminalUpdates) {
+            this(hasGatewayPending, terminalUpdates, false);
+        }
     }
 
     @Transactional

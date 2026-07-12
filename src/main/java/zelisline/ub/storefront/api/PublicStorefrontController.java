@@ -54,6 +54,7 @@ public class PublicStorefrontController {
     }
 
     /** @deprecated Prefer {@link #types(String)}. */
+    @Deprecated
     @GetMapping("/catalog/departments")
     public ResponseEntity<PublicDepartmentListResponse> departments(@PathVariable String slug) {
         return types(slug);
@@ -107,6 +108,7 @@ public class PublicStorefrontController {
     }
 
     /** @deprecated Prefer {@link #checkoutPaymentOptions}; returns manual instructions only. */
+    @Deprecated
     @GetMapping("/payments/display-instructions")
     public List<DisplayInstructions> displayInstructions(@PathVariable String slug) {
         return publicStorefrontPaymentService.checkoutOptions(slug).manual();

@@ -4,21 +4,34 @@
 FROM gradle:8.14.4-jdk21-alpine AS builder
 WORKDIR /app
 
-# Avoid OOM / daemon issues in constrained Docker build hosts (Coolify).
-ENV GRADLE_OPTS="-Dorg.gradle.daemon=false -Dorg.gradle.parallel=true"
+# Coolify build VMs are often ~2GB. Parallel workers + a 100MB+ fat JAR
+# spike past that and the kernel SIGKILLs Gradle (exit 255, truncated logs).
+ENV GRADLE_OPTS="-Dorg.gradle.daemon=false -Dorg.gradle.parallel=false -Dorg.gradle.workers.max=2"
 ENV GRADLE_USER_HOME=/home/gradle/.gradle
+# Serial GC keeps peak RSS lower than G1 on small builders.
+ENV JAVA_TOOL_OPTIONS="-XX:+UseSerialGC"
 
 COPY gradle ./gradle
 COPY gradlew build.gradle settings.gradle gradle.properties ./
 RUN chmod +x gradlew
 
+# Override gradle.properties heap for the container builder (file keeps
+# higher defaults for local/desktop builds).
+RUN printf '%s\n' \
+	'org.gradle.daemon=false' \
+	'org.gradle.parallel=false' \
+	'org.gradle.caching=true' \
+	'org.gradle.workers.max=2' \
+	'org.gradle.jvmargs=-Xmx1024m -XX:MaxMetaspaceSize=256m -XX:+UseSerialGC -XX:+HeapDumpOnOutOfMemoryError' \
+	> gradle.properties
+
 # Prime dependency cache (layer reused when only src changes).
-RUN ./gradlew dependencies --no-daemon -x test \
-	|| ./gradlew classes --no-daemon -x test \
+RUN ./gradlew dependencies --no-daemon -x test --no-parallel \
+	|| ./gradlew classes --no-daemon -x test --no-parallel \
 	|| true
 
 COPY src ./src
-RUN ./gradlew bootJar --no-daemon -x test --stacktrace
+RUN ./gradlew bootJar --no-daemon -x test --no-parallel --stacktrace
 
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app

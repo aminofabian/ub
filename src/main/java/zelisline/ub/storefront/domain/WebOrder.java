@@ -62,6 +62,10 @@ public class WebOrder {
     @Column(name = "notes", length = 2000)
     private String notes;
 
+    /** Set when a cashier till has claimed/auto-printed the pickup ticket (once). */
+    @Column(name = "pickup_ticket_printed_at")
+    private Instant pickupTicketPrintedAt;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 

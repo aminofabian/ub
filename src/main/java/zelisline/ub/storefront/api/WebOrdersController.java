@@ -11,6 +11,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -22,6 +23,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.storefront.api.dto.UpdateWebOrderFulfillmentRequest;
 import zelisline.ub.storefront.api.dto.WebOrderDetailResponse;
+import zelisline.ub.storefront.api.dto.WebOrderPickupTicketClaimResponse;
 import zelisline.ub.storefront.api.dto.WebOrderSummaryResponse;
 import zelisline.ub.storefront.application.WebOrderAdminService;
 import zelisline.ub.storefront.application.WebOrderFulfillmentService;
@@ -76,6 +78,23 @@ public class WebOrdersController {
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=web-order-" + orderId + ".bin")
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
                 .body(body);
+    }
+
+    /**
+     * Claim a one-time cashier auto-print of the pickup ticket.
+     * Returns {@code claimed=false} when already printed or the order is older than 1 hour.
+     */
+    @PostMapping("/{orderId}/pickup-ticket/claim")
+    @PreAuthorize("hasPermission(null, 'sales.sell') or hasPermission(null, 'storefront.orders.read')")
+    public WebOrderPickupTicketClaimResponse claimPickupTicket(
+            @PathVariable String orderId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return webOrderReceiptService.claimPickupTicketPrint(
+                TenantRequestIds.resolveBusinessId(request),
+                orderId.trim()
+        );
     }
 
     @PatchMapping("/{orderId}/fulfillment")

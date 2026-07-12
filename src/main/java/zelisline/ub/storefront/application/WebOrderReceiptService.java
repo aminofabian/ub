@@ -2,6 +2,7 @@ package zelisline.ub.storefront.application;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -12,6 +13,7 @@ import java.util.stream.Collectors;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
@@ -21,6 +23,7 @@ import zelisline.ub.sales.receipt.ReceiptEscPosRenderer;
 import zelisline.ub.sales.receipt.ReceiptLineRow;
 import zelisline.ub.sales.receipt.ReceiptPaymentRow;
 import zelisline.ub.sales.receipt.ReceiptSnapshot;
+import zelisline.ub.storefront.api.dto.WebOrderPickupTicketClaimResponse;
 import zelisline.ub.storefront.domain.WebOrder;
 import zelisline.ub.storefront.domain.WebOrderLine;
 import zelisline.ub.storefront.repository.WebOrderLineRepository;
@@ -38,6 +41,8 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
 public class WebOrderReceiptService {
 
     private static final int MONEY_SCALE = 2;
+    /** Auto-print window for cashier pickup tickets. */
+    public static final long PICKUP_TICKET_AUTO_PRINT_MAX_AGE_SECONDS = 60L * 60L;
 
     private final WebOrderRepository webOrderRepository;
     private final WebOrderLineRepository webOrderLineRepository;
@@ -46,6 +51,40 @@ public class WebOrderReceiptService {
     private final ItemRepository itemRepository;
     private final BranchReceiptSettingsService branchReceiptSettingsService;
     private final StorefrontSettingsService storefrontSettingsService;
+
+    /**
+     * Atomically claim a one-time auto-print. Returns {@code claimed=true} only for the
+     * first successful claim on an order younger than one hour.
+     */
+    @Transactional
+    public WebOrderPickupTicketClaimResponse claimPickupTicketPrint(String businessId, String orderId) {
+        String id = orderId == null ? "" : orderId.trim();
+        if (id.isBlank()) {
+            return new WebOrderPickupTicketClaimResponse(false, "not_found");
+        }
+        WebOrder order = webOrderRepository.findByIdAndBusinessId(id, businessId).orElse(null);
+        if (order == null) {
+            return new WebOrderPickupTicketClaimResponse(false, "not_found");
+        }
+        if (order.getPickupTicketPrintedAt() != null) {
+            return new WebOrderPickupTicketClaimResponse(false, "already_printed");
+        }
+        Instant now = Instant.now();
+        Instant minCreatedAt = now.minusSeconds(PICKUP_TICKET_AUTO_PRINT_MAX_AGE_SECONDS);
+        if (order.getCreatedAt() == null || order.getCreatedAt().isBefore(minCreatedAt)) {
+            return new WebOrderPickupTicketClaimResponse(false, "too_old");
+        }
+        int updated = webOrderRepository.claimPickupTicketPrint(id, businessId, now, minCreatedAt);
+        if (updated == 1) {
+            return new WebOrderPickupTicketClaimResponse(true, "claimed");
+        }
+        // Lost a race with another till, or age window closed mid-claim.
+        WebOrder again = webOrderRepository.findByIdAndBusinessId(id, businessId).orElse(null);
+        if (again != null && again.getPickupTicketPrintedAt() != null) {
+            return new WebOrderPickupTicketClaimResponse(false, "already_printed");
+        }
+        return new WebOrderPickupTicketClaimResponse(false, "too_old");
+    }
 
     public byte[] buildEscPos(String businessId, String orderId, int widthMm) {
         if (widthMm != 50 && widthMm != 58 && widthMm != 80) {

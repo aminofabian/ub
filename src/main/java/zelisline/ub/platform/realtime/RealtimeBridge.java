@@ -58,7 +58,9 @@ public class RealtimeBridge {
         Notification notification = event.notification();
         String businessId = notification.getBusinessId();
         String targetUserId = notification.getUserId();
-        String eventId = UUID.randomUUID().toString();
+        String eventId = notification.getId() != null && !notification.getId().isBlank()
+                ? notification.getId()
+                : UUID.randomUUID().toString();
         Instant eventTime = notification.getCreatedAt();
 
         String priority = resolveNotificationPriority(notification.getType());

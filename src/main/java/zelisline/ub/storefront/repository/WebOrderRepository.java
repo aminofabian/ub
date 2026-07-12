@@ -7,6 +7,7 @@ import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -30,6 +31,26 @@ public interface WebOrderRepository extends JpaRepository<WebOrder, String> {
     );
 
     Optional<WebOrder> findByIdAndBusinessId(String id, String businessId);
+
+    /**
+     * Atomically claim a one-time pickup-ticket auto-print.
+     * Succeeds only when never printed and the order is newer than {@code minCreatedAt}.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update WebOrder w
+               set w.pickupTicketPrintedAt = :now,
+                   w.updatedAt = :now
+             where w.id = :id
+               and w.businessId = :businessId
+               and w.pickupTicketPrintedAt is null
+               and w.createdAt >= :minCreatedAt
+            """)
+    int claimPickupTicketPrint(
+            @Param("id") String id,
+            @Param("businessId") String businessId,
+            @Param("now") Instant now,
+            @Param("minCreatedAt") Instant minCreatedAt);
 
     interface InactiveShopperEmail {
         String getEmail();

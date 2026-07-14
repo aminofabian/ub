@@ -61,6 +61,9 @@ public class FeatureFlagService {
     /** Allow cashiers (sales.sell) to quick-create products from the POS. */
     public static final String FLAG_POS_CASHIER_CREATE_PRODUCT = "pos.cashier_create_product";
 
+    /** Allow cashiers (sales.sell) to mark cart lines as sold by weight from the POS. */
+    public static final String FLAG_POS_CASHIER_WEIGHED_TOGGLE = "pos.cashier_weighed_toggle";
+
     /** Grocery counter draft cart persistence (master kill-switch). */
     public static final String FLAG_GROCERY_DRAFTS_ENABLED = "grocery_drafts.enabled";
 

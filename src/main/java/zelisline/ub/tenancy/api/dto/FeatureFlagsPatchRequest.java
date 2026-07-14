@@ -9,6 +9,8 @@ public record FeatureFlagsPatchRequest(
         /** Allow cashiers to override shelf prices at POS. */
         Boolean posCashierPriceEdit,
         /** Allow cashiers to quick-create products at POS. */
-        Boolean posCashierCreateProduct
+        Boolean posCashierCreateProduct,
+        /** Allow cashiers to mark items as sold by weight from the POS cart. */
+        Boolean posCashierWeighedToggle
 ) {
 }

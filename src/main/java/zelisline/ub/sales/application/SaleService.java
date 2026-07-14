@@ -599,7 +599,9 @@ public class SaleService {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                             "Line " + (i + 1) + ": weighed items currently sell in kg only");
                 }
-                if (line.quantity().scale() > WEIGHTED_QTY_SCALE) {
+                // Ignore trailing zeros (e.g. 0.3470 from DECIMAL storage).
+                BigDecimal weightScale = line.quantity().stripTrailingZeros();
+                if (weightScale.scale() > WEIGHTED_QTY_SCALE) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                             "Line " + (i + 1) + ": weight may have at most " + WEIGHTED_QTY_SCALE + " decimal places");
                 }

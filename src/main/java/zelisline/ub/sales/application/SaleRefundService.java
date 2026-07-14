@@ -272,7 +272,7 @@ public class SaleRefundService {
             if (q.signum() <= 0 || q.compareTo(si.getQuantity()) > 0) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid refund quantity for line");
             }
-            if (weighed && line.quantity().scale() > WEIGHTED_QTY_SCALE) {
+            if (weighed && line.quantity().stripTrailingZeros().scale() > WEIGHTED_QTY_SCALE) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "Weighed refund quantity may have at most " + WEIGHTED_QTY_SCALE + " decimal places");
             }

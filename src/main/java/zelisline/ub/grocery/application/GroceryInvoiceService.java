@@ -553,7 +553,8 @@ public class GroceryInvoiceService {
                     "Line " + lineNumber + ": quantity must be positive");
         }
         if (item.isWeighed()) {
-            return quantity.setScale(QTY_SCALE, RoundingMode.HALF_UP);
+            // Sale API allows at most 3 decimal places on weighed qty.
+            return quantity.setScale(3, RoundingMode.HALF_UP);
         }
         BigDecimal stripped = quantity.stripTrailingZeros();
         if (stripped.scale() > 0) {

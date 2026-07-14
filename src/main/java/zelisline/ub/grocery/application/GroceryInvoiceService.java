@@ -96,7 +96,7 @@ public class GroceryInvoiceService {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, sellabilityViolation);
             }
 
-            BigDecimal qty = lineReq.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
+            BigDecimal qty = normalizeInvoiceQuantity(item, lineReq.quantity(), lineIndex + 1);
             BigDecimal unitPrice = lineReq.unitPrice().setScale(QTY_SCALE, RoundingMode.HALF_UP);
             BigDecimal lineTotal = qty.multiply(unitPrice).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
 
@@ -362,11 +362,22 @@ public class GroceryInvoiceService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "No open shift for this branch"));
 
         List<GroceryInvoiceLine> invoiceLines = lineRepository.findByInvoiceIdOrderByLineIndex(invoiceId);
+        List<String> itemIds = invoiceLines.stream().map(GroceryInvoiceLine::getItemId).distinct().toList();
+        Map<String, Item> itemsById = itemRepository
+                .findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)
+                .stream()
+                .collect(java.util.stream.Collectors.toMap(Item::getId, item -> item, (a, b) -> a));
         List<PostSaleLineRequest> saleLines = new ArrayList<>();
         for (GroceryInvoiceLine line : invoiceLines) {
+            Item item = itemsById.get(line.getItemId());
+            if (item == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Item not found: " + line.getItemId());
+            }
+            BigDecimal saleQty = normalizeInvoiceQuantity(item, line.getQuantity(), line.getLineIndex() + 1);
             saleLines.add(new PostSaleLineRequest(
                     line.getItemId(),
-                    line.getQuantity(),
+                    saleQty,
                     line.getUnitPrice()
             ));
         }
@@ -532,6 +543,25 @@ public class GroceryInvoiceService {
     }
 
     // ---- helpers ----
+
+    /**
+     * Weighed lines keep fractional qty; non-weighed must be whole numbers so sale posting succeeds.
+     */
+    private static BigDecimal normalizeInvoiceQuantity(Item item, BigDecimal quantity, int lineNumber) {
+        if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Line " + lineNumber + ": quantity must be positive");
+        }
+        if (item.isWeighed()) {
+            return quantity.setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        }
+        BigDecimal stripped = quantity.stripTrailingZeros();
+        if (stripped.scale() > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Line " + lineNumber + ": non-weighed items must have a whole-number quantity");
+        }
+        return stripped.setScale(0, RoundingMode.UNNECESSARY);
+    }
 
     private GroceryInvoice loadInvoiceOrThrow(String businessId, String invoiceId) {
         return invoiceRepository.findByIdAndBusinessId(invoiceId, businessId)

@@ -24,6 +24,8 @@ public interface CostAuditRepository extends Repository<Item, String> {
     interface CostIssueRow {
         String getItemId();
         String getName();
+        String getVariantName();
+        String getSize();
         String getSku();
         String getUnitType();
         BigDecimal getCurrentStock();
@@ -39,6 +41,8 @@ public interface CostAuditRepository extends Repository<Item, String> {
     @Query(value = """
             select t.itemId            as itemId,
                    t.name              as name,
+                   t.variantName       as variantName,
+                   t.size              as size,
                    t.sku               as sku,
                    t.unitType          as unitType,
                    t.currentStock      as currentStock,
@@ -53,6 +57,8 @@ public interface CostAuditRepository extends Repository<Item, String> {
                 select
                     i.id            as itemId,
                     i.name          as name,
+                    i.variant_name  as variantName,
+                    i.size          as size,
                     i.sku           as sku,
                     i.unit_type     as unitType,
                     i.current_stock as currentStock,

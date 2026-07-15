@@ -71,7 +71,7 @@ public class CostAuditService {
         for (CostIssueRow row : rows) {
             CostIssueRowResponse mapped = buildRow(
                     row.getItemId(),
-                    row.getName(),
+                    composeDisplayName(row.getName(), row.getVariantName(), row.getSize()),
                     row.getSku(),
                     row.getUnitType(),
                     row.getCurrentStock(),
@@ -159,7 +159,7 @@ public class CostAuditService {
         BigDecimal resolvedSell = pricingService.getCurrentOpenSellingPrice(businessId, itemId, brId);
         return buildRow(
                 item.getId(),
-                item.getName(),
+                composeDisplayName(item.getName(), item.getVariantName(), item.getSize()),
                 item.getSku(),
                 item.getUnitType(),
                 item.getCurrentStock(),
@@ -296,6 +296,29 @@ public class CostAuditService {
             return HUNDRED;
         }
         return thinMarginPct;
+    }
+
+    /**
+     * Combines a variant's parent name with its distinguishing descriptor (variant name, falling
+     * back to size) so the list reads "Amara Macademia 200ml" rather than just "Amara". Skips the
+     * suffix when the base name already contains it.
+     */
+    private static String composeDisplayName(String name, String variantName, String size) {
+        String base = blankToNull(name);
+        String suffix = blankToNull(variantName);
+        if (suffix == null) {
+            suffix = blankToNull(size);
+        }
+        if (base == null) {
+            return suffix == null ? "" : suffix;
+        }
+        if (suffix == null) {
+            return base;
+        }
+        if (base.toLowerCase(java.util.Locale.ROOT).contains(suffix.toLowerCase(java.util.Locale.ROOT))) {
+            return base;
+        }
+        return base + " " + suffix;
     }
 
     private static BigDecimal scaleOrNull(BigDecimal value, int scale) {

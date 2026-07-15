@@ -33,10 +33,11 @@ public class PosSetItemWeighedService {
     ) {
         boolean canWrite = roleId != null
                 && requestPermissionService.hasPermission(roleId, CATALOG_WRITE);
-        boolean flagOn = featureFlagService.isEnabled(
-                businessId,
-                FeatureFlagService.FLAG_POS_CASHIER_WEIGHED_TOGGLE
-        );
+        // Absent flag defaults ON so cashiers can mark kg sales; admin can set false to disable.
+        Boolean weighedFlag = featureFlagService
+                .allFlags(businessId)
+                .get(FeatureFlagService.FLAG_POS_CASHIER_WEIGHED_TOGGLE);
+        boolean flagOn = !Boolean.FALSE.equals(weighedFlag);
         if (!canWrite && !flagOn) {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,

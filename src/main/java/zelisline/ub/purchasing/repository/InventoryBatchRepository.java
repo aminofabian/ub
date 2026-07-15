@@ -234,6 +234,25 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
             @Param("today") LocalDate today
     );
 
+    /**
+     * Active, on-hand batches for an item (optionally scoped to one branch) — used by the
+     * cost-audit tool to rewrite a corrected unit cost across current stock layers.
+     */
+    @Query("""
+            select b from InventoryBatch b
+             where b.businessId = :businessId
+               and b.itemId = :itemId
+               and b.status = 'active'
+               and b.quantityRemaining > 0
+               and (:branchId is null or b.branchId = :branchId)
+             order by b.branchId asc, b.id asc
+            """)
+    List<InventoryBatch> findActiveBatchesForCostRewrite(
+            @Param("businessId") String businessId,
+            @Param("itemId") String itemId,
+            @Param("branchId") String branchId
+    );
+
     Optional<InventoryBatch> findFirstByBusinessIdAndItemIdAndBranchIdAndStatusOrderByReceivedAtDescIdDesc(
             String businessId,
             String itemId,

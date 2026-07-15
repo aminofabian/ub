@@ -112,6 +112,8 @@ public final class AuditEventTypes {
     public static final String SELLING_PRICE_CHANGED = "selling_price.changed";
     public static final String BUYING_PRICE_CHANGED = "buying_price.changed";
     public static final String TAX_RATE_CHANGED = "tax_rate.changed";
+    /** Admin correction of an item's unit cost (rewrites active batch costs + reference cost). */
+    public static final String ITEM_COST_ADJUSTED = "item.cost.adjusted";
 
     // Suppliers
     public static final String SUPPLIER_CREATED = "supplier.created";

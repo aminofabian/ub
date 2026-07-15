@@ -14,6 +14,8 @@ public interface SalePaymentRepository extends JpaRepository<SalePayment, String
 
     List<SalePayment> findBySaleIdOrderBySortOrderAsc(String saleId);
 
+    void deleteBySaleId(String saleId);
+
     @Query("""
             select coalesce(sum(sp.amount), 0)
               from SalePayment sp

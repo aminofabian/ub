@@ -44,6 +44,7 @@ public final class AuditEventTypes {
     public static final String SALE_VOIDED = "sale.voided";
     public static final String REFUND_ISSUED = "refund.issued";
     public static final String PAYMENT_TENDERED = "payment.tendered";
+    public static final String PAYMENT_ADJUSTED = "payment.adjusted";
     public static final String PAYMENT_GATEWAY_WEBHOOK_RECEIVED = "payment.gateway.webhook.received";
     public static final String STK_PUSH_INITIATED = "stk_push.initiated";
     public static final String STK_PUSH_COMPLETED = "stk_push.completed";
@@ -60,6 +61,7 @@ public final class AuditEventTypes {
     public static final String CASH_SALE_ADDED = "cash.sale_added";
     public static final String CASH_REFUND_REMOVED = "cash.refund_removed";
     public static final String CASH_VOID_REMOVED = "cash.void_removed";
+    public static final String CASH_PAYMENT_ADJUSTED = "cash.payment_adjusted";
     public static final String VARIANCE_APPROVED = "variance.approved";
     public static final String DRAWOUT_INITIATED = "drawout.initiated";
     public static final String DRAWOUT_APPROVED = "drawout.approved";

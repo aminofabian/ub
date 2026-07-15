@@ -7,6 +7,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -24,6 +25,7 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
+import zelisline.ub.sales.api.dto.AdjustSalePaymentsRequest;
 import zelisline.ub.sales.api.dto.PostRefundRequest;
 import zelisline.ub.sales.api.dto.PostSaleRequest;
 import zelisline.ub.sales.api.dto.PostVoidSaleRequest;
@@ -31,6 +33,7 @@ import zelisline.ub.sales.api.dto.PosTopProductResponse;
 import zelisline.ub.sales.api.dto.RefundResponse;
 import zelisline.ub.sales.api.dto.SaleResponse;
 import zelisline.ub.sales.application.PosTopProductsService;
+import zelisline.ub.sales.application.SalePaymentAdjustService;
 import zelisline.ub.sales.application.SaleRefundService;
 import zelisline.ub.sales.application.SaleService;
 import zelisline.ub.sales.application.SaleVoidService;
@@ -49,6 +52,7 @@ public class SalesController {
     private final SaleService saleService;
     private final SaleVoidService saleVoidService;
     private final SaleRefundService saleRefundService;
+    private final SalePaymentAdjustService salePaymentAdjustService;
     private final SaleReceiptService saleReceiptService;
     private final BranchResolutionService branchResolutionService;
     private final VariableWeightBarcodeService variableWeightBarcodeService;
@@ -128,6 +132,29 @@ public class SalesController {
         );
         HttpStatus status = out.createdNew() ? HttpStatus.CREATED : HttpStatus.OK;
         return ResponseEntity.status(status).body(out.response());
+    }
+
+    @GetMapping("/{saleId}")
+    @PreAuthorize("hasPermission(null, 'sales.intelligence.read') or hasPermission(null, 'sales.payment.adjust') or hasPermission(null, 'sales.sell')")
+    public SaleResponse getSale(@PathVariable String saleId, HttpServletRequest request) {
+        CurrentTenantUser.requireHuman(request);
+        return saleService.requireSale(TenantRequestIds.resolveBusinessId(request), saleId);
+    }
+
+    @PatchMapping("/{saleId}/payments")
+    @PreAuthorize("hasPermission(null, 'sales.payment.adjust')")
+    public SaleResponse adjustSalePayments(
+            @PathVariable String saleId,
+            @Valid @RequestBody AdjustSalePaymentsRequest body,
+            HttpServletRequest request
+    ) {
+        var user = CurrentTenantUser.requireHuman(request);
+        return salePaymentAdjustService.adjustPayments(
+                TenantRequestIds.resolveBusinessId(request),
+                saleId,
+                body,
+                user.userId()
+        );
     }
 
     @PostMapping("/{saleId}/void")

@@ -43,6 +43,8 @@ public final class SalesConstants {
     public static final String JOURNAL_SOURCE_SALE = "sale";
     public static final String JOURNAL_SOURCE_SALE_VOID = "sale_void";
     public static final String JOURNAL_SOURCE_SALE_REFUND = "sale_refund";
+    /** Reclassify tender accounts after an admin payment-method correction. */
+    public static final String JOURNAL_SOURCE_SALE_PAYMENT_ADJUST = "sale_payment_adjust";
     /** Counter wallet top-up (Phase 5). */
     public static final String JOURNAL_SOURCE_WALLET_TOPUP_CASH = "wallet_topup_cash";
     /** STK-push wallet credit (Phase 5). */

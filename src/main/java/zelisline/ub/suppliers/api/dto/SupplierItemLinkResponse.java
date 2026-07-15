@@ -14,6 +14,10 @@ public record SupplierItemLinkResponse(
         String supplierSku,
         BigDecimal defaultCostPrice,
         BigDecimal lastCostPrice,
+        /** Catalog item buying price — used when link cost fields are unset. */
+        BigDecimal catalogBuyingPrice,
+        /** Catalog bundle/shelf price — draft retail when no open selling price is available. */
+        BigDecimal catalogShelfPrice,
         BigDecimal packSize,
         String packUnit,
         boolean active,

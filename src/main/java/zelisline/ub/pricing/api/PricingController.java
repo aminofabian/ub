@@ -73,7 +73,11 @@ public class PricingController {
     }
 
     @GetMapping("/current-selling-price")
-    @PreAuthorize("hasPermission(null, 'pricing.read') or hasPermission(null, 'sales.sell')")
+    @PreAuthorize(
+            "hasPermission(null, 'pricing.read') or hasPermission(null, 'sales.sell') "
+                    + "or hasPermission(null, 'purchasing.path_b.read') "
+                    + "or hasPermission(null, 'purchasing.path_b.write')"
+    )
     public CurrentSellingPriceResponse getCurrentSellingPrice(
             @RequestParam String itemId,
             @RequestParam(required = false) String branchId,
@@ -89,7 +93,11 @@ public class PricingController {
     }
 
     @GetMapping("/suggest/sell")
-    @PreAuthorize("hasPermission(null, 'pricing.read')")
+    @PreAuthorize(
+            "hasPermission(null, 'pricing.read') "
+                    + "or hasPermission(null, 'purchasing.path_b.read') "
+                    + "or hasPermission(null, 'purchasing.path_b.write')"
+    )
     public SellPriceSuggestionResponse suggestSell(
             @RequestParam String itemId,
             @RequestParam(required = false) String supplierId,

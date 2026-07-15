@@ -237,6 +237,8 @@ public class ItemSupplierLinkService {
                 ? item.getBarcode().trim()
                 : null;
         BigDecimal stock = item != null ? item.getCurrentStock() : null;
+        BigDecimal catalogBuying = item != null ? item.getBuyingPrice() : null;
+        BigDecimal catalogShelf = item != null ? item.getBundlePrice() : null;
         return new SupplierItemLinkResponse(
                 sp.getId(),
                 sp.getItemId(),
@@ -248,6 +250,8 @@ public class ItemSupplierLinkService {
                 sp.getSupplierSku(),
                 sp.getDefaultCostPrice(),
                 sp.getLastCostPrice(),
+                catalogBuying,
+                catalogShelf,
                 sp.getPackSize(),
                 sp.getPackUnit(),
                 sp.isActive(),

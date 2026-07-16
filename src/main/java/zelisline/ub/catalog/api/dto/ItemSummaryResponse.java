@@ -17,8 +17,10 @@ public record ItemSummaryResponse(
         boolean webPublished,
         String variantOfItemId,
         /**
-         * When true, this row is a parent item that only groups variant SKUs (not a sellable line on its own).
-         * Always false for variant rows and for standalone products.
+         * When true, this row is a non-sellable parent that only groups variant SKUs
+         * (not a sellable or stock-holding line on its own).
+         * Always false for variant rows, standalone products, and sellable/stocked bases
+         * that have package or option children (e.g. Eggs).
          */
         boolean groupLabelOnly,
         /**

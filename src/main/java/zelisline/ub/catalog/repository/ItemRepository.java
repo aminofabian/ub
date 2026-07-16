@@ -169,6 +169,8 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                     ))
                and ((:squashParentGroupsForSearch = false)
                     or (i.variantOfItemId is not null
+                        or i.sellable = true
+                        or i.stocked = true
                         or not exists (
                           select 1 from Item ch
                           where ch.variantOfItemId = i.id
@@ -573,6 +575,8 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                     ))
                and ((:squashParentGroupsForSearch = false)
                     or (i.variantOfItemId is not null
+                        or i.sellable = true
+                        or i.stocked = true
                         or not exists (
                           select 1 from Item ch
                           where ch.variantOfItemId = i.id

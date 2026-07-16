@@ -358,11 +358,16 @@ public class ItemCatalogService {
                 displayStock = packageVariantStockResolver.displayStockQty(item, holderStock);
                 baseStock = packageVariantStockResolver.unitsPerSale(item) != null ? holderStock : null;
             }
+            // Only non-sellable parents are "group labels". Stocked sellable bases
+            // (e.g. Eggs with tray/piece options) remain linkable inventory SKUs.
+            boolean groupLabelOnly = item.getVariantOfItemId() == null
+                    && parentsWithChildren.contains(item.getId())
+                    && !item.isSellable();
             return toSummary(
                     item,
                     thumbs,
                     categoryNameFor(catNames, item.getCategoryId()),
-                    item.getVariantOfItemId() == null && parentsWithChildren.contains(item.getId()),
+                    groupLabelOnly,
                     displayStock,
                     baseStock);
         });

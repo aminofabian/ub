@@ -27,11 +27,13 @@ import zelisline.ub.credits.api.dto.CustomerResponse;
 import zelisline.ub.credits.api.dto.IssuePaymentClaimResponse;
 import zelisline.ub.credits.api.dto.OutstandingTabRowResponse;
 import zelisline.ub.credits.api.dto.PatchCustomerRequest;
+import zelisline.ub.credits.api.dto.TabPurchaseRowResponse;
 import zelisline.ub.credits.api.dto.TopUpWalletRequest;
 import zelisline.ub.credits.application.CashierTabClearanceAccess;
 import zelisline.ub.credits.application.CreditCustomerStatementService;
 import zelisline.ub.credits.application.CreditCustomerStatementService.CreditStatement;
 import zelisline.ub.credits.application.CustomerDirectoryService;
+import zelisline.ub.credits.application.CustomerTabPurchasesService;
 import zelisline.ub.credits.application.PublicPaymentClaimService;
 import zelisline.ub.credits.application.PublicPaymentClaimService.IssuedClaimToken;
 import zelisline.ub.credits.application.WalletLedgerService;
@@ -46,6 +48,7 @@ public class CustomersController {
 
     private final CustomerDirectoryService customerDirectoryService;
     private final CreditCustomerStatementService creditCustomerStatementService;
+    private final CustomerTabPurchasesService customerTabPurchasesService;
     private final WalletLedgerService walletLedgerService;
     private final PublicPaymentClaimService publicPaymentClaimService;
     private final CashierTabClearanceAccess cashierTabClearanceAccess;
@@ -154,6 +157,19 @@ public class CustomersController {
         String businessId = TenantRequestIds.resolveBusinessId(request);
         String resolved = customerDirectoryService.resolveCustomerIdOrThrow(businessId, customerId);
         return creditCustomerStatementService.assemble(businessId, resolved);
+    }
+
+    @GetMapping("/{customerId}/tab-purchases")
+    @PreAuthorize("hasPermission(null, 'credits.customers.read')")
+    public List<TabPurchaseRowResponse> tabPurchases(
+            @PathVariable String customerId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        cashierTabClearanceAccess.requireEnabled(businessId);
+        String resolved = customerDirectoryService.resolveCustomerIdOrThrow(businessId, customerId);
+        return customerTabPurchasesService.list(businessId, resolved);
     }
 
     @PostMapping("/{customerId}/wallet/top-ups")

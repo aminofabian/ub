@@ -1580,6 +1580,7 @@ public class ItemCatalogService {
                 i.getBrand(),
                 i.getSize(),
                 i.getBundlePrice(),
+                i.getBuyingPrice(),
                 i.getItemTypeId(),
                 i.isWeighed(),
                 i.getUnitType()

@@ -40,6 +40,8 @@ public record ItemSummaryResponse(
         String size,
         /** Catalog shelf / bundle price on the item record (POS may use branch selling price). */
         BigDecimal bundlePrice,
+        /** Reference buying / cost price on the item record. */
+        BigDecimal buyingPrice,
         /** Department / item type ID. */
         String itemTypeId,
         /** True when the item is sold by weight (kg, g, lb). */

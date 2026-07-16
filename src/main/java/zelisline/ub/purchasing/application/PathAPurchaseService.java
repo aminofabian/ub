@@ -342,8 +342,11 @@ public class PathAPurchaseService {
             PackageVariantStockResolver.StockPickResolution inbound = packageVariantStockResolver.resolveInbound(
                     businessId, pol.getItemId(), in.qtyReceived());
             Item item = packageVariantStockResolver.requireInventoryHolder(businessId, inbound.stockItemId());
-            BigDecimal unitCost = pol.getUnitEstimatedCost();
-            BigDecimal lineMoney = inbound.stockQuantity().multiply(unitCost).setScale(2, RoundingMode.HALF_UP);
+            // PO unit cost is per catalog unit (e.g. per tray); batch cost must be per base stock unit.
+            BigDecimal lineMoney = PackageVariantStockResolver.catalogExtensionMoney(
+                    in.qtyReceived(), pol.getUnitEstimatedCost());
+            BigDecimal unitCost = PackageVariantStockResolver.toStockUnitCost(
+                    in.qtyReceived(), pol.getUnitEstimatedCost(), inbound);
             grniTotal = grniTotal.add(lineMoney);
 
             GoodsReceiptLine gl = new GoodsReceiptLine();
@@ -393,7 +396,8 @@ public class PathAPurchaseService {
             gl.setInventoryBatchId(batch.getId());
             goodsReceiptLineRepository.save(gl);
 
-            touchSupplierProduct(po.getSupplierId(), pol.getItemId(), unitCost);
+            // Supplier last cost stays at catalog (PO) unit, not base-stock unit.
+            touchSupplierProduct(po.getSupplierId(), pol.getItemId(), pol.getUnitEstimatedCost());
         }
         sb.setItemCount(itemCount);
         sb.setTotalInitialQuantity(totalInitial);

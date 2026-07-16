@@ -36,6 +36,40 @@ public class PackageVariantStockResolver {
     ) {
     }
 
+    private static final int UNIT_COST_SCALE = 4;
+
+    /**
+     * Converts catalog-line unit cost to per-stock-unit cost after {@link #resolveInbound}
+     * expands quantity into base units. Preserves extension value:
+     * {@code catalogQty × catalogUnitCost ≈ stockQty × result}.
+     * <p>
+     * Example: receive 2 trays @ 300/tray with 30 units/tray → stock qty 60, unit cost 10.
+     */
+    public static BigDecimal toStockUnitCost(
+            BigDecimal catalogQuantity,
+            BigDecimal catalogUnitCost,
+            StockPickResolution inbound
+    ) {
+        BigDecimal cost = catalogUnitCost == null ? BigDecimal.ZERO : catalogUnitCost;
+        BigDecimal stockQty = inbound == null ? null : inbound.stockQuantity();
+        if (stockQty == null || stockQty.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Stock quantity must be positive");
+        }
+        BigDecimal catalogQty = catalogQuantity == null ? BigDecimal.ZERO : catalogQuantity;
+        if (catalogQty.compareTo(stockQty) == 0) {
+            return cost.setScale(UNIT_COST_SCALE, RoundingMode.HALF_UP);
+        }
+        BigDecimal money = catalogQty.multiply(cost);
+        return money.divide(stockQty, UNIT_COST_SCALE, RoundingMode.HALF_UP);
+    }
+
+    /** Catalog-line extension money (qty × unit cost at catalog units), money scale 2. */
+    public static BigDecimal catalogExtensionMoney(BigDecimal catalogQuantity, BigDecimal catalogUnitCost) {
+        BigDecimal qty = catalogQuantity == null ? BigDecimal.ZERO : catalogQuantity;
+        BigDecimal cost = catalogUnitCost == null ? BigDecimal.ZERO : catalogUnitCost;
+        return qty.multiply(cost).setScale(2, RoundingMode.HALF_UP);
+    }
+
     public Item requireSellableItem(String businessId, String itemId) {
         Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found: " + itemId));

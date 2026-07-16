@@ -28,6 +28,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
+import zelisline.ub.catalog.api.dto.CreateVariantRequest;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.repository.IdempotencyKeyRepository;
@@ -232,6 +233,92 @@ class PathAPurchaseIT {
                         null, null, null, null, null, null, null, null, null, null, null, null, null, null, null),
                 null
         ).body().id();
+    }
+
+    @Test
+    void packageVariantReceive_storesBaseUnitCostNotPackCost() throws Exception {
+        String parentId = itemCatalogService.createItem(
+                TENANT,
+                new CreateItemRequest(
+                        "SKU-EGG", null, "Eggs", null, goodsTypeId, null, null, null,
+                        false, true, true,
+                        null, null, null, null, null, null, null, null, null, null, null, null, null, null, null),
+                null
+        ).body().id();
+        String trayId = itemCatalogService.createVariant(
+                TENANT,
+                parentId,
+                new CreateVariantRequest(
+                        "SKU-EGG-TRAY",
+                        "Tray of 30",
+                        null,
+                        "Eggs Tray",
+                        null,
+                        null,
+                        null,
+                        null,
+                        false,
+                        true,
+                        false,
+                        true,
+                        "tray",
+                        new BigDecimal("30"),
+                        null,
+                        null,
+                        new BigDecimal("300"),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null
+                ),
+                null
+        ).id();
+
+        String poId = createPo();
+        String lineBody = """
+                {"itemId":"%s","qtyOrdered":2,"unitEstimatedCost":300}
+                """.formatted(trayId);
+        MvcResult lineRes = mockMvc.perform(post("/api/v1/purchasing/path-a/purchase-orders/" + poId + "/lines")
+                        .contentType(APPLICATION_JSON)
+                        .content(lineBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String poLineId = objectMapper.readTree(lineRes.getResponse().getContentAsString()).get("id").asText();
+        sendPo(poId);
+
+        String grnBody = """
+                {"purchaseOrderId":"%s","branchId":"%s","receivedAt":"%s","lines":[
+                  {"purchaseOrderLineId":"%s","qtyReceived":2}
+                ]}
+                """.formatted(poId, branchId, Instant.parse("2026-07-02T08:00:00Z"), poLineId);
+
+        MvcResult grnRes = mockMvc.perform(post("/api/v1/purchasing/path-a/goods-receipts")
+                        .contentType(APPLICATION_JSON)
+                        .content(grnBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode grnJson = objectMapper.readTree(grnRes.getResponse().getContentAsString());
+        // 2 trays × 300 = 600 — must NOT be inflated to 60 × 300
+        assertThat(grnJson.get("grniAmount").decimalValue()).isEqualByComparingTo(new BigDecimal("600.00"));
+
+        assertThat(itemRepository.findById(parentId).orElseThrow().getCurrentStock())
+                .isEqualByComparingTo(new BigDecimal("60.0000"));
+
+        var batches = inventoryBatchRepository.findAll().stream()
+                .filter(b -> parentId.equals(b.getItemId()))
+                .toList();
+        assertThat(batches).hasSize(1);
+        assertThat(batches.getFirst().getQuantityRemaining()).isEqualByComparingTo(new BigDecimal("60.0000"));
+        assertThat(batches.getFirst().getUnitCost()).isEqualByComparingTo(new BigDecimal("10.0000"));
     }
 
     @Test

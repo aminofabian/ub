@@ -16,8 +16,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.inventory.api.dto.AdjustItemCostRequest;
-import zelisline.ub.inventory.api.dto.BulkAdjustItemCostRequest;
-import zelisline.ub.inventory.api.dto.BulkAdjustItemCostResponse;
 import zelisline.ub.inventory.api.dto.CostIssueRowResponse;
 import zelisline.ub.inventory.api.dto.CostIssuesResponse;
 import zelisline.ub.inventory.application.CostAuditService;
@@ -57,17 +55,6 @@ public class CostAuditController {
         }
         return costAuditService.listCostIssues(
                 businessId, effectiveBranchId, thinMarginPct, highMarginPct);
-    }
-
-    @PostMapping("/bulk-adjust")
-    @PreAuthorize("hasPermission(null, 'pricing.cost_price.set')")
-    public BulkAdjustItemCostResponse bulkAdjust(
-            @Valid @RequestBody BulkAdjustItemCostRequest body,
-            HttpServletRequest request
-    ) {
-        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
-        String businessId = TenantRequestIds.resolveBusinessId(request);
-        return costAuditService.bulkAdjustByMargin(businessId, body, principal.userId());
     }
 
     @PostMapping("/{itemId}/adjust")

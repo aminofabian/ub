@@ -4,10 +4,8 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -24,8 +22,6 @@ import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.inventory.api.dto.AdjustItemCostRequest;
-import zelisline.ub.inventory.api.dto.BulkAdjustItemCostRequest;
-import zelisline.ub.inventory.api.dto.BulkAdjustItemCostResponse;
 import zelisline.ub.inventory.api.dto.CostIssueRowResponse;
 import zelisline.ub.inventory.api.dto.CostIssuesResponse;
 import zelisline.ub.inventory.repository.CostAuditRepository;
@@ -196,86 +192,6 @@ public class CostAuditService {
                 DEFAULT_THIN_MARGIN_PCT,
                 DEFAULT_HIGH_MARGIN_PCT
         );
-    }
-
-    /**
-     * Keep each item's sell price fixed and set unit cost so margin becomes {@code marginPct}.
-     * Items without a usable sell price are skipped.
-     */
-    @Transactional
-    public BulkAdjustItemCostResponse bulkAdjustByMargin(
-            String businessId,
-            BulkAdjustItemCostRequest req,
-            String actorUserId
-    ) {
-        BigDecimal marginPct = req.marginPct();
-        if (marginPct == null
-                || marginPct.signum() < 0
-                || marginPct.compareTo(new BigDecimal("99.99")) > 0) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST, "Margin must be between 0 and 99.99");
-        }
-
-        Set<String> uniqueIds = new LinkedHashSet<>();
-        for (String raw : req.itemIds()) {
-            String id = blankToNull(raw);
-            if (id != null) {
-                uniqueIds.add(id);
-            }
-        }
-        if (uniqueIds.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "At least one item id is required");
-        }
-        if (uniqueIds.size() > MAX_ROWS) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST, "At most " + MAX_ROWS + " items can be adjusted at once");
-        }
-
-        String brId = blankToNull(req.branchId());
-        if (brId != null) {
-            requireBranch(businessId, brId);
-        }
-
-        Map<String, BigDecimal> sellByItem =
-                pricingService.getCurrentOpenSellingPricesForItems(businessId, brId, uniqueIds);
-
-        BigDecimal keepFraction = BigDecimal.ONE.subtract(
-                marginPct.divide(HUNDRED, 8, RoundingMode.HALF_UP));
-
-        List<CostIssueRowResponse> updated = new ArrayList<>();
-        List<BulkAdjustItemCostResponse.SkippedItem> skipped = new ArrayList<>();
-        String reason = blankToNull(req.reason());
-        if (reason == null) {
-            reason = "Bulk margin adjust to " + marginPct.stripTrailingZeros().toPlainString() + "%";
-        }
-
-        for (String itemId : uniqueIds) {
-            BigDecimal sell = sellByItem.get(itemId);
-            if (sell == null || sell.signum() <= 0) {
-                skipped.add(new BulkAdjustItemCostResponse.SkippedItem(itemId, "No sell price"));
-                continue;
-            }
-            BigDecimal unitCost = sell.multiply(keepFraction).setScale(COST_SCALE, RoundingMode.HALF_UP);
-            if (unitCost.signum() <= 0) {
-                skipped.add(new BulkAdjustItemCostResponse.SkippedItem(
-                        itemId, "Computed unit cost must be greater than zero"));
-                continue;
-            }
-            try {
-                CostIssueRowResponse row = adjustCost(
-                        businessId,
-                        itemId,
-                        new AdjustItemCostRequest(unitCost, null, brId, reason),
-                        actorUserId);
-                updated.add(row);
-            } catch (ResponseStatusException ex) {
-                String msg = ex.getReason() != null ? ex.getReason() : ex.getMessage();
-                skipped.add(new BulkAdjustItemCostResponse.SkippedItem(
-                        itemId, msg != null ? msg : "Failed to adjust cost"));
-            }
-        }
-
-        return new BulkAdjustItemCostResponse(updated, skipped);
     }
 
     private CostIssueRowResponse buildRow(

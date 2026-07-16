@@ -72,6 +72,9 @@ public class InventoryLedgerService {
         PackageVariantStockResolver.StockPickResolution inbound =
                 packageVariantStockResolver.resolveInbound(businessId, req.itemId(), req.quantity());
         Item item = packageVariantStockResolver.requireInventoryHolder(businessId, inbound.stockItemId());
+        BigDecimal unitCost = PackageVariantStockResolver.toStockUnitCost(
+                req.quantity(), req.unitCost(), inbound);
+        BigDecimal value = PackageVariantStockResolver.catalogExtensionMoney(req.quantity(), req.unitCost());
         String opId = UUID.randomUUID().toString();
         InventoryBatch batch = saveInboundBatch(
                 businessId,
@@ -80,7 +83,7 @@ public class InventoryLedgerService {
                 InventoryConstants.BATCH_SOURCE_OPENING,
                 opId,
                 inbound.stockQuantity(),
-                req.unitCost(),
+                unitCost,
                 opId
         );
         SupplyBatch sb = createSupplyBatchForSoloBatch(batch, opId, "Opening balance");
@@ -94,12 +97,11 @@ public class InventoryLedgerService {
                 InventoryConstants.MOVEMENT_OPENING,
                 opId,
                 inbound.stockQuantity(),
-                req.unitCost(),
+                unitCost,
                 req.notes(),
                 userId
         );
         applyStockDelta(item, inbound.stockQuantity());
-        BigDecimal value = extensionMoney(inbound.stockQuantity(), req.unitCost());
         String jeId = saveJournal(
                 businessId,
                 InventoryConstants.JOURNAL_OPENING,
@@ -121,6 +123,9 @@ public class InventoryLedgerService {
         PackageVariantStockResolver.StockPickResolution inbound =
                 packageVariantStockResolver.resolveInbound(businessId, req.itemId(), req.quantity());
         Item item = packageVariantStockResolver.requireInventoryHolder(businessId, inbound.stockItemId());
+        BigDecimal unitCost = PackageVariantStockResolver.toStockUnitCost(
+                req.quantity(), req.unitCost(), inbound);
+        BigDecimal value = PackageVariantStockResolver.catalogExtensionMoney(req.quantity(), req.unitCost());
         String opId = UUID.randomUUID().toString();
         InventoryBatch batch = saveInboundBatch(
                 businessId,
@@ -129,7 +134,7 @@ public class InventoryLedgerService {
                 InventoryConstants.BATCH_SOURCE_STOCK_GAIN,
                 opId,
                 inbound.stockQuantity(),
-                req.unitCost(),
+                unitCost,
                 opId
         );
         SupplyBatch sb = createSupplyBatchForSoloBatch(batch, opId, "Stock gain");
@@ -143,12 +148,11 @@ public class InventoryLedgerService {
                 InventoryConstants.MOVEMENT_ADJUSTMENT,
                 opId,
                 inbound.stockQuantity(),
-                req.unitCost(),
+                unitCost,
                 req.notes(),
                 userId
         );
         applyStockDelta(item, inbound.stockQuantity());
-        BigDecimal value = extensionMoney(inbound.stockQuantity(), req.unitCost());
         // Stock-take surplus and other callers may use $0 unit cost when there is no
         // on-hand batch to average; GL lines must not be zero-amount.
         String jeId = null;

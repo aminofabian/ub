@@ -5,6 +5,7 @@ import jakarta.validation.Valid;
 public record InventoryPatchRequest(
         @Valid StocktakePatchRequest stocktake,
         @Valid StockLevelsPatchRequest stockLevels,
-        @Valid SuppliersAccessPatchRequest suppliers
+        @Valid SuppliersAccessPatchRequest suppliers,
+        @Valid ReceiveStockPatchRequest receiveStock
 ) {
 }

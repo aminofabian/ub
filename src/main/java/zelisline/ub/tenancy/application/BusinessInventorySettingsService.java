@@ -12,6 +12,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.tenancy.api.dto.InventoryPatchRequest;
 import zelisline.ub.tenancy.api.dto.InventorySettingsResponse;
+import zelisline.ub.tenancy.api.dto.ReceiveStockPatchRequest;
+import zelisline.ub.tenancy.api.dto.ReceiveStockSettingsResponse;
 import zelisline.ub.tenancy.api.dto.StockLevelsPatchRequest;
 import zelisline.ub.tenancy.api.dto.StockLevelsSettingsResponse;
 import zelisline.ub.tenancy.api.dto.StocktakePatchRequest;
@@ -27,6 +29,7 @@ public class BusinessInventorySettingsService {
     private static final String KEY_STOCKTAKE = "stocktake";
     private static final String KEY_STOCK_LEVELS = "stockLevels";
     private static final String KEY_SUPPLIERS = "suppliers";
+    private static final String KEY_RECEIVE_STOCK = "receiveStock";
     private static final String KEY_SHOW_SYSTEM_STOCK =
             "showSystemStockToStockManager";
     private static final String KEY_ALLOW_EDIT_STOCK_MANAGER =
@@ -42,6 +45,9 @@ public class BusinessInventorySettingsService {
             "allowLinkProductsForStockManager";
     private static final String KEY_ALLOW_LINK_PRODUCTS_CASHIER =
             "allowLinkProductsForCashier";
+    private static final String KEY_ALLOW_RECEIVE_CASHIER = "allowReceiveForCashier";
+    private static final String KEY_ALLOW_RECEIVE_STOCK_MANAGER =
+            "allowReceiveForStockManager";
 
     private final ObjectMapper objectMapper;
 
@@ -58,7 +64,8 @@ public class BusinessInventorySettingsService {
             return new InventorySettingsResponse(
                     readStocktake(inventory),
                     readStockLevels(inventory),
-                    readSuppliers(inventory)
+                    readSuppliers(inventory),
+                    readReceiveStock(inventory)
             );
         } catch (Exception e) {
             return InventorySettingsResponse.defaults();
@@ -73,6 +80,7 @@ public class BusinessInventorySettingsService {
             patch.stocktake() == null
                     && patch.stockLevels() == null
                     && patch.suppliers() == null
+                    && patch.receiveStock() == null
         ) {
             return currentSettings;
         }
@@ -92,6 +100,11 @@ public class BusinessInventorySettingsService {
             ObjectNode suppliers = copyNamespace(inventory, KEY_SUPPLIERS);
             applySuppliersPatch(suppliers, patch.suppliers());
             inventory.set(KEY_SUPPLIERS, suppliers);
+        }
+        if (patch.receiveStock() != null) {
+            ObjectNode receiveStock = copyNamespace(inventory, KEY_RECEIVE_STOCK);
+            applyReceiveStockPatch(receiveStock, patch.receiveStock());
+            inventory.set(KEY_RECEIVE_STOCK, receiveStock);
         }
         root.set(KEY_INVENTORY, inventory);
         return writeRoot(root);
@@ -138,6 +151,21 @@ public class BusinessInventorySettingsService {
                 suppliers.path(KEY_ALLOW_SUPPLIER_WRITE_CASHIER).asBoolean(false),
                 suppliers.path(KEY_ALLOW_LINK_PRODUCTS_STOCK_MANAGER).asBoolean(false),
                 suppliers.path(KEY_ALLOW_LINK_PRODUCTS_CASHIER).asBoolean(false)
+        );
+    }
+
+    private static ReceiveStockSettingsResponse readReceiveStock(JsonNode inventoryNode) {
+        if (inventoryNode.isMissingNode() || !inventoryNode.isObject()) {
+            return ReceiveStockSettingsResponse.defaults();
+        }
+        JsonNode receiveStock = inventoryNode.path(KEY_RECEIVE_STOCK);
+        if (receiveStock.isMissingNode() || !receiveStock.isObject()) {
+            return ReceiveStockSettingsResponse.defaults();
+        }
+        // Absent keys default to true (preserve prior always-on receive behaviour).
+        return new ReceiveStockSettingsResponse(
+                receiveStock.path(KEY_ALLOW_RECEIVE_CASHIER).asBoolean(true),
+                receiveStock.path(KEY_ALLOW_RECEIVE_STOCK_MANAGER).asBoolean(true)
         );
     }
 
@@ -188,6 +216,21 @@ public class BusinessInventorySettingsService {
             suppliers.put(
                     KEY_ALLOW_LINK_PRODUCTS_CASHIER,
                     patch.allowLinkProductsForCashier()
+            );
+        }
+    }
+
+    private static void applyReceiveStockPatch(
+            ObjectNode receiveStock,
+            ReceiveStockPatchRequest patch
+    ) {
+        if (patch.allowReceiveForCashier() != null) {
+            receiveStock.put(KEY_ALLOW_RECEIVE_CASHIER, patch.allowReceiveForCashier());
+        }
+        if (patch.allowReceiveForStockManager() != null) {
+            receiveStock.put(
+                    KEY_ALLOW_RECEIVE_STOCK_MANAGER,
+                    patch.allowReceiveForStockManager()
             );
         }
     }

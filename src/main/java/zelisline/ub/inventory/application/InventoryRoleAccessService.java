@@ -5,6 +5,7 @@ import org.springframework.stereotype.Service;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.repository.RoleRepository;
+import zelisline.ub.tenancy.api.dto.ReceiveStockSettingsResponse;
 import zelisline.ub.tenancy.api.dto.StockLevelsSettingsResponse;
 import zelisline.ub.tenancy.api.dto.StocktakeSettingsResponse;
 import zelisline.ub.tenancy.api.dto.SuppliersAccessSettingsResponse;
@@ -54,6 +55,19 @@ public class InventoryRoleAccessService {
         return switch (resolveRoleKey(roleId)) {
             case STOCK_MANAGER -> settings.allowLinkProductsForStockManager();
             case CASHIER, BUTCHER_CASHIER -> settings.allowLinkProductsForCashier();
+            default -> false;
+        };
+    }
+
+    /**
+     * Delegates {@code purchasing.path_b.write} (receive supplies / receive stock)
+     * for cashier and stock manager roles when enabled in business settings.
+     */
+    public boolean grantsDelegatedPathBWrite(String businessId, String roleId) {
+        ReceiveStockSettingsResponse settings = readReceiveStock(businessId);
+        return switch (resolveRoleKey(roleId)) {
+            case STOCK_MANAGER -> settings.allowReceiveForStockManager();
+            case CASHIER, BUTCHER_CASHIER -> settings.allowReceiveForCashier();
             default -> false;
         };
     }
@@ -122,6 +136,17 @@ public class InventoryRoleAccessService {
                 .map(businessInventorySettingsService::readFromSettingsJson)
                 .map(inventory -> inventory.suppliers())
                 .orElse(SuppliersAccessSettingsResponse.defaults());
+    }
+
+    private ReceiveStockSettingsResponse readReceiveStock(String businessId) {
+        if (businessId == null || businessId.isBlank()) {
+            return ReceiveStockSettingsResponse.defaults();
+        }
+        return businessRepository.findById(businessId.trim())
+                .map(Business::getSettings)
+                .map(businessInventorySettingsService::readFromSettingsJson)
+                .map(inventory -> inventory.receiveStock())
+                .orElse(ReceiveStockSettingsResponse.defaults());
     }
 
     private String resolveRoleKey(String roleId) {

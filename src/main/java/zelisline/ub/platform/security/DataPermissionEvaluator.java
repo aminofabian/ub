@@ -76,6 +76,12 @@ public class DataPermissionEvaluator implements PermissionEvaluator {
                     tenant.roleId()
             );
         }
+        if ("purchasing.path_b.write".equals(perm)) {
+            return inventoryAccess.grantsDelegatedPathBWrite(
+                    tenant.businessId(),
+                    tenant.roleId()
+            );
+        }
         return false;
     }
 

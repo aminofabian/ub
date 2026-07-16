@@ -124,6 +124,42 @@ class BusinessInventorySettingsIT {
                 .andExpect(jsonPath("$.inventory.suppliers.allowLinkProductsForStockManager")
                         .value(false))
                 .andExpect(jsonPath("$.inventory.suppliers.allowLinkProductsForCashier")
+                        .value(false))
+                .andExpect(jsonPath("$.inventory.receiveStock.allowReceiveForCashier")
+                        .value(true))
+                .andExpect(jsonPath("$.inventory.receiveStock.allowReceiveForStockManager")
+                        .value(true));
+    }
+
+    @Test
+    void patchReceiveStockSettingsPersist() throws Exception {
+        mockMvc.perform(patch("/api/v1/businesses/me")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"inventory":{"receiveStock":{
+                                  "allowReceiveForCashier":false,
+                                  "allowReceiveForStockManager":false
+                                }}}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inventory.receiveStock.allowReceiveForCashier")
+                        .value(false))
+                .andExpect(jsonPath("$.inventory.receiveStock.allowReceiveForStockManager")
+                        .value(false));
+
+        entityManager.clear();
+
+        mockMvc.perform(get("/api/v1/businesses/me")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inventory.receiveStock.allowReceiveForCashier")
+                        .value(false))
+                .andExpect(jsonPath("$.inventory.receiveStock.allowReceiveForStockManager")
                         .value(false));
     }
 

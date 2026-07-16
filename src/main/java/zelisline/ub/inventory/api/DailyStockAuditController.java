@@ -23,6 +23,7 @@ import zelisline.ub.inventory.api.dto.DailyStockAuditDtos.DailyStockAuditInvesti
 import zelisline.ub.inventory.api.dto.DailyStockAuditDtos.DailyStockAuditReviewResponse;
 import zelisline.ub.inventory.api.dto.DailyStockAuditDtos.DailyStockAuditSessionResponse;
 import zelisline.ub.inventory.api.dto.DailyStockAuditDtos.DailyStockAuditTodayResponse;
+import zelisline.ub.inventory.api.dto.DailyStockAuditRequests.DailyAuditBulkApproveRequest;
 import zelisline.ub.inventory.api.dto.DailyStockAuditRequests.DailyAuditReviewActionRequest;
 import zelisline.ub.inventory.api.dto.DailyStockAuditRequests.PatchDailyAuditLineRequest;
 import zelisline.ub.inventory.api.dto.DailyStockAuditRequests.PatchDailyAuditProgressRequest;
@@ -168,6 +169,24 @@ public class DailyStockAuditController {
                 auditId,
                 itemId,
                 notes,
+                principal.userId()
+        );
+    }
+
+    @PostMapping("/{auditId}/approve-bulk")
+    @PreAuthorize("hasPermission(null, 'stocktake.approve')")
+    public DailyStockAuditReviewResponse approveItemsBulk(
+            @PathVariable String auditId,
+            @Valid @RequestBody DailyAuditBulkApproveRequest body,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return dailyStockAuditService.approveItems(
+                businessId,
+                auditId,
+                body.itemIds(),
+                body.notes(),
                 principal.userId()
         );
     }

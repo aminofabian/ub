@@ -2,10 +2,12 @@ package zelisline.ub.inventory.api.dto;
 
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 
 public final class DailyStockAuditRequests {
 
@@ -28,6 +30,11 @@ public final class DailyStockAuditRequests {
     ) {}
 
     public record DailyAuditReviewActionRequest(
+            @Size(max = 2000) String notes
+    ) {}
+
+    public record DailyAuditBulkApproveRequest(
+            @NotEmpty List<@NotBlank String> itemIds,
             @Size(max = 2000) String notes
     ) {}
 }

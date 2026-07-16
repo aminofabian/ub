@@ -402,7 +402,8 @@ public class DailyStockAuditService {
             String notes,
             String userId
     ) {
-        return reviewItem(
+        DailyStockAudit audit = loadAudit(businessId, auditId);
+        applyReviewDecision(
                 businessId,
                 auditId,
                 itemId,
@@ -410,6 +411,48 @@ public class DailyStockAuditService {
                 notes,
                 userId
         );
+        return getReview(businessId, audit.getBranchId(), audit.getAuditDate());
+    }
+
+    @Transactional
+    public DailyStockAuditDtos.DailyStockAuditReviewResponse approveItems(
+            String businessId,
+            String auditId,
+            List<String> itemIds,
+            String notes,
+            String userId
+    ) {
+        if (itemIds == null || itemIds.isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "itemIds is required"
+            );
+        }
+        DailyStockAudit audit = loadAudit(businessId, auditId);
+        LinkedHashMap<String, Boolean> unique = new LinkedHashMap<>();
+        for (String itemId : itemIds) {
+            if (itemId == null || itemId.isBlank()) {
+                continue;
+            }
+            unique.putIfAbsent(itemId.trim(), Boolean.TRUE);
+        }
+        if (unique.isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "itemIds is required"
+            );
+        }
+        for (String itemId : unique.keySet()) {
+            applyReviewDecision(
+                    businessId,
+                    auditId,
+                    itemId,
+                    InventoryConstants.DAILY_AUDIT_REVIEW_APPROVED,
+                    notes,
+                    userId
+            );
+        }
+        return getReview(businessId, audit.getBranchId(), audit.getAuditDate());
     }
 
     @Transactional
@@ -420,7 +463,8 @@ public class DailyStockAuditService {
             String notes,
             String userId
     ) {
-        return reviewItem(
+        DailyStockAudit audit = loadAudit(businessId, auditId);
+        applyReviewDecision(
                 businessId,
                 auditId,
                 itemId,
@@ -428,6 +472,7 @@ public class DailyStockAuditService {
                 notes,
                 userId
         );
+        return getReview(businessId, audit.getBranchId(), audit.getAuditDate());
     }
 
     @Transactional(readOnly = true)
@@ -541,7 +586,7 @@ public class DailyStockAuditService {
         return out;
     }
 
-    private DailyStockAuditDtos.DailyStockAuditReviewResponse reviewItem(
+    private void applyReviewDecision(
             String businessId,
             String auditId,
             String itemId,
@@ -549,34 +594,42 @@ public class DailyStockAuditService {
             String notes,
             String userId
     ) {
-        DailyStockAudit audit = loadAudit(businessId, auditId);
         List<StockTakeSession> sessions =
                 stockTakeSessionRepository.findByDailyAuditIdAndBusinessIdFetchLines(
                         businessId,
                         auditId
                 );
-        StockTakeLine target = null;
+        StockTakeLine eveningLine = null;
+        StockTakeLine morningLine = null;
         StockTakeSession eveningSession = findSessionByType(
                 sessions,
                 InventoryConstants.STOCKTAKE_SESSION_TYPE_EVENING
         );
         if (eveningSession != null) {
-            target = eveningSession.getLines().stream()
+            eveningLine = eveningSession.getLines().stream()
                     .filter(l -> l.getItemId().equals(itemId))
                     .findFirst()
                     .orElse(null);
         }
-        if (target == null) {
-            StockTakeSession morningSession = findSessionByType(
-                    sessions,
-                    InventoryConstants.STOCKTAKE_SESSION_TYPE_MORNING
-            );
-            if (morningSession != null) {
-                target = morningSession.getLines().stream()
-                        .filter(l -> l.getItemId().equals(itemId))
-                        .findFirst()
-                        .orElse(null);
-            }
+        StockTakeSession morningSession = findSessionByType(
+                sessions,
+                InventoryConstants.STOCKTAKE_SESSION_TYPE_MORNING
+        );
+        if (morningSession != null) {
+            morningLine = morningSession.getLines().stream()
+                    .filter(l -> l.getItemId().equals(itemId))
+                    .findFirst()
+                    .orElse(null);
+        }
+
+        // Prefer evening count for review + stock update; fall back to morning.
+        StockTakeLine target = null;
+        if (eveningLine != null && eveningLine.getCountedQty() != null) {
+            target = eveningLine;
+        } else if (morningLine != null && morningLine.getCountedQty() != null) {
+            target = morningLine;
+        } else {
+            target = eveningLine != null ? eveningLine : morningLine;
         }
         if (target == null) {
             throw new ResponseStatusException(
@@ -584,13 +637,46 @@ public class DailyStockAuditService {
                     "No count line found for item in daily audit"
             );
         }
+
+        // Idempotent approve: already approved (+ stock applied) — skip.
+        if (
+            InventoryConstants.DAILY_AUDIT_REVIEW_APPROVED.equals(reviewStatus)
+                    && InventoryConstants.DAILY_AUDIT_REVIEW_APPROVED.equals(
+                            target.getReviewStatus()
+                    )
+                    && InventoryConstants.STOCKTAKE_LINE_CONFIRMED.equals(target.getStatus())
+        ) {
+            return;
+        }
+
+        if (
+            InventoryConstants.DAILY_AUDIT_REVIEW_APPROVED.equals(reviewStatus)
+                    && target.getCountedQty() == null
+        ) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Cannot approve without an evening (or morning) count"
+            );
+        }
+
         Instant now = Instant.now();
         target.setReviewStatus(reviewStatus);
         target.setReviewNotes(notes != null && !notes.isBlank() ? notes.trim() : null);
         target.setReviewedBy(userId);
         target.setReviewedAt(now);
         stockTakeLineRepository.save(target);
-        return getReview(businessId, audit.getBranchId(), audit.getAuditDate());
+
+        if (InventoryConstants.DAILY_AUDIT_REVIEW_APPROVED.equals(reviewStatus)) {
+            stockTakeService.applyDailyAuditApprovedCount(businessId, target, userId);
+            // Keep morning review status in sync when evening is the approval target.
+            if (eveningLine != null && morningLine != null && morningLine != target) {
+                morningLine.setReviewStatus(reviewStatus);
+                morningLine.setReviewNotes(target.getReviewNotes());
+                morningLine.setReviewedBy(userId);
+                morningLine.setReviewedAt(now);
+                stockTakeLineRepository.save(morningLine);
+            }
+        }
     }
 
     private DailyStockAuditDtos.DailyStockAuditTodayResponse buildTodayResponse(

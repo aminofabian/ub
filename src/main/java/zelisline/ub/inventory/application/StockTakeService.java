@@ -830,55 +830,106 @@ public class StockTakeService {
                 "Line has no counted quantity"
             );
         }
-        Instant now = Instant.now();
-        line.setAdminQuantity(
+        applyConfirmedCountToStock(
+            businessId,
+            session,
+            line,
             adminQuantity != null
                 ? adminQuantity.setScale(QTY_SCALE, RoundingMode.HALF_UP)
-                : line.getCountedQty()
+                : line.getCountedQty(),
+            userId
         );
+
+        stockTakeSessionRepository.save(session);
+        return buildResponse(session);
+    }
+
+    /**
+     * Apply a daily-audit approved physical count to inventory.
+     * Idempotent when the line is already confirmed.
+     */
+    @Transactional
+    public void applyDailyAuditApprovedCount(
+        String businessId,
+        StockTakeLine line,
+        String userId
+    ) {
+        if (
+            InventoryConstants.STOCKTAKE_LINE_CONFIRMED.equals(line.getStatus())
+        ) {
+            return;
+        }
+        if (line.getCountedQty() == null) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Cannot approve without a counted quantity"
+            );
+        }
+        StockTakeSession session = line.getSession();
+        if (session == null) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Count line has no session"
+            );
+        }
+        applyConfirmedCountToStock(
+            businessId,
+            session,
+            line,
+            line.getCountedQty(),
+            userId
+        );
+    }
+
+    private void applyConfirmedCountToStock(
+        String businessId,
+        StockTakeSession session,
+        StockTakeLine line,
+        BigDecimal confirmedQty,
+        String userId
+    ) {
+        Instant now = Instant.now();
+        line.setAdminQuantity(confirmedQty.setScale(QTY_SCALE, RoundingMode.HALF_UP));
         line.setStatus(InventoryConstants.STOCKTAKE_LINE_CONFIRMED);
         line.setConfirmedBy(userId);
         line.setConfirmedAt(now);
 
-        // Immediately apply inventory update if there's a variance
-        BigDecimal confirmedQty = line.getAdminQuantity();
+        BigDecimal qty = line.getAdminQuantity();
         BigDecimal systemSnap =
             line.getSystemQtySnapshot() != null
                 ? line.getSystemQtySnapshot()
                 : BigDecimal.ZERO.setScale(QTY_SCALE, RoundingMode.HALF_UP);
-        BigDecimal variance = confirmedQty.subtract(systemSnap);
-        if (variance.signum() != 0) {
-            StockAdjustmentRequest r = persistAdjustmentRequest(
-                businessId,
-                session,
-                line,
-                variance,
-                userId
-            );
-            // Auto-approve the adjustment since admin confirmed it
-            r.setStatus(InventoryConstants.ADJUSTMENT_REQUEST_APPROVED);
-            r.setDecidedBy(userId);
-            r.setDecidedAt(now);
-
-            boolean hasBatchCounts = line
-                .getBatches()
-                .stream()
-                .anyMatch(b -> b.getCountedQty() != null);
-            if (hasBatchCounts) {
-                applyBatchVarianceToStock(
-                    businessId,
-                    session.getBranchId(),
-                    line,
-                    userId
-                );
-            } else {
-                applyVarianceToStock(businessId, r, null, userId);
-            }
-            stockAdjustmentRequestRepository.save(r);
+        BigDecimal variance = qty.subtract(systemSnap);
+        if (variance.signum() == 0) {
+            return;
         }
 
-        stockTakeSessionRepository.save(session);
-        return buildResponse(session);
+        StockAdjustmentRequest r = persistAdjustmentRequest(
+            businessId,
+            session,
+            line,
+            variance,
+            userId
+        );
+        r.setStatus(InventoryConstants.ADJUSTMENT_REQUEST_APPROVED);
+        r.setDecidedBy(userId);
+        r.setDecidedAt(now);
+
+        boolean hasBatchCounts = line
+            .getBatches()
+            .stream()
+            .anyMatch(b -> b.getCountedQty() != null);
+        if (hasBatchCounts) {
+            applyBatchVarianceToStock(
+                businessId,
+                session.getBranchId(),
+                line,
+                userId
+            );
+        } else {
+            applyVarianceToStock(businessId, r, null, userId);
+        }
+        stockAdjustmentRequestRepository.save(r);
     }
 
     // ── Reconciliation ─────────────────────────────────────────────────

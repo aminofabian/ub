@@ -4,9 +4,9 @@
 FROM gradle:8.14.4-jdk21-alpine AS builder
 WORKDIR /app
 
-# Coolify build VMs are often ~2GB total. A 125MB Spring Boot fat JAR + Xmx1g
-# leaves no headroom: the kernel SIGKILLs Gradle (exit 255, logs cut mid-task).
-# Keep heap ≤768m, one worker, Serial GC, and split compile vs package.
+# Coolify build VMs are often ~2GB total. A Spring Boot fat JAR + a large Gradle
+# heap leaves no headroom: the kernel SIGKILLs Gradle (exit 255, logs cut mid-task).
+# Keep heap low, one worker, Serial GC, and split compile vs package.
 ENV GRADLE_OPTS="-Dorg.gradle.daemon=false -Dorg.gradle.parallel=false -Dorg.gradle.workers.max=1"
 ENV GRADLE_USER_HOME=/home/gradle/.gradle
 ENV JAVA_TOOL_OPTIONS="-XX:+UseSerialGC -Xss512k"
@@ -16,12 +16,15 @@ COPY gradlew build.gradle settings.gradle gradle.properties ./
 RUN chmod +x gradlew
 
 # Override local/desktop gradle.properties for the constrained builder.
+# No HeapDumpOnOutOfMemoryError — dumps on a 2GB VM often tip the process into SIGKILL.
 RUN printf '%s\n' \
 	'org.gradle.daemon=false' \
 	'org.gradle.parallel=false' \
 	'org.gradle.caching=true' \
+	'org.gradle.configureondemand=true' \
 	'org.gradle.workers.max=1' \
-	'org.gradle.jvmargs=-Xmx640m -XX:MaxMetaspaceSize=192m -XX:+UseSerialGC -Xss512k -XX:+HeapDumpOnOutOfMemoryError' \
+	'org.gradle.vfs.watch=false' \
+	'org.gradle.jvmargs=-Xmx512m -XX:MaxMetaspaceSize=160m -XX:+UseSerialGC -Xss512k -XX:MaxDirectMemorySize=64m' \
 	> gradle.properties
 
 # Prime dependency cache (layer reused when only src changes).
@@ -33,6 +36,7 @@ COPY src ./src
 
 # Split compile from packaging so peak RSS during bootJar stays lower and
 # Coolify logs show which phase died if the builder is still too small.
+RUN ./gradlew compileJava --no-daemon -x test --no-parallel --max-workers=1 --stacktrace
 RUN ./gradlew classes --no-daemon -x test --no-parallel --max-workers=1 --stacktrace
 RUN ./gradlew bootJar --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace \
 	&& JAR="$(ls -1 build/libs/*.jar | grep -v -- '-plain.jar$' | head -n1)" \

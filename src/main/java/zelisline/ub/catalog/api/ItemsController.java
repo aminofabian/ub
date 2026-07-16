@@ -289,7 +289,9 @@ public class ItemsController {
     }
 
     @PostMapping("/{id}/images")
-    @PreAuthorize("hasPermission(null, 'catalog.items.write')")
+    @PreAuthorize(
+            "hasPermission(null, 'catalog.items.write') or hasPermission(null, 'stocktake.run')"
+    )
     @ResponseStatus(HttpStatus.CREATED)
     public ItemImageResponse registerItemImage(
             @PathVariable("id") String id,
@@ -301,7 +303,9 @@ public class ItemsController {
     }
 
     @PostMapping(value = "/{id}/images/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @PreAuthorize("hasPermission(null, 'catalog.items.write')")
+    @PreAuthorize(
+            "hasPermission(null, 'catalog.items.write') or hasPermission(null, 'stocktake.run')"
+    )
     @ResponseStatus(HttpStatus.CREATED)
     public ItemImageResponse uploadItemImage(
             @PathVariable("id") String id,

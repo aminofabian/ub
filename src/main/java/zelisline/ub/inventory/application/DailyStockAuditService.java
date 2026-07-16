@@ -7,7 +7,9 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -362,7 +364,7 @@ public class DailyStockAuditService {
             lines.add(
                     new DailyStockAuditDtos.DailyStockAuditReviewLineResponse(
                             itemId,
-                            item != null ? item.getName() : itemId,
+                            itemDisplayName(item, itemId),
                             item != null ? item.getSku() : null,
                             item != null ? item.getBarcode() : null,
                             categoryName(ctx, item),
@@ -523,7 +525,7 @@ public class DailyStockAuditService {
                             audit.getAuditDate(),
                             audit.getBranchId(),
                             itemId,
-                            item != null ? item.getName() : itemId,
+                            itemDisplayName(item, itemId),
                             item != null ? item.getSku() : null,
                             morningCount,
                             eveningCount,
@@ -636,7 +638,7 @@ public class DailyStockAuditService {
             out.add(
                     new DailyStockAuditDtos.DailyStockAuditItemSummary(
                             row.getItemId(),
-                            item != null ? item.getName() : row.getItemId(),
+                            itemDisplayName(item, row.getItemId()),
                             item != null ? item.getSku() : null,
                             item != null ? item.getBarcode() : null,
                             categoryName(ctx, item),
@@ -675,7 +677,7 @@ public class DailyStockAuditService {
                     new DailyStockAuditDtos.DailyStockAuditLineResponse(
                             line.getId(),
                             line.getItemId(),
-                            item != null ? item.getName() : line.getItemId(),
+                            itemDisplayName(item, line.getItemId()),
                             item != null ? item.getSku() : null,
                             item != null ? item.getBarcode() : null,
                             categoryName(ctx, item),
@@ -846,11 +848,81 @@ public class DailyStockAuditService {
                         .stream()
                         .filter(c -> categoryIds.contains(c.getId()))
                         .collect(Collectors.toMap(Category::getId, c -> c));
-        Map<String, String> thumbs = itemCatalogService.resolveThumbnailUrls(
-                businessId,
-                itemIds
+        Map<String, String> thumbs = new LinkedHashMap<>(
+                itemCatalogService.resolveThumbnailUrls(businessId, itemIds)
         );
+        // Variants without their own photo borrow the parent product image.
+        Set<String> parentIds = itemsById.values().stream()
+                .filter(i -> !thumbs.containsKey(i.getId()))
+                .map(Item::getVariantOfItemId)
+                .filter(id -> id != null && !id.isBlank())
+                .collect(Collectors.toSet());
+        if (!parentIds.isEmpty()) {
+            Map<String, String> parentThumbs = itemCatalogService.resolveThumbnailUrls(
+                    businessId,
+                    parentIds
+            );
+            for (Item item : itemsById.values()) {
+                if (thumbs.containsKey(item.getId())) {
+                    continue;
+                }
+                String parentId = item.getVariantOfItemId();
+                if (parentId == null || parentId.isBlank()) {
+                    continue;
+                }
+                String parentThumb = parentThumbs.get(parentId);
+                if (parentThumb != null && !parentThumb.isBlank()) {
+                    thumbs.put(item.getId(), parentThumb);
+                }
+            }
+        }
         return new ItemContext(itemsById, categoriesById, thumbs);
+    }
+
+    /**
+     * Shelf label for audits: parent/base name plus pack size or variant option
+     * (e.g. "Kensalt 500g"), matching cost-audit / supplier-catalog display.
+     */
+    private static String itemDisplayName(Item item, String fallbackId) {
+        if (item == null) {
+            return fallbackId != null ? fallbackId : "";
+        }
+        String base = blankToNull(item.getName());
+        if (base == null) {
+            base = "Item";
+        }
+        String suffix = blankToNull(item.getVariantName());
+        if (suffix != null && isGenericVariantLabel(suffix)) {
+            suffix = null;
+        }
+        if (suffix == null) {
+            suffix = blankToNull(item.getSize());
+        }
+        if (suffix == null) {
+            suffix = blankToNull(item.getPackagingUnitName());
+        }
+        if (suffix == null) {
+            return base;
+        }
+        if (base.toLowerCase(Locale.ROOT).contains(suffix.toLowerCase(Locale.ROOT))) {
+            return base;
+        }
+        return base + " " + suffix;
+    }
+
+    private static boolean isGenericVariantLabel(String variantName) {
+        String t = variantName.trim().toLowerCase(Locale.ROOT);
+        return t.equals("variant")
+                || t.equals("option")
+                || t.equals("variation")
+                || t.equals("default");
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
     }
 
     private String categoryName(ItemContext ctx, Item item) {

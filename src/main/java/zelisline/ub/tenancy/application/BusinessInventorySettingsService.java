@@ -10,6 +10,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.tenancy.api.dto.CreditTabsPatchRequest;
+import zelisline.ub.tenancy.api.dto.CreditTabsSettingsResponse;
 import zelisline.ub.tenancy.api.dto.InventoryPatchRequest;
 import zelisline.ub.tenancy.api.dto.InventorySettingsResponse;
 import zelisline.ub.tenancy.api.dto.ReceiveStockPatchRequest;
@@ -30,8 +32,11 @@ public class BusinessInventorySettingsService {
     private static final String KEY_STOCK_LEVELS = "stockLevels";
     private static final String KEY_SUPPLIERS = "suppliers";
     private static final String KEY_RECEIVE_STOCK = "receiveStock";
+    private static final String KEY_CREDIT_TABS = "creditTabs";
     private static final String KEY_SHOW_SYSTEM_STOCK =
             "showSystemStockToStockManager";
+    private static final String KEY_ALLOW_CASHIER_TAB_CLEARANCE =
+            "allowCashierTabClearance";
     private static final String KEY_ALLOW_EDIT_STOCK_MANAGER =
             "allowStockEditForStockManager";
     private static final String KEY_ALLOW_EDIT_GROCERY_CLERK =
@@ -65,7 +70,8 @@ public class BusinessInventorySettingsService {
                     readStocktake(inventory),
                     readStockLevels(inventory),
                     readSuppliers(inventory),
-                    readReceiveStock(inventory)
+                    readReceiveStock(inventory),
+                    readCreditTabs(inventory)
             );
         } catch (Exception e) {
             return InventorySettingsResponse.defaults();
@@ -81,6 +87,7 @@ public class BusinessInventorySettingsService {
                     && patch.stockLevels() == null
                     && patch.suppliers() == null
                     && patch.receiveStock() == null
+                    && patch.creditTabs() == null
         ) {
             return currentSettings;
         }
@@ -105,6 +112,11 @@ public class BusinessInventorySettingsService {
             ObjectNode receiveStock = copyNamespace(inventory, KEY_RECEIVE_STOCK);
             applyReceiveStockPatch(receiveStock, patch.receiveStock());
             inventory.set(KEY_RECEIVE_STOCK, receiveStock);
+        }
+        if (patch.creditTabs() != null) {
+            ObjectNode creditTabs = copyNamespace(inventory, KEY_CREDIT_TABS);
+            applyCreditTabsPatch(creditTabs, patch.creditTabs());
+            inventory.set(KEY_CREDIT_TABS, creditTabs);
         }
         root.set(KEY_INVENTORY, inventory);
         return writeRoot(root);
@@ -166,6 +178,19 @@ public class BusinessInventorySettingsService {
         return new ReceiveStockSettingsResponse(
                 receiveStock.path(KEY_ALLOW_RECEIVE_CASHIER).asBoolean(true),
                 receiveStock.path(KEY_ALLOW_RECEIVE_STOCK_MANAGER).asBoolean(true)
+        );
+    }
+
+    private static CreditTabsSettingsResponse readCreditTabs(JsonNode inventoryNode) {
+        if (inventoryNode.isMissingNode() || !inventoryNode.isObject()) {
+            return CreditTabsSettingsResponse.defaults();
+        }
+        JsonNode creditTabs = inventoryNode.path(KEY_CREDIT_TABS);
+        if (creditTabs.isMissingNode() || !creditTabs.isObject()) {
+            return CreditTabsSettingsResponse.defaults();
+        }
+        return new CreditTabsSettingsResponse(
+                creditTabs.path(KEY_ALLOW_CASHIER_TAB_CLEARANCE).asBoolean(false)
         );
     }
 
@@ -232,6 +257,15 @@ public class BusinessInventorySettingsService {
                     KEY_ALLOW_RECEIVE_STOCK_MANAGER,
                     patch.allowReceiveForStockManager()
             );
+        }
+    }
+
+    private static void applyCreditTabsPatch(
+            ObjectNode creditTabs,
+            CreditTabsPatchRequest patch
+    ) {
+        if (patch.allowCashierTabClearance() != null) {
+            creditTabs.put(KEY_ALLOW_CASHIER_TAB_CLEARANCE, patch.allowCashierTabClearance());
         }
     }
 

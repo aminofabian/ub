@@ -7,8 +7,12 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -17,10 +21,17 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.CreditClaimChannels;
+import zelisline.ub.credits.CreditClaimSources;
 import zelisline.ub.credits.CreditClaimStatuses;
+import zelisline.ub.credits.api.dto.PaymentClaimReviewRowResponse;
+import zelisline.ub.credits.api.dto.ProposeTabClearanceRequest;
 import zelisline.ub.credits.domain.CreditAccount;
+import zelisline.ub.credits.domain.Customer;
+import zelisline.ub.credits.domain.CustomerPhone;
 import zelisline.ub.credits.domain.PublicPaymentClaim;
 import zelisline.ub.credits.repository.CreditAccountRepository;
+import zelisline.ub.credits.repository.CustomerPhoneRepository;
+import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.credits.repository.PublicPaymentClaimRepository;
 
 @Service
@@ -32,13 +43,106 @@ public class PublicPaymentClaimService {
 
     private final PublicPaymentClaimRepository publicPaymentClaimRepository;
     private final CreditAccountRepository creditAccountRepository;
+    private final CustomerRepository customerRepository;
+    private final CustomerPhoneRepository customerPhoneRepository;
     private final CreditSaleDebtService creditSaleDebtService;
     private final CreditsJournalService creditsJournalService;
+    private final CashierTabClearanceAccess cashierTabClearanceAccess;
 
     @Transactional(readOnly = true)
     public List<PublicPaymentClaim> listSubmitted(String businessId) {
         return publicPaymentClaimRepository.findByBusinessIdAndStatusOrderByCreatedAtAsc(
                 businessId, CreditClaimStatuses.SUBMITTED);
+    }
+
+    @Transactional(readOnly = true)
+    public List<PaymentClaimReviewRowResponse> listSubmittedForReview(String businessId) {
+        List<PublicPaymentClaim> rows = listSubmitted(businessId);
+        if (rows.isEmpty()) {
+            return List.of();
+        }
+        List<String> accountIds = rows.stream().map(PublicPaymentClaim::getCreditAccountId).distinct().toList();
+        Map<String, CreditAccount> accounts = new HashMap<>();
+        for (CreditAccount acc : creditAccountRepository.findAllById(accountIds)) {
+            accounts.put(acc.getId(), acc);
+        }
+        List<String> customerIds = accounts.values().stream().map(CreditAccount::getCustomerId).distinct().toList();
+        Map<String, Customer> customers = new HashMap<>();
+        for (Customer c : customerRepository.findAllById(customerIds)) {
+            customers.put(c.getId(), c);
+        }
+        Map<String, String> primaryPhone = new HashMap<>();
+        for (CustomerPhone p : customerPhoneRepository.findByCustomerIdIn(customerIds)) {
+            if (p.isPrimary() || !primaryPhone.containsKey(p.getCustomerId())) {
+                primaryPhone.put(p.getCustomerId(), p.getPhone());
+            }
+        }
+        List<PaymentClaimReviewRowResponse> out = new ArrayList<>(rows.size());
+        for (PublicPaymentClaim row : rows) {
+            CreditAccount acc = accounts.get(row.getCreditAccountId());
+            Customer customer = acc == null ? null : customers.get(acc.getCustomerId());
+            String customerId = customer == null ? null : customer.getId();
+            out.add(new PaymentClaimReviewRowResponse(
+                    row.getId(),
+                    row.getBusinessId(),
+                    row.getCreditAccountId(),
+                    customerId,
+                    customer == null ? null : customer.getName(),
+                    customerId == null ? null : primaryPhone.get(customerId),
+                    row.getStatus(),
+                    row.getSource() == null ? CreditClaimSources.PUBLIC : row.getSource(),
+                    row.getProposedChannel(),
+                    row.getSubmittedAmount(),
+                    row.getSubmittedReference(),
+                    row.getCreditNote(),
+                    row.getSubmittedByUserId(),
+                    row.getApprovedJournalId(),
+                    row.getRejectionReason(),
+                    row.getCreatedAt(),
+                    row.getUpdatedAt()
+            ));
+        }
+        return out;
+    }
+
+    @Transactional
+    public String proposeCashierTabClearance(
+            String businessId,
+            ProposeTabClearanceRequest req,
+            String actorUserId
+    ) {
+        cashierTabClearanceAccess.requireEnabled(businessId);
+        if (!CreditClaimChannels.isValid(req.channel())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Channel must be 'cash' or 'mpesa'");
+        }
+        CreditAccount account = creditAccountRepository
+                .findByCustomerIdAndBusinessId(req.customerId(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Credit account not found"));
+        BigDecimal owed = account.getBalanceOwed() == null ? BigDecimal.ZERO : account.getBalanceOwed();
+        BigDecimal amount = req.amount().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        if (amount.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Amount must be positive");
+        }
+        if (amount.compareTo(owed) > 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Amount exceeds tab balance of " + owed.toPlainString()
+            );
+        }
+        PublicPaymentClaim row = new PublicPaymentClaim();
+        row.setBusinessId(businessId);
+        row.setCreditAccountId(account.getId());
+        // Staff claims are not redeemable via public token; store a unique opaque hash.
+        row.setTokenHash(sha256Hex("cashier:" + UUID.randomUUID()).toLowerCase());
+        row.setStatus(CreditClaimStatuses.SUBMITTED);
+        row.setSource(CreditClaimSources.CASHIER);
+        row.setProposedChannel(req.channel());
+        row.setSubmittedByUserId(actorUserId);
+        row.setSubmittedAmount(amount);
+        row.setSubmittedReference(trimOrNull(req.reference()));
+        row.setCreditNote("Till clearance — " + req.channel());
+        publicPaymentClaimRepository.save(row);
+        return row.getId();
     }
 
     @Transactional
@@ -56,6 +160,7 @@ public class PublicPaymentClaimService {
         row.setCreditAccountId(account.getId());
         row.setTokenHash(hash);
         row.setStatus(CreditClaimStatuses.ISSUED);
+        row.setSource(CreditClaimSources.PUBLIC);
         publicPaymentClaimRepository.save(row);
         return new IssuedClaimToken(row.getId(), plainToken);
     }

@@ -35,6 +35,17 @@ public class PublicPaymentClaim {
     @Column(name = "status", nullable = false, length = 24)
     private String status;
 
+    /** {@code public} (pay link) or {@code cashier} (till clearance). */
+    @Column(name = "source", nullable = false, length = 24)
+    private String source = "public";
+
+    /** Cashier-proposed settlement channel hint ({@code cash} / {@code mpesa}). */
+    @Column(name = "proposed_channel", length = 16)
+    private String proposedChannel;
+
+    @Column(name = "submitted_by_user_id", length = 36)
+    private String submittedByUserId;
+
     @Column(name = "submitted_amount", precision = 14, scale = 2)
     private BigDecimal submittedAmount;
 

@@ -17,9 +17,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.api.dto.ApproveClaimRequest;
+import zelisline.ub.credits.api.dto.PaymentClaimReviewRowResponse;
 import zelisline.ub.credits.api.dto.RejectClaimRequest;
 import zelisline.ub.credits.application.PublicPaymentClaimService;
-import zelisline.ub.credits.domain.PublicPaymentClaim;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
@@ -33,9 +33,10 @@ public class CreditsPaymentClaimsController {
 
     @GetMapping("/submitted")
     @PreAuthorize("hasPermission(null, 'credits.claims.review')")
-    public List<PublicPaymentClaim> listSubmitted(HttpServletRequest request) {
+    public List<PaymentClaimReviewRowResponse> listSubmitted(HttpServletRequest request) {
         CurrentTenantUser.require(request);
-        return publicPaymentClaimService.listSubmitted(TenantRequestIds.resolveBusinessId(request));
+        return publicPaymentClaimService.listSubmittedForReview(
+                TenantRequestIds.resolveBusinessId(request));
     }
 
     @PostMapping("/{claimId}/approve")

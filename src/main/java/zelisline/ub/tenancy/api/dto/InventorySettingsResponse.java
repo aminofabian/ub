@@ -4,14 +4,16 @@ public record InventorySettingsResponse(
         StocktakeSettingsResponse stocktake,
         StockLevelsSettingsResponse stockLevels,
         SuppliersAccessSettingsResponse suppliers,
-        ReceiveStockSettingsResponse receiveStock
+        ReceiveStockSettingsResponse receiveStock,
+        CreditTabsSettingsResponse creditTabs
 ) {
     public static InventorySettingsResponse defaults() {
         return new InventorySettingsResponse(
                 StocktakeSettingsResponse.defaults(),
                 StockLevelsSettingsResponse.defaults(),
                 SuppliersAccessSettingsResponse.defaults(),
-                ReceiveStockSettingsResponse.defaults()
+                ReceiveStockSettingsResponse.defaults(),
+                CreditTabsSettingsResponse.defaults()
         );
     }
 }

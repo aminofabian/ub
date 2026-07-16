@@ -6,6 +6,7 @@ public record InventoryPatchRequest(
         @Valid StocktakePatchRequest stocktake,
         @Valid StockLevelsPatchRequest stockLevels,
         @Valid SuppliersAccessPatchRequest suppliers,
-        @Valid ReceiveStockPatchRequest receiveStock
+        @Valid ReceiveStockPatchRequest receiveStock,
+        @Valid CreditTabsPatchRequest creditTabs
 ) {
 }

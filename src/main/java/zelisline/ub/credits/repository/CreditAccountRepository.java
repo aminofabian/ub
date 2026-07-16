@@ -71,4 +71,12 @@ public interface CreditAccountRepository extends JpaRepository<CreditAccount, St
             @Param("staleBefore") Instant staleBefore,
             @Param("maxCount") int maxCount
     );
+
+    @Query("""
+            select c from CreditAccount c
+            where c.businessId = :businessId
+              and c.balanceOwed > 0
+            order by c.balanceOwed desc
+            """)
+    List<CreditAccount> findOutstandingByBusinessId(@Param("businessId") String businessId);
 }

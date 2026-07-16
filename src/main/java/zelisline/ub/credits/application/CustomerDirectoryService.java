@@ -37,6 +37,7 @@ import zelisline.ub.credits.api.dto.CreditAccountSummaryResponse;
 import zelisline.ub.credits.api.dto.CustomerPhoneDraft;
 import zelisline.ub.credits.api.dto.CustomerPhoneResponse;
 import zelisline.ub.credits.api.dto.CustomerResponse;
+import zelisline.ub.credits.api.dto.OutstandingTabRowResponse;
 import zelisline.ub.credits.api.dto.PatchCustomerRequest;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.Customer;
@@ -75,6 +76,51 @@ public class CustomerDirectoryService {
                 .map(c -> assembleResponse(c, phonesByCustomer.get(c.getId()), creditByCustomer.get(c.getId())))
                 .toList();
         return new PageImpl<>(mapped, page.getPageable(), page.getTotalElements());
+    }
+
+    @Transactional(readOnly = true)
+    public List<OutstandingTabRowResponse> listOutstandingTabs(String businessId, String query) {
+        List<CreditAccount> accounts = creditAccountRepository.findOutstandingByBusinessId(businessId);
+        if (accounts.isEmpty()) {
+            return List.of();
+        }
+        List<String> customerIds = accounts.stream().map(CreditAccount::getCustomerId).distinct().toList();
+        Map<String, Customer> customers = new HashMap<>();
+        for (Customer c : customerRepository.findAllById(customerIds)) {
+            if (c.getDeletedAt() == null) {
+                customers.put(c.getId(), c);
+            }
+        }
+        Map<String, String> primaryPhone = new HashMap<>();
+        for (CustomerPhone p : customerPhoneRepository.findByCustomerIdIn(customerIds)) {
+            if (p.isPrimary() || !primaryPhone.containsKey(p.getCustomerId())) {
+                primaryPhone.put(p.getCustomerId(), p.getPhone());
+            }
+        }
+        String q = query == null ? "" : query.trim().toLowerCase();
+        String qDigits = CustomerPhoneNormalizer.normalize(query == null ? "" : query);
+        List<OutstandingTabRowResponse> out = new ArrayList<>();
+        for (CreditAccount acc : accounts) {
+            Customer c = customers.get(acc.getCustomerId());
+            if (c == null) {
+                continue;
+            }
+            String phone = primaryPhone.get(c.getId());
+            if (!q.isEmpty()) {
+                boolean nameHit = c.getName() != null && c.getName().toLowerCase().contains(q);
+                boolean phoneHit = phone != null && !qDigits.isEmpty() && phone.contains(qDigits);
+                if (!nameHit && !phoneHit) {
+                    continue;
+                }
+            }
+            out.add(new OutstandingTabRowResponse(
+                    c.getId(),
+                    c.getName(),
+                    phone,
+                    acc.getBalanceOwed()
+            ));
+        }
+        return out;
     }
 
     @Transactional(readOnly = true)

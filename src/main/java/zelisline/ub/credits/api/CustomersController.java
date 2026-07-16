@@ -19,12 +19,16 @@ import org.springframework.web.bind.annotation.RestController;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import java.util.List;
+
 import zelisline.ub.credits.api.dto.AddCustomerPhoneRequest;
 import zelisline.ub.credits.api.dto.CreateCustomerRequest;
 import zelisline.ub.credits.api.dto.CustomerResponse;
 import zelisline.ub.credits.api.dto.IssuePaymentClaimResponse;
+import zelisline.ub.credits.api.dto.OutstandingTabRowResponse;
 import zelisline.ub.credits.api.dto.PatchCustomerRequest;
 import zelisline.ub.credits.api.dto.TopUpWalletRequest;
+import zelisline.ub.credits.application.CashierTabClearanceAccess;
 import zelisline.ub.credits.application.CreditCustomerStatementService;
 import zelisline.ub.credits.application.CreditCustomerStatementService.CreditStatement;
 import zelisline.ub.credits.application.CustomerDirectoryService;
@@ -44,6 +48,7 @@ public class CustomersController {
     private final CreditCustomerStatementService creditCustomerStatementService;
     private final WalletLedgerService walletLedgerService;
     private final PublicPaymentClaimService publicPaymentClaimService;
+    private final CashierTabClearanceAccess cashierTabClearanceAccess;
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'credits.customers.read')")
@@ -54,6 +59,18 @@ public class CustomersController {
     ) {
         CurrentTenantUser.require(request);
         return customerDirectoryService.list(TenantRequestIds.resolveBusinessId(request), phone, pageable);
+    }
+
+    @GetMapping("/outstanding-tabs")
+    @PreAuthorize("hasPermission(null, 'credits.customers.read')")
+    public List<OutstandingTabRowResponse> outstandingTabs(
+            @RequestParam(required = false) String q,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        cashierTabClearanceAccess.requireEnabled(businessId);
+        return customerDirectoryService.listOutstandingTabs(businessId, q);
     }
 
     @GetMapping("/{customerId}")

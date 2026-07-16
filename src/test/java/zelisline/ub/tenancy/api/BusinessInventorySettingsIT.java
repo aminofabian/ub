@@ -128,6 +128,33 @@ class BusinessInventorySettingsIT {
                 .andExpect(jsonPath("$.inventory.receiveStock.allowReceiveForCashier")
                         .value(true))
                 .andExpect(jsonPath("$.inventory.receiveStock.allowReceiveForStockManager")
+                        .value(true))
+                .andExpect(jsonPath("$.inventory.creditTabs.allowCashierTabClearance")
+                        .value(false));
+    }
+
+    @Test
+    void patchCreditTabsSettingsPersist() throws Exception {
+        mockMvc.perform(patch("/api/v1/businesses/me")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"inventory":{"creditTabs":{"allowCashierTabClearance":true}}}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inventory.creditTabs.allowCashierTabClearance")
+                        .value(true));
+
+        entityManager.clear();
+
+        mockMvc.perform(get("/api/v1/businesses/me")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inventory.creditTabs.allowCashierTabClearance")
                         .value(true));
     }
 

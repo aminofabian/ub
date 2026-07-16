@@ -3,6 +3,7 @@ package zelisline.ub.sales.application;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
@@ -21,6 +22,7 @@ import zelisline.ub.inventory.application.InventoryLedgerService;
 import zelisline.ub.pricing.api.dto.PostSellingPriceRequest;
 import zelisline.ub.pricing.application.PricingService;
 import zelisline.ub.sales.api.dto.PosQuickCreateItemRequest;
+import zelisline.ub.sales.api.dto.PosQuickCreateVariantLine;
 import zelisline.ub.tenancy.application.FeatureFlagService;
 
 @Service
@@ -80,6 +82,18 @@ public class PosQuickCreateItemService {
             );
         }
 
+        boolean asGroup = Boolean.TRUE.equals(req.createAsGroup());
+        if (asGroup) {
+            return createGroupWithVariants(businessId, actorUserId, req, branchId, idempotencyKey);
+        }
+
+        if (req.unitPrice() == null || req.unitPrice().signum() <= 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Sell price is required"
+            );
+        }
+
         ItemResponse item;
         String relatedId = blankToNull(req.relatedItemId());
         if (relatedId != null) {
@@ -88,36 +102,166 @@ public class PosQuickCreateItemService {
             item = createStandalone(businessId, actorUserId, req, idempotencyKey);
         }
 
+        priceAndStock(
+                businessId,
+                actorUserId,
+                branchId,
+                item.id(),
+                req.unitPrice(),
+                req.buyingPrice(),
+                req.initialStockQty()
+        );
+
+        return item;
+    }
+
+    private ItemResponse createGroupWithVariants(
+            String businessId,
+            String actorUserId,
+            PosQuickCreateItemRequest req,
+            String branchId,
+            String idempotencyKey
+    ) {
+        if (blankToNull(req.relatedItemId()) != null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Cannot link to an existing product when creating a new group"
+            );
+        }
+        List<PosQuickCreateVariantLine> lines = req.variants();
+        if (lines == null || lines.isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Add at least one variant for the group"
+            );
+        }
+
+        String groupSku = "POS-G-"
+                + UUID.randomUUID().toString().replace("-", "").substring(0, 10).toUpperCase();
+        CreateItemRequest parentReq = new CreateItemRequest(
+                groupSku,
+                null,
+                req.name().trim(),
+                null,
+                req.itemTypeId().trim(),
+                blankToNull(req.categoryId()),
+                null,
+                "each",
+                false,
+                false,
+                false,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+        );
+
+        ItemResponse parent = itemCatalogService.createItem(
+                businessId,
+                parentReq,
+                idempotencyKey,
+                actorUserId
+        ).body();
+
+        ItemResponse first = null;
+        for (PosQuickCreateVariantLine line : lines) {
+            String optionLabel = line.variantName().trim();
+            CreateVariantRequest variantReq = new CreateVariantRequest(
+                    "POS-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase(),
+                    optionLabel,
+                    blankToNull(line.barcode()),
+                    req.name().trim() + " — " + optionLabel,
+                    null,
+                    blankToNull(req.categoryId()),
+                    null,
+                    blankToNull(req.unitType()) != null ? req.unitType().trim() : "each",
+                    false,
+                    true,
+                    true,
+                    false,
+                    null,
+                    null,
+                    null,
+                    null,
+                    line.buyingPrice(),
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null
+            );
+
+            ItemResponse created = itemCatalogService.createVariant(
+                    businessId,
+                    parent.id(),
+                    variantReq,
+                    actorUserId
+            );
+            priceAndStock(
+                    businessId,
+                    actorUserId,
+                    branchId,
+                    created.id(),
+                    line.unitPrice(),
+                    line.buyingPrice(),
+                    line.initialStockQty()
+            );
+            if (first == null) {
+                first = created;
+            }
+        }
+        return first;
+    }
+
+    private void priceAndStock(
+            String businessId,
+            String actorUserId,
+            String branchId,
+            String itemId,
+            BigDecimal unitPrice,
+            BigDecimal buyingPrice,
+            BigDecimal initialStockQty
+    ) {
         pricingService.setSellingPrice(
                 businessId,
                 new PostSellingPriceRequest(
-                        item.id(),
+                        itemId,
                         branchId,
-                        req.unitPrice(),
+                        unitPrice,
                         LocalDate.now(),
                         "POS cashier quick-create"
                 ),
                 actorUserId
         );
 
-        // Opening batch so checkout can allocate cost/qty immediately.
-        BigDecimal openingQty = req.initialStockQty() != null
-                ? req.initialStockQty()
+        BigDecimal openingQty = initialStockQty != null
+                ? initialStockQty
                 : DEFAULT_OPENING_QTY;
-        BigDecimal unitCost = resolveUnitCost(req.buyingPrice());
+        BigDecimal unitCost = resolveUnitCost(buyingPrice);
         inventoryLedgerService.recordOpeningBalance(
                 businessId,
                 new PostOpeningBalanceRequest(
                         branchId,
-                        item.id(),
+                        itemId,
                         openingQty,
                         unitCost,
                         "POS cashier quick-create opening stock"
                 ),
                 actorUserId
         );
-
-        return item;
     }
 
     private ItemResponse createStandalone(

@@ -16,6 +16,8 @@ import zelisline.ub.tenancy.api.dto.StockLevelsPatchRequest;
 import zelisline.ub.tenancy.api.dto.StockLevelsSettingsResponse;
 import zelisline.ub.tenancy.api.dto.StocktakePatchRequest;
 import zelisline.ub.tenancy.api.dto.StocktakeSettingsResponse;
+import zelisline.ub.tenancy.api.dto.SuppliersAccessPatchRequest;
+import zelisline.ub.tenancy.api.dto.SuppliersAccessSettingsResponse;
 
 @Service
 @RequiredArgsConstructor
@@ -24,6 +26,7 @@ public class BusinessInventorySettingsService {
     private static final String KEY_INVENTORY = "inventory";
     private static final String KEY_STOCKTAKE = "stocktake";
     private static final String KEY_STOCK_LEVELS = "stockLevels";
+    private static final String KEY_SUPPLIERS = "suppliers";
     private static final String KEY_SHOW_SYSTEM_STOCK =
             "showSystemStockToStockManager";
     private static final String KEY_ALLOW_EDIT_STOCK_MANAGER =
@@ -31,6 +34,14 @@ public class BusinessInventorySettingsService {
     private static final String KEY_ALLOW_EDIT_GROCERY_CLERK =
             "allowStockEditForGroceryClerk";
     private static final String KEY_ALLOW_NEGATIVE_STOCK = "allowNegativeStock";
+    private static final String KEY_ALLOW_SUPPLIER_WRITE_STOCK_MANAGER =
+            "allowSupplierWriteForStockManager";
+    private static final String KEY_ALLOW_SUPPLIER_WRITE_CASHIER =
+            "allowSupplierWriteForCashier";
+    private static final String KEY_ALLOW_LINK_PRODUCTS_STOCK_MANAGER =
+            "allowLinkProductsForStockManager";
+    private static final String KEY_ALLOW_LINK_PRODUCTS_CASHIER =
+            "allowLinkProductsForCashier";
 
     private final ObjectMapper objectMapper;
 
@@ -43,9 +54,11 @@ public class BusinessInventorySettingsService {
             if (!root.isObject()) {
                 return InventorySettingsResponse.defaults();
             }
+            JsonNode inventory = root.path(KEY_INVENTORY);
             return new InventorySettingsResponse(
-                    readStocktake(root.path(KEY_INVENTORY)),
-                    readStockLevels(root.path(KEY_INVENTORY))
+                    readStocktake(inventory),
+                    readStockLevels(inventory),
+                    readSuppliers(inventory)
             );
         } catch (Exception e) {
             return InventorySettingsResponse.defaults();
@@ -56,7 +69,11 @@ public class BusinessInventorySettingsService {
         if (patch == null) {
             return currentSettings;
         }
-        if (patch.stocktake() == null && patch.stockLevels() == null) {
+        if (
+            patch.stocktake() == null
+                    && patch.stockLevels() == null
+                    && patch.suppliers() == null
+        ) {
             return currentSettings;
         }
         ObjectNode root = parseRoot(currentSettings);
@@ -70,6 +87,11 @@ public class BusinessInventorySettingsService {
             ObjectNode stockLevels = copyNamespace(inventory, KEY_STOCK_LEVELS);
             applyStockLevelsPatch(stockLevels, patch.stockLevels());
             inventory.set(KEY_STOCK_LEVELS, stockLevels);
+        }
+        if (patch.suppliers() != null) {
+            ObjectNode suppliers = copyNamespace(inventory, KEY_SUPPLIERS);
+            applySuppliersPatch(suppliers, patch.suppliers());
+            inventory.set(KEY_SUPPLIERS, suppliers);
         }
         root.set(KEY_INVENTORY, inventory);
         return writeRoot(root);
@@ -103,6 +125,22 @@ public class BusinessInventorySettingsService {
         );
     }
 
+    private static SuppliersAccessSettingsResponse readSuppliers(JsonNode inventoryNode) {
+        if (inventoryNode.isMissingNode() || !inventoryNode.isObject()) {
+            return SuppliersAccessSettingsResponse.defaults();
+        }
+        JsonNode suppliers = inventoryNode.path(KEY_SUPPLIERS);
+        if (suppliers.isMissingNode() || !suppliers.isObject()) {
+            return SuppliersAccessSettingsResponse.defaults();
+        }
+        return new SuppliersAccessSettingsResponse(
+                suppliers.path(KEY_ALLOW_SUPPLIER_WRITE_STOCK_MANAGER).asBoolean(false),
+                suppliers.path(KEY_ALLOW_SUPPLIER_WRITE_CASHIER).asBoolean(false),
+                suppliers.path(KEY_ALLOW_LINK_PRODUCTS_STOCK_MANAGER).asBoolean(false),
+                suppliers.path(KEY_ALLOW_LINK_PRODUCTS_CASHIER).asBoolean(false)
+        );
+    }
+
     private static void applyStockLevelsPatch(
             ObjectNode stockLevels,
             StockLevelsPatchRequest patch
@@ -121,6 +159,36 @@ public class BusinessInventorySettingsService {
         }
         if (patch.allowNegativeStock() != null) {
             stockLevels.put(KEY_ALLOW_NEGATIVE_STOCK, patch.allowNegativeStock());
+        }
+    }
+
+    private static void applySuppliersPatch(
+            ObjectNode suppliers,
+            SuppliersAccessPatchRequest patch
+    ) {
+        if (patch.allowSupplierWriteForStockManager() != null) {
+            suppliers.put(
+                    KEY_ALLOW_SUPPLIER_WRITE_STOCK_MANAGER,
+                    patch.allowSupplierWriteForStockManager()
+            );
+        }
+        if (patch.allowSupplierWriteForCashier() != null) {
+            suppliers.put(
+                    KEY_ALLOW_SUPPLIER_WRITE_CASHIER,
+                    patch.allowSupplierWriteForCashier()
+            );
+        }
+        if (patch.allowLinkProductsForStockManager() != null) {
+            suppliers.put(
+                    KEY_ALLOW_LINK_PRODUCTS_STOCK_MANAGER,
+                    patch.allowLinkProductsForStockManager()
+            );
+        }
+        if (patch.allowLinkProductsForCashier() != null) {
+            suppliers.put(
+                    KEY_ALLOW_LINK_PRODUCTS_CASHIER,
+                    patch.allowLinkProductsForCashier()
+            );
         }
     }
 

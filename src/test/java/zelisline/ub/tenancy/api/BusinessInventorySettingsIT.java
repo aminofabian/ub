@@ -116,7 +116,49 @@ class BusinessInventorySettingsIT {
                 .andExpect(jsonPath("$.inventory.stockLevels.allowStockEditForGroceryClerk")
                         .value(false))
                 .andExpect(jsonPath("$.inventory.stockLevels.allowNegativeStock")
+                        .value(false))
+                .andExpect(jsonPath("$.inventory.suppliers.allowSupplierWriteForStockManager")
+                        .value(false))
+                .andExpect(jsonPath("$.inventory.suppliers.allowSupplierWriteForCashier")
+                        .value(false))
+                .andExpect(jsonPath("$.inventory.suppliers.allowLinkProductsForStockManager")
+                        .value(false))
+                .andExpect(jsonPath("$.inventory.suppliers.allowLinkProductsForCashier")
                         .value(false));
+    }
+
+    @Test
+    void patchSuppliersAccessSettingsPersist() throws Exception {
+        mockMvc.perform(patch("/api/v1/businesses/me")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"inventory":{"suppliers":{
+                                  "allowSupplierWriteForStockManager":true,
+                                  "allowLinkProductsForCashier":true
+                                }}}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inventory.suppliers.allowSupplierWriteForStockManager")
+                        .value(true))
+                .andExpect(jsonPath("$.inventory.suppliers.allowLinkProductsForCashier")
+                        .value(true))
+                .andExpect(jsonPath("$.inventory.suppliers.allowSupplierWriteForCashier")
+                        .value(false));
+
+        entityManager.clear();
+
+        mockMvc.perform(get("/api/v1/businesses/me")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inventory.suppliers.allowSupplierWriteForStockManager")
+                        .value(true))
+                .andExpect(jsonPath("$.inventory.suppliers.allowLinkProductsForCashier")
+                        .value(true));
     }
 
     @Test

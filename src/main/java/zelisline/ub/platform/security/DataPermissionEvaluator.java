@@ -64,6 +64,18 @@ public class DataPermissionEvaluator implements PermissionEvaluator {
                     tenant.roleId()
             );
         }
+        if ("suppliers.write".equals(perm)) {
+            return inventoryAccess.grantsDelegatedSupplierWrite(
+                    tenant.businessId(),
+                    tenant.roleId()
+            );
+        }
+        if ("catalog.items.link_suppliers".equals(perm)) {
+            return inventoryAccess.grantsDelegatedLinkSuppliers(
+                    tenant.businessId(),
+                    tenant.roleId()
+            );
+        }
         return false;
     }
 

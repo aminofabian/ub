@@ -7,13 +7,14 @@ import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.tenancy.api.dto.StockLevelsSettingsResponse;
 import zelisline.ub.tenancy.api.dto.StocktakeSettingsResponse;
+import zelisline.ub.tenancy.api.dto.SuppliersAccessSettingsResponse;
 import zelisline.ub.tenancy.application.BusinessInventorySettingsService;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
 /**
- * Delegates {@code inventory.read} / {@code inventory.write} to restricted
- * roles when an admin has enabled it in business inventory settings.
+ * Delegates inventory / supplier permissions to restricted roles when an admin
+ * has enabled it in business inventory settings.
  */
 @Service
 @RequiredArgsConstructor
@@ -21,6 +22,8 @@ public class InventoryRoleAccessService {
 
     private static final String STOCK_MANAGER = "stock_manager";
     private static final String GROCERY_CLERK = "grocery_clerk";
+    private static final String CASHIER = "cashier";
+    private static final String BUTCHER_CASHIER = "butcher_cashier";
 
     private final BusinessRepository businessRepository;
     private final RoleRepository roleRepository;
@@ -31,6 +34,26 @@ public class InventoryRoleAccessService {
         return switch (resolveRoleKey(roleId)) {
             case STOCK_MANAGER -> settings.allowStockEditForStockManager();
             case GROCERY_CLERK -> settings.allowStockEditForGroceryClerk();
+            default -> false;
+        };
+    }
+
+    /** Delegates {@code suppliers.write} (create/edit suppliers). */
+    public boolean grantsDelegatedSupplierWrite(String businessId, String roleId) {
+        SuppliersAccessSettingsResponse settings = readSuppliers(businessId);
+        return switch (resolveRoleKey(roleId)) {
+            case STOCK_MANAGER -> settings.allowSupplierWriteForStockManager();
+            case CASHIER, BUTCHER_CASHIER -> settings.allowSupplierWriteForCashier();
+            default -> false;
+        };
+    }
+
+    /** Delegates {@code catalog.items.link_suppliers}. */
+    public boolean grantsDelegatedLinkSuppliers(String businessId, String roleId) {
+        SuppliersAccessSettingsResponse settings = readSuppliers(businessId);
+        return switch (resolveRoleKey(roleId)) {
+            case STOCK_MANAGER -> settings.allowLinkProductsForStockManager();
+            case CASHIER, BUTCHER_CASHIER -> settings.allowLinkProductsForCashier();
             default -> false;
         };
     }
@@ -88,6 +111,17 @@ public class InventoryRoleAccessService {
                 .map(businessInventorySettingsService::readFromSettingsJson)
                 .map(inventory -> inventory.stockLevels())
                 .orElse(StockLevelsSettingsResponse.defaults());
+    }
+
+    private SuppliersAccessSettingsResponse readSuppliers(String businessId) {
+        if (businessId == null || businessId.isBlank()) {
+            return SuppliersAccessSettingsResponse.defaults();
+        }
+        return businessRepository.findById(businessId.trim())
+                .map(Business::getSettings)
+                .map(businessInventorySettingsService::readFromSettingsJson)
+                .map(inventory -> inventory.suppliers())
+                .orElse(SuppliersAccessSettingsResponse.defaults());
     }
 
     private String resolveRoleKey(String roleId) {

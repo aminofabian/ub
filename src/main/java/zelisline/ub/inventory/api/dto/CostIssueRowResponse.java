@@ -6,7 +6,8 @@ import java.math.BigDecimal;
  * One flagged item in the cost-audit list.
  *
  * @param costSource   where {@code effectiveCost} came from: {@code batch}, {@code reference}, or {@code none}
- * @param primaryIssue most severe flag: {@code zero_cost}, {@code sells_at_loss}, or {@code thin_margin}
+ * @param primaryIssue most severe flag: {@code zero_cost}, {@code sells_at_loss}, {@code thin_margin},
+ *                     or {@code high_margin}
  */
 public record CostIssueRowResponse(
         String itemId,
@@ -25,6 +26,7 @@ public record CostIssueRowResponse(
         String primaryIssue,
         boolean zeroCost,
         boolean sellsAtLoss,
-        boolean thinMargin
+        boolean thinMargin,
+        boolean highMargin
 ) {
 }

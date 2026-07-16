@@ -25,9 +25,9 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 import zelisline.ub.tenancy.application.BranchResolutionService;
 
 /**
- * Cost-audit surface: list items with abnormal cost (missing/zero, at-or-above sell price, or
- * thin margin) and correct them. Reading requires {@code pricing.read}; correcting requires
- * {@code pricing.cost_price.set}.
+ * Cost-audit surface: list items with abnormal cost (missing/zero, at-or-above sell price,
+ * thin margin, or exaggerated/high margin) and correct them. Reading requires
+ * {@code pricing.read}; correcting requires {@code pricing.cost_price.set}.
  */
 @Validated
 @RestController
@@ -43,6 +43,7 @@ public class CostAuditController {
     public CostIssuesResponse list(
             @RequestParam(required = false) String branchId,
             @RequestParam(required = false) BigDecimal thinMarginPct,
+            @RequestParam(required = false) BigDecimal highMarginPct,
             HttpServletRequest request
     ) {
         TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
@@ -52,7 +53,8 @@ public class CostAuditController {
             effectiveBranchId = branchResolutionService.resolveBranchForReport(
                     businessId, principal.roleId(), principal.branchId(), branchId);
         }
-        return costAuditService.listCostIssues(businessId, effectiveBranchId, thinMarginPct);
+        return costAuditService.listCostIssues(
+                businessId, effectiveBranchId, thinMarginPct, highMarginPct);
     }
 
     @PostMapping("/{itemId}/adjust")

@@ -7,10 +7,12 @@ import java.util.List;
 public record CostIssuesResponse(
         String branchId,
         BigDecimal thinMarginPct,
+        BigDecimal highMarginPct,
         int total,
         int zeroCostCount,
         int sellsAtLossCount,
         int thinMarginCount,
+        int highMarginCount,
         List<CostIssueRowResponse> items
 ) {
 }

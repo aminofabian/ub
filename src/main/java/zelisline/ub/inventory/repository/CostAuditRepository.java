@@ -11,8 +11,8 @@ import zelisline.ub.catalog.domain.Item;
 
 /**
  * Read-only detection query for the cost-audit tool: finds sellable items whose effective
- * cost is missing/zero, at or above the sell price (would sell at a loss), or leaves a very
- * thin margin.
+ * cost is missing/zero, at or above the sell price (would sell at a loss), leaves a very
+ * thin margin, or shows an exaggerated (high) margin — often an understated cost.
  *
  * <p>Effective cost = weighted-average of active on-hand batch unit costs (what drives COGS),
  * falling back to {@code items.buying_price}. Effective sell price = open branch selling price
@@ -110,13 +110,20 @@ public interface CostAuditRepository extends Repository<Item, String> {
                  or (t.sellPrice is not null and t.sellPrice > 0
                      and t.effectiveCost is not null and t.effectiveCost > 0
                      and (t.sellPrice - t.effectiveCost) < t.sellPrice * :thinFraction)
+                    -- Exaggerated / high margin (often an understated cost).
+                 or (t.sellPrice is not null and t.sellPrice > 0
+                     and t.effectiveCost is not null and t.effectiveCost > 0
+                     and (t.sellPrice - t.effectiveCost) > t.sellPrice * :highFraction)
                )
              order by
                case when t.activeQty > 0 and (t.effectiveCost is null or t.effectiveCost <= 0) then 0
                     when t.sellPrice is not null and t.sellPrice > 0
                          and t.effectiveCost is not null and t.effectiveCost > 0
                          and t.effectiveCost >= t.sellPrice then 1
-                    else 2 end,
+                    when t.sellPrice is not null and t.sellPrice > 0
+                         and t.effectiveCost is not null and t.effectiveCost > 0
+                         and (t.sellPrice - t.effectiveCost) < t.sellPrice * :thinFraction then 2
+                    else 3 end,
                t.activeQty desc,
                t.name asc
              limit :maxRows
@@ -125,6 +132,7 @@ public interface CostAuditRepository extends Repository<Item, String> {
             @Param("businessId") String businessId,
             @Param("branchId") String branchId,
             @Param("thinFraction") BigDecimal thinFraction,
+            @Param("highFraction") BigDecimal highFraction,
             @Param("maxRows") int maxRows
     );
 }

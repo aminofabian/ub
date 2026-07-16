@@ -32,9 +32,10 @@ import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.tenancy.repository.BranchRepository;
 
 /**
- * Finds and corrects items with abnormal cost (missing/zero, at-or-above sell price, or thin
- * margin). Correcting an item rewrites active batch unit costs (the COGS driver) and the item's
- * reference {@code buying_price}, and can optionally set the selling price — all audited.
+ * Finds and corrects items with abnormal cost (missing/zero, at-or-above sell price, thin
+ * margin, or exaggerated/high margin). Correcting an item rewrites active batch unit costs
+ * (the COGS driver) and the item's reference {@code buying_price}, and can optionally set the
+ * selling price — all audited.
  */
 @Service
 @RequiredArgsConstructor
@@ -44,6 +45,7 @@ public class CostAuditService {
     private static final int COST_SCALE = 4;
     private static final BigDecimal HUNDRED = new BigDecimal("100");
     private static final BigDecimal DEFAULT_THIN_MARGIN_PCT = new BigDecimal("5");
+    private static final BigDecimal DEFAULT_HIGH_MARGIN_PCT = new BigDecimal("50");
     private static final int MAX_ROWS = 500;
 
     private final CostAuditRepository costAuditRepository;
@@ -55,19 +57,34 @@ public class CostAuditService {
     private final AuditEventBuilder auditEventBuilder;
 
     @Transactional(readOnly = true)
-    public CostIssuesResponse listCostIssues(String businessId, String branchId, BigDecimal thinMarginPct) {
+    public CostIssuesResponse listCostIssues(
+            String businessId,
+            String branchId,
+            BigDecimal thinMarginPct,
+            BigDecimal highMarginPct
+    ) {
         String brId = blankToNull(branchId);
         if (brId != null) {
             requireBranch(businessId, brId);
         }
-        BigDecimal thinPct = clampThinMargin(thinMarginPct);
+        BigDecimal thinPct = clampMarginPct(thinMarginPct, DEFAULT_THIN_MARGIN_PCT);
+        BigDecimal highPct = clampMarginPct(highMarginPct, DEFAULT_HIGH_MARGIN_PCT);
+        if (highPct.compareTo(thinPct) <= 0) {
+            highPct = DEFAULT_HIGH_MARGIN_PCT;
+            if (highPct.compareTo(thinPct) <= 0) {
+                highPct = HUNDRED;
+            }
+        }
         BigDecimal thinFraction = thinPct.divide(HUNDRED, 6, RoundingMode.HALF_UP);
+        BigDecimal highFraction = highPct.divide(HUNDRED, 6, RoundingMode.HALF_UP);
 
-        List<CostIssueRow> rows = costAuditRepository.findCostIssues(businessId, brId, thinFraction, MAX_ROWS);
+        List<CostIssueRow> rows = costAuditRepository.findCostIssues(
+                businessId, brId, thinFraction, highFraction, MAX_ROWS);
         List<CostIssueRowResponse> items = new ArrayList<>(rows.size());
         int zeroCount = 0;
         int lossCount = 0;
         int thinCount = 0;
+        int highCount = 0;
         for (CostIssueRow row : rows) {
             CostIssueRowResponse mapped = buildRow(
                     row.getItemId(),
@@ -81,17 +98,20 @@ public class CostAuditService {
                     row.getBuyingPrice(),
                     row.getEffectiveCost(),
                     row.getSellPrice(),
-                    thinPct
+                    thinPct,
+                    highPct
             );
             switch (mapped.primaryIssue()) {
                 case "zero_cost" -> zeroCount++;
                 case "sells_at_loss" -> lossCount++;
                 case "thin_margin" -> thinCount++;
+                case "high_margin" -> highCount++;
                 default -> { /* no-op */ }
             }
             items.add(mapped);
         }
-        return new CostIssuesResponse(brId, thinPct, items.size(), zeroCount, lossCount, thinCount, items);
+        return new CostIssuesResponse(
+                brId, thinPct, highPct, items.size(), zeroCount, lossCount, thinCount, highCount, items);
     }
 
     @Transactional
@@ -169,7 +189,8 @@ public class CostAuditService {
                 item.getBuyingPrice(),
                 effectiveCost,
                 resolvedSell,
-                DEFAULT_THIN_MARGIN_PCT
+                DEFAULT_THIN_MARGIN_PCT,
+                DEFAULT_HIGH_MARGIN_PCT
         );
     }
 
@@ -185,7 +206,8 @@ public class CostAuditService {
             BigDecimal buyingPrice,
             BigDecimal effectiveCost,
             BigDecimal sellPrice,
-            BigDecimal thinMarginPct
+            BigDecimal thinMarginPct,
+            BigDecimal highMarginPct
     ) {
         BigDecimal cost = effectiveCost;
         BigDecimal sell = sellPrice;
@@ -205,10 +227,26 @@ public class CostAuditService {
                 && cost.signum() > 0
                 && marginPct != null
                 && marginPct.compareTo(thinMarginPct) < 0;
+        boolean highMargin = !zeroCost
+                && !sellsAtLoss
+                && !thinMargin
+                && hasSell
+                && cost.signum() > 0
+                && marginPct != null
+                && marginPct.compareTo(highMarginPct) > 0;
 
-        String primaryIssue = zeroCost
-                ? "zero_cost"
-                : sellsAtLoss ? "sells_at_loss" : "thin_margin";
+        String primaryIssue;
+        if (zeroCost) {
+            primaryIssue = "zero_cost";
+        } else if (sellsAtLoss) {
+            primaryIssue = "sells_at_loss";
+        } else if (thinMargin) {
+            primaryIssue = "thin_margin";
+        } else if (highMargin) {
+            primaryIssue = "high_margin";
+        } else {
+            primaryIssue = "ok";
+        }
         String costSource = batchWac != null
                 ? "batch"
                 : (buyingPrice != null && buyingPrice.signum() > 0 ? "reference" : "none");
@@ -230,7 +268,8 @@ public class CostAuditService {
                 primaryIssue,
                 zeroCost,
                 sellsAtLoss,
-                thinMargin
+                thinMargin,
+                highMargin
         );
     }
 
@@ -285,17 +324,17 @@ public class CostAuditService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Branch not found"));
     }
 
-    private static BigDecimal clampThinMargin(BigDecimal thinMarginPct) {
-        if (thinMarginPct == null) {
-            return DEFAULT_THIN_MARGIN_PCT;
+    private static BigDecimal clampMarginPct(BigDecimal marginPct, BigDecimal defaultPct) {
+        if (marginPct == null) {
+            return defaultPct;
         }
-        if (thinMarginPct.signum() < 0) {
+        if (marginPct.signum() < 0) {
             return BigDecimal.ZERO;
         }
-        if (thinMarginPct.compareTo(HUNDRED) > 0) {
+        if (marginPct.compareTo(HUNDRED) > 0) {
             return HUNDRED;
         }
-        return thinMarginPct;
+        return marginPct;
     }
 
     /**

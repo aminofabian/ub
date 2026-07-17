@@ -21,6 +21,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.CategoryDailyRevenueRow;
 import zelisline.ub.sales.api.dto.ItemRevenueRow;
+import zelisline.ub.sales.api.dto.PaymentLedgerRow;
 import zelisline.ub.sales.api.dto.PaymentMethodBreakdownRow;
 import zelisline.ub.sales.api.dto.RecentSaleRow;
 import zelisline.ub.sales.api.dto.RevenueByCategoryRow;
@@ -499,6 +500,33 @@ public class SalesIntelligenceService {
           ORDER BY total_amount DESC
             """;
 
+    /** Chronological tender lines for a day (or short range) — one row per sale_payments. */
+    private static final String Q_PAYMENT_LEDGER = """
+            SELECT sp.id AS payment_id,
+                   sp.sale_id,
+                   s.receipt_no,
+                   s.sold_at,
+                   sp.method,
+                   sp.amount,
+                   sp.reference,
+                   sp.sort_order,
+                   s.status,
+                   s.branch_id,
+                   COALESCE(NULLIF(TRIM(u.name), ''), u.email, s.sold_by) AS cashier_name,
+                   COALESCE(cu.name, '') AS customer_name,
+                   s.grand_total
+              FROM sale_payments sp
+              JOIN sales s ON s.id = sp.sale_id
+         LEFT JOIN users u ON u.id = s.sold_by AND u.business_id = s.business_id AND u.deleted_at IS NULL
+         LEFT JOIN customers cu ON cu.id = s.customer_id AND cu.business_id = s.business_id
+             WHERE s.business_id = ?
+               AND s.status IN (?, ?)
+               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND (? IS NULL OR s.branch_id = ?)
+          ORDER BY s.sold_at ASC, sp.sort_order ASC
+             LIMIT 3000
+            """;
+
     private static final String Q_STAFF_PERFORMANCE = """
             SELECT s.sold_by AS user_id,
                    COALESCE(NULLIF(TRIM(u.name), ''), u.email, s.sold_by) AS user_name,
@@ -645,6 +673,50 @@ public class SalesIntelligenceService {
                 branchFilter,
                 typeFilter,
                 typeFilter);
+        return out;
+    }
+
+    @Transactional(readOnly = true)
+    public List<PaymentLedgerRow> paymentLedger(
+            String businessId,
+            LocalDate fromInclusive,
+            LocalDate toInclusive,
+            String branchId
+    ) {
+        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
+        Date from = Date.valueOf(w[0]);
+        Date to = Date.valueOf(w[1]);
+        String branchFilter = (branchId != null && !branchId.isBlank()) ? branchId : null;
+
+        List<PaymentLedgerRow> out = new ArrayList<>();
+        jdbc.query(
+                Q_PAYMENT_LEDGER,
+                rs -> {
+                    long receiptNoRaw = rs.getLong("receipt_no");
+                    Long receiptNo = rs.wasNull() ? null : receiptNoRaw;
+                    out.add(new PaymentLedgerRow(
+                            rs.getString("payment_id"),
+                            rs.getString("sale_id"),
+                            receiptNo,
+                            rs.getTimestamp("sold_at").toInstant(),
+                            rs.getString("method"),
+                            rs.getBigDecimal("amount").setScale(2, RoundingMode.HALF_UP),
+                            rs.getString("reference"),
+                            rs.getInt("sort_order"),
+                            rs.getString("status"),
+                            rs.getString("branch_id"),
+                            rs.getString("cashier_name"),
+                            rs.getString("customer_name"),
+                            rs.getBigDecimal("grand_total").setScale(2, RoundingMode.HALF_UP)
+                    ));
+                },
+                businessId,
+                SalesConstants.SALE_STATUS_COMPLETED,
+                SalesConstants.SALE_STATUS_REFUNDED,
+                from,
+                to,
+                branchFilter,
+                branchFilter);
         return out;
     }
 

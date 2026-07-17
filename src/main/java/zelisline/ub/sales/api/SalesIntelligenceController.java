@@ -17,6 +17,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.sales.api.dto.CategoryDailyRevenueRow;
 import zelisline.ub.sales.api.dto.ItemRevenueRow;
+import zelisline.ub.sales.api.dto.PaymentLedgerRow;
 import zelisline.ub.sales.api.dto.PaymentMethodBreakdownRow;
 import zelisline.ub.sales.api.dto.RecentSaleRow;
 import zelisline.ub.sales.api.dto.RevenueByCategoryRow;
@@ -112,6 +113,20 @@ public class SalesIntelligenceController {
         CurrentTenantUser.require(request);
         return salesIntelligenceService.paymentsByMethod(
                 TenantRequestIds.resolveBusinessId(request), from, to, branchId, itemTypeId);
+    }
+
+    /** Chronological tender lines for reconciling a day's cash / M-Pesa / credit take. */
+    @GetMapping("/payment-ledger")
+    @PreAuthorize("hasPermission(null, 'sales.intelligence.read')")
+    public List<PaymentLedgerRow> paymentLedger(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) String branchId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return salesIntelligenceService.paymentLedger(
+                TenantRequestIds.resolveBusinessId(request), from, to, branchId);
     }
 
     @GetMapping("/staff-performance")

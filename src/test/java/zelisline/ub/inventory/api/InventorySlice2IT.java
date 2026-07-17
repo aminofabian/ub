@@ -524,6 +524,138 @@ class InventorySlice2IT {
         assertThat(expired.getQuantityRemaining().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("4");
     }
 
+    @Test
+    void stockTakeWriteDown_packageVariant_doesNotDoubleCountPackUnits() {
+        String parentId = itemCatalogService.createItem(
+                TENANT,
+                new CreateItemRequest(
+                        "SKU-SUGAR-1KG",
+                        null,
+                        "Kabras Sugar 1kg",
+                        null,
+                        goodsTypeId,
+                        null,
+                        null,
+                        null,
+                        false,
+                        true,
+                        true,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        false,
+                        null,
+                        null,
+                        null,
+                        null
+                ),
+                null
+        ).body().id();
+        String packId = itemCatalogService.createVariant(
+                TENANT,
+                parentId,
+                new zelisline.ub.catalog.api.dto.CreateVariantRequest(
+                        "SKU-SUGAR-2KG",
+                        "2kg",
+                        null,
+                        "Kabras Sugar 2kg",
+                        null,
+                        null,
+                        null,
+                        null,
+                        false,
+                        true,
+                        false,
+                        true,
+                        "2kg",
+                        new BigDecimal("2"),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null
+                ),
+                null
+        ).id();
+
+        inventoryBatchRepository.deleteAll();
+        stockMovementRepository.deleteAll();
+        // Batches parked on the pack SKU (10 pack units). Writing down 5 packs → 10 base units.
+        String packBatchId = UUID.randomUUID().toString();
+        inventoryBatchRepository.save(batch(
+                packBatchId,
+                packId,
+                Instant.parse("2026-01-01T12:00:00Z"),
+                null,
+                "10"
+        ));
+        Item parent = itemRepository.findById(parentId).orElseThrow();
+        parent.setCurrentStock(new BigDecimal("10"));
+        itemRepository.save(parent);
+
+        transactionTemplate.executeWithoutResult(st ->
+                inventoryBatchPickerService.pickAndApplyStockTakeDecrement(
+                        TENANT,
+                        packId,
+                        branchId,
+                        new BigDecimal("5"),
+                        InventoryConstants.REF_STOCK_ADJUSTMENT_REQUEST,
+                        inventoryBatchPickerService.newPickReferenceId(),
+                        owner.getId()
+                ));
+
+        InventoryBatch packBatch = inventoryBatchRepository.findById(packBatchId).orElseThrow();
+        assertThat(packBatch.getQuantityRemaining().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("0");
+        Item parentAfter = itemRepository.findById(parentId).orElseThrow();
+        assertThat(parentAfter.getCurrentStock().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void stockTakeWriteDown_writesDownAvailableWhenRequestedExceedsOnHand() {
+        inventoryBatchRepository.deleteAll();
+        stockMovementRepository.deleteAll();
+        String sole = UUID.randomUUID().toString();
+        inventoryBatchRepository.save(batch(
+                sole,
+                itemId,
+                Instant.parse("2026-02-01T12:00:00Z"),
+                null,
+                "3"
+        ));
+        Item stocked = itemRepository.findById(itemId).orElseThrow();
+        stocked.setHasExpiry(false);
+        stocked.setCurrentStock(new BigDecimal("3"));
+        itemRepository.save(stocked);
+
+        transactionTemplate.executeWithoutResult(st ->
+                inventoryBatchPickerService.pickAndApplyStockTakeDecrement(
+                        TENANT,
+                        itemId,
+                        branchId,
+                        new BigDecimal("10"),
+                        InventoryConstants.REF_STOCK_ADJUSTMENT_REQUEST,
+                        inventoryBatchPickerService.newPickReferenceId(),
+                        owner.getId()
+                ));
+
+        InventoryBatch left = inventoryBatchRepository.findById(sole).orElseThrow();
+        assertThat(left.getQuantityRemaining().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("0");
+        Item after = itemRepository.findById(itemId).orElseThrow();
+        assertThat(after.getCurrentStock().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("0");
+    }
+
     private InventoryBatch batch(String id, String itId, Instant received, LocalDate expiry, String qty) {
         InventoryBatch b = new InventoryBatch();
         b.setId(id);

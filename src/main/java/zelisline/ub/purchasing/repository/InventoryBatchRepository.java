@@ -164,6 +164,25 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
             @Param("status") String status
     );
 
+    /**
+     * Physical on-hand by item (includes expired lots). Used for stock-take snapshots
+     * and approve-time reconcile so counts match what write-downs can actually move.
+     */
+    @Query("""
+            select b.itemId, coalesce(sum(b.quantityRemaining), 0)
+             from InventoryBatch b
+             where b.businessId = :businessId
+               and b.branchId = :branchId
+               and b.status = :status
+               and b.quantityRemaining > 0
+             group by b.itemId
+            """)
+    List<Object[]> sumQuantityRemainingPhysicalByItemAtBranch(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("status") String status
+    );
+
     @Query("""
             select b.itemId, coalesce(sum(b.quantityRemaining), 0)
              from InventoryBatch b

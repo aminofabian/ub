@@ -21,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.application.ItemCatalogService;
+import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.domain.Aisle;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.AisleRepository;
@@ -70,6 +71,7 @@ public class StockTakeService {
     private final InventoryLedgerService inventoryLedgerService;
     private final InventoryBatchPickerService inventoryBatchPickerService;
     private final ItemCatalogService itemCatalogService;
+    private final PackageVariantStockResolver packageVariantStockResolver;
     private final SalesIntelligenceService salesIntelligenceService;
 
     // ── Session lifecycle ──────────────────────────────────────────────
@@ -899,8 +901,27 @@ public class StockTakeService {
             line.getSystemQtySnapshot() != null
                 ? line.getSystemQtySnapshot()
                 : BigDecimal.ZERO.setScale(QTY_SCALE, RoundingMode.HALF_UP);
-        BigDecimal variance = qty.subtract(systemSnap);
-        if (variance.signum() == 0) {
+
+        boolean hasBatchCounts = line
+            .getBatches()
+            .stream()
+            .anyMatch(b -> b.getCountedQty() != null);
+
+        BigDecimal appliedVariance;
+        if (hasBatchCounts) {
+            appliedVariance = qty.subtract(systemSnap).setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        } else {
+            // Reconcile live on-hand (package display units) to the approved count.
+            // Snapshot variance can exceed pickable qty after sales or when pack SKUs
+            // share a parent pool — live→count is what inventory can actually apply.
+            BigDecimal live = liveDisplayOnHand(
+                businessId,
+                session.getBranchId(),
+                line.getItemId()
+            );
+            appliedVariance = qty.subtract(live).setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        }
+        if (appliedVariance.signum() == 0) {
             return;
         }
 
@@ -908,17 +929,13 @@ public class StockTakeService {
             businessId,
             session,
             line,
-            variance,
+            appliedVariance,
             userId
         );
         r.setStatus(InventoryConstants.ADJUSTMENT_REQUEST_APPROVED);
         r.setDecidedBy(userId);
         r.setDecidedAt(now);
 
-        boolean hasBatchCounts = line
-            .getBatches()
-            .stream()
-            .anyMatch(b -> b.getCountedQty() != null);
         if (hasBatchCounts) {
             applyBatchVarianceToStock(
                 businessId,
@@ -1310,7 +1327,24 @@ public class StockTakeService {
         BigDecimal unitCostOverride,
         String userId
     ) {
-        BigDecimal variance = request.getVarianceQty();
+        // Prefer live→count reconcile so approve never asks for more than on-hand
+        // (and package variants adjust in catalog units against the shared pool).
+        BigDecimal target = request.getCountedQty();
+        BigDecimal variance;
+        if (target != null) {
+            BigDecimal live = liveDisplayOnHand(
+                businessId,
+                request.getBranchId(),
+                request.getItemId()
+            );
+            variance = target.subtract(live).setScale(QTY_SCALE, RoundingMode.HALF_UP);
+            request.setVarianceQty(variance);
+        } else {
+            variance = request.getVarianceQty();
+        }
+        if (variance == null || variance.signum() == 0) {
+            return;
+        }
         if (variance.signum() > 0) {
             BigDecimal unit = resolveInboundUnitCostSafe(
                 businessId,
@@ -1331,18 +1365,16 @@ public class StockTakeService {
             );
             return;
         }
-        if (variance.signum() < 0) {
-            BigDecimal pickQty = variance.negate();
-            inventoryBatchPickerService.pickAndApplyStockTakeDecrement(
-                businessId,
-                request.getItemId(),
-                request.getBranchId(),
-                pickQty,
-                InventoryConstants.REF_STOCK_ADJUSTMENT_REQUEST,
-                request.getId(),
-                userId
-            );
-        }
+        BigDecimal pickQty = variance.negate();
+        inventoryBatchPickerService.pickAndApplyStockTakeDecrement(
+            businessId,
+            request.getItemId(),
+            request.getBranchId(),
+            pickQty,
+            InventoryConstants.REF_STOCK_ADJUSTMENT_REQUEST,
+            request.getId(),
+            userId
+        );
     }
 
     private void applyBatchVarianceToStock(
@@ -1686,8 +1718,35 @@ public class StockTakeService {
         String businessId,
         String branchId
     ) {
+        Map<String, BigDecimal> raw = loadRawPhysicalOnHandByItem(businessId, branchId);
+        if (raw.isEmpty()) {
+            return Map.of();
+        }
+        Set<String> ids = new HashSet<>(raw.keySet());
+        // Expand package parents/children so variant lines get display qty even when
+        // batches live only on the parent (or sibling) item id.
+        List<Item> seeded = itemRepository.findAllById(ids).stream()
+            .filter(i -> businessId.equals(i.getBusinessId()) && i.getDeletedAt() == null)
+            .toList();
+        for (Item item : seeded) {
+            ids.addAll(packageVariantStockResolver.branchStockPoolItemIds(businessId, item));
+        }
+        Map<String, BigDecimal> out = new HashMap<>();
+        for (Item item : itemRepository.findAllById(ids)) {
+            if (!businessId.equals(item.getBusinessId()) || item.getDeletedAt() != null) {
+                continue;
+            }
+            out.put(item.getId(), displayOnHandForItem(businessId, item, raw));
+        }
+        return out;
+    }
+
+    private Map<String, BigDecimal> loadRawPhysicalOnHandByItem(
+        String businessId,
+        String branchId
+    ) {
         List<Object[]> rows =
-            inventoryBatchRepository.sumQuantityRemainingByItemAtBranch(
+            inventoryBatchRepository.sumQuantityRemainingPhysicalByItemAtBranch(
                 businessId,
                 branchId,
                 InventoryConstants.BATCH_STATUS_ACTIVE
@@ -1697,6 +1756,32 @@ public class StockTakeService {
             out.put((String) row[0], toBigDecimal(row[1]));
         }
         return out;
+    }
+
+    private BigDecimal liveDisplayOnHand(
+        String businessId,
+        String branchId,
+        String itemId
+    ) {
+        Item item = itemRepository
+            .findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
+            .orElse(null);
+        if (item == null) {
+            return BigDecimal.ZERO.setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        }
+        Map<String, BigDecimal> raw = loadRawPhysicalOnHandByItem(businessId, branchId);
+        return displayOnHandForItem(businessId, item, raw);
+    }
+
+    private BigDecimal displayOnHandForItem(
+        String businessId,
+        Item item,
+        Map<String, BigDecimal> rawByItemId
+    ) {
+        BigDecimal pool = packageVariantStockResolver.sumPoolStock(item, rawByItemId);
+        return packageVariantStockResolver
+            .displayStockQty(item, pool)
+            .setScale(QTY_SCALE, RoundingMode.HALF_UP);
     }
 
     private Optional<String> resolveAisleName(

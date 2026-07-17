@@ -149,10 +149,7 @@ public class InventoryBatchPickerService {
         List<InventoryBatch> working = new ArrayList<>(locked);
 
         if (working.isEmpty()) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "No on-hand stock available to write down for " + itemLabel(catalogItem)
-            );
+            return List.of();
         }
 
         BatchAllocationPlanner.sortBatchesForPick(
@@ -160,19 +157,14 @@ public class InventoryBatchPickerService {
                 item,
                 costMethodForTenant(businessId)
         );
-        List<BatchAllocationLine> batchLines;
-        try {
-            batchLines = BatchAllocationPlanner.allocateInOrder(working, pick.stockQuantity());
-        } catch (ResponseStatusException ex) {
-            if (ex.getStatusCode() == HttpStatus.BAD_REQUEST
-                    && "Insufficient stock for pick".equals(ex.getReason())) {
-                throw new ResponseStatusException(
-                        HttpStatus.BAD_REQUEST,
-                        "Insufficient on-hand stock to apply stock-take write-down for "
-                                + itemLabel(catalogItem)
-                );
-            }
-            throw ex;
+        // Never fail approve because live moved since the count — write down what remains.
+        BatchAllocationPlanner.AllocationResult allocation =
+                BatchAllocationPlanner.allocateInOrderAllowShortage(working, pick.stockQuantity());
+        List<BatchAllocationLine> batchLines = allocation.lines();
+        BigDecimal appliedQty = pick.stockQuantity().subtract(allocation.unallocated())
+                .setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        if (appliedQty.signum() <= 0) {
+            return List.of();
         }
 
         applyAllocatedDecrements(
@@ -190,7 +182,7 @@ public class InventoryBatchPickerService {
         );
 
         BigDecimal stockBefore = item.getCurrentStock() == null ? BigDecimal.ZERO : item.getCurrentStock();
-        applyStockDelta(item, pick.stockQuantity().negate(), false);
+        applyStockDelta(item, appliedQty.negate(), false);
         maybeEnqueueLowStockWebhook(businessId, branchId, pick.stockItemId(), item, stockBefore);
         return batchLines;
     }

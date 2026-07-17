@@ -37,12 +37,15 @@ import zelisline.ub.catalog.api.dto.GenerateProductDescriptionResponse;
 import zelisline.ub.catalog.api.dto.ItemImageResponse;
 import zelisline.ub.catalog.api.dto.ItemResponse;
 import zelisline.ub.catalog.api.dto.ItemSummaryResponse;
+import zelisline.ub.catalog.api.dto.ItemTimelineResponse;
 import zelisline.ub.catalog.api.dto.PatchItemRequest;
+import zelisline.ub.catalog.api.dto.RecordItemScanRequest;
 import zelisline.ub.catalog.api.dto.RegisterItemImageRequest;
 import zelisline.ub.catalog.api.dto.SuggestedSkuResponse;
 import zelisline.ub.catalog.application.CategoryPricingResolutionService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.application.ItemCreateResult;
+import zelisline.ub.catalog.application.ItemTimelineService;
 import zelisline.ub.catalog.application.ProductDescriptionGeneratorService;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -63,6 +66,7 @@ import java.util.Set;
 public class ItemsController {
 
     private final ItemCatalogService itemCatalogService;
+    private final ItemTimelineService itemTimelineService;
     private final CategoryPricingResolutionService categoryPricingResolutionService;
     private final ProductDescriptionGeneratorService productDescriptionGeneratorService;
     private final BranchResolutionService branchResolutionService;
@@ -209,6 +213,36 @@ public class ItemsController {
     public EffectivePricingContextResponse pricingContext(@PathVariable("id") String id, HttpServletRequest request) {
         CurrentTenantUser.require(request);
         return categoryPricingResolutionService.resolve(TenantRequestIds.resolveBusinessId(request), id);
+    }
+
+    @GetMapping("/{id}/timeline")
+    @PreAuthorize("hasPermission(null, 'catalog.items.read')")
+    public ItemTimelineResponse timeline(
+            @PathVariable("id") String id,
+            @RequestParam(required = false, defaultValue = "40") int limit,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return itemTimelineService.timeline(TenantRequestIds.resolveBusinessId(request), id, limit);
+    }
+
+    @PostMapping("/{id}/scans")
+    @PreAuthorize(
+            "hasPermission(null, 'catalog.items.read') or hasPermission(null, 'stocktake.run')"
+    )
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void recordScan(
+            @PathVariable("id") String id,
+            @Valid @RequestBody RecordItemScanRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        itemTimelineService.recordScan(
+                TenantRequestIds.resolveBusinessId(request),
+                id,
+                body,
+                CurrentTenantUser.auditActorId(request)
+        );
     }
 
     @GetMapping("/{id}")

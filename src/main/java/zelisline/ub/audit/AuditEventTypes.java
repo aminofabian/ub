@@ -109,6 +109,11 @@ public final class AuditEventTypes {
     public static final String ITEM_CREATED = "item.created";
     public static final String ITEM_UPDATED = "item.updated";
     public static final String ITEM_DELETED = "item.deleted";
+    /**
+     * Intentional non-POS barcode scan (catalog, stock-take, missing-barcodes).
+     * Not emitted for every cashier POS lookup.
+     */
+    public static final String ITEM_SCANNED = "item.scanned";
     public static final String SELLING_PRICE_CHANGED = "selling_price.changed";
     public static final String BUYING_PRICE_CHANGED = "buying_price.changed";
     public static final String TAX_RATE_CHANGED = "tax_rate.changed";

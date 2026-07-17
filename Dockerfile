@@ -53,7 +53,12 @@ USER spring:spring
 EXPOSE 5050
 ENV SERVER_PORT=5050
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=75.0"
-# Spring Boot prod profile + Flyway can take 60–120s on cold start; Coolify must use the same grace period.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=5 \
-	CMD wget -qO- http://127.0.0.1:5050/actuator/health >/dev/null || exit 1
+# Spring Boot prod + Flyway/Hibernate often need 60–180s on cold start.
+# Coolify UI healthcheck must also use a matching start/grace period (or it
+# ignores this Dockerfile HEALTHCHECK and rolls back while the JVM is still booting).
+# Prefer liveness (process up) over full /actuator/health (DB/Redis readiness).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=5 \
+	CMD wget -qO- http://127.0.0.1:5050/actuator/health/liveness >/dev/null \
+		|| wget -qO- http://127.0.0.1:5050/actuator/health >/dev/null \
+		|| exit 1
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -Dserver.port=${SERVER_PORT:-5050} -jar app.jar"]

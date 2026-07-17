@@ -306,6 +306,40 @@ class BusinessInventorySettingsIT {
                         .value(true));
     }
 
+    @Test
+    void patchDailyAuditSampleSizePersistsAndClamps() throws Exception {
+        mockMvc.perform(patch("/api/v1/businesses/me")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"inventory":{"stocktake":{"dailyAuditSampleSize":40}}}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inventory.stocktake.dailyAuditSampleSize").value(40));
+
+        entityManager.clear();
+
+        mockMvc.perform(get("/api/v1/businesses/me")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inventory.stocktake.dailyAuditSampleSize").value(40));
+
+        mockMvc.perform(patch("/api/v1/businesses/me")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"inventory":{"stocktake":{"dailyAuditSampleSize":999}}}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inventory.stocktake.dailyAuditSampleSize").value(200));
+    }
+
     private static Permission perm(String id, String key, String description) {
         Permission p = new Permission();
         p.setId(id);

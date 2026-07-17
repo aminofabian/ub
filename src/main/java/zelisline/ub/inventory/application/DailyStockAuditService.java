@@ -39,6 +39,9 @@ import zelisline.ub.inventory.repository.StockTakeLineRepository;
 import zelisline.ub.inventory.repository.StockTakeSessionRepository;
 import zelisline.ub.sales.application.SalesIntelligenceService;
 import zelisline.ub.sales.repository.SaleItemRepository;
+import zelisline.ub.tenancy.application.BusinessInventorySettingsService;
+import zelisline.ub.tenancy.api.dto.StocktakeSettingsResponse;
+import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.*;
 
 @Service
@@ -59,9 +62,10 @@ public class DailyStockAuditService {
     private final BranchRepository branchRepository;
     private final BusinessRepository businessRepository;
     private final InventoryRoleAccessService inventoryRoleAccessService;
+    private final BusinessInventorySettingsService businessInventorySettingsService;
 
     @Value("${app.inventory.daily-stock-audit.sample-size:25}")
-    private int sampleSize;
+    private int platformSampleSize;
 
     @Value("${app.inventory.daily-stock-audit.zone:Africa/Nairobi}")
     private String auditZoneId;
@@ -93,7 +97,7 @@ public class DailyStockAuditService {
         }
 
         LocalDate soldOn = auditDate.minusDays(1);
-        int limit = Math.max(1, sampleSize);
+        int limit = resolveSampleSize(businessId);
         List<String> itemIds = saleItemRepository.findRandomSoldItemIds(
                 businessId,
                 branchId,
@@ -1009,6 +1013,21 @@ public class DailyStockAuditService {
             return null;
         }
         return value.trim();
+    }
+
+    private int resolveSampleSize(String businessId) {
+        int configured = businessRepository
+                .findById(businessId)
+                .map(Business::getSettings)
+                .map(businessInventorySettingsService::readFromSettingsJson)
+                .map(inv -> inv.stocktake().dailyAuditSampleSize())
+                .orElse(platformSampleSize);
+        if (configured <= 0) {
+            configured = platformSampleSize > 0
+                    ? platformSampleSize
+                    : StocktakeSettingsResponse.DEFAULT_DAILY_AUDIT_SAMPLE_SIZE;
+        }
+        return StocktakeSettingsResponse.clampSampleSize(configured);
     }
 
     private String categoryName(ItemContext ctx, Item item) {

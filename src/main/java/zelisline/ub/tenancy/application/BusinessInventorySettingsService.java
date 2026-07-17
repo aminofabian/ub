@@ -35,6 +35,7 @@ public class BusinessInventorySettingsService {
     private static final String KEY_CREDIT_TABS = "creditTabs";
     private static final String KEY_SHOW_SYSTEM_STOCK =
             "showSystemStockToStockManager";
+    private static final String KEY_DAILY_AUDIT_SAMPLE_SIZE = "dailyAuditSampleSize";
     private static final String KEY_ALLOW_CASHIER_TAB_CLEARANCE =
             "allowCashierTabClearance";
     private static final String KEY_ALLOW_EDIT_STOCK_MANAGER =
@@ -131,7 +132,11 @@ public class BusinessInventorySettingsService {
             return StocktakeSettingsResponse.defaults();
         }
         return new StocktakeSettingsResponse(
-                stocktake.path(KEY_SHOW_SYSTEM_STOCK).asBoolean(false)
+                stocktake.path(KEY_SHOW_SYSTEM_STOCK).asBoolean(false),
+                StocktakeSettingsResponse.clampSampleSize(
+                        stocktake.path(KEY_DAILY_AUDIT_SAMPLE_SIZE)
+                                .asInt(StocktakeSettingsResponse.DEFAULT_DAILY_AUDIT_SAMPLE_SIZE)
+                )
         );
     }
 
@@ -277,6 +282,12 @@ public class BusinessInventorySettingsService {
             stocktake.put(
                     KEY_SHOW_SYSTEM_STOCK,
                     patch.showSystemStockToStockManager()
+            );
+        }
+        if (patch.dailyAuditSampleSize() != null) {
+            stocktake.put(
+                    KEY_DAILY_AUDIT_SAMPLE_SIZE,
+                    StocktakeSettingsResponse.clampSampleSize(patch.dailyAuditSampleSize())
             );
         }
     }

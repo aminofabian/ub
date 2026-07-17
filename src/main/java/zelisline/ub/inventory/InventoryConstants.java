@@ -31,7 +31,8 @@ public final class InventoryConstants {
     public static final String DAILY_AUDIT_REVIEW_PENDING = "pending";
     public static final String DAILY_AUDIT_REVIEW_APPROVED = "approved";
     public static final String DAILY_AUDIT_REVIEW_ESCALATED = "escalated";
-    public static final int DAILY_AUDIT_SAMPLE_SIZE = 25;
+    public static final int DAILY_AUDIT_SAMPLE_SIZE =
+            zelisline.ub.tenancy.api.dto.StocktakeSettingsResponse.DEFAULT_DAILY_AUDIT_SAMPLE_SIZE;
     public static final String RESTOCK_STATUS_PENDING = "pending";
     public static final String RESTOCK_STATUS_APPROVED = "approved";
     public static final String RESTOCK_STATUS_ORDER_DRAFTED = "order_drafted";

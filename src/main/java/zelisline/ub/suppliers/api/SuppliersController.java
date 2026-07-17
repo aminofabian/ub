@@ -107,6 +107,21 @@ public class SuppliersController {
         );
     }
 
+    @DeleteMapping("/{supplierId}")
+    @PreAuthorize("hasPermission(null, 'suppliers.write')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(
+            @PathVariable String supplierId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        supplierService.deleteSupplier(
+                TenantRequestIds.resolveBusinessId(request),
+                supplierId,
+                CurrentTenantUser.auditActorId(request)
+        );
+    }
+
     @GetMapping("/{supplierId}/item-links")
     @PreAuthorize("hasPermission(null, 'suppliers.read') and hasPermission(null, 'catalog.items.read')")
     public List<SupplierItemLinkResponse> listItemLinks(

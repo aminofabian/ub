@@ -174,6 +174,24 @@ public class SupplierService {
         return toResponse(s);
     }
 
+    @Transactional
+    public void deleteSupplier(String businessId, String supplierId) {
+        deleteSupplier(businessId, supplierId, null);
+    }
+
+    @Transactional
+    public void deleteSupplier(String businessId, String supplierId, String actorUserId) {
+        Supplier s = supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(supplierId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
+        if (SupplierCodes.SYSTEM_UNASSIGNED.equals(s.getCode())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cannot delete the system unassigned supplier");
+        }
+        s.setDeletedAt(java.time.Instant.now());
+        s.setStatus("inactive");
+        supplierRepository.save(s);
+        publishSupplierEvent(businessId, s, actorUserId, AuditEventTypes.SUPPLIER_DELETED, null);
+    }
+
     @Transactional(readOnly = true)
     public List<SupplierContactResponse> listContacts(String businessId, String supplierId) {
         assertSupplierInBusiness(businessId, supplierId);

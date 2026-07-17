@@ -123,6 +123,7 @@ public final class AuditEventTypes {
     // Suppliers
     public static final String SUPPLIER_CREATED = "supplier.created";
     public static final String SUPPLIER_UPDATED = "supplier.updated";
+    public static final String SUPPLIER_DELETED = "supplier.deleted";
     public static final String SUPPLIER_CONTACT_ADDED = "supplier.contact_added";
     public static final String SUPPLIER_CONTACT_UPDATED = "supplier.contact_updated";
     public static final String SUPPLIER_CONTACT_DELETED = "supplier.contact_deleted";

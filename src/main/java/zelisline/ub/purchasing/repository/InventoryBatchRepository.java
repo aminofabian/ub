@@ -90,6 +90,47 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
             @Param("minRemaining") BigDecimal minRemaining
     );
 
+    /**
+     * Locks all on-hand active batches for physical stock-take write-downs.
+     * Unlike sale picks, closed supply batches and expired lots are included —
+     * the count reflects what is physically present, not what is sellable.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select b from InventoryBatch b
+             where b.businessId = :businessId
+               and b.itemId = :itemId
+               and b.branchId = :branchId
+               and b.status = :status
+               and b.quantityRemaining > :minRemaining
+             order by b.id asc
+            """)
+    List<InventoryBatch> lockActiveBatchesForPhysicalAdjustment(
+            @Param("businessId") String businessId,
+            @Param("itemId") String itemId,
+            @Param("branchId") String branchId,
+            @Param("status") String status,
+            @Param("minRemaining") BigDecimal minRemaining
+    );
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select b from InventoryBatch b
+             where b.businessId = :businessId
+               and b.branchId = :branchId
+               and b.status = :status
+               and b.itemId in :itemIds
+               and b.quantityRemaining > :minRemaining
+             order by b.itemId asc, b.id asc
+            """)
+    List<InventoryBatch> lockActiveBatchesForPhysicalAdjustmentForItems(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("status") String status,
+            @Param("itemIds") Collection<String> itemIds,
+            @Param("minRemaining") BigDecimal minRemaining
+    );
+
     @Query("""
             select b from InventoryBatch b
              where b.businessId = :businessId

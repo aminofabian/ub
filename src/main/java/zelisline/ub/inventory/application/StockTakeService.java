@@ -1333,7 +1333,7 @@ public class StockTakeService {
         }
         if (variance.signum() < 0) {
             BigDecimal pickQty = variance.negate();
-            inventoryBatchPickerService.pickAndApplyPhysicalDecrement(
+            inventoryBatchPickerService.pickAndApplyStockTakeDecrement(
                 businessId,
                 request.getItemId(),
                 request.getBranchId(),

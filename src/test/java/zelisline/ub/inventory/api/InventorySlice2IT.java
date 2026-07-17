@@ -399,6 +399,131 @@ class InventorySlice2IT {
         assertThat(after.getCurrentStock().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("-1");
     }
 
+    @Test
+    void salePickRejectsExpiredOnlyStock() {
+        Item item = itemRepository.findById(itemId).orElseThrow();
+        item.setHasExpiry(true);
+        itemRepository.save(item);
+        inventoryBatchRepository.deleteAll();
+        stockMovementRepository.deleteAll();
+
+        String expiredId = UUID.randomUUID().toString();
+        inventoryBatchRepository.save(batch(
+                expiredId,
+                itemId,
+                Instant.parse("2026-01-01T12:00:00Z"),
+                LocalDate.now().minusDays(3),
+                "5"
+        ));
+        Item stocked = itemRepository.findById(itemId).orElseThrow();
+        stocked.setCurrentStock(new BigDecimal("5"));
+        itemRepository.save(stocked);
+
+        Throwable thrown = catchThrowable(() ->
+                transactionTemplate.executeWithoutResult(st ->
+                        inventoryBatchPickerService.pickAndApplyPhysicalDecrement(
+                                TENANT,
+                                itemId,
+                                branchId,
+                                new BigDecimal("2"),
+                                InventoryConstants.REF_OPERATION,
+                                inventoryBatchPickerService.newPickReferenceId(),
+                                owner.getId()
+                        )));
+        assertThat(thrown).isNotNull();
+        ResponseStatusException rse = null;
+        for (Throwable c = thrown; c != null; c = c.getCause()) {
+            if (c instanceof ResponseStatusException ex) {
+                rse = ex;
+                break;
+            }
+        }
+        assertThat(rse).isNotNull();
+        assertThat(rse.getReason()).contains("No non-expired stock available");
+    }
+
+    @Test
+    void stockTakeWriteDownCanConsumeExpiredStock() {
+        Item item = itemRepository.findById(itemId).orElseThrow();
+        item.setHasExpiry(true);
+        itemRepository.save(item);
+        inventoryBatchRepository.deleteAll();
+        stockMovementRepository.deleteAll();
+
+        String expiredId = UUID.randomUUID().toString();
+        inventoryBatchRepository.save(batch(
+                expiredId,
+                itemId,
+                Instant.parse("2026-01-01T12:00:00Z"),
+                LocalDate.now().minusDays(3),
+                "5"
+        ));
+        Item stocked = itemRepository.findById(itemId).orElseThrow();
+        stocked.setCurrentStock(new BigDecimal("5"));
+        itemRepository.save(stocked);
+
+        transactionTemplate.executeWithoutResult(st ->
+                inventoryBatchPickerService.pickAndApplyStockTakeDecrement(
+                        TENANT,
+                        itemId,
+                        branchId,
+                        new BigDecimal("2"),
+                        InventoryConstants.REF_STOCK_ADJUSTMENT_REQUEST,
+                        inventoryBatchPickerService.newPickReferenceId(),
+                        owner.getId()
+                ));
+
+        InventoryBatch expired = inventoryBatchRepository.findById(expiredId).orElseThrow();
+        assertThat(expired.getQuantityRemaining().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("3");
+        Item after = itemRepository.findById(itemId).orElseThrow();
+        assertThat(after.getCurrentStock().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("3");
+    }
+
+    @Test
+    void stockTakeWriteDownPrefersNonExpiredBeforeExpired() {
+        Item item = itemRepository.findById(itemId).orElseThrow();
+        item.setHasExpiry(true);
+        itemRepository.save(item);
+        inventoryBatchRepository.deleteAll();
+        stockMovementRepository.deleteAll();
+
+        String freshId = UUID.randomUUID().toString();
+        String expiredId = UUID.randomUUID().toString();
+        inventoryBatchRepository.save(batch(
+                freshId,
+                itemId,
+                Instant.parse("2026-02-01T12:00:00Z"),
+                LocalDate.now().plusDays(30),
+                "2"
+        ));
+        inventoryBatchRepository.save(batch(
+                expiredId,
+                itemId,
+                Instant.parse("2026-01-01T12:00:00Z"),
+                LocalDate.now().minusDays(1),
+                "5"
+        ));
+        Item stocked = itemRepository.findById(itemId).orElseThrow();
+        stocked.setCurrentStock(new BigDecimal("7"));
+        itemRepository.save(stocked);
+
+        transactionTemplate.executeWithoutResult(st ->
+                inventoryBatchPickerService.pickAndApplyStockTakeDecrement(
+                        TENANT,
+                        itemId,
+                        branchId,
+                        new BigDecimal("3"),
+                        InventoryConstants.REF_STOCK_ADJUSTMENT_REQUEST,
+                        inventoryBatchPickerService.newPickReferenceId(),
+                        owner.getId()
+                ));
+
+        InventoryBatch fresh = inventoryBatchRepository.findById(freshId).orElseThrow();
+        InventoryBatch expired = inventoryBatchRepository.findById(expiredId).orElseThrow();
+        assertThat(fresh.getQuantityRemaining().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("0");
+        assertThat(expired.getQuantityRemaining().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("4");
+    }
+
     private InventoryBatch batch(String id, String itId, Instant received, LocalDate expiry, String qty) {
         InventoryBatch b = new InventoryBatch();
         b.setId(id);

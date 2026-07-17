@@ -103,6 +103,37 @@ class BatchAllocationPlannerTest {
         assertThat(result.unallocated()).isEqualByComparingTo("3");
     }
 
+    @Test
+    void excludeExpired_dropsPastExpiryBatches() {
+        LocalDate today = LocalDate.now();
+        Instant t0 = Instant.parse("2026-01-01T12:00:00Z");
+        List<InventoryBatch> filtered = BatchAllocationPlanner.excludeExpired(List.of(
+                batch("fresh", t0, today.plusDays(7), "3"),
+                batch("expired", t0, today.minusDays(1), "4"),
+                batch("no-expiry", t0, null, "2")
+        ));
+        assertThat(filtered).extracting(InventoryBatch::getId)
+                .containsExactly("fresh", "no-expiry");
+    }
+
+    @Test
+    void fefo_withExpiredIncluded_consumesFreshFirstThenExpired() {
+        Item item = new Item();
+        item.setHasExpiry(true);
+        Instant t0 = Instant.parse("2026-01-01T12:00:00Z");
+        LocalDate today = LocalDate.now();
+        List<InventoryBatch> batches = new ArrayList<>();
+        batches.add(batch("expired", t0, today.minusDays(2), "5"));
+        batches.add(batch("fresh", t0.plusSeconds(60), today.plusDays(10), "2"));
+        BatchAllocationPlanner.sortBatchesForPick(batches, item, CostMethod.FIFO);
+        List<BatchAllocationLine> lines = BatchAllocationPlanner.allocateInOrder(batches, new BigDecimal("3"));
+        assertThat(lines).hasSize(2);
+        assertThat(lines.getFirst().batchId()).isEqualTo("fresh");
+        assertThat(lines.getFirst().quantity()).isEqualByComparingTo("2");
+        assertThat(lines.get(1).batchId()).isEqualTo("expired");
+        assertThat(lines.get(1).quantity()).isEqualByComparingTo("1");
+    }
+
     private static String firstBatchId(List<BatchAllocationLine> lines) {
         return lines.getFirst().batchId();
     }

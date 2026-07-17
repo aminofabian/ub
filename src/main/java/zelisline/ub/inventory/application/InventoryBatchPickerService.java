@@ -124,6 +124,77 @@ public class InventoryBatchPickerService {
         );
     }
 
+    /**
+     * Stock-take / audit write-down: decrements physical on-hand batches including expired lots
+     * and closed-supply batches. Sale picks must keep using {@link #pickAndApplyPhysicalDecrement}.
+     */
+    @Transactional
+    public List<BatchAllocationLine> pickAndApplyStockTakeDecrement(
+            String businessId,
+            String itemId,
+            String branchId,
+            BigDecimal quantity,
+            String referenceType,
+            String referenceId,
+            String userId
+    ) {
+        requireBranch(businessId, branchId);
+        Item catalogItem = packageVariantStockResolver.requireSellableItem(businessId, itemId);
+        StockPickResolution pick = packageVariantStockResolver.resolvePick(businessId, itemId, quantity);
+        Item item = requireStockedItem(businessId, pick.stockItemId());
+        entityManager.lock(item, LockModeType.PESSIMISTIC_WRITE);
+
+        List<InventoryBatch> locked = lockActiveBatchesForPhysicalAdjustmentPool(
+                businessId, branchId, catalogItem);
+        List<InventoryBatch> working = new ArrayList<>(locked);
+
+        if (working.isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "No on-hand stock available to write down for " + itemLabel(catalogItem)
+            );
+        }
+
+        BatchAllocationPlanner.sortBatchesForPick(
+                working,
+                item,
+                costMethodForTenant(businessId)
+        );
+        List<BatchAllocationLine> batchLines;
+        try {
+            batchLines = BatchAllocationPlanner.allocateInOrder(working, pick.stockQuantity());
+        } catch (ResponseStatusException ex) {
+            if (ex.getStatusCode() == HttpStatus.BAD_REQUEST
+                    && "Insufficient stock for pick".equals(ex.getReason())) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Insufficient on-hand stock to apply stock-take write-down for "
+                                + itemLabel(catalogItem)
+                );
+            }
+            throw ex;
+        }
+
+        applyAllocatedDecrements(
+                businessId,
+                branchId,
+                pick.stockItemId(),
+                item,
+                locked,
+                batchLines,
+                InventoryConstants.MOVEMENT_ADJUSTMENT,
+                referenceType,
+                referenceId,
+                userId,
+                "Stock-take write-down allocation"
+        );
+
+        BigDecimal stockBefore = item.getCurrentStock() == null ? BigDecimal.ZERO : item.getCurrentStock();
+        applyStockDelta(item, pick.stockQuantity().negate(), false);
+        maybeEnqueueLowStockWebhook(businessId, branchId, pick.stockItemId(), item, stockBefore);
+        return batchLines;
+    }
+
     @Transactional
     public List<BatchAllocationLine> pickAndApplyPhysicalDecrement(
             String businessId,
@@ -189,47 +260,19 @@ public class InventoryBatchPickerService {
             }
         }
 
-        Map<String, InventoryBatch> byId = new HashMap<>();
-        for (InventoryBatch b : locked) {
-            byId.put(b.getId(), b);
-        }
-
-        for (BatchAllocationLine line : batchLines) {
-            InventoryBatch batch = byId.get(line.batchId());
-            if (batch == null) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "Batch disappeared");
-            }
-            BigDecimal next = batch.getQuantityRemaining().subtract(line.quantity()).setScale(QTY_SCALE, RoundingMode.HALF_UP);
-            if (next.signum() < 0) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "Batch quantity changed during pick");
-            }
-            batch.setQuantityRemaining(next);
-            inventoryBatchRepository.save(batch);
-
-            // Publish real-time stock.depleted event when batch hits zero
-            if (next.signum() == 0) {
-                eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.StockDepletedEvent(
-                        businessId, branchId, pick.stockItemId(), item.getName(), line.batchId()));
-            }
-
-            // Auto-detect sold-out on parent supply batch
-            supplyBatchLifecycleService.checkAndTransitionToSoldoutIfNeeded(
-                    businessId, batch.getSupplyBatchId());
-
-            StockMovement sm = new StockMovement();
-            sm.setBusinessId(businessId);
-            sm.setBranchId(branchId);
-            sm.setItemId(pick.stockItemId());
-            sm.setBatchId(line.batchId());
-            sm.setMovementType(movementType);
-            sm.setReferenceType(referenceType);
-            sm.setReferenceId(referenceId);
-            sm.setQuantityDelta(line.quantity().negate());
-            sm.setUnitCost(line.unitCost());
-            sm.setNotes("Batch pick allocation");
-            sm.setCreatedBy(userId);
-            stockMovementRepository.save(sm);
-        }
+        applyAllocatedDecrements(
+                businessId,
+                branchId,
+                pick.stockItemId(),
+                item,
+                locked,
+                batchLines,
+                movementType,
+                referenceType,
+                referenceId,
+                userId,
+                "Batch pick allocation"
+        );
 
         List<BatchAllocationLine> resultLines = new ArrayList<>(batchLines);
         if (unallocated.signum() > 0) {
@@ -275,6 +318,62 @@ public class InventoryBatchPickerService {
         applyStockDelta(item, pick.stockQuantity().negate(), allowNegativeStock);
         maybeEnqueueLowStockWebhook(businessId, branchId, pick.stockItemId(), item, stockBefore);
         return resultLines;
+    }
+
+    private void applyAllocatedDecrements(
+            String businessId,
+            String branchId,
+            String stockItemId,
+            Item item,
+            List<InventoryBatch> locked,
+            List<BatchAllocationLine> batchLines,
+            String movementType,
+            String referenceType,
+            String referenceId,
+            String userId,
+            String movementNotes
+    ) {
+        Map<String, InventoryBatch> byId = new HashMap<>();
+        for (InventoryBatch b : locked) {
+            byId.put(b.getId(), b);
+        }
+
+        for (BatchAllocationLine line : batchLines) {
+            InventoryBatch batch = byId.get(line.batchId());
+            if (batch == null) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Batch disappeared");
+            }
+            BigDecimal next = batch.getQuantityRemaining().subtract(line.quantity()).setScale(QTY_SCALE, RoundingMode.HALF_UP);
+            if (next.signum() < 0) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Batch quantity changed during pick");
+            }
+            batch.setQuantityRemaining(next);
+            inventoryBatchRepository.save(batch);
+
+            // Publish real-time stock.depleted event when batch hits zero
+            if (next.signum() == 0) {
+                eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.StockDepletedEvent(
+                        businessId, branchId, stockItemId, item.getName(), line.batchId()));
+            }
+
+            // Auto-detect sold-out on parent supply batch
+            supplyBatchLifecycleService.checkAndTransitionToSoldoutIfNeeded(
+                    businessId, batch.getSupplyBatchId());
+
+            StockMovement sm = new StockMovement();
+            sm.setBusinessId(businessId);
+            sm.setBranchId(branchId);
+            sm.setItemId(stockItemId);
+            sm.setBatchId(line.batchId());
+            sm.setMovementType(movementType);
+            sm.setReferenceType(referenceType);
+            sm.setReferenceId(referenceId);
+            sm.setQuantityDelta(line.quantity().negate());
+            sm.setUnitCost(line.unitCost());
+            sm.setNotes(movementNotes);
+            sm.setCreatedBy(userId);
+            stockMovementRepository.save(sm);
+        }
     }
 
     /**
@@ -385,6 +484,32 @@ public class InventoryBatchPickerService {
             );
         }
         return inventoryBatchRepository.lockActiveBatchesForPickForItems(
+                businessId,
+                branchId,
+                InventoryConstants.BATCH_STATUS_ACTIVE,
+                List.copyOf(pool),
+                BigDecimal.ZERO
+        );
+    }
+
+    private List<InventoryBatch> lockActiveBatchesForPhysicalAdjustmentPool(
+            String businessId,
+            String branchId,
+            Item catalogItem
+    ) {
+        Set<String> pool = packageVariantStockResolver.usesSharedStockPool(catalogItem)
+                ? packageVariantStockResolver.branchStockPoolItemIds(businessId, catalogItem)
+                : Set.of(catalogItem.getId());
+        if (pool.size() <= 1) {
+            return inventoryBatchRepository.lockActiveBatchesForPhysicalAdjustment(
+                    businessId,
+                    pool.iterator().next(),
+                    branchId,
+                    InventoryConstants.BATCH_STATUS_ACTIVE,
+                    BigDecimal.ZERO
+            );
+        }
+        return inventoryBatchRepository.lockActiveBatchesForPhysicalAdjustmentForItems(
                 businessId,
                 branchId,
                 InventoryConstants.BATCH_STATUS_ACTIVE,

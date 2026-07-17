@@ -590,7 +590,8 @@ public class StorefrontSettingsService {
                         && patch.butcherPosEnabled() == null
                         && patch.posCashierPriceEdit() == null
                         && patch.posCashierCreateProduct() == null
-                        && patch.posCashierWeighedToggle() == null)) {
+                        && patch.posCashierWeighedToggle() == null
+                        && patch.shiftsPrefillOpeningFromLastClose() == null)) {
             return currentSettings;
         }
         ObjectNode root = parseRoot(currentSettings);
@@ -613,6 +614,11 @@ public class StorefrontSettingsService {
                 flags,
                 FeatureFlagService.FLAG_POS_CASHIER_WEIGHED_TOGGLE,
                 patch.posCashierWeighedToggle()
+        );
+        putFlagIfPresent(
+                flags,
+                FeatureFlagService.FLAG_SHIFTS_PREFILL_OPENING_FROM_LAST_CLOSE,
+                patch.shiftsPrefillOpeningFromLastClose()
         );
         root.set(KEY_FEATURES, flags);
         return writeRoot(root);

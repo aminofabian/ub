@@ -11,6 +11,8 @@ public record FeatureFlagsPatchRequest(
         /** Allow cashiers to quick-create products at POS. */
         Boolean posCashierCreateProduct,
         /** Allow cashiers to mark items as sold by weight from the POS cart. */
-        Boolean posCashierWeighedToggle
+        Boolean posCashierWeighedToggle,
+        /** Prefill opening float denominations from the previous night's closing count. */
+        Boolean shiftsPrefillOpeningFromLastClose
 ) {
 }

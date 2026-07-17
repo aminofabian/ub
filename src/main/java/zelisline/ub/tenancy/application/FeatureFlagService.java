@@ -65,6 +65,13 @@ public class FeatureFlagService {
      * Absent / unset defaults to enabled; set {@code false} to disable for cashiers. */
     public static final String FLAG_POS_CASHIER_WEIGHED_TOGGLE = "pos.cashier_weighed_toggle";
 
+    /**
+     * When enabled, opening a shift prefills denomination quantities from the
+     * most recently closed shift at that branch (cashier can still edit).
+     */
+    public static final String FLAG_SHIFTS_PREFILL_OPENING_FROM_LAST_CLOSE =
+            "shifts.prefill_opening_from_last_close";
+
     /** Grocery counter draft cart persistence (master kill-switch). */
     public static final String FLAG_GROCERY_DRAFTS_ENABLED = "grocery_drafts.enabled";
 

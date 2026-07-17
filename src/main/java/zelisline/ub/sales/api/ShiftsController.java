@@ -19,6 +19,7 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
+import zelisline.ub.sales.api.dto.LastClosedShiftFloatResponse;
 import zelisline.ub.sales.api.dto.PostCloseShiftRequest;
 import zelisline.ub.sales.api.dto.PostOpenShiftRequest;
 import zelisline.ub.sales.api.dto.ShiftDetailResponse;
@@ -57,6 +58,21 @@ public class ShiftsController {
         String validatedBranch = branchResolutionService.requireBranchForLockedRole(
                 principal.roleId(), principal.branchId(), branchId);
         return shiftService.getCurrentOpenShift(
+                TenantRequestIds.resolveBusinessId(request),
+                validatedBranch
+        );
+    }
+
+    @GetMapping("/last-closed")
+    @PreAuthorize("hasPermission(null, 'shifts.open') or hasPermission(null, 'shifts.read')")
+    public LastClosedShiftFloatResponse lastClosedShiftFloat(
+            @RequestParam @NotBlank String branchId,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String validatedBranch = branchResolutionService.requireBranchForLockedRole(
+                principal.roleId(), principal.branchId(), branchId);
+        return shiftService.getLastClosedShiftFloat(
                 TenantRequestIds.resolveBusinessId(request),
                 validatedBranch
         );

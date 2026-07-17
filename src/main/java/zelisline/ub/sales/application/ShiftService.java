@@ -40,6 +40,7 @@ import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.DenominationEntry;
 import zelisline.ub.sales.api.dto.DenominationResponse;
+import zelisline.ub.sales.api.dto.LastClosedShiftFloatResponse;
 import zelisline.ub.sales.api.dto.PostCloseShiftRequest;
 import zelisline.ub.sales.api.dto.PostOpenShiftRequest;
 import zelisline.ub.sales.api.dto.ShiftAuditEntryResponse;
@@ -170,6 +171,43 @@ public class ShiftService {
                 .toList();
 
         return toDto(s, branch.getName(), s.getOpenedBy(), openingDenoms, closingDenoms.isEmpty() ? null : closingDenoms);
+    }
+
+    // ========================================================================
+    // LAST CLOSED SHIFT FLOAT (for opening prefill)
+    // ========================================================================
+
+    @Transactional(readOnly = true)
+    public LastClosedShiftFloatResponse getLastClosedShiftFloat(
+            String businessId,
+            String branchId
+    ) {
+        requireBranch(businessId, branchId);
+        List<Shift> closed = shiftRepository.findClosedByBusinessIdAndBranchId(
+                businessId,
+                branchId,
+                SalesConstants.SHIFT_STATUS_CLOSED,
+                PageRequest.of(0, 1)
+        );
+        if (closed.isEmpty()) {
+            return LastClosedShiftFloatResponse.empty(branchId);
+        }
+        Shift s = closed.get(0);
+        List<DenominationResponse> closingDenoms = shiftDenominationRepository
+                .findByShiftIdAndCountTypeOrderByDenominationDesc(
+                        s.getId(),
+                        SalesConstants.DENOM_COUNT_TYPE_CLOSING
+                )
+                .stream()
+                .map(ShiftService::toDenomDto)
+                .toList();
+        return new LastClosedShiftFloatResponse(
+                s.getId(),
+                s.getBranchId(),
+                s.getClosedAt(),
+                s.getCountedClosingCash(),
+                closingDenoms
+        );
     }
 
     // ========================================================================

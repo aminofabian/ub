@@ -1,5 +1,6 @@
 package zelisline.ub.sales.repository;
 
+import java.util.List;
 import java.util.Optional;
 
 import jakarta.persistence.LockModeType;
@@ -108,4 +109,19 @@ public interface ShiftRepository extends JpaRepository<Shift, String> {
     /** Count open shifts for a specific branch. */
     long countByBusinessIdAndBranchIdAndStatus(
             String businessId, String branchId, String status);
+
+    /** Recently closed shifts at a branch (by closedAt, then openedAt). Use page size 1 for latest. */
+    @Query("""
+            select s from Shift s
+             where s.businessId = :businessId
+               and s.branchId = :branchId
+               and s.status = :status
+             order by s.closedAt desc nulls last, s.openedAt desc
+            """)
+    List<Shift> findClosedByBusinessIdAndBranchId(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("status") String status,
+            Pageable pageable
+    );
 }

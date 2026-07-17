@@ -54,4 +54,18 @@ public class LedgerPostingService implements LedgerPostingPort {
         journalLineRepository.saveAll(entry.getLines());
         return existing.getId();
     }
+
+    @Override
+    @Transactional
+    public void deleteBySource(String businessId, String sourceType, String sourceId) {
+        journalEntryRepository
+                .findByBusinessIdAndSourceTypeAndSourceId(businessId, sourceType, sourceId)
+                .ifPresent(existing -> {
+                    List<JournalLine> oldLines = journalLineRepository.findByJournalEntryId(existing.getId());
+                    if (!oldLines.isEmpty()) {
+                        journalLineRepository.deleteAll(oldLines);
+                    }
+                    journalEntryRepository.delete(existing);
+                });
+    }
 }

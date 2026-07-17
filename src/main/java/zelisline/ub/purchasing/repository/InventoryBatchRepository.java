@@ -211,6 +211,8 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
     List<InventoryBatch> findBySourceTypeAndSourceIdAndStatus(
             String sourceType, String sourceId, String status);
 
+    List<InventoryBatch> findBySourceTypeAndSourceId(String sourceType, String sourceId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
             select b from InventoryBatch b

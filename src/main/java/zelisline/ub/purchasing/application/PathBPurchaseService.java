@@ -38,6 +38,8 @@ import zelisline.ub.finance.domain.JournalEntry;
 import zelisline.ub.identity.application.TokenHasher;
 import zelisline.ub.inventory.WastageReason;
 import zelisline.ub.inventory.domain.SupplyBatch;
+import zelisline.ub.inventory.domain.SupplyBatchExpense;
+import zelisline.ub.inventory.repository.SupplyBatchExpenseRepository;
 import zelisline.ub.inventory.repository.SupplyBatchRepository;
 import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.api.dto.AddPathBLineRequest;
@@ -94,6 +96,7 @@ public class PathBPurchaseService {
     private final PurchaseUnitConversionService purchaseUnitConversionService;
     private final SupplierPaymentAllocationRepository allocationRepository;
     private final SupplyBatchRepository supplyBatchRepository;
+    private final SupplyBatchExpenseRepository supplyBatchExpenseRepository;
 
     public static String postRoute(String sessionId) {
         return "POST /api/v1/purchasing/path-b/sessions/%s/post".formatted(sessionId);
@@ -609,10 +612,25 @@ public class PathBPurchaseService {
 
     /**
      * Reverse inventory effect for a posted Path B line (becomes {@link PurchasingConstants#LINE_PENDING}).
+     * Fails when usable stock from the receipt has already been sold or otherwise consumed.
      */
     public void reversePostedPathBLine(String businessId, RawPurchaseLine line) {
         if (!PurchasingConstants.LINE_POSTED.equals(line.getLineStatus())) {
             return;
+        }
+        if (line.getInventoryBatchId() != null) {
+            InventoryBatch batch = inventoryBatchRepository
+                    .findByIdAndBusinessId(line.getInventoryBatchId(), businessId)
+                    .orElse(null);
+            if (batch != null) {
+                BigDecimal initial = batch.getInitialQuantity() == null ? BigDecimal.ZERO : batch.getInitialQuantity();
+                BigDecimal remaining = batch.getQuantityRemaining() == null ? BigDecimal.ZERO : batch.getQuantityRemaining();
+                if (remaining.compareTo(initial) < 0) {
+                    throw new ResponseStatusException(
+                            HttpStatus.CONFLICT,
+                            "Stock from this supply has already been used; cannot reverse or delete");
+                }
+            }
         }
         List<StockMovement> moves = stockMovementRepository.findByBusinessIdAndReferenceTypeAndReferenceId(
                 businessId,
@@ -634,12 +652,79 @@ public class PathBPurchaseService {
             inventoryBatchRepository.findByIdAndBusinessId(line.getInventoryBatchId(), businessId)
                     .ifPresent(inventoryBatchRepository::delete);
         }
+        List<InventoryBatch> wastageBatches = inventoryBatchRepository.findBySourceTypeAndSourceId(
+                "path_b_wastage", line.getId());
+        if (!wastageBatches.isEmpty()) {
+            inventoryBatchRepository.deleteAll(wastageBatches);
+        }
         line.setInventoryBatchId(null);
         line.setPostedItemId(null);
         line.setUsableQty(null);
         line.setWastageQty(null);
         line.setLineStatus(PurchasingConstants.LINE_PENDING);
         lineRepository.save(line);
+    }
+
+    /**
+     * Permanently remove a posted Path B supply invoice: reverses stock, voids the journal,
+     * and deletes the invoice, session lines, and supply batch. Only unpaid invoices with
+     * unused receipt stock can be deleted.
+     */
+    @Transactional
+    public void deletePostedPathBSupplyInvoice(String businessId, String invoiceId) {
+        SupplierInvoice inv = supplierInvoiceRepository.findByIdAndBusinessId(invoiceId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Invoice not found"));
+        if (inv.getRawPurchaseSessionId() == null || inv.getRawPurchaseSessionId().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Not a direct supply (Path B) invoice");
+        }
+        if (!PurchasingConstants.INVOICE_POSTED.equals(inv.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only posted invoices can be deleted");
+        }
+        BigDecimal paid = allocationRepository.sumAmountBySupplierInvoiceId(invoiceId);
+        if (paid != null && paid.compareTo(MONEY_SCALE) >= 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Remove payments from this invoice before deleting it");
+        }
+        String sessionId = inv.getRawPurchaseSessionId();
+        RawPurchaseSession session = sessionRepository.findByIdAndBusinessId(sessionId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Purchase session not found"));
+
+        List<SupplierInvoiceLine> sils = supplierInvoiceLineRepository.findByInvoiceIdOrderBySortOrderAsc(invoiceId);
+        for (SupplierInvoiceLine sil : sils) {
+            if (sil.getRawLineId() == null || sil.getRawLineId().isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice line is not linked to a receipt");
+            }
+            RawPurchaseLine rl = lineRepository.findById(sil.getRawLineId())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Raw line not found"));
+            reversePostedPathBLine(businessId, rl);
+        }
+
+        ledgerPostingPort.deleteBySource(businessId, PurchasingConstants.JOURNAL_SOURCE_PATH_B, sessionId);
+
+        supplierInvoiceLineRepository.deleteAll(sils);
+        supplierInvoiceRepository.delete(inv);
+
+        supplyBatchRepository
+                .findByBusinessIdAndSourceTypeAndSourceId(businessId, PurchasingConstants.BATCH_SOURCE_PATH_B, sessionId)
+                .ifPresent(sb -> {
+                    List<SupplyBatchExpense> expenses =
+                            supplyBatchExpenseRepository.findBySupplyBatchIdOrderByCreatedAtAsc(sb.getId());
+                    if (!expenses.isEmpty()) {
+                        supplyBatchExpenseRepository.deleteAll(expenses);
+                    }
+                    List<InventoryBatch> linked = inventoryBatchRepository.findBySupplyBatchId(sb.getId());
+                    if (!linked.isEmpty()) {
+                        inventoryBatchRepository.deleteAll(linked);
+                    }
+                    supplyBatchRepository.delete(sb);
+                });
+
+        List<RawPurchaseLine> sessionLines = lineRepository.findBySessionIdOrderBySortOrderAscIdAsc(sessionId);
+        if (!sessionLines.isEmpty()) {
+            lineRepository.deleteAll(sessionLines);
+        }
+        sessionRepository.delete(session);
     }
 
     public void reapplyPostedPathBLine(

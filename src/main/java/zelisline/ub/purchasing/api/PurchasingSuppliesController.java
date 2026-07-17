@@ -5,6 +5,7 @@ import java.util.List;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -25,6 +26,7 @@ import zelisline.ub.purchasing.api.dto.PathBSupplyListRow;
 import zelisline.ub.purchasing.api.dto.SupplyKopokopoPayResponse;
 import zelisline.ub.purchasing.api.dto.SupplyPayOptionsResponse;
 import zelisline.ub.purchasing.api.dto.SupplyPaymentHistoryRow;
+import zelisline.ub.purchasing.application.PathBPurchaseService;
 import zelisline.ub.purchasing.application.SupplierDisbursementService;
 import zelisline.ub.purchasing.application.SupplyInvoiceEditService;
 import zelisline.ub.purchasing.application.SupplyReceiptQueryService;
@@ -38,6 +40,7 @@ public class PurchasingSuppliesController {
 
     private final SupplyReceiptQueryService supplyReceiptQueryService;
     private final SupplyInvoiceEditService supplyInvoiceEditService;
+    private final PathBPurchaseService pathBPurchaseService;
     private final SupplierDisbursementService supplierDisbursementService;
 
     @GetMapping
@@ -77,6 +80,20 @@ public class PurchasingSuppliesController {
                 TenantRequestIds.resolveBusinessId(request),
                 invoiceId,
                 body
+        );
+    }
+
+    @DeleteMapping("/{invoiceId}")
+    @PreAuthorize("hasPermission(null, 'purchasing.path_b.write')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteInvoice(
+            @PathVariable String invoiceId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        pathBPurchaseService.deletePostedPathBSupplyInvoice(
+                TenantRequestIds.resolveBusinessId(request),
+                invoiceId
         );
     }
 

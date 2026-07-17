@@ -2,6 +2,7 @@ package zelisline.ub.purchasing.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -377,6 +378,48 @@ class PathBPurchaseIT {
         List<SupplierInvoiceLine> sils =
                 supplierInvoiceLineRepository.findByInvoiceIdOrderBySortOrderAsc(invId);
         assertThat(sils.getFirst().getLineTotal()).isEqualByComparingTo(new BigDecimal("120.00"));
+    }
+
+    @Test
+    void deletePathBSupplyInvoice_reversesStockAndRemovesInvoice() throws Exception {
+        String sessionId = createSession();
+        String lineId = addLine(sessionId, "Beans", "40.00");
+        String postBody = """
+                {"lines":[{"lineId":"%s","itemId":"%s","usableQty":40,"wastageQty":0}]}
+                """.formatted(lineId, itemId);
+
+        MvcResult r = mockMvc.perform(post("/api/v1/purchasing/path-b/sessions/" + sessionId + "/post")
+                        .contentType(APPLICATION_JSON)
+                        .content(postBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        String invId = objectMapper.readTree(r.getResponse().getContentAsString()).get("supplierInvoiceId").asText();
+
+        var itemAfterPost = itemRepository.findById(itemId).orElseThrow();
+        assertThat(itemAfterPost.getCurrentStock().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo(new BigDecimal("40.00"));
+
+        mockMvc.perform(delete("/api/v1/purchasing/supplies/" + invId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isNoContent());
+
+        assertThat(supplierInvoiceRepository.findById(invId)).isEmpty();
+        var itemAfterDelete = itemRepository.findById(itemId).orElseThrow();
+        assertThat(itemAfterDelete.getCurrentStock().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo(new BigDecimal("0.00"));
+
+        mockMvc.perform(get("/api/v1/purchasing/supplies")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(result -> assertThat(
+                        objectMapper.readTree(result.getResponse().getContentAsString()).size()).isZero());
     }
 
     @Test

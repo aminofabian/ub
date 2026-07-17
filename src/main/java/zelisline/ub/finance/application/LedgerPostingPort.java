@@ -21,4 +21,10 @@ public interface LedgerPostingPort {
      * @throws IllegalStateException if the entry is not balanced or not found
      */
     String replace(String businessId, String sourceType, String sourceId, JournalEntry entry);
+
+    /**
+     * Delete a journal entry and its lines identified by business + sourceType + sourceId.
+     * No-op when no matching entry exists.
+     */
+    void deleteBySource(String businessId, String sourceType, String sourceId);
 }

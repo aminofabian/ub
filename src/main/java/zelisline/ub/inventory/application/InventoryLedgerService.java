@@ -208,7 +208,9 @@ public class InventoryLedgerService {
                 req.reason(),
                 userId
         );
-        applyStockDelta(item, req.quantity().negate());
+        // Batch remaining is the physical guard; current_stock may already be
+        // below branch on-hand (oversell / multi-branch drift).
+        applyStockDelta(item, req.quantity().negate(), true);
         BigDecimal value = extensionMoney(req.quantity(), batch.getUnitCost());
         String jeId = saveJournal(
                 businessId,
@@ -317,7 +319,7 @@ public class InventoryLedgerService {
         );
         mv.setWastageReason(cat.name());
         stockMovementRepository.save(mv);
-        applyStockDelta(item, qty.negate());
+        applyStockDelta(item, qty.negate(), true);
 
         BigDecimal value = extensionMoney(qty, batch.getUnitCost());
         String jeId = saveJournal(
@@ -490,12 +492,19 @@ public class InventoryLedgerService {
     }
 
     private void applyStockDelta(Item item, BigDecimal delta) {
+        // Inbound always allowed so oversold current_stock can be repaired.
+        applyStockDelta(item, delta, delta.signum() > 0);
+    }
+
+    /**
+     * @param allowNegativeResult when true (batch-backed decrease / wastage), skip the
+     *        denormalized current_stock floor. Branch UIs use batch on-hand; current_stock
+     *        can already sit below that after allowNegativeStock sales or cross-branch drift.
+     */
+    private void applyStockDelta(Item item, BigDecimal delta, boolean allowNegativeResult) {
         BigDecimal base = item.getCurrentStock() == null ? BigDecimal.ZERO : item.getCurrentStock();
         BigDecimal next = base.add(delta).setScale(QTY_SCALE, RoundingMode.HALF_UP);
-        // Inbound (+delta) must always be allowed so oversold / negative current_stock
-        // can be repaired. Branch UIs show batch on-hand (often 0) while current_stock
-        // can already be negative when allowNegativeStock sales ran.
-        if (next.signum() < 0 && delta.signum() <= 0) {
+        if (next.signum() < 0 && !allowNegativeResult) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Stock cannot go negative");
         }
         if (base.signum() <= 0 && next.signum() > 0) {

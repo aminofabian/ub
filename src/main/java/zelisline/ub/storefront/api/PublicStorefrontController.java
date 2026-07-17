@@ -74,7 +74,7 @@ public class PublicStorefrontController {
             @RequestParam(required = false) String typeId,
             @RequestParam(required = false) String departmentId,
             @RequestParam(required = false) String cursor,
-            @RequestParam(required = false, defaultValue = "24") int limit
+            @RequestParam(required = false, defaultValue = "48") int limit
     ) {
         int lim = Math.min(Math.max(limit, 1), MAX_PAGE);
         String resolvedTypeId = typeId != null && !typeId.isBlank() ? typeId : departmentId;

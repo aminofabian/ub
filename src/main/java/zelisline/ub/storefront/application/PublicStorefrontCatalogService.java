@@ -47,9 +47,10 @@ import zelisline.ub.tenancy.api.dto.StorefrontSettingsResponse;
 @Service
 public class PublicStorefrontCatalogService {
 
-    private static final int DEFAULT_PAGE_SIZE = 24;
+    private static final int DEFAULT_PAGE_SIZE = 48;
     private static final int MAX_PAGE_SIZE = 100;
-    private static final int CATALOG_SCAN_PAGE = 64;
+    /** Published rows scanned per DB round-trip while filtering to in-stock items. */
+    private static final int CATALOG_SCAN_PAGE = 128;
 
     private final PublicStorefrontContextService storefrontContextService;
     private final ItemRepository itemRepository;
@@ -124,14 +125,23 @@ public class PublicStorefrontCatalogService {
             return listItemsRankedSearch(
                     ctx, qq, catUnset, categoryIds, typeUnset, type, blankToNull(cursor), sz);
         }
-        List<Item> items = fetchInStockCatalogPage(
-                ctx, qq, catUnset, categoryIds, typeUnset, type, blankToNull(cursor), sz);
-        String next = null;
-        if (!items.isEmpty()
-                && hasInStockCatalogAfter(ctx, qq, catUnset, categoryIds, typeUnset, type, items.getLast().getId())) {
-            next = items.getLast().getId();
+        String pageCursor = blankToNull(cursor);
+        // Fetch one extra in-stock row to derive nextCursor without a second stock scan.
+        List<Item> fetched = fetchInStockCatalogPage(
+                ctx, qq, catUnset, categoryIds, typeUnset, type, pageCursor, sz + 1);
+        boolean hasMore = fetched.size() > sz;
+        List<Item> items = hasMore ? List.copyOf(fetched.subList(0, sz)) : fetched;
+        String next = hasMore && !items.isEmpty() ? items.getLast().getId() : null;
+        // Full in-stock recount is expensive; only do it on the first page so scroll
+        // pages stay fast. Clients keep initialTotalCount across infinite-scroll fetches.
+        Long total = null;
+        if (pageCursor == null) {
+            if (!hasMore) {
+                total = (long) items.size();
+            } else {
+                total = countInStockCatalog(ctx, qq, catUnset, categoryIds, typeUnset, type, null);
+            }
         }
-        long total = countInStockCatalog(ctx, qq, catUnset, categoryIds, typeUnset, type, blankToNull(cursor));
         return new PublicCatalogListResponse(ctx.business().getCurrency(), toCards(ctx, items), next, total);
     }
 
@@ -769,46 +779,6 @@ public class PublicStorefrontCatalogService {
             scan = batch.getLast().getId();
         }
         return page;
-    }
-
-    private boolean hasInStockCatalogAfter(
-            PublicStorefrontContext ctx,
-            String q,
-            boolean catUnset,
-            Collection<String> categoryIds,
-            boolean deptUnset,
-            String departmentId,
-            String afterItemId
-    ) {
-        String scan = afterItemId;
-        while (true) {
-            Slice<Item> slice = itemRepository.searchStorefrontCatalog(
-                    ctx.business().getId(),
-                    q,
-                    catUnset,
-                    categoryIds,
-                    deptUnset,
-                    departmentId == null ? "" : departmentId,
-                    scan,
-                    ctx.catalogBranch().getId(),
-                    PageRequest.of(0, CATALOG_SCAN_PAGE, Sort.by(Sort.Direction.ASC, "id")));
-            List<Item> batch = slice.getContent();
-            if (batch.isEmpty()) {
-                return false;
-            }
-            Map<String, BigDecimal> qty = storefrontCatalogStockService.displayQtyForItems(
-                    ctx.business().getId(), ctx.catalogBranch().getId(), batch);
-            for (Item item : batch) {
-                if (!item.getId().equals(afterItemId)
-                        && qty.getOrDefault(item.getId(), BigDecimal.ZERO).compareTo(BigDecimal.ZERO) > 0) {
-                    return true;
-                }
-            }
-            if (!slice.hasNext()) {
-                return false;
-            }
-            scan = batch.getLast().getId();
-        }
     }
 
     private long countInStockCatalog(

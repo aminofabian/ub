@@ -36,14 +36,21 @@ public class StorefrontCatalogStockService {
         if (catalogItems.isEmpty()) {
             return Map.of();
         }
+        // Resolve each item's stock pool once — sumPoolStock would re-query the same pools.
+        Map<String, Set<String>> poolsByItemId = new HashMap<>();
         Set<String> poolIds = new LinkedHashSet<>();
         for (Item item : catalogItems) {
-            poolIds.addAll(packageVariantStockResolver.branchStockPoolItemIds(businessId, item));
+            Set<String> pool = packageVariantStockResolver.branchStockPoolItemIds(businessId, item);
+            poolsByItemId.put(item.getId(), pool);
+            poolIds.addAll(pool);
         }
         Map<String, BigDecimal> raw = loadRawBatchQty(businessId, branchId, poolIds);
         Map<String, BigDecimal> out = new HashMap<>();
         for (Item item : catalogItems) {
-            BigDecimal holder = packageVariantStockResolver.sumPoolStock(item, raw);
+            BigDecimal holder = BigDecimal.ZERO;
+            for (String id : poolsByItemId.getOrDefault(item.getId(), Set.of())) {
+                holder = holder.add(raw.getOrDefault(id, BigDecimal.ZERO));
+            }
             out.put(item.getId(), packageVariantStockResolver.displayStockQty(item, holder));
         }
         return out;

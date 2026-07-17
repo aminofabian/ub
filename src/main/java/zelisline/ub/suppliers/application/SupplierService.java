@@ -56,7 +56,14 @@ public class SupplierService {
 
     @Transactional(readOnly = true)
     public SupplierResponse getSupplier(String businessId, String supplierId) {
-        Supplier s = supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(supplierId, businessId)
+        return getSupplier(businessId, supplierId, false);
+    }
+
+    @Transactional(readOnly = true)
+    public SupplierResponse getSupplier(String businessId, String supplierId, boolean includeDeleted) {
+        Supplier s = (includeDeleted
+                ? supplierRepository.findByIdAndBusinessId(supplierId, businessId)
+                : supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(supplierId, businessId))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
         return toResponse(s);
     }
@@ -391,7 +398,8 @@ public class SupplierService {
                 s.getKopokopoExternalRecipientUrl(),
                 s.getVersion(),
                 s.getCreatedAt(),
-                s.getUpdatedAt()
+                s.getUpdatedAt(),
+                s.getDeletedAt()
         );
     }
 

@@ -98,10 +98,18 @@ public class SupplyInvoiceEditService {
 
     private PathBSupplyInvoiceDetailDto toDetail(String businessId, SupplierInvoice inv) {
         Supplier sup = supplierRepository.findById(inv.getSupplierId()).orElse(null);
-        if (sup != null && (!businessId.equals(sup.getBusinessId()) || sup.getDeletedAt() != null)) {
+        if (sup != null && !businessId.equals(sup.getBusinessId())) {
             sup = null;
         }
-        String supName = sup != null ? sup.getName() : "";
+        String supName;
+        if (sup == null) {
+            supName = "Unknown supplier";
+        } else if (sup.getDeletedAt() != null) {
+            String base = sup.getName() == null || sup.getName().isBlank() ? "Supplier" : sup.getName().trim();
+            supName = base + " (deleted)";
+        } else {
+            supName = sup.getName();
+        }
         BigDecimal grand = inv.getGrandTotal().setScale(2, RoundingMode.HALF_UP);
         BigDecimal paid = nz(allocationRepository.sumAmountBySupplierInvoiceId(inv.getId()))
                 .setScale(2, RoundingMode.HALF_UP);

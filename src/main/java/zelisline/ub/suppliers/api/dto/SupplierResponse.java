@@ -22,6 +22,7 @@ public record SupplierResponse(
         String kopokopoExternalRecipientUrl,
         long version,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        Instant deletedAt
 ) {
 }

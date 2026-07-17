@@ -77,9 +77,17 @@ public class SuppliersController {
 
     @GetMapping("/{supplierId}")
     @PreAuthorize("hasPermission(null, 'suppliers.read')")
-    public SupplierResponse get(@PathVariable String supplierId, HttpServletRequest request) {
+    public SupplierResponse get(
+            @PathVariable String supplierId,
+            @RequestParam(required = false, defaultValue = "false") boolean includeDeleted,
+            HttpServletRequest request
+    ) {
         CurrentTenantUser.require(request);
-        return supplierService.getSupplier(TenantRequestIds.resolveBusinessId(request), supplierId);
+        return supplierService.getSupplier(
+                TenantRequestIds.resolveBusinessId(request),
+                supplierId,
+                includeDeleted
+        );
     }
 
     @PostMapping

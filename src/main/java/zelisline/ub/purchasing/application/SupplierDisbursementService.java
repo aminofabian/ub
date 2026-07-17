@@ -70,16 +70,19 @@ public class SupplierDisbursementService {
     @Transactional(readOnly = true)
     public SupplyPayOptionsResponse payOptions(String businessId, String invoiceId) {
         SupplierInvoice inv = requirePayableInvoice(businessId, invoiceId);
-        Supplier supplier = supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(inv.getSupplierId(), businessId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
+        // Include soft-deleted suppliers so open supplies can still be paid or cleared.
+        Supplier supplier = supplierRepository.findByIdAndBusinessId(inv.getSupplierId(), businessId)
+                .orElse(null);
 
         BigDecimal open = openBalance(inv);
         Optional<PaymentGatewayConfig> payoutGateway = supplierPayoutSettingsService.resolveActivePayoutConfig(businessId);
         boolean supplierPayoutEnabled = supplierPayoutSettingsService.isSupplierPayoutToggleEnabled(businessId);
         boolean gatewayReady = payoutGateway.isPresent();
-        boolean mobilePayout = SupplierPayoutTypes.MOBILE_WALLET.equals(supplier.getPayoutType())
+        boolean mobilePayout = supplier != null
+                && SupplierPayoutTypes.MOBILE_WALLET.equals(supplier.getPayoutType())
                 && supplier.getPayoutPhone() != null
-                && !supplier.getPayoutPhone().isBlank();
+                && !supplier.getPayoutPhone().isBlank()
+                && supplier.getDeletedAt() == null;
         boolean kopokopoEligible = gatewayReady && mobilePayout && open.compareTo(MONEY) > 0;
 
         Optional<SupplierDisbursement> pending = findPendingDisbursement(businessId, invoiceId);
@@ -90,7 +93,7 @@ public class SupplierDisbursementService {
                 gatewayReady,
                 payoutGateway.map(PaymentGatewayConfig::getLabel).orElse(null),
                 mobilePayout,
-                supplier.getPayoutPhone(),
+                mobilePayout ? supplier.getPayoutPhone() : null,
                 kopokopoEligible,
                 pending.isPresent(),
                 pending.map(SupplierDisbursement::getId).orElse(null));

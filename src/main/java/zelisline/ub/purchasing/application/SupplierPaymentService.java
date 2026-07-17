@@ -243,7 +243,8 @@ public class SupplierPaymentService {
     private PostSupplierPaymentResponse executePayment(String businessId, PostSupplierPaymentRequest req) {
         synchronized ((businessId + "|" + req.supplierId()).intern()) {
             assertPayMethod(req.paymentMethod());
-            Supplier supplier = supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(req.supplierId(), businessId)
+            // Soft-deleted suppliers may still have open AP that needs clearing.
+            Supplier supplier = supplierRepository.findByIdAndBusinessId(req.supplierId(), businessId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Supplier not found"));
             BigDecimal credit = nz(req.creditApplied()).setScale(2, RoundingMode.HALF_UP);
             if (credit.signum() < 0) {

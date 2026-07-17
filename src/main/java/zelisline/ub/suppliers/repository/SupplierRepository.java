@@ -49,6 +49,8 @@ public interface SupplierRepository extends JpaRepository<Supplier, String> {
 
     Optional<Supplier> findByIdAndBusinessIdAndDeletedAtIsNull(String id, String businessId);
 
+    Optional<Supplier> findByIdAndBusinessId(String id, String businessId);
+
     Optional<Supplier> findByIdAndDeletedAtIsNull(String id);
 
     /**

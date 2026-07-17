@@ -64,6 +64,7 @@ import zelisline.ub.purchasing.repository.StockMovementRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
 import zelisline.ub.purchasing.repository.SupplierPaymentAllocationRepository;
+import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.suppliers.domain.SupplierProduct;
 import zelisline.ub.suppliers.repository.SupplierProductRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
@@ -97,6 +98,7 @@ public class PathBPurchaseService {
     private final SupplierPaymentAllocationRepository allocationRepository;
     private final SupplyBatchRepository supplyBatchRepository;
     private final SupplyBatchExpenseRepository supplyBatchExpenseRepository;
+    private final SaleItemRepository saleItemRepository;
 
     public static String postRoute(String sessionId) {
         return "POST /api/v1/purchasing/path-b/sessions/%s/post".formatted(sessionId);
@@ -618,9 +620,10 @@ public class PathBPurchaseService {
         if (!PurchasingConstants.LINE_POSTED.equals(line.getLineStatus())) {
             return;
         }
-        if (line.getInventoryBatchId() != null) {
+        String usableBatchId = line.getInventoryBatchId();
+        if (usableBatchId != null) {
             InventoryBatch batch = inventoryBatchRepository
-                    .findByIdAndBusinessId(line.getInventoryBatchId(), businessId)
+                    .findByIdAndBusinessId(usableBatchId, businessId)
                     .orElse(null);
             if (batch != null) {
                 BigDecimal initial = batch.getInitialQuantity() == null ? BigDecimal.ZERO : batch.getInitialQuantity();
@@ -631,7 +634,13 @@ public class PathBPurchaseService {
                             "Stock from this supply has already been used; cannot reverse or delete");
                 }
             }
+            if (!saleItemRepository.findByBatchId(usableBatchId).isEmpty()) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Stock from this supply has already been sold; cannot reverse or delete");
+            }
         }
+
         List<StockMovement> moves = stockMovementRepository.findByBusinessIdAndReferenceTypeAndReferenceId(
                 businessId,
                 PurchasingConstants.STOCK_REF_RAW_LINE,
@@ -648,21 +657,42 @@ public class PathBPurchaseService {
             }
             stockMovementRepository.delete(sm);
         }
-        if (line.getInventoryBatchId() != null) {
-            inventoryBatchRepository.findByIdAndBusinessId(line.getInventoryBatchId(), businessId)
-                    .ifPresent(inventoryBatchRepository::delete);
-        }
-        List<InventoryBatch> wastageBatches = inventoryBatchRepository.findBySourceTypeAndSourceId(
-                "path_b_wastage", line.getId());
-        if (!wastageBatches.isEmpty()) {
-            inventoryBatchRepository.deleteAll(wastageBatches);
-        }
+
+        // Clear FK on the line before deleting inventory batches (fk_rpl_inventory_batch).
         line.setInventoryBatchId(null);
         line.setPostedItemId(null);
         line.setUsableQty(null);
         line.setWastageQty(null);
         line.setLineStatus(PurchasingConstants.LINE_PENDING);
         lineRepository.save(line);
+        lineRepository.flush();
+
+        if (usableBatchId != null) {
+            deleteInventoryBatchIfUnused(usableBatchId, businessId);
+        }
+        List<InventoryBatch> wastageBatches = inventoryBatchRepository.findBySourceTypeAndSourceId(
+                "path_b_wastage", line.getId());
+        for (InventoryBatch waste : wastageBatches) {
+            deleteInventoryBatchIfUnused(waste.getId(), businessId);
+        }
+    }
+
+    private void deleteInventoryBatchIfUnused(String batchId, String businessId) {
+        List<StockMovement> leftover = stockMovementRepository.findByBatchId(batchId);
+        if (!leftover.isEmpty()) {
+            stockMovementRepository.deleteAll(leftover);
+            stockMovementRepository.flush();
+        }
+        if (!saleItemRepository.findByBatchId(batchId).isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Stock from this supply has already been sold; cannot reverse or delete");
+        }
+        inventoryBatchRepository.findByIdAndBusinessId(batchId, businessId)
+                .ifPresent(b -> {
+                    inventoryBatchRepository.delete(b);
+                    inventoryBatchRepository.flush();
+                });
     }
 
     /**
@@ -686,6 +716,11 @@ public class PathBPurchaseService {
                     HttpStatus.CONFLICT,
                     "Remove payments from this invoice before deleting it");
         }
+        if (!allocationRepository.findBySupplierInvoiceIdOrderByCreatedAtAsc(invoiceId).isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Remove payments from this invoice before deleting it");
+        }
         String sessionId = inv.getRawPurchaseSessionId();
         RawPurchaseSession session = sessionRepository.findByIdAndBusinessId(sessionId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Purchase session not found"));
@@ -702,8 +737,16 @@ public class PathBPurchaseService {
 
         ledgerPostingPort.deleteBySource(businessId, PurchasingConstants.JOURNAL_SOURCE_PATH_B, sessionId);
 
+        // Drop invoice lines (FK to raw lines) before deleting raw lines / session.
+        for (SupplierInvoiceLine sil : sils) {
+            sil.setRawLineId(null);
+        }
+        supplierInvoiceLineRepository.saveAll(sils);
+        supplierInvoiceLineRepository.flush();
         supplierInvoiceLineRepository.deleteAll(sils);
+        supplierInvoiceLineRepository.flush();
         supplierInvoiceRepository.delete(inv);
+        supplierInvoiceRepository.flush();
 
         supplyBatchRepository
                 .findByBusinessIdAndSourceTypeAndSourceId(businessId, PurchasingConstants.BATCH_SOURCE_PATH_B, sessionId)
@@ -712,17 +755,26 @@ public class PathBPurchaseService {
                             supplyBatchExpenseRepository.findBySupplyBatchIdOrderByCreatedAtAsc(sb.getId());
                     if (!expenses.isEmpty()) {
                         supplyBatchExpenseRepository.deleteAll(expenses);
+                        supplyBatchExpenseRepository.flush();
                     }
                     List<InventoryBatch> linked = inventoryBatchRepository.findBySupplyBatchId(sb.getId());
-                    if (!linked.isEmpty()) {
-                        inventoryBatchRepository.deleteAll(linked);
+                    for (InventoryBatch b : linked) {
+                        // Detach from supply batch header so header delete cannot trip fk_ib_supply_batch.
+                        b.setSupplyBatchId(null);
+                        inventoryBatchRepository.save(b);
+                    }
+                    inventoryBatchRepository.flush();
+                    for (InventoryBatch b : linked) {
+                        deleteInventoryBatchIfUnused(b.getId(), businessId);
                     }
                     supplyBatchRepository.delete(sb);
+                    supplyBatchRepository.flush();
                 });
 
         List<RawPurchaseLine> sessionLines = lineRepository.findBySessionIdOrderBySortOrderAscIdAsc(sessionId);
         if (!sessionLines.isEmpty()) {
             lineRepository.deleteAll(sessionLines);
+            lineRepository.flush();
         }
         sessionRepository.delete(session);
     }

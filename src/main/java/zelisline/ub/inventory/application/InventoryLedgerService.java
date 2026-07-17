@@ -492,7 +492,10 @@ public class InventoryLedgerService {
     private void applyStockDelta(Item item, BigDecimal delta) {
         BigDecimal base = item.getCurrentStock() == null ? BigDecimal.ZERO : item.getCurrentStock();
         BigDecimal next = base.add(delta).setScale(QTY_SCALE, RoundingMode.HALF_UP);
-        if (next.signum() < 0) {
+        // Inbound (+delta) must always be allowed so oversold / negative current_stock
+        // can be repaired. Branch UIs show batch on-hand (often 0) while current_stock
+        // can already be negative when allowNegativeStock sales ran.
+        if (next.signum() < 0 && delta.signum() <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Stock cannot go negative");
         }
         if (base.signum() <= 0 && next.signum() > 0) {

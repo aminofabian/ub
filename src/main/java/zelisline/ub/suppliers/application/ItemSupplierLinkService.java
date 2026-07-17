@@ -2,6 +2,8 @@ package zelisline.ub.suppliers.application;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -15,8 +17,10 @@ import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.suppliers.api.dto.AddItemSupplierLinkRequest;
 import zelisline.ub.suppliers.api.dto.ItemSupplierLinkResponse;
 import zelisline.ub.suppliers.api.dto.SupplierItemLinkResponse;
@@ -24,6 +28,7 @@ import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierProduct;
 import zelisline.ub.suppliers.repository.SupplierProductRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
+import zelisline.ub.tenancy.repository.BranchRepository;
 
 @Service
 @RequiredArgsConstructor
@@ -33,6 +38,9 @@ public class ItemSupplierLinkService {
     private final SupplierRepository supplierRepository;
     private final SupplierProductRepository supplierProductRepository;
     private final SupplierProductPrimaryService primaryService;
+    private final PackageVariantStockResolver packageVariantStockResolver;
+    private final InventoryBatchRepository inventoryBatchRepository;
+    private final BranchRepository branchRepository;
 
     @Transactional(readOnly = true)
     public java.util.List<ItemSupplierLinkResponse> listLinks(String businessId, String itemId) {
@@ -46,6 +54,20 @@ public class ItemSupplierLinkService {
 
     @Transactional(readOnly = true)
     public java.util.List<SupplierItemLinkResponse> listLinksForSupplier(String businessId, String supplierId) {
+        return listLinksForSupplier(businessId, supplierId, null);
+    }
+
+    /**
+     * @param branchId when set, {@code currentStock} is branch on-hand from active batches
+     *                 (same source as catalog {@code stockQty} / admin stock edits). When null,
+     *                 falls back to denormalized {@code item.currentStock}.
+     */
+    @Transactional(readOnly = true)
+    public java.util.List<SupplierItemLinkResponse> listLinksForSupplier(
+            String businessId,
+            String supplierId,
+            String branchId
+    ) {
         supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(supplierId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
         java.util.List<SupplierProduct> links = supplierProductRepository.listForSupplier(businessId, supplierId);
@@ -56,7 +78,40 @@ public class ItemSupplierLinkService {
         Map<String, Item> itemsById = itemRepository.findAllById(itemIds).stream()
                 .filter(i -> businessId.equals(i.getBusinessId()) && i.getDeletedAt() == null)
                 .collect(Collectors.toMap(Item::getId, i -> i, (a, b) -> a));
-        return links.stream().map(sp -> toSupplierItemLinkResponse(sp, itemsById.get(sp.getItemId()))).toList();
+
+        String stockBranch = blankToNull(branchId);
+        Map<String, BigDecimal> branchStockByItemId = Map.of();
+        if (stockBranch != null) {
+            branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(stockBranch, businessId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Branch not found"));
+            Set<String> poolIds = new HashSet<>();
+            for (Item item : itemsById.values()) {
+                poolIds.addAll(packageVariantStockResolver.branchStockPoolItemIds(businessId, item));
+            }
+            if (!poolIds.isEmpty()) {
+                Map<String, BigDecimal> raw = new HashMap<>();
+                for (Object[] row : inventoryBatchRepository.sumQuantityRemainingForItemsAtBranch(
+                        businessId, stockBranch, "active", poolIds)) {
+                    raw.put((String) row[0], (BigDecimal) row[1]);
+                }
+                branchStockByItemId = raw;
+            }
+        }
+
+        Map<String, BigDecimal> stockByItemId = branchStockByItemId;
+        return links.stream()
+                .map(sp -> {
+                    Item item = itemsById.get(sp.getItemId());
+                    BigDecimal stock = null;
+                    if (item != null && stockBranch != null) {
+                        BigDecimal holderStock = packageVariantStockResolver.sumPoolStock(item, stockByItemId);
+                        stock = packageVariantStockResolver.displayStockQty(item, holderStock);
+                    } else if (item != null) {
+                        stock = item.getCurrentStock();
+                    }
+                    return toSupplierItemLinkResponse(sp, item, stock);
+                })
+                .toList();
     }
 
     @Transactional
@@ -230,13 +285,16 @@ public class ItemSupplierLinkService {
         return name;
     }
 
-    private static SupplierItemLinkResponse toSupplierItemLinkResponse(SupplierProduct sp, Item item) {
+    private static SupplierItemLinkResponse toSupplierItemLinkResponse(
+            SupplierProduct sp,
+            Item item,
+            BigDecimal stock
+    ) {
         String itemName = supplierLinkItemDisplayName(item);
         String sku = item != null ? item.getSku() : "";
         String barcode = item != null && item.getBarcode() != null && !item.getBarcode().isBlank()
                 ? item.getBarcode().trim()
                 : null;
-        BigDecimal stock = item != null ? item.getCurrentStock() : null;
         BigDecimal catalogBuying = item != null ? item.getBuyingPrice() : null;
         BigDecimal catalogShelf = item != null ? item.getBundlePrice() : null;
         return new SupplierItemLinkResponse(

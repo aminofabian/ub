@@ -111,11 +111,12 @@ public class SuppliersController {
     @PreAuthorize("hasPermission(null, 'suppliers.read') and hasPermission(null, 'catalog.items.read')")
     public List<SupplierItemLinkResponse> listItemLinks(
             @PathVariable String supplierId,
+            @RequestParam(required = false) String branchId,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
         return itemSupplierLinkService.listLinksForSupplier(
-                TenantRequestIds.resolveBusinessId(request), supplierId);
+                TenantRequestIds.resolveBusinessId(request), supplierId, branchId);
     }
 
     @GetMapping("/{supplierId}/purchase-history")

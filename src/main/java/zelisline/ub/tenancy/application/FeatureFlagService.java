@@ -65,6 +65,9 @@ public class FeatureFlagService {
      * Absent / unset defaults to enabled; set {@code false} to disable for cashiers. */
     public static final String FLAG_POS_CASHIER_WEIGHED_TOGGLE = "pos.cashier_weighed_toggle";
 
+    /** Allow owners/admins to upload product photos from the cashier shelf. */
+    public static final String FLAG_POS_CASHIER_ADD_PHOTO = "pos.cashier_add_photo";
+
     /**
      * When enabled, opening a shift prefills denomination quantities from the
      * most recently closed shift at that branch (cashier can still edit).

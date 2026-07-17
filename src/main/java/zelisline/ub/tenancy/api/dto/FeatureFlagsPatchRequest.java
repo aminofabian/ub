@@ -12,6 +12,8 @@ public record FeatureFlagsPatchRequest(
         Boolean posCashierCreateProduct,
         /** Allow cashiers to mark items as sold by weight from the POS cart. */
         Boolean posCashierWeighedToggle,
+        /** Allow owners/admins to upload product photos from the cashier shelf. */
+        Boolean posCashierAddPhoto,
         /** Prefill opening float denominations from the previous night's closing count. */
         Boolean shiftsPrefillOpeningFromLastClose
 ) {

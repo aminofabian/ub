@@ -20,7 +20,7 @@ class StorefrontSettingsServiceFeatureFlagTest {
     void mergeFeatureFlags_enablesButcherPos() throws Exception {
         String merged = service.mergeFeatureFlags(
                 "{}",
-                new FeatureFlagsPatchRequest(null, true, null, null, null, null));
+                new FeatureFlagsPatchRequest(null, true, null, null, null, null, null));
 
         assertThat(objectMapper.readTree(merged).path("featureFlags").path("butcher_pos.enabled").asBoolean())
                 .isTrue();
@@ -30,7 +30,7 @@ class StorefrontSettingsServiceFeatureFlagTest {
     void mergeFeatureFlags_disablesButcherPos() throws Exception {
         String merged = service.mergeFeatureFlags(
                 "{\"featureFlags\":{\"butcher_pos.enabled\":true}}",
-                new FeatureFlagsPatchRequest(null, false, null, null, null, null));
+                new FeatureFlagsPatchRequest(null, false, null, null, null, null, null));
 
         assertThat(objectMapper.readTree(merged).path("featureFlags").path("butcher_pos.enabled").asBoolean())
                 .isFalse();
@@ -40,7 +40,7 @@ class StorefrontSettingsServiceFeatureFlagTest {
     void mergeFeatureFlags_preservesExistingFlags() throws Exception {
         String merged = service.mergeFeatureFlags(
                 "{\"featureFlags\":{\"pos_drafts.enabled\":true}}",
-                new FeatureFlagsPatchRequest(null, true, null, null, null, null));
+                new FeatureFlagsPatchRequest(null, true, null, null, null, null, null));
 
         assertThat(objectMapper.readTree(merged).path("featureFlags").path("butcher_pos.enabled").asBoolean())
                 .isTrue();
@@ -52,7 +52,7 @@ class StorefrontSettingsServiceFeatureFlagTest {
     void mergeFeatureFlags_enablesCashierCapabilities() throws Exception {
         String merged = service.mergeFeatureFlags(
                 "{}",
-                new FeatureFlagsPatchRequest(null, null, true, true, true, null));
+                new FeatureFlagsPatchRequest(null, null, true, true, true, true, null));
 
         assertThat(objectMapper.readTree(merged).path("featureFlags").path("pos.cashier_price_edit").asBoolean())
                 .isTrue();
@@ -60,13 +60,15 @@ class StorefrontSettingsServiceFeatureFlagTest {
                 .isTrue();
         assertThat(objectMapper.readTree(merged).path("featureFlags").path("pos.cashier_weighed_toggle").asBoolean())
                 .isTrue();
+        assertThat(objectMapper.readTree(merged).path("featureFlags").path("pos.cashier_add_photo").asBoolean())
+                .isTrue();
     }
 
     @Test
     void mergeFeatureFlags_enablesShiftPrefillOpeningFromLastClose() throws Exception {
         String merged = service.mergeFeatureFlags(
                 "{}",
-                new FeatureFlagsPatchRequest(null, null, null, null, null, true));
+                new FeatureFlagsPatchRequest(null, null, null, null, null, null, true));
 
         assertThat(objectMapper.readTree(merged)
                         .path("featureFlags")

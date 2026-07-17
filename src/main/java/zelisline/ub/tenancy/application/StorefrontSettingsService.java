@@ -591,6 +591,7 @@ public class StorefrontSettingsService {
                         && patch.posCashierPriceEdit() == null
                         && patch.posCashierCreateProduct() == null
                         && patch.posCashierWeighedToggle() == null
+                        && patch.posCashierAddPhoto() == null
                         && patch.shiftsPrefillOpeningFromLastClose() == null)) {
             return currentSettings;
         }
@@ -614,6 +615,11 @@ public class StorefrontSettingsService {
                 flags,
                 FeatureFlagService.FLAG_POS_CASHIER_WEIGHED_TOGGLE,
                 patch.posCashierWeighedToggle()
+        );
+        putFlagIfPresent(
+                flags,
+                FeatureFlagService.FLAG_POS_CASHIER_ADD_PHOTO,
+                patch.posCashierAddPhoto()
         );
         putFlagIfPresent(
                 flags,

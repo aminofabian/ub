@@ -36,6 +36,9 @@ public class BusinessInventorySettingsService {
     private static final String KEY_SHOW_SYSTEM_STOCK =
             "showSystemStockToStockManager";
     private static final String KEY_DAILY_AUDIT_SAMPLE_SIZE = "dailyAuditSampleSize";
+    private static final String KEY_MORNING_STARTS_AT = "morningStartsAt";
+    private static final String KEY_EVENING_STARTS_AT = "eveningStartsAt";
+    private static final String KEY_COUNTING_ENDS_AT = "countingEndsAt";
     private static final String KEY_ALLOW_CASHIER_TAB_CLEARANCE =
             "allowCashierTabClearance";
     private static final String KEY_ALLOW_EDIT_STOCK_MANAGER =
@@ -131,13 +134,50 @@ public class BusinessInventorySettingsService {
         if (stocktake.isMissingNode() || !stocktake.isObject()) {
             return StocktakeSettingsResponse.defaults();
         }
+        String morning = readTimeOrDefault(
+                stocktake,
+                KEY_MORNING_STARTS_AT,
+                StocktakeSettingsResponse.DEFAULT_MORNING_STARTS_AT
+        );
+        String evening = readTimeOrDefault(
+                stocktake,
+                KEY_EVENING_STARTS_AT,
+                StocktakeSettingsResponse.DEFAULT_EVENING_STARTS_AT
+        );
+        String ends = readTimeOrDefault(
+                stocktake,
+                KEY_COUNTING_ENDS_AT,
+                StocktakeSettingsResponse.DEFAULT_COUNTING_ENDS_AT
+        );
+        try {
+            StocktakeSettingsResponse.requireOrderedSchedule(morning, evening, ends);
+        } catch (IllegalArgumentException ex) {
+            morning = StocktakeSettingsResponse.DEFAULT_MORNING_STARTS_AT;
+            evening = StocktakeSettingsResponse.DEFAULT_EVENING_STARTS_AT;
+            ends = StocktakeSettingsResponse.DEFAULT_COUNTING_ENDS_AT;
+        }
         return new StocktakeSettingsResponse(
                 stocktake.path(KEY_SHOW_SYSTEM_STOCK).asBoolean(false),
                 StocktakeSettingsResponse.clampSampleSize(
                         stocktake.path(KEY_DAILY_AUDIT_SAMPLE_SIZE)
                                 .asInt(StocktakeSettingsResponse.DEFAULT_DAILY_AUDIT_SAMPLE_SIZE)
-                )
+                ),
+                morning,
+                evening,
+                ends
         );
+    }
+
+    private static String readTimeOrDefault(JsonNode stocktake, String key, String fallback) {
+        JsonNode node = stocktake.path(key);
+        if (node.isMissingNode() || node.isNull() || !node.isTextual()) {
+            return StocktakeSettingsResponse.normalizeTime(fallback);
+        }
+        try {
+            return StocktakeSettingsResponse.normalizeTime(node.asText());
+        } catch (IllegalArgumentException ex) {
+            return StocktakeSettingsResponse.normalizeTime(fallback);
+        }
     }
 
     private static StockLevelsSettingsResponse readStockLevels(JsonNode inventoryNode) {
@@ -290,6 +330,63 @@ public class BusinessInventorySettingsService {
                     StocktakeSettingsResponse.clampSampleSize(patch.dailyAuditSampleSize())
             );
         }
+
+        boolean patchingSchedule =
+                patch.morningStartsAt() != null
+                        || patch.eveningStartsAt() != null
+                        || patch.countingEndsAt() != null;
+        if (patchingSchedule) {
+            String morning = resolvePatchedTime(
+                    stocktake,
+                    KEY_MORNING_STARTS_AT,
+                    patch.morningStartsAt(),
+                    StocktakeSettingsResponse.DEFAULT_MORNING_STARTS_AT
+            );
+            String evening = resolvePatchedTime(
+                    stocktake,
+                    KEY_EVENING_STARTS_AT,
+                    patch.eveningStartsAt(),
+                    StocktakeSettingsResponse.DEFAULT_EVENING_STARTS_AT
+            );
+            String ends = resolvePatchedTime(
+                    stocktake,
+                    KEY_COUNTING_ENDS_AT,
+                    patch.countingEndsAt(),
+                    StocktakeSettingsResponse.DEFAULT_COUNTING_ENDS_AT
+            );
+            try {
+                StocktakeSettingsResponse.requireOrderedSchedule(morning, evening, ends);
+            } catch (IllegalArgumentException ex) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+            }
+            stocktake.put(KEY_MORNING_STARTS_AT, morning);
+            stocktake.put(KEY_EVENING_STARTS_AT, evening);
+            stocktake.put(KEY_COUNTING_ENDS_AT, ends);
+        }
+    }
+
+    private static String resolvePatchedTime(
+            ObjectNode stocktake,
+            String key,
+            String patchValue,
+            String fallback
+    ) {
+        if (patchValue != null) {
+            try {
+                return StocktakeSettingsResponse.normalizeTime(patchValue);
+            } catch (IllegalArgumentException ex) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+            }
+        }
+        JsonNode existing = stocktake.path(key);
+        if (!existing.isMissingNode() && existing.isTextual()) {
+            try {
+                return StocktakeSettingsResponse.normalizeTime(existing.asText());
+            } catch (IllegalArgumentException ignored) {
+                // fall through to default
+            }
+        }
+        return StocktakeSettingsResponse.normalizeTime(fallback);
     }
 
     private ObjectNode parseRoot(String currentSettings) {

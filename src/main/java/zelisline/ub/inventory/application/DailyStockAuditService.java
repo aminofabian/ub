@@ -4,6 +4,8 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -185,6 +187,7 @@ public class DailyStockAuditService {
             boolean hasStocktakeApprove
     ) {
         requireValidSessionType(sessionType);
+        requireCountingWindowOpen(businessId, sessionType);
         boolean showSystemStock = inventoryRoleAccessService.canSeeSystemStockDuringCount(
                 businessId,
                 roleId,
@@ -239,7 +242,8 @@ public class DailyStockAuditService {
             String roleId,
             boolean hasStocktakeApprove
     ) {
-        loadDailyAuditSession(businessId, sessionId);
+        StockTakeSession existing = loadDailyAuditSession(businessId, sessionId);
+        requireCountingWindowOpen(businessId, existing.getSessionType());
         stockTakeService.applySingleCountWithNote(
                 businessId,
                 sessionId,
@@ -271,6 +275,7 @@ public class DailyStockAuditService {
             boolean hasStocktakeApprove
     ) {
         StockTakeSession session = loadDailyAuditSession(businessId, sessionId);
+        requireCountingWindowOpen(businessId, session.getSessionType());
         stockTakeService.updateSessionProgress(
                 businessId,
                 sessionId,
@@ -692,6 +697,10 @@ public class DailyStockAuditService {
                         businessId,
                         audit.getId()
                 );
+        CountingSchedulePhase phase = resolveCountingSchedulePhase(
+                businessId,
+                audit.getAuditDate()
+        );
         return new DailyStockAuditDtos.DailyStockAuditTodayResponse(
                 audit.getId(),
                 audit.getAuditDate(),
@@ -710,7 +719,14 @@ public class DailyStockAuditService {
                                 sessions,
                                 InventoryConstants.STOCKTAKE_SESSION_TYPE_EVENING
                         )
-                )
+                ),
+                phase.morningStartsAt(),
+                phase.eveningStartsAt(),
+                phase.countingEndsAt(),
+                phase.timezone(),
+                phase.activeSessionType(),
+                phase.phaseEndsAt(),
+                phase.nextOpensAt()
         );
     }
 
@@ -919,6 +935,132 @@ public class DailyStockAuditService {
             );
         }
     }
+
+    private void requireCountingWindowOpen(String businessId, String sessionType) {
+        CountingSchedulePhase phase = resolveCountingSchedulePhase(
+                businessId,
+                LocalDate.now(resolveBusinessZone(businessId))
+        );
+        String active = phase.activeSessionType();
+        if (active != null && active.equals(sessionType)) {
+            return;
+        }
+        throw new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                countingWindowClosedMessage(sessionType, phase)
+        );
+    }
+
+    private static String countingWindowClosedMessage(
+            String sessionType,
+            CountingSchedulePhase phase
+    ) {
+        if (phase.activeSessionType() == null) {
+            if (phase.nextOpensAt() != null) {
+                return "Morning counting opens at " + phase.morningStartsAt()
+                        + " (" + phase.timezone() + ")";
+            }
+            return "Counting has ended for today (closed at "
+                    + phase.countingEndsAt()
+                    + " "
+                    + phase.timezone()
+                    + ")";
+        }
+        if (InventoryConstants.STOCKTAKE_SESSION_TYPE_MORNING.equals(sessionType)) {
+            return "Morning counting is closed. Evening counting is open until "
+                    + phase.countingEndsAt();
+        }
+        return "Evening counting opens at " + phase.eveningStartsAt()
+                + " (" + phase.timezone() + ")";
+    }
+
+    private CountingSchedulePhase resolveCountingSchedulePhase(
+            String businessId,
+            LocalDate auditDate
+    ) {
+        Business business = businessRepository.findById(businessId).orElse(null);
+        ZoneId zone = resolveBusinessZone(business);
+        StocktakeSettingsResponse stocktake = business == null
+                ? StocktakeSettingsResponse.defaults()
+                : businessInventorySettingsService
+                        .readFromSettingsJson(business.getSettings())
+                        .stocktake();
+
+        LocalTime morning = StocktakeSettingsResponse.parseTime(stocktake.morningStartsAt());
+        LocalTime evening = StocktakeSettingsResponse.parseTime(stocktake.eveningStartsAt());
+        LocalTime ends = StocktakeSettingsResponse.parseTime(stocktake.countingEndsAt());
+
+        Instant morningStart = atZone(auditDate, morning, zone);
+        Instant eveningStart = atZone(auditDate, evening, zone);
+        Instant countingEnd = atZone(auditDate, ends, zone);
+        Instant now = Instant.now();
+
+        String active;
+        Instant phaseEndsAt;
+        Instant nextOpensAt;
+        if (now.isBefore(morningStart)) {
+            active = null;
+            phaseEndsAt = null;
+            nextOpensAt = morningStart;
+        } else if (now.isBefore(eveningStart)) {
+            active = InventoryConstants.STOCKTAKE_SESSION_TYPE_MORNING;
+            phaseEndsAt = eveningStart;
+            nextOpensAt = eveningStart;
+        } else if (now.isBefore(countingEnd)) {
+            active = InventoryConstants.STOCKTAKE_SESSION_TYPE_EVENING;
+            phaseEndsAt = countingEnd;
+            nextOpensAt = null;
+        } else {
+            active = null;
+            phaseEndsAt = null;
+            nextOpensAt = null;
+        }
+
+        return new CountingSchedulePhase(
+                stocktake.morningStartsAt(),
+                stocktake.eveningStartsAt(),
+                stocktake.countingEndsAt(),
+                zone.getId(),
+                active,
+                phaseEndsAt,
+                nextOpensAt
+        );
+    }
+
+    private ZoneId resolveBusinessZone(String businessId) {
+        return resolveBusinessZone(
+                businessRepository.findById(businessId).orElse(null)
+        );
+    }
+
+    private ZoneId resolveBusinessZone(Business business) {
+        String tz = business != null ? blankToNull(business.getTimezone()) : null;
+        if (tz == null) {
+            tz = blankToNull(auditZoneId);
+        }
+        if (tz == null) {
+            tz = "Africa/Nairobi";
+        }
+        try {
+            return ZoneId.of(tz);
+        } catch (Exception ex) {
+            return ZoneId.of("Africa/Nairobi");
+        }
+    }
+
+    private static Instant atZone(LocalDate date, LocalTime time, ZoneId zone) {
+        return LocalDateTime.of(date, time).atZone(zone).toInstant();
+    }
+
+    private record CountingSchedulePhase(
+            String morningStartsAt,
+            String eveningStartsAt,
+            String countingEndsAt,
+            String timezone,
+            String activeSessionType,
+            Instant phaseEndsAt,
+            Instant nextOpensAt
+    ) {}
 
     private ItemContext loadItemContext(String businessId, List<String> itemIds) {
         if (itemIds.isEmpty()) {

@@ -134,7 +134,14 @@ class DailyStockAuditIT {
         b.setId(TENANT);
         b.setName("Daily Audit Shop");
         b.setSlug("daily-audit-shop");
-        b.setSettings("{}");
+        // Keep morning window open for IT runs at any clock time.
+        b.setSettings(
+                "{\"inventory\":{\"stocktake\":{"
+                        + "\"morningStartsAt\":\"00:00\","
+                        + "\"eveningStartsAt\":\"23:00\","
+                        + "\"countingEndsAt\":\"23:59\""
+                        + "}}}");
+        b.setTimezone("Africa/Nairobi");
         businessRepository.save(b);
         ledgerBootstrapService.ensureStandardAccounts(TENANT);
 
@@ -276,6 +283,69 @@ class DailyStockAuditIT {
         assertThat(session.get("lines").get(0).get("systemStock").isNull()).isTrue();
         assertThat(session.get("lines").get(0).get("itemName").asText())
                 .isEqualTo("Daily Audit Item");
+    }
+
+    @Test
+    void today_includesScheduleAndActiveSessionType() throws Exception {
+        dailyStockAuditService.generateForBranchIfAbsent(
+                TENANT, branchId, auditDate, "system");
+
+        MvcResult result =
+                mockMvc.perform(
+                                get("/api/v1/inventory/stock-take/daily-audits/today")
+                                        .param("branchId", branchId)
+                                        .param("auditDate", auditDate.toString())
+                                        .header("X-Tenant-Id", TENANT)
+                                        .header(
+                                                TestAuthenticationFilter.HEADER_USER_ID,
+                                                manager.getId())
+                                        .header(
+                                                TestAuthenticationFilter.HEADER_ROLE_ID,
+                                                ROLE_MANAGER))
+                        .andExpect(status().isOk())
+                        .andReturn();
+
+        JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString());
+        assertThat(body.get("morningStartsAt").asText()).isEqualTo("00:00");
+        assertThat(body.get("eveningStartsAt").asText()).isEqualTo("23:00");
+        assertThat(body.get("countingEndsAt").asText()).isEqualTo("23:59");
+        assertThat(body.get("timezone").asText()).isEqualTo("Africa/Nairobi");
+        assertThat(body.get("activeSessionType").asText()).isEqualTo("morning");
+        assertThat(body.get("phaseEndsAt").isNull()).isFalse();
+    }
+
+    @Test
+    void startSession_forbiddenOutsideCountingWindow() throws Exception {
+        Business business = businessRepository.findById(TENANT).orElseThrow();
+        // Evening is open for nearly the whole day; morning start must be rejected.
+        business.setSettings(
+                "{\"inventory\":{\"stocktake\":{"
+                        + "\"morningStartsAt\":\"00:00\","
+                        + "\"eveningStartsAt\":\"00:01\","
+                        + "\"countingEndsAt\":\"23:59\""
+                        + "}}}");
+        businessRepository.save(business);
+
+        dailyStockAuditService.generateForBranchIfAbsent(
+                TENANT, branchId, auditDate, "system");
+
+        mockMvc.perform(
+                        post("/api/v1/inventory/stock-take/daily-audits/sessions")
+                                .contentType(APPLICATION_JSON)
+                                .content(
+                                        "{\"branchId\":\""
+                                                + branchId
+                                                + "\",\"sessionType\":\"morning\",\"auditDate\":\""
+                                                + auditDate
+                                                + "\"}")
+                                .header("X-Tenant-Id", TENANT)
+                                .header(
+                                        TestAuthenticationFilter.HEADER_USER_ID,
+                                        manager.getId())
+                                .header(
+                                        TestAuthenticationFilter.HEADER_ROLE_ID,
+                                        ROLE_MANAGER))
+                .andExpect(status().isForbidden());
     }
 
     @Test

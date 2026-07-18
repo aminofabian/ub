@@ -89,7 +89,13 @@ class InventoryRoleAccessServiceTest {
         when(businessRepository.findById(BUSINESS_ID)).thenReturn(Optional.of(business));
         when(businessInventorySettingsService.readFromSettingsJson(any()))
                 .thenReturn(new InventorySettingsResponse(
-                        new StocktakeSettingsResponse(show, 25),
+                        new StocktakeSettingsResponse(
+                                show,
+                                25,
+                                StocktakeSettingsResponse.DEFAULT_MORNING_STARTS_AT,
+                                StocktakeSettingsResponse.DEFAULT_EVENING_STARTS_AT,
+                                StocktakeSettingsResponse.DEFAULT_COUNTING_ENDS_AT
+                        ),
                         null,
                         null,
                         null,

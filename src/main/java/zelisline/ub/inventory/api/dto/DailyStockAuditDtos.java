@@ -38,7 +38,18 @@ public final class DailyStockAuditDtos {
             Instant generatedAt,
             List<DailyStockAuditItemSummary> items,
             DailyStockAuditSessionSummary morningSession,
-            DailyStockAuditSessionSummary eveningSession
+            DailyStockAuditSessionSummary eveningSession,
+            /** Local wall-clock times ({@code HH:mm}) and countdown anchors for counters. */
+            String morningStartsAt,
+            String eveningStartsAt,
+            String countingEndsAt,
+            String timezone,
+            /** {@code "morning"}, {@code "evening"}, or {@code null} when counting is closed. */
+            String activeSessionType,
+            /** When the current open phase ends; null when no phase is open. */
+            Instant phaseEndsAt,
+            /** When the next count window opens; null when counting has ended for today. */
+            Instant nextOpensAt
     ) {}
 
     public record DailyStockAuditSessionResponse(

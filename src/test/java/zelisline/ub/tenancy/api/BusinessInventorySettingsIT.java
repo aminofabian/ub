@@ -101,7 +101,10 @@ class BusinessInventorySettingsIT {
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.inventory.stocktake.showSystemStockToStockManager")
-                        .value(false));
+                        .value(false))
+                .andExpect(jsonPath("$.inventory.stocktake.morningStartsAt").value("06:00"))
+                .andExpect(jsonPath("$.inventory.stocktake.eveningStartsAt").value("17:00"))
+                .andExpect(jsonPath("$.inventory.stocktake.countingEndsAt").value("21:00"));
     }
 
     @Test
@@ -304,6 +307,46 @@ class BusinessInventorySettingsIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.inventory.stocktake.showSystemStockToStockManager")
                         .value(true));
+    }
+
+    @Test
+    void patchDailyAuditSchedulePersists() throws Exception {
+        mockMvc.perform(patch("/api/v1/businesses/me")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"inventory":{"stocktake":{"morningStartsAt":"07:30","eveningStartsAt":"16:00","countingEndsAt":"20:15"}}}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inventory.stocktake.morningStartsAt").value("07:30"))
+                .andExpect(jsonPath("$.inventory.stocktake.eveningStartsAt").value("16:00"))
+                .andExpect(jsonPath("$.inventory.stocktake.countingEndsAt").value("20:15"));
+
+        entityManager.clear();
+
+        mockMvc.perform(get("/api/v1/businesses/me")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inventory.stocktake.morningStartsAt").value("07:30"))
+                .andExpect(jsonPath("$.inventory.stocktake.eveningStartsAt").value("16:00"))
+                .andExpect(jsonPath("$.inventory.stocktake.countingEndsAt").value("20:15"));
+    }
+
+    @Test
+    void patchDailyAuditScheduleRejectsUnorderedTimes() throws Exception {
+        mockMvc.perform(patch("/api/v1/businesses/me")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"inventory":{"stocktake":{"morningStartsAt":"18:00","eveningStartsAt":"17:00","countingEndsAt":"21:00"}}}
+                                """))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

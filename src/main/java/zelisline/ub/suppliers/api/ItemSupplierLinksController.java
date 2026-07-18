@@ -77,7 +77,9 @@ public class ItemSupplierLinksController {
     }
 
     @PatchMapping("/{linkId}")
-    @PreAuthorize("hasPermission(null, 'catalog.items.link_suppliers')")
+    @PreAuthorize(
+            "hasPermission(null, 'catalog.items.link_suppliers') or hasPermission(null, 'catalog.items.write')"
+    )
     public ItemSupplierLinkResponse patch(
             @PathVariable String itemId,
             @PathVariable String linkId,

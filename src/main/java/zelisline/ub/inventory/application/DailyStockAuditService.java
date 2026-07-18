@@ -784,8 +784,9 @@ public class DailyStockAuditService {
                         )
                 ),
                 phase.morningStartsAt(),
+                phase.morningEndsAt(),
                 phase.eveningStartsAt(),
-                phase.countingEndsAt(),
+                phase.eveningEndsAt(),
                 phase.timezone(),
                 phase.activeSessionType(),
                 phase.phaseEndsAt(),
@@ -1032,23 +1033,30 @@ public class DailyStockAuditService {
             String sessionType,
             CountingSchedulePhase phase
     ) {
-        if (phase.activeSessionType() == null) {
-            if (phase.nextOpensAt() != null) {
+        if (InventoryConstants.STOCKTAKE_SESSION_TYPE_MORNING.equals(sessionType)) {
+            if (phase.activeSessionType() == null && phase.nextOpensAt() != null) {
                 return "Morning counting opens at " + phase.morningStartsAt()
                         + " (" + phase.timezone() + ")";
             }
-            return "Counting has ended for today (closed at "
-                    + phase.countingEndsAt()
+            return "Morning counting is closed (window "
+                    + phase.morningStartsAt()
+                    + "–"
+                    + phase.morningEndsAt()
                     + " "
                     + phase.timezone()
                     + ")";
         }
-        if (InventoryConstants.STOCKTAKE_SESSION_TYPE_MORNING.equals(sessionType)) {
-            return "Morning counting is closed. Evening counting is open until "
-                    + phase.countingEndsAt();
+        if (phase.activeSessionType() == null && phase.nextOpensAt() != null) {
+            return "Evening counting opens at " + phase.eveningStartsAt()
+                    + " (" + phase.timezone() + ")";
         }
-        return "Evening counting opens at " + phase.eveningStartsAt()
-                + " (" + phase.timezone() + ")";
+        return "Evening counting is closed (window "
+                + phase.eveningStartsAt()
+                + "–"
+                + phase.eveningEndsAt()
+                + " "
+                + phase.timezone()
+                + ")";
     }
 
     private CountingSchedulePhase resolveCountingSchedulePhase(
@@ -1063,30 +1071,37 @@ public class DailyStockAuditService {
                         .readFromSettingsJson(business.getSettings())
                         .stocktake();
 
-        LocalTime morning = StocktakeSettingsResponse.parseTime(stocktake.morningStartsAt());
-        LocalTime evening = StocktakeSettingsResponse.parseTime(stocktake.eveningStartsAt());
-        LocalTime ends = StocktakeSettingsResponse.parseTime(stocktake.countingEndsAt());
+        LocalTime morningStartT = StocktakeSettingsResponse.parseTime(stocktake.morningStartsAt());
+        LocalTime morningEndT = StocktakeSettingsResponse.parseTime(stocktake.morningEndsAt());
+        LocalTime eveningStartT = StocktakeSettingsResponse.parseTime(stocktake.eveningStartsAt());
+        LocalTime eveningEndT = StocktakeSettingsResponse.parseTime(stocktake.eveningEndsAt());
 
-        Instant morningStart = atZone(auditDate, morning, zone);
-        Instant eveningStart = atZone(auditDate, evening, zone);
-        Instant countingEnd = atZone(auditDate, ends, zone);
+        Instant morningStart = atZone(auditDate, morningStartT, zone);
+        Instant morningEnd = atZone(auditDate, morningEndT, zone);
+        Instant eveningStart = atZone(auditDate, eveningStartT, zone);
+        Instant eveningEnd = atZone(auditDate, eveningEndT, zone);
         Instant now = Instant.now();
 
         String active;
         Instant phaseEndsAt;
         Instant nextOpensAt;
-        if (now.isBefore(morningStart)) {
+        if (!now.isBefore(morningStart) && now.isBefore(morningEnd)) {
+            active = InventoryConstants.STOCKTAKE_SESSION_TYPE_MORNING;
+            phaseEndsAt = morningEnd;
+            nextOpensAt = eveningStart;
+        } else if (!now.isBefore(eveningStart) && now.isBefore(eveningEnd)) {
+            active = InventoryConstants.STOCKTAKE_SESSION_TYPE_EVENING;
+            phaseEndsAt = eveningEnd;
+            nextOpensAt = null;
+        } else if (now.isBefore(morningStart)) {
             active = null;
             phaseEndsAt = null;
             nextOpensAt = morningStart;
         } else if (now.isBefore(eveningStart)) {
-            active = InventoryConstants.STOCKTAKE_SESSION_TYPE_MORNING;
-            phaseEndsAt = eveningStart;
+            // Gap between morning end and evening start
+            active = null;
+            phaseEndsAt = null;
             nextOpensAt = eveningStart;
-        } else if (now.isBefore(countingEnd)) {
-            active = InventoryConstants.STOCKTAKE_SESSION_TYPE_EVENING;
-            phaseEndsAt = countingEnd;
-            nextOpensAt = null;
         } else {
             active = null;
             phaseEndsAt = null;
@@ -1095,8 +1110,9 @@ public class DailyStockAuditService {
 
         return new CountingSchedulePhase(
                 stocktake.morningStartsAt(),
+                stocktake.morningEndsAt(),
                 stocktake.eveningStartsAt(),
-                stocktake.countingEndsAt(),
+                stocktake.eveningEndsAt(),
                 zone.getId(),
                 active,
                 phaseEndsAt,
@@ -1131,8 +1147,9 @@ public class DailyStockAuditService {
 
     private record CountingSchedulePhase(
             String morningStartsAt,
+            String morningEndsAt,
             String eveningStartsAt,
-            String countingEndsAt,
+            String eveningEndsAt,
             String timezone,
             String activeSessionType,
             Instant phaseEndsAt,

@@ -102,9 +102,10 @@ class BusinessInventorySettingsIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.inventory.stocktake.showSystemStockToStockManager")
                         .value(false))
-                .andExpect(jsonPath("$.inventory.stocktake.morningStartsAt").value("06:00"))
-                .andExpect(jsonPath("$.inventory.stocktake.eveningStartsAt").value("17:00"))
-                .andExpect(jsonPath("$.inventory.stocktake.countingEndsAt").value("21:00"));
+                .andExpect(jsonPath("$.inventory.stocktake.morningStartsAt").value("08:00"))
+                .andExpect(jsonPath("$.inventory.stocktake.morningEndsAt").value("09:00"))
+                .andExpect(jsonPath("$.inventory.stocktake.eveningStartsAt").value("20:00"))
+                .andExpect(jsonPath("$.inventory.stocktake.eveningEndsAt").value("21:00"));
     }
 
     @Test
@@ -317,12 +318,13 @@ class BusinessInventorySettingsIT {
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
                         .contentType(APPLICATION_JSON)
                         .content("""
-                                {"inventory":{"stocktake":{"morningStartsAt":"07:30","eveningStartsAt":"16:00","countingEndsAt":"20:15"}}}
+                                {"inventory":{"stocktake":{"morningStartsAt":"07:30","morningEndsAt":"08:30","eveningStartsAt":"16:00","eveningEndsAt":"20:15"}}}
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.inventory.stocktake.morningStartsAt").value("07:30"))
+                .andExpect(jsonPath("$.inventory.stocktake.morningEndsAt").value("08:30"))
                 .andExpect(jsonPath("$.inventory.stocktake.eveningStartsAt").value("16:00"))
-                .andExpect(jsonPath("$.inventory.stocktake.countingEndsAt").value("20:15"));
+                .andExpect(jsonPath("$.inventory.stocktake.eveningEndsAt").value("20:15"));
 
         entityManager.clear();
 
@@ -332,8 +334,9 @@ class BusinessInventorySettingsIT {
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.inventory.stocktake.morningStartsAt").value("07:30"))
+                .andExpect(jsonPath("$.inventory.stocktake.morningEndsAt").value("08:30"))
                 .andExpect(jsonPath("$.inventory.stocktake.eveningStartsAt").value("16:00"))
-                .andExpect(jsonPath("$.inventory.stocktake.countingEndsAt").value("20:15"));
+                .andExpect(jsonPath("$.inventory.stocktake.eveningEndsAt").value("20:15"));
     }
 
     @Test
@@ -344,7 +347,7 @@ class BusinessInventorySettingsIT {
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
                         .contentType(APPLICATION_JSON)
                         .content("""
-                                {"inventory":{"stocktake":{"morningStartsAt":"18:00","eveningStartsAt":"17:00","countingEndsAt":"21:00"}}}
+                                {"inventory":{"stocktake":{"morningStartsAt":"18:00","morningEndsAt":"19:00","eveningStartsAt":"17:00","eveningEndsAt":"21:00"}}}
                                 """))
                 .andExpect(status().isBadRequest());
     }

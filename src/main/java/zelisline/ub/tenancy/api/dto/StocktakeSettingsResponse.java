@@ -14,18 +14,21 @@ public record StocktakeSettingsResponse(
         int dailyAuditSampleSize,
         /** Local wall-clock time when morning counting opens ({@code HH:mm}). */
         String morningStartsAt,
+        /** Local wall-clock time when morning counting closes ({@code HH:mm}). */
+        String morningEndsAt,
         /** Local wall-clock time when evening counting opens ({@code HH:mm}). */
         String eveningStartsAt,
-        /** Local wall-clock time when counting closes for the day ({@code HH:mm}). */
-        String countingEndsAt
+        /** Local wall-clock time when evening counting closes ({@code HH:mm}). */
+        String eveningEndsAt
 ) {
     public static final int DEFAULT_DAILY_AUDIT_SAMPLE_SIZE = 25;
     public static final int MIN_DAILY_AUDIT_SAMPLE_SIZE = 1;
     public static final int MAX_DAILY_AUDIT_SAMPLE_SIZE = 200;
 
-    public static final String DEFAULT_MORNING_STARTS_AT = "06:00";
-    public static final String DEFAULT_EVENING_STARTS_AT = "17:00";
-    public static final String DEFAULT_COUNTING_ENDS_AT = "21:00";
+    public static final String DEFAULT_MORNING_STARTS_AT = "08:00";
+    public static final String DEFAULT_MORNING_ENDS_AT = "09:00";
+    public static final String DEFAULT_EVENING_STARTS_AT = "20:00";
+    public static final String DEFAULT_EVENING_ENDS_AT = "21:00";
 
     private static final DateTimeFormatter HH_MM = DateTimeFormatter.ofPattern("HH:mm");
 
@@ -34,8 +37,9 @@ public record StocktakeSettingsResponse(
                 false,
                 DEFAULT_DAILY_AUDIT_SAMPLE_SIZE,
                 DEFAULT_MORNING_STARTS_AT,
+                DEFAULT_MORNING_ENDS_AT,
                 DEFAULT_EVENING_STARTS_AT,
-                DEFAULT_COUNTING_ENDS_AT
+                DEFAULT_EVENING_ENDS_AT
         );
     }
 
@@ -71,19 +75,32 @@ public record StocktakeSettingsResponse(
     }
 
     /**
-     * Ensures {@code morningStartsAt < eveningStartsAt < countingEndsAt}.
+     * Ensures morning and evening windows are valid and do not overlap:
+     * {@code morningStart < morningEnd <= eveningStart < eveningEnd}.
      */
     public static void requireOrderedSchedule(
             String morningStartsAt,
+            String morningEndsAt,
             String eveningStartsAt,
-            String countingEndsAt
+            String eveningEndsAt
     ) {
-        LocalTime morning = parseTime(morningStartsAt);
-        LocalTime evening = parseTime(eveningStartsAt);
-        LocalTime end = parseTime(countingEndsAt);
-        if (!morning.isBefore(evening) || !evening.isBefore(end)) {
+        LocalTime morningStart = parseTime(morningStartsAt);
+        LocalTime morningEnd = parseTime(morningEndsAt);
+        LocalTime eveningStart = parseTime(eveningStartsAt);
+        LocalTime eveningEnd = parseTime(eveningEndsAt);
+        if (!morningStart.isBefore(morningEnd)) {
             throw new IllegalArgumentException(
-                    "Daily audit schedule must satisfy morningStartsAt < eveningStartsAt < countingEndsAt"
+                    "Morning window must satisfy morningStartsAt < morningEndsAt"
+            );
+        }
+        if (!eveningStart.isBefore(eveningEnd)) {
+            throw new IllegalArgumentException(
+                    "Evening window must satisfy eveningStartsAt < eveningEndsAt"
+            );
+        }
+        if (morningEnd.isAfter(eveningStart)) {
+            throw new IllegalArgumentException(
+                    "Morning must end at or before evening starts (morningEndsAt <= eveningStartsAt)"
             );
         }
     }

@@ -93,8 +93,9 @@ class InventoryRoleAccessServiceTest {
                                 show,
                                 25,
                                 StocktakeSettingsResponse.DEFAULT_MORNING_STARTS_AT,
+                                StocktakeSettingsResponse.DEFAULT_MORNING_ENDS_AT,
                                 StocktakeSettingsResponse.DEFAULT_EVENING_STARTS_AT,
-                                StocktakeSettingsResponse.DEFAULT_COUNTING_ENDS_AT
+                                StocktakeSettingsResponse.DEFAULT_EVENING_ENDS_AT
                         ),
                         null,
                         null,

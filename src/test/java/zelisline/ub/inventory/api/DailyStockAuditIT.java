@@ -138,8 +138,9 @@ class DailyStockAuditIT {
         b.setSettings(
                 "{\"inventory\":{\"stocktake\":{"
                         + "\"morningStartsAt\":\"00:00\","
+                        + "\"morningEndsAt\":\"23:00\","
                         + "\"eveningStartsAt\":\"23:00\","
-                        + "\"countingEndsAt\":\"23:59\""
+                        + "\"eveningEndsAt\":\"23:59\""
                         + "}}}");
         b.setTimezone("Africa/Nairobi");
         businessRepository.save(b);
@@ -307,8 +308,9 @@ class DailyStockAuditIT {
 
         JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString());
         assertThat(body.get("morningStartsAt").asText()).isEqualTo("00:00");
+        assertThat(body.get("morningEndsAt").asText()).isEqualTo("23:00");
         assertThat(body.get("eveningStartsAt").asText()).isEqualTo("23:00");
-        assertThat(body.get("countingEndsAt").asText()).isEqualTo("23:59");
+        assertThat(body.get("eveningEndsAt").asText()).isEqualTo("23:59");
         assertThat(body.get("timezone").asText()).isEqualTo("Africa/Nairobi");
         assertThat(body.get("activeSessionType").asText()).isEqualTo("morning");
         assertThat(body.get("phaseEndsAt").isNull()).isFalse();
@@ -321,8 +323,9 @@ class DailyStockAuditIT {
         business.setSettings(
                 "{\"inventory\":{\"stocktake\":{"
                         + "\"morningStartsAt\":\"00:00\","
+                        + "\"morningEndsAt\":\"00:01\","
                         + "\"eveningStartsAt\":\"00:01\","
-                        + "\"countingEndsAt\":\"23:59\""
+                        + "\"eveningEndsAt\":\"23:59\""
                         + "}}}");
         businessRepository.save(business);
 

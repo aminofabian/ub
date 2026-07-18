@@ -41,8 +41,9 @@ public final class DailyStockAuditDtos {
             DailyStockAuditSessionSummary eveningSession,
             /** Local wall-clock times ({@code HH:mm}) and countdown anchors for counters. */
             String morningStartsAt,
+            String morningEndsAt,
             String eveningStartsAt,
-            String countingEndsAt,
+            String eveningEndsAt,
             String timezone,
             /** {@code "morning"}, {@code "evening"}, or {@code null} when counting is closed. */
             String activeSessionType,

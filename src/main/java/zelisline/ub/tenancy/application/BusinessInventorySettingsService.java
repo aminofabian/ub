@@ -37,7 +37,10 @@ public class BusinessInventorySettingsService {
             "showSystemStockToStockManager";
     private static final String KEY_DAILY_AUDIT_SAMPLE_SIZE = "dailyAuditSampleSize";
     private static final String KEY_MORNING_STARTS_AT = "morningStartsAt";
+    private static final String KEY_MORNING_ENDS_AT = "morningEndsAt";
     private static final String KEY_EVENING_STARTS_AT = "eveningStartsAt";
+    private static final String KEY_EVENING_ENDS_AT = "eveningEndsAt";
+    /** Legacy 3-time model key — mapped into morningEndsAt / eveningEndsAt when reading. */
     private static final String KEY_COUNTING_ENDS_AT = "countingEndsAt";
     private static final String KEY_ALLOW_CASHIER_TAB_CLEARANCE =
             "allowCashierTabClearance";
@@ -134,27 +137,47 @@ public class BusinessInventorySettingsService {
         if (stocktake.isMissingNode() || !stocktake.isObject()) {
             return StocktakeSettingsResponse.defaults();
         }
-        String morning = readTimeOrDefault(
+        String morningStart = readTimeOrDefault(
                 stocktake,
                 KEY_MORNING_STARTS_AT,
                 StocktakeSettingsResponse.DEFAULT_MORNING_STARTS_AT
         );
-        String evening = readTimeOrDefault(
+        String eveningStart = readTimeOrDefault(
                 stocktake,
                 KEY_EVENING_STARTS_AT,
                 StocktakeSettingsResponse.DEFAULT_EVENING_STARTS_AT
         );
-        String ends = readTimeOrDefault(
-                stocktake,
-                KEY_COUNTING_ENDS_AT,
-                StocktakeSettingsResponse.DEFAULT_COUNTING_ENDS_AT
-        );
+        // Prefer explicit ends; fall back to legacy 3-time model (evening start = morning end).
+        String morningEnd = hasTextual(stocktake, KEY_MORNING_ENDS_AT)
+                ? readTimeOrDefault(
+                        stocktake,
+                        KEY_MORNING_ENDS_AT,
+                        StocktakeSettingsResponse.DEFAULT_MORNING_ENDS_AT
+                )
+                : eveningStart;
+        String eveningEnd = hasTextual(stocktake, KEY_EVENING_ENDS_AT)
+                ? readTimeOrDefault(
+                        stocktake,
+                        KEY_EVENING_ENDS_AT,
+                        StocktakeSettingsResponse.DEFAULT_EVENING_ENDS_AT
+                )
+                : readTimeOrDefault(
+                        stocktake,
+                        KEY_COUNTING_ENDS_AT,
+                        StocktakeSettingsResponse.DEFAULT_EVENING_ENDS_AT
+                );
         try {
-            StocktakeSettingsResponse.requireOrderedSchedule(morning, evening, ends);
+            StocktakeSettingsResponse.requireOrderedSchedule(
+                    morningStart,
+                    morningEnd,
+                    eveningStart,
+                    eveningEnd
+            );
         } catch (IllegalArgumentException ex) {
-            morning = StocktakeSettingsResponse.DEFAULT_MORNING_STARTS_AT;
-            evening = StocktakeSettingsResponse.DEFAULT_EVENING_STARTS_AT;
-            ends = StocktakeSettingsResponse.DEFAULT_COUNTING_ENDS_AT;
+            morningStart = StocktakeSettingsResponse.DEFAULT_MORNING_STARTS_AT;
+            morningEnd = StocktakeSettingsResponse.DEFAULT_MORNING_ENDS_AT;
+            eveningStart = StocktakeSettingsResponse.DEFAULT_EVENING_STARTS_AT;
+            eveningEnd = StocktakeSettingsResponse.DEFAULT_EVENING_ENDS_AT;
         }
         return new StocktakeSettingsResponse(
                 stocktake.path(KEY_SHOW_SYSTEM_STOCK).asBoolean(false),
@@ -162,10 +185,16 @@ public class BusinessInventorySettingsService {
                         stocktake.path(KEY_DAILY_AUDIT_SAMPLE_SIZE)
                                 .asInt(StocktakeSettingsResponse.DEFAULT_DAILY_AUDIT_SAMPLE_SIZE)
                 ),
-                morning,
-                evening,
-                ends
+                morningStart,
+                morningEnd,
+                eveningStart,
+                eveningEnd
         );
+    }
+
+    private static boolean hasTextual(JsonNode stocktake, String key) {
+        JsonNode node = stocktake.path(key);
+        return !node.isMissingNode() && node.isTextual() && !node.asText().isBlank();
     }
 
     private static String readTimeOrDefault(JsonNode stocktake, String key, String fallback) {
@@ -333,35 +362,61 @@ public class BusinessInventorySettingsService {
 
         boolean patchingSchedule =
                 patch.morningStartsAt() != null
+                        || patch.morningEndsAt() != null
                         || patch.eveningStartsAt() != null
-                        || patch.countingEndsAt() != null;
+                        || patch.eveningEndsAt() != null;
         if (patchingSchedule) {
-            String morning = resolvePatchedTime(
+            String morningStart = resolvePatchedTime(
                     stocktake,
                     KEY_MORNING_STARTS_AT,
                     patch.morningStartsAt(),
                     StocktakeSettingsResponse.DEFAULT_MORNING_STARTS_AT
             );
-            String evening = resolvePatchedTime(
+            String eveningStart = resolvePatchedTime(
                     stocktake,
                     KEY_EVENING_STARTS_AT,
                     patch.eveningStartsAt(),
                     StocktakeSettingsResponse.DEFAULT_EVENING_STARTS_AT
             );
-            String ends = resolvePatchedTime(
+            String morningEndDefault = hasTextual(stocktake, KEY_MORNING_ENDS_AT)
+                    ? StocktakeSettingsResponse.DEFAULT_MORNING_ENDS_AT
+                    : eveningStart;
+            String eveningEndDefault = hasTextual(stocktake, KEY_EVENING_ENDS_AT)
+                    ? StocktakeSettingsResponse.DEFAULT_EVENING_ENDS_AT
+                    : (hasTextual(stocktake, KEY_COUNTING_ENDS_AT)
+                            ? readTimeOrDefault(
+                                    stocktake,
+                                    KEY_COUNTING_ENDS_AT,
+                                    StocktakeSettingsResponse.DEFAULT_EVENING_ENDS_AT
+                            )
+                            : StocktakeSettingsResponse.DEFAULT_EVENING_ENDS_AT);
+            String morningEnd = resolvePatchedTime(
                     stocktake,
-                    KEY_COUNTING_ENDS_AT,
-                    patch.countingEndsAt(),
-                    StocktakeSettingsResponse.DEFAULT_COUNTING_ENDS_AT
+                    KEY_MORNING_ENDS_AT,
+                    patch.morningEndsAt(),
+                    morningEndDefault
+            );
+            String eveningEnd = resolvePatchedTime(
+                    stocktake,
+                    KEY_EVENING_ENDS_AT,
+                    patch.eveningEndsAt(),
+                    eveningEndDefault
             );
             try {
-                StocktakeSettingsResponse.requireOrderedSchedule(morning, evening, ends);
+                StocktakeSettingsResponse.requireOrderedSchedule(
+                        morningStart,
+                        morningEnd,
+                        eveningStart,
+                        eveningEnd
+                );
             } catch (IllegalArgumentException ex) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
             }
-            stocktake.put(KEY_MORNING_STARTS_AT, morning);
-            stocktake.put(KEY_EVENING_STARTS_AT, evening);
-            stocktake.put(KEY_COUNTING_ENDS_AT, ends);
+            stocktake.put(KEY_MORNING_STARTS_AT, morningStart);
+            stocktake.put(KEY_MORNING_ENDS_AT, morningEnd);
+            stocktake.put(KEY_EVENING_STARTS_AT, eveningStart);
+            stocktake.put(KEY_EVENING_ENDS_AT, eveningEnd);
+            stocktake.remove(KEY_COUNTING_ENDS_AT);
         }
     }
 

@@ -4,7 +4,8 @@ public record StocktakePatchRequest(
         Boolean showSystemStockToStockManager,
         Integer dailyAuditSampleSize,
         String morningStartsAt,
+        String morningEndsAt,
         String eveningStartsAt,
-        String countingEndsAt
+        String eveningEndsAt
 ) {
 }

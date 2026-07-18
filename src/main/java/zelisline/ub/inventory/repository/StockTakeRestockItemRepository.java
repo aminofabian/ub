@@ -94,4 +94,18 @@ public interface StockTakeRestockItemRepository extends JpaRepository<StockTakeR
     );
 
     List<StockTakeRestockItem> findByBusinessIdAndOrderNumber(String businessId, String orderNumber);
+
+    @Query("""
+            select count(r) from StockTakeRestockItem r
+             where r.businessId = :businessId
+               and r.addedBy = :userId
+               and r.addedAt >= :from
+               and r.addedAt < :to
+            """)
+    long countAddedByUserBetween(
+            @Param("businessId") String businessId,
+            @Param("userId") String userId,
+            @Param("from") Instant from,
+            @Param("to") Instant to
+    );
 }

@@ -147,4 +147,50 @@ public interface StockTakeSessionRepository extends JpaRepository<StockTakeSessi
             @Param("businessId") String businessId,
             @Param("dailyAuditId") String dailyAuditId
     );
+
+    @Query("""
+            select count(s) from StockTakeSession s
+             where s.businessId = :businessId
+               and s.startedBy = :userId
+               and s.sessionDate >= :from
+               and s.sessionDate <= :to
+            """)
+    long countStartedByUserBetween(
+            @Param("businessId") String businessId,
+            @Param("userId") String userId,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to
+    );
+
+    @Query("""
+            select count(s) from StockTakeSession s
+             where s.businessId = :businessId
+               and s.startedBy = :userId
+               and s.sessionDate >= :from
+               and s.sessionDate <= :to
+               and s.sessionType = :sessionType
+            """)
+    long countStartedByUserAndTypeBetween(
+            @Param("businessId") String businessId,
+            @Param("userId") String userId,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to,
+            @Param("sessionType") String sessionType
+    );
+
+    @Query("""
+            select count(s) from StockTakeSession s
+             where s.businessId = :businessId
+               and s.startedBy = :userId
+               and s.sessionDate >= :from
+               and s.sessionDate <= :to
+               and s.source = :source
+            """)
+    long countStartedByUserAndSourceBetween(
+            @Param("businessId") String businessId,
+            @Param("userId") String userId,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to,
+            @Param("source") String source
+    );
 }

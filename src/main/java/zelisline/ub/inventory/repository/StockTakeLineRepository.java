@@ -28,4 +28,92 @@ public interface StockTakeLineRepository extends JpaRepository<StockTakeLine, St
             @Param("from") LocalDate from,
             @Param("to") LocalDate to
     );
+
+    @Query("""
+            select count(l) from StockTakeLine l
+             join l.session s
+             where s.businessId = :businessId
+               and l.submittedBy = :userId
+               and s.sessionDate >= :from
+               and s.sessionDate <= :to
+               and l.countedQty is not null
+               and (l.status = 'submitted' or l.status = 'confirmed')
+            """)
+    long countSubmittedByUserBetween(
+            @Param("businessId") String businessId,
+            @Param("userId") String userId,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to
+    );
+
+    @Query("""
+            select count(distinct s.sessionDate) from StockTakeLine l
+             join l.session s
+             where s.businessId = :businessId
+               and l.submittedBy = :userId
+               and s.sessionDate >= :from
+               and s.sessionDate <= :to
+               and l.countedQty is not null
+               and (l.status = 'submitted' or l.status = 'confirmed')
+            """)
+    long countDistinctActiveDaysByUserBetween(
+            @Param("businessId") String businessId,
+            @Param("userId") String userId,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to
+    );
+
+    @Query("""
+            select count(l) from StockTakeLine l
+             join l.session s
+             where s.businessId = :businessId
+               and l.submittedBy = :userId
+               and s.sessionDate >= :from
+               and s.sessionDate <= :to
+               and l.reviewStatus = :reviewStatus
+               and l.countedQty is not null
+            """)
+    long countByReviewStatusForUserBetween(
+            @Param("businessId") String businessId,
+            @Param("userId") String userId,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to,
+            @Param("reviewStatus") String reviewStatus
+    );
+
+    @Query("""
+            select count(l) from StockTakeLine l
+             join l.session s
+             where s.businessId = :businessId
+               and l.submittedBy = :userId
+               and s.sessionDate >= :from
+               and s.sessionDate <= :to
+               and l.note is not null
+               and trim(l.note) <> ''
+               and l.countedQty is not null
+            """)
+    long countNotesByUserBetween(
+            @Param("businessId") String businessId,
+            @Param("userId") String userId,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to
+    );
+
+    @Query("""
+            select distinct s.sessionDate from StockTakeLine l
+             join l.session s
+             where s.businessId = :businessId
+               and l.submittedBy = :userId
+               and s.sessionDate >= :from
+               and s.sessionDate <= :to
+               and l.countedQty is not null
+               and (l.status = 'submitted' or l.status = 'confirmed')
+             order by s.sessionDate desc
+            """)
+    List<LocalDate> findActiveDatesByUserBetween(
+            @Param("businessId") String businessId,
+            @Param("userId") String userId,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to
+    );
 }

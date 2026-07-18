@@ -5,6 +5,8 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.YearMonth;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -28,10 +30,12 @@ import zelisline.ub.inventory.api.dto.PatchStockTakeCountsRequest;
 import zelisline.ub.inventory.api.dto.PostStartStockTakeSessionRequest;
 import zelisline.ub.inventory.api.dto.ReconciliationResponse;
 import zelisline.ub.inventory.api.dto.RejectStockAdjustmentRequest;
+import zelisline.ub.inventory.api.dto.StockTakeMyStatsResponse;
 import zelisline.ub.inventory.api.dto.StockTakeSessionResponse;
 import zelisline.ub.identity.application.RequestPermissionService;
 import zelisline.ub.inventory.application.InventoryRoleAccessService;
 import zelisline.ub.inventory.application.StockTakeService;
+import zelisline.ub.inventory.application.StockTakeStatsService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.tenancy.api.TenantRequestIds;
@@ -47,9 +51,37 @@ public class StockTakeController {
         "stocktake.approve";
 
     private final StockTakeService stockTakeService;
+    private final StockTakeStatsService stockTakeStatsService;
     private final BranchResolutionService branchResolutionService;
     private final RequestPermissionService permissionService;
     private final InventoryRoleAccessService inventoryRoleAccessService;
+
+    // ── Counter personal stats ────────────────────────────────────────
+
+    @GetMapping("/my-stats")
+    @PreAuthorize("hasPermission(null, 'stocktake.read') or hasPermission(null, 'stocktake.run')")
+    public StockTakeMyStatsResponse myStats(
+        @RequestParam(required = false) String month,
+        HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        YearMonth yearMonth = null;
+        if (month != null && !month.isBlank()) {
+            try {
+                yearMonth = YearMonth.parse(month.trim());
+            } catch (DateTimeParseException ex) {
+                throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "month must be YYYY-MM"
+                );
+            }
+        }
+        return stockTakeStatsService.myMonthStats(
+            TenantRequestIds.resolveBusinessId(request),
+            principal.userId(),
+            yearMonth
+        );
+    }
 
     // ── Sessions ──────────────────────────────────────────────────────
 

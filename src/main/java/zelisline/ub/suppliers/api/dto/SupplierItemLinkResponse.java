@@ -21,6 +21,13 @@ public record SupplierItemLinkResponse(
         BigDecimal packSize,
         String packUnit,
         boolean active,
+        /** When set, this catalog row is a variant/pack of another product. */
+        String variantOfItemId,
+        /** Display name of the parent product when {@link #variantOfItemId} is set. */
+        String parentItemName,
+        /** Variant option label (e.g. Medium, Pink) when this row is a variant. */
+        String variantName,
+        boolean packageVariant,
         long version,
         Instant createdAt,
         Instant updatedAt

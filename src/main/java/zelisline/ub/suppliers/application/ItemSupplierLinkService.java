@@ -79,6 +79,20 @@ public class ItemSupplierLinkService {
                 .filter(i -> businessId.equals(i.getBusinessId()) && i.getDeletedAt() == null)
                 .collect(Collectors.toMap(Item::getId, i -> i, (a, b) -> a));
 
+        // Resolve parent products for variants even when the parent itself is not linked.
+        Set<String> missingParentIds = itemsById.values().stream()
+                .map(Item::getVariantOfItemId)
+                .filter(id -> id != null && !id.isBlank())
+                .filter(id -> !itemsById.containsKey(id))
+                .collect(Collectors.toSet());
+        if (!missingParentIds.isEmpty()) {
+            for (Item parent : itemRepository.findAllById(missingParentIds)) {
+                if (businessId.equals(parent.getBusinessId()) && parent.getDeletedAt() == null) {
+                    itemsById.put(parent.getId(), parent);
+                }
+            }
+        }
+
         String stockBranch = blankToNull(branchId);
         Map<String, BigDecimal> branchStockByItemId = Map.of();
         if (stockBranch != null) {
@@ -102,6 +116,13 @@ public class ItemSupplierLinkService {
         return links.stream()
                 .map(sp -> {
                     Item item = itemsById.get(sp.getItemId());
+                    Item parent = null;
+                    if (item != null) {
+                        String parentId = blankToNull(item.getVariantOfItemId());
+                        if (parentId != null) {
+                            parent = itemsById.get(parentId);
+                        }
+                    }
                     BigDecimal stock = null;
                     if (item != null && stockBranch != null) {
                         BigDecimal holderStock = packageVariantStockResolver.sumPoolStock(item, stockByItemId);
@@ -109,7 +130,7 @@ public class ItemSupplierLinkService {
                     } else if (item != null) {
                         stock = item.getCurrentStock();
                     }
-                    return toSupplierItemLinkResponse(sp, item, stock);
+                    return toSupplierItemLinkResponse(sp, item, parent, stock);
                 })
                 .toList();
     }
@@ -265,38 +286,54 @@ public class ItemSupplierLinkService {
                 || t.equals("default");
     }
 
-    private static String supplierLinkItemDisplayName(Item item) {
+    private static String supplierLinkItemDisplayName(Item item, Item parent) {
         if (item == null) {
             return "";
         }
         String name = item.getName() != null ? item.getName().trim() : "Item";
-        String variantOf = item.getVariantOfItemId();
-        if (variantOf == null || variantOf.isBlank()) {
+        String variantOf = blankToNull(item.getVariantOfItemId());
+        if (variantOf == null) {
             return name;
         }
+        String family = parent != null && parent.getName() != null && !parent.getName().isBlank()
+                ? parent.getName().trim()
+                : name;
         String vn = item.getVariantName();
         if (vn != null && !vn.isBlank() && !isGenericVariantLabel(vn)) {
-            return name + " · " + vn.trim();
+            return family + " · " + vn.trim();
         }
         String sku = item.getSku();
         if (sku != null && !sku.isBlank()) {
-            return name + " · " + sku.trim();
+            return family + " · " + sku.trim();
         }
-        return name;
+        return family;
     }
 
     private static SupplierItemLinkResponse toSupplierItemLinkResponse(
             SupplierProduct sp,
             Item item,
+            Item parent,
             BigDecimal stock
     ) {
-        String itemName = supplierLinkItemDisplayName(item);
+        String itemName = supplierLinkItemDisplayName(item, parent);
         String sku = item != null ? item.getSku() : "";
         String barcode = item != null && item.getBarcode() != null && !item.getBarcode().isBlank()
                 ? item.getBarcode().trim()
                 : null;
         BigDecimal catalogBuying = item != null ? item.getBuyingPrice() : null;
         BigDecimal catalogShelf = item != null ? item.getBundlePrice() : null;
+        String variantOfItemId = item != null ? blankToNull(item.getVariantOfItemId()) : null;
+        String parentItemName = null;
+        String variantName = null;
+        boolean packageVariant = item != null && item.isPackageVariant();
+        if (variantOfItemId != null) {
+            if (parent != null && parent.getName() != null && !parent.getName().isBlank()) {
+                parentItemName = parent.getName().trim();
+            }
+            if (item.getVariantName() != null && !item.getVariantName().isBlank()) {
+                variantName = item.getVariantName().trim();
+            }
+        }
         return new SupplierItemLinkResponse(
                 sp.getId(),
                 sp.getItemId(),
@@ -313,6 +350,10 @@ public class ItemSupplierLinkService {
                 sp.getPackSize(),
                 sp.getPackUnit(),
                 sp.isActive(),
+                variantOfItemId,
+                parentItemName,
+                variantName,
+                packageVariant,
                 sp.getVersion(),
                 sp.getCreatedAt(),
                 sp.getUpdatedAt()

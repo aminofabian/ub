@@ -85,24 +85,24 @@ public class InventoryRoleAccessService {
 
     /**
      * Whether counters may see on-hand system quantity during stock take / daily audit.
-     * Owners, admins, and users with {@code stocktake.approve} always see it.
+     * Owners and admins always see it. Stock managers follow
+     * {@code showSystemStockToStockManager} even when they also have
+     * {@code stocktake.approve}. Other roles with approve see it.
      */
     public boolean canSeeSystemStockDuringCount(
             String businessId,
             String roleId,
             boolean hasStocktakeApprove
     ) {
-        if (hasStocktakeApprove) {
-            return true;
-        }
         String roleKey = resolveRoleKey(roleId);
         if ("owner".equals(roleKey) || "admin".equals(roleKey)) {
             return true;
         }
-        if (!STOCK_MANAGER.equals(roleKey)) {
-            return false;
+        // Stock managers ship with stocktake.approve; that must not bypass the toggle.
+        if (STOCK_MANAGER.equals(roleKey)) {
+            return readStocktake(businessId).showSystemStockToStockManager();
         }
-        return readStocktake(businessId).showSystemStockToStockManager();
+        return hasStocktakeApprove;
     }
 
     private StocktakeSettingsResponse readStocktake(String businessId) {

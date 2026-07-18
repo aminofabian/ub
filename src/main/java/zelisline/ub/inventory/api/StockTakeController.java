@@ -30,6 +30,7 @@ import zelisline.ub.inventory.api.dto.ReconciliationResponse;
 import zelisline.ub.inventory.api.dto.RejectStockAdjustmentRequest;
 import zelisline.ub.inventory.api.dto.StockTakeSessionResponse;
 import zelisline.ub.identity.application.RequestPermissionService;
+import zelisline.ub.inventory.application.InventoryRoleAccessService;
 import zelisline.ub.inventory.application.StockTakeService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
@@ -48,6 +49,7 @@ public class StockTakeController {
     private final StockTakeService stockTakeService;
     private final BranchResolutionService branchResolutionService;
     private final RequestPermissionService permissionService;
+    private final InventoryRoleAccessService inventoryRoleAccessService;
 
     // ── Sessions ──────────────────────────────────────────────────────
 
@@ -492,7 +494,7 @@ public class StockTakeController {
         StockTakeSessionResponse response,
         TenantPrincipal principal
     ) {
-        if (canApprove(principal)) {
+        if (canSeeSystemStock(principal)) {
             return response;
         }
         return stockTakeService.maskSystemQty(response);
@@ -502,12 +504,20 @@ public class StockTakeController {
         List<StockTakeSessionResponse> responses,
         TenantPrincipal principal
     ) {
-        if (canApprove(principal)) {
+        if (canSeeSystemStock(principal)) {
             return responses;
         }
         return responses
             .stream()
             .map(stockTakeService::maskSystemQty)
             .toList();
+    }
+
+    private boolean canSeeSystemStock(TenantPrincipal principal) {
+        return inventoryRoleAccessService.canSeeSystemStockDuringCount(
+            principal.businessId(),
+            principal.roleId(),
+            canApprove(principal)
+        );
     }
 }

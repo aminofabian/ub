@@ -60,7 +60,8 @@ public interface ItemRepository extends JpaRepository<Item, String> {
     /**
      * Published items whose name or variant name contains the query, across all businesses.
      * <p>
-     * Space-insensitive: {@code "blue band"} matches {@code "Blueband"} and vice-versa.
+     * Compact-insensitive via {@code qCompact}: {@code "cocacola"} matches {@code "Coca-Cola"}
+     * / {@code "Coca Cola"}, and {@code "blue band"} matches {@code "Blueband"}.
      * <p>
      * Returns standalone items and variants, but <strong>not</strong> parent items that have
      * variant children — parents are labels, not scannable products.
@@ -72,9 +73,11 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                and i.webPublished = true
                and (lower(i.name) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.variantName, '')) like lower(concat('%', :q, '%'))
-                    or (:qNoSpace is not null
-                        and (lower(replace(i.name, ' ', '')) like lower(concat('%', :qNoSpace, '%'))
-                             or lower(replace(coalesce(i.variantName, ''), ' ', '')) like lower(concat('%', :qNoSpace, '%')))))
+                    or (:qCompact is not null
+                        and (lower(replace(replace(i.name, ' ', ''), '-', ''))
+                                 like lower(concat('%', :qCompact, '%'))
+                             or lower(replace(replace(coalesce(i.variantName, ''), ' ', ''), '-', ''))
+                                 like lower(concat('%', :qCompact, '%')))))
                and (i.variantOfItemId is not null
                     or not exists (
                       select 1 from Item ch
@@ -86,7 +89,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             """)
     List<Item> findPublishedByNameContaining(
             @Param("q") String q,
-            @Param("qNoSpace") String qNoSpace,
+            @Param("qCompact") String qCompact,
             Pageable pageable);
 
     /** First published item matching barcode across all businesses. */

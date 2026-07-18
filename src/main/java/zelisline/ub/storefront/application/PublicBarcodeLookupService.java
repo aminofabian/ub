@@ -2,8 +2,8 @@ package zelisline.ub.storefront.application;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -15,6 +15,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.application.CatalogSearchSupport;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.ItemImage;
@@ -208,29 +209,36 @@ public class PublicBarcodeLookupService {
 
     private static final int MAX_SEARCH_RESULTS = 25;
 
+    /**
+     * Public product-name search for the barcode lookup page.
+     * Uses the same {@link CatalogSearchSupport} ranking as cashier POS search
+     * so compact queries like {@code cocacola} match {@code Coca-Cola}.
+     */
     @Transactional(readOnly = true)
     public List<PublicBarcodeLookupResponse> searchByName(String q) {
-        if (q == null || q.isBlank() || q.trim().length() < 2) {
+        if (q == null || CatalogSearchSupport.isBlankQuery(q) || q.trim().length() < 2) {
             return List.of();
         }
 
         String query = q.trim();
-        String queryNoSpace = query.replace(" ", "");
-        // Only pass the space-stripped variant if it differs from the original
-        String qNoSpace = queryNoSpace.equals(query) ? null : queryNoSpace;
+        List<Item> ranked = List.of();
+        for (String token : CatalogSearchSupport.dbCandidateTokens(query)) {
+            // Keep only scannable hits before accepting a candidate set, so we
+            // fall through to the next DB token when ranked rows lack barcodes.
+            ranked = rankPublishedCandidates(token, query).stream()
+                    .filter(i -> i.getBarcode() != null && !i.getBarcode().isBlank())
+                    .toList();
+            if (!ranked.isEmpty()) {
+                break;
+            }
+        }
 
-        List<Item> items = itemRepository.findPublishedByNameContaining(
-                query, qNoSpace, PageRequest.of(0, MAX_SEARCH_RESULTS));
-
-        // Only return items that have a barcode — this is a barcode lookup tool.
-        // The query intentionally casts a wider net (no barcode filter in SQL) so
-        // it can match more rows; we post-filter here to keep results scannable.
-        items = items.stream()
-                .filter(i -> i.getBarcode() != null && !i.getBarcode().isBlank())
-                .toList();
+        if (ranked.size() > MAX_SEARCH_RESULTS) {
+            ranked = ranked.subList(0, MAX_SEARCH_RESULTS);
+        }
 
         // Resolve parent names for variants in one batch
-        List<String> parentIds = items.stream()
+        List<String> parentIds = ranked.stream()
                 .map(Item::getVariantOfItemId)
                 .filter(id -> id != null && !id.isBlank())
                 .distinct()
@@ -238,78 +246,110 @@ public class PublicBarcodeLookupService {
         var parentsById = itemRepository.findAllById(parentIds).stream()
                 .collect(java.util.stream.Collectors.toMap(Item::getId, Item::getName));
 
-        // Resolve business names, slugs, currencies, and prices
-        return items.stream()
-                .map(item -> {
-                    Business business = businessRepository
-                            .findByIdAndDeletedAtIsNull(item.getBusinessId())
-                            .orElse(null);
-                    if (business == null) {
-                        return null;
-                    }
+        // Resolve business names, slugs, currencies, and prices — preserve relevance order
+        List<PublicBarcodeLookupResponse> results = new ArrayList<>(ranked.size());
+        for (Item item : ranked) {
+            Business business = businessRepository
+                    .findByIdAndDeletedAtIsNull(item.getBusinessId())
+                    .orElse(null);
+            if (business == null) {
+                continue;
+            }
 
-                    // Try to resolve the storefront catalog branch for pricing
-                    String catalogBranchId = resolveCatalogBranchId(business);
+            String catalogBranchId = resolveCatalogBranchId(business);
 
-                    BigDecimal price = null;
-                    if (catalogBranchId != null) {
-                        price = pricingService.getCurrentOpenSellingPrice(
-                                business.getId(), item.getId(), catalogBranchId);
-                    }
+            BigDecimal price = null;
+            if (catalogBranchId != null) {
+                price = pricingService.getCurrentOpenSellingPrice(
+                        business.getId(), item.getId(), catalogBranchId);
+            }
 
-                    // First image only for search results
-                    PublicItemImageResponse image = null;
-                    List<ItemImage> imgs = itemImageRepository
-                            .findByItemIdOrderBySortOrderAscIdAsc(item.getId());
-                    if (!imgs.isEmpty()) {
-                        String url = resolveImagePublicUrl(imgs.get(0));
-                        if (url != null) {
-                            image = new PublicItemImageResponse(
-                                    url,
-                                    imgs.get(0).getAltText() != null && !imgs.get(0).getAltText().isBlank()
-                                            ? imgs.get(0).getAltText().trim() : null,
-                                    imgs.get(0).getWidth(),
-                                    imgs.get(0).getHeight());
-                        }
-                    }
+            PublicItemImageResponse image = null;
+            List<ItemImage> imgs = itemImageRepository
+                    .findByItemIdOrderBySortOrderAscIdAsc(item.getId());
+            if (!imgs.isEmpty()) {
+                String url = resolveImagePublicUrl(imgs.get(0));
+                if (url != null) {
+                    image = new PublicItemImageResponse(
+                            url,
+                            imgs.get(0).getAltText() != null && !imgs.get(0).getAltText().isBlank()
+                                    ? imgs.get(0).getAltText().trim() : null,
+                            imgs.get(0).getWidth(),
+                            imgs.get(0).getHeight());
+                }
+            }
 
-                    List<PublicItemImageResponse> images = image != null
-                            ? List.of(image)
-                            : List.of();
+            List<PublicItemImageResponse> images = image != null
+                    ? List.of(image)
+                    : List.of();
 
-                    String parentName = null;
-                    String variantLabel = null;
-                    if (item.getVariantOfItemId() != null) {
-                        parentName = parentsById.get(item.getVariantOfItemId());
-                        variantLabel = item.getVariantName();
-                    }
+            String parentName = null;
+            String variantLabel = null;
+            if (item.getVariantOfItemId() != null) {
+                parentName = parentsById.get(item.getVariantOfItemId());
+                variantLabel = item.getVariantName();
+            }
 
-                    return new PublicBarcodeLookupResponse(
-                            item.getId(),
-                            item.getSku(),
-                            item.getBarcode(),
-                            parentName != null ? parentName : item.getName(),
-                            item.getDescription() != null && !item.getDescription().isBlank()
-                                    ? item.getDescription().trim() : null,
-                            item.getBrand() != null && !item.getBrand().isBlank()
-                                    ? item.getBrand().trim() : null,
-                            item.getSize() != null && !item.getSize().isBlank()
-                                    ? item.getSize().trim() : null,
-                            business.getName(),
-                            business.getSlug(),
-                            business.getCurrency(),
-                            price,
-                            null,
-                            images,
-                            parentName,
-                            variantLabel,
-                            null,
-                            null,
-                            null);
-                })
-                .filter(r -> r != null)
-                .sorted(Comparator.comparing(PublicBarcodeLookupResponse::name))
-                .toList();
+            results.add(new PublicBarcodeLookupResponse(
+                    item.getId(),
+                    item.getSku(),
+                    item.getBarcode(),
+                    parentName != null ? parentName : item.getName(),
+                    item.getDescription() != null && !item.getDescription().isBlank()
+                            ? item.getDescription().trim() : null,
+                    item.getBrand() != null && !item.getBrand().isBlank()
+                            ? item.getBrand().trim() : null,
+                    item.getSize() != null && !item.getSize().isBlank()
+                            ? item.getSize().trim() : null,
+                    business.getName(),
+                    business.getSlug(),
+                    business.getCurrency(),
+                    price,
+                    null,
+                    images,
+                    parentName,
+                    variantLabel,
+                    null,
+                    null,
+                    null));
+        }
+        return results;
+    }
+
+    /**
+     * Broad candidate fetch + cashier-style relevance ranking for one DB token.
+     */
+    private List<Item> rankPublishedCandidates(String dbToken, String query) {
+        if (dbToken == null || dbToken.isBlank()) {
+            return List.of();
+        }
+        String compact = compactForDb(dbToken);
+        String qCompact = compact.length() >= 2 ? compact : null;
+
+        List<Item> candidates = itemRepository.findPublishedByNameContaining(
+                dbToken,
+                qCompact,
+                PageRequest.of(0, CatalogSearchSupport.CANDIDATE_FETCH_SIZE));
+
+        return CatalogSearchSupport.rankAndFilter(
+                candidates,
+                item -> CatalogSearchSupport.SearchableText.of(
+                        item.getName(),
+                        item.getVariantName(),
+                        item.getSku(),
+                        item.getBarcode(),
+                        item.getDescription(),
+                        item.getBrand(),
+                        item.getSize()),
+                query);
+    }
+
+    /** Strip spaces and hyphens so SQL can recall {@code Coca-Cola} for {@code cocacola}. */
+    private static String compactForDb(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.toLowerCase(Locale.ROOT).replace(" ", "").replace("-", "");
     }
 
     private static String resolveCatalogBranchId(Business business) {

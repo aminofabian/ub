@@ -154,4 +154,18 @@ class CatalogSearchSupportTest {
         assertThat(CatalogSearchSupport.dbCandidateTokens("sl"))
                 .contains("sl", "supa", "loaf");
     }
+
+    @Test
+    void score_matchesCompactNameWithoutHyphenOrSpace() {
+        assertThat(CatalogSearchSupport.score(item("Coca-Cola", null), "cocacola"))
+                .isGreaterThan(0);
+        assertThat(CatalogSearchSupport.score(item("Coca Cola", null), "cocacola"))
+                .isGreaterThan(0);
+        assertThat(CatalogSearchSupport.rankAndFilter(
+                List.of(item("Bread Rolls", null), item("Coca-Cola 500ml", "500ml")),
+                t -> t,
+                "cocacola"))
+                .extracting(CatalogSearchSupport.SearchableText::name)
+                .containsExactly("Coca-Cola 500ml");
+    }
 }

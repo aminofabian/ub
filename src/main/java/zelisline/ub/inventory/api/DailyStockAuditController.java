@@ -139,6 +139,23 @@ public class DailyStockAuditController {
         );
     }
 
+    @PostMapping("/sessions/{sessionId}/complete")
+    @PreAuthorize("hasPermission(null, 'stocktake.run')")
+    public DailyStockAuditSessionResponse completeSession(
+            @PathVariable String sessionId,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return dailyStockAuditService.completeSession(
+                businessId,
+                sessionId,
+                principal.userId(),
+                principal.roleId(),
+                canApprove(principal)
+        );
+    }
+
     @GetMapping("/review")
     @PreAuthorize("hasPermission(null, 'stocktake.approve')")
     public DailyStockAuditReviewResponse getReview(

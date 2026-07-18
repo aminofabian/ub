@@ -195,8 +195,8 @@ public class DailyStockAuditService {
         );
         DailyStockAudit audit = requireManifest(businessId, branchId, auditDate, userId);
 
-        Optional<StockTakeSession> existing =
-                stockTakeSessionRepository.findActiveDailyAuditSessionFetchLines(
+        List<StockTakeSession> existingOfType =
+                stockTakeSessionRepository.findDailyAuditSessionsFetchLines(
                         businessId,
                         branchId,
                         auditDate,
@@ -204,12 +204,22 @@ public class DailyStockAuditService {
                         InventoryConstants.STOCKTAKE_SOURCE_DAILY_AUDIT,
                         audit.getId()
                 );
-        if (existing.isPresent()) {
-            return toSessionResponse(
-                    businessId,
-                    existing.get(),
-                    audit,
-                    showSystemStock
+        Optional<StockTakeSession> active = existingOfType.stream()
+                .filter(s -> InventoryConstants.STOCKTAKE_SESSION_IN_PROGRESS.equals(s.getStatus()))
+                .findFirst();
+        if (active.isPresent()) {
+            return toSessionResponse(businessId, active.get(), audit, showSystemStock);
+        }
+        Optional<StockTakeSession> closed = existingOfType.stream()
+                .filter(s -> InventoryConstants.STOCKTAKE_SESSION_CLOSED.equals(s.getStatus()))
+                .findFirst();
+        if (closed.isPresent()) {
+            String label = InventoryConstants.STOCKTAKE_SESSION_TYPE_MORNING.equals(sessionType)
+                    ? "Morning"
+                    : "Evening";
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    label + " count is already done for today."
             );
         }
 
@@ -232,6 +242,57 @@ public class DailyStockAuditService {
     }
 
     @Transactional
+    public DailyStockAuditDtos.DailyStockAuditSessionResponse completeSession(
+            String businessId,
+            String sessionId,
+            String userId,
+            String roleId,
+            boolean hasStocktakeApprove
+    ) {
+        StockTakeSession session = loadDailyAuditSession(businessId, sessionId);
+        requireCountingWindowOpen(businessId, session.getSessionType());
+
+        if (InventoryConstants.STOCKTAKE_SESSION_CLOSED.equals(session.getStatus())) {
+            DailyStockAudit audit = loadAudit(businessId, session.getDailyAuditId());
+            boolean showSystemStock = inventoryRoleAccessService.canSeeSystemStockDuringCount(
+                    businessId,
+                    roleId,
+                    hasStocktakeApprove
+            );
+            return toSessionResponse(businessId, session, audit, showSystemStock);
+        }
+        if (!InventoryConstants.STOCKTAKE_SESSION_IN_PROGRESS.equals(session.getStatus())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Session cannot be completed from status " + session.getStatus()
+            );
+        }
+
+        long missing = session.getLines().stream()
+                .filter(l -> l.getCountedQty() == null)
+                .count();
+        if (missing > 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    missing + " item(s) still need a physical count before finishing."
+            );
+        }
+
+        session.setStatus(InventoryConstants.STOCKTAKE_SESSION_CLOSED);
+        session.setClosedAt(Instant.now());
+        session.setClosedBy(userId);
+        stockTakeSessionRepository.save(session);
+
+        DailyStockAudit audit = loadAudit(businessId, session.getDailyAuditId());
+        boolean showSystemStock = inventoryRoleAccessService.canSeeSystemStockDuringCount(
+                businessId,
+                roleId,
+                hasStocktakeApprove
+        );
+        return toSessionResponse(businessId, session, audit, showSystemStock);
+    }
+
+    @Transactional
     public DailyStockAuditDtos.DailyStockAuditSessionResponse applyLineCount(
             String businessId,
             String sessionId,
@@ -243,6 +304,7 @@ public class DailyStockAuditService {
             boolean hasStocktakeApprove
     ) {
         StockTakeSession existing = loadDailyAuditSession(businessId, sessionId);
+        requireSessionEditable(existing);
         requireCountingWindowOpen(businessId, existing.getSessionType());
         stockTakeService.applySingleCountWithNote(
                 businessId,
@@ -275,6 +337,7 @@ public class DailyStockAuditService {
             boolean hasStocktakeApprove
     ) {
         StockTakeSession session = loadDailyAuditSession(businessId, sessionId);
+        requireSessionEditable(session);
         requireCountingWindowOpen(businessId, session.getSessionType());
         stockTakeService.updateSessionProgress(
                 businessId,
@@ -932,6 +995,20 @@ public class DailyStockAuditService {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "sessionType must be 'morning' or 'evening'"
+            );
+        }
+    }
+
+    private void requireSessionEditable(StockTakeSession session) {
+        if (!InventoryConstants.STOCKTAKE_SESSION_IN_PROGRESS.equals(session.getStatus())) {
+            String label = InventoryConstants.STOCKTAKE_SESSION_TYPE_MORNING.equals(
+                            session.getSessionType()
+                    )
+                    ? "Morning"
+                    : "Evening";
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    label + " count is already done. Counts are locked."
             );
         }
     }

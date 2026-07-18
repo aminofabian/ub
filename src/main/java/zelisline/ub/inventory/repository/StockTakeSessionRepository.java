@@ -140,6 +140,26 @@ public interface StockTakeSessionRepository extends JpaRepository<StockTakeSessi
             select s from StockTakeSession s
              left join fetch s.lines
              where s.businessId = :businessId
+               and s.branchId = :branchId
+               and s.sessionDate = :sessionDate
+               and s.sessionType = :sessionType
+               and s.source = :source
+               and s.dailyAuditId = :dailyAuditId
+             order by s.createdAt desc
+            """)
+    List<StockTakeSession> findDailyAuditSessionsFetchLines(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("sessionDate") LocalDate sessionDate,
+            @Param("sessionType") String sessionType,
+            @Param("source") String source,
+            @Param("dailyAuditId") String dailyAuditId
+    );
+
+    @Query("""
+            select s from StockTakeSession s
+             left join fetch s.lines
+             where s.businessId = :businessId
                and s.dailyAuditId = :dailyAuditId
              order by s.sessionType asc, s.createdAt desc
             """)

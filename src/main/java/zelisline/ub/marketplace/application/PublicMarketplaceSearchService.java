@@ -4,7 +4,6 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -37,6 +36,7 @@ import zelisline.ub.suppliers.domain.SupplierProduct;
 import zelisline.ub.suppliers.repository.SupplierContactRepository;
 import zelisline.ub.suppliers.repository.SupplierProductRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
+import zelisline.ub.tenancy.application.BranchLocalityLabels;
 import zelisline.ub.tenancy.application.BusinessOnboardingSettingsService;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.domain.Business;
@@ -394,64 +394,14 @@ public class PublicMarketplaceSearchService {
         for (String businessId : distinct) {
             Business business = businesses.get(businessId);
             List<Branch> branches = branchRepository.findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(businessId);
-            LinkedHashSet<String> labels = new LinkedHashSet<>();
-            if (business != null) {
-                var onboarding = businessOnboardingSettingsService.readFromSettingsJson(business.getSettings());
-                if (onboarding != null
-                        && onboarding.answers() != null
-                        && onboarding.answers().branchLocalities() != null) {
-                    for (String locality : onboarding.answers().branchLocalities()) {
-                        String cleaned = cleanLocationLabel(locality);
-                        if (cleaned != null) {
-                            labels.add(cleaned);
-                        }
-                    }
-                }
-            }
-            for (Branch branch : branches) {
-                if (!branch.isActive()) {
-                    continue;
-                }
-                String fromAddress = cleanLocationLabel(branch.getAddress());
-                if (fromAddress != null) {
-                    labels.add(fromAddress);
-                    continue;
-                }
-                String fromName = localityFromBranchName(branch.getName());
-                if (fromName != null) {
-                    labels.add(fromName);
-                }
-            }
-            out.put(businessId, ListingLocation.of(List.copyOf(labels)));
+            var onboarding = business != null
+                    ? businessOnboardingSettingsService.readFromSettingsJson(business.getSettings())
+                    : null;
+            List<String> labels =
+                    BranchLocalityLabels.fromOnboardingAndBranches(onboarding, branches);
+            out.put(businessId, ListingLocation.of(labels));
         }
         return out;
-    }
-
-    private static String localityFromBranchName(String name) {
-        String cleaned = blankToNull(name);
-        if (cleaned == null) {
-            return null;
-        }
-        String withoutSuffix = cleaned.replaceAll("(?i)\\s+branch$", "").trim();
-        return cleanLocationLabel(withoutSuffix);
-    }
-
-    private static String cleanLocationLabel(String raw) {
-        String value = blankToNull(raw);
-        if (value == null) {
-            return null;
-        }
-        // Prefer a short locality when address is a long free-text line.
-        if (value.contains(",")) {
-            String first = value.split(",", 2)[0].trim();
-            if (!first.isBlank() && first.length() <= 48) {
-                value = first;
-            }
-        }
-        if (value.length() > 64) {
-            value = value.substring(0, 64).trim();
-        }
-        return value.isBlank() ? null : value;
     }
 
     private Map<String, Item> loadItems(Collection<String> itemIds) {

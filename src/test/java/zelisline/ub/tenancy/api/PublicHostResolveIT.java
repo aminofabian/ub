@@ -79,7 +79,9 @@ class PublicHostResolveIT {
                 .andExpect(jsonPath("$.authConfig.methods[0]").value("password"))
                 .andExpect(jsonPath("$.authConfig.passwordPolicy.minLength").value(8))
                 .andExpect(jsonPath("$.featureFlags").isMap())
-                .andExpect(jsonPath("$.resolvedAt").exists());
+                .andExpect(jsonPath("$.resolvedAt").exists())
+                .andExpect(jsonPath("$.countryCode").exists())
+                .andExpect(jsonPath("$.branchLocalities").isArray());
     }
 
     @Test

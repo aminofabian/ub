@@ -1,6 +1,7 @@
 package zelisline.ub.tenancy.application;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 
@@ -10,13 +11,16 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import zelisline.ub.tenancy.api.dto.OnboardingSettingsResponse;
 import zelisline.ub.tenancy.api.dto.PublicHostResolveResponse;
 import zelisline.ub.tenancy.api.dto.StorefrontSettingsResponse;
 import zelisline.ub.tenancy.api.dto.TenantConfigBundle;
+import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.domain.DomainMapping;
 import zelisline.ub.tenancy.domain.TenantStatus;
 import zelisline.ub.tenancy.infrastructure.TenantHostParsing;
+import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
@@ -37,6 +41,7 @@ public class PublicHostResolverService {
 
     private final DomainMappingRepository domainMappingRepository;
     private final BusinessRepository businessRepository;
+    private final BranchRepository branchRepository;
     private final StorefrontSettingsService storefrontSettingsService;
     private final CatalogBootstrapService catalogBootstrapService;
     private final BusinessOnboardingSettingsService businessOnboardingSettingsService;
@@ -46,6 +51,7 @@ public class PublicHostResolverService {
     public PublicHostResolverService(
             DomainMappingRepository domainMappingRepository,
             BusinessRepository businessRepository,
+            BranchRepository branchRepository,
             StorefrontSettingsService storefrontSettingsService,
             CatalogBootstrapService catalogBootstrapService,
             BusinessOnboardingSettingsService businessOnboardingSettingsService,
@@ -53,6 +59,7 @@ public class PublicHostResolverService {
             UserRepository userRepository) {
         this.domainMappingRepository = domainMappingRepository;
         this.businessRepository = businessRepository;
+        this.branchRepository = branchRepository;
         this.storefrontSettingsService = storefrontSettingsService;
         this.catalogBootstrapService = catalogBootstrapService;
         this.businessOnboardingSettingsService = businessOnboardingSettingsService;
@@ -188,6 +195,15 @@ public class PublicHostResolverService {
         TenantStatus status = business.getTenantStatus() != null
                 ? business.getTenantStatus()
                 : TenantStatus.ACTIVE;
+        OnboardingSettingsResponse onboarding =
+                businessOnboardingSettingsService.readFromSettingsJson(business.getSettings());
+        List<Branch> branches =
+                branchRepository.findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(business.getId());
+        List<String> localities =
+                BranchLocalityLabels.fromOnboardingAndBranches(onboarding, branches);
+        String countryCode = business.getCountryCode() != null && !business.getCountryCode().isBlank()
+                ? business.getCountryCode().trim().toUpperCase(Locale.ROOT)
+                : null;
         return new PublicHostResolveResponse(
                 business.getId(),
                 business.getName(),
@@ -197,7 +213,9 @@ public class PublicHostResolverService {
                 config.authConfig(),
                 config.featureFlags(),
                 storefront.enabled(),
-                Instant.now()
+                Instant.now(),
+                countryCode,
+                localities.isEmpty() ? List.of() : localities
         );
     }
 }

@@ -46,7 +46,9 @@ class EmailVerificationBrandingContextTest {
                         new TenantPasswordPolicyDto(8, false, false)),
                 java.util.Map.of(),
                 true,
-                java.time.Instant.now());
+                java.time.Instant.now(),
+                "KE",
+                java.util.List.of());
         var ctx = EmailVerificationBrandingContext.fromHost(Optional.of(tenant), "uzapoint.kiosk.ke");
         assertThat(ctx.displayName()).isEqualTo("UzaPoint POS");
         assertThat(ctx.primaryColor()).isEqualTo("#111827");

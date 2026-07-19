@@ -88,12 +88,13 @@ public class AuthService {
     /** Returned when a just-rotated refresh token is replayed inside the grace window. */
     public static final String REFRESH_ALREADY_ROTATED_TITLE = "Refresh token already rotated";
 
-    /** Returned when {@link #idleTimeoutHours} of inactivity have elapsed. */
+    /** Returned when {@code app.auth.idle-timeout-hours} of inactivity have elapsed. */
     public static final String SESSION_IDLE_EXPIRED_TITLE = "Session idle timeout expired";
 
     private final UserRepository userRepository;
     private final UserSessionRepository userSessionRepository;
     private final UserSessionRevocation userSessionRevocation;
+    private final UserSessionActivity userSessionActivity;
     private final EntityManager entityManager;
     private final PasswordResetTokenRepository passwordResetTokenRepository;
     private final PasswordEncoder passwordEncoder;
@@ -110,9 +111,6 @@ public class AuthService {
 
     @Value("${app.jwt.refresh-ttl-days:30}")
     private long refreshTtlDays;
-
-    @Value("${app.auth.idle-timeout-hours:12}")
-    private long idleTimeoutHours;
 
     @Value("${app.auth.password-reset-ttl-hours:1}")
     private long passwordResetTtlHours;
@@ -221,10 +219,7 @@ public class AuthService {
             userSessionRepository.save(session);
             throw invalidCredentials();
         }
-        Instant lastSeen = session.getLastSeenAt() != null ? session.getLastSeenAt() : session.getIssuedAt();
-        if (lastSeen.plus(idleTimeoutHours, ChronoUnit.HOURS).isBefore(Instant.now())) {
-            session.setRevokedAt(Instant.now());
-            userSessionRepository.save(session);
+        if (userSessionActivity.revokeIfIdle(session)) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, SESSION_IDLE_EXPIRED_TITLE);
         }
     }

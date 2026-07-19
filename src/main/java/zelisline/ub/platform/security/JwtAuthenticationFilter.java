@@ -34,6 +34,7 @@ import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.identity.application.UserSessionActivity;
 import zelisline.ub.identity.domain.SuperAdmin;
 import zelisline.ub.identity.domain.User;
+import zelisline.ub.identity.domain.UserSession;
 import zelisline.ub.identity.domain.UserStatus;
 import zelisline.ub.identity.repository.SuperAdminRepository;
 import zelisline.ub.identity.repository.UserRepository;
@@ -51,6 +52,8 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private static final String PROBLEM_BASE = "urn:problem:";
+    /** Keep in sync with {@code AuthService.SESSION_IDLE_EXPIRED_TITLE}. */
+    private static final String SESSION_IDLE_EXPIRED_TITLE = "Session idle timeout expired";
 
     private final JwtTokenService jwtTokenService;
     private final UserSessionRepository userSessionRepository;
@@ -147,11 +150,34 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         String jti = claims.getId();
-        if (jti == null || jti.isBlank()
-                || userSessionRepository.findByAccessTokenJtiAndRevokedAtIsNull(jti).isEmpty()) {
+        if (jti == null || jti.isBlank()) {
             publishSecurityEvent(request, resolvedTenant, AuditEventTypes.LOGIN_FAILED, "Session is no longer active");
             writeProblem(response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
             return;
+        }
+        var sessionOpt = userSessionRepository.findByAccessTokenJtiAndRevokedAtIsNull(jti);
+        if (sessionOpt.isEmpty()) {
+            publishSecurityEvent(request, resolvedTenant, AuditEventTypes.LOGIN_FAILED, "Session is no longer active");
+            writeProblem(response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
+            return;
+        }
+        UserSession session = sessionOpt.get();
+        // Enforce idle on access-token requests (not only on refresh) so leftover
+        // JWTs cannot outlive the sliding inactivity window.
+        try {
+            if (userSessionActivity.revokeIfIdle(session)) {
+                publishSecurityEvent(
+                        request, resolvedTenant, AuditEventTypes.LOGIN_FAILED,
+                        SESSION_IDLE_EXPIRED_TITLE);
+                writeProblem(
+                        response,
+                        HttpStatus.UNAUTHORIZED,
+                        SESSION_IDLE_EXPIRED_TITLE,
+                        "unauthorized");
+                return;
+            }
+        } catch (Exception ignored) {
+            // Fail open on idle-check persistence errors; refresh still enforces idle.
         }
 
         String userId = claims.getSubject();

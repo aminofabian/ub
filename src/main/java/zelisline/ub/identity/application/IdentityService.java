@@ -1,5 +1,6 @@
 package zelisline.ub.identity.application;
 
+import java.time.Instant;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -37,6 +38,7 @@ import zelisline.ub.identity.repository.RolePermissionRepository;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserItemTypeRepository;
 import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.identity.repository.UserSessionRepository;
 
 /**
  * Use-case orchestration for Slice 2 — Identity primitives
@@ -61,6 +63,7 @@ public class IdentityService {
     private final RolePermissionRepository rolePermissionRepository;
     private final UserItemTypeRepository userItemTypeRepository;
     private final ItemTypeRepository itemTypeRepository;
+    private final UserSessionRepository userSessionRepository;
     private final PasswordEncoder passwordEncoder;
 
     // ---------- Users -------------------------------------------------------
@@ -213,6 +216,24 @@ public class IdentityService {
         }
         user.setStatus(UserStatus.SUSPENDED);
         User saved = userRepository.save(user);
+        Role role = roleRepository.findById(saved.getRoleId()).orElse(null);
+        return toResponse(saved, role);
+    }
+
+    /**
+     * Admin sets a user's password without knowing the current one.
+     * Invited users become active (same as accepting an invite via reset link).
+     * All of the user's sessions are revoked so the new credential takes effect.
+     */
+    @Transactional
+    public UserResponse setUserPassword(String businessId, String userId, String newPassword) {
+        User user = requireTenantUser(businessId, userId);
+        user.setPasswordHash(passwordEncoder.encode(newPassword));
+        if (user.statusAsEnum() == UserStatus.INVITED) {
+            user.setStatus(UserStatus.ACTIVE);
+        }
+        User saved = userRepository.save(user);
+        userSessionRepository.revokeAllActiveForUser(saved.getId(), Instant.now());
         Role role = roleRepository.findById(saved.getRoleId()).orElse(null);
         return toResponse(saved, role);
     }

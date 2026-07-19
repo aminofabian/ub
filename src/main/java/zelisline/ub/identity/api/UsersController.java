@@ -29,6 +29,7 @@ import zelisline.ub.audit.application.AuditEventPublisher;
 import zelisline.ub.audit.domain.AuditEventActorType;
 import zelisline.ub.audit.domain.AuditEventCategory;
 import zelisline.ub.audit.domain.AuditEventSeverity;
+import zelisline.ub.identity.api.dto.AdminSetPasswordRequest;
 import zelisline.ub.identity.api.dto.AssignRoleRequest;
 import zelisline.ub.identity.api.dto.CreateUserRequest;
 import zelisline.ub.identity.api.dto.SetUserItemTypesRequest;
@@ -129,6 +130,30 @@ public class UsersController {
                 .newState(map("name", updated.name(), "phone", updated.phone(), "branchId", updated.branchId(), "status", updated.status()))
                 .build());
         return updated;
+    }
+
+    @PostMapping("/{userId}/password")
+    @PreAuthorize("hasPermission(null, 'users.update')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void setPassword(
+            @PathVariable String userId,
+            @Valid @RequestBody AdminSetPasswordRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String actorId = CurrentTenantUser.auditActorId(request);
+        UserResponse updated = identityService.setUserPassword(businessId, userId, body.newPassword());
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.SECURITY, AuditEventTypes.PASSWORD_CHANGED, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .branchId(updated.branchId())
+                .actor(actorId, AuditEventActorType.USER)
+                .target("user", updated.id())
+                .targetLabel(updated.email())
+                .ipAddress(clientIp(request))
+                .userAgent(request.getHeader("User-Agent"))
+                .source("web_admin")
+                .build());
     }
 
     @PostMapping("/{userId}/deactivate")

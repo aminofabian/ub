@@ -9,6 +9,7 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -35,6 +36,7 @@ import zelisline.ub.identity.repository.RolePermissionRepository;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserItemTypeRepository;
 import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.identity.repository.UserSessionRepository;
 
 /**
  * Unit tests for {@link IdentityService} invariants
@@ -57,6 +59,7 @@ class IdentityServiceTest {
     @Mock private RolePermissionRepository rolePermissionRepository;
     @Mock private UserItemTypeRepository userItemTypeRepository;
     @Mock private ItemTypeRepository itemTypeRepository;
+    @Mock private UserSessionRepository userSessionRepository;
     @Mock private PasswordEncoder passwordEncoder;
 
     @InjectMocks
@@ -225,6 +228,57 @@ class IdentityServiceTest {
                 ResponseStatusException.class);
 
         assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+    }
+
+    // ---------- setUserPassword ---------------------------------------------
+
+    @Test
+    void setUserPasswordHashesAndRevokesSessions() {
+        User user = ownerUserOf(TENANT_A);
+        given(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(user.getId(), TENANT_A))
+                .willReturn(Optional.of(user));
+        given(passwordEncoder.encode("new-secret-password")).willReturn("enc:new-secret-password");
+        given(userRepository.save(any(User.class))).willAnswer(inv -> inv.getArgument(0));
+        given(roleRepository.findById(ROLE_OWNER)).willReturn(Optional.of(ownerRole));
+        given(permissionRepository.findPermissionKeysByRoleId(ROLE_OWNER)).willReturn(List.of());
+
+        identityService.setUserPassword(TENANT_A, user.getId(), "new-secret-password");
+
+        assertThat(user.getPasswordHash()).isEqualTo("enc:new-secret-password");
+        assertThat(user.statusAsEnum()).isEqualTo(UserStatus.ACTIVE);
+        verify(passwordEncoder).encode("new-secret-password");
+        verify(userSessionRepository).revokeAllActiveForUser(eq(user.getId()), any(Instant.class));
+    }
+
+    @Test
+    void setUserPasswordActivatesInvitedUser() {
+        User user = ownerUserOf(TENANT_A);
+        user.setStatus(UserStatus.INVITED);
+        given(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(user.getId(), TENANT_A))
+                .willReturn(Optional.of(user));
+        given(passwordEncoder.encode(anyString())).willReturn("enc:pw");
+        given(userRepository.save(any(User.class))).willAnswer(inv -> inv.getArgument(0));
+        given(roleRepository.findById(ROLE_OWNER)).willReturn(Optional.of(ownerRole));
+        given(permissionRepository.findPermissionKeysByRoleId(ROLE_OWNER)).willReturn(List.of());
+
+        UserResponse response = identityService.setUserPassword(TENANT_A, user.getId(), "password123");
+
+        assertThat(user.statusAsEnum()).isEqualTo(UserStatus.ACTIVE);
+        assertThat(response.status()).isEqualTo("active");
+    }
+
+    @Test
+    void setUserPasswordRejectsOtherTenant() {
+        given(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull("user-1", TENANT_A))
+                .willReturn(Optional.empty());
+
+        ResponseStatusException ex = catchThrowableOfType(
+                () -> identityService.setUserPassword(TENANT_A, "user-1", "password123"),
+                ResponseStatusException.class);
+
+        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        verify(userRepository, never()).save(any(User.class));
+        verify(userSessionRepository, never()).revokeAllActiveForUser(anyString(), any(Instant.class));
     }
 
     // ---------- helpers -----------------------------------------------------

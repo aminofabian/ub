@@ -9,7 +9,9 @@ WORKDIR /app
 # Keep heap low, one worker, Serial GC, and split compile vs package.
 ENV GRADLE_OPTS="-Dorg.gradle.daemon=false -Dorg.gradle.parallel=false -Dorg.gradle.workers.max=1"
 ENV GRADLE_USER_HOME=/home/gradle/.gradle
-ENV JAVA_TOOL_OPTIONS="-XX:+UseSerialGC -Xss512k"
+# Cap every forked JVM (Gradle + javac) — without -Xmx here, child processes can
+# grow past the builder and get SIGKILL with no Java stacktrace in Coolify logs.
+ENV JAVA_TOOL_OPTIONS="-XX:+UseSerialGC -Xss512k -Xmx384m -XX:MaxMetaspaceSize=128m -XX:MaxDirectMemorySize=32m"
 
 COPY gradle ./gradle
 COPY gradlew build.gradle settings.gradle gradle.properties ./
@@ -17,14 +19,15 @@ RUN chmod +x gradlew
 
 # Override local/desktop gradle.properties for the constrained builder.
 # No HeapDumpOnOutOfMemoryError — dumps on a 2GB VM often tip the process into SIGKILL.
+# configureondemand=false: on-demand config has spiked RSS during compile on small VMs.
 RUN printf '%s\n' \
 	'org.gradle.daemon=false' \
 	'org.gradle.parallel=false' \
-	'org.gradle.caching=true' \
-	'org.gradle.configureondemand=true' \
+	'org.gradle.caching=false' \
+	'org.gradle.configureondemand=false' \
 	'org.gradle.workers.max=1' \
 	'org.gradle.vfs.watch=false' \
-	'org.gradle.jvmargs=-Xmx512m -XX:MaxMetaspaceSize=160m -XX:+UseSerialGC -Xss512k -XX:MaxDirectMemorySize=64m' \
+	'org.gradle.jvmargs=-Xmx384m -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -Xss512k -XX:MaxDirectMemorySize=32m' \
 	> gradle.properties
 
 # Prime dependency cache (layer reused when only src changes).
@@ -34,10 +37,17 @@ RUN ./gradlew dependencies --no-daemon -x test --no-parallel --max-workers=1 \
 
 COPY src ./src
 
+# Drop transform/journal junk so compileJava has more free RAM on ~2GB builders.
+RUN rm -rf /tmp/* \
+	"$GRADLE_USER_HOME"/caches/*/transforms \
+	"$GRADLE_USER_HOME"/caches/journal-* \
+	"$GRADLE_USER_HOME"/daemon \
+	|| true
+
 # Split compile from packaging so peak RSS during bootJar stays lower and
 # Coolify logs show which phase died if the builder is still too small.
-RUN ./gradlew compileJava --no-daemon -x test --no-parallel --max-workers=1 --stacktrace
-RUN ./gradlew classes --no-daemon -x test --no-parallel --max-workers=1 --stacktrace
+RUN ./gradlew compileJava --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace
+RUN ./gradlew classes --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace
 RUN ./gradlew bootJar --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace \
 	&& JAR="$(ls -1 build/libs/*.jar | grep -v -- '-plain.jar$' | head -n1)" \
 	&& test -n "$JAR" && test -s "$JAR" \

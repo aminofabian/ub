@@ -142,6 +142,10 @@ public class SaleService {
         String customerId = blankToNull(req.customerId());
         enforceCustomerLinkage(customerId, creditTenderTotal, walletTenderTotal, redeemTenderTotal, resolved.overpay());
         validateCustomerForCreditSale(businessId, customerId, creditTenderTotal);
+        if (customerId != null) {
+            // Optional linkage (e.g. M-Pesa STK) still requires a live customer + credit account.
+            creditSaleDebtService.assertCustomerExists(businessId, customerId);
+        }
         loyaltyPointsService.validateRedeemTender(businessId, customerId, grandTotal, redeemTenderTotal,
                 creditSettingsResolved);
 

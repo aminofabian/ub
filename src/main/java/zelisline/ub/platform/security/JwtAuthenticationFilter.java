@@ -132,6 +132,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         try {
             resolvedTenant = TenantRequestIds.resolveBusinessId(request);
         } catch (ResponseStatusException ex) {
+            // Public slug-in-URL routes bypass DomainBusinessResolverFilter, so a
+            // dashboard session Bearer on storefront pagination must not 400.
+            if (PublicApiEndpoints.matches(request.getRequestURI())) {
+                filterChain.doFilter(request, response);
+                return;
+            }
             HttpStatus st = HttpStatus.resolve(ex.getStatusCode().value());
             if (st == null) {
                 st = HttpStatus.BAD_REQUEST;

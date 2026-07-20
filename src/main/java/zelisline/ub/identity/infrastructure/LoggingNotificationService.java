@@ -66,8 +66,9 @@ public class LoggingNotificationService implements NotificationService {
     }
 
     @Override
-    public void sendOrderConfirmationHtml(String toEmail, String subject, String htmlBody) {
-        sendOrLogHtml(toEmail, subject, htmlBody, "order confirmation");
+    public void sendOrderConfirmationHtml(
+            String toEmail, String subject, String htmlBody, String fromDisplayName) {
+        sendOrLogHtml(toEmail, subject, htmlBody, "order confirmation", fromDisplayName);
     }
 
     @Override
@@ -80,13 +81,18 @@ public class LoggingNotificationService implements NotificationService {
     }
 
     private void sendOrLogHtml(String toEmail, String subject, String htmlBody, String kind) {
+        sendOrLogHtml(toEmail, subject, htmlBody, kind, null);
+    }
+
+    private void sendOrLogHtml(
+            String toEmail, String subject, String htmlBody, String kind, String fromDisplayName) {
         if (trySendSmtpHtml(toEmail, subject, htmlBody, kind)) {
             return;
         }
-        if (trySendResendHtml(toEmail, subject, htmlBody, kind)) {
+        if (trySendResendHtml(toEmail, subject, htmlBody, kind, fromDisplayName)) {
             return;
         }
-        if (trySendMailgunHtml(toEmail, subject, htmlBody, kind)) {
+        if (trySendMailgunHtml(toEmail, subject, htmlBody, kind, fromDisplayName)) {
             return;
         }
         log.warn(
@@ -98,7 +104,8 @@ public class LoggingNotificationService implements NotificationService {
         String truncated = htmlBody != null && htmlBody.length() > 500
                 ? htmlBody.substring(0, 500) + "..."
                 : htmlBody;
-        log.info("[notification-html] {} to={} subject={}\n{}", kind, toEmail, subject, truncated);
+        log.info("[notification-html] {} to={} subject={} fromDisplayName={}\n{}",
+                kind, toEmail, subject, fromDisplayName, truncated);
     }
 
     private boolean trySendSmtpHtml(String toEmail, String subject, String htmlBody, String kind) {
@@ -120,13 +127,14 @@ public class LoggingNotificationService implements NotificationService {
         }
     }
 
-    private boolean trySendResendHtml(String toEmail, String subject, String htmlBody, String kind) {
+    private boolean trySendResendHtml(
+            String toEmail, String subject, String htmlBody, String kind, String fromDisplayName) {
         if (!resendMailClient.isConfigured()) {
             return false;
         }
         try {
-            resendMailClient.sendHtml(toEmail, subject, htmlBody);
-            log.info("Sent {} HTML via Resend to={}", kind, toEmail);
+            resendMailClient.sendHtml(toEmail, subject, htmlBody, fromDisplayName);
+            log.info("Sent {} HTML via Resend to={} fromDisplayName={}", kind, toEmail, fromDisplayName);
             return true;
         } catch (RuntimeException ex) {
             log.warn("Resend HTML failed for {} to={}", kind, toEmail, ex);
@@ -134,13 +142,14 @@ public class LoggingNotificationService implements NotificationService {
         }
     }
 
-    private boolean trySendMailgunHtml(String toEmail, String subject, String htmlBody, String kind) {
+    private boolean trySendMailgunHtml(
+            String toEmail, String subject, String htmlBody, String kind, String fromDisplayName) {
         if (!mailgunMailClient.isConfigured()) {
             return false;
         }
         try {
-            mailgunMailClient.sendHtml(toEmail, subject, htmlBody);
-            log.info("Sent {} HTML via Mailgun to={}", kind, toEmail);
+            mailgunMailClient.sendHtml(toEmail, subject, htmlBody, fromDisplayName);
+            log.info("Sent {} HTML via Mailgun to={} fromDisplayName={}", kind, toEmail, fromDisplayName);
             return true;
         } catch (RuntimeException ex) {
             log.warn("Mailgun HTML failed for {} to={}", kind, toEmail, ex);

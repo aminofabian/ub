@@ -45,7 +45,11 @@ public class MailgunMailClient {
      * @throws IllegalStateException when Mailgun returns a non-2xx status
      */
     public void sendPlainText(String toEmail, String subject, String textBody) {
-        doSend(toEmail, subject, "text", textBody);
+        sendPlainText(toEmail, subject, textBody, null);
+    }
+
+    public void sendPlainText(String toEmail, String subject, String textBody, String fromDisplayName) {
+        doSend(toEmail, subject, "text", textBody, fromDisplayName);
     }
 
     /**
@@ -53,10 +57,15 @@ public class MailgunMailClient {
      * @throws IllegalStateException when Mailgun returns a non-2xx status
      */
     public void sendHtml(String toEmail, String subject, String htmlBody) {
-        doSend(toEmail, subject, "html", htmlBody);
+        sendHtml(toEmail, subject, htmlBody, null);
     }
 
-    private void doSend(String toEmail, String subject, String bodyFieldName, String body) {
+    public void sendHtml(String toEmail, String subject, String htmlBody, String fromDisplayName) {
+        doSend(toEmail, subject, "html", htmlBody, fromDisplayName);
+    }
+
+    private void doSend(
+            String toEmail, String subject, String bodyFieldName, String body, String fromDisplayName) {
         if (!isConfigured()) {
             throw new IllegalStateException("Mailgun is not configured");
         }
@@ -65,7 +74,7 @@ public class MailgunMailClient {
 
         HttpResponse<String> response = Unirest.post(url)
                 .basicAuth(BASIC_AUTH_USER, privateApiKey.strip())
-                .field("from", resolveFrom())
+                .field("from", resolveFrom(fromDisplayName))
                 .field("to", toEmail)
                 .field("subject", subject)
                 .field(bodyFieldName, body)
@@ -77,10 +86,13 @@ public class MailgunMailClient {
         }
     }
 
-    private String resolveFrom() {
+    private String resolveFrom(String fromDisplayName) {
+        String base;
         if (fromOverride != null && !fromOverride.isBlank()) {
-            return fromOverride.trim();
+            base = fromOverride.trim();
+        } else {
+            base = "UB <noreply@" + domain + ">";
         }
-        return "UB <noreply@" + domain + ">";
+        return ResendMailClient.withDisplayName(base, fromDisplayName);
     }
 }

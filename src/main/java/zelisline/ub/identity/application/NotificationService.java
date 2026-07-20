@@ -13,7 +13,11 @@ public interface NotificationService {
     /** {@code htmlBody} is a complete HTML document (inline CSS). */
     void sendEmailVerificationEmail(String toEmail, String subject, String htmlBody);
 
-    void sendOrderConfirmationHtml(String toEmail, String subject, String htmlBody);
+    /**
+     * @param fromDisplayName tenant store name for the From header (e.g. {@code Palmart});
+     *                        may be null to keep the provider default
+     */
+    void sendOrderConfirmationHtml(String toEmail, String subject, String htmlBody, String fromDisplayName);
 
     /** In-app notification projection to email (plain + minimal HTML). */
     void sendNotificationEmail(String toEmail, String subject, String textBody, String htmlBody);

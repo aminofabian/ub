@@ -28,6 +28,8 @@ import zelisline.ub.storefront.domain.WebOrderLine;
 import zelisline.ub.storefront.repository.WebCartRepository;
 import zelisline.ub.storefront.repository.WebOrderLineRepository;
 import zelisline.ub.storefront.repository.WebOrderRepository;
+import zelisline.ub.tenancy.api.dto.TenantBrandingDto;
+import zelisline.ub.tenancy.application.StorefrontSettingsService;
 
 @Service
 public class PublicWebCheckoutService {
@@ -47,6 +49,7 @@ public class PublicWebCheckoutService {
     private final WebCartRepository webCartRepository;
     private final OrderConfirmationEmailRenderer orderConfirmationEmailRenderer;
     private final NotificationService notificationService;
+    private final StorefrontSettingsService storefrontSettingsService;
     private final zelisline.ub.notifications.application.NotificationOutboxService notificationOutboxService;
 
     public PublicWebCheckoutService(
@@ -60,6 +63,7 @@ public class PublicWebCheckoutService {
             WebCartRepository webCartRepository,
             OrderConfirmationEmailRenderer orderConfirmationEmailRenderer,
             NotificationService notificationService,
+            StorefrontSettingsService storefrontSettingsService,
             zelisline.ub.notifications.application.NotificationOutboxService notificationOutboxService
     ) {
         this.publicWebCartService = publicWebCartService;
@@ -72,6 +76,7 @@ public class PublicWebCheckoutService {
         this.webCartRepository = webCartRepository;
         this.orderConfirmationEmailRenderer = orderConfirmationEmailRenderer;
         this.notificationService = notificationService;
+        this.storefrontSettingsService = storefrontSettingsService;
         this.notificationOutboxService = notificationOutboxService;
     }
 
@@ -142,11 +147,17 @@ public class PublicWebCheckoutService {
                 List<WebOrderLine> orderLines =
                         webOrderLineRepository.findByOrderIdOrderByLineIndexAsc(order.getId());
                 String branchName = elig.ctx().catalogBranch().getName();
-                String businessName = elig.ctx().business().getName();
+                var business = elig.ctx().business();
+                TenantBrandingDto branding = storefrontSettingsService
+                        .readTenantConfig(business.getSettings(), business.getName())
+                        .branding();
+                String storeName = OrderConfirmationEmailRenderer.resolveStoreName(
+                        branding, business.getName(), business.getSlug());
                 String htmlBody = orderConfirmationEmailRenderer.renderHtml(
-                        order, orderLines, branchName, businessName);
-                String subject = "Order Confirmed \u2014 " + order.getId();
-                notificationService.sendOrderConfirmationHtml(customerEmail, subject, htmlBody);
+                        order, orderLines, branchName, branding, business.getName(), business.getSlug());
+                String subject = "Order Confirmed \u2014 " + storeName;
+                notificationService.sendOrderConfirmationHtml(
+                        customerEmail, subject, htmlBody, storeName);
             } catch (Exception e) {
                 log.warn("Failed to send order confirmation email for order {} to {}: {}",
                         order.getId(), customerEmail, e.getMessage());

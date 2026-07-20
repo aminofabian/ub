@@ -97,6 +97,15 @@ public class AuthController {
     }
 
     /**
+     * Same-cashier till unlock: PIN against the current refresh session, new access
+     * JWT only (no refresh rotation). Fall back to {@code /login-pin} when no session.
+     */
+    @PostMapping("/unlock-pin")
+    public ResponseEntity<LoginResponse> unlockPin(@Valid @RequestBody LoginPinRequest request, HttpServletRequest http) {
+        return toSessionResponse(authService.unlockPin(http, request));
+    }
+
+    /**
      * Active branches (id + name) for the request's tenant, so the PIN login
      * screen can offer a branch picker instead of a raw UUID field. Public:
      * returns {@code []} when no tenant is resolvable.

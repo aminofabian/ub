@@ -13,6 +13,7 @@ public final class PublicAuthEndpoints {
             "/api/v1/auth/email-lookup",
             "/api/v1/auth/login",
             "/api/v1/auth/login-pin",
+            "/api/v1/auth/unlock-pin",
             "/api/v1/auth/branches",
             "/api/v1/auth/refresh",
             "/api/v1/auth/verify-email",

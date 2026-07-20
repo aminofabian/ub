@@ -4,6 +4,8 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -41,6 +43,7 @@ import zelisline.ub.identity.repository.UserSessionRepository;
 import zelisline.ub.platform.security.JwtTokenService;
 import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.tenancy.api.TenantRequestIds;
+import zelisline.ub.till.application.TillDeviceService;
 
 /**
  * Slice 3 auth use-cases (PHASE_1_PLAN.md §3.3–3.4): login, PIN, refresh rotation,
@@ -91,6 +94,13 @@ public class AuthService {
     /** Returned when {@code app.auth.idle-timeout-hours} of inactivity have elapsed. */
     public static final String SESSION_IDLE_EXPIRED_TITLE = "Session idle timeout expired";
 
+    /**
+     * Returned by {@link #unlockPin} when there is no usable refresh session
+     * (client should fall back to full {@code login-pin}).
+     */
+    public static final String UNLOCK_NO_SESSION_DETAIL =
+            "No active session to unlock. Sign in with PIN again.";
+
     private final UserRepository userRepository;
     private final UserSessionRepository userSessionRepository;
     private final UserSessionRevocation userSessionRevocation;
@@ -105,6 +115,7 @@ public class AuthService {
     private final RefreshTokenCookieSupport refreshTokenCookieSupport;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
+    private final TillDeviceService tillDeviceService;
 
     @Value("${app.jwt.access-ttl-minutes:60}")
     private long accessTtlMinutes;
@@ -131,7 +142,7 @@ public class AuthService {
         }
         recordLoginSuccess(user);
         LoginResponse response = issueNewSessionWithSession(user, http).tokens();
-        publishLoginEvent(user, http, response, AuditEventTypes.LOGIN_SUCCEEDED, null);
+        publishLoginEvent(user, http, response, AuditEventTypes.LOGIN_SUCCEEDED, null, null, "password");
         return response;
     }
 
@@ -139,6 +150,7 @@ public class AuthService {
     public LoginResponse loginPin(HttpServletRequest http, LoginPinRequest request) {
         String businessId = TenantRequestIds.resolveBusinessId(http);
         String email = request.email().trim().toLowerCase();
+        String tillDeviceKey = trimToNull(http.getHeader(TillDeviceService.TILL_DEVICE_HEADER));
         User user = userRepository.findByBusinessIdAndEmailAndDeletedAtIsNull(businessId, email)
                 .orElseThrow(this::invalidCredentials);
         if (user.getPinHash() == null) {
@@ -153,9 +165,74 @@ public class AuthService {
             recordLoginFailure(user, http, AuditEventTypes.LOGIN_FAILED, "Incorrect PIN");
             throw invalidCredentials();
         }
+        try {
+            tillDeviceService.assertPinLoginAllowed(businessId, request.branchId(), tillDeviceKey);
+        } catch (ResponseStatusException ex) {
+            publishPinLoginDenied(user, http, tillDeviceKey, ex.getReason());
+            throw ex;
+        }
         recordLoginSuccess(user);
         LoginResponse response = issueNewSessionWithSession(user, http).tokens();
-        publishLoginEvent(user, http, response, AuditEventTypes.LOGIN_SUCCEEDED, null);
+        publishLoginEvent(user, http, response, AuditEventTypes.LOGIN_SUCCEEDED, null, tillDeviceKey, "pin");
+        return response;
+    }
+
+    /**
+     * Same-cashier till unlock: verify PIN against the user on the current refresh
+     * session and reissue an access JWT <em>without</em> rotating the refresh token.
+     *
+     * <p>Requires a valid refresh cookie/body. Callers should fall back to
+     * {@link #loginPin} when this returns {@link #UNLOCK_NO_SESSION_DETAIL} or idle expiry.
+     */
+    @Transactional
+    public LoginResponse unlockPin(HttpServletRequest http, LoginPinRequest request) {
+        String refreshRaw = resolveRefreshToken(http, new RefreshRequest(null));
+        if (refreshRaw == null || refreshRaw.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, UNLOCK_NO_SESSION_DETAIL);
+        }
+
+        String businessId = TenantRequestIds.resolveBusinessId(http);
+        String tillDeviceKey = trimToNull(http.getHeader(TillDeviceService.TILL_DEVICE_HEADER));
+        String hash = TokenHasher.sha256Hex(refreshRaw);
+
+        UserSession session = userSessionRepository.findByRefreshTokenHash(hash)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, UNLOCK_NO_SESSION_DETAIL));
+        if (!session.getBusinessId().equals(businessId)) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, UNLOCK_NO_SESSION_DETAIL);
+        }
+        assertRefreshSessionValid(session);
+
+        User user = userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(session.getUserId(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, UNLOCK_NO_SESSION_DETAIL));
+
+        String email = request.email().trim().toLowerCase();
+        if (!email.equalsIgnoreCase(user.getEmail())) {
+            // Switch-cashier must use full login-pin (different user / new session).
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, UNLOCK_NO_SESSION_DETAIL);
+        }
+        if (user.getPinHash() == null) {
+            throw invalidCredentials();
+        }
+        if (user.getBranchId() == null || !user.getBranchId().equals(request.branchId())) {
+            throw invalidCredentials();
+        }
+        assertCanAuthenticate(user);
+
+        String pinPayload = businessId + ":" + request.pin();
+        if (!passwordEncoder.matches(pinPayload, user.getPinHash())) {
+            recordLoginFailure(user, http, AuditEventTypes.LOGIN_FAILED, "Incorrect PIN");
+            throw invalidCredentials();
+        }
+        try {
+            tillDeviceService.assertPinLoginAllowed(businessId, request.branchId(), tillDeviceKey);
+        } catch (ResponseStatusException ex) {
+            publishPinLoginDenied(user, http, tillDeviceKey, ex.getReason());
+            throw ex;
+        }
+
+        recordLoginSuccess(user);
+        LoginResponse response = reissueAccessOnSession(session, user, http);
+        publishLoginEvent(user, http, response, AuditEventTypes.LOGIN_SUCCEEDED, null, tillDeviceKey, "pin_unlock");
         return response;
     }
 
@@ -407,6 +484,34 @@ public class AuthService {
         return new SessionBundle(response, session);
     }
 
+    /** Mint a new access JWT on an existing session row; leave refresh token unchanged. */
+    private LoginResponse reissueAccessOnSession(UserSession session, User user, HttpServletRequest http) {
+        String jti = UUID.randomUUID().toString();
+        Instant now = Instant.now();
+        Instant accessExp = now.plus(accessTtlMinutes, ChronoUnit.MINUTES);
+        session.setAccessTokenJti(jti);
+        session.setExpiresAt(accessExp);
+        session.setLastSeenAt(now);
+        String ua = trimToNull(http.getHeader("User-Agent"));
+        if (ua != null) {
+            session.setUserAgent(ua);
+        }
+        String ip = clientIp(http);
+        if (ip != null) {
+            session.setIp(ip);
+        }
+        userSessionRepository.save(session);
+
+        String access = jwtTokenService.createAccessToken(
+                user.getId(),
+                user.getBusinessId(),
+                user.getRoleId(),
+                user.getBranchId(),
+                jti
+        );
+        return new LoginResponse(access, null, toAuthUser(user));
+    }
+
     private void recordLoginFailure(User user, HttpServletRequest http, String eventType, String reason) {
         Instant now = Instant.now();
 
@@ -443,7 +548,20 @@ public class AuthService {
         publishSecurityEventSync(user, http, eventType, reason);
     }
 
-    private void publishLoginEvent(User user, HttpServletRequest http, LoginResponse response, String eventType, String reason) {
+    private void publishLoginEvent(
+            User user,
+            HttpServletRequest http,
+            LoginResponse response,
+            String eventType,
+            String reason,
+            String tillDeviceKey,
+            String authMethod
+    ) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("authMethod", authMethod);
+        if (tillDeviceKey != null && !tillDeviceKey.isBlank()) {
+            metadata.put("tillDeviceKey", tillDeviceKey);
+        }
         auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.SECURITY, eventType,
                         AuditEventTypes.LOGIN_SUCCEEDED.equals(eventType) ? AuditEventSeverity.INFO : AuditEventSeverity.WARN)
                 .businessId(user.getBusinessId())
@@ -455,11 +573,42 @@ public class AuthService {
                 .ipAddress(clientIp(http))
                 .userAgent(trimToNull(http.getHeader("User-Agent")))
                 .source("web_admin")
+                .terminalId(tillDeviceKey)
                 .reason(reason)
+                .metadata(metadata)
+                .build());
+    }
+
+    private void publishPinLoginDenied(User user, HttpServletRequest http, String tillDeviceKey, String reason) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("authMethod", "pin");
+        metadata.put("denied", "till_not_registered");
+        if (tillDeviceKey != null && !tillDeviceKey.isBlank()) {
+            metadata.put("tillDeviceKey", tillDeviceKey);
+        }
+        auditEventPublisher.publishSynchronous(auditEventBuilder.builder(
+                        AuditEventCategory.SECURITY, AuditEventTypes.LOGIN_FAILED, AuditEventSeverity.WARN)
+                .businessId(user.getBusinessId())
+                .branchId(user.getBranchId())
+                .actor(user.getId(), AuditEventActorType.USER)
+                .actorName(user.getEmail())
+                .target("user", user.getId())
+                .targetLabel(user.getEmail())
+                .ipAddress(clientIp(http))
+                .userAgent(trimToNull(http.getHeader("User-Agent")))
+                .source("web_admin")
+                .terminalId(tillDeviceKey)
+                .reason(reason != null ? reason : TillDeviceService.TILL_DEVICE_NOT_REGISTERED_DETAIL)
+                .metadata(metadata)
                 .build());
     }
 
     private void publishSecurityEventSync(User user, HttpServletRequest http, String eventType, String reason) {
+        String tillDeviceKey = trimToNull(http.getHeader(TillDeviceService.TILL_DEVICE_HEADER));
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        if (tillDeviceKey != null) {
+            metadata.put("tillDeviceKey", tillDeviceKey);
+        }
         auditEventPublisher.publishSynchronous(auditEventBuilder.builder(AuditEventCategory.SECURITY, eventType, AuditEventSeverity.WARN)
                 .businessId(user.getBusinessId())
                 .branchId(user.getBranchId())
@@ -470,7 +619,9 @@ public class AuthService {
                 .ipAddress(clientIp(http))
                 .userAgent(trimToNull(http.getHeader("User-Agent")))
                 .source("web_admin")
+                .terminalId(tillDeviceKey)
                 .reason(reason)
+                .metadata(metadata.isEmpty() ? null : metadata)
                 .build());
     }
 

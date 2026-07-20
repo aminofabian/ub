@@ -37,6 +37,7 @@ import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserItemTypeRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.identity.repository.UserSessionRepository;
+import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
 
 /**
  * Unit tests for {@link IdentityService} invariants
@@ -61,6 +62,7 @@ class IdentityServiceTest {
     @Mock private ItemTypeRepository itemTypeRepository;
     @Mock private UserSessionRepository userSessionRepository;
     @Mock private PasswordEncoder passwordEncoder;
+    @Mock private CredentialEncryptionService credentialEncryptionService;
 
     @InjectMocks
     private IdentityService identityService;
@@ -82,6 +84,7 @@ class IdentityServiceTest {
                 .willReturn(false);
         given(roleRepository.findByIdAndDeletedAtIsNull(ROLE_OWNER)).willReturn(Optional.of(ownerRole));
         given(passwordEncoder.encode(anyString())).willAnswer(inv -> "enc:" + inv.getArgument(0));
+        given(credentialEncryptionService.encryptSecret("1234")).willReturn("aes:1234");
         given(userRepository.save(any(User.class))).willAnswer(inv -> {
             User u = inv.getArgument(0);
             u.setId("user-1");
@@ -96,10 +99,12 @@ class IdentityServiceTest {
         ));
 
         assertThat(response.email()).isEqualTo("owner@example.com");
+        assertThat(response.hasPin()).isTrue();
         assertThat(response.permissions())
                 .containsExactlyInAnyOrder("users.create", "business.manage_settings");
         verify(passwordEncoder).encode("correct-horse-battery-staple");
         verify(passwordEncoder).encode(TENANT_A + ":1234");
+        verify(credentialEncryptionService).encryptSecret("1234");
     }
 
     @Test
@@ -279,6 +284,58 @@ class IdentityServiceTest {
         assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         verify(userRepository, never()).save(any(User.class));
         verify(userSessionRepository, never()).revokeAllActiveForUser(anyString(), any(Instant.class));
+    }
+
+    // ---------- setUserPin / getUserPin -------------------------------------
+
+    @Test
+    void setUserPinHashesEncryptsAndRevokesSessions() {
+        User user = ownerUserOf(TENANT_A);
+        given(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(user.getId(), TENANT_A))
+                .willReturn(Optional.of(user));
+        given(passwordEncoder.encode(TENANT_A + ":4321")).willReturn("enc:" + TENANT_A + ":4321");
+        given(credentialEncryptionService.encryptSecret("4321")).willReturn("aes:4321");
+        given(userRepository.save(any(User.class))).willAnswer(inv -> inv.getArgument(0));
+        given(roleRepository.findById(ROLE_OWNER)).willReturn(Optional.of(ownerRole));
+        given(permissionRepository.findPermissionKeysByRoleId(ROLE_OWNER)).willReturn(List.of());
+
+        UserResponse response = identityService.setUserPin(TENANT_A, user.getId(), "4321");
+
+        assertThat(user.getPinHash()).isEqualTo("enc:" + TENANT_A + ":4321");
+        assertThat(user.getPinEnc()).isEqualTo("aes:4321");
+        assertThat(response.hasPin()).isTrue();
+        verify(userSessionRepository).revokeAllActiveForUser(eq(user.getId()), any(Instant.class));
+    }
+
+    @Test
+    void getUserPinReturnsDecryptedWhenRecoverable() {
+        User user = ownerUserOf(TENANT_A);
+        user.setPinHash("enc:hash");
+        user.setPinEnc("aes:9999");
+        given(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(user.getId(), TENANT_A))
+                .willReturn(Optional.of(user));
+        given(credentialEncryptionService.decrypt("aes:9999")).willReturn("9999");
+
+        var response = identityService.getUserPin(TENANT_A, user.getId());
+
+        assertThat(response.hasPin()).isTrue();
+        assertThat(response.recoverable()).isTrue();
+        assertThat(response.pin()).isEqualTo("9999");
+    }
+
+    @Test
+    void getUserPinReportsLegacyHashOnlyAsNotRecoverable() {
+        User user = ownerUserOf(TENANT_A);
+        user.setPinHash("enc:hash");
+        given(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(user.getId(), TENANT_A))
+                .willReturn(Optional.of(user));
+
+        var response = identityService.getUserPin(TENANT_A, user.getId());
+
+        assertThat(response.hasPin()).isTrue();
+        assertThat(response.recoverable()).isFalse();
+        assertThat(response.pin()).isNull();
+        verify(credentialEncryptionService, never()).decrypt(anyString());
     }
 
     // ---------- helpers -----------------------------------------------------

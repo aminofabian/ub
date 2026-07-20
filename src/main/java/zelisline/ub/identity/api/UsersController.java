@@ -30,10 +30,12 @@ import zelisline.ub.audit.domain.AuditEventActorType;
 import zelisline.ub.audit.domain.AuditEventCategory;
 import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.identity.api.dto.AdminSetPasswordRequest;
+import zelisline.ub.identity.api.dto.AdminSetPinRequest;
 import zelisline.ub.identity.api.dto.AssignRoleRequest;
 import zelisline.ub.identity.api.dto.CreateUserRequest;
 import zelisline.ub.identity.api.dto.SetUserItemTypesRequest;
 import zelisline.ub.identity.api.dto.UpdateUserRequest;
+import zelisline.ub.identity.api.dto.UserPinResponse;
 import zelisline.ub.identity.api.dto.UserResponse;
 import zelisline.ub.identity.application.IdentityService;
 import zelisline.ub.identity.application.UserInvitationService;
@@ -145,6 +147,52 @@ public class UsersController {
         String actorId = CurrentTenantUser.auditActorId(request);
         UserResponse updated = identityService.setUserPassword(businessId, userId, body.newPassword());
         auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.SECURITY, AuditEventTypes.PASSWORD_CHANGED, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .branchId(updated.branchId())
+                .actor(actorId, AuditEventActorType.USER)
+                .target("user", updated.id())
+                .targetLabel(updated.email())
+                .ipAddress(clientIp(request))
+                .userAgent(request.getHeader("User-Agent"))
+                .source("web_admin")
+                .build());
+    }
+
+    @GetMapping("/{userId}/pin")
+    @PreAuthorize("hasPermission(null, 'users.update')")
+    public UserPinResponse getPin(@PathVariable String userId, HttpServletRequest request) {
+        CurrentTenantUser.require(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String actorId = CurrentTenantUser.auditActorId(request);
+        UserResponse user = identityService.getUser(businessId, userId);
+        UserPinResponse pin = identityService.getUserPin(businessId, userId);
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.SECURITY, AuditEventTypes.PIN_VIEWED, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .branchId(user.branchId())
+                .actor(actorId, AuditEventActorType.USER)
+                .target("user", user.id())
+                .targetLabel(user.email())
+                .ipAddress(clientIp(request))
+                .userAgent(request.getHeader("User-Agent"))
+                .source("web_admin")
+                .metadata(map("recoverable", pin.recoverable()))
+                .build());
+        return pin;
+    }
+
+    @PostMapping("/{userId}/pin")
+    @PreAuthorize("hasPermission(null, 'users.update')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void setPin(
+            @PathVariable String userId,
+            @Valid @RequestBody AdminSetPinRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String actorId = CurrentTenantUser.auditActorId(request);
+        UserResponse updated = identityService.setUserPin(businessId, userId, body.pin());
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.SECURITY, AuditEventTypes.PIN_CHANGED, AuditEventSeverity.INFO)
                 .businessId(businessId)
                 .branchId(updated.branchId())
                 .actor(actorId, AuditEventActorType.USER)

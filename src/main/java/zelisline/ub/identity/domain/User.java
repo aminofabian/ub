@@ -63,6 +63,13 @@ public class User {
     @Column(name = "pin_hash")
     private String pinHash;
 
+    /**
+     * AES-GCM encrypted PIN for admin reveal. Auth uses {@link #pinHash} only.
+     * Null for legacy rows created before recoverable PIN storage.
+     */
+    @Column(name = "pin_enc", length = 512)
+    private String pinEnc;
+
     @Column(name = "status", nullable = false, length = 32)
     private String status = UserStatus.ACTIVE.wire();
 

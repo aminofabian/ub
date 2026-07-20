@@ -24,6 +24,8 @@ public record UserResponse(
          * are unrestricted.
          */
         List<String> itemTypeIds,
+        /** True when a till PIN hash is stored (value is never returned here). */
+        boolean hasPin,
         Instant lastLoginAt,
         Instant createdAt,
         Instant updatedAt

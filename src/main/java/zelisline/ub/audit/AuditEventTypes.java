@@ -19,6 +19,7 @@ public final class AuditEventTypes {
     public static final String PASSWORD_RESET_REQUESTED = "password.reset.requested";
     public static final String PASSWORD_RESET_USED = "password.reset.used";
     public static final String PIN_CHANGED = "pin.changed";
+    public static final String PIN_VIEWED = "pin.viewed";
     public static final String ACCOUNT_LOCKED_SOFT = "account.locked.soft";
     public static final String ACCOUNT_LOCKED_HARD = "account.locked.hard";
     public static final String ACCOUNT_UNLOCKED = "account.unlocked";

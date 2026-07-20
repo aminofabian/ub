@@ -27,6 +27,7 @@ import zelisline.ub.identity.api.dto.RoleResponse;
 import zelisline.ub.identity.api.dto.UpdateMeRequest;
 import zelisline.ub.identity.api.dto.UpdateRoleRequest;
 import zelisline.ub.identity.api.dto.UpdateUserRequest;
+import zelisline.ub.identity.api.dto.UserPinResponse;
 import zelisline.ub.identity.api.dto.UserResponse;
 import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.domain.RolePermission;
@@ -39,6 +40,7 @@ import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserItemTypeRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.identity.repository.UserSessionRepository;
+import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
 
 /**
  * Use-case orchestration for Slice 2 — Identity primitives
@@ -65,6 +67,7 @@ public class IdentityService {
     private final ItemTypeRepository itemTypeRepository;
     private final UserSessionRepository userSessionRepository;
     private final PasswordEncoder passwordEncoder;
+    private final CredentialEncryptionService credentialEncryptionService;
 
     // ---------- Users -------------------------------------------------------
 
@@ -105,7 +108,7 @@ public class IdentityService {
             user.setPasswordHash(passwordEncoder.encode(request.password()));
         }
         if (request.pin() != null && !request.pin().isBlank()) {
-            user.setPinHash(encodePin(businessId, request.pin()));
+            applyPin(user, businessId, request.pin().trim());
         }
 
         User saved = userRepository.save(user);
@@ -236,6 +239,52 @@ public class IdentityService {
         userSessionRepository.revokeAllActiveForUser(saved.getId(), Instant.now());
         Role role = roleRepository.findById(saved.getRoleId()).orElse(null);
         return toResponse(saved, role);
+    }
+
+    /**
+     * Admin sets a user's till PIN without knowing the current one.
+     * Stores bcrypt hash for auth and an encrypted copy for admin reveal.
+     * Invited users become active. Sessions are revoked so till unlock uses the new PIN.
+     */
+    @Transactional
+    public UserResponse setUserPin(String businessId, String userId, String pin) {
+        User user = requireTenantUser(businessId, userId);
+        applyPin(user, businessId, pin.trim());
+        if (user.statusAsEnum() == UserStatus.INVITED) {
+            user.setStatus(UserStatus.ACTIVE);
+        }
+        User saved = userRepository.save(user);
+        userSessionRepository.revokeAllActiveForUser(saved.getId(), Instant.now());
+        Role role = roleRepository.findById(saved.getRoleId()).orElse(null);
+        return toResponse(saved, role);
+    }
+
+    /**
+     * Admin reveal of a till PIN. Returns the decrypted value only when
+     * {@code pin_enc} is present; legacy hash-only rows are not recoverable.
+     */
+    @Transactional(readOnly = true)
+    public UserPinResponse getUserPin(String businessId, String userId) {
+        User user = requireTenantUser(businessId, userId);
+        boolean hasPin = user.getPinHash() != null && !user.getPinHash().isBlank();
+        if (!hasPin) {
+            return new UserPinResponse(false, false, null);
+        }
+        String enc = user.getPinEnc();
+        if (enc == null || enc.isBlank()) {
+            return new UserPinResponse(true, false, null);
+        }
+        try {
+            String pin = credentialEncryptionService.decrypt(enc);
+            if (pin == null || pin.isBlank()) {
+                return new UserPinResponse(true, false, null);
+            }
+            return new UserPinResponse(true, true, pin);
+        } catch (RuntimeException ex) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Unable to decrypt stored PIN. Re-set the PIN, or check APP_PAYMENTS_ENCRYPTION_KEY.");
+        }
     }
 
     // ---------- Self --------------------------------------------------------
@@ -407,6 +456,7 @@ public class IdentityService {
                 roleSummary,
                 permissions,
                 itemTypeIds,
+                user.getPinHash() != null && !user.getPinHash().isBlank(),
                 user.getLastLoginAt(),
                 user.getCreatedAt(),
                 user.getUpdatedAt()
@@ -482,6 +532,11 @@ public class IdentityService {
                 role.isSystem(),
                 grants
         );
+    }
+
+    private void applyPin(User user, String businessId, String pin) {
+        user.setPinHash(encodePin(businessId, pin));
+        user.setPinEnc(credentialEncryptionService.encryptSecret(pin));
     }
 
     private String encodePin(String businessId, String pin) {

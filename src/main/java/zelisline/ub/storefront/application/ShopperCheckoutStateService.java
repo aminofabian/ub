@@ -44,6 +44,7 @@ public class ShopperCheckoutStateService {
     private final WebCheckoutSessionRepository sessionRepository;
     private final UserRepository userRepository;
     private final WebOrderAdminService webOrderAdminService;
+    private final StorefrontLeadCaptureService storefrontLeadCaptureService;
 
     @Transactional(readOnly = true)
     public PublicCheckoutStateResponse getState(String slug, String cartId, HttpServletRequest request) {
@@ -103,7 +104,11 @@ public class ShopperCheckoutStateService {
             TenantPrincipal principal = signedIn.get();
             ShopperCheckoutProfile profile = loadOrCreateUserProfile(businessId, principal.userId());
             requireContactComplete(profile.getContactCompletedAt(), isContactComplete(profile));
-            applyDelivery(profile, body);
+            String areaName = storefrontLeadCaptureService.requireActiveDeliveryArea(
+                    ctx.business().getSettings(),
+                    body.ward()
+            );
+            applyDelivery(profile, withCanonicalArea(body, areaName));
             profile.setDeliveryCompletedAt(Instant.now());
             profileRepository.save(profile);
             return buildAuthenticatedState(businessId, principal);
@@ -111,7 +116,11 @@ public class ShopperCheckoutStateService {
 
         WebCheckoutSession session = loadOrCreateGuestSession(businessId, cart, request);
         requireContactComplete(session.getContactCompletedAt(), isContactComplete(session));
-        applyDelivery(session, body);
+        String areaName = storefrontLeadCaptureService.requireActiveDeliveryArea(
+                ctx.business().getSettings(),
+                body.ward()
+        );
+        applyDelivery(session, withCanonicalArea(body, areaName));
         session.setDeliveryCompletedAt(Instant.now());
         session.setSaveForNextTime(body.saveForNextTime());
         if (body.saveForNextTime()) {
@@ -121,6 +130,20 @@ public class ShopperCheckoutStateService {
         }
         sessionRepository.save(session);
         return buildGuestStateFromSession(session);
+    }
+
+    private static PatchCheckoutDeliveryRequest withCanonicalArea(
+            PatchCheckoutDeliveryRequest body,
+            String areaName
+    ) {
+        return new PatchCheckoutDeliveryRequest(
+                body.county(),
+                areaName,
+                areaName,
+                body.streetAddress(),
+                body.deliveryNotes(),
+                body.saveForNextTime()
+        );
     }
 
     private PublicCheckoutStateResponse buildAuthenticatedState(String businessId, TenantPrincipal principal) {
@@ -469,14 +492,12 @@ public class ShopperCheckoutStateService {
     }
 
     private static boolean isDeliveryComplete(ShopperCheckoutProfile profile) {
-        return hasText(profile.getSubcounty())
-                && hasText(profile.getWard())
+        return hasText(profile.getWard())
                 && hasText(profile.getStreetAddress());
     }
 
     private static boolean isDeliveryComplete(WebCheckoutSession session) {
-        return hasText(session.getSubcounty())
-                && hasText(session.getWard())
+        return hasText(session.getWard())
                 && hasText(session.getStreetAddress());
     }
 

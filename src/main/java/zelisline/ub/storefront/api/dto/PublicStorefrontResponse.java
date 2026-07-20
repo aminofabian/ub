@@ -2,6 +2,8 @@ package zelisline.ub.storefront.api.dto;
 
 import java.util.List;
 
+import zelisline.ub.tenancy.api.dto.DeliveryAreaDto;
+
 public record PublicStorefrontResponse(
         String businessName,
         String slug,
@@ -11,6 +13,8 @@ public record PublicStorefrontResponse(
         String label,
         String announcement,
         List<PublicCatalogItemCardResponse> featured,
-        List<PublicDepartmentResponse> types
+        List<PublicDepartmentResponse> types,
+        /** Active delivery areas shoppers may select. */
+        List<DeliveryAreaDto> deliveryAreas
 ) {
 }

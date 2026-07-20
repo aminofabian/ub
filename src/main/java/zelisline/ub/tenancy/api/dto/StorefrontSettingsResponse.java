@@ -7,9 +7,17 @@ public record StorefrontSettingsResponse(
         String catalogBranchId,
         String label,
         String announcement,
-        List<String> featuredItemIds
+        List<String> featuredItemIds,
+        List<DeliveryAreaDto> deliveryAreas
 ) {
     public static StorefrontSettingsResponse defaults() {
-        return new StorefrontSettingsResponse(false, null, null, null, List.of());
+        return new StorefrontSettingsResponse(
+                false,
+                null,
+                null,
+                null,
+                List.of(),
+                DeliveryAreaDefaults.seed()
+        );
     }
 }

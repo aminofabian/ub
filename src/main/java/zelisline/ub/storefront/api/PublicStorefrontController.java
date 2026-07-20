@@ -7,21 +7,28 @@ import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.domain.spi.DisplayInstructions;
 import zelisline.ub.storefront.api.dto.PublicCatalogItemDetailResponse;
 import zelisline.ub.storefront.api.dto.PublicCatalogListResponse;
 import zelisline.ub.storefront.api.dto.PublicCategoryListResponse;
 import zelisline.ub.storefront.api.dto.PublicCheckoutPaymentOptions;
+import zelisline.ub.storefront.api.dto.PublicLeadCaptureRequest;
+import zelisline.ub.storefront.api.dto.PublicLeadCaptureResponse;
 import zelisline.ub.storefront.api.dto.PublicDepartmentListResponse;
 import zelisline.ub.storefront.api.dto.PublicStorefrontResponse;
 import zelisline.ub.storefront.application.PublicMobileConfigService;
 import zelisline.ub.storefront.application.PublicStorefrontCatalogService;
 import zelisline.ub.storefront.application.PublicStorefrontPaymentService;
+import zelisline.ub.storefront.application.StorefrontLeadCaptureService;
 import zelisline.ub.storefront.api.dto.PublicMobileConfigResponse;
 
 @RestController
@@ -34,11 +41,22 @@ public class PublicStorefrontController {
     private final PublicStorefrontCatalogService publicStorefrontCatalogService;
     private final PublicStorefrontPaymentService publicStorefrontPaymentService;
     private final PublicMobileConfigService publicMobileConfigService;
+    private final StorefrontLeadCaptureService storefrontLeadCaptureService;
 
     @GetMapping("/storefront")
     public ResponseEntity<PublicStorefrontResponse> storefront(@PathVariable String slug) {
         PublicStorefrontResponse body = publicStorefrontCatalogService.getStorefront(slug);
         return ResponseEntity.ok().cacheControl(CacheControl.maxAge(Duration.ofSeconds(60))).body(body);
+    }
+
+    @PostMapping("/lead-capture")
+    public ResponseEntity<PublicLeadCaptureResponse> leadCapture(
+            @PathVariable String slug,
+            @Valid @RequestBody PublicLeadCaptureRequest body,
+            HttpServletRequest request
+    ) {
+        PublicLeadCaptureResponse out = storefrontLeadCaptureService.capture(slug, body, request);
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(out);
     }
 
     @GetMapping("/mobile")

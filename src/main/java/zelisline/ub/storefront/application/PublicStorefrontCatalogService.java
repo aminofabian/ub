@@ -91,7 +91,8 @@ public class PublicStorefrontCatalogService {
                 sf.label(),
                 sf.announcement(),
                 loadFeaturedCards(ctx),
-                listPublishedTypes(ctx)
+                listPublishedTypes(ctx),
+                sf.deliveryAreas().stream().filter(a -> a.active()).toList()
         );
     }
 

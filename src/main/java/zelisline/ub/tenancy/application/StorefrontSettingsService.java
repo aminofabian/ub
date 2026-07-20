@@ -15,6 +15,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.tenancy.api.dto.BrandingPatchRequest;
+import zelisline.ub.tenancy.api.dto.DeliveryAreaDefaults;
+import zelisline.ub.tenancy.api.dto.DeliveryAreaDto;
 import zelisline.ub.tenancy.api.dto.FeatureFlagsPatchRequest;
 import zelisline.ub.tenancy.api.dto.PosDraftsFeatureFlagsPatch;
 import zelisline.ub.tenancy.api.dto.StorefrontPatchRequest;
@@ -65,11 +67,36 @@ public class StorefrontSettingsService {
                 textOrNull(sf.get("catalogBranchId")),
                 textOrNull(sf.get("label")),
                 textOrNull(sf.get("announcement")),
-                readFeaturedIds(sf.get("featuredItemIds"))
+                readFeaturedIds(sf.get("featuredItemIds")),
+                readDeliveryAreas(sf.get("deliveryAreas"))
             );
         } catch (Exception e) {
             return StorefrontSettingsResponse.defaults();
         }
+    }
+
+    /**
+     * Active delivery area names for allowlist checks (case-insensitive compare in callers).
+     * Uses seed defaults when the tenant has never configured areas.
+     */
+    public List<String> activeDeliveryAreaNames(String settingsJson) {
+        return readFromSettingsJson(settingsJson)
+                .deliveryAreas()
+                .stream()
+                .filter(DeliveryAreaDto::active)
+                .map(DeliveryAreaDto::name)
+                .filter(n -> n != null && !n.isBlank())
+                .map(String::trim)
+                .toList();
+    }
+
+    /** Active areas for public storefront payloads. */
+    public List<DeliveryAreaDto> activeDeliveryAreas(String settingsJson) {
+        return readFromSettingsJson(settingsJson)
+                .deliveryAreas()
+                .stream()
+                .filter(DeliveryAreaDto::active)
+                .toList();
     }
 
     public TenantConfigBundle readTenantConfig(
@@ -738,57 +765,127 @@ public class StorefrontSettingsService {
                 storefront.set("featuredItemIds", arr);
             }
         }
+        if (patch.deliveryAreas() != null) {
+            ArrayNode arr = objectMapper.createArrayNode();
+            for (DeliveryAreaDto area : patch.deliveryAreas()) {
+                if (area == null) {
+                    continue;
+                }
+                String name = area.name() == null ? "" : area.name().trim();
+                if (name.isEmpty()) {
+                    continue;
+                }
+                String id = area.id() == null ? "" : area.id().trim();
+                if (id.isEmpty()) {
+                    id = UUID.randomUUID().toString();
+                }
+                ObjectNode node = objectMapper.createObjectNode();
+                node.put("id", id);
+                node.put("name", name);
+                node.put("active", area.active());
+                arr.add(node);
+            }
+            // Explicit empty list = no served areas (does not fall back to seed).
+            storefront.set("deliveryAreas", arr);
+        }
     }
 
     private void validateStorefrontForBusiness(
         String businessId,
         ObjectNode storefront
     ) {
-        if (!readEnabled(storefront)) {
-            return;
-        }
-        String branchId = textOrNull(storefront.get("catalogBranchId"));
-        if (branchId == null) {
-            throw badRequest(
-                "Catalog branch is required when the online storefront is enabled"
-            );
-        }
-        Branch branch = branchRepository
-            .findByIdAndBusinessIdAndDeletedAtIsNull(branchId, businessId)
-            .orElseThrow(() ->
-                badRequest("Catalog branch not found for this business")
-            );
-        if (!branch.isActive()) {
-            throw badRequest("Catalog branch must be active");
+        if (readEnabled(storefront)) {
+            String branchId = textOrNull(storefront.get("catalogBranchId"));
+            if (branchId == null) {
+                throw badRequest(
+                    "Catalog branch is required when the online storefront is enabled"
+                );
+            }
+            Branch branch = branchRepository
+                .findByIdAndBusinessIdAndDeletedAtIsNull(branchId, businessId)
+                .orElseThrow(() ->
+                    badRequest("Catalog branch not found for this business")
+                );
+            if (!branch.isActive()) {
+                throw badRequest("Catalog branch must be active");
+            }
         }
         JsonNode featured = storefront.get("featuredItemIds");
-        if (featured == null || featured.isNull()) {
+        if (featured != null && !featured.isNull()) {
+            if (!featured.isArray()) {
+                throw badRequest("featuredItemIds must be an array");
+            }
+            if (featured.size() > 12) {
+                throw badRequest("At most 12 featured item ids are allowed");
+            }
+            List<String> parsed = new ArrayList<>();
+            for (JsonNode n : featured) {
+                if (!n.isTextual()) {
+                    throw badRequest("Each featured item id must be a string UUID");
+                }
+                String v = n.asText().trim();
+                try {
+                    UUID.fromString(v);
+                } catch (IllegalArgumentException e) {
+                    throw badRequest("Invalid featured item id: " + v);
+                }
+                parsed.add(v);
+            }
+            ArrayNode normalized = objectMapper.createArrayNode();
+            for (String id : parsed) {
+                normalized.add(id);
+            }
+            storefront.set("featuredItemIds", normalized);
+        }
+
+        JsonNode areas = storefront.get("deliveryAreas");
+        if (areas == null || areas.isNull()) {
             return;
         }
-        if (!featured.isArray()) {
-            throw badRequest("featuredItemIds must be an array");
+        if (!areas.isArray()) {
+            throw badRequest("deliveryAreas must be an array");
         }
-        if (featured.size() > 12) {
-            throw badRequest("At most 12 featured item ids are allowed");
+        if (areas.size() > 100) {
+            throw badRequest("At most 100 delivery areas are allowed");
         }
-        List<String> parsed = new ArrayList<>();
-        for (JsonNode n : featured) {
-            if (!n.isTextual()) {
-                throw badRequest("Each featured item id must be a string UUID");
+        ArrayNode normalizedAreas = objectMapper.createArrayNode();
+        for (JsonNode n : areas) {
+            if (!n.isObject()) {
+                throw badRequest("Each delivery area must be an object");
             }
-            String v = n.asText().trim();
-            try {
-                UUID.fromString(v);
-            } catch (IllegalArgumentException e) {
-                throw badRequest("Invalid featured item id: " + v);
+            String id = textOrNull(n.get("id"));
+            String name = textOrNull(n.get("name"));
+            if (name == null) {
+                throw badRequest("Each delivery area requires a name");
             }
-            parsed.add(v);
+            if (name.length() > 80) {
+                throw badRequest("Delivery area name must be at most 80 characters");
+            }
+            if (id == null) {
+                id = UUID.randomUUID().toString();
+            } else {
+                try {
+                    UUID.fromString(id);
+                } catch (IllegalArgumentException e) {
+                    throw badRequest("Invalid delivery area id: " + id);
+                }
+            }
+            boolean active = true;
+            JsonNode activeNode = n.get("active");
+            if (activeNode != null && !activeNode.isNull()) {
+                if (activeNode.isBoolean()) {
+                    active = activeNode.booleanValue();
+                } else if (activeNode.isTextual()) {
+                    active = Boolean.parseBoolean(activeNode.asText().trim());
+                }
+            }
+            ObjectNode node = objectMapper.createObjectNode();
+            node.put("id", id);
+            node.put("name", name);
+            node.put("active", active);
+            normalizedAreas.add(node);
         }
-        ArrayNode normalized = objectMapper.createArrayNode();
-        for (String id : parsed) {
-            normalized.add(id);
-        }
-        storefront.set("featuredItemIds", normalized);
+        storefront.set("deliveryAreas", normalizedAreas);
     }
 
     private static ResponseStatusException badRequest(String msg) {
@@ -832,6 +929,42 @@ public class StorefrontSettingsService {
                     out.add(s);
                 }
             }
+        }
+        return List.copyOf(out);
+    }
+
+    /**
+     * Missing key → seed defaults. Explicit empty array → empty (admin cleared).
+     */
+    private static List<DeliveryAreaDto> readDeliveryAreas(JsonNode arrayNode) {
+        if (arrayNode == null || arrayNode.isNull() || arrayNode.isMissingNode()) {
+            return DeliveryAreaDefaults.seed();
+        }
+        if (!arrayNode.isArray()) {
+            return DeliveryAreaDefaults.seed();
+        }
+        if (arrayNode.isEmpty()) {
+            return List.of();
+        }
+        List<DeliveryAreaDto> out = new ArrayList<>();
+        for (JsonNode n : arrayNode) {
+            if (!n.isObject()) {
+                continue;
+            }
+            String name = textOrNull(n.get("name"));
+            if (name == null) {
+                continue;
+            }
+            String id = textOrNull(n.get("id"));
+            if (id == null) {
+                id = UUID.randomUUID().toString();
+            }
+            boolean active = true;
+            JsonNode activeNode = n.get("active");
+            if (activeNode != null && activeNode.isBoolean()) {
+                active = activeNode.booleanValue();
+            }
+            out.add(new DeliveryAreaDto(id, name, active));
         }
         return List.copyOf(out);
     }

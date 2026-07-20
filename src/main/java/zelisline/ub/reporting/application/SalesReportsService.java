@@ -5,7 +5,10 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -20,9 +23,9 @@ import zelisline.ub.tenancy.repository.BranchRepository;
 
 /**
  * Phase 7 Slice 2 read facade for the Sales register report (#2). Hybrid by design:
- * past days come from {@code mv_sales_daily}, today comes from OLTP. The composition
- * lives here so controllers and exporters stay thin and so the unit test can assert
- * "MV + today = OLTP control query" on a small fixture.
+ * past days prefer {@code mv_sales_daily}, with OLTP gap-fill when the MV has not been
+ * refreshed yet; today always comes from OLTP. The composition lives here so controllers
+ * and exporters stay thin.
  */
 @Service
 @RequiredArgsConstructor
@@ -57,18 +60,33 @@ public class SalesReportsService {
         String resolvedType = blankToNull(itemTypeId);
         LocalDate today = LocalDate.now(ZoneOffset.UTC);
 
-        // MV side: covers any past day in [from, min(to, today-1)].
+        // Past window: [from, min(to, today-1)] — MV first, OLTP fills missing day×branch rows
+        // so a stale/empty rollup does not blank the seven-day runway.
         LocalDate mvUpper = to.isBefore(today) ? to : today.minusDays(1);
         List<SalesRegisterResponse.Day> days = new ArrayList<>();
+        Set<String> covered = new HashSet<>();
         if (!mvUpper.isBefore(from)) {
-            mvRepository.sumByDay(businessId, from, mvUpper, resolvedBranch, resolvedType)
-                    .forEach(r -> days.add(map(r)));
+            for (DailyRollup r : mvRepository.sumByDay(
+                    businessId, from, mvUpper, resolvedBranch, resolvedType)) {
+                days.add(map(r));
+                covered.add(dayBranchKey(r));
+            }
+            for (DailyRollup r : mvRepository.sumOltpByDay(
+                    businessId, from, mvUpper, resolvedBranch, resolvedType)) {
+                if (covered.add(dayBranchKey(r))) {
+                    days.add(map(r));
+                }
+            }
         }
         // OLTP side: today, only if the request spans into today.
         if (!today.isBefore(from) && !today.isAfter(to)) {
             mvRepository.sumOltpForDay(businessId, today, resolvedBranch, resolvedType)
                     .forEach(r -> days.add(map(r)));
         }
+
+        days.sort(Comparator
+                .comparing(SalesRegisterResponse.Day::day)
+                .thenComparing(SalesRegisterResponse.Day::branchId));
 
         BigDecimal totalQty = QTY_ZERO;
         BigDecimal totalRevenue = MONEY_ZERO;
@@ -102,6 +120,10 @@ public class SalesReportsService {
                 money2(r.getCost()),
                 money2(r.getProfit())
         );
+    }
+
+    private static String dayBranchKey(DailyRollup r) {
+        return r.getBusinessDay() + "|" + r.getBranchId();
     }
 
     private String resolveBranch(String businessId, String branchId) {

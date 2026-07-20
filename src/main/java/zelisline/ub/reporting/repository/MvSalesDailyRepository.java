@@ -86,8 +86,8 @@ public interface MvSalesDailyRepository extends JpaRepository<MvSalesDaily, MvSa
             @Param("businessDay") LocalDate businessDay);
 
     /**
-     * OLTP twin of {@link #sumByDay} for "today" — keeps the live window honest
-     * regardless of MV refresh lag (PHASE_7_PLAN.md "today hybrid" rule).
+     * OLTP twin of {@link #sumByDay} for a single calendar day — keeps the live
+     * window honest regardless of MV refresh lag (PHASE_7_PLAN.md "today hybrid").
      */
     @Query(value = """
             SELECT CAST(s.sold_at AS DATE) AS business_day,
@@ -110,6 +110,37 @@ public interface MvSalesDailyRepository extends JpaRepository<MvSalesDaily, MvSa
     List<DailyRollup> sumOltpForDay(
             @Param("businessId") String businessId,
             @Param("targetDay") LocalDate targetDay,
+            @Param("branchId") String branchId,
+            @Param("itemTypeId") String itemTypeId
+    );
+
+    /**
+     * OLTP twin of {@link #sumByDay} for a closed date range. Used to gap-fill past
+     * days when {@code mv_sales_daily} has not been refreshed yet for the tenant.
+     */
+    @Query(value = """
+            SELECT CAST(s.sold_at AS DATE) AS business_day,
+                   s.branch_id              AS branch_id,
+                   COALESCE(SUM(si.quantity), 0)   AS qty,
+                   COALESCE(SUM(si.line_total), 0) AS revenue,
+                   COALESCE(SUM(si.cost_total), 0) AS cost,
+                   COALESCE(SUM(si.profit), 0)     AS profit
+              FROM sales s
+              JOIN sale_items si ON si.sale_id = s.id
+              JOIN items i ON i.id = si.item_id AND i.business_id = s.business_id AND i.deleted_at IS NULL
+             WHERE s.business_id = :businessId
+               AND s.status = 'completed'
+               AND CAST(s.sold_at AS DATE) >= :from
+               AND CAST(s.sold_at AS DATE) <= :to
+               AND (:branchId IS NULL OR s.branch_id = :branchId)
+               AND (:itemTypeId IS NULL OR i.item_type_id = :itemTypeId)
+             GROUP BY CAST(s.sold_at AS DATE), s.branch_id
+             ORDER BY CAST(s.sold_at AS DATE), s.branch_id
+            """, nativeQuery = true)
+    List<DailyRollup> sumOltpByDay(
+            @Param("businessId") String businessId,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to,
             @Param("branchId") String branchId,
             @Param("itemTypeId") String itemTypeId
     );

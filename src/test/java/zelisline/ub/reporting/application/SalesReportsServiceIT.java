@@ -16,6 +16,10 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
+import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.domain.ItemType;
+import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.identity.domain.Permission;
 import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.domain.RolePermission;
@@ -60,6 +64,10 @@ class SalesReportsServiceIT {
     @Autowired
     private RolePermissionRepository rolePermissionRepository;
     @Autowired
+    private ItemTypeRepository itemTypeRepository;
+    @Autowired
+    private ItemRepository itemRepository;
+    @Autowired
     private SaleRepository saleRepository;
     @Autowired
     private SaleItemRepository saleItemRepository;
@@ -76,12 +84,15 @@ class SalesReportsServiceIT {
 
     private String branchId;
     private String userId;
+    private String itemId;
 
     @BeforeEach
     void seed() {
         mvRepository.deleteAll();
         saleItemRepository.deleteAll();
         saleRepository.deleteAll();
+        itemRepository.deleteAll();
+        itemTypeRepository.deleteAll();
         userRepository.deleteAll();
         rolePermissionRepository.deleteAll();
         roleRepository.deleteAll();
@@ -123,6 +134,23 @@ class SalesReportsServiceIT {
         user.setPasswordHash("$2a$10$stubstubstubstubstubstubstubstubst");
         userRepository.save(user);
         userId = user.getId();
+
+        ItemType type = new ItemType();
+        type.setBusinessId(TENANT);
+        type.setTypeKey("goods");
+        type.setLabel("Goods");
+        type.setSortOrder(0);
+        itemTypeRepository.save(type);
+
+        itemId = UUID.randomUUID().toString();
+        Item item = new Item();
+        item.setId(itemId);
+        item.setBusinessId(TENANT);
+        item.setSku("SKU-SR-1");
+        item.setName("Till item");
+        item.setItemTypeId(type.getId());
+        item.setHasExpiry(false);
+        itemRepository.save(item);
     }
 
     @Test
@@ -131,16 +159,14 @@ class SalesReportsServiceIT {
         LocalDate yesterday = today.minusDays(1);
         Instant yesterdayNoon = yesterday.atTime(12, 0).toInstant(ZoneOffset.UTC);
         Instant todayNoon = today.atTime(12, 0).toInstant(ZoneOffset.UTC);
-        String itemA = UUID.randomUUID().toString();
-        String itemB = UUID.randomUUID().toString();
 
-        // Yesterday: 2 lines, revenue 200, cost 120, profit 80.
-        seedSale("idem-y-1", yesterdayNoon, itemA,
+        // Yesterday: revenue 200, cost 120, profit 80.
+        seedSale("idem-y-1", yesterdayNoon, itemId,
                 "2.0000", "100.0000", "200.00",
                 "60.0000", "120.00", "80.00");
 
-        // Today: 1 line, revenue 50, cost 30, profit 20 — only OLTP sees this until refresh.
-        seedSale("idem-t-1", todayNoon, itemB,
+        // Today: revenue 50, cost 30, profit 20 — only OLTP sees this until refresh.
+        seedSale("idem-t-1", todayNoon, itemId,
                 "1.0000", "50.0000", "50.00",
                 "30.0000", "30.00", "20.00");
 
@@ -175,10 +201,41 @@ class SalesReportsServiceIT {
     }
 
     @Test
+    void salesRegister_withoutMvRefresh_gapFillsPastDaysFromOltp() {
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        LocalDate yesterday = today.minusDays(1);
+        Instant yesterdayNoon = yesterday.atTime(12, 0).toInstant(ZoneOffset.UTC);
+        Instant todayNoon = today.atTime(12, 0).toInstant(ZoneOffset.UTC);
+
+        seedSale("idem-gap-y", yesterdayNoon, itemId,
+                "1.0000", "80.0000", "80.00",
+                "40.0000", "40.00", "40.00");
+        seedSale("idem-gap-t", todayNoon, itemId,
+                "1.0000", "20.0000", "20.00",
+                "10.0000", "10.00", "10.00");
+
+        assertThat(mvRepository.count()).isZero();
+
+        SalesRegisterResponse register = salesReportsService.salesRegister(
+                TENANT, yesterday, today, branchId);
+
+        assertThat(register.days()).hasSize(2);
+        assertThat(register.days().stream().filter(d -> d.day().equals(yesterday)).findFirst())
+                .get()
+                .extracting(SalesRegisterResponse.Day::revenue)
+                .isEqualTo(new BigDecimal("80.00"));
+        assertThat(register.days().stream().filter(d -> d.day().equals(today)).findFirst())
+                .get()
+                .extracting(SalesRegisterResponse.Day::revenue)
+                .isEqualTo(new BigDecimal("20.00"));
+        assertThat(register.totalRevenue()).isEqualByComparingTo("100.00");
+    }
+
+    @Test
     void refresh_idempotent_secondRunDoesNotDuplicate() {
         LocalDate today = LocalDate.now(ZoneOffset.UTC);
         Instant noon = today.atTime(12, 0).toInstant(ZoneOffset.UTC);
-        seedSale("idem-2x-1", noon, UUID.randomUUID().toString(),
+        seedSale("idem-2x-1", noon, itemId,
                 "1.0000", "100.0000", "100.00",
                 "60.0000", "60.00", "40.00");
 
@@ -193,7 +250,7 @@ class SalesReportsServiceIT {
     private void seedSale(
             String idemKey,
             Instant soldAt,
-            String itemId,
+            String saleItemId,
             String qty,
             String unitPrice,
             String lineTotal,
@@ -215,7 +272,7 @@ class SalesReportsServiceIT {
         SaleItem line = new SaleItem();
         line.setSaleId(sale.getId());
         line.setLineIndex(0);
-        line.setItemId(itemId);
+        line.setItemId(saleItemId);
         line.setBatchId(UUID.randomUUID().toString());
         line.setQuantity(new BigDecimal(qty));
         line.setUnitPrice(new BigDecimal(unitPrice));

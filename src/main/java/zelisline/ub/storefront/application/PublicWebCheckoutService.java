@@ -152,12 +152,13 @@ public class PublicWebCheckoutService {
                         .readTenantConfig(business.getSettings(), business.getName())
                         .branding();
                 String storeName = OrderConfirmationEmailRenderer.resolveStoreName(
-                        branding, business.getName(), business.getSlug());
+                        branding, business.getName(), business.getSlug(), branchName);
+                String brand = OrderConfirmationEmailRenderer.brandWordmark(storeName);
                 String htmlBody = orderConfirmationEmailRenderer.renderHtml(
                         order, orderLines, branchName, branding, business.getName(), business.getSlug());
-                String subject = "Order Confirmed \u2014 " + storeName;
+                String subject = "Order confirmed \u2014 " + brand;
                 notificationService.sendOrderConfirmationHtml(
-                        customerEmail, subject, htmlBody, storeName);
+                        customerEmail, subject, htmlBody, brand);
             } catch (Exception e) {
                 log.warn("Failed to send order confirmation email for order {} to {}: {}",
                         order.getId(), customerEmail, e.getMessage());

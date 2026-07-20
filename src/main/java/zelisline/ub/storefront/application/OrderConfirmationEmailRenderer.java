@@ -15,7 +15,7 @@ import zelisline.ub.storefront.domain.WebOrderLine;
 import zelisline.ub.tenancy.api.dto.TenantBrandingDto;
 
 /**
- * Renders a creative, modern HTML order confirmation email with inline CSS
+ * Renders a clean, professional HTML order confirmation email with inline CSS
  * suitable for the widest range of email clients. Colours and store name come
  * from tenant branding when set.
  */
@@ -26,11 +26,25 @@ public class OrderConfirmationEmailRenderer {
             DateTimeFormatter.ofPattern("dd MMM yyyy 'at' hh:mm a").withZone(ZoneId.of("Africa/Nairobi"));
 
     // ── default palette (used when tenant colours are unset) ─────────────
-    private static final String DEFAULT_PRIMARY = "#2D6A4F";
-    private static final String DEFAULT_ACCENT  = "#40916C";
-    private static final String CREAM           = "#FEFAE0";
-    private static final String WARM_WHITE      = "#FFFDF7";
-    private static final String MUTED_BROWN     = "#6B705C";
+    private static final String DEFAULT_PRIMARY = "#1B4332";
+    private static final String DEFAULT_ACCENT = "#2D6A4F";
+
+    /** Page wash — cool neutral, not cream. */
+    private static final String PAGE_BG = "#F4F5F4";
+    private static final String CARD_BG = "#FFFFFF";
+    private static final String BORDER = "#E8EAE8";
+    private static final String TEXT = "#14201A";
+    private static final String MUTED = "#5C6B63";
+    private static final String HAIRLINE = "#EEF0EE";
+
+    /** Matches verification email / frontend {@code --font-dm-sans}. */
+    private static final String FONT_SANS =
+            "'DM Sans', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+    /** Display for the thank-you line — matches {@code --font-cormorant}. */
+    private static final String FONT_SERIF =
+            "'Cormorant Garamond', Georgia, 'Times New Roman', serif";
+    private static final String FONT_MONO =
+            "'SF Mono', Menlo, Consolas, 'Courier New', monospace";
 
     /**
      * @param order     the saved order
@@ -47,8 +61,9 @@ public class OrderConfirmationEmailRenderer {
             TenantBrandingDto branding,
             String fallbackBusinessName,
             String businessSlug) {
-        String storeName = resolveStoreName(branding, fallbackBusinessName, businessSlug);
+        String storeName = resolveStoreName(branding, fallbackBusinessName, businessSlug, branchName);
         Palette palette = Palette.from(branding);
+        String location = cleanLocation(branchName);
 
         return """
                 <!DOCTYPE html>
@@ -57,12 +72,17 @@ public class OrderConfirmationEmailRenderer {
                 <meta charset="utf-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>Order Confirmed</title>
+                %s
                 </head>
-                <body style="margin:0;padding:0;background-color:%s;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+                <body style="margin:0;padding:0;background-color:%s;font-family:%s;-webkit-font-smoothing:antialiased;">
                 %s
                 </body>
                 </html>
-                """.formatted(CREAM, renderBody(order, lines, branchName, storeName, palette));
+                """.formatted(
+                renderFontHead(),
+                PAGE_BG,
+                FONT_SANS,
+                renderBody(order, lines, location, storeName, palette));
     }
 
     public String renderHtml(
@@ -81,19 +101,30 @@ public class OrderConfirmationEmailRenderer {
         return renderHtml(order, lines, branchName, null, businessName, null);
     }
 
+    private static String renderFontHead() {
+        return """
+                <link rel="preconnect" href="https://fonts.googleapis.com">
+                <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+                <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+                """;
+    }
+
     // ── body ─────────────────────────────────────────────────────────────
 
     private String renderBody(
             WebOrder order,
             List<WebOrderLine> lines,
-            String branchName,
+            String location,
             String storeName,
             Palette palette) {
+        String brand = brandWordmark(storeName);
+        String tagline = brandTagline(storeName, location);
+
         return """
-                <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="background-color:%s;padding:32px 16px 48px;">
+                <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="background-color:%s;padding:40px 16px 56px;">
                   <tr>
                     <td align="center">
-                      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%%;">
+                      <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%%;background-color:%s;border:1px solid %s;border-radius:4px;overflow:hidden;">
                         %s
                         %s
                         %s
@@ -105,25 +136,45 @@ public class OrderConfirmationEmailRenderer {
                   </tr>
                 </table>
                 """.formatted(
-                CREAM,
-                renderHeader(storeName, palette),
+                PAGE_BG,
+                CARD_BG,
+                BORDER,
+                renderHeader(brand, tagline, palette),
                 renderHero(order, palette),
-                renderLinesTable(lines, palette),
-                renderTotals(order, palette),
-                renderPickup(order, branchName, palette),
-                renderFooter(storeName, palette));
+                renderLinesTable(lines),
+                renderTotals(order),
+                renderPickup(location, palette),
+                renderFooter(brand, location));
     }
 
-    // ── header strip ─────────────────────────────────────────────────────
+    // ── header ───────────────────────────────────────────────────────────
 
-    private String renderHeader(String storeName, Palette palette) {
+    private String renderHeader(String brand, String tagline, Palette palette) {
+        String taglineBlock = tagline.isBlank()
+                ? ""
+                : """
+                    <div style="font-family:%s;font-size:12px;font-weight:400;color:%s;letter-spacing:0.02em;margin-top:6px;">
+                      %s
+                    </div>
+                    """.formatted(FONT_SANS, MUTED, escape(tagline));
+
         return """
                 <tr>
-                  <td style="background:linear-gradient(135deg,%s 0%%,%s 100%%);padding:28px 32px;border-radius:14px 14px 0 0;text-align:center;">
-                    <span style="font-size:28px;font-weight:700;color:#FFFFFF;letter-spacing:0.5px;">%s</span>
+                  <td style="background-color:%s;padding:0;">
+                    <div style="height:3px;background-color:%s;line-height:3px;font-size:0;">&nbsp;</div>
+                    <div style="padding:28px 36px 24px;text-align:left;">
+                      <div style="font-family:%s;font-size:20px;font-weight:600;color:%s;letter-spacing:-0.02em;line-height:1.2;">
+                        %s
+                      </div>
+                      %s
+                    </div>
                   </td>
                 </tr>
-                """.formatted(palette.primary, palette.accent, escape(storeName));
+                """.formatted(
+                CARD_BG,
+                palette.primary,
+                FONT_SANS, TEXT, escape(brand),
+                taglineBlock);
     }
 
     // ── hero section ─────────────────────────────────────────────────────
@@ -135,77 +186,75 @@ public class OrderConfirmationEmailRenderer {
 
         return """
                 <tr>
-                  <td style="background-color:%s;padding:32px 32px 24px;text-align:center;">
-                    <div style="font-size:15px;font-weight:600;color:%s;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px;">
-                      &#10003; Order Confirmed!
+                  <td style="background-color:%s;padding:8px 36px 28px;border-top:1px solid %s;">
+                    <div style="font-family:%s;font-size:11px;font-weight:600;color:%s;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:8px;">
+                      Order confirmed
                     </div>
-                    <div style="font-size:36px;font-weight:800;color:%s;line-height:1.2;margin-bottom:14px;">
-                      Thank You
+                    <div style="font-family:%s;font-size:34px;font-weight:500;color:%s;line-height:1.15;letter-spacing:-0.02em;margin-bottom:18px;">
+                      Thank you
                     </div>
-                    <table role="presentation" align="center" cellpadding="0" cellspacing="0" style="margin-bottom:10px;">
-                      <tr>
-                        <td style="background-color:%s;border-radius:20px;padding:6px 18px;">
-                          <span style="font-size:13px;font-weight:700;color:%s;letter-spacing:0.4px;">
-                            %s
-                          </span>
-                        </td>
-                      </tr>
-                    </table>
-                    <div style="font-size:13px;color:%s;margin-top:4px;">
+                    <div style="font-family:%s;font-size:12px;font-weight:500;color:%s;letter-spacing:0.02em;margin-bottom:4px;">
+                      Order ID
+                    </div>
+                    <div style="font-family:%s;font-size:12px;font-weight:500;color:%s;letter-spacing:0.01em;word-break:break-all;margin-bottom:10px;">
+                      %s
+                    </div>
+                    <div style="font-family:%s;font-size:13px;font-weight:400;color:%s;">
                       Placed on %s
                     </div>
                   </td>
                 </tr>
                 """.formatted(
-                WARM_WHITE, palette.soft, palette.dark,
-                palette.pale, palette.primary, escape(order.getId()),
-                MUTED_BROWN, dateStr);
+                CARD_BG, HAIRLINE,
+                FONT_SANS, palette.primary,
+                FONT_SERIF, TEXT,
+                FONT_SANS, MUTED,
+                FONT_MONO, TEXT, escape(order.getId()),
+                FONT_SANS, MUTED, dateStr);
     }
 
     // ── lines table ──────────────────────────────────────────────────────
 
-    private String renderLinesTable(List<WebOrderLine> lines, Palette palette) {
+    private String renderLinesTable(List<WebOrderLine> lines) {
         StringBuilder sb = new StringBuilder();
         sb.append("""
                 <tr>
-                  <td style="background-color:#FFFFFF;padding:24px 32px 8px;">
-                    <div style="font-size:14px;font-weight:700;color:%s;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:14px;">
-                      Order Details
+                  <td style="background-color:%s;padding:8px 36px 0;">
+                    <div style="font-family:%s;font-size:11px;font-weight:600;color:%s;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid %s;">
+                      Order details
                     </div>
                     <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-                      <tr style="border-bottom:2px solid %s;">
-                        <td style="padding:10px 8px;font-size:11px;font-weight:700;color:%s;text-transform:uppercase;letter-spacing:0.5px;">Item</td>
-                        <td style="padding:10px 8px;font-size:11px;font-weight:700;color:%s;text-transform:uppercase;letter-spacing:0.5px;">Qty</td>
-                        <td style="padding:10px 8px;font-size:11px;font-weight:700;color:%s;text-transform:uppercase;letter-spacing:0.5px;text-align:right;">Unit Price</td>
-                        <td style="padding:10px 8px;font-size:11px;font-weight:700;color:%s;text-transform:uppercase;letter-spacing:0.5px;text-align:right;">Line Total</td>
+                      <tr>
+                        <td style="padding:0 0 8px;font-family:%s;font-size:10px;font-weight:600;color:%s;text-transform:uppercase;letter-spacing:0.08em;">Item</td>
+                        <td style="padding:0 0 8px;font-family:%s;font-size:10px;font-weight:600;color:%s;text-transform:uppercase;letter-spacing:0.08em;width:40px;text-align:center;">Qty</td>
+                        <td style="padding:0 0 8px;font-family:%s;font-size:10px;font-weight:600;color:%s;text-transform:uppercase;letter-spacing:0.08em;text-align:right;">Amount</td>
                       </tr>
-                """.formatted(palette.dark, palette.pale,
-                MUTED_BROWN, MUTED_BROWN, MUTED_BROWN, MUTED_BROWN));
+                """.formatted(
+                CARD_BG,
+                FONT_SANS, MUTED, BORDER,
+                FONT_SANS, MUTED,
+                FONT_SANS, MUTED,
+                FONT_SANS, MUTED));
 
-        int i = 0;
         for (WebOrderLine line : lines) {
-            String bg = (i % 2 == 0) ? "#FFFFFF" : "#FAFBF9";
-            String nameCell = escape(line.getItemName());
+            String nameCell = "<span style=\"font-family:" + FONT_SANS
+                    + ";font-weight:500;color:" + TEXT + ";\">"
+                    + escape(line.getItemName()) + "</span>";
             if (line.getVariantName() != null && !line.getVariantName().isBlank()) {
-                nameCell = "<span style=\"font-weight:600;color:" + palette.dark + ";\">"
-                        + escape(line.getItemName()) + "</span>"
-                        + "<br><span style=\"font-size:12px;color:" + MUTED_BROWN + ";\">"
+                nameCell += "<br><span style=\"font-family:" + FONT_SANS
+                        + ";font-size:12px;font-weight:400;color:" + MUTED + ";\">"
                         + escape(line.getVariantName()) + "</span>";
             }
             sb.append("""
-                      <tr style="border-bottom:1px solid %s;background-color:%s;">
-                        <td style="padding:10px 8px;font-size:13px;color:%s;">%s</td>
-                        <td style="padding:10px 8px;font-size:13px;color:%s;">%s</td>
-                        <td style="padding:10px 8px;font-size:13px;color:%s;text-align:right;">%s</td>
-                        <td style="padding:10px 8px;font-size:13px;font-weight:600;color:%s;text-align:right;">%s</td>
+                      <tr>
+                        <td style="padding:12px 8px 12px 0;font-size:14px;border-bottom:1px solid %s;vertical-align:top;">%s</td>
+                        <td style="padding:12px 0;font-family:%s;font-size:14px;font-weight:400;color:%s;text-align:center;border-bottom:1px solid %s;vertical-align:top;">%s</td>
+                        <td style="padding:12px 0 12px 8px;font-family:%s;font-size:14px;font-weight:500;color:%s;text-align:right;border-bottom:1px solid %s;vertical-align:top;white-space:nowrap;">%s</td>
                       </tr>
                     """.formatted(
-                    palette.pale, bg,
-                    palette.dark, nameCell,
-                    palette.dark, formatQty(line.getQuantity()),
-                    palette.dark, formatKes(line.getUnitPrice()),
-                    palette.dark, formatKes(line.getLineTotal())));
-            i++;
+                    HAIRLINE, nameCell,
+                    FONT_SANS, TEXT, HAIRLINE, formatQty(line.getQuantity()),
+                    FONT_SANS, TEXT, HAIRLINE, formatKes(line.getLineTotal())));
         }
 
         sb.append("""
@@ -218,128 +267,223 @@ public class OrderConfirmationEmailRenderer {
 
     // ── totals ───────────────────────────────────────────────────────────
 
-    private String renderTotals(WebOrder order, Palette palette) {
+    private String renderTotals(WebOrder order) {
         BigDecimal grand = order.getGrandTotal() != null ? order.getGrandTotal() : BigDecimal.ZERO;
 
         return """
                 <tr>
-                  <td style="background-color:#FFFFFF;padding:12px 32px 20px;">
+                  <td style="background-color:%s;padding:16px 36px 8px;">
                     <table role="presentation" width="100%%" cellpadding="0" cellspacing="0">
                       <tr>
-                        <td style="padding:8px 0;font-size:14px;color:%s;text-align:right;">Total</td>
-                        <td style="width:140px;padding:8px 0;font-size:18px;font-weight:800;color:%s;text-align:right;">
+                        <td style="padding:4px 0;font-family:%s;font-size:13px;font-weight:500;color:%s;">Total</td>
+                        <td style="padding:4px 0;font-family:%s;font-size:16px;font-weight:600;color:%s;text-align:right;">
                           %s
                         </td>
                       </tr>
                     </table>
                   </td>
                 </tr>
-                """.formatted(MUTED_BROWN, palette.dark, formatKes(grand));
+                """.formatted(CARD_BG, FONT_SANS, MUTED, FONT_SANS, TEXT, formatKes(grand));
     }
 
     // ── pickup + status ──────────────────────────────────────────────────
 
-    private String renderPickup(WebOrder order, String branchName, Palette palette) {
-        String branch = branchName != null && !branchName.isBlank()
-                ? escape(branchName)
-                : "Store";
-        String statusLabel = "Pending Payment";
+    private String renderPickup(String location, Palette palette) {
+        String branch = location.isBlank() ? "Store" : location;
+        String statusLabel = "Pending payment";
 
         return """
                 <tr>
-                  <td style="background-color:%s;padding:20px 32px;border-top:2px solid %s;">
-                    <table role="presentation" width="100%%" cellpadding="0" cellspacing="0">
+                  <td style="background-color:%s;padding:24px 36px 28px;">
+                    <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-top:1px solid %s;padding-top:0;">
                       <tr>
-                        <td style="vertical-align:top;width:50%%;padding-right:12px;">
-                          <div style="font-size:11px;font-weight:700;color:%s;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">
-                            Pickup Location
+                        <td colspan="2" style="height:20px;font-size:0;line-height:0;">&nbsp;</td>
+                      </tr>
+                      <tr>
+                        <td style="vertical-align:top;width:50%%;padding-right:16px;">
+                          <div style="font-family:%s;font-size:10px;font-weight:600;color:%s;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:6px;">
+                            Pickup
                           </div>
-                          <div style="font-size:14px;font-weight:600;color:%s;">
-                            %s &#x1F4CD;
+                          <div style="font-family:%s;font-size:15px;font-weight:500;color:%s;">
+                            %s
                           </div>
                         </td>
-                        <td style="vertical-align:top;width:50%%;text-align:right;padding-left:12px;">
-                          <div style="font-size:11px;font-weight:700;color:%s;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">
+                        <td style="vertical-align:top;width:50%%;text-align:right;padding-left:16px;">
+                          <div style="font-family:%s;font-size:10px;font-weight:600;color:%s;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:6px;">
                             Status
                           </div>
-                          <table role="presentation" align="right" cellpadding="0" cellspacing="0">
-                            <tr>
-                              <td style="background-color:%s;border-radius:14px;padding:5px 16px;">
-                                <span style="font-size:12px;font-weight:700;color:%s;">%s</span>
-                              </td>
-                            </tr>
-                          </table>
+                          <div style="font-family:%s;font-size:14px;font-weight:500;color:%s;">
+                            %s
+                          </div>
                         </td>
                       </tr>
                     </table>
                   </td>
                 </tr>
                 """.formatted(
-                WARM_WHITE, palette.pale,
-                MUTED_BROWN, palette.dark, branch,
-                MUTED_BROWN, palette.pale, palette.primary, statusLabel);
+                CARD_BG, BORDER,
+                FONT_SANS, MUTED,
+                FONT_SANS, TEXT, escape(branch),
+                FONT_SANS, MUTED,
+                FONT_SANS, palette.primary, statusLabel);
     }
 
     // ── receipt footer ───────────────────────────────────────────────────
 
-    private String renderFooter(String storeName, Palette palette) {
+    private String renderFooter(String brand, String location) {
+        String credit = location.isBlank()
+                ? escape(brand)
+                : escape(brand) + " · " + escape(location);
+
         return """
                 <tr>
-                  <td style="background-color:%s;padding:28px 32px;border-radius:0 0 14px 14px;text-align:center;border-top:2px dashed %s;">
-                    <div style="font-size:13px;color:%s;line-height:1.7;margin-bottom:8px;">
-                      Thank you for shopping with us!
+                  <td style="background-color:%s;padding:28px 36px 32px;border-top:1px solid %s;text-align:left;">
+                    <div style="font-family:%s;font-size:13px;font-weight:400;color:%s;line-height:1.65;margin-bottom:6px;">
+                      Thank you for shopping with us.
                     </div>
-                    <div style="font-size:12px;color:%s;line-height:1.7;">
-                      Staff may contact you via phone or WhatsApp to confirm your order.
+                    <div style="font-family:%s;font-size:12px;font-weight:400;color:%s;line-height:1.65;margin-bottom:4px;">
+                      Staff may contact you by phone or WhatsApp to confirm your order.
                     </div>
-                    <div style="font-size:12px;color:%s;line-height:1.7;margin-bottom:10px;">
+                    <div style="font-family:%s;font-size:12px;font-weight:400;color:%s;line-height:1.65;margin-bottom:20px;">
                       Questions? Reply to this email.
                     </div>
-                    <div style="margin-top:14px;padding-top:14px;border-top:1px solid %s;">
-                      <span style="font-size:11px;color:%s;">%s &nbsp;&#183;&nbsp; %s</span>
+                    <div style="font-family:%s;font-size:11px;font-weight:400;color:#9AA39D;">
+                      %s &nbsp;&middot;&nbsp; %s
                     </div>
                   </td>
                 </tr>
                 """.formatted(
-                WARM_WHITE, palette.pale,
-                palette.dark,
-                MUTED_BROWN,
-                MUTED_BROWN,
-                palette.pale,
-                MUTED_BROWN, escape(storeName),
+                CARD_BG, BORDER,
+                FONT_SANS, TEXT,
+                FONT_SANS, MUTED,
+                FONT_SANS, MUTED,
+                FONT_SANS,
+                credit,
                 java.time.Year.now().getValue());
     }
 
-    // ── branding / colour helpers ────────────────────────────────────────
+    // ── branding / name helpers ──────────────────────────────────────────
 
     static String resolveStoreName(TenantBrandingDto branding, String fallbackBusinessName) {
-        return resolveStoreName(branding, fallbackBusinessName, null);
+        return resolveStoreName(branding, fallbackBusinessName, null, null);
+    }
+
+    static String resolveStoreName(
+            TenantBrandingDto branding, String fallbackBusinessName, String slug) {
+        return resolveStoreName(branding, fallbackBusinessName, slug, null);
     }
 
     /**
      * Prefer branding display name, then a real business name, then a title-cased slug.
-     * Platform leftovers like {@code Kiosk}/{@code UB} are skipped when a slug is available
-     * (e.g. business name still {@code Kiosk} but slug {@code palmart} on palmart.co.ke).
+     * Applies {@code [Area]} / {@code [Country]} / {@code [Name]} placeholders when present
+     * (e.g. SEO title mistakenly saved as display name).
      */
     static String resolveStoreName(
-            TenantBrandingDto branding, String fallbackBusinessName, String slug) {
+            TenantBrandingDto branding,
+            String fallbackBusinessName,
+            String slug,
+            String location) {
+        String raw = null;
         if (branding != null && branding.displayName() != null && !branding.displayName().isBlank()) {
             String display = branding.displayName().strip();
             if (!isPlatformPlaceholderName(display)) {
-                return display;
+                raw = display;
             }
         }
-        if (fallbackBusinessName != null && !fallbackBusinessName.isBlank()
+        if (raw == null && fallbackBusinessName != null && !fallbackBusinessName.isBlank()
                 && !isPlatformPlaceholderName(fallbackBusinessName)) {
-            return fallbackBusinessName.strip();
+            raw = fallbackBusinessName.strip();
         }
-        if (slug != null && !slug.isBlank()) {
-            return titleCaseSlug(slug);
+        if (raw == null && slug != null && !slug.isBlank()) {
+            raw = titleCaseSlug(slug);
         }
-        if (fallbackBusinessName != null && !fallbackBusinessName.isBlank()) {
-            return fallbackBusinessName.strip();
+        if (raw == null && fallbackBusinessName != null && !fallbackBusinessName.isBlank()) {
+            raw = fallbackBusinessName.strip();
         }
-        return "Your store";
+        if (raw == null) {
+            raw = "Your store";
+        }
+        return applySeoPlaceholders(raw, location, brandWordmark(raw));
+    }
+
+    /**
+     * Short brand for headers / subjects — text before {@code |} when the name looks
+     * like an SEO title ({@code Palmart | Groceries…}).
+     */
+    static String brandWordmark(String storeName) {
+        if (storeName == null || storeName.isBlank()) {
+            return "Your store";
+        }
+        int pipe = storeName.indexOf('|');
+        if (pipe > 0) {
+            String left = storeName.substring(0, pipe).trim();
+            if (!left.isBlank()) {
+                return left;
+            }
+        }
+        return storeName.trim();
+    }
+
+    /**
+     * Optional subtitle under the wordmark — prefers text after {@code |}, else
+     * a quiet “in {location}” line.
+     */
+    static String brandTagline(String storeName, String location) {
+        if (storeName != null) {
+            int pipe = storeName.indexOf('|');
+            if (pipe >= 0 && pipe < storeName.length() - 1) {
+                String right = storeName.substring(pipe + 1).trim();
+                if (!right.isBlank()) {
+                    return right;
+                }
+            }
+        }
+        String loc = cleanLocation(location);
+        if (!loc.isBlank()) {
+            return "Groceries & essentials · " + loc;
+        }
+        return "";
+    }
+
+    /**
+     * Substitutes [Area], [Country], [Name] (and {area}/{country}/{name}) the same
+     * way storefront SEO templates do on the frontend.
+     */
+    static String applySeoPlaceholders(String template, String location, String name) {
+        if (template == null || template.isBlank()) {
+            return template;
+        }
+        String area = cleanLocation(location);
+        String country = "Kenya";
+        String display = name != null && !name.isBlank() ? name.trim() : "";
+
+        String out = template;
+        out = out.replaceAll("(?i)\\[Area\\]|\\{area\\}", area);
+        out = out.replaceAll("(?i)\\[Country\\]|\\{country\\}", country);
+        out = out.replaceAll("(?i)\\[Name\\]|\\{name\\}|\\{displayName\\}", java.util.regex.Matcher.quoteReplacement(display));
+        out = out.replaceAll("(?i)\\bin\\s*,", "in");
+        out = out.replaceAll("\\s{2,}", " ");
+        out = out.replaceAll("\\s+,", ",");
+        out = out.replaceAll(",\\s*,", ",");
+        out = out.trim().replaceAll("^[,|]\\s*", "").replaceAll("\\s*[,|]$", "");
+        return out;
+    }
+
+    static String cleanLocation(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "";
+        }
+        String value = raw.trim().replaceAll("(?i)\\s+branch$", "").trim();
+        if (value.contains(",")) {
+            String first = value.split(",", 2)[0].trim();
+            if (!first.isBlank() && first.length() <= 48) {
+                value = first;
+            }
+        }
+        if (value.length() > 64) {
+            value = value.substring(0, 64).trim();
+        }
+        return value;
     }
 
     static boolean isPlatformPlaceholderName(String name) {
@@ -347,7 +491,6 @@ public class OrderConfirmationEmailRenderer {
             return true;
         }
         String n = name.strip();
-        // Legacy / platform labels that should not brand a tenant storefront email.
         return n.equalsIgnoreCase("Kiosk")
                 || n.equalsIgnoreCase("UB")
                 || n.equals("🥬 Palmart");
@@ -375,7 +518,7 @@ public class OrderConfirmationEmailRenderer {
         return sb.isEmpty() ? "Your store" : sb.toString();
     }
 
-    record Palette(String primary, String accent, String soft, String pale, String dark) {
+    record Palette(String primary, String accent) {
         static Palette from(TenantBrandingDto branding) {
             String primary = sanitizeHex(
                     branding != null ? branding.primaryColor() : null,
@@ -383,12 +526,7 @@ public class OrderConfirmationEmailRenderer {
             String accent = sanitizeHex(
                     branding != null ? branding.accentColor() : null,
                     DEFAULT_ACCENT);
-            return new Palette(
-                    primary,
-                    accent,
-                    mixWithWhite(primary, 0.35),
-                    mixWithWhite(primary, 0.82),
-                    mixWithBlack(primary, 0.35));
+            return new Palette(primary, accent);
         }
     }
 
@@ -416,34 +554,6 @@ public class OrderConfirmationEmailRenderer {
             }
         }
         return s.toUpperCase(Locale.ROOT);
-    }
-
-    /** Mix hex colour toward white by {@code amount} (0 = unchanged, 1 = white). */
-    static String mixWithWhite(String hex, double amount) {
-        return mix(hex, 255, 255, 255, amount);
-    }
-
-    /** Mix hex colour toward black by {@code amount} (0 = unchanged, 1 = black). */
-    static String mixWithBlack(String hex, double amount) {
-        return mix(hex, 0, 0, 0, amount);
-    }
-
-    private static String mix(String hex, int tr, int tg, int tb, double amount) {
-        int[] rgb = parseRgb(hex);
-        double a = Math.max(0, Math.min(1, amount));
-        int r = (int) Math.round(rgb[0] + (tr - rgb[0]) * a);
-        int g = (int) Math.round(rgb[1] + (tg - rgb[1]) * a);
-        int b = (int) Math.round(rgb[2] + (tb - rgb[2]) * a);
-        return String.format(Locale.ROOT, "#%02X%02X%02X", r, g, b);
-    }
-
-    private static int[] parseRgb(String hex) {
-        String h = sanitizeHex(hex, DEFAULT_PRIMARY);
-        return new int[] {
-                Integer.parseInt(h.substring(1, 3), 16),
-                Integer.parseInt(h.substring(3, 5), 16),
-                Integer.parseInt(h.substring(5, 7), 16)
-        };
     }
 
     // ── formatting helpers ───────────────────────────────────────────────

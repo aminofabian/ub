@@ -1,6 +1,7 @@
 package zelisline.ub.storefront.application;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
@@ -37,7 +38,55 @@ class OrderConfirmationEmailRendererTest {
         assertTrue(html.contains("Palmart"));
         assertTrue(!html.contains(">Kiosk<") && !html.contains("Kiosk &nbsp;"));
         assertTrue(html.contains("#0B6E4F"));
-        assertTrue(html.contains("#08A045"));
+        assertFalse(html.contains("linear-gradient"));
+        assertTrue(html.contains("DM Sans"));
+        assertTrue(html.contains("Mirema"));
+    }
+
+    @Test
+    void substitutesAreaPlaceholderWithLocation() {
+        TenantBrandingDto branding = new TenantBrandingDto(
+                "Palmart | Groceries & Essentials in [Area], Kenya",
+                null,
+                null,
+                "#1B4332",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null);
+
+        String html = renderer.renderHtml(
+                sampleOrder(), List.of(sampleLine()), "Mirema", branding, "Kiosk", "palmart");
+
+        assertFalse(html.contains("[Area]"));
+        assertTrue(html.contains("Groceries &amp; Essentials in Mirema, Kenya")
+                || html.contains("Groceries & Essentials in Mirema, Kenya"));
+        assertTrue(html.contains("Palmart"));
+        assertEquals(
+                "Palmart",
+                OrderConfirmationEmailRenderer.brandWordmark(
+                        OrderConfirmationEmailRenderer.resolveStoreName(
+                                branding, "Kiosk", "palmart", "Mirema")));
+    }
+
+    @Test
+    void brandWordmarkTakesLeftOfPipe() {
+        assertEquals(
+                "Palmart",
+                OrderConfirmationEmailRenderer.brandWordmark(
+                        "Palmart | Groceries & Essentials in Mirema, Kenya"));
+    }
+
+    @Test
+    void applySeoPlaceholdersReplacesArea() {
+        assertEquals(
+                "Palmart | Groceries & Essentials in Mirema, Kenya",
+                OrderConfirmationEmailRenderer.applySeoPlaceholders(
+                        "Palmart | Groceries & Essentials in [Area], Kenya",
+                        "Mirema",
+                        "Palmart"));
     }
 
     @Test

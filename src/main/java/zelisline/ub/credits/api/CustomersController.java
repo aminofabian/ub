@@ -91,9 +91,8 @@ public class CustomersController {
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        String businessId = TenantRequestIds.resolveBusinessId(request);
-        cashierTabClearanceAccess.requireEnabled(businessId);
-        return customerDirectoryService.listOutstandingTabs(businessId, q);
+        return customerDirectoryService.listOutstandingTabs(
+                TenantRequestIds.resolveBusinessId(request), q);
     }
 
     @GetMapping("/{customerId}")

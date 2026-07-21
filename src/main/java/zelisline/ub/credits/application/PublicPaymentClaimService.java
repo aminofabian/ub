@@ -25,6 +25,8 @@ import zelisline.ub.credits.CreditClaimSources;
 import zelisline.ub.credits.CreditClaimStatuses;
 import zelisline.ub.credits.api.dto.PaymentClaimReviewRowResponse;
 import zelisline.ub.credits.api.dto.ProposeTabClearanceRequest;
+import zelisline.ub.credits.api.dto.RecordTabPaymentRequest;
+import zelisline.ub.credits.api.dto.RecordTabPaymentResponse;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.Customer;
 import zelisline.ub.credits.domain.CustomerPhone;
@@ -143,6 +145,66 @@ public class PublicPaymentClaimService {
         row.setCreditNote("Till clearance — " + req.channel());
         publicPaymentClaimRepository.save(row);
         return row.getId();
+    }
+
+    /**
+     * Manager records cash/M-Pesa toward an open tab and clears debt immediately
+     * (partial or full). Leaves an approved claim row for audit.
+     */
+    @Transactional
+    public RecordTabPaymentResponse recordAdminTabPayment(
+            String businessId,
+            RecordTabPaymentRequest req,
+            String actorUserId
+    ) {
+        if (!CreditClaimChannels.isValid(req.channel())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Channel must be 'cash' or 'mpesa'");
+        }
+        CreditAccount account = creditAccountRepository
+                .findByCustomerIdAndBusinessIdForUpdate(req.customerId(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Credit account not found"));
+        BigDecimal owed = account.getBalanceOwed() == null ? BigDecimal.ZERO : account.getBalanceOwed();
+        BigDecimal amount = req.amount().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        if (amount.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Amount must be positive");
+        }
+        if (amount.compareTo(owed) > 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Amount exceeds tab balance of " + owed.toPlainString()
+            );
+        }
+
+        PublicPaymentClaim row = new PublicPaymentClaim();
+        row.setBusinessId(businessId);
+        row.setCreditAccountId(account.getId());
+        row.setTokenHash(sha256Hex("admin:" + UUID.randomUUID()).toLowerCase());
+        row.setStatus(CreditClaimStatuses.SUBMITTED);
+        row.setSource(CreditClaimSources.ADMIN);
+        row.setProposedChannel(req.channel());
+        row.setSubmittedByUserId(actorUserId);
+        row.setSubmittedAmount(amount);
+        row.setSubmittedReference(trimOrNull(req.reference()));
+        row.setCreditNote("Admin clearance — " + req.channel());
+        publicPaymentClaimRepository.save(row);
+
+        creditSaleDebtService.applyInboundArPayment(businessId, account.getId(), amount);
+        String memo = "Admin tab payment " + row.getId() + " (" + req.channel() + ")";
+        String je = CreditClaimChannels.CASH.equals(req.channel())
+                ? creditsJournalService.postInboundCashTowardAr(businessId, amount, row.getId(), memo)
+                : creditsJournalService.postInboundMpesaTowardAr(businessId, amount, row.getId(), memo);
+        row.setStatus(CreditClaimStatuses.APPROVED);
+        row.setApprovedJournalId(je);
+        row.setUpdatedAt(Instant.now());
+        publicPaymentClaimRepository.save(row);
+
+        CreditAccount refreshed = creditAccountRepository
+                .findByCustomerIdAndBusinessId(req.customerId(), businessId)
+                .orElse(account);
+        BigDecimal remaining = refreshed.getBalanceOwed() == null
+                ? BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP)
+                : refreshed.getBalanceOwed().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        return new RecordTabPaymentResponse(row.getId(), remaining.toPlainString());
     }
 
     /**

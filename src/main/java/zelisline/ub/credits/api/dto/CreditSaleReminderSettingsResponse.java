@@ -12,6 +12,9 @@ public record CreditSaleReminderSettingsResponse(
         String smsSozuriFrom,
         String smsSozuriType,
         String smsSozuriApiUrl,
+        String smsTextsmsPartnerId,
+        String smsTextsmsShortcode,
+        String smsTextsmsApiUrl,
         boolean hasRapidApiKey,
         String rapidApiHost,
         String rapidApiLookupUrl,
@@ -20,6 +23,7 @@ public record CreditSaleReminderSettingsResponse(
         boolean hasWhatsappMetaAccessToken,
         boolean hasSmsAfricasTalkingApiKey,
         boolean hasSmsSozuriApiKey,
+        boolean hasSmsTextsmsApiKey,
         boolean secretsReadable,
         String secretsReadError
 ) {

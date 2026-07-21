@@ -16,6 +16,7 @@ import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
 import zelisline.ub.platform.application.PlatformIntegrationSettingsService;
 import zelisline.ub.platform.application.ResolvedRapidApiWhatsappConfig;
 import zelisline.ub.platform.application.ResolvedSozuriSmsConfig;
+import zelisline.ub.platform.application.ResolvedTextSmsConfig;
 
 @Service
 @RequiredArgsConstructor
@@ -70,6 +71,8 @@ public class BusinessCreditMessagingSettingsService {
                 platformIntegrationSettingsService.resolveRapidApiWhatsapp();
         ResolvedSozuriSmsConfig platformSms =
                 platformIntegrationSettingsService.resolveSozuriSms();
+        ResolvedTextSmsConfig platformTextSms =
+                platformIntegrationSettingsService.resolveTextSms();
         String paymentUrl = firstNonBlank(
                 trimToNull(s.getCreditSaleReminderPaymentUrl()),
                 env.creditSaleReminder().paymentAccountUrl(),
@@ -109,6 +112,13 @@ public class BusinessCreditMessagingSettingsService {
                         trimToNull(s.getSmsSozuriApiUrl()),
                         platformSms.apiUrl(),
                         "https://sozuri.net/api/v1/messaging"),
+                firstNonBlank(trimToNull(s.getSmsTextsmsPartnerId()), platformTextSms.partnerId()),
+                firstNonBlank(decryptOrNull(s.getSmsTextsmsApiKeyEnc()), platformTextSms.apiKey()),
+                firstNonBlank(trimToNull(s.getSmsTextsmsShortcode()), platformTextSms.shortcode()),
+                firstNonBlank(
+                        trimToNull(s.getSmsTextsmsApiUrl()),
+                        platformTextSms.apiUrl(),
+                        "https://sms.textsms.co.ke/api/services/sendsms/"),
                 true,
                 null);
     }
@@ -121,9 +131,11 @@ public class BusinessCreditMessagingSettingsService {
         String smsProvider = body.smsProvider() == null ? "none" : body.smsProvider().trim().toLowerCase();
         if (!"none".equals(smsProvider)
                 && !"africas_talking".equals(smsProvider)
-                && !"sozuri".equals(smsProvider)) {
+                && !"sozuri".equals(smsProvider)
+                && !"textsms".equals(smsProvider)) {
             throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST, "SMS provider must be none, africas_talking, or sozuri");
+                    HttpStatus.BAD_REQUEST,
+                    "SMS provider must be none, africas_talking, sozuri, or textsms");
         }
         if ("africas_talking".equals(smsProvider)) {
             if (body.smsAfricasTalkingUsername() == null || body.smsAfricasTalkingUsername().isBlank()) {
@@ -146,6 +158,24 @@ public class BusinessCreditMessagingSettingsService {
                         HttpStatus.BAD_REQUEST, "Sozuri type must be transactional or promotional");
             }
         }
+        if ("textsms".equals(smsProvider)) {
+            ResolvedTextSmsConfig platformTextSms =
+                    platformIntegrationSettingsService.resolveTextSms();
+            String partnerId = blankToNull(body.smsTextsmsPartnerId());
+            String shortcode = blankToNull(body.smsTextsmsShortcode());
+            if (partnerId == null
+                    && (platformTextSms.partnerId() == null || platformTextSms.partnerId().isBlank())) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "TextSMS partner ID required (set here or in Super Admin → Platform integrations)");
+            }
+            if (shortcode == null
+                    && (platformTextSms.shortcode() == null || platformTextSms.shortcode().isBlank())) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "TextSMS shortcode / sender ID required (set here or in Super Admin → Platform integrations)");
+            }
+        }
 
         BusinessCreditSettings s = businessCreditSettingsService.resolveForBusiness(businessId);
         s.setCreditSaleReminderEnabled(body.enabled());
@@ -166,6 +196,11 @@ public class BusinessCreditMessagingSettingsService {
                             ? "transactional"
                             : body.smsSozuriType().trim().toLowerCase());
             s.setSmsSozuriApiUrl(blankToNull(body.smsSozuriApiUrl()));
+        }
+        if ("textsms".equals(smsProvider)) {
+            s.setSmsTextsmsPartnerId(blankToNull(body.smsTextsmsPartnerId()));
+            s.setSmsTextsmsShortcode(blankToNull(body.smsTextsmsShortcode()));
+            s.setSmsTextsmsApiUrl(blankToNull(body.smsTextsmsApiUrl()));
         }
 
         if (body.rapidApiKey() != null) {
@@ -192,6 +227,9 @@ public class BusinessCreditMessagingSettingsService {
         if (body.smsSozuriApiKey() != null) {
             s.setSmsSozuriApiKeyEnc(encryptOrClear(body.smsSozuriApiKey()));
         }
+        if (body.smsTextsmsApiKey() != null) {
+            s.setSmsTextsmsApiKeyEnc(encryptOrClear(body.smsTextsmsApiKey()));
+        }
 
         BusinessCreditSettings saved = businessCreditSettingsService.saveSettings(s);
         return toResponse(saved, readSecrets(saved));
@@ -207,6 +245,8 @@ public class BusinessCreditMessagingSettingsService {
                         : platformWa.phoneDigitsOnly();
         ResolvedSozuriSmsConfig platformSms =
                 platformIntegrationSettingsService.resolveSozuriSms();
+        ResolvedTextSmsConfig platformTextSms =
+                platformIntegrationSettingsService.resolveTextSms();
         return new CreditSaleReminderSettingsResponse(
                 s.isCreditSaleReminderEnabled(),
                 firstNonBlank(trimToNull(s.getCreditSaleReminderPaymentUrl()), defaultUrl),
@@ -222,6 +262,12 @@ public class BusinessCreditMessagingSettingsService {
                         trimToNull(s.getSmsSozuriApiUrl()),
                         platformSms.apiUrl(),
                         "https://sozuri.net/api/v1/messaging"),
+                firstNonBlank(trimToNull(s.getSmsTextsmsPartnerId()), platformTextSms.partnerId()),
+                firstNonBlank(trimToNull(s.getSmsTextsmsShortcode()), platformTextSms.shortcode()),
+                firstNonBlank(
+                        trimToNull(s.getSmsTextsmsApiUrl()),
+                        platformTextSms.apiUrl(),
+                        "https://sms.textsms.co.ke/api/services/sendsms/"),
                 read.hasRapidApiKey,
                 firstNonBlank(trimToNull(s.getRapidapiHost()), platformWa.host()),
                 firstNonBlank(trimToNull(s.getRapidapiLookupUrl()), platformWa.lookupUrl()),
@@ -230,6 +276,8 @@ public class BusinessCreditMessagingSettingsService {
                 read.hasWhatsappToken,
                 read.hasSmsAtApiKey,
                 read.hasSmsSozuriApiKey || (platformSms.apiKey() != null && !platformSms.apiKey().isBlank()),
+                read.hasSmsTextsmsApiKey
+                        || (platformTextSms.apiKey() != null && !platformTextSms.apiKey().isBlank()),
                 read.readable,
                 read.errorMessage);
     }
@@ -246,6 +294,7 @@ public class BusinessCreditMessagingSettingsService {
                 hasEncrypted(s.getWhatsappMetaAccessTokenEnc()),
                 hasEncrypted(s.getSmsAfricasTalkingApiKeyEnc()),
                 hasEncrypted(s.getSmsSozuriApiKeyEnc()),
+                hasEncrypted(s.getSmsTextsmsApiKeyEnc()),
                 true,
                 persistenceHint);
     }
@@ -283,7 +332,7 @@ public class BusinessCreditMessagingSettingsService {
     private static TenantMessagingConfig disabledConfig(String readError) {
         return new TenantMessagingConfig(
                 false, "", null, null, null, null, false, null, null, null, "none",
-                null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null, null,
                 readError == null, readError);
     }
 
@@ -312,6 +361,7 @@ public class BusinessCreditMessagingSettingsService {
             boolean hasWhatsappToken,
             boolean hasSmsAtApiKey,
             boolean hasSmsSozuriApiKey,
+            boolean hasSmsTextsmsApiKey,
             boolean readable,
             String errorMessage
     ) {

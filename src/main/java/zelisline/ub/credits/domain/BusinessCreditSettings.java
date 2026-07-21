@@ -81,4 +81,16 @@ public class BusinessCreditSettings {
 
     @Column(name = "sms_sozuri_api_url", length = 512)
     private String smsSozuriApiUrl;
+
+    @Column(name = "sms_textsms_partner_id", length = 64)
+    private String smsTextsmsPartnerId;
+
+    @Column(name = "sms_textsms_api_key_enc", columnDefinition = "TEXT")
+    private String smsTextsmsApiKeyEnc;
+
+    @Column(name = "sms_textsms_shortcode", length = 64)
+    private String smsTextsmsShortcode;
+
+    @Column(name = "sms_textsms_api_url", length = 512)
+    private String smsTextsmsApiUrl;
 }

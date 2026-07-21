@@ -66,6 +66,18 @@ public class PlatformIntegrationSettings {
     @Column(name = "sozuri_api_url", length = 512)
     private String sozuriApiUrl;
 
+    @Column(name = "textsms_partner_id", length = 64)
+    private String textsmsPartnerId;
+
+    @Column(name = "textsms_api_key_enc", columnDefinition = "TEXT")
+    private String textsmsApiKeyEnc;
+
+    @Column(name = "textsms_shortcode", length = 64)
+    private String textsmsShortcode;
+
+    @Column(name = "textsms_api_url", length = 512)
+    private String textsmsApiUrl;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt = Instant.now();
 }

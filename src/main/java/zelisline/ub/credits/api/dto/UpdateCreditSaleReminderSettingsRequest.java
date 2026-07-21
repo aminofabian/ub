@@ -8,9 +8,7 @@ import jakarta.validation.constraints.NotNull;
  * @param whatsappMetaAccessToken {@code null} = unchanged; blank = clear.
  * @param smsAfricasTalkingApiKey {@code null} = unchanged; blank = clear.
  * @param smsSozuriApiKey {@code null} = unchanged; blank = clear.
- * @param rapidApiHost blank = clear tenant override (use platform/env).
- * @param rapidApiLookupUrl blank = clear tenant override.
- * @param rapidApiPhoneField blank = clear tenant override.
+ * @param smsTextsmsApiKey {@code null} = unchanged; blank = clear.
  */
 public record UpdateCreditSaleReminderSettingsRequest(
         @NotNull Boolean enabled,
@@ -30,6 +28,10 @@ public record UpdateCreditSaleReminderSettingsRequest(
         String smsSozuriApiKey,
         String smsSozuriFrom,
         String smsSozuriType,
-        String smsSozuriApiUrl
+        String smsSozuriApiUrl,
+        String smsTextsmsPartnerId,
+        String smsTextsmsApiKey,
+        String smsTextsmsShortcode,
+        String smsTextsmsApiUrl
 ) {
 }

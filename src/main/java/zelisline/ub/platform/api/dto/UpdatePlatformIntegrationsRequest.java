@@ -19,5 +19,9 @@ public record UpdatePlatformIntegrationsRequest(
         String sozuriApiKey,
         String sozuriFrom,
         String sozuriType,
-        String sozuriApiUrl
+        String sozuriApiUrl,
+        String textsmsPartnerId,
+        String textsmsApiKey,
+        String textsmsShortcode,
+        String textsmsApiUrl
 ) {}

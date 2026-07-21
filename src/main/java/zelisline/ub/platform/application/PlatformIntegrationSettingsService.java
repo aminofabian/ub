@@ -21,6 +21,7 @@ public class PlatformIntegrationSettingsService {
 
     private static final String DEFAULT_PHONE_FIELD = "phone";
     private static final String DEFAULT_SOZURI_URL = "https://sozuri.net/api/v1/messaging";
+    private static final String DEFAULT_TEXTSMS_URL = "https://sms.textsms.co.ke/api/services/sendsms/";
 
     private final PlatformIntegrationSettingsRepository repository;
     private final CredentialEncryptionService encryptionService;
@@ -71,7 +72,8 @@ public class PlatformIntegrationSettingsService {
                 provider = provider.toLowerCase();
                 if (!"none".equals(provider)
                         && !"africas_talking".equals(provider)
-                        && !"sozuri".equals(provider)) {
+                        && !"sozuri".equals(provider)
+                        && !"textsms".equals(provider)) {
                     provider = "none";
                 }
             }
@@ -98,6 +100,18 @@ public class PlatformIntegrationSettingsService {
         }
         if (body.sozuriApiUrl() != null) {
             row.setSozuriApiUrl(blankToNull(body.sozuriApiUrl()));
+        }
+        if (body.textsmsPartnerId() != null) {
+            row.setTextsmsPartnerId(blankToNull(body.textsmsPartnerId()));
+        }
+        if (body.textsmsApiKey() != null) {
+            row.setTextsmsApiKeyEnc(encryptOrClear(body.textsmsApiKey()));
+        }
+        if (body.textsmsShortcode() != null) {
+            row.setTextsmsShortcode(blankToNull(body.textsmsShortcode()));
+        }
+        if (body.textsmsApiUrl() != null) {
+            row.setTextsmsApiUrl(blankToNull(body.textsmsApiUrl()));
         }
         row.setUpdatedAt(Instant.now());
         PlatformIntegrationSettings saved = repository.save(row);
@@ -139,6 +153,13 @@ public class PlatformIntegrationSettingsService {
         return resolveSozuriFromRow(row, secrets);
     }
 
+    @Transactional(readOnly = true)
+    public ResolvedTextSmsConfig resolveTextSms() {
+        PlatformIntegrationSettings row = loadSingleton();
+        SecretRead secrets = readSecrets(row);
+        return resolveTextSmsFromRow(row, secrets);
+    }
+
     private PlatformIntegrationsResponse toResponse(
             PlatformIntegrationSettings row,
             SecretRead secrets
@@ -147,6 +168,7 @@ public class PlatformIntegrationSettingsService {
         var msgEnv = messagingProperties.rapidApiWhatsApp();
         ResolvedRapidApiWhatsappConfig wa = resolveWhatsappFromRow(row, secrets, msgEnv);
         ResolvedSozuriSmsConfig sozuri = resolveSozuriFromRow(row, secrets);
+        ResolvedTextSmsConfig textsms = resolveTextSmsFromRow(row, secrets);
         return new PlatformIntegrationsResponse(
                 secrets.hasDeepseekApiKey,
                 firstNonBlank(trimToNull(row.getDeepseekHost()), catalogEnv.host()),
@@ -163,9 +185,14 @@ public class PlatformIntegrationSettingsService {
                 sozuri.type(),
                 sozuri.apiUrl(),
                 secrets.hasSozuriApiKey,
+                textsms.partnerId(),
+                textsms.shortcode(),
+                textsms.apiUrl(),
+                secrets.hasTextsmsApiKey,
                 envHasDeepseekKey(catalogEnv),
                 envHasRapidApiWhatsappKey(msgEnv),
                 envHasSozuriKey(messagingProperties.sms()),
+                envHasTextsmsKey(messagingProperties.sms()),
                 secrets.readable,
                 secrets.errorMessage,
                 encryptionService.usesEphemeralKey());
@@ -210,6 +237,24 @@ public class PlatformIntegrationSettingsService {
         return new ResolvedSozuriSmsConfig(provider, project, apiKey, from, type, apiUrl);
     }
 
+    private ResolvedTextSmsConfig resolveTextSmsFromRow(
+            PlatformIntegrationSettings row,
+            SecretRead secrets
+    ) {
+        var env = messagingProperties.sms();
+        String partnerId =
+                firstNonBlank(trimToNull(row.getTextsmsPartnerId()), env.textsmsPartnerId());
+        String apiKey =
+                secrets.readable
+                        ? firstNonBlank(secrets.textsmsApiKey, env.textsmsApiKey())
+                        : blankToNull(env.textsmsApiKey());
+        String shortcode =
+                firstNonBlank(trimToNull(row.getTextsmsShortcode()), env.textsmsShortcode());
+        String apiUrl =
+                firstNonBlank(trimToNull(row.getTextsmsApiUrl()), env.textsmsApiUrl(), DEFAULT_TEXTSMS_URL);
+        return new ResolvedTextSmsConfig(partnerId, apiKey, shortcode, apiUrl);
+    }
+
     private PlatformIntegrationSettings loadSingleton() {
         return repository
                 .findById(PlatformIntegrationSettings.SINGLETON_ID)
@@ -230,6 +275,8 @@ public class PlatformIntegrationSettingsService {
                     hasEncrypted(row.getDeepseekApiKeyEnc()),
                     hasEncrypted(row.getRapidapiWhatsappKeyEnc()),
                     hasEncrypted(row.getSozuriApiKeyEnc()),
+                    hasEncrypted(row.getTextsmsApiKeyEnc()),
+                    null,
                     null,
                     null,
                     null,
@@ -242,9 +289,11 @@ public class PlatformIntegrationSettingsService {
                     hasEncrypted(row.getDeepseekApiKeyEnc()),
                     hasEncrypted(row.getRapidapiWhatsappKeyEnc()),
                     hasEncrypted(row.getSozuriApiKeyEnc()),
+                    hasEncrypted(row.getTextsmsApiKeyEnc()),
                     decryptOrNull(row.getDeepseekApiKeyEnc()),
                     decryptOrNull(row.getRapidapiWhatsappKeyEnc()),
                     decryptOrNull(row.getSozuriApiKeyEnc()),
+                    decryptOrNull(row.getTextsmsApiKeyEnc()),
                     null);
         } catch (RuntimeException ex) {
             return new SecretRead(
@@ -252,6 +301,8 @@ public class PlatformIntegrationSettingsService {
                     hasEncrypted(row.getDeepseekApiKeyEnc()),
                     hasEncrypted(row.getRapidapiWhatsappKeyEnc()),
                     hasEncrypted(row.getSozuriApiKeyEnc()),
+                    hasEncrypted(row.getTextsmsApiKeyEnc()),
+                    null,
                     null,
                     null,
                     null,
@@ -295,6 +346,10 @@ public class PlatformIntegrationSettingsService {
         return env.sozuriApiKey() != null && !env.sozuriApiKey().isBlank();
     }
 
+    private static boolean envHasTextsmsKey(MessagingProperties.Sms env) {
+        return env.textsmsApiKey() != null && !env.textsmsApiKey().isBlank();
+    }
+
     private static String trimToNull(String value) {
         if (value == null) {
             return null;
@@ -321,9 +376,11 @@ public class PlatformIntegrationSettingsService {
             boolean hasDeepseekApiKey,
             boolean hasRapidapiWhatsappKey,
             boolean hasSozuriApiKey,
+            boolean hasTextsmsApiKey,
             String deepseekApiKey,
             String rapidapiWhatsappKey,
             String sozuriApiKey,
+            String textsmsApiKey,
             String errorMessage
     ) {}
 }

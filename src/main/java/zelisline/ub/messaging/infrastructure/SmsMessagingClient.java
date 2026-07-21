@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import kong.unirest.HttpResponse;
@@ -14,14 +15,14 @@ import kong.unirest.Unirest;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
 
 /**
- * SMS fallback for credit tab reminders (Africa's Talking or Sozuri when configured,
- * otherwise log-only).
+ * SMS fallback for credit tab reminders (Africa's Talking, Sozuri, or TextSMS.co.ke).
  */
 @Component
 public class SmsMessagingClient {
 
     private static final Logger log = LoggerFactory.getLogger(SmsMessagingClient.class);
     private static final String DEFAULT_SOZURI_URL = "https://sozuri.net/api/v1/messaging";
+    private static final String DEFAULT_TEXTSMS_URL = "https://sms.textsms.co.ke/api/services/sendsms/";
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -38,6 +39,9 @@ public class SmsMessagingClient {
         }
         if ("sozuri".equalsIgnoreCase(cfg.smsProvider())) {
             return sendSozuri(toE164, body, cfg);
+        }
+        if ("textsms".equalsIgnoreCase(cfg.smsProvider())) {
+            return sendTextSms(toE164, body, cfg);
         }
         return sendAfricasTalking(toE164, body, cfg);
     }
@@ -90,6 +94,75 @@ public class SmsMessagingClient {
             log.warn("Sozuri SMS failed: {}", ex.getMessage());
             return SendResult.failed("error");
         }
+    }
+
+    private SendResult sendTextSms(String toE164, String body, TenantMessagingConfig cfg) {
+        String url = blankToDefault(cfg.smsTextsmsApiUrl(), DEFAULT_TEXTSMS_URL);
+        String mobile = digitsOnly(toE164);
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("apikey", cfg.smsTextsmsApiKey().strip());
+            payload.put("partnerID", cfg.smsTextsmsPartnerId().strip());
+            payload.put("mobile", mobile);
+            payload.put("message", body);
+            payload.put("shortcode", cfg.smsTextsmsShortcode().strip());
+            payload.put("pass_type", "plain");
+            String json = objectMapper.writeValueAsString(payload);
+            HttpResponse<String> response = Unirest.post(url)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .body(json)
+                    .asString();
+            if (response.getStatus() < 200 || response.getStatus() >= 300) {
+                log.warn("TextSMS HTTP {} body={}", response.getStatus(), truncate(response.getBody()));
+                return SendResult.failed("http_" + response.getStatus());
+            }
+            String detail = parseTextSmsResponse(response.getBody());
+            if (detail == null) {
+                return SendResult.sent("textsms");
+            }
+            log.warn("TextSMS rejected for {}: {}", mask(toE164), detail);
+            return SendResult.failed(detail);
+        } catch (Exception ex) {
+            log.warn("TextSMS failed: {}", ex.getMessage());
+            return SendResult.failed("error");
+        }
+    }
+
+    /**
+     * @return null when accepted; otherwise a short failure detail
+     */
+    private String parseTextSmsResponse(String rawBody) {
+        if (rawBody == null || rawBody.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(rawBody);
+            JsonNode responses = root.get("responses");
+            if (responses == null || !responses.isArray() || responses.isEmpty()) {
+                return null;
+            }
+            JsonNode first = responses.get(0);
+            int code = first.path("respose-code").asInt(
+                    first.path("response-code").asInt(0));
+            if (code == 200 || code == 0) {
+                return null;
+            }
+            String description = first.path("response-description").asText("").trim();
+            if (description.isEmpty()) {
+                return "code_" + code;
+            }
+            return "code_" + code + ":" + description;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private static String digitsOnly(String phone) {
+        if (phone == null) {
+            return "";
+        }
+        return phone.replaceAll("\\D+", "");
     }
 
     private static String blankToDefault(String value, String fallback) {

@@ -21,7 +21,10 @@ public record MessagingProperties(
             metaWhatsApp = new MetaWhatsApp("", "", "v25.0", "", "");
         }
         if (sms == null) {
-            sms = new Sms("none", "", "", "", "", "Sozuri", "transactional", "https://sozuri.net/api/v1/messaging");
+            sms = new Sms(
+                    "none", "", "",
+                    "", "", "Sozuri", "transactional", "https://sozuri.net/api/v1/messaging",
+                    "", "", "", "https://sms.textsms.co.ke/api/services/sendsms/");
         }
     }
 
@@ -60,7 +63,11 @@ public record MessagingProperties(
             String sozuriApiKey,
             String sozuriFrom,
             String sozuriType,
-            String sozuriApiUrl
+            String sozuriApiUrl,
+            String textsmsPartnerId,
+            String textsmsApiKey,
+            String textsmsShortcode,
+            String textsmsApiUrl
     ) {
         public boolean africasTalkingConfigured() {
             return "africas_talking".equalsIgnoreCase(provider)
@@ -72,6 +79,13 @@ public record MessagingProperties(
             return "sozuri".equalsIgnoreCase(provider)
                     && sozuriProject != null && !sozuriProject.isBlank()
                     && sozuriApiKey != null && !sozuriApiKey.isBlank();
+        }
+
+        public boolean textsmsConfigured() {
+            return "textsms".equalsIgnoreCase(provider)
+                    && textsmsPartnerId != null && !textsmsPartnerId.isBlank()
+                    && textsmsApiKey != null && !textsmsApiKey.isBlank()
+                    && textsmsShortcode != null && !textsmsShortcode.isBlank();
         }
     }
 }

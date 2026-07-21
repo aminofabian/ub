@@ -19,7 +19,12 @@ import org.springframework.web.bind.annotation.RestController;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
+
+import org.springframework.format.annotation.DateTimeFormat;
 
 import zelisline.ub.credits.api.dto.AddCustomerPhoneRequest;
 import zelisline.ub.credits.api.dto.CreateCustomerRequest;
@@ -46,6 +51,8 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 @RequiredArgsConstructor
 public class CustomersController {
 
+    private static final ZoneId LIST_ZONE = ZoneId.of("Africa/Nairobi");
+
     private final CustomerDirectoryService customerDirectoryService;
     private final CreditCustomerStatementService creditCustomerStatementService;
     private final CustomerTabPurchasesService customerTabPurchasesService;
@@ -58,10 +65,23 @@ public class CustomersController {
     public Page<CustomerResponse> list(
             Pageable pageable,
             @RequestParam(required = false) String phone,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdTo,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        return customerDirectoryService.list(TenantRequestIds.resolveBusinessId(request), phone, pageable);
+        Instant fromInstant = createdFrom == null
+                ? null
+                : createdFrom.atStartOfDay(LIST_ZONE).toInstant();
+        Instant toExclusive = createdTo == null
+                ? null
+                : createdTo.plusDays(1).atStartOfDay(LIST_ZONE).toInstant();
+        return customerDirectoryService.list(
+                TenantRequestIds.resolveBusinessId(request),
+                phone,
+                fromInstant,
+                toExclusive,
+                pageable);
     }
 
     @GetMapping("/outstanding-tabs")

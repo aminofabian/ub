@@ -61,14 +61,21 @@ public class CustomerDirectoryService {
     private final AuditEventBuilder auditEventBuilder;
 
     @Transactional(readOnly = true)
-    public Page<CustomerResponse> list(String businessId, String phoneQuery, Pageable pageable) {
+    public Page<CustomerResponse> list(
+            String businessId,
+            String phoneQuery,
+            Instant createdFrom,
+            Instant createdToExclusive,
+            Pageable pageable
+    ) {
         if (phoneQuery != null && !phoneQuery.isBlank()) {
             String normalized = CustomerPhoneNormalizer.normalize(phoneQuery);
             if (normalized.isEmpty()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Phone search requires digits");
             }
         }
-        Page<Customer> page = resolveListPage(businessId, phoneQuery, pageable);
+        Page<Customer> page = resolveListPage(
+                businessId, phoneQuery, createdFrom, createdToExclusive, pageable);
         List<Customer> rows = page.getContent();
         Map<String, List<CustomerPhone>> phonesByCustomer = phonesGroupedByCustomer(rows);
         Map<String, CreditAccount> creditByCustomer = creditByCustomer(rows);
@@ -304,12 +311,29 @@ public class CustomerDirectoryService {
         return toResponseSingle(businessId, customerRepository.findById(customerId).orElseThrow());
     }
 
-    private Page<Customer> resolveListPage(String businessId, String phoneRaw, Pageable pageable) {
+    private Page<Customer> resolveListPage(
+            String businessId,
+            String phoneRaw,
+            Instant createdFrom,
+            Instant createdToExclusive,
+            Pageable pageable
+    ) {
+        boolean hasRange = createdFrom != null || createdToExclusive != null;
         if (phoneRaw == null || phoneRaw.isBlank()) {
-            return customerRepository.findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(businessId, pageable);
+            if (!hasRange) {
+                return customerRepository.findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(
+                        businessId, pageable);
+            }
+            return customerRepository.findByBusinessIdAndDeletedAtIsNullAndCreatedAtRange(
+                    businessId, createdFrom, createdToExclusive, pageable);
         }
         String normalized = CustomerPhoneNormalizer.normalize(phoneRaw);
-        return customerRepository.findByBusinessIdAndPhoneNormalized(businessId, normalized, pageable);
+        if (!hasRange) {
+            return customerRepository.findByBusinessIdAndPhoneNormalized(
+                    businessId, normalized, pageable);
+        }
+        return customerRepository.findByBusinessIdAndPhoneNormalizedAndCreatedAtRange(
+                businessId, normalized, createdFrom, createdToExclusive, pageable);
     }
 
     private Customer loadActive(String businessId, String customerId) {

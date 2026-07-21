@@ -1,5 +1,6 @@
 package zelisline.ub.credits.repository;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -33,6 +34,21 @@ public interface CustomerRepository extends JpaRepository<Customer, String> {
     Page<Customer> findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(String businessId, Pageable pageable);
 
     @Query(
+            """
+                    select c from Customer c
+                     where c.businessId = :businessId
+                       and c.deletedAt is null
+                       and (:createdFrom is null or c.createdAt >= :createdFrom)
+                       and (:createdToExclusive is null or c.createdAt < :createdToExclusive)
+                     order by c.name asc""")
+    Page<Customer> findByBusinessIdAndDeletedAtIsNullAndCreatedAtRange(
+            @Param("businessId") String businessId,
+            @Param("createdFrom") Instant createdFrom,
+            @Param("createdToExclusive") Instant createdToExclusive,
+            Pageable pageable
+    );
+
+    @Query(
             value = """
                     SELECT DISTINCT c FROM Customer c, CustomerPhone p
                     WHERE p.customerId = c.id
@@ -53,6 +69,36 @@ public interface CustomerRepository extends JpaRepository<Customer, String> {
     Page<Customer> findByBusinessIdAndPhoneNormalized(
             @Param("businessId") String businessId,
             @Param("phoneNormalized") String phoneNormalized,
+            Pageable pageable
+    );
+
+    @Query(
+            value = """
+                    SELECT DISTINCT c FROM Customer c, CustomerPhone p
+                    WHERE p.customerId = c.id
+                      AND c.businessId = :businessId
+                      AND c.deletedAt IS NULL
+                      AND p.businessId = :businessId
+                      AND p.phone = :phoneNormalized
+                      AND (:createdFrom IS NULL OR c.createdAt >= :createdFrom)
+                      AND (:createdToExclusive IS NULL OR c.createdAt < :createdToExclusive)
+                    """,
+            countQuery = """
+                    SELECT COUNT(DISTINCT c) FROM Customer c, CustomerPhone p
+                    WHERE p.customerId = c.id
+                      AND c.businessId = :businessId
+                      AND c.deletedAt IS NULL
+                      AND p.businessId = :businessId
+                      AND p.phone = :phoneNormalized
+                      AND (:createdFrom IS NULL OR c.createdAt >= :createdFrom)
+                      AND (:createdToExclusive IS NULL OR c.createdAt < :createdToExclusive)
+                    """
+    )
+    Page<Customer> findByBusinessIdAndPhoneNormalizedAndCreatedAtRange(
+            @Param("businessId") String businessId,
+            @Param("phoneNormalized") String phoneNormalized,
+            @Param("createdFrom") Instant createdFrom,
+            @Param("createdToExclusive") Instant createdToExclusive,
             Pageable pageable
     );
 }

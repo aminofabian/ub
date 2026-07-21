@@ -14,6 +14,7 @@ import zelisline.ub.messaging.application.TenantMessagingConfig;
 import zelisline.ub.messaging.config.MessagingProperties;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
 import zelisline.ub.platform.application.PlatformIntegrationSettingsService;
+import zelisline.ub.platform.application.ResolvedRapidApiWhatsappConfig;
 
 @Service
 @RequiredArgsConstructor
@@ -64,18 +65,26 @@ public class BusinessCreditMessagingSettingsService {
 
     private TenantMessagingConfig buildConfig(BusinessCreditSettings s, boolean enabled) {
         var env = messagingProperties;
+        ResolvedRapidApiWhatsappConfig platformWa =
+                platformIntegrationSettingsService.resolveRapidApiWhatsapp();
         String paymentUrl = firstNonBlank(
                 trimToNull(s.getCreditSaleReminderPaymentUrl()),
                 env.creditSaleReminder().paymentAccountUrl(),
                 defaultPaymentUrl());
+        boolean digitsOnly =
+                s.getRapidapiPhoneDigitsOnly() != null
+                        ? s.getRapidapiPhoneDigitsOnly()
+                        : platformWa.phoneDigitsOnly();
         return new TenantMessagingConfig(
                 enabled,
                 paymentUrl,
                 firstNonBlank(
                         decryptOrNull(s.getRapidapiKeyEnc()),
-                        platformIntegrationSettingsService.resolveRapidApiWhatsappKey()),
-                env.rapidApiWhatsApp().host(),
-                env.rapidApiWhatsApp().lookupUrl(),
+                        platformWa.apiKey()),
+                firstNonBlank(trimToNull(s.getRapidapiHost()), platformWa.host()),
+                firstNonBlank(trimToNull(s.getRapidapiLookupUrl()), platformWa.lookupUrl()),
+                firstNonBlank(trimToNull(s.getRapidapiPhoneField()), platformWa.phoneField()),
+                digitsOnly,
                 firstNonBlank(trimToNull(decryptOrNull(s.getWhatsappMetaAccessTokenEnc())), trimToNull(env.metaWhatsApp().accessToken())),
                 firstNonBlank(trimToNull(s.getWhatsappMetaPhoneNumberId()), trimToNull(env.metaWhatsApp().phoneNumberId())),
                 firstNonBlank(trimToNull(s.getWhatsappMetaGraphVersion()), env.metaWhatsApp().graphVersion()),
@@ -115,6 +124,18 @@ public class BusinessCreditMessagingSettingsService {
         if (body.rapidApiKey() != null) {
             s.setRapidapiKeyEnc(encryptOrClear(body.rapidApiKey()));
         }
+        if (body.rapidApiHost() != null) {
+            s.setRapidapiHost(blankToNull(body.rapidApiHost()));
+        }
+        if (body.rapidApiLookupUrl() != null) {
+            s.setRapidapiLookupUrl(blankToNull(body.rapidApiLookupUrl()));
+        }
+        if (body.rapidApiPhoneField() != null) {
+            s.setRapidapiPhoneField(blankToNull(body.rapidApiPhoneField()));
+        }
+        if (body.rapidApiPhoneDigitsOnly() != null) {
+            s.setRapidapiPhoneDigitsOnly(body.rapidApiPhoneDigitsOnly());
+        }
         if (body.whatsappMetaAccessToken() != null) {
             s.setWhatsappMetaAccessTokenEnc(encryptOrClear(body.whatsappMetaAccessToken()));
         }
@@ -128,6 +149,12 @@ public class BusinessCreditMessagingSettingsService {
 
     private CreditSaleReminderSettingsResponse toResponse(BusinessCreditSettings s, SecretRead read) {
         String defaultUrl = defaultPaymentUrl();
+        ResolvedRapidApiWhatsappConfig platformWa =
+                platformIntegrationSettingsService.resolveRapidApiWhatsapp();
+        boolean digitsOnly =
+                s.getRapidapiPhoneDigitsOnly() != null
+                        ? s.getRapidapiPhoneDigitsOnly()
+                        : platformWa.phoneDigitsOnly();
         return new CreditSaleReminderSettingsResponse(
                 s.isCreditSaleReminderEnabled(),
                 firstNonBlank(trimToNull(s.getCreditSaleReminderPaymentUrl()), defaultUrl),
@@ -137,6 +164,10 @@ public class BusinessCreditMessagingSettingsService {
                 firstNonBlank(trimToNull(s.getSmsProvider()), "none"),
                 trimToNull(s.getSmsAfricasTalkingUsername()),
                 read.hasRapidApiKey,
+                firstNonBlank(trimToNull(s.getRapidapiHost()), platformWa.host()),
+                firstNonBlank(trimToNull(s.getRapidapiLookupUrl()), platformWa.lookupUrl()),
+                firstNonBlank(trimToNull(s.getRapidapiPhoneField()), platformWa.phoneField()),
+                digitsOnly,
                 read.hasWhatsappToken,
                 read.hasSmsApiKey,
                 read.readable,
@@ -190,7 +221,7 @@ public class BusinessCreditMessagingSettingsService {
 
     private static TenantMessagingConfig disabledConfig(String readError) {
         return new TenantMessagingConfig(
-                false, "", null, null, null, null, null, null, "none", null, null,
+                false, "", null, null, null, null, false, null, null, null, "none", null, null,
                 readError == null, readError);
     }
 

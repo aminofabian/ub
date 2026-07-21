@@ -37,6 +37,18 @@ public class BusinessCreditSettings {
     @Column(name = "rapidapi_key_enc", columnDefinition = "TEXT")
     private String rapidapiKeyEnc;
 
+    @Column(name = "rapidapi_host", length = 255)
+    private String rapidapiHost;
+
+    @Column(name = "rapidapi_lookup_url", length = 512)
+    private String rapidapiLookupUrl;
+
+    @Column(name = "rapidapi_phone_field", length = 64)
+    private String rapidapiPhoneField;
+
+    @Column(name = "rapidapi_phone_digits_only")
+    private Boolean rapidapiPhoneDigitsOnly;
+
     @Column(name = "whatsapp_meta_access_token_enc", columnDefinition = "TEXT")
     private String whatsappMetaAccessTokenEnc;
 

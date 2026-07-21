@@ -9,6 +9,8 @@ public record TenantMessagingConfig(
         String rapidApiKey,
         String rapidApiHost,
         String rapidApiLookupUrl,
+        String rapidApiPhoneField,
+        boolean rapidApiPhoneDigitsOnly,
         String metaAccessToken,
         String metaPhoneNumberId,
         String metaGraphVersion,
@@ -19,7 +21,9 @@ public record TenantMessagingConfig(
         String secretsReadError
 ) {
     public boolean rapidApiConfigured() {
-        return rapidApiKey != null && !rapidApiKey.isBlank();
+        return rapidApiKey != null && !rapidApiKey.isBlank()
+                && rapidApiHost != null && !rapidApiHost.isBlank()
+                && rapidApiLookupUrl != null && !rapidApiLookupUrl.isBlank();
     }
 
     public boolean metaWhatsAppConfigured() {

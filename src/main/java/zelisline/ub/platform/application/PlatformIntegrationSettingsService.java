@@ -19,6 +19,8 @@ import zelisline.ub.platform.repository.PlatformIntegrationSettingsRepository;
 @RequiredArgsConstructor
 public class PlatformIntegrationSettingsService {
 
+    private static final String DEFAULT_PHONE_FIELD = "phone";
+
     private final PlatformIntegrationSettingsRepository repository;
     private final CredentialEncryptionService encryptionService;
     private final CatalogAiProperties catalogAiProperties;
@@ -28,19 +30,7 @@ public class PlatformIntegrationSettingsService {
     public PlatformIntegrationsResponse getForSuperAdmin() {
         PlatformIntegrationSettings row = loadSingleton();
         SecretRead secrets = readSecrets(row);
-        var catalogEnv = catalogAiProperties;
-        var msgEnv = messagingProperties.rapidApiWhatsApp();
-        return new PlatformIntegrationsResponse(
-                secrets.hasDeepseekApiKey,
-                firstNonBlank(trimToNull(row.getDeepseekHost()), catalogEnv.host()),
-                firstNonBlank(trimToNull(row.getDeepseekUrl()), catalogEnv.url()),
-                firstNonBlank(trimToNull(row.getDeepseekModel()), catalogEnv.model()),
-                secrets.hasRapidapiWhatsappKey,
-                envHasDeepseekKey(catalogEnv),
-                envHasRapidApiWhatsappKey(msgEnv),
-                secrets.readable,
-                secrets.errorMessage,
-                encryptionService.usesEphemeralKey());
+        return toResponse(row, secrets);
     }
 
     @Transactional
@@ -61,6 +51,18 @@ public class PlatformIntegrationSettingsService {
         }
         if (body.rapidApiWhatsappKey() != null) {
             row.setRapidapiWhatsappKeyEnc(encryptOrClear(body.rapidApiWhatsappKey()));
+        }
+        if (body.rapidApiWhatsappHost() != null) {
+            row.setRapidapiWhatsappHost(blankToNull(body.rapidApiWhatsappHost()));
+        }
+        if (body.rapidApiWhatsappLookupUrl() != null) {
+            row.setRapidapiWhatsappLookupUrl(blankToNull(body.rapidApiWhatsappLookupUrl()));
+        }
+        if (body.rapidApiWhatsappPhoneField() != null) {
+            row.setRapidapiWhatsappPhoneField(blankToNull(body.rapidApiWhatsappPhoneField()));
+        }
+        if (body.rapidApiWhatsappPhoneDigitsOnly() != null) {
+            row.setRapidapiWhatsappPhoneDigitsOnly(body.rapidApiWhatsappPhoneDigitsOnly());
         }
         row.setUpdatedAt(Instant.now());
         PlatformIntegrationSettings saved = repository.save(row);
@@ -84,12 +86,27 @@ public class PlatformIntegrationSettingsService {
 
     @Transactional(readOnly = true)
     public String resolveRapidApiWhatsappKey() {
-        SecretRead secrets = readSecrets(loadSingleton());
-        var envKey = messagingProperties.rapidApiWhatsApp().apiKey();
-        if (!secrets.readable) {
-            return blankToNull(envKey);
-        }
-        return firstNonBlank(secrets.rapidapiWhatsappKey, envKey);
+        return resolveRapidApiWhatsapp().apiKey();
+    }
+
+    @Transactional(readOnly = true)
+    public ResolvedRapidApiWhatsappConfig resolveRapidApiWhatsapp() {
+        PlatformIntegrationSettings row = loadSingleton();
+        SecretRead secrets = readSecrets(row);
+        var env = messagingProperties.rapidApiWhatsApp();
+        String apiKey =
+                secrets.readable
+                        ? firstNonBlank(secrets.rapidapiWhatsappKey, env.apiKey())
+                        : blankToNull(env.apiKey());
+        String host = firstNonBlank(trimToNull(row.getRapidapiWhatsappHost()), env.host());
+        String lookupUrl =
+                firstNonBlank(trimToNull(row.getRapidapiWhatsappLookupUrl()), env.lookupUrl());
+        String phoneField =
+                firstNonBlank(trimToNull(row.getRapidapiWhatsappPhoneField()), DEFAULT_PHONE_FIELD);
+        boolean digitsOnly =
+                row.getRapidapiWhatsappPhoneDigitsOnly() != null
+                        && row.getRapidapiWhatsappPhoneDigitsOnly();
+        return new ResolvedRapidApiWhatsappConfig(apiKey, host, lookupUrl, phoneField, digitsOnly);
     }
 
     private PlatformIntegrationsResponse toResponse(
@@ -98,17 +115,42 @@ public class PlatformIntegrationSettingsService {
     ) {
         var catalogEnv = catalogAiProperties;
         var msgEnv = messagingProperties.rapidApiWhatsApp();
+        ResolvedRapidApiWhatsappConfig wa = resolveFromRow(row, secrets, msgEnv);
         return new PlatformIntegrationsResponse(
                 secrets.hasDeepseekApiKey,
                 firstNonBlank(trimToNull(row.getDeepseekHost()), catalogEnv.host()),
                 firstNonBlank(trimToNull(row.getDeepseekUrl()), catalogEnv.url()),
                 firstNonBlank(trimToNull(row.getDeepseekModel()), catalogEnv.model()),
                 secrets.hasRapidapiWhatsappKey,
+                wa.host(),
+                wa.lookupUrl(),
+                wa.phoneField(),
+                wa.phoneDigitsOnly(),
                 envHasDeepseekKey(catalogEnv),
                 envHasRapidApiWhatsappKey(msgEnv),
                 secrets.readable,
                 secrets.errorMessage,
                 encryptionService.usesEphemeralKey());
+    }
+
+    private ResolvedRapidApiWhatsappConfig resolveFromRow(
+            PlatformIntegrationSettings row,
+            SecretRead secrets,
+            MessagingProperties.RapidApiWhatsApp env
+    ) {
+        String apiKey =
+                secrets.readable
+                        ? firstNonBlank(secrets.rapidapiWhatsappKey, env.apiKey())
+                        : blankToNull(env.apiKey());
+        String host = firstNonBlank(trimToNull(row.getRapidapiWhatsappHost()), env.host());
+        String lookupUrl =
+                firstNonBlank(trimToNull(row.getRapidapiWhatsappLookupUrl()), env.lookupUrl());
+        String phoneField =
+                firstNonBlank(trimToNull(row.getRapidapiWhatsappPhoneField()), DEFAULT_PHONE_FIELD);
+        boolean digitsOnly =
+                row.getRapidapiWhatsappPhoneDigitsOnly() != null
+                        && row.getRapidapiWhatsappPhoneDigitsOnly();
+        return new ResolvedRapidApiWhatsappConfig(apiKey, host, lookupUrl, phoneField, digitsOnly);
     }
 
     private PlatformIntegrationSettings loadSingleton() {

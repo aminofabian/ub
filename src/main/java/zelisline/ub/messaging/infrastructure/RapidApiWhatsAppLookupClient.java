@@ -35,7 +35,11 @@ public class RapidApiWhatsAppLookupClient {
             return LookupResult.notRegistered("empty phone");
         }
         try {
-            String body = objectMapper.writeValueAsString(java.util.Map.of("phone", phone));
+            String phoneField = cfg.rapidApiPhoneField() == null || cfg.rapidApiPhoneField().isBlank()
+                    ? "phone"
+                    : cfg.rapidApiPhoneField().trim();
+            String phoneValue = cfg.rapidApiPhoneDigitsOnly() ? digitsOnly(phone) : phone;
+            String body = objectMapper.writeValueAsString(java.util.Map.of(phoneField, phoneValue));
             HttpResponse<String> response = Unirest.post(cfg.rapidApiLookupUrl())
                     .header("x-rapidapi-key", cfg.rapidApiKey())
                     .header("x-rapidapi-host", cfg.rapidApiHost())
@@ -53,6 +57,13 @@ public class RapidApiWhatsAppLookupClient {
         }
     }
 
+    private static String digitsOnly(String phone) {
+        if (phone == null) {
+            return "";
+        }
+        return phone.replaceAll("\\D+", "");
+    }
+
     private LookupResult parseExists(String rawBody) {
         if (rawBody == null || rawBody.isBlank()) {
             return LookupResult.lookupSkipped("empty_body");
@@ -64,7 +75,11 @@ public class RapidApiWhatsAppLookupClient {
                     || booleanField(root, "registered")
                     || booleanField(root, "exists")
                     || booleanField(root, "on_whatsapp")
-                    || booleanField(root, "onWhatsapp")) {
+                    || booleanField(root, "onWhatsapp")
+                    || booleanField(root, "has_whatsapp")
+                    || booleanField(root, "hasWhatsapp")
+                    || booleanField(root, "number_exists")
+                    || booleanField(root, "whatsapp")) {
                 return LookupResult.registered();
             }
             if (root.has("data") && root.get("data").isObject()) {

@@ -36,6 +36,18 @@ public class PlatformIntegrationSettings {
     @Column(name = "rapidapi_whatsapp_key_enc", columnDefinition = "TEXT")
     private String rapidapiWhatsappKeyEnc;
 
+    @Column(name = "rapidapi_whatsapp_host", length = 255)
+    private String rapidapiWhatsappHost;
+
+    @Column(name = "rapidapi_whatsapp_lookup_url", length = 512)
+    private String rapidapiWhatsappLookupUrl;
+
+    @Column(name = "rapidapi_whatsapp_phone_field", length = 64)
+    private String rapidapiWhatsappPhoneField;
+
+    @Column(name = "rapidapi_whatsapp_phone_digits_only")
+    private Boolean rapidapiWhatsappPhoneDigitsOnly;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt = Instant.now();
 }

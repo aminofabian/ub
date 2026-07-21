@@ -12,8 +12,10 @@ import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.domain.CreditAccount;
@@ -24,6 +26,7 @@ import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CreditReminderRecordRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
+import zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse;
 import zelisline.ub.messaging.application.CustomerMessageDispatcher;
 import zelisline.ub.messaging.application.CustomerTabPaymentUrl;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
@@ -94,6 +97,103 @@ public class OverdueDebtReminderService {
         log.info("credits.balance_reminder.sweep accounts={} sent={} skipped={} intervalDays={} maxCount={}",
                 eligible.size(), sent, skipped, intervalDays, maxCount);
         return new ReminderSweepReport(eligible.size(), sent, skipped, currentDayBucket());
+    }
+
+    /**
+     * Staff-triggered balance reminder for one customer (WhatsApp and/or SMS).
+     *
+     * @param channelPref {@code auto} (WhatsApp then SMS), {@code whatsapp}, or {@code sms}
+     */
+    @Transactional
+    public CreditSaleReminderTestResponse sendManualReminder(
+            String businessId,
+            String customerId,
+            String channelPref
+    ) {
+        String channel = channelPref == null || channelPref.isBlank()
+                ? "auto"
+                : channelPref.trim().toLowerCase(Locale.ROOT);
+        if (!channel.equals("auto") && !channel.equals("whatsapp") && !channel.equals("sms")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Channel must be auto, whatsapp, or sms");
+        }
+
+        CreditAccount account = creditAccountRepository
+                .findByCustomerIdAndBusinessId(customerId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Credit account not found"));
+        BigDecimal owed = account.getBalanceOwed() == null ? BigDecimal.ZERO : account.getBalanceOwed();
+        if (owed.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customer has no outstanding balance");
+        }
+        if (account.isRemindersOptOut()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Customer opted out of reminders");
+        }
+
+        Customer customer = customerRepository
+                .findByIdAndBusinessIdAndDeletedAtIsNull(customerId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Customer not found"));
+
+        String phoneDigits = resolvePrimaryPhoneDigits(customerId);
+        if (phoneDigits == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customer has no phone number");
+        }
+
+        // Staff-triggered: allow send even if the automated reminders toggle is off.
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForTest(businessId);
+        if (!messaging.secretsReadable()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    messaging.secretsReadError() != null
+                            ? messaging.secretsReadError()
+                            : "Messaging credentials are not readable");
+        }
+        if (!messaging.metaWhatsAppConfigured() && !messaging.smsConfigured()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Configure WhatsApp or SMS under Credit customers → Messaging");
+        }
+
+        Business business = businessRepository.findById(businessId).orElse(null);
+        String currency = business != null && business.getCurrency() != null
+                ? business.getCurrency().trim()
+                : "KES";
+        String shopName = business != null && business.getName() != null
+                ? business.getName().trim()
+                : "our shop";
+        String paymentUrl = CustomerTabPaymentUrl.build(
+                messaging.paymentAccountUrl().isBlank()
+                        ? "https://palmart.co.ke"
+                        : messaging.paymentAccountUrl().trim(),
+                phoneDigits);
+        String message = buildMessage(customer.getName(), shopName, owed, currency, paymentUrl);
+
+        CustomerMessageDispatcher.DeliveryResult delivery = switch (channel) {
+            case "whatsapp" -> customerMessageDispatcher.deliverDirect(messaging, phoneDigits, message);
+            case "sms" -> customerMessageDispatcher.deliverSmsOnly(messaging, phoneDigits, message);
+            default -> customerMessageDispatcher.deliver(messaging, phoneDigits, message);
+        };
+
+        if ("sent".equals(delivery.outcome()) || "stub".equals(delivery.outcome())) {
+            account.setLastBalanceReminderAt(clock.instant());
+            account.setBalanceReminderCount(account.getBalanceReminderCount() + 1);
+            creditAccountRepository.save(account);
+        }
+
+        log.info("credits.balance_reminder.manual customer={} channel={} outcome={} detail={}",
+                customerId, delivery.channel(), delivery.outcome(), delivery.detail());
+
+        var lookup = delivery.lookup();
+        return new CreditSaleReminderTestResponse(
+                messaging.enabled(),
+                messaging.rapidApiConfigured(),
+                messaging.metaWhatsAppConfigured(),
+                messaging.smsConfigured(),
+                lookup.skipped(),
+                lookup.onWhatsApp(),
+                lookup.detail(),
+                delivery.channel(),
+                delivery.outcome(),
+                delivery.detail(),
+                message);
     }
 
     DispatchOutcome dispatch(CreditAccount account) {

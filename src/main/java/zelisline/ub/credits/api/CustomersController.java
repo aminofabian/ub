@@ -28,10 +28,12 @@ import org.springframework.format.annotation.DateTimeFormat;
 
 import zelisline.ub.credits.api.dto.AddCustomerPhoneRequest;
 import zelisline.ub.credits.api.dto.CreateCustomerRequest;
+import zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse;
 import zelisline.ub.credits.api.dto.CustomerResponse;
 import zelisline.ub.credits.api.dto.IssuePaymentClaimResponse;
 import zelisline.ub.credits.api.dto.OutstandingTabRowResponse;
 import zelisline.ub.credits.api.dto.PatchCustomerRequest;
+import zelisline.ub.credits.api.dto.RemindPaymentRequest;
 import zelisline.ub.credits.api.dto.TabPurchaseRowResponse;
 import zelisline.ub.credits.api.dto.TopUpWalletRequest;
 import zelisline.ub.credits.application.CashierTabClearanceAccess;
@@ -39,6 +41,7 @@ import zelisline.ub.credits.application.CreditCustomerStatementService;
 import zelisline.ub.credits.application.CreditCustomerStatementService.CreditStatement;
 import zelisline.ub.credits.application.CustomerDirectoryService;
 import zelisline.ub.credits.application.CustomerTabPurchasesService;
+import zelisline.ub.credits.application.OverdueDebtReminderService;
 import zelisline.ub.credits.application.PublicPaymentClaimService;
 import zelisline.ub.credits.application.PublicPaymentClaimService.IssuedClaimToken;
 import zelisline.ub.credits.application.WalletLedgerService;
@@ -59,6 +62,7 @@ public class CustomersController {
     private final WalletLedgerService walletLedgerService;
     private final PublicPaymentClaimService publicPaymentClaimService;
     private final CashierTabClearanceAccess cashierTabClearanceAccess;
+    private final OverdueDebtReminderService overdueDebtReminderService;
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'credits.customers.read')")
@@ -138,6 +142,21 @@ public class CustomersController {
         String businessId = TenantRequestIds.resolveBusinessId(request);
         String resolved = customerDirectoryService.resolveCustomerIdOrThrow(businessId, customerId);
         customerDirectoryService.softDelete(businessId, resolved, CurrentTenantUser.auditActorId(request));
+    }
+
+    @PostMapping("/{customerId}/remind-payment")
+    @PreAuthorize(
+            "hasPermission(null, 'credits.settings.write') or hasPermission(null, 'credits.claims.review')")
+    public CreditSaleReminderTestResponse remindPayment(
+            @PathVariable String customerId,
+            @RequestBody(required = false) @Valid RemindPaymentRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String resolved = customerDirectoryService.resolveCustomerIdOrThrow(businessId, customerId);
+        String channel = body == null ? null : body.channel();
+        return overdueDebtReminderService.sendManualReminder(businessId, resolved, channel);
     }
 
     @PostMapping("/{customerId}/phones")

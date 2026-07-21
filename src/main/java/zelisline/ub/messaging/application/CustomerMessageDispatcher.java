@@ -101,25 +101,29 @@ public class CustomerMessageDispatcher {
         if (send.sent()) {
             return new DeliveryResult(lookup, send.channel(), "sent", send.detail());
         }
+
+        String waPrefix = send.skipped() ? "whatsapp_skipped:" : "whatsapp_failed:";
+        String waDetail = waPrefix + send.detail();
         if (send.authFailure()) {
-            return new DeliveryResult(
-                    lookup,
-                    "whatsapp",
-                    "failed",
-                    "whatsapp_failed:" + send.detail());
+            waDetail += " (Meta access token rejected)";
         }
+
+        // Any Meta failure (including 401 auth) falls through to SMS when configured.
         if (!messaging.smsConfigured()) {
             return new DeliveryResult(
                     lookup,
                     "whatsapp",
                     "failed",
-                    "whatsapp_failed:" + send.detail());
+                    waDetail
+                            + (send.authFailure()
+                                    ? ". SMS fallback is not configured — fix the Meta token or enable Sozuri / Africa's Talking."
+                                    : ". SMS fallback is not configured."));
         }
+
         var sms = smsMessagingClient.sendText(messaging, e164, message);
         String channel = sms.sent() || sms.stub() ? sms.channel() : "sms";
         String outcome = sms.sent() ? "sent" : (sms.stub() ? "stub" : "failed");
-        String prefix = send.skipped() ? "whatsapp_skipped:" : "whatsapp_failed:";
-        String detail = prefix + send.detail() + ";" + sms.detail();
+        String detail = waDetail + "; sms:" + sms.detail();
         return new DeliveryResult(lookup, channel, outcome, detail);
     }
 

@@ -18,13 +18,12 @@ import zelisline.ub.credits.api.dto.PublicCustomerTabResponse;
 import zelisline.ub.credits.api.dto.PublicTabStkRequest;
 import zelisline.ub.credits.api.dto.PublicTabStkResponse;
 import zelisline.ub.credits.application.PublicCustomerTabService;
-import zelisline.ub.tenancy.api.TenantRequestIds;
+import zelisline.ub.tenancy.application.PublicHostBusinessResolver;
 
 /**
  * Public customer tab portal: balance owed, purchase history, and M-Pesa STK paydown.
- * Tenant is resolved from Host / {@code X-Tenant-Id}. Phone is the public path key
- * (SMS/WhatsApp link possession + STK-to-registered-phone). Does not reopen claim-by-phone
- * (ADR-0010).
+ * Tenant is resolved from Host / {@code X-Tenant-Host} domain mapping (public paths skip
+ * {@code DomainBusinessResolverFilter}). Phone is the public path key.
  */
 @Validated
 @RestController
@@ -33,13 +32,14 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class PublicCustomerTabController {
 
     private final PublicCustomerTabService publicCustomerTabService;
+    private final PublicHostBusinessResolver publicHostBusinessResolver;
 
     @GetMapping("/{phone}")
     public PublicCustomerTabResponse overview(
             @PathVariable String phone,
             HttpServletRequest request
     ) {
-        return publicCustomerTabService.overview(TenantRequestIds.resolveBusinessId(request), phone);
+        return publicCustomerTabService.overview(publicHostBusinessResolver.resolveOrThrow(request), phone);
     }
 
     @PostMapping("/{phone}/stk")
@@ -51,7 +51,7 @@ public class PublicCustomerTabController {
             HttpServletRequest request
     ) {
         return publicCustomerTabService.initiateStk(
-                TenantRequestIds.resolveBusinessId(request),
+                publicHostBusinessResolver.resolveOrThrow(request),
                 phone,
                 body.amount(),
                 idempotencyKey);
@@ -64,7 +64,7 @@ public class PublicCustomerTabController {
             HttpServletRequest request
     ) {
         return publicCustomerTabService.stkStatus(
-                TenantRequestIds.resolveBusinessId(request),
+                publicHostBusinessResolver.resolveOrThrow(request),
                 phone,
                 intentId);
     }

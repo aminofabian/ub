@@ -29,6 +29,11 @@ public class JwtTokenService {
     public static final String PRINCIPAL_SUPPLIER = "SUPPLIER";
     public static final String CLAIM_MARKETPLACE_SUPPLIER_ID = "marketplace_supplier_id";
     public static final String CLAIM_SUPPLIER_ROLE = "supplier_role";
+    /** Super-admin id when the access JWT is an impersonation session. */
+    public static final String CLAIM_IMPERSONATED_BY = "impersonated_by";
+
+    /** Support/impersonation access tokens are intentionally shorter-lived. */
+    public static final long IMPERSONATION_ACCESS_TTL_MINUTES = 15;
 
     /**
      * Tolerated clock skew during JWT validation. Mobile browsers, sleeping
@@ -69,6 +74,35 @@ public class JwtTokenService {
                 .subject(userId)
                 .claim(CLAIM_BUSINESS_ID, businessId)
                 .claim(CLAIM_ROLE, roleId)
+                .issuedAt(Date.from(now))
+                .expiration(Date.from(exp))
+                .signWith(key);
+        if (branchId != null && !branchId.isBlank()) {
+            builder.claim(CLAIM_BRANCH_ID, branchId);
+        }
+        return builder.compact();
+    }
+
+    /**
+     * Tenant access token for super-admin impersonation: same claims as a normal
+     * user JWT plus {@link #CLAIM_IMPERSONATED_BY}, with a shorter TTL.
+     */
+    public String createImpersonationAccessToken(
+            String userId,
+            String businessId,
+            String roleId,
+            String branchId,
+            String jti,
+            String superAdminId
+    ) {
+        Instant now = Instant.now();
+        Instant exp = now.plusSeconds(IMPERSONATION_ACCESS_TTL_MINUTES * 60);
+        var builder = Jwts.builder()
+                .id(jti)
+                .subject(userId)
+                .claim(CLAIM_BUSINESS_ID, businessId)
+                .claim(CLAIM_ROLE, roleId)
+                .claim(CLAIM_IMPERSONATED_BY, superAdminId)
                 .issuedAt(Date.from(now))
                 .expiration(Date.from(exp))
                 .signWith(key);

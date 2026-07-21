@@ -15,6 +15,8 @@ public final class AuditEventTypes {
     public static final String LOGIN_FAILED = "login.failed";
     public static final String LOGOUT = "logout";
     public static final String LOGOUT_ALL = "logout.all";
+    /** Super-admin opened a short-lived tenant session as a tenant user. */
+    public static final String IMPERSONATION_STARTED = "impersonation.started";
     public static final String PASSWORD_CHANGED = "password.changed";
     public static final String PASSWORD_RESET_REQUESTED = "password.reset.requested";
     public static final String PASSWORD_RESET_USED = "password.reset.used";

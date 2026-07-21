@@ -72,6 +72,19 @@ public interface UserRepository extends JpaRepository<User, String> {
         """)
     Page<User> pageByBusiness(@Param("businessId") String businessId, Pageable pageable);
 
+    /** Active users whose role key matches (system or tenant-scoped role). Oldest first. */
+    @Query("""
+        select u from User u
+         where u.businessId = :businessId
+           and u.deletedAt is null
+           and u.status = 'active'
+           and u.roleId in (select r.id from Role r where r.roleKey = :roleKey)
+         order by u.createdAt asc
+        """)
+    List<User> findActiveByRoleKeyOrderByCreatedAtAsc(
+            @Param("businessId") String businessId,
+            @Param("roleKey") String roleKey);
+
     /** Owner-count guard for the "cannot demote last owner" invariant (§2.4). */
     @Query("""
         select count(u)

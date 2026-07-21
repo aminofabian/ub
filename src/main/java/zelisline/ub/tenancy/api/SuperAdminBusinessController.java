@@ -5,6 +5,8 @@ import java.util.List;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -15,9 +17,14 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.identity.api.dto.SaImpersonateRequest;
+import zelisline.ub.identity.api.dto.SaImpersonateResponse;
+import zelisline.ub.identity.application.SuperAdminImpersonationService;
 import zelisline.ub.tenancy.api.dto.BusinessResponse;
 import zelisline.ub.tenancy.api.dto.CreateBusinessRequest;
 import zelisline.ub.tenancy.api.dto.DomainResponse;
@@ -36,6 +43,7 @@ public class SuperAdminBusinessController {
 
     private final TenancyService tenancyService;
     private final BusinessDeletionService businessDeletionService;
+    private final SuperAdminImpersonationService superAdminImpersonationService;
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -60,6 +68,18 @@ public class SuperAdminBusinessController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteBusiness(@PathVariable String businessId) {
         businessDeletionService.deleteBusinessAndUsers(businessId);
+    }
+
+    // ── Impersonation ────────────────────────────────────────────────────
+
+    @PostMapping("/{businessId}/impersonate")
+    public SaImpersonateResponse impersonate(
+            @PathVariable String businessId,
+            @RequestBody(required = false) SaImpersonateRequest request,
+            HttpServletRequest http
+    ) {
+        return superAdminImpersonationService.impersonate(
+                businessId, requireSuperAdminId(), request, http);
     }
 
     // ── Users ────────────────────────────────────────────────────────────
@@ -101,5 +121,17 @@ public class SuperAdminBusinessController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteDomain(@PathVariable String businessId, @PathVariable String domainId) {
         tenancyService.deleteDomain(businessId, domainId);
+    }
+
+    private static String requireSuperAdminId() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Not authenticated");
+        }
+        Object principal = authentication.getPrincipal();
+        if (!(principal instanceof String id) || id.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Not authenticated");
+        }
+        return id;
     }
 }

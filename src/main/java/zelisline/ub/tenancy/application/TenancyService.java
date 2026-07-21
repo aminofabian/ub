@@ -716,6 +716,17 @@ public class TenancyService {
         }
     }
 
+    /** Super-admin / platform lookup by id (includes slug + primary domain). */
+    @Transactional(readOnly = true)
+    public BusinessResponse getBusiness(String businessId) {
+        return businessRepository
+            .findByIdAndDeletedAtIsNull(businessId)
+            .map(this::toResponse)
+            .orElseThrow(() ->
+                new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found")
+            );
+    }
+
     private static String blankToNull(String value) {
         if (value == null || value.isBlank()) {
             return null;

@@ -11,8 +11,10 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.api.dto.PublicCustomerTabResponse;
+import zelisline.ub.credits.api.dto.PublicTabManualPaymentResponse;
 import zelisline.ub.credits.api.dto.PublicTabStkResponse;
 import zelisline.ub.credits.api.dto.TabPurchaseRowResponse;
+import zelisline.ub.credits.CreditClaimStatuses;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.Customer;
 import zelisline.ub.credits.domain.KenyanPhoneForms;
@@ -33,6 +35,7 @@ public class PublicCustomerTabService {
     private final MpesaStkIntentService mpesaStkIntentService;
     private final MpesaStkIntentRepository mpesaStkIntentRepository;
     private final BusinessRepository businessRepository;
+    private final PublicPaymentClaimService publicPaymentClaimService;
 
     @Transactional(readOnly = true)
     public PublicCustomerTabResponse overview(String businessId, String phoneRaw) {
@@ -86,6 +89,22 @@ public class PublicCustomerTabService {
                 intent.getStatus(),
                 intent.getAmount(),
                 owed);
+    }
+
+    @Transactional
+    public PublicTabManualPaymentResponse submitManualPayment(
+            String businessId,
+            String phoneRaw,
+            BigDecimal amount,
+            String reference
+    ) {
+        ResolvedCustomer resolved = resolveCustomerOrThrow(businessId, phoneRaw);
+        String claimId = publicPaymentClaimService.submitTabPortalClaim(
+                businessId,
+                resolved.customer().getId(),
+                amount,
+                reference);
+        return new PublicTabManualPaymentResponse(claimId, CreditClaimStatuses.SUBMITTED);
     }
 
     @Transactional(readOnly = true)

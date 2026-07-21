@@ -145,6 +145,45 @@ public class PublicPaymentClaimService {
         return row.getId();
     }
 
+    /**
+     * Customer on the public tab portal reports they already paid (e.g. M-Pesa to till).
+     * Creates a submitted claim for admin review — no redeemable token.
+     */
+    @Transactional
+    public String submitTabPortalClaim(
+            String businessId,
+            String customerId,
+            BigDecimal amount,
+            String referenceRaw
+    ) {
+        CreditAccount account = creditAccountRepository
+                .findByCustomerIdAndBusinessId(customerId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Credit account not found"));
+        BigDecimal owed = account.getBalanceOwed() == null ? BigDecimal.ZERO : account.getBalanceOwed();
+        BigDecimal amt = amount.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        if (amt.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Amount must be positive");
+        }
+        if (amt.compareTo(owed) > 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Amount exceeds tab balance of " + owed.toPlainString()
+            );
+        }
+        PublicPaymentClaim row = new PublicPaymentClaim();
+        row.setBusinessId(businessId);
+        row.setCreditAccountId(account.getId());
+        row.setTokenHash(sha256Hex("tab_portal:" + UUID.randomUUID()).toLowerCase());
+        row.setStatus(CreditClaimStatuses.SUBMITTED);
+        row.setSource(CreditClaimSources.TAB_PORTAL);
+        row.setProposedChannel(CreditClaimChannels.MPESA);
+        row.setSubmittedAmount(amt);
+        row.setSubmittedReference(trimOrNull(referenceRaw));
+        row.setCreditNote("Tab portal — reported payment");
+        publicPaymentClaimRepository.save(row);
+        return row.getId();
+    }
+
     @Transactional
     public IssuedClaimToken issueClaim(String businessId, String customerId) {
         CreditAccount account = creditAccountRepository.findByCustomerIdAndBusinessId(customerId, businessId)

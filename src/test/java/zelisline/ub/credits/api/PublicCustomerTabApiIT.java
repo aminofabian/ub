@@ -21,6 +21,8 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import zelisline.ub.credits.MpesaStkIntentPurposes;
 import zelisline.ub.credits.MpesaStkStatuses;
+import zelisline.ub.credits.CreditClaimSources;
+import zelisline.ub.credits.CreditClaimStatuses;
 import zelisline.ub.credits.application.CreditSaleDebtService;
 import zelisline.ub.credits.application.CreditsJournalService;
 import zelisline.ub.credits.domain.CreditAccount;
@@ -32,6 +34,7 @@ import zelisline.ub.credits.repository.CreditTransactionRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.credits.repository.MpesaStkIntentRepository;
+import zelisline.ub.credits.repository.PublicPaymentClaimRepository;
 import zelisline.ub.finance.LedgerAccountCodes;
 import zelisline.ub.finance.domain.LedgerAccount;
 import zelisline.ub.finance.repository.JournalEntryRepository;
@@ -68,6 +71,8 @@ class PublicCustomerTabApiIT {
     @Autowired
     private MpesaStkIntentRepository mpesaStkIntentRepository;
     @Autowired
+    private PublicPaymentClaimRepository publicPaymentClaimRepository;
+    @Autowired
     private CreditSaleDebtService creditSaleDebtService;
     @Autowired
     private CreditsJournalService creditsJournalService;
@@ -89,6 +94,7 @@ class PublicCustomerTabApiIT {
     @BeforeEach
     void seed() {
         mpesaStkIntentRepository.deleteAll();
+        publicPaymentClaimRepository.deleteAll();
         creditTransactionRepository.deleteAll();
         customerPhoneRepository.deleteAll();
         creditAccountRepository.deleteAll();
@@ -220,6 +226,36 @@ class PublicCustomerTabApiIT {
                 .get()
                 .extracting(zelisline.ub.credits.domain.CustomerPhone::isPrimary)
                 .isEqualTo(false);
+    }
+
+    @Test
+    void manualPayment_createsSubmittedClaimForAdminReview() throws Exception {
+        mockMvc.perform(post("/api/v1/public/credits/tabs/" + PHONE + "/payment-claims")
+                        .header("X-Tenant-Id", TENANT)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"amount\":200,\"reference\":\"QGH1ABC234\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value(CreditClaimStatuses.SUBMITTED))
+                .andExpect(jsonPath("$.claimId").isNotEmpty());
+
+        var claim = publicPaymentClaimRepository.findAll().getFirst();
+        assertThat(claim.getSource()).isEqualTo(CreditClaimSources.TAB_PORTAL);
+        assertThat(claim.getStatus()).isEqualTo(CreditClaimStatuses.SUBMITTED);
+        assertThat(claim.getSubmittedAmount()).isEqualByComparingTo("200.00");
+        assertThat(claim.getSubmittedReference()).isEqualTo("QGH1ABC234");
+        assertThat(claim.getProposedChannel()).isEqualTo("mpesa");
+
+        var refreshed = creditAccountRepository.findById(account.getId()).orElseThrow();
+        assertThat(refreshed.getBalanceOwed()).isEqualByComparingTo("500.00");
+    }
+
+    @Test
+    void manualPayment_amountExceedingBalance_returns400() throws Exception {
+        mockMvc.perform(post("/api/v1/public/credits/tabs/" + PHONE + "/payment-claims")
+                        .header("X-Tenant-Id", TENANT)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"amount\":600}"))
+                .andExpect(status().isBadRequest());
     }
 
     private void seedLedger(String code, String name, String type) {

@@ -15,8 +15,10 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.api.dto.PublicCustomerTabResponse;
+import zelisline.ub.credits.api.dto.PublicTabManualPaymentResponse;
 import zelisline.ub.credits.api.dto.PublicTabStkRequest;
 import zelisline.ub.credits.api.dto.PublicTabStkResponse;
+import zelisline.ub.credits.api.dto.SubmitPublicClaimRequest;
 import zelisline.ub.credits.application.PublicCustomerTabService;
 import zelisline.ub.tenancy.application.PublicHostBusinessResolver;
 
@@ -68,5 +70,19 @@ public class PublicCustomerTabController {
                 publicHostBusinessResolver.resolveOrThrow(request),
                 phone,
                 intentId);
+    }
+
+    @PostMapping("/{phone}/payment-claims")
+    @ResponseStatus(HttpStatus.CREATED)
+    public PublicTabManualPaymentResponse submitManualPayment(
+            @PathVariable String phone,
+            @Valid @RequestBody SubmitPublicClaimRequest body,
+            HttpServletRequest request
+    ) {
+        return publicCustomerTabService.submitManualPayment(
+                publicHostBusinessResolver.resolveOrThrow(request),
+                phone,
+                body.amount(),
+                body.reference());
     }
 }

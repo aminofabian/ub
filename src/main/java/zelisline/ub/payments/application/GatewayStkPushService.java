@@ -43,6 +43,7 @@ import zelisline.ub.payments.infrastructure.KopokopoPaymentGateway;
 import zelisline.ub.payments.repository.GatewayStkPushRepository;
 import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
 import zelisline.ub.payments.repository.PaymentWebhookEventRepository;
+import zelisline.ub.messaging.application.CreditTabPaymentConfirmationEvent;
 import zelisline.ub.platform.realtime.RealtimeBridge;
 import zelisline.ub.storefront.WebOrderStatuses;
 import zelisline.ub.storefront.application.WebOrderFulfillmentService;
@@ -604,6 +605,15 @@ public class GatewayStkPushService {
                 }
                 customerPhoneOnPaymentService.syncPrimaryPhoneAfterPayment(
                         intent.getBusinessId(), acc.getCustomerId(), paidPhone);
+
+                String phoneDigits = StkPhoneNormalizer.normalize(paidPhone);
+                eventPublisher.publishEvent(new CreditTabPaymentConfirmationEvent(
+                        intent.getBusinessId(),
+                        intent.getId(),
+                        acc.getCustomerId(),
+                        pay,
+                        acc.getBalanceOwed(),
+                        phoneDigits));
             }
 
             publishStkRealtime(push, true, "Tab payment received");

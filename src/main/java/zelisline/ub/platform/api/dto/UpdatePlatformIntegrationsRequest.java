@@ -2,7 +2,7 @@ package zelisline.ub.platform.api.dto;
 
 /**
  * Secret fields: {@code null} = leave unchanged; blank string = clear stored value.
- * Non-secret endpoint fields: {@code null} = leave unchanged; blank = clear (fall back to env).
+ * Non-secret fields: {@code null} = leave unchanged; blank = clear (fall back to env if any).
  */
 public record UpdatePlatformIntegrationsRequest(
         String deepseekApiKey,
@@ -13,5 +13,11 @@ public record UpdatePlatformIntegrationsRequest(
         String rapidApiWhatsappHost,
         String rapidApiWhatsappLookupUrl,
         String rapidApiWhatsappPhoneField,
-        Boolean rapidApiWhatsappPhoneDigitsOnly
+        Boolean rapidApiWhatsappPhoneDigitsOnly,
+        String smsProvider,
+        String sozuriProject,
+        String sozuriApiKey,
+        String sozuriFrom,
+        String sozuriType,
+        String sozuriApiUrl
 ) {}

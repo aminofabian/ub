@@ -8,6 +8,10 @@ public record CreditSaleReminderSettingsResponse(
         String whatsappMetaGraphVersion,
         String smsProvider,
         String smsAfricasTalkingUsername,
+        String smsSozuriProject,
+        String smsSozuriFrom,
+        String smsSozuriType,
+        String smsSozuriApiUrl,
         boolean hasRapidApiKey,
         String rapidApiHost,
         String rapidApiLookupUrl,
@@ -15,6 +19,7 @@ public record CreditSaleReminderSettingsResponse(
         boolean rapidApiPhoneDigitsOnly,
         boolean hasWhatsappMetaAccessToken,
         boolean hasSmsAfricasTalkingApiKey,
+        boolean hasSmsSozuriApiKey,
         boolean secretsReadable,
         String secretsReadError
 ) {

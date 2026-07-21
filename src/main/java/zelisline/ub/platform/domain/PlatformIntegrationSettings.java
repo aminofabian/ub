@@ -48,6 +48,24 @@ public class PlatformIntegrationSettings {
     @Column(name = "rapidapi_whatsapp_phone_digits_only")
     private Boolean rapidapiWhatsappPhoneDigitsOnly;
 
+    @Column(name = "sms_provider", length = 32)
+    private String smsProvider;
+
+    @Column(name = "sozuri_project", length = 128)
+    private String sozuriProject;
+
+    @Column(name = "sozuri_api_key_enc", columnDefinition = "TEXT")
+    private String sozuriApiKeyEnc;
+
+    @Column(name = "sozuri_from", length = 64)
+    private String sozuriFrom;
+
+    @Column(name = "sozuri_type", length = 32)
+    private String sozuriType;
+
+    @Column(name = "sozuri_api_url", length = 512)
+    private String sozuriApiUrl;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt = Instant.now();
 }

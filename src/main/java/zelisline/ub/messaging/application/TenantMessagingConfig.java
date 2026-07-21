@@ -17,6 +17,11 @@ public record TenantMessagingConfig(
         String smsProvider,
         String smsUsername,
         String smsApiKey,
+        String smsSozuriProject,
+        String smsSozuriApiKey,
+        String smsSozuriFrom,
+        String smsSozuriType,
+        String smsSozuriApiUrl,
         boolean secretsReadable,
         String secretsReadError
 ) {
@@ -32,8 +37,14 @@ public record TenantMessagingConfig(
     }
 
     public boolean smsConfigured() {
-        return "africas_talking".equalsIgnoreCase(smsProvider)
-                && smsUsername != null && !smsUsername.isBlank()
-                && smsApiKey != null && !smsApiKey.isBlank();
+        if ("africas_talking".equalsIgnoreCase(smsProvider)) {
+            return smsUsername != null && !smsUsername.isBlank()
+                    && smsApiKey != null && !smsApiKey.isBlank();
+        }
+        if ("sozuri".equalsIgnoreCase(smsProvider)) {
+            return smsSozuriProject != null && !smsSozuriProject.isBlank()
+                    && smsSozuriApiKey != null && !smsSozuriApiKey.isBlank();
+        }
+        return false;
     }
 }

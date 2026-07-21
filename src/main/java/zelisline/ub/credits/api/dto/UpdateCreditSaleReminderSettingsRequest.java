@@ -7,6 +7,7 @@ import jakarta.validation.constraints.NotNull;
  * @param rapidApiKey {@code null} = leave stored key unchanged; blank = clear.
  * @param whatsappMetaAccessToken {@code null} = unchanged; blank = clear.
  * @param smsAfricasTalkingApiKey {@code null} = unchanged; blank = clear.
+ * @param smsSozuriApiKey {@code null} = unchanged; blank = clear.
  * @param rapidApiHost blank = clear tenant override (use platform/env).
  * @param rapidApiLookupUrl blank = clear tenant override.
  * @param rapidApiPhoneField blank = clear tenant override.
@@ -24,6 +25,11 @@ public record UpdateCreditSaleReminderSettingsRequest(
         String whatsappMetaGraphVersion,
         String smsProvider,
         String smsAfricasTalkingUsername,
-        String smsAfricasTalkingApiKey
+        String smsAfricasTalkingApiKey,
+        String smsSozuriProject,
+        String smsSozuriApiKey,
+        String smsSozuriFrom,
+        String smsSozuriType,
+        String smsSozuriApiUrl
 ) {
 }

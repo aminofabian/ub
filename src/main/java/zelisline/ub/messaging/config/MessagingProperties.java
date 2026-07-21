@@ -21,7 +21,7 @@ public record MessagingProperties(
             metaWhatsApp = new MetaWhatsApp("", "", "v25.0", "", "");
         }
         if (sms == null) {
-            sms = new Sms("none", "", "");
+            sms = new Sms("none", "", "", "", "", "Sozuri", "transactional", "https://sozuri.net/api/v1/messaging");
         }
     }
 
@@ -52,11 +52,26 @@ public record MessagingProperties(
         }
     }
 
-    public record Sms(String provider, String africasTalkingUsername, String africasTalkingApiKey) {
+    public record Sms(
+            String provider,
+            String africasTalkingUsername,
+            String africasTalkingApiKey,
+            String sozuriProject,
+            String sozuriApiKey,
+            String sozuriFrom,
+            String sozuriType,
+            String sozuriApiUrl
+    ) {
         public boolean africasTalkingConfigured() {
             return "africas_talking".equalsIgnoreCase(provider)
                     && africasTalkingUsername != null && !africasTalkingUsername.isBlank()
                     && africasTalkingApiKey != null && !africasTalkingApiKey.isBlank();
+        }
+
+        public boolean sozuriConfigured() {
+            return "sozuri".equalsIgnoreCase(provider)
+                    && sozuriProject != null && !sozuriProject.isBlank()
+                    && sozuriApiKey != null && !sozuriApiKey.isBlank();
         }
     }
 }

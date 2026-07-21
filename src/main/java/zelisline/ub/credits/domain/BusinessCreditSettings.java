@@ -66,4 +66,19 @@ public class BusinessCreditSettings {
 
     @Column(name = "sms_africas_talking_api_key_enc", columnDefinition = "TEXT")
     private String smsAfricasTalkingApiKeyEnc;
+
+    @Column(name = "sms_sozuri_project", length = 128)
+    private String smsSozuriProject;
+
+    @Column(name = "sms_sozuri_api_key_enc", columnDefinition = "TEXT")
+    private String smsSozuriApiKeyEnc;
+
+    @Column(name = "sms_sozuri_from", length = 64)
+    private String smsSozuriFrom;
+
+    @Column(name = "sms_sozuri_type", length = 32)
+    private String smsSozuriType;
+
+    @Column(name = "sms_sozuri_api_url", length = 512)
+    private String smsSozuriApiUrl;
 }

@@ -15,6 +15,7 @@ import zelisline.ub.messaging.config.MessagingProperties;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
 import zelisline.ub.platform.application.PlatformIntegrationSettingsService;
 import zelisline.ub.platform.application.ResolvedRapidApiWhatsappConfig;
+import zelisline.ub.platform.application.ResolvedSozuriSmsConfig;
 
 @Service
 @RequiredArgsConstructor
@@ -67,6 +68,8 @@ public class BusinessCreditMessagingSettingsService {
         var env = messagingProperties;
         ResolvedRapidApiWhatsappConfig platformWa =
                 platformIntegrationSettingsService.resolveRapidApiWhatsapp();
+        ResolvedSozuriSmsConfig platformSms =
+                platformIntegrationSettingsService.resolveSozuriSms();
         String paymentUrl = firstNonBlank(
                 trimToNull(s.getCreditSaleReminderPaymentUrl()),
                 env.creditSaleReminder().paymentAccountUrl(),
@@ -75,6 +78,13 @@ public class BusinessCreditMessagingSettingsService {
                 s.getRapidapiPhoneDigitsOnly() != null
                         ? s.getRapidapiPhoneDigitsOnly()
                         : platformWa.phoneDigitsOnly();
+        String tenantSmsProvider = trimToNull(s.getSmsProvider());
+        String smsProvider;
+        if (tenantSmsProvider != null && !"none".equalsIgnoreCase(tenantSmsProvider)) {
+            smsProvider = tenantSmsProvider;
+        } else {
+            smsProvider = firstNonBlank(platformSms.provider(), env.sms().provider(), "none");
+        }
         return new TenantMessagingConfig(
                 enabled,
                 paymentUrl,
@@ -88,9 +98,17 @@ public class BusinessCreditMessagingSettingsService {
                 firstNonBlank(trimToNull(decryptOrNull(s.getWhatsappMetaAccessTokenEnc())), trimToNull(env.metaWhatsApp().accessToken())),
                 firstNonBlank(trimToNull(s.getWhatsappMetaPhoneNumberId()), trimToNull(env.metaWhatsApp().phoneNumberId())),
                 firstNonBlank(trimToNull(s.getWhatsappMetaGraphVersion()), env.metaWhatsApp().graphVersion()),
-                firstNonBlank(trimToNull(s.getSmsProvider()), env.sms().provider()),
+                smsProvider,
                 firstNonBlank(trimToNull(s.getSmsAfricasTalkingUsername()), env.sms().africasTalkingUsername()),
                 firstNonBlank(decryptOrNull(s.getSmsAfricasTalkingApiKeyEnc()), env.sms().africasTalkingApiKey()),
+                firstNonBlank(trimToNull(s.getSmsSozuriProject()), platformSms.project()),
+                firstNonBlank(decryptOrNull(s.getSmsSozuriApiKeyEnc()), platformSms.apiKey()),
+                firstNonBlank(trimToNull(s.getSmsSozuriFrom()), platformSms.from(), "Sozuri"),
+                firstNonBlank(trimToNull(s.getSmsSozuriType()), platformSms.type(), "transactional"),
+                firstNonBlank(
+                        trimToNull(s.getSmsSozuriApiUrl()),
+                        platformSms.apiUrl(),
+                        "https://sozuri.net/api/v1/messaging"),
                 true,
                 null);
     }
@@ -101,12 +119,31 @@ public class BusinessCreditMessagingSettingsService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Payment account URL is required");
         }
         String smsProvider = body.smsProvider() == null ? "none" : body.smsProvider().trim().toLowerCase();
-        if (!"none".equals(smsProvider) && !"africas_talking".equals(smsProvider)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "SMS provider must be none or africas_talking");
+        if (!"none".equals(smsProvider)
+                && !"africas_talking".equals(smsProvider)
+                && !"sozuri".equals(smsProvider)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "SMS provider must be none, africas_talking, or sozuri");
         }
         if ("africas_talking".equals(smsProvider)) {
             if (body.smsAfricasTalkingUsername() == null || body.smsAfricasTalkingUsername().isBlank()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Africa's Talking username required");
+            }
+        }
+        if ("sozuri".equals(smsProvider)) {
+            ResolvedSozuriSmsConfig platformSms =
+                    platformIntegrationSettingsService.resolveSozuriSms();
+            String project = blankToNull(body.smsSozuriProject());
+            if (project == null
+                    && (platformSms.project() == null || platformSms.project().isBlank())) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Sozuri project name required (set here or in Super Admin → Platform integrations)");
+            }
+            String type = body.smsSozuriType() == null ? "transactional" : body.smsSozuriType().trim().toLowerCase();
+            if (!type.isBlank() && !"transactional".equals(type) && !"promotional".equals(type)) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Sozuri type must be transactional or promotional");
             }
         }
 
@@ -119,7 +156,17 @@ public class BusinessCreditMessagingSettingsService {
                         ? "v25.0"
                         : body.whatsappMetaGraphVersion().trim());
         s.setSmsProvider(smsProvider);
-        s.setSmsAfricasTalkingUsername(blankToNull(body.smsAfricasTalkingUsername()));
+        s.setSmsAfricasTalkingUsername(
+                "africas_talking".equals(smsProvider) ? blankToNull(body.smsAfricasTalkingUsername()) : s.getSmsAfricasTalkingUsername());
+        if ("sozuri".equals(smsProvider)) {
+            s.setSmsSozuriProject(blankToNull(body.smsSozuriProject()));
+            s.setSmsSozuriFrom(blankToNull(body.smsSozuriFrom()));
+            s.setSmsSozuriType(
+                    body.smsSozuriType() == null || body.smsSozuriType().isBlank()
+                            ? "transactional"
+                            : body.smsSozuriType().trim().toLowerCase());
+            s.setSmsSozuriApiUrl(blankToNull(body.smsSozuriApiUrl()));
+        }
 
         if (body.rapidApiKey() != null) {
             s.setRapidapiKeyEnc(encryptOrClear(body.rapidApiKey()));
@@ -142,6 +189,9 @@ public class BusinessCreditMessagingSettingsService {
         if (body.smsAfricasTalkingApiKey() != null) {
             s.setSmsAfricasTalkingApiKeyEnc(encryptOrClear(body.smsAfricasTalkingApiKey()));
         }
+        if (body.smsSozuriApiKey() != null) {
+            s.setSmsSozuriApiKeyEnc(encryptOrClear(body.smsSozuriApiKey()));
+        }
 
         BusinessCreditSettings saved = businessCreditSettingsService.saveSettings(s);
         return toResponse(saved, readSecrets(saved));
@@ -155,21 +205,31 @@ public class BusinessCreditMessagingSettingsService {
                 s.getRapidapiPhoneDigitsOnly() != null
                         ? s.getRapidapiPhoneDigitsOnly()
                         : platformWa.phoneDigitsOnly();
+        ResolvedSozuriSmsConfig platformSms =
+                platformIntegrationSettingsService.resolveSozuriSms();
         return new CreditSaleReminderSettingsResponse(
                 s.isCreditSaleReminderEnabled(),
                 firstNonBlank(trimToNull(s.getCreditSaleReminderPaymentUrl()), defaultUrl),
                 defaultUrl,
                 trimToNull(s.getWhatsappMetaPhoneNumberId()),
                 firstNonBlank(trimToNull(s.getWhatsappMetaGraphVersion()), "v25.0"),
-                firstNonBlank(trimToNull(s.getSmsProvider()), "none"),
+                firstNonBlank(trimToNull(s.getSmsProvider()), platformSms.provider(), "none"),
                 trimToNull(s.getSmsAfricasTalkingUsername()),
+                firstNonBlank(trimToNull(s.getSmsSozuriProject()), platformSms.project()),
+                firstNonBlank(trimToNull(s.getSmsSozuriFrom()), platformSms.from(), "Sozuri"),
+                firstNonBlank(trimToNull(s.getSmsSozuriType()), platformSms.type(), "transactional"),
+                firstNonBlank(
+                        trimToNull(s.getSmsSozuriApiUrl()),
+                        platformSms.apiUrl(),
+                        "https://sozuri.net/api/v1/messaging"),
                 read.hasRapidApiKey,
                 firstNonBlank(trimToNull(s.getRapidapiHost()), platformWa.host()),
                 firstNonBlank(trimToNull(s.getRapidapiLookupUrl()), platformWa.lookupUrl()),
                 firstNonBlank(trimToNull(s.getRapidapiPhoneField()), platformWa.phoneField()),
                 digitsOnly,
                 read.hasWhatsappToken,
-                read.hasSmsApiKey,
+                read.hasSmsAtApiKey,
+                read.hasSmsSozuriApiKey || (platformSms.apiKey() != null && !platformSms.apiKey().isBlank()),
                 read.readable,
                 read.errorMessage);
     }
@@ -185,6 +245,7 @@ public class BusinessCreditMessagingSettingsService {
                 hasEncrypted(s.getRapidapiKeyEnc()),
                 hasEncrypted(s.getWhatsappMetaAccessTokenEnc()),
                 hasEncrypted(s.getSmsAfricasTalkingApiKeyEnc()),
+                hasEncrypted(s.getSmsSozuriApiKeyEnc()),
                 true,
                 persistenceHint);
     }
@@ -221,7 +282,8 @@ public class BusinessCreditMessagingSettingsService {
 
     private static TenantMessagingConfig disabledConfig(String readError) {
         return new TenantMessagingConfig(
-                false, "", null, null, null, null, false, null, null, null, "none", null, null,
+                false, "", null, null, null, null, false, null, null, null, "none",
+                null, null, null, null, null, null, null,
                 readError == null, readError);
     }
 
@@ -248,7 +310,8 @@ public class BusinessCreditMessagingSettingsService {
     private record SecretRead(
             boolean hasRapidApiKey,
             boolean hasWhatsappToken,
-            boolean hasSmsApiKey,
+            boolean hasSmsAtApiKey,
+            boolean hasSmsSozuriApiKey,
             boolean readable,
             String errorMessage
     ) {

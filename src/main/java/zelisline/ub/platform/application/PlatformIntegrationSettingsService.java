@@ -20,6 +20,7 @@ import zelisline.ub.platform.repository.PlatformIntegrationSettingsRepository;
 public class PlatformIntegrationSettingsService {
 
     private static final String DEFAULT_PHONE_FIELD = "phone";
+    private static final String DEFAULT_SOZURI_URL = "https://sozuri.net/api/v1/messaging";
 
     private final PlatformIntegrationSettingsRepository repository;
     private final CredentialEncryptionService encryptionService;
@@ -64,6 +65,40 @@ public class PlatformIntegrationSettingsService {
         if (body.rapidApiWhatsappPhoneDigitsOnly() != null) {
             row.setRapidapiWhatsappPhoneDigitsOnly(body.rapidApiWhatsappPhoneDigitsOnly());
         }
+        if (body.smsProvider() != null) {
+            String provider = blankToNull(body.smsProvider());
+            if (provider != null) {
+                provider = provider.toLowerCase();
+                if (!"none".equals(provider)
+                        && !"africas_talking".equals(provider)
+                        && !"sozuri".equals(provider)) {
+                    provider = "none";
+                }
+            }
+            row.setSmsProvider(provider);
+        }
+        if (body.sozuriProject() != null) {
+            row.setSozuriProject(blankToNull(body.sozuriProject()));
+        }
+        if (body.sozuriApiKey() != null) {
+            row.setSozuriApiKeyEnc(encryptOrClear(body.sozuriApiKey()));
+        }
+        if (body.sozuriFrom() != null) {
+            row.setSozuriFrom(blankToNull(body.sozuriFrom()));
+        }
+        if (body.sozuriType() != null) {
+            String type = blankToNull(body.sozuriType());
+            if (type != null) {
+                type = type.toLowerCase();
+                if (!"transactional".equals(type) && !"promotional".equals(type)) {
+                    type = "transactional";
+                }
+            }
+            row.setSozuriType(type);
+        }
+        if (body.sozuriApiUrl() != null) {
+            row.setSozuriApiUrl(blankToNull(body.sozuriApiUrl()));
+        }
         row.setUpdatedAt(Instant.now());
         PlatformIntegrationSettings saved = repository.save(row);
         return toResponse(saved, readSecrets(saved));
@@ -94,19 +129,14 @@ public class PlatformIntegrationSettingsService {
         PlatformIntegrationSettings row = loadSingleton();
         SecretRead secrets = readSecrets(row);
         var env = messagingProperties.rapidApiWhatsApp();
-        String apiKey =
-                secrets.readable
-                        ? firstNonBlank(secrets.rapidapiWhatsappKey, env.apiKey())
-                        : blankToNull(env.apiKey());
-        String host = firstNonBlank(trimToNull(row.getRapidapiWhatsappHost()), env.host());
-        String lookupUrl =
-                firstNonBlank(trimToNull(row.getRapidapiWhatsappLookupUrl()), env.lookupUrl());
-        String phoneField =
-                firstNonBlank(trimToNull(row.getRapidapiWhatsappPhoneField()), DEFAULT_PHONE_FIELD);
-        boolean digitsOnly =
-                row.getRapidapiWhatsappPhoneDigitsOnly() != null
-                        && row.getRapidapiWhatsappPhoneDigitsOnly();
-        return new ResolvedRapidApiWhatsappConfig(apiKey, host, lookupUrl, phoneField, digitsOnly);
+        return resolveWhatsappFromRow(row, secrets, env);
+    }
+
+    @Transactional(readOnly = true)
+    public ResolvedSozuriSmsConfig resolveSozuriSms() {
+        PlatformIntegrationSettings row = loadSingleton();
+        SecretRead secrets = readSecrets(row);
+        return resolveSozuriFromRow(row, secrets);
     }
 
     private PlatformIntegrationsResponse toResponse(
@@ -115,7 +145,8 @@ public class PlatformIntegrationSettingsService {
     ) {
         var catalogEnv = catalogAiProperties;
         var msgEnv = messagingProperties.rapidApiWhatsApp();
-        ResolvedRapidApiWhatsappConfig wa = resolveFromRow(row, secrets, msgEnv);
+        ResolvedRapidApiWhatsappConfig wa = resolveWhatsappFromRow(row, secrets, msgEnv);
+        ResolvedSozuriSmsConfig sozuri = resolveSozuriFromRow(row, secrets);
         return new PlatformIntegrationsResponse(
                 secrets.hasDeepseekApiKey,
                 firstNonBlank(trimToNull(row.getDeepseekHost()), catalogEnv.host()),
@@ -126,14 +157,21 @@ public class PlatformIntegrationSettingsService {
                 wa.lookupUrl(),
                 wa.phoneField(),
                 wa.phoneDigitsOnly(),
+                sozuri.provider(),
+                sozuri.project(),
+                sozuri.from(),
+                sozuri.type(),
+                sozuri.apiUrl(),
+                secrets.hasSozuriApiKey,
                 envHasDeepseekKey(catalogEnv),
                 envHasRapidApiWhatsappKey(msgEnv),
+                envHasSozuriKey(messagingProperties.sms()),
                 secrets.readable,
                 secrets.errorMessage,
                 encryptionService.usesEphemeralKey());
     }
 
-    private ResolvedRapidApiWhatsappConfig resolveFromRow(
+    private ResolvedRapidApiWhatsappConfig resolveWhatsappFromRow(
             PlatformIntegrationSettings row,
             SecretRead secrets,
             MessagingProperties.RapidApiWhatsApp env
@@ -153,6 +191,25 @@ public class PlatformIntegrationSettingsService {
         return new ResolvedRapidApiWhatsappConfig(apiKey, host, lookupUrl, phoneField, digitsOnly);
     }
 
+    private ResolvedSozuriSmsConfig resolveSozuriFromRow(
+            PlatformIntegrationSettings row,
+            SecretRead secrets
+    ) {
+        var env = messagingProperties.sms();
+        String provider = firstNonBlank(trimToNull(row.getSmsProvider()), env.provider(), "none");
+        String project = firstNonBlank(trimToNull(row.getSozuriProject()), env.sozuriProject());
+        String apiKey =
+                secrets.readable
+                        ? firstNonBlank(secrets.sozuriApiKey, env.sozuriApiKey())
+                        : blankToNull(env.sozuriApiKey());
+        String from = firstNonBlank(trimToNull(row.getSozuriFrom()), env.sozuriFrom(), "Sozuri");
+        String type =
+                firstNonBlank(trimToNull(row.getSozuriType()), env.sozuriType(), "transactional");
+        String apiUrl =
+                firstNonBlank(trimToNull(row.getSozuriApiUrl()), env.sozuriApiUrl(), DEFAULT_SOZURI_URL);
+        return new ResolvedSozuriSmsConfig(provider, project, apiKey, from, type, apiUrl);
+    }
+
     private PlatformIntegrationSettings loadSingleton() {
         return repository
                 .findById(PlatformIntegrationSettings.SINGLETON_ID)
@@ -168,12 +225,12 @@ public class PlatformIntegrationSettingsService {
 
     private SecretRead readSecrets(PlatformIntegrationSettings row) {
         if (encryptionService.usesEphemeralKey()) {
-            boolean hasDeepseek = hasEncrypted(row.getDeepseekApiKeyEnc());
-            boolean hasWhatsapp = hasEncrypted(row.getRapidapiWhatsappKeyEnc());
             return new SecretRead(
                     false,
-                    hasDeepseek,
-                    hasWhatsapp,
+                    hasEncrypted(row.getDeepseekApiKeyEnc()),
+                    hasEncrypted(row.getRapidapiWhatsappKeyEnc()),
+                    hasEncrypted(row.getSozuriApiKeyEnc()),
+                    null,
                     null,
                     null,
                     "Server encryption key is not configured; stored secrets cannot be read. "
@@ -184,14 +241,18 @@ public class PlatformIntegrationSettingsService {
                     true,
                     hasEncrypted(row.getDeepseekApiKeyEnc()),
                     hasEncrypted(row.getRapidapiWhatsappKeyEnc()),
+                    hasEncrypted(row.getSozuriApiKeyEnc()),
                     decryptOrNull(row.getDeepseekApiKeyEnc()),
                     decryptOrNull(row.getRapidapiWhatsappKeyEnc()),
+                    decryptOrNull(row.getSozuriApiKeyEnc()),
                     null);
         } catch (RuntimeException ex) {
             return new SecretRead(
                     false,
                     hasEncrypted(row.getDeepseekApiKeyEnc()),
                     hasEncrypted(row.getRapidapiWhatsappKeyEnc()),
+                    hasEncrypted(row.getSozuriApiKeyEnc()),
+                    null,
                     null,
                     null,
                     ex.getMessage());
@@ -225,9 +286,13 @@ public class PlatformIntegrationSettingsService {
     }
 
     private static boolean envHasRapidApiWhatsappKey(
-            zelisline.ub.messaging.config.MessagingProperties.RapidApiWhatsApp env
+            MessagingProperties.RapidApiWhatsApp env
     ) {
         return env.apiKey() != null && !env.apiKey().isBlank();
+    }
+
+    private static boolean envHasSozuriKey(MessagingProperties.Sms env) {
+        return env.sozuriApiKey() != null && !env.sozuriApiKey().isBlank();
     }
 
     private static String trimToNull(String value) {
@@ -242,12 +307,11 @@ public class PlatformIntegrationSettingsService {
         return trimToNull(value);
     }
 
-    private static String firstNonBlank(String first, String second) {
-        if (first != null && !first.isBlank()) {
-            return first;
-        }
-        if (second != null && !second.isBlank()) {
-            return second;
+    private static String firstNonBlank(String... values) {
+        for (String v : values) {
+            if (v != null && !v.isBlank()) {
+                return v.trim();
+            }
         }
         return null;
     }
@@ -256,8 +320,10 @@ public class PlatformIntegrationSettingsService {
             boolean readable,
             boolean hasDeepseekApiKey,
             boolean hasRapidapiWhatsappKey,
+            boolean hasSozuriApiKey,
             String deepseekApiKey,
             String rapidapiWhatsappKey,
+            String sozuriApiKey,
             String errorMessage
     ) {}
 }

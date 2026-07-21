@@ -326,7 +326,7 @@ public class BusinessCreditMessagingSettingsService {
         if (base.endsWith("/")) {
             base = base.substring(0, base.length() - 1);
         }
-        return base + "/shop/account";
+        return base;
     }
 
     private static TenantMessagingConfig disabledConfig(String readError) {

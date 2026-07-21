@@ -12,7 +12,7 @@ public record MessagingProperties(
 
     public MessagingProperties {
         if (creditSaleReminder == null) {
-            creditSaleReminder = new CreditSaleReminder("https://palmart.co.ke/shop/account");
+            creditSaleReminder = new CreditSaleReminder("https://palmart.co.ke");
         }
         if (rapidApiWhatsApp == null) {
             rapidApiWhatsApp = new RapidApiWhatsApp("", "whatsapp-osint.p.rapidapi.com", "https://whatsapp-osint.p.rapidapi.com/bizos");
@@ -28,7 +28,7 @@ public record MessagingProperties(
         }
     }
 
-    /** {@code paymentAccountUrl} is a platform default when the tenant has not set one in admin. */
+    /** {@code paymentAccountUrl} is a site origin; customer phone path is appended per message. */
     public record CreditSaleReminder(String paymentAccountUrl) {
     }
 

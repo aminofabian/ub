@@ -22,7 +22,7 @@ class CreditSaleReminderServiceTest {
                 new BigDecimal("305.00"),
                 new BigDecimal("1240.00"),
                 "KES",
-                "https://palmart.co.ke/shop/account");
+                "https://palmart.co.ke/0714282874");
         assertEquals(
                 "Hi Jane,\n\n"
                         + "You took on credit at Mama's Kiosk:\n"
@@ -30,7 +30,7 @@ class CreditSaleReminderServiceTest {
                         + "• Milk 1L — KES 65\n\n"
                         + "This sale: KES 305\n"
                         + "Total tab: KES 1,240\n\n"
-                        + "Pay here: https://palmart.co.ke/shop/account",
+                        + "Pay here: https://palmart.co.ke/0714282874",
                 msg);
     }
 
@@ -51,7 +51,7 @@ class CreditSaleReminderServiceTest {
                 new BigDecimal("60.00"),
                 new BigDecimal("100.00"),
                 "KES",
-                "https://palmart.co.ke/shop/account");
+                "https://palmart.co.ke/0711111111");
         assertEquals(
                 "Hi,\n\n"
                         + "You took on credit at Shop:\n"
@@ -63,7 +63,7 @@ class CreditSaleReminderServiceTest {
                         + "• and 1 more\n\n"
                         + "This sale: KES 60\n"
                         + "Total tab: KES 100\n\n"
-                        + "Pay here: https://palmart.co.ke/shop/account",
+                        + "Pay here: https://palmart.co.ke/0711111111",
                 msg);
     }
 

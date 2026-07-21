@@ -90,7 +90,7 @@ public class CreditSaleReminderService {
         String shopName = business != null && business.getName() != null
                 ? business.getName().trim()
                 : "our shop";
-        String paymentUrl = messaging.paymentAccountUrl().trim();
+        String paymentUrl = CustomerTabPaymentUrl.build(messaging.paymentAccountUrl(), phoneDigits);
         BigDecimal balanceOwed = event.balanceOwed() != null ? event.balanceOwed() : BigDecimal.ZERO;
         String message = buildMessage(
                 customer.getName(),
@@ -118,9 +118,11 @@ public class CreditSaleReminderService {
             String rawPhone
     ) {
         TenantMessagingConfig messaging = messagingSettingsService.resolveForDispatch(businessId);
-        String paymentUrl = messaging.paymentAccountUrl().isBlank()
-                ? "https://palmart.co.ke/shop/account"
-                : messaging.paymentAccountUrl();
+        String paymentUrl = CustomerTabPaymentUrl.build(
+                messaging.paymentAccountUrl().isBlank()
+                        ? "https://palmart.co.ke"
+                        : messaging.paymentAccountUrl(),
+                rawPhone);
         List<CreditSaleReminderLineItem> dummyItems = List.of(
                 new CreditSaleReminderLineItem("Sugar 2kg", new BigDecimal("2"), new BigDecimal("240.00")),
                 new CreditSaleReminderLineItem("Milk 1L", BigDecimal.ONE, new BigDecimal("65.00")));

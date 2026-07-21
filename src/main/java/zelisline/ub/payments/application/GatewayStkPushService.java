@@ -21,6 +21,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.MpesaStkStatuses;
+import zelisline.ub.credits.application.CreditSaleDebtService;
+import zelisline.ub.credits.application.CreditsJournalService;
 import zelisline.ub.credits.application.WalletLedgerService;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.MpesaStkIntent;
@@ -65,6 +67,8 @@ public class GatewayStkPushService {
     private final MpesaStkIntentRepository mpesaStkIntentRepository;
     private final CreditAccountRepository creditAccountRepository;
     private final WalletLedgerService walletLedgerService;
+    private final CreditSaleDebtService creditSaleDebtService;
+    private final CreditsJournalService creditsJournalService;
     private final CredentialEncryptionService encryptionService;
     private final KopokopoPaymentGateway kopokopoGateway;
     private final ObjectMapper objectMapper;
@@ -476,6 +480,7 @@ public class GatewayStkPushService {
         switch (push.getContextType()) {
             case WEB_ORDER -> confirmWebOrder(push);
             case WALLET_INTENT -> confirmWalletIntent(push);
+            case CREDIT_AR -> confirmCreditArIntent(push);
             case POS_PAYMENT -> publishPosConfirmation(push);
             default -> log.warn("Unknown STK context type: {}", push.getContextType());
         }
@@ -497,7 +502,8 @@ public class GatewayStkPushService {
                 }
             });
         }
-        if (push.getContextType() == StkPushContextType.WALLET_INTENT) {
+        if (push.getContextType() == StkPushContextType.WALLET_INTENT
+                || push.getContextType() == StkPushContextType.CREDIT_AR) {
             mpesaStkIntentRepository.findByBusinessIdAndIdempotencyKey(
                     push.getBusinessId(), push.getMerchantReference()).ifPresent(intent -> {
                 if (MpesaStkStatuses.PENDING.equals(intent.getStatus())) {
@@ -538,14 +544,7 @@ public class GatewayStkPushService {
     }
 
     private void confirmWalletIntent(GatewayStkPush push) {
-        MpesaStkIntent intent = null;
-        if (push.getContextId() != null) {
-            intent = mpesaStkIntentRepository.findById(push.getContextId()).orElse(null);
-        }
-        if (intent == null) {
-            intent = mpesaStkIntentRepository.findByBusinessIdAndIdempotencyKey(
-                    push.getBusinessId(), push.getMerchantReference()).orElse(null);
-        }
+        MpesaStkIntent intent = resolveIntent(push);
         if (intent == null) {
             log.warn("Wallet STK intent not found for push {}", push.getId());
             return;
@@ -570,6 +569,47 @@ public class GatewayStkPushService {
             log.error("Failed to fulfill wallet STK intent {}", intent.getId(), e);
             markFailed(push, e.getMessage());
         }
+    }
+
+    private void confirmCreditArIntent(GatewayStkPush push) {
+        MpesaStkIntent intent = resolveIntent(push);
+        if (intent == null) {
+            log.warn("Credit AR STK intent not found for push {}", push.getId());
+            return;
+        }
+        if (MpesaStkStatuses.FULFILLED.equals(intent.getStatus())) {
+            return;
+        }
+        try {
+            BigDecimal pay = intent.getAmount();
+            creditSaleDebtService.applyInboundArPayment(
+                    intent.getBusinessId(), intent.getCreditAccountId(), pay);
+            creditsJournalService.postInboundMpesaTowardAr(
+                    intent.getBusinessId(),
+                    pay,
+                    intent.getId(),
+                    "M-Pesa STK tab payment");
+            intent.setStatus(MpesaStkStatuses.FULFILLED);
+            intent.setGatewayConfirmationCode(
+                    push.getGatewayTransactionId() != null ? push.getGatewayTransactionId() : "OK");
+            mpesaStkIntentRepository.save(intent);
+            publishStkRealtime(push, true, "Tab payment received");
+        } catch (Exception e) {
+            log.error("Failed to fulfill credit AR STK intent {}", intent.getId(), e);
+            markFailed(push, e.getMessage());
+        }
+    }
+
+    private MpesaStkIntent resolveIntent(GatewayStkPush push) {
+        MpesaStkIntent intent = null;
+        if (push.getContextId() != null) {
+            intent = mpesaStkIntentRepository.findById(push.getContextId()).orElse(null);
+        }
+        if (intent == null) {
+            intent = mpesaStkIntentRepository.findByBusinessIdAndIdempotencyKey(
+                    push.getBusinessId(), push.getMerchantReference()).orElse(null);
+        }
+        return intent;
     }
 
     private void publishPosConfirmation(GatewayStkPush push) {

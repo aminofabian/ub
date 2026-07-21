@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.credits.MpesaStkIntentPurposes;
 import zelisline.ub.credits.MpesaStkStatuses;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.MpesaStkIntent;
@@ -48,8 +49,63 @@ public class MpesaStkIntentService {
 
         String phone = resolveCustomerPhone(customerId);
         try {
-            MpesaStkIntent row = createRow(businessId, account.getId(), amt, idempotencyKey, phone);
-            return row;
+            return createRow(
+                    businessId,
+                    account.getId(),
+                    amt,
+                    idempotencyKey,
+                    phone,
+                    MpesaStkIntentPurposes.WALLET,
+                    StkPushContextType.WALLET_INTENT,
+                    "Wallet Top Up");
+        } catch (DataIntegrityViolationException duplicate) {
+            return mpesaStkIntentRepository
+                    .findByBusinessIdAndIdempotencyKey(businessId, idempotencyKey)
+                    .orElseThrow(() -> duplicate);
+        }
+    }
+
+    /**
+     * Public / staff STK that pays down {@code balance_owed} (AR), not wallet.
+     * Amount is capped at the open balance.
+     */
+    @Transactional
+    public MpesaStkIntent initiateArPayment(
+            String businessId,
+            String creditAccountId,
+            BigDecimal rawAmount,
+            String idempotencyKey,
+            String customerId
+    ) {
+        CreditAccount account = creditAccountRepository.findByIdAndBusinessIdForUpdate(creditAccountId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Credit account not found"));
+        BigDecimal owed = account.getBalanceOwed() != null ? account.getBalanceOwed() : BigDecimal.ZERO;
+        if (owed.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nothing owed on this tab");
+        }
+        BigDecimal amt = rawAmount.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        if (amt.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Amount must be positive");
+        }
+        if (amt.compareTo(owed) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Amount exceeds balance owed");
+        }
+
+        String phone = resolveCustomerPhone(customerId);
+        if (phone == null || phone.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customer has no phone for M-Pesa prompt");
+        }
+
+        try {
+            return createRow(
+                    businessId,
+                    account.getId(),
+                    amt,
+                    idempotencyKey,
+                    phone,
+                    MpesaStkIntentPurposes.AR,
+                    StkPushContextType.CREDIT_AR,
+                    "Tab payment");
         } catch (DataIntegrityViolationException duplicate) {
             return mpesaStkIntentRepository
                     .findByBusinessIdAndIdempotencyKey(businessId, idempotencyKey)
@@ -62,25 +118,29 @@ public class MpesaStkIntentService {
             String creditAccountId,
             BigDecimal amt,
             String idempotencyKey,
-            String phone
+            String phone,
+            String purpose,
+            StkPushContextType contextType,
+            String narrative
     ) {
         MpesaStkIntent row = new MpesaStkIntent();
         row.setBusinessId(businessId);
         row.setCreditAccountId(creditAccountId);
+        row.setPurpose(purpose);
         row.setSaleId(null);
         row.setAmount(amt);
         row.setIdempotencyKey(idempotencyKey.trim());
         row.setStatus(MpesaStkStatuses.PENDING);
 
         PaymentGatewayStkService.StkPushOutcome outcome = initiateRealStkPush(
-                businessId, phone, amt, idempotencyKey);
+                businessId, phone, amt, idempotencyKey, narrative);
         String checkoutRequestId = outcome.accepted() && outcome.checkoutRequestId() != null
                 ? outcome.checkoutRequestId()
                 : "STUB-" + java.util.UUID.randomUUID();
         row.setCheckoutRequestId(checkoutRequestId);
 
         mpesaStkIntentRepository.save(row);
-        registerWalletPush(businessId, row, phone, outcome);
+        registerPush(businessId, row, phone, outcome, contextType);
         return row;
     }
 
@@ -88,10 +148,11 @@ public class MpesaStkIntentService {
             String businessId,
             String phone,
             BigDecimal amount,
-            String reference
+            String reference,
+            String narrative
     ) {
         if (phone == null || phone.isBlank()) {
-            log.warn("Wallet STK skipped — no customer phone for business={}", businessId);
+            log.warn("STK skipped — no customer phone for business={}", businessId);
             return PaymentGatewayStkService.StkPushOutcome.rejected(null, "NO_PHONE", "Customer has no phone");
         }
         PaymentGatewayStkService.StkPushOutcome outcome = paymentGatewayStkService.initiate(
@@ -100,19 +161,20 @@ public class MpesaStkIntentService {
                 phone,
                 amount,
                 reference,
-                "Wallet Top Up"
+                narrative
         );
         if (!outcome.accepted()) {
-            log.info("No ACTIVE gateway accepted wallet STK for business={}", businessId);
+            log.info("No ACTIVE gateway accepted STK for business={} narrative={}", businessId, narrative);
         }
         return outcome;
     }
 
-    private void registerWalletPush(
+    private void registerPush(
             String businessId,
             MpesaStkIntent intent,
             String phone,
-            PaymentGatewayStkService.StkPushOutcome outcome
+            PaymentGatewayStkService.StkPushOutcome outcome,
+            StkPushContextType contextType
     ) {
         if (!outcome.accepted()
                 || intent.getCheckoutRequestId() == null
@@ -126,7 +188,7 @@ public class MpesaStkIntentService {
                 outcome.configId(),
                 intent.getCheckoutRequestId(),
                 intent.getIdempotencyKey(),
-                StkPushContextType.WALLET_INTENT,
+                contextType,
                 intent.getId(),
                 intent.getAmount(),
                 phone);

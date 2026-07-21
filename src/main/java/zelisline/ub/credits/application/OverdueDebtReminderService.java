@@ -25,6 +25,7 @@ import zelisline.ub.credits.repository.CreditReminderRecordRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.messaging.application.CustomerMessageDispatcher;
+import zelisline.ub.messaging.application.CustomerTabPaymentUrl;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.tenancy.domain.Business;
@@ -120,9 +121,11 @@ public class OverdueDebtReminderService {
         String shopName = business != null && business.getName() != null
                 ? business.getName().trim()
                 : "our shop";
-        String paymentUrl = messaging.paymentAccountUrl().isBlank()
-                ? "https://palmart.co.ke/shop/account"
-                : messaging.paymentAccountUrl().trim();
+        String paymentUrl = CustomerTabPaymentUrl.build(
+                messaging.paymentAccountUrl().isBlank()
+                        ? "https://palmart.co.ke"
+                        : messaging.paymentAccountUrl().trim(),
+                phoneDigits);
         String message = buildMessage(
                 customer.getName(),
                 shopName,

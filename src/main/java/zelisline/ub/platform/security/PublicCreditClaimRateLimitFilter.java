@@ -19,9 +19,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 
 /**
- * Rate limits {@code POST /api/v1/public/credits/**} per client IP. Keeps the unauthenticated
- * payment-claim submission endpoint from being abused as an admin-queue spammer (Phase 5 Slice 6,
- * see ADR-0010).
+ * Rate limits {@code POST /api/v1/public/credits/**} per client IP. Covers payment-claim
+ * submissions and public tab STK initiation so unauthenticated paths cannot be abused.
  */
 @RequiredArgsConstructor
 public class PublicCreditClaimRateLimitFilter extends OncePerRequestFilter {
@@ -53,7 +52,7 @@ public class PublicCreditClaimRateLimitFilter extends OncePerRequestFilter {
             ProblemDetail body = ProblemDetail.forStatus(HttpStatus.TOO_MANY_REQUESTS);
             body.setTitle("Too many requests");
             body.setType(URI.create(PROBLEM_BASE + "rate-limited"));
-            body.setDetail("Public claim submission rate limit exceeded. Try again shortly.");
+            body.setDetail("Public credits rate limit exceeded. Try again shortly.");
             response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
             response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
             response.setCharacterEncoding("UTF-8");

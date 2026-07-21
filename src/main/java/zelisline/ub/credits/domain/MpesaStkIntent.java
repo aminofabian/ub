@@ -29,6 +29,10 @@ public class MpesaStkIntent {
     @Column(name = "credit_account_id", nullable = false, length = 36)
     private String creditAccountId;
 
+    /** {@code wallet} top-up or {@code ar} tab paydown — see {@link zelisline.ub.credits.MpesaStkIntentPurposes}. */
+    @Column(name = "purpose", nullable = false, length = 16)
+    private String purpose = "wallet";
+
     @Column(name = "sale_id", length = 36)
     private String saleId;
 
@@ -60,6 +64,9 @@ public class MpesaStkIntent {
     void onCreate() {
         if (id == null || id.isBlank()) {
             id = UUID.randomUUID().toString();
+        }
+        if (purpose == null || purpose.isBlank()) {
+            purpose = "wallet";
         }
         Instant now = Instant.now();
         if (createdAt == null) {

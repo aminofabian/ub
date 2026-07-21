@@ -14,13 +14,15 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.MpesaStkIntentPurposes;
 import zelisline.ub.credits.MpesaStkStatuses;
 import zelisline.ub.credits.domain.CreditAccount;
-import zelisline.ub.credits.domain.MpesaStkIntent;
 import zelisline.ub.credits.domain.CustomerPhone;
+import zelisline.ub.credits.domain.KenyanPhoneForms;
+import zelisline.ub.credits.domain.MpesaStkIntent;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.MpesaStkIntentRepository;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.PaymentGatewayStkService;
+import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.StkPushContextType;
 
@@ -68,6 +70,8 @@ public class MpesaStkIntentService {
     /**
      * Public / staff STK that pays down {@code balance_owed} (AR), not wallet.
      * Amount is capped at the open balance.
+     *
+     * @param stkPhoneOverride optional M-Pesa number to prompt; defaults to customer primary
      */
     @Transactional
     public MpesaStkIntent initiateArPayment(
@@ -75,7 +79,8 @@ public class MpesaStkIntentService {
             String creditAccountId,
             BigDecimal rawAmount,
             String idempotencyKey,
-            String customerId
+            String customerId,
+            String stkPhoneOverride
     ) {
         CreditAccount account = creditAccountRepository.findByIdAndBusinessIdForUpdate(creditAccountId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Credit account not found"));
@@ -91,9 +96,9 @@ public class MpesaStkIntentService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Amount exceeds balance owed");
         }
 
-        String phone = resolveCustomerPhone(customerId);
+        String phone = resolveStkPhone(customerId, stkPhoneOverride);
         if (phone == null || phone.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customer has no phone for M-Pesa prompt");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter a valid M-Pesa number");
         }
 
         try {
@@ -111,6 +116,19 @@ public class MpesaStkIntentService {
                     .findByBusinessIdAndIdempotencyKey(businessId, idempotencyKey)
                     .orElseThrow(() -> duplicate);
         }
+    }
+
+    private String resolveStkPhone(String customerId, String overrideRaw) {
+        if (overrideRaw != null && !overrideRaw.isBlank()) {
+            if (!KenyanPhoneForms.looksLikeKenyanMobile(overrideRaw)) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Use a Kenyan M-Pesa number e.g. 0712345678");
+            }
+            String local = KenyanPhoneForms.toLocal07(overrideRaw);
+            return local != null ? local : StkPhoneNormalizer.normalize(overrideRaw);
+        }
+        return resolveCustomerPhone(customerId);
     }
 
     private MpesaStkIntent createRow(
@@ -131,6 +149,7 @@ public class MpesaStkIntentService {
         row.setAmount(amt);
         row.setIdempotencyKey(idempotencyKey.trim());
         row.setStatus(MpesaStkStatuses.PENDING);
+        row.setStkPhone(phone);
 
         PaymentGatewayStkService.StkPushOutcome outcome = initiateRealStkPush(
                 businessId, phone, amt, idempotencyKey, narrative);

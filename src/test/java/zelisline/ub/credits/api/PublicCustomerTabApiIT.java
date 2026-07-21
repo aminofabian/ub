@@ -72,6 +72,8 @@ class PublicCustomerTabApiIT {
     @Autowired
     private CreditsJournalService creditsJournalService;
     @Autowired
+    private zelisline.ub.credits.application.CustomerPhoneOnPaymentService customerPhoneOnPaymentService;
+    @Autowired
     private JournalEntryRepository journalEntryRepository;
     @Autowired
     private JournalLineRepository journalLineRepository;
@@ -176,6 +178,7 @@ class PublicCustomerTabApiIT {
         MpesaStkIntent intent = mpesaStkIntentRepository.findAll().getFirst();
         assertThat(intent.getPurpose()).isEqualTo(MpesaStkIntentPurposes.AR);
         assertThat(intent.getAmount()).isEqualByComparingTo("150.00");
+        assertThat(intent.getStkPhone()).isEqualTo(PHONE);
 
         // Simulate gateway success settlement path used by CREDIT_AR confirm.
         creditSaleDebtService.applyInboundArPayment(TENANT, account.getId(), intent.getAmount());
@@ -193,6 +196,30 @@ class PublicCustomerTabApiIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value(MpesaStkStatuses.FULFILLED))
                 .andExpect(jsonPath("$.balanceOwed").value(350.00));
+    }
+
+    @Test
+    void stk_acceptsAlternatePhone_andSyncsOnPayment() throws Exception {
+        String alt = "0799000111";
+        mockMvc.perform(post("/api/v1/public/credits/tabs/" + PHONE + "/stk")
+                        .header("X-Tenant-Id", TENANT)
+                        .header("Idempotency-Key", "tab-alt-1")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"amount\":50,\"phone\":\"" + alt + "\"}"))
+                .andExpect(status().isCreated());
+
+        MpesaStkIntent intent = mpesaStkIntentRepository.findAll().getFirst();
+        assertThat(intent.getStkPhone()).isEqualTo(alt);
+
+        customerPhoneOnPaymentService.syncPrimaryPhoneAfterPayment(
+                TENANT, account.getCustomerId(), alt);
+
+        var phones = customerPhoneRepository.findByCustomerIdOrderByCreatedAtAsc(account.getCustomerId());
+        assertThat(phones.stream().anyMatch(p -> alt.equals(p.getPhone()) && p.isPrimary())).isTrue();
+        assertThat(phones.stream().filter(p -> PHONE.equals(p.getPhone())).findFirst())
+                .get()
+                .extracting(zelisline.ub.credits.domain.CustomerPhone::isPrimary)
+                .isEqualTo(false);
     }
 
     private void seedLedger(String code, String name, String type) {

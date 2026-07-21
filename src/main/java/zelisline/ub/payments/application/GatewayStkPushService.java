@@ -23,6 +23,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.MpesaStkStatuses;
 import zelisline.ub.credits.application.CreditSaleDebtService;
 import zelisline.ub.credits.application.CreditsJournalService;
+import zelisline.ub.credits.application.CustomerPhoneOnPaymentService;
 import zelisline.ub.credits.application.WalletLedgerService;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.MpesaStkIntent;
@@ -69,6 +70,7 @@ public class GatewayStkPushService {
     private final WalletLedgerService walletLedgerService;
     private final CreditSaleDebtService creditSaleDebtService;
     private final CreditsJournalService creditsJournalService;
+    private final CustomerPhoneOnPaymentService customerPhoneOnPaymentService;
     private final CredentialEncryptionService encryptionService;
     private final KopokopoPaymentGateway kopokopoGateway;
     private final ObjectMapper objectMapper;
@@ -593,6 +595,17 @@ public class GatewayStkPushService {
             intent.setGatewayConfirmationCode(
                     push.getGatewayTransactionId() != null ? push.getGatewayTransactionId() : "OK");
             mpesaStkIntentRepository.save(intent);
+
+            CreditAccount acc = creditAccountRepository.findById(intent.getCreditAccountId()).orElse(null);
+            if (acc != null) {
+                String paidPhone = intent.getStkPhone();
+                if (paidPhone == null || paidPhone.isBlank()) {
+                    paidPhone = push.getPhoneNumber();
+                }
+                customerPhoneOnPaymentService.syncPrimaryPhoneAfterPayment(
+                        intent.getBusinessId(), acc.getCustomerId(), paidPhone);
+            }
+
             publishStkRealtime(push, true, "Tab payment received");
         } catch (Exception e) {
             log.error("Failed to fulfill credit AR STK intent {}", intent.getId(), e);

@@ -63,6 +63,7 @@ public class PublicCustomerTabService {
             String businessId,
             String phoneRaw,
             BigDecimal amount,
+            String stkPhoneOverride,
             String idempotencyKey
     ) {
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
@@ -74,7 +75,8 @@ public class PublicCustomerTabService {
                 resolved.account().getId(),
                 amount,
                 idempotencyKey.trim(),
-                resolved.customer().getId());
+                resolved.customer().getId(),
+                stkPhoneOverride);
         BigDecimal owed = resolved.account().getBalanceOwed() != null
                 ? resolved.account().getBalanceOwed()
                 : BigDecimal.ZERO;

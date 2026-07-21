@@ -39,6 +39,10 @@ public class MpesaStkIntent {
     @Column(name = "amount", nullable = false, precision = 14, scale = 2)
     private BigDecimal amount;
 
+    /** MSISDN the STK prompt was sent to (digits; may differ from directory primary). */
+    @Column(name = "stk_phone", length = 32)
+    private String stkPhone;
+
     @Column(name = "idempotency_key", nullable = false, length = 128)
     private String idempotencyKey;
 

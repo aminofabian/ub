@@ -54,6 +54,7 @@ public class PublicCustomerTabController {
                 publicHostBusinessResolver.resolveOrThrow(request),
                 phone,
                 body.amount(),
+                body.phone(),
                 idempotencyKey);
     }
 

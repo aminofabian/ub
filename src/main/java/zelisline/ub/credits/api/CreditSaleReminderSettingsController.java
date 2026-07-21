@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.api.dto.CreditSaleReminderSettingsResponse;
 import zelisline.ub.credits.api.dto.CreditSaleReminderTestRequest;
 import zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse;
+import zelisline.ub.credits.api.dto.SmsTestSendRequest;
 import zelisline.ub.credits.api.dto.UpdateCreditSaleReminderSettingsRequest;
 import zelisline.ub.credits.api.dto.WhatsAppTestSendRequest;
 import zelisline.ub.credits.application.BusinessCreditMessagingSettingsService;
@@ -68,6 +69,19 @@ public class CreditSaleReminderSettingsController {
     ) {
         CurrentTenantUser.require(request);
         return creditSaleReminderService.sendWhatsAppTest(
+                TenantRequestIds.resolveBusinessId(request),
+                body.phone(),
+                body.message());
+    }
+
+    @PostMapping("/test-sms")
+    @PreAuthorize("hasPermission(null, 'credits.settings.write')")
+    public CreditSaleReminderTestResponse testSms(
+            @Valid @RequestBody SmsTestSendRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return creditSaleReminderService.sendSmsTest(
                 TenantRequestIds.resolveBusinessId(request),
                 body.phone(),
                 body.message());

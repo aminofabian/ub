@@ -42,12 +42,19 @@ public class CustomerMessageDispatcher {
     }
 
     /**
-     * Attempts Meta WhatsApp directly (bypassing the OSINT lookup gate). Used for
-     * admin test sends — does not fall back to the SMS log-only stub.
+     * Attempts Meta WhatsApp directly (no RapidAPI lookup, no SMS fallback).
+     * Used for the standalone WhatsApp admin test.
      */
     public DeliveryResult deliverDirect(TenantMessagingConfig messaging, String phoneDigits, String message) {
         String e164 = "+" + phoneDigits;
-        var lookup = RapidApiWhatsAppLookupClient.LookupResult.lookupSkipped("direct_send");
+        var lookup = RapidApiWhatsAppLookupClient.LookupResult.lookupSkipped("whatsapp_only_test");
+        if (!messaging.metaWhatsAppConfigured()) {
+            return new DeliveryResult(
+                    lookup,
+                    "whatsapp",
+                    "skipped",
+                    "Meta WhatsApp is not configured (phone number ID + access token).");
+        }
         var send = metaWhatsAppClient.sendText(messaging, phoneDigits, message);
         if (send.sent()) {
             return new DeliveryResult(lookup, send.channel(), "sent", send.detail());
@@ -60,20 +67,27 @@ public class CustomerMessageDispatcher {
                     "whatsapp_failed:" + send.detail()
                             + ". Paste a fresh permanent token from Meta Business → WhatsApp → API setup, save, then retry.");
         }
-        if (messaging.smsConfigured()) {
-            var sms = smsMessagingClient.sendText(messaging, e164, message);
-            String channel = sms.sent() ? sms.channel() : "sms";
-            String outcome = sms.sent() ? "sent" : "failed";
-            String prefix = send.skipped() ? "whatsapp_skipped:" : "whatsapp_failed:";
-            String detail = prefix + send.detail() + ";" + sms.detail();
-            return new DeliveryResult(lookup, channel, outcome, detail);
+        String prefix = send.skipped() ? "whatsapp_skipped:" : "whatsapp_failed:";
+        return new DeliveryResult(lookup, "whatsapp", "failed", prefix + send.detail());
+    }
+
+    /**
+     * SMS-only send (no RapidAPI lookup, no Meta WhatsApp). Used for the standalone SMS admin test.
+     */
+    public DeliveryResult deliverSmsOnly(TenantMessagingConfig messaging, String phoneDigits, String message) {
+        String e164 = "+" + phoneDigits;
+        var lookup = RapidApiWhatsAppLookupClient.LookupResult.lookupSkipped("sms_only_test");
+        if (!messaging.smsConfigured()) {
+            return new DeliveryResult(
+                    lookup,
+                    "sms",
+                    "skipped",
+                    "SMS provider is not configured (set Sozuri or Africa's Talking in admin).");
         }
-        return new DeliveryResult(
-                lookup,
-                "whatsapp",
-                "failed",
-                "whatsapp_failed:" + send.detail()
-                        + (send.skipped() ? "" : ". SMS fallback is not configured."));
+        var sms = smsMessagingClient.sendText(messaging, e164, message);
+        String channel = sms.channel();
+        String outcome = sms.sent() ? "sent" : (sms.stub() ? "stub" : "failed");
+        return new DeliveryResult(lookup, channel, outcome, sms.detail());
     }
 
     private DeliveryResult attemptWhatsAppThenSms(

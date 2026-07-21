@@ -210,18 +210,18 @@ public class CreditSaleReminderService {
                     message);
         }
 
-        if (!messaging.metaWhatsAppConfigured() && !messaging.smsConfigured()) {
+        if (!messaging.metaWhatsAppConfigured()) {
             return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
                     true,
                     messaging.rapidApiConfigured(),
-                    messaging.metaWhatsAppConfigured(),
+                    false,
                     messaging.smsConfigured(),
+                    true,
                     false,
-                    false,
-                    "not_configured",
-                    "none",
+                    "whatsapp_only_test",
+                    "whatsapp",
                     "skipped",
-                    "Add a Meta WhatsApp phone number ID + access token (or an SMS provider), save, then retry.",
+                    "Add a Meta WhatsApp phone number ID + access token, save, then retry. Use the SMS test for Sozuri / Africa's Talking.",
                     message);
         }
 
@@ -258,6 +258,83 @@ public class CreditSaleReminderService {
                 message);
     }
 
+    /**
+     * Standalone admin SMS test (Sozuri / Africa's Talking). No RapidAPI or Meta WhatsApp.
+     */
+    public zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse sendSmsTest(
+            String businessId,
+            String rawPhone,
+            String customMessage
+    ) {
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForTest(businessId);
+        String message = buildSmsTestMessage(businessId, customMessage);
+
+        if (!messaging.secretsReadable()) {
+            return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
+                    true,
+                    messaging.rapidApiConfigured(),
+                    messaging.metaWhatsAppConfigured(),
+                    messaging.smsConfigured(),
+                    true,
+                    false,
+                    "sms_only_test",
+                    "none",
+                    "failed",
+                    messaging.secretsReadError() != null
+                            ? messaging.secretsReadError()
+                            : "Stored API keys could not be read on the server.",
+                    message);
+        }
+
+        if (!messaging.smsConfigured()) {
+            return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
+                    true,
+                    messaging.rapidApiConfigured(),
+                    messaging.metaWhatsAppConfigured(),
+                    false,
+                    true,
+                    false,
+                    "sms_only_test",
+                    "sms",
+                    "skipped",
+                    "Configure Sozuri or Africa's Talking in Platform integrations or Credit tab reminders, save, then retry.",
+                    message);
+        }
+
+        String phoneDigits = StkPhoneNormalizer.normalize(rawPhone);
+        if (phoneDigits == null) {
+            return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
+                    true,
+                    messaging.rapidApiConfigured(),
+                    messaging.metaWhatsAppConfigured(),
+                    messaging.smsConfigured(),
+                    true,
+                    false,
+                    "sms_only_test",
+                    "sms",
+                    "failed",
+                    "Use a Kenyan number e.g. 0712345678 or 254712345678",
+                    message);
+        }
+
+        CustomerMessageDispatcher.DeliveryResult attempt =
+                customerMessageDispatcher.deliverSmsOnly(messaging, phoneDigits, message);
+        log.info("sms_test business={} channel={} outcome={} detail={}",
+                businessId, attempt.channel(), attempt.outcome(), attempt.detail());
+        return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
+                true,
+                messaging.rapidApiConfigured(),
+                messaging.metaWhatsAppConfigured(),
+                messaging.smsConfigured(),
+                attempt.lookup().skipped(),
+                attempt.lookup().onWhatsApp(),
+                attempt.lookup().detail(),
+                attempt.channel(),
+                attempt.outcome(),
+                attempt.detail(),
+                message);
+    }
+
     private String buildTestMessage(String businessId, String customMessage) {
         if (customMessage != null && !customMessage.isBlank()) {
             return customMessage.trim();
@@ -267,6 +344,17 @@ public class CreditSaleReminderService {
                 ? business.getName().trim()
                 : "our shop";
         return "Test message from " + shopName + " via Palmart. If you received this, WhatsApp messaging is set up correctly.";
+    }
+
+    private String buildSmsTestMessage(String businessId, String customMessage) {
+        if (customMessage != null && !customMessage.isBlank()) {
+            return customMessage.trim();
+        }
+        Business business = businessRepository.findById(businessId).orElse(null);
+        String shopName = business != null && business.getName() != null && !business.getName().isBlank()
+                ? business.getName().trim()
+                : "our shop";
+        return "Test SMS from " + shopName + " via Palmart. If you received this, SMS messaging is set up correctly.";
     }
 
     private void pushInAppNotification(

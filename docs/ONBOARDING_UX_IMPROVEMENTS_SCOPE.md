@@ -1,6 +1,6 @@
 # Onboarding UX Improvements — Scope
 
-**Status:** Scoped (ready to implement)  
+**Status:** Phase A + B quick wins in progress (FE)  
 **Date:** 2026-07-22  
 **Depends on:** `ONBOARDING_REGION_AND_CATALOG_SCOPE.md`, `SUPER_ADMIN_GLOBAL_CATALOG_SCOPE.md`, global catalog adopt UI  
 **Related:** questionnaire (steps 1–6), products catalog review/import, post-setup checklist  
@@ -75,6 +75,78 @@ Highest leverage = tighten **B** into the completion / activation story.
 
 ---
 
+## 2b. Screen-by-screen audit (code truth, per step)
+
+Source: `onboarding-questionnaire.tsx` + provider. Aligned with the locked decisions in
+`ONBOARDING_REGION_AND_CATALOG_SCOPE.md` §5–§6 (country on create, 6 steps, empty-catalog honesty).
+
+### Step 1 — Your shop locations
+
+**Today:** branch count (1–5+) then a required name input per branch; live “→ {Name} branch” preview; country-aware locality placeholders (KE/UG/TZ/RW/NG/ZA).
+
+| Issue | Improvement | Effort |
+|-------|-------------|--------|
+| All branch names required before Continue — a 5-branch owner types 5 localities on screen 1 | Require **only branch 1**; blank slots auto-name (“Branch 2”) and are editable later in Branches. Copy: “You can rename these anytime.” | S |
+| “5 or more” silently caps at 5 | Keep cap but say it **before** the inputs, not after | S |
+| No context for why we ask | One-liner: “Each branch gets its own stock and sales.” | S |
+
+### Step 2 — What kind of shop
+
+**Today:** multi-select store types incl. cosmetics / wines-spirits (Phase 3 verticals shipped); hint text per option.
+
+| Issue | Improvement | Effort |
+|-------|-------------|--------|
+| Changing types after step 3 silently wipes department picks | Keep wipe (correct) but toast/inline note: “Departments reset to match your new shop type.” | S |
+| No signal that this drives catalog packs later | Hint: “We use this to suggest starter products at the end.” Sets up step 6. | S |
+
+### Step 3 — Choose your departments
+
+**Today:** auto-selects all suggested kits; chips + custom add; Select all / Clear; skippable.
+
+| Issue | Improvement | Effort |
+|-------|-------------|--------|
+| “Departments” creates item types, not POS categories — taxonomy confusion later (B1) | Rename to **“Product sections”** + subtitle “How items are grouped at the till and in reports.” | S |
+| Auto-select-all makes Continue a rubber stamp; users don’t realize these become real entities | Keep auto-select (good default) but add “These become your product sections — you can edit them anytime.” | S |
+
+### Step 4 — Sell online?
+
+**Today:** bare yes/no; no consequence explanation.
+
+| Issue | Improvement | Effort |
+|-------|-------------|--------|
+| User can’t tell what “yes” does | Show outcome under Yes: “Get a web shop at **{slug}.palmart…** — customers browse and order online.” Under No: “You can turn this on later in Settings.” | S |
+
+### Step 5 — Brand your shop (the heavy step)
+
+**Today:** display name (suggested), color presets + contrast rule, preview modal, optional logo (≤4 MB); **Finish setup** applies all entities (branches, item types, storefront, branding, logo) then marks `completed`.
+
+| Issue | Improvement | Effort |
+|-------|-------------|--------|
+| One button does five writes; failure gives one generic error and re-runs everything | Make `applyOnboardingQuestionnaire` steps idempotent/resumable; on failure, tell the user **what** failed (“Branches created; logo upload failed — retry or skip logo”). | M |
+| “Finish setup” label + 83% progress implies more to come, but status flips to `completed` here | Rename button to **“Create my shop”**; progress copy at step 6 becomes “Last step: stock your shelves.” | S |
+| Contrast error appears only after picking bad colours | Fine as-is (presets are contrast-safe); no change. | — |
+
+### Step 6 — Stock your shelves (the weak link)
+
+**Today:** text CTA card. Browse catalog / add manually / finish later. Empty-shell variant honest (per §5.12). No pack preview, no import from here, completion already happened.
+
+| Issue | Improvement | Effort |
+|-------|-------------|--------|
+| Zero product evidence — user must take it on faith and context-switch to catalog | **Show the suggested pack inline**: pack name, product count, a few product names/images, currency-correct prices. Primary CTA: “Import {pack} → review”. | M |
+| “Browse product catalog” is a detour, not a path | Keep as secondary CTA. Primary = suggested pack (matches §6 “vertical pack for you”). | S |
+| “I’ll add products later” has no follow-up | Pairs with hub banner / checklist (Phase A2–A3). | S |
+
+### Cross-cutting
+
+| Issue | Improvement | Effort |
+|-------|-------------|--------|
+| Progress % (`step/6`) counts the post-complete step | Show 5 answer steps as the bar; step 6 renders as “Final step” state, not 100%-plus | S |
+| **Skip for now** on every step wipes answers (D5) | Keep answers on dismiss; hub “Resume setup” chip while `dismissed` + shop empty | S |
+| Country/currency never confirmed inside questionnaire | Read-only chip in the header (e.g. “🇰🇪 Kenya · KES”) — reassures the §6 “where you operate” promise without adding a step | S |
+| No funnel telemetry (region doc Phase 5) | Emit step-view / finish / pack-adopt events when instrumenting Phase A | M |
+
+---
+
 ## 3. Decisions (lock before build)
 
 | # | Decision | Options | Recommendation |
@@ -95,7 +167,8 @@ Highest leverage = tighten **B** into the completion / activation story.
 
 | Work item | Detail | Effort |
 |-----------|--------|--------|
-| **A1. Onboarding-aware catalog happy path** | From step 6 / `?from=onboarding`: surface best matching pack → primary CTA (“Import starter pack”) → slim review (defaults on, `createMissingCategories` default on for this path) → progress → success → hub with “X products ready.” | M |
+| **A0. Step 6 shows the goods** | Fetch suggested pack (store-type match) on step 6 and render it inline: pack name, product count, sample products, currency-correct prices. Primary CTA “Import {pack}” deep-links to catalog with the pack pre-selected. | M |
+| **A1. Onboarding-aware catalog happy path** | From step 6 / `?from=onboarding`: pack pre-selected → slim review (defaults on, `createMissingCategories` default on for this path) → progress % → success → hub with “X products ready.” | M |
 | **A2. Post-setup: stock first** | Checklist order: Import starter pack → First sale → Invite staff → Reports. Mark stock item done when tenant has ≥1 product (or pack adopted). | S |
 | **A3. Soft banner for skippers / empty catalogs** | Hub + Products: persistent “Stock your shelves” until first import or explicit dismiss. | S |
 
@@ -118,6 +191,9 @@ Highest leverage = tighten **B** into the completion / activation story.
 | **B3. Retire legacy tour** | Unwire `?onboarding=` drawer openers; rename `markOnboardingTourPending` → questionnaire pending; remove or quarantine dead tour UI. | S |
 | **B4. Skip preserves answers** | `dismissed` keeps answers; hub “Resume setup” re-opens overlay. | S |
 | **B5. Landing copy** | Align “how it works” / stock messaging with catalog packs (not CSV-first). | S |
+| **B6. Per-step micro-copy** | Screen-by-screen fixes from §2b: step-1 only branch 1 required, step-4 consequence copy, step-5 button rename (“Create my shop”), step-2 “resets departments” note, progress bar counts 5 answer steps. | S–M |
+| **B7. Country chip in header** | Read-only “{flag} {country} · {currency}” chip on the questionnaire card. | S |
+| **B8. Resumable apply** | Split `applyOnboardingQuestionnaire` failure reporting (branches vs logo vs storefront); don’t re-run succeeded writes on retry. | M |
 
 **Success criteria**
 
@@ -256,3 +332,5 @@ Do **not** implement A2 unless Product explicitly locks D1=A2.
 | Date | Change |
 |------|--------|
 | 2026-07-22 | Initial scope from live questionnaire + catalog + hub audit |
+| 2026-07-22 | v2 — added §2b screen-by-screen audit (steps 1–6 + cross-cutting); Phase A gains A0 (inline pack preview on step 6); Phase B gains B6–B8 (micro-copy, country chip, resumable apply) |
+| 2026-07-22 | v3 — started implementation: A0–A3 + B quick wins (step-6 pack card, catalog `packId` happy path, hub stock banner/checklist, skip-preserve + resume, departments→sections, Create my shop) |

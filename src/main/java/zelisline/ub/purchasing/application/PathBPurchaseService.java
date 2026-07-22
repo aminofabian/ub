@@ -50,6 +50,7 @@ import zelisline.ub.purchasing.api.dto.PathBSessionListRow;
 import zelisline.ub.purchasing.api.dto.PostPathBLineBreakdown;
 import zelisline.ub.purchasing.api.dto.PostPathBRequest;
 import zelisline.ub.purchasing.api.dto.PostPathBResponse;
+import zelisline.ub.purchasing.api.dto.PatchPathBSessionRequest;
 import zelisline.ub.purchasing.api.dto.PatchPathBSupplyInvoiceLineRequest;
 import zelisline.ub.purchasing.domain.InventoryBatch;
 import zelisline.ub.purchasing.domain.RawPurchaseLine;
@@ -114,7 +115,29 @@ public class PathBPurchaseService {
         s.setBranchId(req.branchId());
         s.setReceivedAt(req.receivedAt());
         s.setNotes(blankToNull(req.notes()));
+        s.setClientDraftJson(blankToNull(req.clientDraftJson()));
         s.setStatus(PurchasingConstants.SESSION_DRAFT);
+        sessionRepository.save(s);
+        return detailOf(s);
+    }
+
+    @Transactional
+    public PathBSessionDetailResponse patchSession(
+            String businessId,
+            String sessionId,
+            PatchPathBSessionRequest req
+    ) {
+        RawPurchaseSession s = loadSession(businessId, sessionId);
+        assertDraft(s);
+        if (req.receivedAt() != null) {
+            s.setReceivedAt(req.receivedAt());
+        }
+        if (req.notes() != null) {
+            s.setNotes(blankToNull(req.notes()));
+        }
+        if (req.clientDraftJson() != null) {
+            s.setClientDraftJson(blankToNull(req.clientDraftJson()));
+        }
         sessionRepository.save(s);
         return detailOf(s);
     }
@@ -162,6 +185,7 @@ public class PathBPurchaseService {
         line.setDescriptionText(req.description().trim());
         line.setAmountMoney(req.amountMoney().setScale(2, RoundingMode.HALF_UP));
         line.setSuggestedItemId(blankToNull(req.suggestedItemId()));
+        applyDraftLineFields(line, req);
         line.setLineStatus(PurchasingConstants.LINE_PENDING);
         lineRepository.save(line);
         return toLineResponse(line);
@@ -187,6 +211,7 @@ public class PathBPurchaseService {
         line.setDescriptionText(req.description().trim());
         line.setAmountMoney(req.amountMoney().setScale(2, RoundingMode.HALF_UP));
         line.setSuggestedItemId(blankToNull(req.suggestedItemId()));
+        applyDraftLineFields(line, req);
         lineRepository.save(line);
         return toLineResponse(line);
     }
@@ -597,8 +622,23 @@ public class PathBPurchaseService {
                 s.getReceivedAt(),
                 s.getNotes(),
                 s.getStatus(),
+                s.getClientDraftJson(),
                 lines
         );
+    }
+
+    private static void applyDraftLineFields(RawPurchaseLine line, AddPathBLineRequest req) {
+        line.setDraftQty(scaleNullable(req.draftQty(), UNIT_SCALE));
+        line.setDraftUnitCost(scaleNullable(req.draftUnitCost(), UNIT_SCALE));
+        line.setDraftSellPrice(scaleNullable(req.draftSellPrice(), 2));
+        line.setDraftExpiryDate(req.draftExpiryDate());
+    }
+
+    private static BigDecimal scaleNullable(BigDecimal value, int scale) {
+        if (value == null) {
+            return null;
+        }
+        return value.setScale(scale, RoundingMode.HALF_UP);
     }
 
     private static PathBLineResponse toLineResponse(RawPurchaseLine l) {
@@ -608,7 +648,11 @@ public class PathBPurchaseService {
                 l.getDescriptionText(),
                 l.getAmountMoney(),
                 l.getSuggestedItemId(),
-                l.getLineStatus()
+                l.getLineStatus(),
+                l.getDraftQty(),
+                l.getDraftUnitCost(),
+                l.getDraftSellPrice(),
+                l.getDraftExpiryDate()
         );
     }
 

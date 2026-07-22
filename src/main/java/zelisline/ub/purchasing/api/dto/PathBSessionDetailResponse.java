@@ -10,6 +10,7 @@ public record PathBSessionDetailResponse(
         Instant receivedAt,
         String notes,
         String status,
+        String clientDraftJson,
         List<PathBLineResponse> lines
 ) {
 }

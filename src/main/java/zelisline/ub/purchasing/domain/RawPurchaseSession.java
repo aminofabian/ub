@@ -38,6 +38,10 @@ public class RawPurchaseSession {
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
 
+    /** Opaque client draft JSON (extras, UI flags). Not interpreted by the server. */
+    @Column(name = "client_draft_json", columnDefinition = "TEXT")
+    private String clientDraftJson;
+
     @Column(name = "status", nullable = false, length = 16)
     private String status;
 

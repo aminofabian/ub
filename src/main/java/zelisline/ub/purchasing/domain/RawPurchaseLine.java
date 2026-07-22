@@ -2,6 +2,7 @@ package zelisline.ub.purchasing.domain;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 
 import jakarta.persistence.Column;
@@ -36,6 +37,19 @@ public class RawPurchaseLine {
 
     @Column(name = "suggested_item_id", length = 36)
     private String suggestedItemId;
+
+    /** Optional draft qty while session is still open (grocery receive). */
+    @Column(name = "draft_qty", precision = 14, scale = 4)
+    private BigDecimal draftQty;
+
+    @Column(name = "draft_unit_cost", precision = 14, scale = 4)
+    private BigDecimal draftUnitCost;
+
+    @Column(name = "draft_sell_price", precision = 14, scale = 4)
+    private BigDecimal draftSellPrice;
+
+    @Column(name = "draft_expiry_date")
+    private LocalDate draftExpiryDate;
 
     @Column(name = "line_status", nullable = false, length = 16)
     private String lineStatus;

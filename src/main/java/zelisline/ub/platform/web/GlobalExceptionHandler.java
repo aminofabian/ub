@@ -24,6 +24,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
 
+import jakarta.persistence.PersistenceException;
 import jakarta.validation.ConstraintViolationException;
 
 import zelisline.ub.platform.persistence.DataIntegrityProblems;
@@ -58,6 +59,24 @@ public class GlobalExceptionHandler {
         body.setTitle("Database not ready");
         body.setType(URI.create(PROBLEM_BASE + "schema-mismatch"));
         body.setDetail(schemaMismatchDetail(ex));
+        return problem(body, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    @ExceptionHandler(PersistenceException.class)
+    public ResponseEntity<ProblemDetail> handlePersistence(PersistenceException ex) {
+        log.error("Persistence error", ex);
+        String detail = schemaMismatchDetail(ex);
+        if (detail.toLowerCase().contains("path b draft")
+                || detail.toLowerCase().contains("migration")) {
+            ProblemDetail body = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
+            body.setTitle("Database not ready");
+            body.setType(URI.create(PROBLEM_BASE + "schema-mismatch"));
+            body.setDetail(detail);
+            return problem(body, HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+        ProblemDetail body = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
+        body.setTitle("Internal server error");
+        body.setType(URI.create(PROBLEM_BASE + "internal-error"));
         return problem(body, HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
@@ -192,13 +211,37 @@ public class GlobalExceptionHandler {
     }
 
     private static String schemaMismatchDetail(Throwable ex) {
-        String message = ex.getMessage() != null ? ex.getMessage().toLowerCase() : "";
+        String message = flattenMessages(ex).toLowerCase();
         if (message.contains("stock_take_restock_items")) {
             return "Restock tables are missing. Redeploy the API so Flyway can apply migration V134__stock_take_restock_items.sql.";
         }
         if (message.contains("daily_stock_audit")) {
             return "Daily audit tables are missing. Redeploy the API so Flyway can apply migration V133__daily_stock_audit.sql.";
         }
+        if (message.contains("client_draft_json")
+                || message.contains("draft_qty")
+                || message.contains("draft_unit_cost")
+                || message.contains("draft_sell_price")
+                || message.contains("draft_expiry_date")) {
+            return "Path B draft columns are missing. Redeploy the API so Flyway can apply migrations V154/V155 (path_b draft fields).";
+        }
         return "A required database migration may be missing. Redeploy the API so Flyway can run pending migrations.";
+    }
+
+    private static String flattenMessages(Throwable ex) {
+        StringBuilder sb = new StringBuilder();
+        Throwable cur = ex;
+        int depth = 0;
+        while (cur != null && depth < 8) {
+            if (cur.getMessage() != null) {
+                if (sb.length() > 0) {
+                    sb.append(' ');
+                }
+                sb.append(cur.getMessage());
+            }
+            cur = cur.getCause();
+            depth++;
+        }
+        return sb.toString();
     }
 }

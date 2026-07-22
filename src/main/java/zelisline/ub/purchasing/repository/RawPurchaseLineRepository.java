@@ -12,6 +12,8 @@ public interface RawPurchaseLineRepository extends JpaRepository<RawPurchaseLine
 
     List<RawPurchaseLine> findBySessionIdOrderBySortOrderAscIdAsc(String sessionId);
 
+    List<RawPurchaseLine> findByInventoryBatchId(String inventoryBatchId);
+
     int countBySessionIdAndLineStatus(String sessionId, String lineStatus);
 
     @Query("select coalesce(max(l.sortOrder), -1) from RawPurchaseLine l where l.sessionId = :sid")

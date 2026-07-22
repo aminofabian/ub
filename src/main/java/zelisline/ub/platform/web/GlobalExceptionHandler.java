@@ -185,6 +185,37 @@ public class GlobalExceptionHandler {
                     "A supplier invoice for this receipt already exists. Refresh supplies and retry if stock was not updated.");
             return problem(body, HttpStatus.CONFLICT);
         }
+        if (flat.contains("fk_si_rps") || flat.contains("raw_purchase_session")) {
+            ProblemDetail body = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+            body.setTitle("Conflict");
+            body.setType(URI.create(PROBLEM_BASE + "supply-session-linked"));
+            body.setDetail(
+                    "This supply is still linked to a purchase receipt used by another invoice. Refresh and retry, or delete the duplicate invoice first.");
+            return problem(body, HttpStatus.CONFLICT);
+        }
+        if (flat.contains("fk_rpl_inventory_batch") || flat.contains("inventory_batch_id")) {
+            ProblemDetail body = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+            body.setTitle("Conflict");
+            body.setType(URI.create(PROBLEM_BASE + "supply-batch-linked"));
+            body.setDetail(
+                    "Stock batches from this supply are still linked. Refresh and retry delete.");
+            return problem(body, HttpStatus.CONFLICT);
+        }
+        if (flat.contains("fk_spa_invoice") || flat.contains("supplier_payment_allocations")) {
+            ProblemDetail body = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+            body.setTitle("Conflict");
+            body.setType(URI.create(PROBLEM_BASE + "supply-has-payments"));
+            body.setDetail("Remove payments from this invoice before deleting it");
+            return problem(body, HttpStatus.CONFLICT);
+        }
+        if (flat.contains("fk_ib_supply_batch") || flat.contains("supply_batch_id")) {
+            ProblemDetail body = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+            body.setTitle("Conflict");
+            body.setType(URI.create(PROBLEM_BASE + "supply-batch-linked"));
+            body.setDetail(
+                    "Inventory rows still reference this supply batch. Refresh and retry delete.");
+            return problem(body, HttpStatus.CONFLICT);
+        }
         ProblemDetail body = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
         body.setTitle("Invalid data");
         body.setType(URI.create(PROBLEM_BASE + "data-integrity"));

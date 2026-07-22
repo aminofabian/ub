@@ -742,6 +742,15 @@ public class PathBPurchaseService {
     }
 
     private void deleteInventoryBatchIfUnused(String batchId, String businessId) {
+        // Clear raw-line FKs that still point at this batch (orphan/double-post leftovers).
+        List<RawPurchaseLine> stillLinked = lineRepository.findByInventoryBatchId(batchId);
+        if (!stillLinked.isEmpty()) {
+            for (RawPurchaseLine rl : stillLinked) {
+                rl.setInventoryBatchId(null);
+            }
+            lineRepository.saveAll(stillLinked);
+            lineRepository.flush();
+        }
         List<StockMovement> leftover = stockMovementRepository.findByBatchId(batchId);
         if (!leftover.isEmpty()) {
             stockMovementRepository.deleteAll(leftover);
@@ -789,6 +798,9 @@ public class PathBPurchaseService {
         RawPurchaseSession session = sessionRepository.findByIdAndBusinessId(sessionId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Purchase session not found"));
 
+        // Double-posts can leave more than one invoice on the same session.
+        boolean soleInvoiceForSession = supplierInvoiceRepository.countByRawPurchaseSessionId(sessionId) <= 1;
+
         List<SupplierInvoiceLine> sils = supplierInvoiceLineRepository.findByInvoiceIdOrderBySortOrderAsc(invoiceId);
         for (SupplierInvoiceLine sil : sils) {
             if (sil.getRawLineId() == null || sil.getRawLineId().isBlank()) {
@@ -799,7 +811,13 @@ public class PathBPurchaseService {
             reversePostedPathBLine(businessId, rl);
         }
 
-        ledgerPostingPort.deleteBySource(businessId, PurchasingConstants.JOURNAL_SOURCE_PATH_B, sessionId);
+        if (soleInvoiceForSession) {
+            // Reverse orphan posted lines (partial receive / double-post leftovers) before batch cleanup.
+            for (RawPurchaseLine rl : lineRepository.findBySessionIdOrderBySortOrderAscIdAsc(sessionId)) {
+                reversePostedPathBLine(businessId, rl);
+            }
+            ledgerPostingPort.deleteBySource(businessId, PurchasingConstants.JOURNAL_SOURCE_PATH_B, sessionId);
+        }
 
         // Drop invoice lines (FK to raw lines) before deleting raw lines / session.
         for (SupplierInvoiceLine sil : sils) {
@@ -809,8 +827,17 @@ public class PathBPurchaseService {
         supplierInvoiceLineRepository.flush();
         supplierInvoiceLineRepository.deleteAll(sils);
         supplierInvoiceLineRepository.flush();
+        // Detach session FK before session delete so a race/sibling cannot trip fk_si_rps mid-cleanup.
+        inv.setRawPurchaseSessionId(null);
+        supplierInvoiceRepository.save(inv);
+        supplierInvoiceRepository.flush();
         supplierInvoiceRepository.delete(inv);
         supplierInvoiceRepository.flush();
+
+        if (!soleInvoiceForSession) {
+            // Another invoice still owns this receipt session — leave session/batches/journal alone.
+            return;
+        }
 
         // Duplicate Path B posts can leave more than one supply batch per session.
         List<SupplyBatch> supplyBatches = supplyBatchRepository
@@ -822,6 +849,11 @@ public class PathBPurchaseService {
 
         List<RawPurchaseLine> sessionLines = lineRepository.findBySessionIdOrderBySortOrderAscIdAsc(sessionId);
         if (!sessionLines.isEmpty()) {
+            for (RawPurchaseLine rl : sessionLines) {
+                rl.setInventoryBatchId(null);
+            }
+            lineRepository.saveAll(sessionLines);
+            lineRepository.flush();
             lineRepository.deleteAll(sessionLines);
             lineRepository.flush();
         }

@@ -71,11 +71,17 @@ public class GlobalCatalogJobRunner {
         );
     }
 
+    /** Minimum gap between progress row writes so 500-item jobs do not spam the DB. */
+    private static final long PROGRESS_WRITE_INTERVAL_MS = 750;
+
     private void runPromote(GlobalCatalogJob job) throws Exception {
         PromoteRequest request = objectMapper.readValue(job.getPayloadJson(), PromoteRequest.class);
         int total = request.itemIds().size();
         progressWriter.markProcessing(job.getId(), total);
-        PromoteResponse response = promoteService.promoteForJob(request, job.getActorUserId());
+        PromoteResponse response = promoteService.promoteForJob(
+                request,
+                job.getActorUserId(),
+                throttledProgressListener(job.getId(), total));
         int committed = response.createdCount() + response.updatedCount();
         progressWriter.finalizeOk(
                 job.getId(),
@@ -86,5 +92,27 @@ public class GlobalCatalogJobRunner {
                         + " updated=" + response.updatedCount()
                         + " skipped=" + response.skippedCount()
         );
+    }
+
+    private SuperAdminGlobalCatalogPromoteService.PromoteProgressListener throttledProgressListener(
+            String jobId,
+            int total
+    ) {
+        long[] lastWriteAt = {0L};
+        return (processedCount, itemName) -> {
+            long now = System.currentTimeMillis();
+            if (now - lastWriteAt[0] < PROGRESS_WRITE_INTERVAL_MS) {
+                return;
+            }
+            lastWriteAt[0] = now;
+            String label = itemName == null || itemName.isBlank()
+                    ? "Promoting " + processedCount + " of " + total
+                    : "Promoting " + processedCount + " of " + total + " — " + itemName;
+            try {
+                progressWriter.markProgress(jobId, processedCount, label);
+            } catch (RuntimeException ex) {
+                log.debug("progress write skipped for job {}: {}", jobId, ex.toString());
+            }
+        };
     }
 }

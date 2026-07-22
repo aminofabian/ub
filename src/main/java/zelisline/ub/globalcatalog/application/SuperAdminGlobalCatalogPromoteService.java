@@ -67,6 +67,11 @@ public class SuperAdminGlobalCatalogPromoteService {
 
     private static final Logger log = LoggerFactory.getLogger(SuperAdminGlobalCatalogPromoteService.class);
 
+    /** Live progress hook for async promote jobs (called once per processed line). */
+    public interface PromoteProgressListener {
+        void onItemProcessed(int processedCount, String itemName);
+    }
+
     private static final String DEFAULT_CATALOG_CODE = "default";
     private static final int MAX_BATCH = 100;
     private static final int MAX_JOB_BATCH = 500;
@@ -141,28 +146,38 @@ public class SuperAdminGlobalCatalogPromoteService {
 
     @Transactional(readOnly = true)
     public PromoteResponse preview(PromoteRequest request) {
-        return runPromote(request, true, MAX_BATCH);
+        return runPromote(request, true, MAX_BATCH, null);
     }
 
     @Transactional
     public PromoteResponse promote(PromoteRequest request) {
-        PromoteResponse result = runPromote(request, false, MAX_BATCH);
+        PromoteResponse result = runPromote(request, false, MAX_BATCH, null);
         publishAudit(request, result, currentSuperAdminId());
         return result;
     }
 
     /**
      * Async job path: larger batch ceiling; actor id comes from the job row
-     * (scheduler has no SecurityContext).
+     * (scheduler has no SecurityContext). Reports per-line progress so the
+     * SA UI can render a live progress bar while images re-host.
      */
     @Transactional
-    public PromoteResponse promoteForJob(PromoteRequest request, String actorUserId) {
-        PromoteResponse result = runPromote(request, false, MAX_JOB_BATCH);
+    public PromoteResponse promoteForJob(
+            PromoteRequest request,
+            String actorUserId,
+            PromoteProgressListener progressListener
+    ) {
+        PromoteResponse result = runPromote(request, false, MAX_JOB_BATCH, progressListener);
         publishAudit(request, result, actorUserId);
         return result;
     }
 
-    private PromoteResponse runPromote(PromoteRequest request, boolean dryRun, int maxBatch) {
+    private PromoteResponse runPromote(
+            PromoteRequest request,
+            boolean dryRun,
+            int maxBatch,
+            PromoteProgressListener progressListener
+    ) {
         if (request.itemIds().size() > maxBatch) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST, "Promote batch limited to " + maxBatch + " items");
@@ -198,8 +213,13 @@ public class SuperAdminGlobalCatalogPromoteService {
         List<PromoteLineResult> lines = new ArrayList<>();
 
         // Preserve request order
+        int reachedCount = 0;
         for (String itemId : request.itemIds()) {
             Item item = byId.get(itemId);
+            if (progressListener != null) {
+                progressListener.onItemProcessed(reachedCount, item != null ? item.getName() : null);
+            }
+            reachedCount++;
             if (item == null) {
                 skipped++;
                 lines.add(new PromoteLineResult(itemId, null, "skipped", "Item not found in source business", false));

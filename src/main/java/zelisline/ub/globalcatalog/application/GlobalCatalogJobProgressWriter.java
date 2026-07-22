@@ -27,6 +27,14 @@ public class GlobalCatalogJobProgressWriter {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markProgress(String jobId, int rowsProcessed, String message) {
+        GlobalCatalogJob job = load(jobId);
+        job.setRowsProcessed(rowsProcessed);
+        job.setStatusMessage(truncate(message, 1000));
+        jobRepository.save(job);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void finalizeOk(String jobId, int rowsTotal, int rowsCommitted, String resultJson, String message) {
         GlobalCatalogJob job = load(jobId);
         job.setStatus(GlobalCatalogJob.Status.completed);

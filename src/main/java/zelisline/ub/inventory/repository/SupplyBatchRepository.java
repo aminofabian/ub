@@ -40,6 +40,13 @@ public interface SupplyBatchRepository extends JpaRepository<SupplyBatch, String
     Optional<SupplyBatch> findByBusinessIdAndSourceTypeAndSourceId(
             String businessId, String sourceType, String sourceId);
 
+    /**
+     * Prefer this over {@link #findByBusinessIdAndSourceTypeAndSourceId} when duplicates may exist
+     * (e.g. after a partial/double Path B post). Ordered oldest-first.
+     */
+    List<SupplyBatch> findAllByBusinessIdAndSourceTypeAndSourceIdOrderByCreatedAtAscIdAsc(
+            String businessId, String sourceType, String sourceId);
+
     long countByBusinessId(String businessId);
 
     long countBySupplierIdAndBusinessId(String supplierId, String businessId);

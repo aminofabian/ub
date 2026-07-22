@@ -37,10 +37,18 @@ public class LedgerPostingService implements LedgerPostingPort {
     public String replace(String businessId, String sourceType, String sourceId, JournalEntry entry) {
         ledgerBootstrapService.ensureStandardAccounts(businessId);
         entry.assertBalanced();
-        JournalEntry existing = journalEntryRepository
-                .findByBusinessIdAndSourceTypeAndSourceId(businessId, sourceType, sourceId)
-                .orElseThrow(() -> new IllegalStateException(
-                        "Journal entry not found for replacement: " + sourceType + "/" + sourceId));
+        List<JournalEntry> matches = journalEntryRepository
+                .findAllByBusinessIdAndSourceTypeAndSourceIdOrderByCreatedAtAscIdAsc(
+                        businessId, sourceType, sourceId);
+        if (matches.isEmpty()) {
+            throw new IllegalStateException(
+                    "Journal entry not found for replacement: " + sourceType + "/" + sourceId);
+        }
+        // Keep the oldest; drop duplicate journals left by partial/double posts.
+        JournalEntry existing = matches.getFirst();
+        for (int i = 1; i < matches.size(); i++) {
+            deleteJournalEntry(matches.get(i));
+        }
         List<JournalLine> oldLines = journalLineRepository.findByJournalEntryId(existing.getId());
         if (!oldLines.isEmpty()) {
             journalLineRepository.deleteAll(oldLines);
@@ -58,14 +66,19 @@ public class LedgerPostingService implements LedgerPostingPort {
     @Override
     @Transactional
     public void deleteBySource(String businessId, String sourceType, String sourceId) {
-        journalEntryRepository
-                .findByBusinessIdAndSourceTypeAndSourceId(businessId, sourceType, sourceId)
-                .ifPresent(existing -> {
-                    List<JournalLine> oldLines = journalLineRepository.findByJournalEntryId(existing.getId());
-                    if (!oldLines.isEmpty()) {
-                        journalLineRepository.deleteAll(oldLines);
-                    }
-                    journalEntryRepository.delete(existing);
-                });
+        List<JournalEntry> matches = journalEntryRepository
+                .findAllByBusinessIdAndSourceTypeAndSourceIdOrderByCreatedAtAscIdAsc(
+                        businessId, sourceType, sourceId);
+        for (JournalEntry existing : matches) {
+            deleteJournalEntry(existing);
+        }
+    }
+
+    private void deleteJournalEntry(JournalEntry existing) {
+        List<JournalLine> oldLines = journalLineRepository.findByJournalEntryId(existing.getId());
+        if (!oldLines.isEmpty()) {
+            journalLineRepository.deleteAll(oldLines);
+        }
+        journalEntryRepository.delete(existing);
     }
 }

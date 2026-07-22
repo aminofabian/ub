@@ -812,28 +812,13 @@ public class PathBPurchaseService {
         supplierInvoiceRepository.delete(inv);
         supplierInvoiceRepository.flush();
 
-        supplyBatchRepository
-                .findByBusinessIdAndSourceTypeAndSourceId(businessId, PurchasingConstants.BATCH_SOURCE_PATH_B, sessionId)
-                .ifPresent(sb -> {
-                    List<SupplyBatchExpense> expenses =
-                            supplyBatchExpenseRepository.findBySupplyBatchIdOrderByCreatedAtAsc(sb.getId());
-                    if (!expenses.isEmpty()) {
-                        supplyBatchExpenseRepository.deleteAll(expenses);
-                        supplyBatchExpenseRepository.flush();
-                    }
-                    List<InventoryBatch> linked = inventoryBatchRepository.findBySupplyBatchId(sb.getId());
-                    for (InventoryBatch b : linked) {
-                        // Detach from supply batch header so header delete cannot trip fk_ib_supply_batch.
-                        b.setSupplyBatchId(null);
-                        inventoryBatchRepository.save(b);
-                    }
-                    inventoryBatchRepository.flush();
-                    for (InventoryBatch b : linked) {
-                        deleteInventoryBatchIfUnused(b.getId(), businessId);
-                    }
-                    supplyBatchRepository.delete(sb);
-                    supplyBatchRepository.flush();
-                });
+        // Duplicate Path B posts can leave more than one supply batch per session.
+        List<SupplyBatch> supplyBatches = supplyBatchRepository
+                .findAllByBusinessIdAndSourceTypeAndSourceIdOrderByCreatedAtAscIdAsc(
+                        businessId, PurchasingConstants.BATCH_SOURCE_PATH_B, sessionId);
+        for (SupplyBatch sb : supplyBatches) {
+            deleteSupplyBatchHeader(businessId, sb);
+        }
 
         List<RawPurchaseLine> sessionLines = lineRepository.findBySessionIdOrderBySortOrderAscIdAsc(sessionId);
         if (!sessionLines.isEmpty()) {
@@ -859,25 +844,51 @@ public class PathBPurchaseService {
         }
         CostSplit split = splitLine(line.getAmountMoney(), usableQty, wastageQty);
         LinePostPlan p = new LinePostPlan(line, item, itemId, usableQty, wastageQty, split, expiryDate);
-        SupplyBatch sb = supplyBatchRepository
-                .findByBusinessIdAndSourceTypeAndSourceId(businessId, PurchasingConstants.BATCH_SOURCE_PATH_B, session.getId())
-                .orElseGet(() -> {
-                    SupplyBatch fresh = new SupplyBatch();
-                    fresh.setBusinessId(businessId);
-                    fresh.setBranchId(session.getBranchId());
-                    fresh.setSupplierId(session.getSupplierId());
-                    fresh.setBatchNumber(batchNumberGenerator.next(session.getSupplierId(), supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(session.getSupplierId(), businessId).map(zelisline.ub.suppliers.domain.Supplier::getName).orElse(null), session.getReceivedAt(), businessId));
-                    fresh.setBatchName(null);
-                    fresh.setSourceType(PurchasingConstants.BATCH_SOURCE_PATH_B);
-                    fresh.setSourceId(session.getId());
-                    fresh.setItemCount(0);
-                    fresh.setTotalInitialQuantity(BigDecimal.ZERO);
-                    fresh.setTotalRemainingQuantity(BigDecimal.ZERO);
-                    fresh.setReceivedAt(session.getReceivedAt());
-                    fresh.setStatus("active");
-                    return supplyBatchRepository.save(fresh);
-                });
+        List<SupplyBatch> existingBatches = supplyBatchRepository
+                .findAllByBusinessIdAndSourceTypeAndSourceIdOrderByCreatedAtAscIdAsc(
+                        businessId, PurchasingConstants.BATCH_SOURCE_PATH_B, session.getId());
+        SupplyBatch sb;
+        if (existingBatches.isEmpty()) {
+            SupplyBatch fresh = new SupplyBatch();
+            fresh.setBusinessId(businessId);
+            fresh.setBranchId(session.getBranchId());
+            fresh.setSupplierId(session.getSupplierId());
+            fresh.setBatchNumber(batchNumberGenerator.next(session.getSupplierId(), supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(session.getSupplierId(), businessId).map(zelisline.ub.suppliers.domain.Supplier::getName).orElse(null), session.getReceivedAt(), businessId));
+            fresh.setBatchName(null);
+            fresh.setSourceType(PurchasingConstants.BATCH_SOURCE_PATH_B);
+            fresh.setSourceId(session.getId());
+            fresh.setItemCount(0);
+            fresh.setTotalInitialQuantity(BigDecimal.ZERO);
+            fresh.setTotalRemainingQuantity(BigDecimal.ZERO);
+            fresh.setReceivedAt(session.getReceivedAt());
+            fresh.setStatus("active");
+            sb = supplyBatchRepository.save(fresh);
+        } else {
+            // Prefer the oldest header; orphan duplicate headers from double-posts stay until delete.
+            sb = existingBatches.getFirst();
+        }
         applyLinePost(businessId, session, p, sb);
+    }
+
+    private void deleteSupplyBatchHeader(String businessId, SupplyBatch sb) {
+        List<SupplyBatchExpense> expenses =
+                supplyBatchExpenseRepository.findBySupplyBatchIdOrderByCreatedAtAsc(sb.getId());
+        if (!expenses.isEmpty()) {
+            supplyBatchExpenseRepository.deleteAll(expenses);
+            supplyBatchExpenseRepository.flush();
+        }
+        List<InventoryBatch> linked = inventoryBatchRepository.findBySupplyBatchId(sb.getId());
+        for (InventoryBatch b : linked) {
+            // Detach from supply batch header so header delete cannot trip fk_ib_supply_batch.
+            b.setSupplyBatchId(null);
+            inventoryBatchRepository.save(b);
+        }
+        inventoryBatchRepository.flush();
+        for (InventoryBatch b : linked) {
+            deleteInventoryBatchIfUnused(b.getId(), businessId);
+        }
+        supplyBatchRepository.delete(sb);
+        supplyBatchRepository.flush();
     }
 
     @Transactional

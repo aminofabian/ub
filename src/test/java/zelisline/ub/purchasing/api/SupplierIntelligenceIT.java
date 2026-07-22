@@ -313,6 +313,30 @@ class SupplierIntelligenceIT {
                 .andExpect(status().isBadRequest());
     }
 
+    @Test
+    void dashboardOkWithoutBranch() throws Exception {
+        mockMvc.perform(get("/api/v1/purchasing/intelligence/dashboard")
+                        .param("from", windowStart.toString())
+                        .param("to", windowEnd.toString())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void dashboardOkWithBranchFilter() throws Exception {
+        // Branch filter must inject into WHERE (before ORDER BY / LIMIT), not append.
+        mockMvc.perform(get("/api/v1/purchasing/intelligence/dashboard")
+                        .param("from", windowStart.toString())
+                        .param("to", windowEnd.toString())
+                        .param("branchId", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+    }
+
     private Item manualItem(String sku, String name) {
         Item it = new Item();
         it.setBusinessId(TENANT);

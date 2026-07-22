@@ -7,6 +7,8 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -86,17 +88,35 @@ public class SupplierIntelligenceService {
             """;
 
     private static final String INVOICE_BRANCH_FILTER = """
+
             AND COALESCE(
                 (SELECT rps.branch_id FROM raw_purchase_sessions rps WHERE rps.id = si.raw_purchase_session_id LIMIT 1),
                 (SELECT gr.branch_id FROM goods_receipts gr WHERE gr.id = si.goods_receipt_id LIMIT 1)
             ) = ?
             """;
 
-    private static String withInvoiceBranchFilter(String sql, String branchId) {
+    /**
+     * Start of the first trailing clause ({@code GROUP BY} / {@code ORDER BY} / {@code LIMIT}).
+     * Matches the keyword itself (not leading whitespace) so injected SQL stays separated.
+     */
+    private static final Pattern TRAILING_SQL_CLAUSE = Pattern.compile(
+            "(?i)\\b(GROUP\\s+BY|ORDER\\s+BY|LIMIT)\\b");
+
+    /**
+     * Injects the branch predicate into the WHERE clause. Appending after
+     * {@code ORDER BY}/{@code LIMIT} produces invalid SQL and surfaces as a
+     * misleading schema-mismatch 500 when the UI always sends a branch id.
+     */
+    static String withInvoiceBranchFilter(String sql, String branchId) {
         if (branchId == null || branchId.isBlank()) {
             return sql;
         }
-        return sql + INVOICE_BRANCH_FILTER;
+        Matcher m = TRAILING_SQL_CLAUSE.matcher(sql);
+        if (!m.find()) {
+            return sql + INVOICE_BRANCH_FILTER;
+        }
+        int insertAt = m.start();
+        return sql.substring(0, insertAt) + INVOICE_BRANCH_FILTER + sql.substring(insertAt);
     }
 
     @Transactional(readOnly = true)
@@ -274,10 +294,10 @@ public class SupplierIntelligenceService {
                 ? totalVariance[0].divide(new BigDecimal(varianceCount[0]), 2, RoundingMode.HALF_UP)
                 : BigDecimal.ZERO;
 
-        // Spend trend by week
+        // Spend trend by day (portable — avoid MySQL-only DATE_FORMAT for H2 tests)
         List<PurchasingIntelligenceDashboardResponse.SpendTrendPoint> spendTrend = jdbc.query(
                 withInvoiceBranchFilter("""
-                SELECT DATE_FORMAT(si.invoice_date, '%Y-%m-%d') AS dt,
+                SELECT si.invoice_date AS dt,
                        COALESCE(SUM(sil.line_total), 0) AS spend
                   FROM supplier_invoice_lines sil
                   JOIN supplier_invoices si ON si.id = sil.invoice_id
@@ -285,11 +305,11 @@ public class SupplierIntelligenceService {
                    AND si.status = 'posted'
                    AND si.invoice_date >= ?
                    AND si.invoice_date <= ?
-                 GROUP BY DATE_FORMAT(si.invoice_date, '%Y-%m-%d')
+                 GROUP BY si.invoice_date
                  ORDER BY dt
                 """, branchFilter),
                 (rs, rowNum) -> new PurchasingIntelligenceDashboardResponse.SpendTrendPoint(
-                        rs.getString("dt"),
+                        rs.getDate("dt").toLocalDate().toString(),
                         new BigDecimal(rs.getString("spend")).setScale(2, RoundingMode.HALF_UP)),
                 branchFilter.isEmpty()
                         ? new Object[] {businessId, fromDate, toDate}

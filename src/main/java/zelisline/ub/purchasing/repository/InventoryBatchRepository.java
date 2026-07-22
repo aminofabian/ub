@@ -329,4 +329,6 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
             String branchId,
             List<String> statuses
     );
+
+    boolean existsByBusinessIdAndQuantityRemainingGreaterThan(String businessId, BigDecimal quantityRemaining);
 }

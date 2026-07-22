@@ -42,7 +42,8 @@ public record ItemResponse(
         String size,
         /**
          * On-hand at {@code branchId} when the detail endpoint was called with that query param;
-         * otherwise null. Prefer this over {@link #currentStock()} for branch-scoped UIs.
+         * otherwise null. Prefer this over {@link #currentStock()} for branch-scoped UIs
+         * (in-store / branch stock from active batches).
          * For package variants this is available whole packages; see {@link #baseStockQty}.
          */
         BigDecimal stockQty,

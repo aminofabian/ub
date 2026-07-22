@@ -23,6 +23,8 @@ public record BusinessResponse(
         // app shell to keep cross-origin redirects (login handoff, share
         // links) anchored to the tenant's chosen primary host instead of a
         // slug-derived fallback.
-        String primaryDomain
+        String primaryDomain,
+        /** Optional override of regional catalog resolution ({@code settings.globalCatalogCode}). */
+        String globalCatalogCode
 ) {
 }

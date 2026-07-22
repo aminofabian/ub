@@ -48,6 +48,11 @@ public class MediaStoreConfiguration {
             }
 
             @Override
+            public CloudinaryUploadResult uploadFromRemoteUrl(String remoteUrl, String folderPath) {
+                return EMPTY;
+            }
+
+            @Override
             public void destroyImage(String publicId) {
                 // no-op
             }

@@ -142,6 +142,67 @@ public class CloudinaryImageService implements MediaStore {
         return "ub/" + businessId + "/categories/" + categoryId;
     }
 
+    public static String folderGlobalCatalog(String productId) {
+        return "global-catalog/" + productId;
+    }
+
+    /**
+     * Ask Cloudinary to fetch {@code remoteUrl} and store it under {@code folderPath}.
+     * Avoids downloading bytes into the app JVM.
+     */
+    @Override
+    public CloudinaryUploadResult uploadFromRemoteUrl(String remoteUrl, String folderPath) {
+        if (!isConfigured()) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Cloudinary is not configured on this server"
+            );
+        }
+        if (remoteUrl == null || remoteUrl.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Empty remote image URL");
+        }
+        String trimmed = remoteUrl.trim();
+        if (!(trimmed.startsWith("http://") || trimmed.startsWith("https://"))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Remote image URL must be http(s)");
+        }
+        String folder = folderPath == null || folderPath.isBlank()
+                ? "ub/misc"
+                : folderPath.trim();
+
+        String url = "https://api.cloudinary.com/v1_1/" + properties.getCloudName() + "/image/upload";
+        final HttpResponse<String> raw;
+        try {
+            raw = Unirest.post(url)
+                    .basicAuth(properties.getApiKey(), properties.getApiSecret())
+                    .field("file", trimmed)
+                    .field("folder", folder)
+                    .field("overwrite", "false")
+                    .field("phash", "true")
+                    .field("colors", "true")
+                    .asString();
+        } catch (Exception e) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Could not reach Cloudinary: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName())
+            );
+        }
+        if (raw.getStatus() != 200) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    cloudinaryFailureMessage("upload", raw.getStatus(), raw.getBody()));
+        }
+        try {
+            return parseUpload(raw.getBody());
+        } catch (ResponseStatusException ex) {
+            throw ex;
+        } catch (Exception e) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Could not parse Cloudinary response: " + e.getMessage()
+            );
+        }
+    }
+
     public void destroyImage(String publicId) {
         if (!isConfigured() || publicId == null || publicId.isBlank()) {
             return;

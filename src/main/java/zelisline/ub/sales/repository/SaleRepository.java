@@ -36,4 +36,6 @@ public interface SaleRepository extends JpaRepository<Sale, String> {
             nativeQuery = true
     )
     long nextReceiptNo(@Param("businessId") String businessId);
+
+    boolean existsByBusinessId(String businessId);
 }

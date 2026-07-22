@@ -22,7 +22,9 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
+import zelisline.ub.catalog.application.CatalogTaxonomyService;
 import zelisline.ub.catalog.application.ItemCatalogService;
+import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
@@ -41,6 +43,7 @@ import zelisline.ub.globalcatalog.domain.GlobalCatalog;
 import zelisline.ub.globalcatalog.domain.GlobalCategory;
 import zelisline.ub.globalcatalog.domain.GlobalProduct;
 import zelisline.ub.globalcatalog.domain.GlobalProductPack;
+import zelisline.ub.globalcatalog.domain.GlobalProductStatus;
 import zelisline.ub.globalcatalog.repository.GlobalCatalogRepository;
 import zelisline.ub.globalcatalog.repository.GlobalCategoryRepository;
 import zelisline.ub.globalcatalog.repository.GlobalProductPackRepository;
@@ -48,7 +51,6 @@ import zelisline.ub.globalcatalog.repository.GlobalProductRepository;
 import zelisline.ub.platform.persistence.DataIntegrityProblems;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.repository.BranchRepository;
-import zelisline.ub.tenancy.repository.BusinessRepository;
 
 @Service
 @RequiredArgsConstructor
@@ -57,19 +59,19 @@ public class GlobalCatalogService {
     /** Placeholder item id for SKUs reserved by earlier lines in the same adopt batch. */
     private static final String BATCH_SKU_PLACEHOLDER = "__batch_reserved__";
 
-    private static final String STATUS_PUBLISHED = "published";
-    private static final String DEFAULT_CATALOG_CODE = "default";
+    private static final String STATUS_PUBLISHED = GlobalProductStatus.PUBLISHED;
 
     private final GlobalCatalogRepository globalCatalogRepository;
     private final GlobalCategoryRepository globalCategoryRepository;
     private final GlobalProductRepository globalProductRepository;
     private final GlobalProductPackRepository globalProductPackRepository;
-    private final BusinessRepository businessRepository;
     private final BranchRepository branchRepository;
     private final ItemRepository itemRepository;
     private final ItemTypeRepository itemTypeRepository;
     private final CategoryRepository categoryRepository;
+    private final CatalogTaxonomyService catalogTaxonomyService;
     private final GlobalCatalogAdoptLineExecutor adoptLineExecutor;
+    private final GlobalCatalogResolver globalCatalogResolver;
 
     @Transactional(readOnly = true)
     public GlobalCatalogMetaResponse getCatalogMeta(String businessId) {
@@ -88,6 +90,7 @@ public class GlobalCatalogService {
 
         return new GlobalCatalogMetaResponse(
                 catalog.getId(),
+                catalog.getCode(),
                 catalog.getName(),
                 catalog.getCurrency(),
                 categories,
@@ -198,11 +201,25 @@ public class GlobalCatalogService {
 
     @Transactional(readOnly = true)
     public AdoptResponse previewAdopt(String businessId, PreviewAdoptRequest request) {
-        return runAdopt(businessId, null, request.lines(), true, null);
+        return runAdopt(
+                businessId,
+                null,
+                request.lines(),
+                true,
+                null,
+                Boolean.TRUE.equals(request.createMissingCategories())
+        );
     }
 
     public AdoptResponse adopt(String businessId, AdoptRequest request, String actorUserId) {
-        return runAdopt(businessId, request.openingBranchId(), request.lines(), false, actorUserId);
+        return runAdopt(
+                businessId,
+                request.openingBranchId(),
+                request.lines(),
+                false,
+                actorUserId,
+                Boolean.TRUE.equals(request.createMissingCategories())
+        );
     }
 
     private AdoptResponse runAdopt(
@@ -210,7 +227,8 @@ public class GlobalCatalogService {
             String openingBranchId,
             List<AdoptLineRequest> lines,
             boolean dryRun,
-            String actorUserId
+            String actorUserId,
+            boolean createMissingCategories
     ) {
         GlobalCatalog catalog = resolveCatalog(businessId);
         Branch branch = null;
@@ -232,9 +250,15 @@ public class GlobalCatalogService {
         List<Item> tenantItems = itemRepository.findByBusinessIdAndDeletedAtIsNull(businessId);
         TenantCatalogMatchIndex matchIndex = TenantCatalogMatchIndex.fromItems(tenantItems);
 
-        Map<String, String> categorySlugHintById = globalCategoryRepository.findByCatalogIdAndActiveTrueOrderByPositionAsc(catalog.getId())
-                .stream()
-                .collect(Collectors.toMap(GlobalCategory::getId, c -> c.getTenantCategorySlugHint() == null ? "" : c.getTenantCategorySlugHint(), (a, b) -> a));
+        Map<String, String> categorySlugHintById = new HashMap<>();
+        Map<String, String> categoryNameById = new HashMap<>();
+        for (GlobalCategory category : globalCategoryRepository.findByCatalogIdAndActiveTrueOrderByPositionAsc(catalog.getId())) {
+            categorySlugHintById.put(
+                    category.getId(),
+                    category.getTenantCategorySlugHint() == null ? "" : category.getTenantCategorySlugHint());
+            categoryNameById.put(category.getId(), category.getName());
+        }
+        Map<String, String> createdCategoryIdBySlug = new HashMap<>();
 
         Map<String, String> skuToItemId = new HashMap<>();
         for (Item tenantItem : tenantItems) {
@@ -310,8 +334,11 @@ public class GlobalCatalogService {
                                         gp.getId(),
                                         conflictItem.getId(),
                                         branch.getId(),
-                                        mergePrice),
+                                        mergePrice,
+                                        gp.getImageUrl()),
                                 effectiveActor);
+                        merged = adoptLineExecutor.attachImageAfterCommit(
+                                businessId, merged, gp.getImageUrl(), true);
                         itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(conflictItem.getId(), businessId)
                                 .ifPresent(matchIndex::register);
                         importedCount++;
@@ -362,13 +389,35 @@ public class GlobalCatalogService {
             }
 
             if (dryRun) {
-                results.add(new AdoptResultLineResponse(gpId, "ready", null, sku, "Will import"));
+                String slugHint = categorySlugHintById.getOrDefault(gp.getGlobalCategoryId(), "");
+                CategoryResolveResult categoryResult = resolveTenantCategory(
+                        businessId,
+                        line.categoryId(),
+                        slugHint,
+                        categoryNameById.get(gp.getGlobalCategoryId()),
+                        createMissingCategories,
+                        true,
+                        createdCategoryIdBySlug
+                );
+                String message = "Will import";
+                if (categoryResult.wouldCreate()) {
+                    message = "Will import (create category " + slugHint.trim() + ")";
+                }
+                results.add(new AdoptResultLineResponse(gpId, "ready", null, sku, message));
                 reserveSkuForBatch(skuToItemId, sku);
                 continue;
             }
 
             String slugHint = categorySlugHintById.getOrDefault(gp.getGlobalCategoryId(), "");
-            String categoryId = resolveTenantCategoryId(businessId, line.categoryId(), slugHint);
+            String categoryId = resolveTenantCategory(
+                    businessId,
+                    line.categoryId(),
+                    slugHint,
+                    categoryNameById.get(gp.getGlobalCategoryId()),
+                    createMissingCategories,
+                    false,
+                    createdCategoryIdBySlug
+            ).categoryId();
 
             CreateItemRequest createReq = new CreateItemRequest(
                     sku,
@@ -418,8 +467,11 @@ public class GlobalCatalogService {
                                 branch.getId(),
                                 sellingPrice,
                                 openingQty,
-                                openingUnitCost),
+                                openingUnitCost,
+                                gp.getImageUrl()),
                         effectiveActor);
+                imported = adoptLineExecutor.attachImageAfterCommit(
+                        businessId, imported, gp.getImageUrl(), false);
                 if (imported.sku() != null && !imported.sku().isBlank()) {
                     skuToItemId.put(imported.sku().trim(), imported.itemId());
                 }
@@ -580,18 +632,48 @@ public class GlobalCatalogService {
         return null;
     }
 
-    private String resolveTenantCategoryId(String businessId, String explicitCategoryId, String slugHint) {
+    private CategoryResolveResult resolveTenantCategory(
+            String businessId,
+            String explicitCategoryId,
+            String slugHint,
+            String categoryDisplayName,
+            boolean createMissingCategories,
+            boolean dryRun,
+            Map<String, String> createdCategoryIdBySlug
+    ) {
         if (explicitCategoryId != null && !explicitCategoryId.isBlank()) {
-            return categoryRepository.findByIdAndBusinessId(explicitCategoryId, businessId).isPresent()
-                    ? explicitCategoryId
-                    : null;
+            boolean exists = categoryRepository.findByIdAndBusinessId(explicitCategoryId, businessId).isPresent();
+            return new CategoryResolveResult(exists ? explicitCategoryId : null, false);
         }
-        if (slugHint != null && !slugHint.isBlank()) {
-            return categoryRepository.findByBusinessIdAndSlugAndActiveTrue(businessId, slugHint)
-                    .map(zelisline.ub.catalog.domain.Category::getId)
-                    .orElse(null);
+        if (slugHint == null || slugHint.isBlank()) {
+            return new CategoryResolveResult(null, false);
         }
-        return null;
+        String hint = slugHint.trim().toLowerCase(java.util.Locale.ROOT);
+        if (createdCategoryIdBySlug.containsKey(hint)) {
+            return new CategoryResolveResult(createdCategoryIdBySlug.get(hint), false);
+        }
+        Optional<Category> active = categoryRepository.findByBusinessIdAndSlugAndActiveTrue(businessId, hint);
+        if (active.isPresent()) {
+            createdCategoryIdBySlug.put(hint, active.get().getId());
+            return new CategoryResolveResult(active.get().getId(), false);
+        }
+        if (!createMissingCategories) {
+            return new CategoryResolveResult(null, false);
+        }
+        if (dryRun) {
+            createdCategoryIdBySlug.put(hint, BATCH_SKU_PLACEHOLDER);
+            return new CategoryResolveResult(null, true);
+        }
+        Category created = catalogTaxonomyService.ensureActiveCategoryBySlug(
+                businessId,
+                hint,
+                categoryDisplayName
+        );
+        createdCategoryIdBySlug.put(hint, created.getId());
+        return new CategoryResolveResult(created.getId(), true);
+    }
+
+    private record CategoryResolveResult(String categoryId, boolean wouldCreate) {
     }
 
     private TenantCatalogMatchIndex tenantCatalogMatchIndex(String businessId) {
@@ -599,14 +681,7 @@ public class GlobalCatalogService {
     }
 
     private GlobalCatalog resolveCatalog(String businessId) {
-        String countryCode = businessRepository.findById(businessId)
-                .map(b -> b.getCountryCode() != null ? b.getCountryCode().trim().toUpperCase() : null)
-                .orElse("KE");
-
-        return globalCatalogRepository.findFirstByRegionCodeAndStatusOrderByVersionDesc(countryCode, STATUS_PUBLISHED)
-                .or(() -> globalCatalogRepository.findByCode(DEFAULT_CATALOG_CODE))
-                .or(() -> globalCatalogRepository.findFirstByStatusOrderByVersionDesc(STATUS_PUBLISHED))
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No global catalog available"));
+        return globalCatalogResolver.resolveForBusiness(businessId);
     }
 
     private GlobalCategoryResponse toCategoryResponse(GlobalCategory c) {
@@ -615,7 +690,14 @@ public class GlobalCatalogService {
 
     private GlobalProductPackSummaryResponse toPackSummaryResponse(GlobalProductPack pack, String catalogId) {
         int count = globalProductPackRepository.findProductIdsByPackId(pack.getId()).size();
-        return new GlobalProductPackSummaryResponse(pack.getId(), pack.getCode(), pack.getName(), pack.getDescription(), count, pack.getSortOrder());
+        return new GlobalProductPackSummaryResponse(
+                pack.getId(),
+                pack.getCode(),
+                pack.getName(),
+                pack.getDescription(),
+                pack.getStoreKitId(),
+                count,
+                pack.getSortOrder());
     }
 
     private GlobalProductResponse toProductResponse(GlobalProduct gp, TenantCatalogMatchIndex matchIndex) {

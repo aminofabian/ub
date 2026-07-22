@@ -10,6 +10,11 @@ public record UpdateBusinessRequest(
         @Valid StorefrontPatchRequest storefront,
         @Valid InventoryPatchRequest inventory,
         @Valid ProfilePatchRequest profile,
-        @Valid FeatureFlagsPatchRequest featureFlags
+        @Valid FeatureFlagsPatchRequest featureFlags,
+        /**
+         * Published global catalog code override. Null = unchanged; blank = clear
+         * override and fall back to country/default resolution.
+         */
+        @Size(max = 64) String globalCatalogCode
 ) {
 }

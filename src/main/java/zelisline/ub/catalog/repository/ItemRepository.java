@@ -20,12 +20,34 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     List<Item> findByBusinessIdAndDeletedAtIsNull(String businessId);
 
+    List<Item> findByGlobalProductSourceIdAndDeletedAtIsNull(String globalProductSourceId);
+
+    List<Item> findByBusinessIdAndGlobalProductSourceIdInAndDeletedAtIsNull(
+            String businessId,
+            Collection<String> globalProductSourceIds
+    );
+
     Optional<Item> findByBusinessIdAndLegacyImportSourceIdAndDeletedAtIsNull(
             String businessId,
             String legacyImportSourceId
     );
 
     List<Item> findByIdInAndBusinessIdAndDeletedAtIsNull(Collection<String> ids, String businessId);
+
+    @Query("""
+            select i from Item i
+             where i.businessId = :businessId
+               and i.deletedAt is null
+               and (:q is null or :q = ''
+                    or lower(i.name) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(i.brand, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(i.barcode, '')) like lower(concat('%', :q, '%'))
+                    or lower(i.sku) like lower(concat('%', :q, '%')))
+            """)
+    Page<Item> searchActiveByBusiness(
+            @Param("businessId") String businessId,
+            @Param("q") String q,
+            Pageable pageable);
 
     boolean existsByBusinessIdAndSkuAndDeletedAtIsNull(String businessId, String sku);
 

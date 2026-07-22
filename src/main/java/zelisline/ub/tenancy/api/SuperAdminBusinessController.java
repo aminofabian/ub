@@ -56,6 +56,11 @@ public class SuperAdminBusinessController {
         return tenancyService.listBusinesses(pageable);
     }
 
+    @GetMapping("/{businessId}")
+    public BusinessResponse getBusiness(@PathVariable String businessId) {
+        return tenancyService.getBusiness(businessId);
+    }
+
     @PatchMapping("/{businessId}")
     public BusinessResponse updateBusiness(
             @PathVariable String businessId,

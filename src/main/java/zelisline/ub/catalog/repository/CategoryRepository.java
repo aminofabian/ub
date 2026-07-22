@@ -16,4 +16,6 @@ public interface CategoryRepository extends JpaRepository<Category, String> {
     boolean existsByBusinessIdAndSlug(String businessId, String slug);
 
     Optional<Category> findByBusinessIdAndSlugAndActiveTrue(String businessId, String slug);
+
+    Optional<Category> findByBusinessIdAndSlug(String businessId, String slug);
 }

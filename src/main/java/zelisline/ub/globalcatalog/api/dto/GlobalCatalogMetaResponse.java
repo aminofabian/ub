@@ -4,6 +4,7 @@ import java.util.List;
 
 public record GlobalCatalogMetaResponse(
         String catalogId,
+        String catalogCode,
         String catalogName,
         String currency,
         List<GlobalCategoryResponse> categories,

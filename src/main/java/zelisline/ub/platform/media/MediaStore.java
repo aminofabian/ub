@@ -49,6 +49,13 @@ public interface MediaStore {
             String folderPath,
             boolean requestImageFingerprinting);
 
+    /**
+     * Re-host a remote image URL into {@code folderPath} without streaming bytes through the
+     * application when the backend store supports remote fetch (Cloudinary). Local/desktop
+     * stores download then write to disk.
+     */
+    CloudinaryUploadResult uploadFromRemoteUrl(String remoteUrl, String folderPath);
+
     /** Best-effort delete by {@code publicId}. Implementations swallow not-found errors. */
     void destroyImage(String publicId);
 }

@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.globalcatalog.application.GlobalCatalogResolver;
 import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.repository.RoleRepository;
@@ -68,6 +69,7 @@ public class TenancyService {
     private final RoleRepository roleRepository;
     private final ItemRepository itemRepository;
     private final ShiftRepository shiftRepository;
+    private final GlobalCatalogResolver globalCatalogResolver;
 
     @Transactional
     public BusinessResponse createBusiness(CreateBusinessRequest request) {
@@ -185,6 +187,14 @@ public class TenancyService {
                 storefrontSettingsService.mergeFeatureFlags(
                     business.getSettings(),
                     request.featureFlags()
+                )
+            );
+        }
+        if (request.globalCatalogCode() != null) {
+            business.setSettings(
+                globalCatalogResolver.mergeOverrideCode(
+                    business.getSettings(),
+                    request.globalCatalogCode()
                 )
             );
         }
@@ -792,7 +802,8 @@ public class TenancyService {
             onboarding,
             bundle.branding(),
             bundle.featureFlags(),
-            primaryDomain
+            primaryDomain,
+            globalCatalogResolver.readOverrideCode(business.getSettings())
         );
     }
 

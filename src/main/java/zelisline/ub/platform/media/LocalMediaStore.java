@@ -142,6 +142,30 @@ public class LocalMediaStore implements MediaStore {
     }
 
     @Override
+    public CloudinaryUploadResult uploadFromRemoteUrl(String remoteUrl, String folderPath) {
+        if (remoteUrl == null || remoteUrl.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Empty remote image URL");
+        }
+        String trimmed = remoteUrl.trim();
+        if (!(trimmed.startsWith("http://") || trimmed.startsWith("https://"))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Remote image URL must be http(s)");
+        }
+        byte[] bytes;
+        try {
+            bytes = java.net.URI.create(trimmed).toURL().openStream().readAllBytes();
+        } catch (IOException e) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Could not download remote image: " + e.getMessage());
+        }
+        String name = filenameOf(trimmed);
+        if (name.isBlank() || !name.contains(".")) {
+            name = "remote.jpg";
+        }
+        return uploadImageToFolder(bytes, name, folderPath, true);
+    }
+
+    @Override
     public void destroyImage(String publicId) {
         if (publicId == null || publicId.isBlank()) {
             return;

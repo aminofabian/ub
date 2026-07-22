@@ -23,6 +23,9 @@ import zelisline.ub.pricing.application.PricingService;
 /**
  * Commits one global-catalog adopt line in its own transaction so a failure on one row
  * does not mark the whole batch rollback-only.
+ *
+ * <p>Image re-host runs in a <em>separate</em> {@code REQUIRES_NEW} transaction after
+ * the item commit so Cloudinary latency cannot block pack adopts.
  */
 @Service
 @RequiredArgsConstructor
@@ -32,6 +35,8 @@ public class GlobalCatalogAdoptLineExecutor {
     private final ItemRepository itemRepository;
     private final PricingService pricingService;
     private final InventoryLedgerService inventoryLedgerService;
+    private final GlobalCatalogAdoptImageAttacher imageAttacher;
+    private final GlobalCatalogSupplierAdoptLinker supplierAdoptLinker;
 
     public record ImportLineCommand(
             String globalProductId,
@@ -39,7 +44,8 @@ public class GlobalCatalogAdoptLineExecutor {
             String branchId,
             BigDecimal sellingPrice,
             BigDecimal openingQty,
-            BigDecimal openingUnitCost
+            BigDecimal openingUnitCost,
+            String globalImageUrl
     ) {
     }
 
@@ -47,7 +53,8 @@ public class GlobalCatalogAdoptLineExecutor {
             String globalProductId,
             String existingItemId,
             String branchId,
-            BigDecimal sellingPrice
+            BigDecimal sellingPrice,
+            String globalImageUrl
     ) {
     }
 
@@ -69,6 +76,7 @@ public class GlobalCatalogAdoptLineExecutor {
                 cmd.createReq().buyingPrice(),
                 actorUserId
         );
+        supplierAdoptLinker.linkPrimaryTemplate(businessId, cmd.globalProductId(), item);
 
         return new AdoptResultLineResponse(
                 cmd.globalProductId(),
@@ -92,6 +100,7 @@ public class GlobalCatalogAdoptLineExecutor {
                 cmd.sellingPrice(),
                 actorUserId,
                 "Global catalog merge");
+        supplierAdoptLinker.linkPrimaryTemplate(businessId, cmd.globalProductId(), existing);
 
         return new AdoptResultLineResponse(
                 cmd.globalProductId(),
@@ -99,6 +108,55 @@ public class GlobalCatalogAdoptLineExecutor {
                 existing.getId(),
                 existing.getSku(),
                 "Linked to existing product");
+    }
+
+    /**
+     * Post-commit image attach. Non-fatal: returns the original line with an appended warning
+     * when re-host/gallery registration fails.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public AdoptResultLineResponse attachImageAfterCommit(
+            String businessId,
+            AdoptResultLineResponse line,
+            String globalImageUrl,
+            boolean onlyIfMissingCover
+    ) {
+        if (line == null || line.itemId() == null || line.itemId().isBlank()) {
+            return line;
+        }
+        GlobalCatalogAdoptImageAttacher.AttachResult result = imageAttacher.attachFromGlobalUrl(
+                businessId,
+                line.itemId(),
+                globalImageUrl,
+                onlyIfMissingCover
+        );
+        if (result.warning() == null || result.warning().isBlank()) {
+            if (result.attached()) {
+                return new AdoptResultLineResponse(
+                        line.globalProductId(),
+                        line.status(),
+                        line.itemId(),
+                        line.sku(),
+                        appendMessage(line.message(), "Image gallery registered"));
+            }
+            return line;
+        }
+        return new AdoptResultLineResponse(
+                line.globalProductId(),
+                line.status(),
+                line.itemId(),
+                line.sku(),
+                appendMessage(line.message(), result.warning()));
+    }
+
+    private static String appendMessage(String base, String extra) {
+        if (extra == null || extra.isBlank()) {
+            return base;
+        }
+        if (base == null || base.isBlank()) {
+            return extra;
+        }
+        return base + "; " + extra;
     }
 
     private void applySellingPrice(

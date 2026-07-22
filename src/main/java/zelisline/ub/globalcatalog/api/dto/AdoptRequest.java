@@ -9,6 +9,8 @@ import jakarta.validation.constraints.Size;
 
 public record AdoptRequest(
         @NotBlank @Size(max = 36) String openingBranchId,
-        @NotEmpty @Valid List<AdoptLineRequest> lines
+        @NotEmpty @Valid List<AdoptLineRequest> lines,
+        /** When true, create tenant categories from global {@code tenantCategorySlugHint}. Default false. */
+        Boolean createMissingCategories
 ) {
 }

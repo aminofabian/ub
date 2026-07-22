@@ -37,6 +37,35 @@ public interface GlobalProductRepository extends JpaRepository<GlobalProduct, St
             Pageable pageable);
 
     @Query("""
+            select gp from GlobalProduct gp
+             where gp.catalogId = :catalogId
+               and (:status is null or :status = '' or gp.status = :status)
+               and (:categoryId is null or gp.globalCategoryId = :categoryId)
+               and (:missingImage = false
+                    or gp.imageUrl is null
+                    or gp.imageUrl = '')
+               and (:q is null or :q = ''
+                    or lower(gp.name) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(gp.brand, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(gp.barcode, '')) like lower(concat('%', :q, '%')))
+            """)
+    Page<GlobalProduct> searchForSuperAdmin(
+            @Param("catalogId") String catalogId,
+            @Param("status") String status,
+            @Param("categoryId") String categoryId,
+            @Param("q") String q,
+            @Param("missingImage") boolean missingImage,
+            Pageable pageable);
+
+    long countByCatalogIdAndBarcodeAndStatusNotAndIdNot(
+            String catalogId, String barcode, String status, String id);
+
+    long countByCatalogIdAndBarcodeAndStatusNot(String catalogId, String barcode, String status);
+
+    Optional<GlobalProduct> findFirstByCatalogIdAndBarcodeAndStatusNotOrderByCreatedAtAsc(
+            String catalogId, String barcode, String status);
+
+    @Query("""
             select gp.id from GlobalProduct gp
              where gp.catalogId = :catalogId
                and gp.status = :status

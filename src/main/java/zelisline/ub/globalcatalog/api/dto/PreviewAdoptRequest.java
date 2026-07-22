@@ -6,6 +6,8 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
 
 public record PreviewAdoptRequest(
-        @NotEmpty @Valid List<AdoptLineRequest> lines
+        @NotEmpty @Valid List<AdoptLineRequest> lines,
+        /** When true, preview assumes missing slug-hint categories will be created. Default false. */
+        Boolean createMissingCategories
 ) {
 }

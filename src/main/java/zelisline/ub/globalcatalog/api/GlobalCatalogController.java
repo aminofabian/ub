@@ -21,10 +21,20 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.globalcatalog.api.dto.AdoptRequest;
 import zelisline.ub.globalcatalog.api.dto.AdoptResponse;
+import zelisline.ub.globalcatalog.api.dto.GlobalCatalogJobDtos.CreateJobResponse;
+import zelisline.ub.globalcatalog.api.dto.GlobalCatalogJobDtos.JobResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalCatalogMetaResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalProductPackDetailResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalProductResponse;
 import zelisline.ub.globalcatalog.api.dto.PreviewAdoptRequest;
+import zelisline.ub.globalcatalog.api.dto.RefreshCatalogRequest;
+import zelisline.ub.globalcatalog.api.dto.RefreshCatalogResponse;
+import zelisline.ub.globalcatalog.api.dto.ReplaceCatalogEligibilityResponse;
+import zelisline.ub.globalcatalog.api.dto.ReplaceCatalogRequest;
+import zelisline.ub.globalcatalog.api.dto.ReplaceCatalogResponse;
+import zelisline.ub.globalcatalog.application.GlobalCatalogJobService;
+import zelisline.ub.globalcatalog.application.GlobalCatalogRefreshService;
+import zelisline.ub.globalcatalog.application.GlobalCatalogReplaceService;
 import zelisline.ub.globalcatalog.application.GlobalCatalogService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.TenantRequestIds;
@@ -36,6 +46,9 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class GlobalCatalogController {
 
     private final GlobalCatalogService globalCatalogService;
+    private final GlobalCatalogReplaceService globalCatalogReplaceService;
+    private final GlobalCatalogJobService globalCatalogJobService;
+    private final GlobalCatalogRefreshService globalCatalogRefreshService;
 
     @GetMapping("/meta")
     @PreAuthorize("hasPermission(null, 'catalog.global.read')")
@@ -125,8 +138,99 @@ public class GlobalCatalogController {
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
+        GlobalCatalogJobService.requireSyncAdoptSize(body);
         String actorUserId = CurrentTenantUser.auditActorId(request);
         return globalCatalogService.adopt(
+                TenantRequestIds.resolveBusinessId(request),
+                body,
+                actorUserId
+        );
+    }
+
+    @PostMapping("/adopt/jobs")
+    @PreAuthorize("hasPermission(null, 'catalog.global.adopt')")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public CreateJobResponse enqueueAdopt(
+            @Valid @RequestBody AdoptRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        String actorUserId = CurrentTenantUser.auditActorId(request);
+        return globalCatalogJobService.enqueueAdopt(
+                TenantRequestIds.resolveBusinessId(request),
+                actorUserId,
+                body
+        );
+    }
+
+    @GetMapping("/adopt/jobs/{jobId}")
+    @PreAuthorize("hasPermission(null, 'catalog.global.adopt')")
+    @ResponseStatus(HttpStatus.OK)
+    public JobResponse getAdoptJob(
+            @PathVariable String jobId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return globalCatalogJobService.getAdoptJob(
+                jobId,
+                TenantRequestIds.resolveBusinessId(request)
+        );
+    }
+
+    @PostMapping("/refresh/preview")
+    @PreAuthorize("hasPermission(null, 'catalog.global.adopt')")
+    @ResponseStatus(HttpStatus.OK)
+    public RefreshCatalogResponse previewRefresh(
+            @Valid @RequestBody RefreshCatalogRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return globalCatalogRefreshService.preview(
+                TenantRequestIds.resolveBusinessId(request),
+                body
+        );
+    }
+
+    @PostMapping("/refresh")
+    @PreAuthorize("hasPermission(null, 'catalog.global.adopt')")
+    @ResponseStatus(HttpStatus.OK)
+    public RefreshCatalogResponse refresh(
+            @Valid @RequestBody RefreshCatalogRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        String actorUserId = CurrentTenantUser.auditActorId(request);
+        return globalCatalogRefreshService.refresh(
+                TenantRequestIds.resolveBusinessId(request),
+                body,
+                actorUserId
+        );
+    }
+
+    @GetMapping("/replace/preview")
+    @PreAuthorize("hasPermission(null, 'catalog.global.adopt')")
+    @ResponseStatus(HttpStatus.OK)
+    public ReplaceCatalogEligibilityResponse previewReplace(
+            @RequestParam String packId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return globalCatalogReplaceService.preview(
+                TenantRequestIds.resolveBusinessId(request),
+                packId
+        );
+    }
+
+    @PostMapping("/replace")
+    @PreAuthorize("hasPermission(null, 'catalog.global.adopt')")
+    @ResponseStatus(HttpStatus.OK)
+    public ReplaceCatalogResponse replaceCatalog(
+            @Valid @RequestBody ReplaceCatalogRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        String actorUserId = CurrentTenantUser.auditActorId(request);
+        return globalCatalogReplaceService.replace(
                 TenantRequestIds.resolveBusinessId(request),
                 body,
                 actorUserId

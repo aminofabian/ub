@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -566,6 +567,38 @@ public class CatalogTaxonomyService {
         assertTaxRateAllowed(businessId, entity.getDefaultTaxRateId());
         categoryRepository.save(entity);
         return buildCategoryResponse(businessId, entity);
+    }
+
+    /**
+     * Idempotent get-or-create for global-catalog adopt: exact slug match (reactivate if inactive).
+     * Does not uniqueSlug-suffix — rematch depends on stable hint = slug.
+     */
+    @Transactional
+    public Category ensureActiveCategoryBySlug(String businessId, String slug, String displayName) {
+        String normalizedSlug = slug == null ? "" : slug.trim().toLowerCase(Locale.ROOT);
+        if (normalizedSlug.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Category slug is required");
+        }
+        String name = displayName == null || displayName.isBlank()
+                ? normalizedSlug
+                : displayName.trim();
+        Optional<Category> existing = categoryRepository.findByBusinessIdAndSlug(businessId, normalizedSlug);
+        if (existing.isPresent()) {
+            Category category = existing.get();
+            if (!category.isActive()) {
+                category.setActive(true);
+                categoryRepository.save(category);
+            }
+            return category;
+        }
+        Category entity = new Category();
+        entity.setBusinessId(businessId);
+        entity.setName(name);
+        entity.setSlug(normalizedSlug);
+        List<Category> all = categoryRepository.findByBusinessIdOrderByPositionAsc(businessId);
+        entity.setPosition(all.isEmpty() ? 0 : all.get(all.size() - 1).getPosition() + 1);
+        entity.setActive(true);
+        return categoryRepository.save(entity);
     }
 
     /**

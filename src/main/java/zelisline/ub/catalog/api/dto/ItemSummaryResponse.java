@@ -25,6 +25,7 @@ public record ItemSummaryResponse(
         boolean groupLabelOnly,
         /**
          * On-hand quantity at the branch when {@code branchId} was passed to the list endpoint; otherwise null.
+         * This is in-store / branch stock (active batch sum). Prefer over {@code Item#currentStock} for branch UIs.
          * For package variants this is available whole packages; see {@link #baseStockQty}.
          */
         BigDecimal stockQty,

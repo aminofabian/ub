@@ -10,6 +10,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import jakarta.persistence.Version;
 import lombok.Getter;
 import lombok.Setter;
@@ -17,7 +18,11 @@ import lombok.Setter;
 @Getter
 @Setter
 @Entity
-@Table(name = "global_products")
+@Table(
+        name = "global_products",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uq_global_products_dedup_barcode",
+                columnNames = {"catalog_id", "dedup_barcode"}))
 public class GlobalProduct {
 
     @Id
@@ -87,11 +92,22 @@ public class GlobalProduct {
     @Column(name = "image_url", length = 2048)
     private String imageUrl;
 
+    /** Cloudinary (or local) public id for {@link #imageUrl}; used for explicit clear/destroy. */
+    @Column(name = "image_public_id", length = 512)
+    private String imagePublicId;
+
+    /**
+     * Unique barcode among non-archived rows in a catalog. NULL when archived or barcode blank
+     * so archived/empty barcodes do not collide under the unique index.
+     */
+    @Column(name = "dedup_barcode", length = 191)
+    private String dedupBarcode;
+
     @Column(name = "item_type_key_hint", length = 64)
     private String itemTypeKeyHint = "goods";
 
     @Column(name = "status", nullable = false, length = 16)
-    private String status = "published";
+    private String status = GlobalProductStatus.PUBLISHED;
 
     @Column(name = "sort_order", nullable = false)
     private int sortOrder;
@@ -116,10 +132,21 @@ public class GlobalProduct {
             createdAt = now;
         }
         updatedAt = now;
+        refreshDedupBarcode();
     }
 
     @PreUpdate
     void onUpdate() {
         updatedAt = Instant.now();
+        refreshDedupBarcode();
+    }
+
+    /** Keeps {@link #dedupBarcode} in sync for Hibernate create-drop / app-level safety. */
+    public void refreshDedupBarcode() {
+        if (GlobalProductStatus.ARCHIVED.equals(status) || barcode == null || barcode.isBlank()) {
+            dedupBarcode = null;
+            return;
+        }
+        dedupBarcode = barcode.trim();
     }
 }

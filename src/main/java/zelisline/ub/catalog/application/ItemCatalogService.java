@@ -24,6 +24,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -903,6 +904,48 @@ public class ItemCatalogService {
         itemRepository.save(item);
         removeFromStockTakeChecklist(businessId, item.getId());
         publishItemEvent(businessId, item, actorUserId, AuditEventTypes.ITEM_DELETED, null);
+    }
+
+    /**
+     * Soft-deletes every active item for a business (used by empty-shop catalog replace).
+     * Emits one audit event for the batch rather than per-item noise.
+     *
+     * <p>Runs in {@link Propagation#REQUIRES_NEW} so a subsequent adopt (also
+     * {@code REQUIRES_NEW} per line) can see vacated SKUs / soft-deleted rows.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public int softDeleteAllActiveItems(String businessId, String actorUserId) {
+        List<Item> items = itemRepository.findByBusinessIdAndDeletedAtIsNull(businessId);
+        if (items.isEmpty()) {
+            return 0;
+        }
+        java.time.Instant now = java.time.Instant.now();
+        for (Item item : items) {
+            item.setDeletedAt(now);
+            item.setBarcode(null);
+            item.setActive(false);
+            // Vacate SKU so a later adopt can reuse the template SKU (unique index is business-wide).
+            item.setSku("del-" + item.getId());
+            item.setGlobalProductSourceId(null);
+            removeFromStockTakeChecklist(businessId, item.getId());
+        }
+        itemRepository.saveAll(items);
+        AuditEventActorType actorType = actorUserId != null && !actorUserId.isBlank()
+                ? AuditEventActorType.USER
+                : AuditEventActorType.SYSTEM;
+        auditEventPublisher.publish(auditEventBuilder.builder(
+                        AuditEventCategory.PRODUCTS,
+                        AuditEventTypes.ITEM_DELETED,
+                        AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .actor(actorUserId, actorType)
+                .target("catalog", businessId)
+                .targetLabel("Catalog replace — soft-deleted " + items.size() + " items")
+                .source("web_admin")
+                .reason("global_catalog_replace")
+                .metadata(map("softDeletedCount", items.size()))
+                .build());
+        return items.size();
     }
 
     private void removeFromStockTakeChecklist(String businessId, String itemId) {

@@ -5,6 +5,7 @@ public record GlobalProductPackSummaryResponse(
         String code,
         String name,
         String description,
+        String storeKitId,
         int productCount,
         int sortOrder
 ) {

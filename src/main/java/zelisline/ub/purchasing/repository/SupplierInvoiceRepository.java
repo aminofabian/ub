@@ -24,7 +24,11 @@ public interface SupplierInvoiceRepository extends JpaRepository<SupplierInvoice
 
     boolean existsByGoodsReceiptId(String goodsReceiptId);
 
+    boolean existsByBusinessIdAndInvoiceNumber(String businessId, String invoiceNumber);
+
     boolean existsByBusinessIdAndInvoiceNumberAndIdNot(String businessId, String invoiceNumber, String id);
+
+    int countByRawPurchaseSessionId(String rawPurchaseSessionId);
 
     Optional<SupplierInvoice> findByIdAndBusinessId(String id, String businessId);
 

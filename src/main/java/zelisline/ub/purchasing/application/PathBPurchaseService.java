@@ -304,7 +304,9 @@ public class PathBPurchaseService {
     }
 
     private PostPathBResponse executePost(String businessId, String sessionId, PostPathBRequest req) {
-        RawPurchaseSession session = loadSession(businessId, sessionId);
+        RawPurchaseSession session = sessionRepository
+                .findByIdAndBusinessIdForUpdate(sessionId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found"));
         assertDraft(session);
         List<RawPurchaseLine> dbLines = lineRepository.findBySessionIdOrderBySortOrderAscIdAsc(sessionId);
         if (dbLines.isEmpty()) {
@@ -381,7 +383,7 @@ public class PathBPurchaseService {
         supplyBatchRepository.save(sb);
 
         LocalDate invoiceDate = LocalDate.ofInstant(session.getReceivedAt(), ZoneOffset.UTC);
-        String invoiceNumber = "PB-" + session.getId().replace("-", "").substring(0, 8).toUpperCase();
+        String invoiceNumber = nextPathBInvoiceNumber(businessId, session.getId());
         SupplierInvoice inv = new SupplierInvoice();
         inv.setBusinessId(businessId);
         inv.setSupplierId(session.getSupplierId());
@@ -566,6 +568,24 @@ public class PathBPurchaseService {
                         "Duplicate item on multiple lines — combine quantities or use a separate receipt");
             }
         }
+    }
+
+    private String nextPathBInvoiceNumber(String businessId, String sessionId) {
+        String compact = sessionId.replace("-", "");
+        String base = "PB-" + compact.substring(0, Math.min(12, compact.length())).toUpperCase();
+        int seq = supplierInvoiceRepository.countByRawPurchaseSessionId(sessionId) + 1;
+        String candidate = seq <= 1 ? base : base + "-" + seq;
+        int guard = 0;
+        while (supplierInvoiceRepository.existsByBusinessIdAndInvoiceNumber(businessId, candidate)
+                && guard < 50) {
+            seq++;
+            candidate = base + "-" + seq;
+            guard++;
+        }
+        if (supplierInvoiceRepository.existsByBusinessIdAndInvoiceNumber(businessId, candidate)) {
+            candidate = base + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        }
+        return candidate;
     }
 
     private record CostSplit(BigDecimal inventoryMoney, BigDecimal wastageMoney) {

@@ -176,6 +176,15 @@ public class GlobalExceptionHandler {
             body.setDetail("Phone already in use for this business");
             return problem(body, HttpStatus.CONFLICT);
         }
+        String flat = flattenMessages(ex).toLowerCase();
+        if (flat.contains("uq_supplier_invoices_business_no") || flat.contains("invoice_number")) {
+            ProblemDetail body = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+            body.setTitle("Conflict");
+            body.setType(URI.create(PROBLEM_BASE + "duplicate-invoice"));
+            body.setDetail(
+                    "A supplier invoice for this receipt already exists. Refresh supplies and retry if stock was not updated.");
+            return problem(body, HttpStatus.CONFLICT);
+        }
         ProblemDetail body = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
         body.setTitle("Invalid data");
         body.setType(URI.create(PROBLEM_BASE + "data-integrity"));

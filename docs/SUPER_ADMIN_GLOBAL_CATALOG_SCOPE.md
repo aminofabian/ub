@@ -51,7 +51,7 @@ Each needs a baseline + telemetry, or it is a slogan, not a metric. Instrument o
 |------|------------|
 | Promote “any business” leaks private assortment into platform | Default Palmart; confirm source; promote → **draft**; review before publish |
 | **Re-hosting Palmart product photos into a library shared with competing shops** | IP/licensing exposure. Prefer generic barcode/pack-shot images; confirm rights before promoting branded lifestyle shots |
-| KES / Kenya-shaped prices mislead other countries | Only one catalog (`default`/KE) exists today, so resolution always lands on KE — the `country_code` mitigation is **not yet real**. Prefer `suggestedMarginPct` over absolute `recommendedSellingPrice` at adopt; document as KE retail v1 |
+| KES / Kenya-shaped prices mislead other countries | **Mitigated for self-serve:** UG resolves to `ug-retail` (cloned with absolute prices scrubbed). Prefer `suggestedMarginPct` over absolute sell at adopt. SA country/currency change requires `acknowledgeRegionRisk` when products/sales exist (amounts re-label, not convert). |
 | Flyway reseed after shops have adopted | **Forbidden** once promote era starts — wipes provenance / breaks links |
 | Stale recommended prices erode trust | Draft review + version bump; periodic price refresh (Phase 3) |
 | Confusing Marketplace with Global Catalog | Separate SA nav + this doc’s terminology (§3) |
@@ -440,7 +440,7 @@ Default status: **`draft`**. Optional `publish: true` for trusted bulk after dry
 | Promote `catalogId` | Optional on `PromoteRequest` (+ jobs payload) | Shipped |
 | Empty `ug-retail` seed | Published shell: region `UG`, currency `UGX`; no product copy | Shipped |
 | SA catalog picker | URL `?catalogId=` + header select | Shipped |
-| Bulk clone KE → UG | Later | Deferred |
+| Bulk clone KE → UG | Flyway `V161__CloneKeCatalogToUgRetail` + `CatalogRegionalCloneJdbc` (scrub absolute prices) | Shipped (Phase 4 onboarding scope) |
 | SA create/edit catalog metadata UI | Flyway/SQL is enough for v1 | Deferred |
 
 ### Definition of done (Phase 5 regional slice)

@@ -47,6 +47,8 @@ public class PublicHostResolverService {
     private final BusinessOnboardingSettingsService businessOnboardingSettingsService;
     private final BusinessMobileSettingsService businessMobileSettingsService;
     private final UserRepository userRepository;
+    private final RegionDefaults regionDefaults;
+    private final RegionCatalogAuditService regionCatalogAuditService;
 
     public PublicHostResolverService(
             DomainMappingRepository domainMappingRepository,
@@ -56,7 +58,9 @@ public class PublicHostResolverService {
             CatalogBootstrapService catalogBootstrapService,
             BusinessOnboardingSettingsService businessOnboardingSettingsService,
             BusinessMobileSettingsService businessMobileSettingsService,
-            UserRepository userRepository) {
+            UserRepository userRepository,
+            RegionDefaults regionDefaults,
+            RegionCatalogAuditService regionCatalogAuditService) {
         this.domainMappingRepository = domainMappingRepository;
         this.businessRepository = businessRepository;
         this.branchRepository = branchRepository;
@@ -65,6 +69,8 @@ public class PublicHostResolverService {
         this.businessOnboardingSettingsService = businessOnboardingSettingsService;
         this.businessMobileSettingsService = businessMobileSettingsService;
         this.userRepository = userRepository;
+        this.regionDefaults = regionDefaults;
+        this.regionCatalogAuditService = regionCatalogAuditService;
     }
 
     /**
@@ -99,18 +105,21 @@ public class PublicHostResolverService {
      * subdomain mapping. The apex host (e.g. kiosk.ke) is NEVER mapped —
      * it stays as the landing page where visitors can only create shops.
      *
-     * @param name    display name for the new business
-     * @param rawHost the host the visitor is currently on (used only for
-     *                logging/idempotency, not for domain mapping)
+     * @param name        display name for the new business
+     * @param rawHost     the host the visitor is currently on (used only for
+     *                    logging/idempotency, not for domain mapping)
+     * @param countryCode optional ISO country; omit/blank → Kenya; must be self-serve enabled
      * @return full resolve response for the newly created tenant
      */
     @Transactional
-    public PublicHostResolveResponse onboardBusiness(String name, String rawHost) {
+    public PublicHostResolveResponse onboardBusiness(String name, String rawHost, String countryCode) {
         String lookup = TenantHostParsing.hostnameOnly(rawHost);
         if (lookup == null) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST, "A valid host is required");
         }
+
+        RegionProfile region = regionDefaults.requireSelfServe(countryCode);
 
         String slug = nameToSlug(name);
         if (slug.isBlank()) {
@@ -137,9 +146,9 @@ public class PublicHostResolverService {
         Business business = new Business();
         business.setName(name.trim());
         business.setSlug(slug);
-        business.setCurrency("KES");
-        business.setCountryCode("KE");
-        business.setTimezone("Africa/Nairobi");
+        business.setCurrency(region.currency());
+        business.setCountryCode(region.countryCode());
+        business.setTimezone(region.timezone());
         business.setSubscriptionTier("starter");
         business.setSettings("{}");
         Business saved = businessRepository.save(business);
@@ -155,6 +164,12 @@ public class PublicHostResolverService {
         );
         saved = businessRepository.save(saved);
         catalogBootstrapService.seedDefaultItemTypesIfMissing(saved.getId());
+
+        regionCatalogAuditService.countrySelected(
+                saved.getId(),
+                region.countryCode(),
+                RegionCatalogAuditService.SOURCE_LANDING
+        );
 
         // ONLY create the {slug}.{suffix} subdomain mapping —
         // the apex (kiosk.ke) stays as a landing page forever.

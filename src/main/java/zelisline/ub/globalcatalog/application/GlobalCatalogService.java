@@ -49,8 +49,12 @@ import zelisline.ub.globalcatalog.repository.GlobalCategoryRepository;
 import zelisline.ub.globalcatalog.repository.GlobalProductPackRepository;
 import zelisline.ub.globalcatalog.repository.GlobalProductRepository;
 import zelisline.ub.platform.persistence.DataIntegrityProblems;
+import zelisline.ub.tenancy.application.BusinessProfileSettingsService;
+import zelisline.ub.tenancy.application.RegionCatalogAuditService;
 import zelisline.ub.tenancy.domain.Branch;
+import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BranchRepository;
+import zelisline.ub.tenancy.repository.BusinessRepository;
 
 @Service
 @RequiredArgsConstructor
@@ -72,10 +76,15 @@ public class GlobalCatalogService {
     private final CatalogTaxonomyService catalogTaxonomyService;
     private final GlobalCatalogAdoptLineExecutor adoptLineExecutor;
     private final GlobalCatalogResolver globalCatalogResolver;
+    private final RegionCatalogAuditService regionCatalogAuditService;
+    private final BusinessRepository businessRepository;
+    private final BusinessProfileSettingsService businessProfileSettingsService;
 
     @Transactional(readOnly = true)
     public GlobalCatalogMetaResponse getCatalogMeta(String businessId) {
-        GlobalCatalog catalog = resolveCatalog(businessId);
+        ResolvedGlobalCatalog resolved = globalCatalogResolver.resolveDetailedForBusiness(businessId);
+        GlobalCatalog catalog = resolved.catalog();
+        regionCatalogAuditService.catalogResolved(businessId, catalog, resolved.via());
         List<GlobalCategoryResponse> categories = globalCategoryRepository
                 .findByCatalogIdAndActiveTrueOrderByPositionAsc(catalog.getId())
                 .stream()
@@ -212,13 +221,46 @@ public class GlobalCatalogService {
     }
 
     public AdoptResponse adopt(String businessId, AdoptRequest request, String actorUserId) {
-        return runAdopt(
+        AdoptResponse response = runAdopt(
                 businessId,
                 request.openingBranchId(),
                 request.lines(),
                 false,
                 actorUserId,
                 Boolean.TRUE.equals(request.createMissingCategories())
+        );
+        if (request.packId() != null && !request.packId().isBlank()) {
+            emitPackAdopted(businessId, request.packId().trim(), response.importedCount());
+        }
+        return response;
+    }
+
+    private void emitPackAdopted(String businessId, String packId, int importedCount) {
+        GlobalCatalog catalog = resolveCatalog(businessId);
+        String storeKitId = globalProductPackRepository.findById(packId)
+                .map(GlobalProductPack::getStoreKitId)
+                .orElse(null);
+        List<String> storeTypes = List.of();
+        try {
+            Business business = businessRepository.findById(businessId).orElse(null);
+            if (business != null) {
+                var profile = businessProfileSettingsService.readFromSettingsJson(business.getSettings());
+                if (profile.storeTypes() != null) {
+                    storeTypes = profile.storeTypes();
+                } else if (profile.storeType() != null) {
+                    storeTypes = List.of(profile.storeType());
+                }
+            }
+        } catch (Exception ignored) {
+            // telemetry only
+        }
+        regionCatalogAuditService.packAdopted(
+                businessId,
+                catalog.getCode(),
+                packId,
+                storeKitId,
+                storeTypes,
+                importedCount
         );
     }
 

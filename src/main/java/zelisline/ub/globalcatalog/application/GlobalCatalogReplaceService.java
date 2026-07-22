@@ -89,7 +89,7 @@ public class GlobalCatalogReplaceService {
 
         AdoptResponse adopt = globalCatalogService.adopt(
                 businessId,
-                new AdoptRequest(request.openingBranchId(), lines, true),
+                new AdoptRequest(request.openingBranchId(), lines, true, request.packId()),
                 actorUserId);
         return new ReplaceCatalogResponse(softDeleted, adopt);
     }

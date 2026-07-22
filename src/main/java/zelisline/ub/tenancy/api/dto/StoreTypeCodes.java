@@ -6,7 +6,7 @@ package zelisline.ub.tenancy.api.dto;
 public final class StoreTypeCodes {
 
     public static final String PATTERN =
-            "butchery|mini-mart|full-grocery|fresh-market|mixed-shop";
+            "butchery|mini-mart|full-grocery|fresh-market|mixed-shop|cosmetics|wines-spirits";
 
     private StoreTypeCodes() {}
 }

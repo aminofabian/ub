@@ -11,6 +11,8 @@ public record AdoptRequest(
         @NotBlank @Size(max = 36) String openingBranchId,
         @NotEmpty @Valid List<AdoptLineRequest> lines,
         /** When true, create tenant categories from global {@code tenantCategorySlugHint}. Default false. */
-        Boolean createMissingCategories
+        Boolean createMissingCategories,
+        /** Optional pack id when adopt was started from a starter pack (telemetry). */
+        @Size(max = 36) String packId
 ) {
 }

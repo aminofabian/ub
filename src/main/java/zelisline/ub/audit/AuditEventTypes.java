@@ -145,4 +145,11 @@ public final class AuditEventTypes {
     public static final String BACKUP_COMPLETED = "backup.completed";
     public static final String BACKUP_FAILED = "backup.failed";
     public static final String SYSTEM_EXCEPTION = "system.exception";
+
+    // Onboarding / regional catalog funnel
+    public static final String ONBOARDING_COUNTRY_SELECTED = "onboarding.country_selected";
+    public static final String ONBOARDING_VERTICAL_SELECTED = "onboarding.vertical_selected";
+    public static final String CATALOG_RESOLVED = "catalog.resolved";
+    public static final String CATALOG_PACK_ADOPTED = "catalog.pack_adopted";
+    public static final String BUSINESS_REGION_CHANGED = "business.region_changed";
 }

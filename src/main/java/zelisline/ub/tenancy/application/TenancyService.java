@@ -24,6 +24,7 @@ import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.platform.media.CloudinaryUploadResult;
 import zelisline.ub.platform.media.MediaStore;
+import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
 import zelisline.ub.tenancy.api.dto.BranchResponse;
 import zelisline.ub.tenancy.api.dto.BrandingPatchRequest;
@@ -69,7 +70,10 @@ public class TenancyService {
     private final RoleRepository roleRepository;
     private final ItemRepository itemRepository;
     private final ShiftRepository shiftRepository;
+    private final SaleRepository saleRepository;
     private final GlobalCatalogResolver globalCatalogResolver;
+    private final RegionDefaults regionDefaults;
+    private final RegionCatalogAuditService regionCatalogAuditService;
 
     @Transactional
     public BusinessResponse createBusiness(CreateBusinessRequest request) {
@@ -135,71 +139,7 @@ public class TenancyService {
         String businessId,
         UpdateBusinessRequest request
     ) {
-        Business business = businessRepository
-            .findByIdAndDeletedAtIsNull(businessId)
-            .orElseThrow(() ->
-                new ResponseStatusException(
-                    HttpStatus.NOT_FOUND,
-                    "Business not found"
-                )
-            );
-
-        if (request.name() != null && !request.name().isBlank()) {
-            business.setName(request.name().trim());
-        }
-        if (
-            request.subscriptionTier() != null &&
-            !request.subscriptionTier().isBlank()
-        ) {
-            business.setSubscriptionTier(
-                request.subscriptionTier().trim().toLowerCase(Locale.ROOT)
-            );
-        }
-        if (request.active() != null) {
-            business.setActive(request.active());
-        }
-        if (request.storefront() != null) {
-            String merged = storefrontSettingsService.mergeAndValidate(
-                business.getId(),
-                business.getSettings(),
-                request.storefront()
-            );
-            business.setSettings(merged);
-        }
-        if (request.inventory() != null) {
-            business.setSettings(
-                businessInventorySettingsService.merge(
-                    business.getSettings(),
-                    request.inventory()
-                )
-            );
-        }
-        if (request.profile() != null) {
-            business.setSettings(
-                businessProfileSettingsService.merge(
-                    business.getSettings(),
-                    request.profile()
-                )
-            );
-        }
-        if (request.featureFlags() != null) {
-            business.setSettings(
-                storefrontSettingsService.mergeFeatureFlags(
-                    business.getSettings(),
-                    request.featureFlags()
-                )
-            );
-        }
-        if (request.globalCatalogCode() != null) {
-            business.setSettings(
-                globalCatalogResolver.mergeOverrideCode(
-                    business.getSettings(),
-                    request.globalCatalogCode()
-                )
-            );
-        }
-
-        return toResponse(businessRepository.save(business));
+        return updateBusinessInternal(businessId, request, false);
     }
 
     @Transactional(readOnly = true)
@@ -226,10 +166,18 @@ public class TenancyService {
                         settings,
                         patch.answers().storeTypes()
                 );
+                regionCatalogAuditService.verticalSelected(
+                        tenantBusinessId,
+                        patch.answers().storeTypes()
+                );
             } else if (patch.answers().storeType() != null) {
                 settings = businessProfileSettingsService.mergeStoreType(
                         settings,
                         patch.answers().storeType()
+                );
+                regionCatalogAuditService.verticalSelected(
+                        tenantBusinessId,
+                        List.of(patch.answers().storeType())
                 );
             }
         }
@@ -387,7 +335,84 @@ public class TenancyService {
         String tenantBusinessId,
         UpdateBusinessRequest request
     ) {
-        return updateBusiness(tenantBusinessId, request);
+        return updateBusinessInternal(tenantBusinessId, request, true);
+    }
+
+    private BusinessResponse updateBusinessInternal(
+        String businessId,
+        UpdateBusinessRequest request,
+        boolean tenantSelfServe
+    ) {
+        Business business = businessRepository
+            .findByIdAndDeletedAtIsNull(businessId)
+            .orElseThrow(() ->
+                new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Business not found"
+                )
+            );
+
+        if (tenantSelfServe && hasRegionFields(request)) {
+            assertTenantRegionEditable(business);
+        }
+
+        if (request.name() != null && !request.name().isBlank()) {
+            business.setName(request.name().trim());
+        }
+        if (
+            request.subscriptionTier() != null &&
+            !request.subscriptionTier().isBlank()
+        ) {
+            business.setSubscriptionTier(
+                request.subscriptionTier().trim().toLowerCase(Locale.ROOT)
+            );
+        }
+        if (request.active() != null) {
+            business.setActive(request.active());
+        }
+        if (request.storefront() != null) {
+            String merged = storefrontSettingsService.mergeAndValidate(
+                business.getId(),
+                business.getSettings(),
+                request.storefront()
+            );
+            business.setSettings(merged);
+        }
+        if (request.inventory() != null) {
+            business.setSettings(
+                businessInventorySettingsService.merge(
+                    business.getSettings(),
+                    request.inventory()
+                )
+            );
+        }
+        if (request.profile() != null) {
+            business.setSettings(
+                businessProfileSettingsService.merge(
+                    business.getSettings(),
+                    request.profile()
+                )
+            );
+        }
+        if (request.featureFlags() != null) {
+            business.setSettings(
+                storefrontSettingsService.mergeFeatureFlags(
+                    business.getSettings(),
+                    request.featureFlags()
+                )
+            );
+        }
+        if (request.globalCatalogCode() != null) {
+            business.setSettings(
+                globalCatalogResolver.mergeOverrideCode(
+                    business.getSettings(),
+                    request.globalCatalogCode()
+                )
+            );
+        }
+        applyRegionPatch(business, request, tenantSelfServe);
+
+        return toResponse(businessRepository.save(business));
     }
 
     @Transactional
@@ -949,5 +974,142 @@ public class TenancyService {
             return fallback;
         }
         return value.trim();
+    }
+
+    private static boolean hasRegionFields(UpdateBusinessRequest request) {
+        return request.currency() != null
+                || request.countryCode() != null
+                || request.timezone() != null;
+    }
+
+    private void assertTenantRegionEditable(Business business) {
+        String status = businessOnboardingSettingsService
+                .readFromSettingsJson(business.getSettings())
+                .status();
+        if ("completed".equals(status) || "dismissed".equals(status)) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Country, currency, and timezone are locked after onboarding is finished"
+            );
+        }
+    }
+
+    /**
+     * @param tenantSelfServe when true, currency must match the country map (no free-pick).
+     *                        When false (SA), free-pick is allowed; country still must be known
+     *                        if provided, and changing country alone re-derives currency/tz
+     *                        unless those fields are also supplied.
+     */
+    private void applyRegionPatch(
+            Business business,
+            UpdateBusinessRequest request,
+            boolean tenantSelfServe
+    ) {
+        if (!hasRegionFields(request)) {
+            return;
+        }
+
+        String previousCountry = business.getCountryCode();
+        String previousCurrency = business.getCurrency();
+        String previousTimezone = business.getTimezone();
+
+        String nextCountry = request.countryCode() != null
+                ? RegionDefaults.normalizeCountry(request.countryCode())
+                : business.getCountryCode();
+        if (request.countryCode() != null) {
+            RegionProfile profile = regionDefaults.require(nextCountry);
+            business.setCountryCode(profile.countryCode());
+            if (request.currency() == null) {
+                business.setCurrency(profile.currency());
+            }
+            if (request.timezone() == null) {
+                business.setTimezone(profile.timezone());
+            }
+        }
+
+        if (request.currency() != null) {
+            String currency = request.currency().trim().toUpperCase(Locale.ROOT);
+            if (tenantSelfServe && !regionDefaults.currencyMatchesCountry(nextCountry, currency)) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Currency must match the country default for self-serve tenants"
+                );
+            }
+            business.setCurrency(currency);
+        }
+
+        if (request.timezone() != null) {
+            String timezone = request.timezone().trim();
+            if (timezone.isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Timezone is required");
+            }
+            business.setTimezone(timezone);
+        }
+
+        boolean countryChanged = !java.util.Objects.equals(
+                normalizeNullable(previousCountry),
+                normalizeNullable(business.getCountryCode())
+        );
+        boolean currencyChanged = !java.util.Objects.equals(
+                normalizeNullable(previousCurrency),
+                normalizeNullable(business.getCurrency())
+        );
+
+        if (tenantSelfServe && countryChanged) {
+            regionCatalogAuditService.countrySelected(
+                    business.getId(),
+                    business.getCountryCode(),
+                    RegionCatalogAuditService.SOURCE_QUESTIONNAIRE
+            );
+        }
+
+        if (!tenantSelfServe && (countryChanged || currencyChanged)) {
+            boolean hasRisk = itemRepository.existsByBusinessIdAndDeletedAtIsNull(business.getId())
+                    || saleRepository.existsByBusinessId(business.getId());
+            if (hasRisk && !Boolean.TRUE.equals(request.acknowledgeRegionRisk())) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Changing country/currency re-labels existing amounts without converting. "
+                                + "This business has products and/or sales. "
+                                + "Confirm with acknowledgeRegionRisk=true."
+                );
+            }
+            regionCatalogAuditService.regionChangedBySuperAdmin(
+                    business.getId(),
+                    currentActorId(),
+                    Map.of(
+                            "countryCode", nullToEmpty(previousCountry),
+                            "currency", nullToEmpty(previousCurrency),
+                            "timezone", nullToEmpty(previousTimezone)
+                    ),
+                    Map.of(
+                            "countryCode", nullToEmpty(business.getCountryCode()),
+                            "currency", nullToEmpty(business.getCurrency()),
+                            "timezone", nullToEmpty(business.getTimezone())
+                    ),
+                    hasRisk
+            );
+        }
+    }
+
+    private static String normalizeNullable(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
+    }
+
+    private static String currentActorId() {
+        var authentication = org.springframework.security.core.context.SecurityContextHolder
+                .getContext()
+                .getAuthentication();
+        if (authentication == null || !(authentication.getPrincipal() instanceof String id) || id.isBlank()) {
+            return null;
+        }
+        return id;
     }
 }

@@ -1,6 +1,7 @@
 package zelisline.ub.tenancy.api;
 
 import java.time.Duration;
+import java.util.List;
 
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
@@ -18,7 +19,9 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.tenancy.api.dto.OnboardBusinessRequest;
 import zelisline.ub.tenancy.api.dto.PublicHostResolveResponse;
+import zelisline.ub.tenancy.api.dto.SelfServeCountryResponse;
 import zelisline.ub.tenancy.application.PublicHostResolverService;
+import zelisline.ub.tenancy.application.RegionDefaults;
 
 /**
  * Public tenant lookup by hostname. Used by the Next.js storefront so that any
@@ -37,6 +40,7 @@ public class PublicHostResolveController {
     private static final Duration CACHE_TTL = Duration.ofSeconds(60);
 
     private final PublicHostResolverService publicHostResolverService;
+    private final RegionDefaults regionDefaults;
 
     @GetMapping("/resolve")
     public ResponseEntity<PublicHostResolveResponse> resolve(@RequestParam("host") String host) {
@@ -67,6 +71,19 @@ public class PublicHostResolveController {
     }
 
     /**
+     * Countries enabled for cloud self-serve onboarding (picker source of truth).
+     */
+    @GetMapping("/selfserve-countries")
+    public ResponseEntity<List<SelfServeCountryResponse>> selfServeCountries() {
+        List<SelfServeCountryResponse> body = regionDefaults.selfServeProfiles().stream()
+                .map(regionDefaults::toSelfServeCountry)
+                .toList();
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.maxAge(CACHE_TTL).cachePublic())
+                .body(body);
+    }
+
+    /**
      * Self-service business onboarding for visitors on an unmapped domain.
      * Creates a business, maps the host, and returns tenant context so the
      * frontend can proceed directly to login or signup.
@@ -75,7 +92,7 @@ public class PublicHostResolveController {
     public ResponseEntity<PublicHostResolveResponse> onboard(
             @Valid @RequestBody OnboardBusinessRequest request) {
         PublicHostResolveResponse body = publicHostResolverService.onboardBusiness(
-                request.name(), request.host());
+                request.name(), request.host(), request.countryCode());
         return ResponseEntity.status(HttpStatus.CREATED).body(body);
     }
 }

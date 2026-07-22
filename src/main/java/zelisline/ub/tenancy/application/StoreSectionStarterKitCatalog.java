@@ -96,6 +96,37 @@ public final class StoreSectionStarterKitCatalog {
                             "Beverages",
                             "Snacks"
                     )
+            ),
+            new StoreSectionStarterKitResponse(
+                    "cosmetics",
+                    "Cosmetics",
+                    List.of(
+                            "Skin care",
+                            "Hair care",
+                            "Make-up",
+                            "Fragrances",
+                            "Personal care",
+                            "Bath & body",
+                            "Nails",
+                            "Men's grooming",
+                            "Baby care",
+                            "Accessories"
+                    )
+            ),
+            new StoreSectionStarterKitResponse(
+                    "wines-spirits",
+                    "Wines & spirits",
+                    List.of(
+                            "Beer",
+                            "Wine",
+                            "Spirits",
+                            "RTD & cider",
+                            "Mixers",
+                            "Soft drinks",
+                            "Snacks",
+                            "Tobacco",
+                            "Glassware & accessories"
+                    )
             )
     );
 

@@ -39,18 +39,27 @@ public class GlobalCatalogResolver {
     private final ObjectMapper objectMapper;
 
     public GlobalCatalog resolveForBusiness(String businessId) {
-        Business business = businessRepository.findById(businessId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
-        return resolveForBusiness(business);
+        return resolveDetailedForBusiness(businessId).catalog();
     }
 
     public GlobalCatalog resolveForBusiness(Business business) {
+        return resolveDetailedForBusiness(business).catalog();
+    }
+
+    public ResolvedGlobalCatalog resolveDetailedForBusiness(String businessId) {
+        Business business = businessRepository.findById(businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
+        return resolveDetailedForBusiness(business);
+    }
+
+    public ResolvedGlobalCatalog resolveDetailedForBusiness(Business business) {
         String overrideCode = readOverrideCode(business.getSettings());
         if (overrideCode != null) {
-            return globalCatalogRepository.findByCodeAndStatus(overrideCode, STATUS_PUBLISHED)
+            GlobalCatalog catalog = globalCatalogRepository.findByCodeAndStatus(overrideCode, STATUS_PUBLISHED)
                     .orElseThrow(() -> new ResponseStatusException(
                             HttpStatus.BAD_REQUEST,
                             "Configured globalCatalogCode '" + overrideCode + "' is missing or not published"));
+            return new ResolvedGlobalCatalog(catalog, "override");
         }
 
         String countryCode = business.getCountryCode() != null
@@ -60,13 +69,14 @@ public class GlobalCatalogResolver {
             var byRegion = globalCatalogRepository.findFirstByRegionCodeAndStatusOrderByVersionDesc(
                     countryCode, STATUS_PUBLISHED);
             if (byRegion.isPresent()) {
-                return byRegion.get();
+                return new ResolvedGlobalCatalog(byRegion.get(), "region");
             }
         }
 
-        return globalCatalogRepository.findByCode(DEFAULT_CATALOG_CODE)
+        GlobalCatalog fallback = globalCatalogRepository.findByCode(DEFAULT_CATALOG_CODE)
                 .or(() -> globalCatalogRepository.findFirstByStatusOrderByVersionDesc(STATUS_PUBLISHED))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No global catalog available"));
+        return new ResolvedGlobalCatalog(fallback, "default");
     }
 
     public String readOverrideCode(String settingsJson) {

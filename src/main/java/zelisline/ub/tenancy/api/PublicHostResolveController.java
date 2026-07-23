@@ -71,6 +71,21 @@ public class PublicHostResolveController {
     }
 
     /**
+     * Shop finder for the landing page — resolve by business name, slug, or host.
+     */
+    @GetMapping("/resolve-by-shop")
+    public ResponseEntity<PublicHostResolveResponse> resolveByShop(
+            @RequestParam("q") String query) {
+        PublicHostResolveResponse body = publicHostResolverService.resolveByShopQuery(query)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "No active shop found for that name"));
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.maxAge(CACHE_TTL).cachePublic())
+                .body(body);
+    }
+
+    /**
      * Countries enabled for cloud self-serve onboarding (picker source of truth).
      */
     @GetMapping("/selfserve-countries")

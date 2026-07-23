@@ -101,6 +101,58 @@ public class PublicHostResolverService {
     }
 
     /**
+     * Landing-page shop finder: visitors type a business name, slug, or shop
+     * host and we resolve the tenant so they can open the till on their subdomain.
+     */
+    @Transactional(readOnly = true)
+    public Optional<PublicHostResolveResponse> resolveByShopQuery(String rawQuery) {
+        if (rawQuery == null || rawQuery.isBlank()) {
+            return Optional.empty();
+        }
+        String trimmed = rawQuery.trim();
+
+        String asHost = TenantHostParsing.hostnameOnly(trimmed);
+        if (asHost != null && asHost.contains(".")) {
+            Optional<PublicHostResolveResponse> byHost = resolveByHost(asHost);
+            if (byHost.isPresent()) {
+                return byHost;
+            }
+            String left = asHost.split("\\.", 2)[0];
+            if (!left.isBlank()) {
+                Optional<Business> byLeftSlug =
+                        businessRepository.findBySlugAndDeletedAtIsNull(left.toLowerCase(Locale.ROOT));
+                if (byLeftSlug.isPresent()) {
+                    return byLeftSlug.map(this::toResponse);
+                }
+            }
+        }
+
+        Optional<Business> byExactName =
+                businessRepository.findFirstByNameIgnoreCaseAndDeletedAtIsNull(trimmed);
+        if (byExactName.isPresent()) {
+            return byExactName.map(this::toResponse);
+        }
+
+        String slug = nameToSlug(trimmed);
+        if (slug.isBlank()) {
+            return Optional.empty();
+        }
+
+        Optional<Business> bySlug = businessRepository.findBySlugAndDeletedAtIsNull(slug);
+        if (bySlug.isPresent()) {
+            return bySlug.map(this::toResponse);
+        }
+
+        List<Business> prefixed =
+                businessRepository.findBySlugStartingWithAndDeletedAtIsNull(slug + "-");
+        if (prefixed.size() == 1) {
+            return Optional.of(toResponse(prefixed.get(0)));
+        }
+
+        return Optional.empty();
+    }
+
+    /**
      * Self-service onboarding: creates a business and a {@code {slug}.{suffix}}
      * subdomain mapping. The apex host (e.g. kiosk.ke) is NEVER mapped —
      * it stays as the landing page where visitors can only create shops.

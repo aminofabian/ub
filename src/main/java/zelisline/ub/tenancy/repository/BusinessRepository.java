@@ -30,6 +30,10 @@ public interface BusinessRepository extends JpaRepository<Business, String> {
 
     Optional<Business> findBySlugAndDeletedAtIsNull(String slug);
 
+    Optional<Business> findFirstByNameIgnoreCaseAndDeletedAtIsNull(String name);
+
+    java.util.List<Business> findBySlugStartingWithAndDeletedAtIsNull(String slugPrefix);
+
     Optional<Business> findByIdAndDeletedAtIsNull(String id);
 
     Page<Business> findByDeletedAtIsNull(Pageable pageable);

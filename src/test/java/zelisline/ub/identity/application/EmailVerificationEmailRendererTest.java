@@ -24,29 +24,40 @@ class EmailVerificationEmailRendererTest {
     }
 
     @Test
-    void htmlMatchesMockupLayoutAndGreenPalette() {
+    void htmlMatchesOrderEmailVisualSystem() {
         var renderer = new EmailVerificationEmailRenderer();
         var branding = EmailVerificationBrandingContext.fromHost(
                 java.util.Optional.empty(),
                 "uzapoint.kiosk.ke");
         String link = "https://uzapoint.kiosk.ke/verify-email?token=abc";
-        String html = renderer.renderHtml(branding, "owner@example.com", link);
+        String html = renderer.renderHtml(branding, "Jane Owner", "owner@example.com", link);
 
         assertThat(html).contains("<!DOCTYPE html>");
-        assertThat(html).contains("Verify Your Email");
+        assertThat(html).contains("Email verification");
+        assertThat(html).contains("Confirm it");
         assertThat(html).contains("Confirm your email");
-        assertThat(html).contains("Please click the button below to confirm your email");
-        assertThat(html).contains(EmailVerificationEmailRenderer.BG_MINT);
-        assertThat(html).contains(EmailVerificationEmailRenderer.HERO_BG);
+        assertThat(html).contains("Hi Jane");
+        assertThat(html).contains(EmailVerificationEmailRenderer.PAGE_BG);
         assertThat(html).contains(EmailVerificationEmailRenderer.GREEN);
         assertThat(html).contains("href=\"" + link + "\"");
-        assertThat(html).contains("If you did not request this, no worries");
-        assertThat(html).contains("<svg");
+        assertThat(html).contains("If you did not create a");
         assertThat(html).contains("fonts.googleapis.com");
         assertThat(html).contains("Cormorant+Garamond");
         assertThat(html).contains("DM+Sans");
         assertThat(html).contains(EmailVerificationEmailRenderer.FONT_SERIF);
         assertThat(html).contains(EmailVerificationEmailRenderer.FONT_SANS);
+        assertThat(html).contains("Uzapoint");
+        assertThat(html).doesNotContain("<svg");
+    }
+
+    @Test
+    void platformDefaultLeadsWithUb() {
+        var renderer = new EmailVerificationEmailRenderer();
+        var branding = EmailVerificationBrandingContext.platformDefault();
+        assertThat(renderer.renderSubject(branding)).isEqualTo("Verify your UB account");
+        String html = renderer.renderHtml(branding, "owner@example.com", "https://example.com/v");
+        assertThat(html).contains(">UB<");
+        assertThat(html).contains("Point of sale, inventory, and online storefront.");
     }
 
     @Test

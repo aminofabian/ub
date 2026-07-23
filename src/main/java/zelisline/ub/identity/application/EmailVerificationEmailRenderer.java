@@ -1,72 +1,101 @@
 package zelisline.ub.identity.application;
 
+import java.util.Locale;
+
 import org.springframework.stereotype.Component;
 
 /**
- * Branded HTML verification email — clean card layout on mint green, hero
- * illustration, and primary CTA button. Matches the product verification mockup;
- * tenant logo and button colour come from {@link EmailVerificationBrandingContext}.
+ * Branded HTML verification email — same visual system as storefront order
+ * confirmations: cool neutral page wash, white card, primary accent bar,
+ * Cormorant + DM Sans, and tenant colours / wordmark.
+ *
+ * <p>Platform default wordmark is {@code UB}; tenant shops use their display name.
  */
 @Component
 public class EmailVerificationEmailRenderer {
 
-    /** Mockup primary green */
+    /** Default primary — matches platform {@code BRAND_PRIMARY}. */
     static final String GREEN = "#28A745";
-    /** Darker green for logo tile and illustration accents */
+    /** Default accent — matches platform {@code BRAND_ACCENT}. */
     static final String GREEN_DARK = "#20863B";
-    /** Page background (mint) */
-    static final String BG_MINT = "#E9F0EA";
-    /** Hero panel background */
-    static final String HERO_BG = "#F0F2F1";
-    static final String CARD = "#FFFFFF";
-    static final String TEXT = "#111827";
-    static final String MUTED = "#6C757D";
 
-    /** Display type — matches frontend {@code --font-cormorant} / {@code .font-serif}. */
-    static final String FONT_SERIF =
-            "'Cormorant Garamond', Georgia, 'Times New Roman', serif";
-    /** UI type — matches frontend {@code --font-dm-sans} / {@code font-sans}. */
+    /** Page wash — cool neutral (same as order confirmation). */
+    static final String PAGE_BG = "#F4F5F4";
+    static final String CARD_BG = "#FFFFFF";
+    static final String BORDER = "#E8EAE8";
+    static final String TEXT = "#14201A";
+    static final String MUTED = "#5C6B63";
+    static final String HAIRLINE = "#EEF0EE";
+
+    /** Matches frontend {@code --font-dm-sans}. */
     static final String FONT_SANS =
             "'DM Sans', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+    /** Matches frontend {@code --font-cormorant}. */
+    static final String FONT_SERIF =
+            "'Cormorant Garamond', Georgia, 'Times New Roman', serif";
+    static final String FONT_MONO =
+            "'SF Mono', Menlo, Consolas, 'Courier New', monospace";
 
     public String renderSubject(EmailVerificationBrandingContext branding) {
-        return "Verify your " + branding.displayName() + " account";
+        return "Verify your " + brandWordmark(branding) + " account";
     }
 
     public String renderPlainText(
             EmailVerificationBrandingContext branding,
             String recipientEmail,
             String verifyLink) {
+        return renderPlainText(branding, null, recipientEmail, verifyLink);
+    }
+
+    public String renderPlainText(
+            EmailVerificationBrandingContext branding,
+            String recipientName,
+            String recipientEmail,
+            String verifyLink) {
+        String brand = brandWordmark(branding);
+        String greeting = greetingLine(recipientName);
         return """
                 %s — verify your email
 
-                Please click the link below to confirm your email.
+                %s
 
-                We received a registration for %s.
+                We received a registration for %s on %s.
 
                 Confirm your email:
                 %s
 
                 If you did not request this, no worries — simply ignore this message.
+
+                — %s
                 """.formatted(
-                branding.displayName(),
+                brand,
+                greeting,
                 recipientEmail,
-                verifyLink).strip();
+                brand,
+                verifyLink,
+                brand).strip();
     }
 
     public String renderHtml(
             EmailVerificationBrandingContext branding,
             String recipientEmail,
             String verifyLink) {
-        String green = branding.primaryColor() != null ? branding.primaryColor() : GREEN;
-        String greenDark = branding.accentColor() != null ? branding.accentColor() : GREEN_DARK;
-        String display = escape(branding.displayName());
+        return renderHtml(branding, null, recipientEmail, verifyLink);
+    }
+
+    public String renderHtml(
+            EmailVerificationBrandingContext branding,
+            String recipientName,
+            String recipientEmail,
+            String verifyLink) {
+        Palette palette = Palette.from(branding);
+        String brand = brandWordmark(branding);
+        String tagline = brandTagline(branding);
         String email = escape(recipientEmail);
         String link = escape(verifyLink);
-        String logoInitials = initials(display);
-        String hostLine = branding.host() != null
-                ? escape(branding.host())
-                : display;
+        String hostLine = branding.host() != null && !branding.host().isBlank()
+                ? branding.host().trim()
+                : brand;
 
         return """
                 <!DOCTYPE html>
@@ -77,12 +106,11 @@ public class EmailVerificationEmailRenderer {
                 <title>Verify your email</title>
                 %s
                 </head>
-                <body style="margin:0;padding:0;background-color:%s;font-family:%s;">
-                <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="background-color:%s;">
+                <body style="margin:0;padding:0;background-color:%s;font-family:%s;-webkit-font-smoothing:antialiased;">
+                <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="background-color:%s;padding:40px 16px 56px;">
                   <tr>
-                    <td align="center" style="padding:40px 16px 48px;">
-                      %s
-                      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%%;background-color:%s;border-radius:16px;box-shadow:0 8px 32px rgba(17,24,39,0.08);overflow:hidden;">
+                    <td align="center">
+                      <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%%;background-color:%s;border:1px solid %s;border-radius:4px;overflow:hidden;">
                         %s
                         %s
                         %s
@@ -95,181 +123,304 @@ public class EmailVerificationEmailRenderer {
                 </html>
                 """.formatted(
                 renderFontHead(),
-                BG_MINT,
+                PAGE_BG,
                 FONT_SANS,
-                BG_MINT,
-                renderBackgroundBlobs(greenDark),
-                CARD,
-                renderLogoRow(branding, display, logoInitials, green, greenDark),
-                renderHero(green, greenDark),
-                renderBody(email, link, green),
-                renderFooter(display, hostLine));
+                PAGE_BG,
+                CARD_BG,
+                BORDER,
+                renderHeader(brand, tagline, branding, palette),
+                renderHero(recipientName, brand, palette),
+                renderBody(email, link, brand, palette),
+                renderFooter(brand, hostLine));
     }
 
-    /**
-     * Google Fonts — same families as {@code frontend/app/layout.tsx}
-     * (Cormorant Garamond + DM Sans). Many clients load {@code link}; others fall
-     * back to Georgia / system sans from inline {@code font-family}.
-     */
     private static String renderFontHead() {
         return """
                 <link rel="preconnect" href="https://fonts.googleapis.com">
                 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-                <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+                <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
                 """;
     }
 
-    /** Decorative circles behind the card (mint field). */
-    private static String renderBackgroundBlobs(String greenDark) {
-        return """
-                <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%%;margin-bottom:-12px;">
-                  <tr>
-                    <td width="50%%" align="left" style="padding:0 0 0 8px;">
-                      <div style="width:120px;height:120px;border-radius:60px;background-color:%s;opacity:0.35;"></div>
-                    </td>
-                    <td width="50%%" align="right" style="padding:0 8px 0 0;">
-                      <div style="width:80px;height:80px;border-radius:40px;background-color:%s;opacity:0.25;margin-left:auto;"></div>
-                    </td>
-                  </tr>
-                </table>
-                """.formatted(greenDark, greenDark);
-    }
-
-    private String renderLogoRow(
+    private String renderHeader(
+            String brand,
+            String tagline,
             EmailVerificationBrandingContext branding,
-            String display,
-            String initials,
-            String green,
-            String greenDark) {
-        String logoInner = branding.logoUrl() != null
+            Palette palette) {
+        String logoBlock = branding.logoUrl() != null
                 ? """
-                <img src="%s" alt="%s" width="56" height="56" style="display:block;width:56px;height:56px;object-fit:contain;border:0;">
-                """.formatted(escape(branding.logoUrl()), display)
+                    <img src="%s" alt="%s" width="40" height="40" style="display:block;width:40px;height:40px;object-fit:contain;border:0;border-radius:8px;margin-bottom:14px;">
+                    """.formatted(escape(branding.logoUrl()), escape(brand))
                 : """
-                <span style="font-family:%s;font-size:22px;font-weight:600;color:#FFFFFF;letter-spacing:0.04em;">%s</span>
-                """.formatted(FONT_SERIF, escape(initials));
+                    <div style="display:inline-block;width:40px;height:40px;border-radius:10px;background-color:%s;text-align:center;line-height:40px;margin-bottom:14px;">
+                      <span style="font-family:%s;font-size:15px;font-weight:600;color:#FFFFFF;letter-spacing:0.04em;vertical-align:middle;">%s</span>
+                    </div>
+                    """.formatted(palette.primary, FONT_SANS, escape(initials(brand)));
+
+        String taglineBlock = tagline.isBlank()
+                ? ""
+                : """
+                    <div style="font-family:%s;font-size:12px;font-weight:400;color:%s;letter-spacing:0.02em;margin-top:6px;">
+                      %s
+                    </div>
+                    """.formatted(FONT_SANS, MUTED, escape(tagline));
 
         return """
                 <tr>
-                  <td align="center" style="padding:32px 32px 20px;background-color:%s;">
-                    <table role="presentation" cellpadding="0" cellspacing="0">
+                  <td style="background-color:%s;padding:0;">
+                    <div style="height:3px;background-color:%s;line-height:3px;font-size:0;">&nbsp;</div>
+                    <div style="padding:28px 36px 24px;text-align:left;">
+                      %s
+                      <div style="font-family:%s;font-size:20px;font-weight:600;color:%s;letter-spacing:-0.02em;line-height:1.2;">
+                        %s
+                      </div>
+                      %s
+                    </div>
+                  </td>
+                </tr>
+                """.formatted(
+                CARD_BG,
+                palette.primary,
+                logoBlock,
+                FONT_SANS, TEXT, escape(brand),
+                taglineBlock);
+    }
+
+    private String renderHero(String recipientName, String brand, Palette palette) {
+        String greeting = escape(greetingLine(recipientName));
+
+        return """
+                <tr>
+                  <td style="background-color:%s;padding:8px 36px 8px;border-top:1px solid %s;">
+                    <div style="font-family:%s;font-size:11px;font-weight:600;color:%s;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:8px;">
+                      Email verification
+                    </div>
+                    <div style="font-family:%s;font-size:34px;font-weight:500;color:%s;line-height:1.15;letter-spacing:-0.02em;margin-bottom:14px;">
+                      Confirm it&rsquo;s you
+                    </div>
+                    <div style="font-family:%s;font-size:15px;font-weight:400;color:%s;line-height:1.55;margin-bottom:4px;">
+                      %s
+                    </div>
+                    <div style="font-family:%s;font-size:14px;font-weight:400;color:%s;line-height:1.55;">
+                      One tap activates your <strong style="font-weight:600;color:%s;">%s</strong> account — then you can stock shelves and start selling.
+                    </div>
+                  </td>
+                </tr>
+                """.formatted(
+                CARD_BG, HAIRLINE,
+                FONT_SANS, palette.primary,
+                FONT_SERIF, TEXT,
+                FONT_SANS, MUTED, greeting,
+                FONT_SANS, MUTED, TEXT, escape(brand));
+    }
+
+    private String renderBody(String email, String link, String brand, Palette palette) {
+        return """
+                <tr>
+                  <td style="background-color:%s;padding:24px 36px 28px;">
+                    <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border:1px solid %s;border-radius:4px;background-color:%s;">
                       <tr>
-                        <td align="center" style="width:56px;height:56px;border-radius:12px;background-color:%s;text-align:center;vertical-align:middle;">
-                          %s
+                        <td style="padding:18px 20px;">
+                          <div style="font-family:%s;font-size:10px;font-weight:600;color:%s;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:6px;">
+                            Sent to
+                          </div>
+                          <div style="font-family:%s;font-size:14px;font-weight:500;color:%s;word-break:break-all;">
+                            %s
+                          </div>
                         </td>
                       </tr>
                     </table>
-                  </td>
-                </tr>
-                """.formatted(CARD, branding.logoUrl() != null ? CARD : green, logoInner);
-    }
 
-    private String renderHero(String green, String greenDark) {
-        return """
-                <tr>
-                  <td align="center" style="background-color:%s;padding:28px 24px 32px;">
-                    %s
-                  </td>
-                </tr>
-                """.formatted(HERO_BG, heroIllustrationSvg(green, greenDark));
-    }
-
-    private String renderBody(String email, String link, String green) {
-        return """
-                <tr>
-                  <td style="background-color:%s;padding:8px 40px 36px;text-align:center;">
-                    <h1 style="margin:0 0 12px;font-family:%s;font-size:32px;font-weight:600;color:%s;line-height:1.15;letter-spacing:-0.02em;">
-                      Verify Your Email
-                    </h1>
-                    <p style="margin:0 0 8px;font-family:%s;font-size:16px;font-weight:400;color:%s;line-height:1.55;">
-                      Please click the button below to confirm your email.
-                    </p>
-                    <p style="margin:0 0 28px;font-family:%s;font-size:14px;font-weight:400;color:%s;line-height:1.5;">
-                      Account: <strong style="font-weight:600;color:%s;">%s</strong>
-                    </p>
-                    <table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:0 auto 24px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" width="100%%" style="margin:24px 0 20px;">
                       <tr>
-                        <td align="center" style="border-radius:8px;background-color:%s;">
-                          <a href="%s" target="_blank" style="display:inline-block;padding:14px 32px;font-family:%s;font-size:16px;font-weight:600;color:#FFFFFF;text-decoration:none;">
+                        <td align="center" style="border-radius:4px;background-color:%s;">
+                          <a href="%s" target="_blank" style="display:inline-block;padding:15px 28px;font-family:%s;font-size:15px;font-weight:600;color:#FFFFFF;text-decoration:none;letter-spacing:0.01em;">
                             Confirm your email
                           </a>
                         </td>
                       </tr>
                     </table>
-                    <p style="margin:0 0 16px;font-family:%s;font-size:13px;font-weight:400;color:%s;line-height:1.55;">
-                      If you did not request this, no worries — simply ignore this message.
-                    </p>
-                    <p style="margin:0;font-family:%s;font-size:12px;font-weight:400;color:%s;line-height:1.5;word-break:break-all;">
+
+                    <div style="font-family:%s;font-size:12px;font-weight:400;color:%s;line-height:1.6;margin-bottom:14px;">
+                      Button not working? Paste this link into your browser:
+                    </div>
+                    <div style="font-family:%s;font-size:11px;font-weight:400;color:%s;line-height:1.5;word-break:break-all;">
                       <a href="%s" style="color:%s;text-decoration:underline;">%s</a>
-                    </p>
+                    </div>
                   </td>
                 </tr>
                 """.formatted(
-                CARD,
-                FONT_SERIF, TEXT,
-                FONT_SANS, TEXT,
-                FONT_SANS, MUTED, TEXT, email,
-                green, link, FONT_SANS,
+                CARD_BG,
+                BORDER, PAGE_BG,
                 FONT_SANS, MUTED,
-                FONT_SANS, MUTED, link, green, link);
+                FONT_MONO, TEXT, email,
+                palette.primary, link, FONT_SANS,
+                FONT_SANS, MUTED,
+                FONT_MONO, MUTED, link, palette.primary, link);
     }
 
-    private String renderFooter(String display, String hostLine) {
+    private String renderFooter(String brand, String hostLine) {
         return """
                 <tr>
-                  <td style="background-color:%s;padding:24px 32px 32px;border-top:1px solid #E5E7EB;text-align:center;">
-                    <p style="margin:0 0 8px;font-family:%s;font-size:12px;font-weight:500;color:%s;line-height:1.6;">
-                      %s
-                    </p>
-                    <p style="margin:0;font-family:%s;font-size:11px;font-weight:400;color:#9CA3AF;line-height:1.5;">
-                      &copy; %s &nbsp;&middot;&nbsp; %s
-                    </p>
+                  <td style="background-color:%s;padding:28px 36px 32px;border-top:1px solid %s;text-align:left;">
+                    <div style="font-family:%s;font-size:13px;font-weight:400;color:%s;line-height:1.65;margin-bottom:6px;">
+                      If you did not create a %s account, you can ignore this message.
+                    </div>
+                    <div style="font-family:%s;font-size:12px;font-weight:400;color:%s;line-height:1.65;margin-bottom:20px;">
+                      Questions? Reply to this email — we&rsquo;re happy to help.
+                    </div>
+                    <div style="font-family:%s;font-size:11px;font-weight:400;color:#9AA39D;">
+                      %s &nbsp;&middot;&nbsp; %s &nbsp;&middot;&nbsp; %s
+                    </div>
                   </td>
                 </tr>
                 """.formatted(
-                CARD,
+                CARD_BG, BORDER,
+                FONT_SANS, TEXT, escape(brand),
+                FONT_SANS, MUTED,
                 FONT_SANS,
-                MUTED,
-                escape(display),
-                FONT_SANS,
-                java.time.Year.now().getValue(),
-                escape(hostLine));
+                escape(brand),
+                escape(hostLine),
+                java.time.Year.now().getValue());
     }
 
-    /**
-     * Inline SVG: shield (left) + open envelope (centre) — email-safe in Apple Mail,
-     * Gmail app, and most modern clients; degrades to empty hero panel elsewhere.
-     */
-    private static String heroIllustrationSvg(String green, String greenDark) {
-        return """
-                <svg xmlns="http://www.w3.org/2000/svg" width="280" height="100" viewBox="0 0 280 100" role="img" aria-label="Secure email verification" style="display:block;margin:0 auto;max-width:280px;height:auto;">
-                  <g transform="translate(24,18)">
-                    <path fill="%s" d="M28 4L8 12v14c0 11 8 21 20 24 12-3 20-13 20-24V12L28 4z"/>
-                    <path fill="#FFFFFF" d="M22 26l-6-6 2.8-2.8L22 20.4l9.2-9.2L34 14l-12 12z"/>
-                  </g>
-                  <g transform="translate(108,8)">
-                    <rect x="0" y="20" width="64" height="44" rx="6" fill="%s"/>
-                    <path fill="%s" d="M0 20 L32 42 L64 20 Z"/>
-                    <rect x="14" y="36" width="36" height="28" rx="3" fill="#FFFFFF"/>
-                    <line x1="20" y1="48" x2="44" y2="48" stroke="%s" stroke-width="3" stroke-linecap="round"/>
-                    <line x1="20" y1="56" x2="38" y2="56" stroke="#D1D5DB" stroke-width="3" stroke-linecap="round"/>
-                  </g>
-                </svg>
-                """.formatted(greenDark, green, greenDark, green);
+    static String brandWordmark(EmailVerificationBrandingContext branding) {
+        if (branding == null) {
+            return "UB";
+        }
+        String raw = branding.displayName();
+        if (raw == null || raw.isBlank() || isPlatformPlaceholderName(raw)) {
+            if (branding.slug() != null && !branding.slug().isBlank()
+                    && !"ub".equalsIgnoreCase(branding.slug())) {
+                return titleCaseSlug(branding.slug());
+            }
+            return "UB";
+        }
+        int pipe = raw.indexOf('|');
+        if (pipe > 0) {
+            String left = raw.substring(0, pipe).trim();
+            if (!left.isBlank()) {
+                return left;
+            }
+        }
+        return raw.trim();
+    }
+
+    static String brandTagline(EmailVerificationBrandingContext branding) {
+        if (branding == null) {
+            return "Confirm your email to unlock your account.";
+        }
+        if (branding.tagline() != null && !branding.tagline().isBlank()) {
+            return branding.tagline().trim();
+        }
+        String brand = brandWordmark(branding);
+        if ("UB".equalsIgnoreCase(brand)) {
+            return "Point of sale, inventory, and online storefront.";
+        }
+        return "You're one click away from " + brand + ".";
+    }
+
+    static String greetingLine(String recipientName) {
+        String first = firstName(recipientName);
+        if (first == null) {
+            return "Hi there —";
+        }
+        return "Hi " + first + " —";
+    }
+
+    static String firstName(String recipientName) {
+        if (recipientName == null || recipientName.isBlank()) {
+            return null;
+        }
+        String first = recipientName.trim().split("\\s+")[0];
+        if (first.isBlank()) {
+            return null;
+        }
+        return Character.toUpperCase(first.charAt(0))
+                + (first.length() > 1 ? first.substring(1) : "");
+    }
+
+    static boolean isPlatformPlaceholderName(String name) {
+        if (name == null || name.isBlank()) {
+            return true;
+        }
+        String n = name.strip();
+        return n.equalsIgnoreCase("Kiosk")
+                || n.equalsIgnoreCase("UB")
+                || n.equals("🥬 Palmart");
+    }
+
+    static String titleCaseSlug(String slug) {
+        String normalized = slug.replace('-', ' ').trim();
+        if (normalized.isEmpty()) {
+            return "UB";
+        }
+        String[] parts = normalized.split("\\s+");
+        StringBuilder sb = new StringBuilder();
+        for (String part : parts) {
+            if (part.isEmpty()) {
+                continue;
+            }
+            if (!sb.isEmpty()) {
+                sb.append(' ');
+            }
+            sb.append(Character.toUpperCase(part.charAt(0)));
+            if (part.length() > 1) {
+                sb.append(part.substring(1).toLowerCase(Locale.ROOT));
+            }
+        }
+        return sb.isEmpty() ? "UB" : sb.toString();
     }
 
     private static String initials(String displayName) {
-        if (displayName == null || displayName.isBlank()) {
+        if (displayName == null || displayName.isBlank() || "UB".equalsIgnoreCase(displayName)) {
             return "UB";
         }
         String[] parts = displayName.trim().split("\\s+");
         if (parts.length >= 2) {
-            return ("" + parts[0].charAt(0) + parts[1].charAt(0)).toUpperCase();
+            return ("" + parts[0].charAt(0) + parts[1].charAt(0)).toUpperCase(Locale.ROOT);
         }
         String one = parts[0];
         return one.length() >= 2
-                ? one.substring(0, 2).toUpperCase()
-                : one.toUpperCase();
+                ? one.substring(0, 2).toUpperCase(Locale.ROOT)
+                : one.toUpperCase(Locale.ROOT);
+    }
+
+    record Palette(String primary, String accent) {
+        static Palette from(EmailVerificationBrandingContext branding) {
+            String primary = sanitizeHex(
+                    branding != null ? branding.primaryColor() : null,
+                    GREEN);
+            String accent = sanitizeHex(
+                    branding != null ? branding.accentColor() : null,
+                    GREEN_DARK);
+            return new Palette(primary, accent);
+        }
+    }
+
+    static String sanitizeHex(String raw, String fallback) {
+        if (raw == null || raw.isBlank()) {
+            return fallback;
+        }
+        String s = raw.strip();
+        if (!s.startsWith("#")) {
+            s = "#" + s;
+        }
+        if (s.length() == 4) {
+            char r = s.charAt(1);
+            char g = s.charAt(2);
+            char b = s.charAt(3);
+            s = "#" + r + r + g + g + b + b;
+        }
+        if (s.length() != 7) {
+            return fallback;
+        }
+        for (int i = 1; i < 7; i++) {
+            if (Character.digit(s.charAt(i), 16) < 0) {
+                return fallback;
+            }
+        }
+        return s.toUpperCase(Locale.ROOT);
     }
 
     static String escape(String s) {

@@ -267,7 +267,8 @@ public class AuthRegistrationService {
                         : Optional.empty(),
                 frontendHost);
         String subject = emailVerificationEmailRenderer.renderSubject(branding);
-        String htmlBody = emailVerificationEmailRenderer.renderHtml(branding, user.getEmail(), link);
+        String htmlBody = emailVerificationEmailRenderer.renderHtml(
+                branding, user.getName(), user.getEmail(), link);
         notificationService.sendEmailVerificationEmail(user.getEmail(), subject, htmlBody);
         return link;
     }

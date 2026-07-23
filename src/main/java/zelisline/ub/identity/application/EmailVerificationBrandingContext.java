@@ -59,7 +59,7 @@ public record EmailVerificationBrandingContext(
                 "#28A745",
                 "#20863B",
                 null,
-                "Confirm your email to unlock your account.");
+                "Point of sale, inventory, and online storefront.");
     }
 
     private static EmailVerificationBrandingContext defaultsForSlug(

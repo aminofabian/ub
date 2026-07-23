@@ -25,6 +25,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
+import zelisline.ub.catalog.api.dto.CreateVariantRequest;
 import zelisline.ub.catalog.application.CatalogTaxonomyService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.domain.Category;
@@ -367,6 +368,14 @@ public class GlobalCatalogService {
                 catalog.getId(), STATUS_PUBLISHED, requestedIds);
         Set<String> publishedIdSet = Set.copyOf(publishedIds);
 
+        Map<String, GlobalProduct> globalById = new HashMap<>();
+        if (!requestedIds.isEmpty()) {
+            for (GlobalProduct gp : globalProductRepository.findAllById(requestedIds)) {
+                globalById.put(gp.getId(), gp);
+            }
+        }
+        List<AdoptLineRequest> orderedLines = orderParentsBeforeVariants(lines, globalById);
+
         List<Item> tenantItems = itemRepository.findByBusinessIdAndDeletedAtIsNull(businessId);
         TenantCatalogMatchIndex matchIndex = TenantCatalogMatchIndex.fromItems(tenantItems);
 
@@ -392,8 +401,9 @@ public class GlobalCatalogService {
         int skippedCount = 0;
         final String effectiveActor = actorUserIdOrSystem(actorUserId);
         int lineIndex = 0;
+        Map<String, String> adoptedGlobalIdToItemId = new HashMap<>();
 
-        for (AdoptLineRequest line : lines) {
+        for (AdoptLineRequest line : orderedLines) {
             String gpId = line.globalProductId();
             String progressName = null;
             try {
@@ -402,8 +412,12 @@ public class GlobalCatalogService {
                 continue;
             }
 
-            GlobalProduct gp = globalProductRepository.findById(gpId)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Global product not found"));
+            GlobalProduct gp = globalById.get(gpId);
+            if (gp == null) {
+                gp = globalProductRepository.findById(gpId)
+                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Global product not found"));
+                globalById.put(gp.getId(), gp);
+            }
             progressName = gp.getName();
             if (progressListener != null) {
                 // Report the item about to run so the UI can show a live name while images re-host.
@@ -417,6 +431,7 @@ public class GlobalCatalogService {
                         .findFirst()
                         .orElse(null);
                 String existingSku = existing != null ? existing.getSku() : null;
+                adoptedGlobalIdToItemId.put(gpId, existingItemId);
                 results.add(new AdoptResultLineResponse(gpId, "skip_already_imported", existingItemId, existingSku, "Already in catalog"));
                 skippedCount++;
                 continue;
@@ -469,6 +484,7 @@ public class GlobalCatalogService {
                                 businessId, merged, gp.getId(), gp.getImageUrl(), true);
                         itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(conflictItem.getId(), businessId)
                                 .ifPresent(matchIndex::register);
+                        adoptedGlobalIdToItemId.put(gpId, conflictItem.getId());
                         importedCount++;
                         results.add(merged);
                     } catch (Exception ex) {
@@ -527,9 +543,13 @@ public class GlobalCatalogService {
                         true,
                         createdCategoryIdBySlug
                 );
-                String message = "Will import";
+                String parentTenantId = resolveAdoptParentItemId(
+                        gp, adoptedGlobalIdToItemId, matchIndex, globalById);
+                String message = parentTenantId != null
+                        ? "Will import as variant"
+                        : "Will import";
                 if (categoryResult.wouldCreate()) {
-                    message = "Will import (create category " + slugHint.trim() + ")";
+                    message = message + " (create category " + slugHint.trim() + ")";
                 }
                 results.add(new AdoptResultLineResponse(gpId, "ready", null, sku, message));
                 reserveSkuForBatch(skuToItemId, sku);
@@ -552,64 +572,91 @@ public class GlobalCatalogService {
                 String variant = gp.getVariantName().trim();
                 size = variant.length() > 50 ? variant.substring(0, 50) : variant;
             }
-            // Package templates adopt as standalone stockable SKUs (no parent link yet).
-            boolean stocked = gp.isStocked() || gp.isPackageVariant();
 
-            CreateItemRequest createReq = new CreateItemRequest(
-                    sku,
-                    barcode,
-                    gp.getName(),
-                    gp.getDescription(),
-                    defaultItemTypeId,
-                    categoryId,
-                    null,
-                    gp.getUnitType(),
-                    gp.isWeighed(),
-                    gp.isSellable(),
-                    stocked,
-                    gp.getPackagingUnitName(),
-                    gp.getPackagingUnitQty(),
-                    null,
-                    null,
-                    line.buyingPrice() != null ? line.buyingPrice() : gp.getRecommendedBuyingPrice(),
-                    null,
-                    line.minStockLevel() != null ? line.minStockLevel() : gp.getDefaultMinStockLevel(),
-                    line.reorderLevel() != null ? line.reorderLevel() : gp.getDefaultReorderLevel(),
-                    line.reorderQty() != null ? line.reorderQty() : gp.getDefaultReorderQty(),
-                    gp.getExpiresAfterDays(),
-                    gp.isHasExpiry(),
-                    gp.getImageUrl(),
-                    gp.getBrand(),
-                    size,
-                    null
-            );
-
-            reserveSkuForBatch(skuToItemId, sku);
-
+            BigDecimal buyingPrice = line.buyingPrice() != null
+                    ? line.buyingPrice()
+                    : gp.getRecommendedBuyingPrice();
             BigDecimal sellingPrice = line.sellingPrice() != null
                     ? line.sellingPrice()
                     : gp.getRecommendedSellingPrice();
             BigDecimal openingQty = line.openingQty();
-            BigDecimal openingUnitCost = line.openingUnitCost() != null && line.openingUnitCost().compareTo(BigDecimal.ZERO) > 0
+            BigDecimal openingUnitCost = line.openingUnitCost() != null
+                    && line.openingUnitCost().compareTo(BigDecimal.ZERO) > 0
                     ? line.openingUnitCost()
-                    : (createReq.buyingPrice() != null ? createReq.buyingPrice() : null);
+                    : buyingPrice;
+
+            String parentTenantId = resolveAdoptParentItemId(
+                    gp, adoptedGlobalIdToItemId, matchIndex, globalById);
+
+            reserveSkuForBatch(skuToItemId, sku);
 
             try {
-                AdoptResultLineResponse imported = adoptLineExecutor.importLine(
-                        businessId,
-                        new GlobalCatalogAdoptLineExecutor.ImportLineCommand(
-                                gpId,
-                                createReq,
-                                branch.getId(),
-                                sellingPrice,
-                                openingQty,
-                                openingUnitCost,
-                                gp.getImageUrl()),
-                        effectiveActor);
+                AdoptResultLineResponse imported;
+                if (parentTenantId != null) {
+                    CreateVariantRequest variantReq = buildAdoptVariantRequest(gp, sku, barcode, categoryId, size, line);
+                    imported = adoptLineExecutor.importVariantLine(
+                            businessId,
+                            new GlobalCatalogAdoptLineExecutor.ImportVariantLineCommand(
+                                    gpId,
+                                    parentTenantId,
+                                    variantReq,
+                                    branch.getId(),
+                                    sellingPrice,
+                                    openingQty,
+                                    openingUnitCost,
+                                    buyingPrice,
+                                    gp.getImageUrl()),
+                            effectiveActor);
+                } else {
+                    // Orphan package rows (no resolvable parent) stay flat stockable SKUs.
+                    boolean stocked = gp.isStocked() || gp.isPackageVariant();
+                    CreateItemRequest createReq = new CreateItemRequest(
+                            sku,
+                            barcode,
+                            gp.getName(),
+                            gp.getDescription(),
+                            defaultItemTypeId,
+                            categoryId,
+                            null,
+                            gp.getUnitType(),
+                            gp.isWeighed(),
+                            gp.isSellable(),
+                            stocked,
+                            gp.getPackagingUnitName(),
+                            gp.getPackagingUnitQty(),
+                            null,
+                            null,
+                            buyingPrice,
+                            null,
+                            line.minStockLevel() != null ? line.minStockLevel() : gp.getDefaultMinStockLevel(),
+                            line.reorderLevel() != null ? line.reorderLevel() : gp.getDefaultReorderLevel(),
+                            line.reorderQty() != null ? line.reorderQty() : gp.getDefaultReorderQty(),
+                            gp.getExpiresAfterDays(),
+                            gp.isHasExpiry(),
+                            gp.getImageUrl(),
+                            gp.getBrand(),
+                            size,
+                            null
+                    );
+                    imported = adoptLineExecutor.importLine(
+                            businessId,
+                            new GlobalCatalogAdoptLineExecutor.ImportLineCommand(
+                                    gpId,
+                                    createReq,
+                                    branch.getId(),
+                                    sellingPrice,
+                                    openingQty,
+                                    openingUnitCost,
+                                    gp.getImageUrl()),
+                            effectiveActor);
+                }
                 imported = adoptLineExecutor.attachGalleryAfterCommit(
                         businessId, imported, gp.getId(), gp.getImageUrl(), false);
                 if (imported.sku() != null && !imported.sku().isBlank()) {
                     skuToItemId.put(imported.sku().trim(), imported.itemId());
+                }
+                if (imported.itemId() != null) {
+                    adoptedGlobalIdToItemId.put(gpId, imported.itemId());
                 }
                 itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(imported.itemId(), businessId)
                         .ifPresent(matchIndex::register);
@@ -899,6 +946,7 @@ public class GlobalCatalogService {
                 gp.isSellable(),
                 gp.isStocked(),
                 gp.isPackageVariant(),
+                gp.getVariantOfGlobalProductId(),
                 gp.getPackagingUnitName(),
                 gp.getPackagingUnitQty(),
                 gp.getRecommendedBuyingPrice(),
@@ -915,6 +963,103 @@ public class GlobalCatalogService {
                 gp.getSortOrder(),
                 alreadyImported,
                 adoptedItemId
+        );
+    }
+
+    /**
+     * Parents (no variant link) before children so adopt can resolve
+     * {@code variant_of_global_product_id} within the same batch.
+     */
+    static List<AdoptLineRequest> orderParentsBeforeVariants(
+            List<AdoptLineRequest> lines,
+            Map<String, GlobalProduct> globalById
+    ) {
+        List<AdoptLineRequest> roots = new ArrayList<>();
+        List<AdoptLineRequest> children = new ArrayList<>();
+        for (AdoptLineRequest line : lines) {
+            GlobalProduct gp = globalById.get(line.globalProductId());
+            if (gp != null && blankToNull(gp.getVariantOfGlobalProductId()) != null) {
+                children.add(line);
+            } else {
+                roots.add(line);
+            }
+        }
+        List<AdoptLineRequest> ordered = new ArrayList<>(roots.size() + children.size());
+        ordered.addAll(roots);
+        ordered.addAll(children);
+        return ordered;
+    }
+
+    private String resolveAdoptParentItemId(
+            GlobalProduct gp,
+            Map<String, String> adoptedGlobalIdToItemId,
+            TenantCatalogMatchIndex matchIndex,
+            Map<String, GlobalProduct> globalById
+    ) {
+        String parentGlobalId = blankToNull(gp.getVariantOfGlobalProductId());
+        if (parentGlobalId == null) {
+            return null;
+        }
+        String fromBatch = adoptedGlobalIdToItemId.get(parentGlobalId);
+        if (fromBatch != null) {
+            return fromBatch;
+        }
+        GlobalProduct parent = globalById.get(parentGlobalId);
+        if (parent == null) {
+            parent = globalProductRepository.findById(parentGlobalId).orElse(null);
+            if (parent != null) {
+                globalById.put(parent.getId(), parent);
+            }
+        }
+        if (parent == null) {
+            return null;
+        }
+        return matchIndex.findMatchingItemId(parent);
+    }
+
+    private static CreateVariantRequest buildAdoptVariantRequest(
+            GlobalProduct gp,
+            String sku,
+            String barcode,
+            String categoryId,
+            String size,
+            AdoptLineRequest line
+    ) {
+        String variantName = blankToNull(gp.getVariantName());
+        if (variantName == null) {
+            variantName = blankToNull(gp.getPackagingUnitName());
+        }
+        if (variantName == null) {
+            variantName = blankToNull(size);
+        }
+        if (variantName == null) {
+            variantName = "Variant";
+        }
+        return new CreateVariantRequest(
+                sku,
+                variantName,
+                barcode,
+                gp.getName(),
+                gp.getDescription(),
+                categoryId,
+                null,
+                gp.getUnitType(),
+                gp.isWeighed(),
+                gp.isSellable(),
+                null,
+                gp.isPackageVariant(),
+                gp.getPackagingUnitName(),
+                gp.getPackagingUnitQty(),
+                null,
+                null,
+                line.buyingPrice() != null ? line.buyingPrice() : gp.getRecommendedBuyingPrice(),
+                null,
+                line.minStockLevel() != null ? line.minStockLevel() : gp.getDefaultMinStockLevel(),
+                line.reorderLevel() != null ? line.reorderLevel() : gp.getDefaultReorderLevel(),
+                line.reorderQty() != null ? line.reorderQty() : gp.getDefaultReorderQty(),
+                gp.getImageUrl(),
+                gp.getBrand(),
+                size
         );
     }
 

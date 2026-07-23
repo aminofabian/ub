@@ -527,9 +527,9 @@ Align with `StoreSectionStarterKitCatalog` department names where possible (e.g.
 
 ### 7.6 Variants & package products
 
-**MVP:** Global catalog is **flat SKUs only** (one `global_products` row = one adoptable SKU).
+**MVP:** Global catalog stores flat SKUs plus optional `variant_of_global_product_id` (one parent level). Promote remaps tenant `variant_of_item_id`; adopt recreates the link via `createVariant`.
 
-**Advanced:** `global_product_groups` + `global_product_variants` mirroring tenant parent/variant model; adopt creates parent + children in one transaction.
+**Advanced:** richer `global_product_groups` UI / multi-level nesting if needed later.
 
 ### 7.7 Permissions & branch context
 

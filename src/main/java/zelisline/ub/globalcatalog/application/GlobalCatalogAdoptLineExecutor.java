@@ -11,6 +11,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
+import zelisline.ub.catalog.api.dto.CreateVariantRequest;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
@@ -45,6 +46,19 @@ public class GlobalCatalogAdoptLineExecutor {
             BigDecimal sellingPrice,
             BigDecimal openingQty,
             BigDecimal openingUnitCost,
+            String globalImageUrl
+    ) {
+    }
+
+    public record ImportVariantLineCommand(
+            String globalProductId,
+            String parentItemId,
+            CreateVariantRequest createReq,
+            String branchId,
+            BigDecimal sellingPrice,
+            BigDecimal openingQty,
+            BigDecimal openingUnitCost,
+            BigDecimal buyingPriceFallback,
             String globalImageUrl
     ) {
     }
@@ -84,6 +98,45 @@ public class GlobalCatalogAdoptLineExecutor {
                 item.getId(),
                 item.getSku(),
                 "Imported successfully");
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public AdoptResultLineResponse importVariantLine(
+            String businessId,
+            ImportVariantLineCommand cmd,
+            String actorUserId
+    ) {
+        var created = itemCatalogService.createVariant(
+                businessId, cmd.parentItemId(), cmd.createReq(), actorUserId);
+        Item item = itemRepository.findById(created.id())
+                .orElseThrow(() -> new IllegalStateException("Created variant not found"));
+        item.setGlobalProductSourceId(cmd.globalProductId());
+        itemRepository.saveAndFlush(item);
+
+        applySellingPrice(
+                businessId,
+                item.getId(),
+                cmd.branchId(),
+                cmd.sellingPrice(),
+                actorUserId,
+                "Global catalog adopt");
+        applyOpeningBalance(
+                businessId,
+                cmd.branchId(),
+                item.getId(),
+                cmd.openingQty(),
+                cmd.openingUnitCost(),
+                cmd.buyingPriceFallback(),
+                actorUserId
+        );
+        supplierAdoptLinker.linkPrimaryTemplate(businessId, cmd.globalProductId(), item);
+
+        return new AdoptResultLineResponse(
+                cmd.globalProductId(),
+                "imported",
+                item.getId(),
+                item.getSku(),
+                "Imported as variant of parent");
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

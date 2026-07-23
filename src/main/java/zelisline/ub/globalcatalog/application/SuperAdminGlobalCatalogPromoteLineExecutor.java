@@ -31,6 +31,30 @@ public class SuperAdminGlobalCatalogPromoteLineExecutor {
         return new SavedProduct(saved, created);
     }
 
+    /** Updates (or clears) the parent link after both parent and child exist in global. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void updateVariantParent(String productId, String variantOfGlobalProductId) {
+        if (productId == null || productId.isBlank()) {
+            return;
+        }
+        GlobalProduct product = globalProductRepository.findById(productId).orElse(null);
+        if (product == null) {
+            return;
+        }
+        String next = variantOfGlobalProductId == null || variantOfGlobalProductId.isBlank()
+                ? null
+                : variantOfGlobalProductId.trim();
+        if (next != null && next.equals(productId)) {
+            next = null;
+        }
+        String current = product.getVariantOfGlobalProductId();
+        if (current == null ? next == null : current.equals(next)) {
+            return;
+        }
+        product.setVariantOfGlobalProductId(next);
+        globalProductRepository.saveAndFlush(product);
+    }
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean rehostImages(String productId, List<String> sourceHttpsUrls) {
         if (productId == null || sourceHttpsUrls == null || sourceHttpsUrls.isEmpty()) {

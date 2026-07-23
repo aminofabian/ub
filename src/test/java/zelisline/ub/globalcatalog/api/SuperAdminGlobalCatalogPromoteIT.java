@@ -455,6 +455,69 @@ class SuperAdminGlobalCatalogPromoteIT {
     }
 
     @Test
+    void promoteLinksPackageVariantToParent() throws Exception {
+        String goodsTypeId = itemTypeRepository.findByBusinessIdAndTypeKey(SOURCE_BUSINESS, "goods")
+                .orElseThrow()
+                .getId();
+
+        Item parent = new Item();
+        parent.setBusinessId(SOURCE_BUSINESS);
+        parent.setSku("EGG-BASE");
+        parent.setName("Eggs");
+        parent.setBrand("Farm");
+        parent.setSize("each");
+        parent.setBarcode("1112223334445");
+        parent.setItemTypeId(goodsTypeId);
+        parent.setUnitType("each");
+        parent.setStocked(true);
+        parent.setBuyingPrice(new BigDecimal("5.00"));
+        parent = itemRepository.save(parent);
+
+        Item tray = new Item();
+        tray.setBusinessId(SOURCE_BUSINESS);
+        tray.setSku("EGG-TRAY");
+        tray.setName("Eggs Tray of 30");
+        tray.setBrand("Farm");
+        tray.setVariantName("Tray of 30");
+        tray.setVariantOfItemId(parent.getId());
+        tray.setBarcode("1112223334446");
+        tray.setItemTypeId(goodsTypeId);
+        tray.setUnitType("each");
+        tray.setPackageVariant(true);
+        tray.setPackagingUnitName("Tray");
+        tray.setPackagingUnitQty(new BigDecimal("30"));
+        tray.setStocked(false);
+        tray.setBuyingPrice(new BigDecimal("120.00"));
+        tray = itemRepository.save(tray);
+
+        // Child-first order proves pass-2 remapping does not depend on request order.
+        String body = """
+                {"sourceBusinessId":"%s","itemIds":["%s","%s"],"onConflict":"update","publish":true}
+                """.formatted(SOURCE_BUSINESS, tray.getId(), parent.getId());
+
+        mockMvc.perform(post("/api/v1/super-admin/global-catalog/promote")
+                        .header("Authorization", "Bearer " + saToken)
+                        .contentType(APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.createdCount").value(2));
+
+        GlobalProduct globalParent = globalProductRepository.findAll().stream()
+                .filter(p -> "EGG-BASE".equals(p.getSkuTemplate()))
+                .findFirst()
+                .orElseThrow();
+        GlobalProduct globalTray = globalProductRepository.findAll().stream()
+                .filter(p -> "EGG-TRAY".equals(p.getSkuTemplate()))
+                .findFirst()
+                .orElseThrow();
+
+        org.assertj.core.api.Assertions.assertThat(globalParent.getVariantOfGlobalProductId()).isNull();
+        org.assertj.core.api.Assertions.assertThat(globalTray.getVariantOfGlobalProductId())
+                .isEqualTo(globalParent.getId());
+        org.assertj.core.api.Assertions.assertThat(globalTray.isPackageVariant()).isTrue();
+    }
+
+    @Test
     void promoteWithCatalogIdTargetsUgCatalog() throws Exception {
         GlobalCatalog ug = new GlobalCatalog();
         ug.setCode("ug-retail");

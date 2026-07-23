@@ -22,6 +22,7 @@ import com.jayway.jsonpath.JsonPath;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.application.ItemCatalogService;
+import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemImageRepository;
@@ -310,6 +311,72 @@ class GlobalCatalogIT {
         var items = itemRepository.findByBusinessIdAndDeletedAtIsNull(TENANT_A);
         org.assertj.core.api.Assertions.assertThat(items).hasSize(1);
         org.assertj.core.api.Assertions.assertThat(items.get(0).getGlobalProductSourceId()).isEqualTo(globalProductId);
+    }
+
+    @Test
+    void adoptLinksPackageVariantToParentEvenWhenChildListedFirst() throws Exception {
+        GlobalProduct parent = globalProductRepository.findById(globalProductId).orElseThrow();
+        parent.setName("Eggs");
+        parent.setSkuTemplate("EGG-BASE");
+        parent.setBarcode("9998887776661");
+        parent.setPackageVariant(false);
+        parent.setStocked(true);
+        globalProductRepository.save(parent);
+
+        GlobalProduct tray = new GlobalProduct();
+        tray.setCatalogId(parent.getCatalogId());
+        tray.setGlobalCategoryId(parent.getGlobalCategoryId());
+        tray.setName("Eggs Tray of 30");
+        tray.setBrand("Farm");
+        tray.setVariantName("Tray of 30");
+        tray.setSkuTemplate("EGG-TRAY");
+        tray.setBarcode("9998887776662");
+        tray.setUnitType("each");
+        tray.setPackageVariant(true);
+        tray.setPackagingUnitName("Tray");
+        tray.setPackagingUnitQty(new BigDecimal("30"));
+        tray.setStocked(false);
+        tray.setVariantOfGlobalProductId(parent.getId());
+        tray.setRecommendedBuyingPrice(new BigDecimal("120.00"));
+        tray.setRecommendedSellingPrice(new BigDecimal("150.00"));
+        tray.setStatus("published");
+        tray.setSortOrder(1);
+        tray = globalProductRepository.save(tray);
+        final String trayId = tray.getId();
+        final String parentId = parent.getId();
+
+        String body = String.format(
+                "{\"openingBranchId\":\"%s\",\"lines\":["
+                        + "{\"globalProductId\":\"%s\",\"sellingPrice\":150,\"buyingPrice\":120},"
+                        + "{\"globalProductId\":\"%s\",\"sellingPrice\":8,\"buyingPrice\":5,\"openingQty\":60}"
+                        + "]}",
+                branchId, trayId, parentId
+        );
+
+        mockMvc.perform(post("/api/v1/global-catalog/adopt")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.importedCount").value(2));
+
+        Item parentItem = itemRepository.findByBusinessIdAndDeletedAtIsNull(TENANT_A).stream()
+                .filter(i -> parentId.equals(i.getGlobalProductSourceId()))
+                .findFirst()
+                .orElseThrow();
+        Item trayItem = itemRepository.findByBusinessIdAndDeletedAtIsNull(TENANT_A).stream()
+                .filter(i -> trayId.equals(i.getGlobalProductSourceId()))
+                .findFirst()
+                .orElseThrow();
+
+        org.assertj.core.api.Assertions.assertThat(parentItem.getVariantOfItemId()).isNull();
+        org.assertj.core.api.Assertions.assertThat(trayItem.getVariantOfItemId()).isEqualTo(parentItem.getId());
+        org.assertj.core.api.Assertions.assertThat(trayItem.isPackageVariant()).isTrue();
+        org.assertj.core.api.Assertions.assertThat(trayItem.isStocked()).isFalse();
+        org.assertj.core.api.Assertions.assertThat(trayItem.getPackagingUnitQty())
+                .isEqualByComparingTo("30");
     }
 
     @Test

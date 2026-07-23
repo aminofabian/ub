@@ -152,7 +152,7 @@ Tenant cover can render from HTTPS `items.image_key` alone (`coverImageUrl`). Ga
 - Tenants editing / writing the global catalog
 - Real-time “refresh from template” into already-adopted items (later)
 - Full regional catalog productization beyond existing `country_code` resolution
-- Variant groups / package SKUs in global templates (flat SKUs for now)
+- Deep variant group UI / multi-level nesting (one parent level via `variant_of_global_product_id` is supported)
 - Hard-delete of tenant sales history via “replace catalogue” (separate feature)
 - **Flyway reseed of global products after shops have adopted**
 - Merging Global Catalog into Supplier Marketplace

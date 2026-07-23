@@ -227,6 +227,8 @@ public class SuperAdminGlobalCatalogPromoteService {
         int skipped = 0;
         int imageRehosts = 0;
         List<PromoteLineResult> lines = new ArrayList<>();
+        // Source item id → global product id for successful create/update rows (pass-2 parent link).
+        Map<String, String> sourceItemIdToGlobalId = new LinkedHashMap<>();
 
         // Preserve request order
         int reachedCount = 0;
@@ -346,6 +348,7 @@ public class SuperAdminGlobalCatalogPromoteService {
                     created++;
                     matchIndex.register(product);
                     archivedMatchIndex.unregister(product.getId());
+                    sourceItemIdToGlobalId.put(itemId, product.getId());
                     lines.add(new PromoteLineResult(
                             itemId,
                             product.getId(),
@@ -358,6 +361,7 @@ public class SuperAdminGlobalCatalogPromoteService {
                     updated++;
                     matchIndex.register(product);
                     archivedMatchIndex.unregister(product.getId());
+                    sourceItemIdToGlobalId.put(itemId, product.getId());
                     lines.add(new PromoteLineResult(
                             itemId,
                             product.getId(),
@@ -380,7 +384,80 @@ public class SuperAdminGlobalCatalogPromoteService {
             }
         }
 
+        if (!dryRun && !sourceItemIdToGlobalId.isEmpty()) {
+            linkVariantParents(businessId, byId, sourceItemIdToGlobalId, matchIndex);
+        }
+
         return new PromoteResponse(created, updated, skipped, imageRehosts, lines);
+    }
+
+    /**
+     * Second pass: remap tenant {@code variant_of_item_id} onto
+     * {@code global_products.variant_of_global_product_id} once both rows exist.
+     */
+    private void linkVariantParents(
+            String businessId,
+            Map<String, Item> byId,
+            Map<String, String> sourceItemIdToGlobalId,
+            GlobalMatchIndex matchIndex
+    ) {
+        for (Map.Entry<String, String> entry : sourceItemIdToGlobalId.entrySet()) {
+            Item item = byId.get(entry.getKey());
+            if (item == null) {
+                continue;
+            }
+            String childGlobalId = entry.getValue();
+            String desiredParentGlobalId = resolveParentGlobalProductId(
+                    businessId,
+                    item,
+                    sourceItemIdToGlobalId,
+                    matchIndex);
+            if (desiredParentGlobalId != null && desiredParentGlobalId.equals(childGlobalId)) {
+                desiredParentGlobalId = null;
+            }
+            try {
+                lineExecutor.updateVariantParent(childGlobalId, desiredParentGlobalId);
+            } catch (RuntimeException ex) {
+                log.warn(
+                        "Promote parent link failed for item {} → {}: {}",
+                        entry.getKey(),
+                        desiredParentGlobalId,
+                        ex.toString());
+            }
+        }
+    }
+
+    static String resolveParentGlobalProductId(
+            Item item,
+            Map<String, String> sourceItemIdToGlobalId,
+            GlobalMatchIndex matchIndex,
+            java.util.function.Function<String, Optional<Item>> parentLoader
+    ) {
+        String parentTenantId = blankToNull(item.getVariantOfItemId());
+        if (parentTenantId == null) {
+            return null;
+        }
+        String fromBatch = sourceItemIdToGlobalId.get(parentTenantId);
+        if (fromBatch != null) {
+            return fromBatch;
+        }
+        return parentLoader.apply(parentTenantId)
+                .map(matchIndex::findMatch)
+                .map(GlobalProduct::getId)
+                .orElse(null);
+    }
+
+    private String resolveParentGlobalProductId(
+            String businessId,
+            Item item,
+            Map<String, String> sourceItemIdToGlobalId,
+            GlobalMatchIndex matchIndex
+    ) {
+        return resolveParentGlobalProductId(
+                item,
+                sourceItemIdToGlobalId,
+                matchIndex,
+                parentId -> itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(parentId, businessId));
     }
 
     private GlobalProduct newGlobalProduct(String catalogId, String preferredId) {

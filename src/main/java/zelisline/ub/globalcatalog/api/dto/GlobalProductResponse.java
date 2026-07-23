@@ -20,6 +20,7 @@ public record GlobalProductResponse(
         boolean sellable,
         boolean stocked,
         boolean packageVariant,
+        String variantOfGlobalProductId,
         String packagingUnitName,
         BigDecimal packagingUnitQty,
         BigDecimal recommendedBuyingPrice,

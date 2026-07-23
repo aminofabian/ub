@@ -744,6 +744,8 @@ public class SuperAdminGlobalCatalogService {
         product.setVariantName(blankToNull(req.variantName()));
         product.setDescription(blankToNull(req.description()));
         product.setPackageVariant(Boolean.TRUE.equals(req.packageVariant()));
+        product.setVariantOfGlobalProductId(
+                resolveVariantParentId(product.getCatalogId(), product.getId(), req.variantOfGlobalProductId()));
         product.setPackagingUnitName(blankToNull(req.packagingUnitName()));
         product.setPackagingUnitQty(req.packagingUnitQty());
         product.setGlobalCategoryId(blankToNull(req.globalCategoryId()));
@@ -801,6 +803,13 @@ public class SuperAdminGlobalCatalogService {
         }
         if (req.packageVariant() != null) {
             product.setPackageVariant(req.packageVariant());
+        }
+        if (req.variantOfGlobalProductId() != null) {
+            product.setVariantOfGlobalProductId(
+                    resolveVariantParentId(
+                            product.getCatalogId(),
+                            product.getId(),
+                            blankToNull(req.variantOfGlobalProductId())));
         }
         if (req.packagingUnitName() != null) {
             product.setPackagingUnitName(blankToNull(req.packagingUnitName()));
@@ -981,6 +990,7 @@ public class SuperAdminGlobalCatalogService {
                 gp.isSellable(),
                 gp.isStocked(),
                 gp.isPackageVariant(),
+                gp.getVariantOfGlobalProductId(),
                 gp.getPackagingUnitName(),
                 gp.getPackagingUnitQty(),
                 gp.getRecommendedBuyingPrice(),
@@ -1000,6 +1010,29 @@ public class SuperAdminGlobalCatalogService {
                 gp.getVersion(),
                 hasBarcodeDuplicateWarning(gp)
         );
+    }
+
+    /**
+     * Parent must exist in the same catalog, must not be self, and must not itself be a variant.
+     * Blank clears the link.
+     */
+    private String resolveVariantParentId(String catalogId, String productId, String rawParentId) {
+        String parentId = blankToNull(rawParentId);
+        if (parentId == null) {
+            return null;
+        }
+        if (productId != null && productId.equals(parentId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Product cannot be its own parent");
+        }
+        GlobalProduct parent = globalProductRepository.findById(parentId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Parent global product not found"));
+        if (!catalogId.equals(parent.getCatalogId())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Parent must be in the same catalog");
+        }
+        if (blankToNull(parent.getVariantOfGlobalProductId()) != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cannot nest a variant under another variant");
+        }
+        return parentId;
     }
 
     private CategoryResponse toCategory(GlobalCategory c) {

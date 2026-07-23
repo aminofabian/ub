@@ -70,11 +70,18 @@ public class GlobalProduct {
     private boolean stocked = true;
 
     /**
-     * True when the source SKU was a package/tray variant. Stored for catalog fidelity;
-     * adopt treats these as standalone stockable SKUs until full variant groups exist.
+     * True when the source SKU was a package/tray variant. Linked children keep
+     * {@code is_stocked=false} on adopt; orphaned package rows fall back to flat SKUs.
      */
     @Column(name = "is_package_variant", nullable = false)
     private boolean packageVariant;
+
+    /**
+     * Parent global product when this row is a variant/selling-unit of another template.
+     * Mirrors tenant {@code items.variant_of_item_id}; remapped on promote, applied on adopt.
+     */
+    @Column(name = "variant_of_global_product_id", length = 36)
+    private String variantOfGlobalProductId;
 
     @Column(name = "packaging_unit_name", length = 255)
     private String packagingUnitName;

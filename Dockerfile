@@ -6,12 +6,13 @@ WORKDIR /app
 
 # Coolify build VMs are often ~2GB total. A Spring Boot fat JAR + a large Gradle
 # heap leaves no headroom: the kernel SIGKILLs Gradle (exit 255, logs cut mid-task).
-# Keep heap low, one worker, Serial GC, and split compile vs package.
+# Keep heap low, one worker, Serial GC, in-process javac (UB_LOW_MEM_BUILD), split steps.
+ENV UB_LOW_MEM_BUILD=1
 ENV GRADLE_OPTS="-Dorg.gradle.daemon=false -Dorg.gradle.parallel=false -Dorg.gradle.workers.max=1"
 ENV GRADLE_USER_HOME=/home/gradle/.gradle
-# Cap every forked JVM (Gradle + javac) — without -Xmx here, child processes can
-# grow past the builder and get SIGKILL with no Java stacktrace in Coolify logs.
-ENV JAVA_TOOL_OPTIONS="-XX:+UseSerialGC -Xss512k -Xmx384m -XX:MaxMetaspaceSize=128m -XX:MaxDirectMemorySize=32m"
+# Single JVM budget: with fork=false, Gradle + javac share this heap (do NOT raise
+# while Coolify builders stay ~2GB — two 384m heaps was the previous OOM pattern).
+ENV JAVA_TOOL_OPTIONS="-XX:+UseSerialGC -Xss256k -Xmx288m -XX:MaxMetaspaceSize=96m -XX:MaxDirectMemorySize=16m"
 
 COPY gradle ./gradle
 COPY gradlew build.gradle settings.gradle gradle.properties ./
@@ -27,7 +28,7 @@ RUN printf '%s\n' \
 	'org.gradle.configureondemand=false' \
 	'org.gradle.workers.max=1' \
 	'org.gradle.vfs.watch=false' \
-	'org.gradle.jvmargs=-Xmx384m -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -Xss512k -XX:MaxDirectMemorySize=32m' \
+	'org.gradle.jvmargs=-Xmx288m -XX:MaxMetaspaceSize=96m -XX:+UseSerialGC -Xss256k -XX:MaxDirectMemorySize=16m' \
 	> gradle.properties
 
 # Prime dependency cache (layer reused when only src changes).
@@ -42,13 +43,18 @@ RUN rm -rf /tmp/* \
 	"$GRADLE_USER_HOME"/caches/*/transforms \
 	"$GRADLE_USER_HOME"/caches/journal-* \
 	"$GRADLE_USER_HOME"/daemon \
+	"$GRADLE_USER_HOME"/native \
 	|| true
 
 # Split compile from packaging so peak RSS during bootJar stays lower and
 # Coolify logs show which phase died if the builder is still too small.
-RUN ./gradlew compileJava --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace
-RUN ./gradlew classes --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace
-RUN ./gradlew bootJar --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace \
+# --offline avoids download buffers after the dependencies layer warmed the cache.
+RUN ./gradlew compileJava --offline --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace \
+	|| ./gradlew compileJava --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace
+RUN ./gradlew classes --offline --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace \
+	|| ./gradlew classes --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace
+RUN (./gradlew bootJar --offline --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace \
+	|| ./gradlew bootJar --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace) \
 	&& JAR="$(ls -1 build/libs/*.jar | grep -v -- '-plain.jar$' | head -n1)" \
 	&& test -n "$JAR" && test -s "$JAR" \
 	&& cp "$JAR" /app/application.jar

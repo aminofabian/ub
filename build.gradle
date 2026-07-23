@@ -81,6 +81,14 @@ tasks.named('test') {
 	}
 }
 
+// Coolify / small Docker builders (~2GB): avoid a forked javac worker (Gradle + javac
+// each capped by JAVA_TOOL_OPTIONS ≈ 2× heap → SIGKILL / exit 255 with truncated logs).
+if (System.getenv('UB_LOW_MEM_BUILD') == '1') {
+	tasks.withType(JavaCompile).configureEach {
+		options.fork = false
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Desktop SKU packaging (see ../DESKTOP_INSTALLATION.md §5.7).
 //

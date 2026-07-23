@@ -3,9 +3,11 @@ package zelisline.ub.globalcatalog.application;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 import org.springframework.data.domain.Page;
@@ -36,6 +38,7 @@ import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PackSummar
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PatchPackRequest;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PatchProductRequest;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PatchSupplierTemplateRequest;
+import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductImageResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductSupplierLinkResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PublishProductsRequest;
@@ -46,6 +49,7 @@ import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.UpsertProd
 import zelisline.ub.globalcatalog.domain.GlobalCatalog;
 import zelisline.ub.globalcatalog.domain.GlobalCategory;
 import zelisline.ub.globalcatalog.domain.GlobalProduct;
+import zelisline.ub.globalcatalog.domain.GlobalProductImage;
 import zelisline.ub.globalcatalog.domain.GlobalProductPack;
 import zelisline.ub.globalcatalog.domain.GlobalProductPackItem;
 import zelisline.ub.globalcatalog.domain.GlobalProductStatus;
@@ -80,6 +84,7 @@ public class SuperAdminGlobalCatalogService {
     private final GlobalProductSupplierLinkRepository globalProductSupplierLinkRepository;
     private final ItemRepository itemRepository;
     private final GlobalCatalogAdoptImageAttacher adoptImageAttacher;
+    private final GlobalProductImageGalleryService galleryService;
     private final MediaStore mediaStore;
 
     @Transactional(readOnly = true)
@@ -182,19 +187,21 @@ public class SuperAdminGlobalCatalogService {
                 Math.max(page, 0),
                 Math.min(Math.max(size, 1), 100),
                 Sort.by(Sort.Order.asc("sortOrder"), Sort.Order.asc("name")));
-        return globalProductRepository.searchForSuperAdmin(
-                        catalog.getId(),
-                        statusFilter,
-                        blankToNull(categoryId),
-                        blankToNull(q),
-                        missingImage,
-                        pageable)
-                .map(this::toProduct);
+        Page<GlobalProduct> result = globalProductRepository.searchForSuperAdmin(
+                catalog.getId(),
+                statusFilter,
+                blankToNull(categoryId),
+                blankToNull(q),
+                missingImage,
+                pageable);
+        Map<String, List<GlobalProductImage>> imagesByProduct = imagesByProductId(result.getContent());
+        return result.map(gp -> toProduct(gp, imagesByProduct.getOrDefault(gp.getId(), List.of())));
     }
 
     @Transactional(readOnly = true)
     public ProductResponse getProduct(String id, String catalogId) {
-        return toProduct(requireProduct(id, catalogId));
+        GlobalProduct product = requireProduct(id, catalogId);
+        return toProduct(product, galleryService.listForProduct(product.getId()));
     }
 
     @Transactional
@@ -204,7 +211,7 @@ public class SuperAdminGlobalCatalogService {
         product.setCatalogId(catalog.getId());
         applyCreateFields(product, req);
         assertBarcodeAvailable(product.getCatalogId(), product.getBarcode(), product.getStatus(), null);
-        return toProduct(globalProductRepository.save(product));
+        return toProduct(globalProductRepository.save(product), List.of());
     }
 
     @Transactional
@@ -216,7 +223,8 @@ public class SuperAdminGlobalCatalogService {
         applyPatchFields(product, req);
         assertBarcodeAvailable(product.getCatalogId(), product.getBarcode(), product.getStatus(), product.getId());
         try {
-            return toProduct(globalProductRepository.saveAndFlush(product));
+            GlobalProduct saved = globalProductRepository.saveAndFlush(product);
+            return toProduct(saved, galleryService.listForProduct(saved.getId()));
         } catch (ObjectOptimisticLockingFailureException ex) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Product was modified by another editor");
         }
@@ -329,6 +337,7 @@ public class SuperAdminGlobalCatalogService {
         product.setImageUrl(uploaded.secureUrl());
         product.setImagePublicId(uploaded.publicId());
         GlobalProduct saved = globalProductRepository.save(product);
+        galleryService.syncCoverAsPrimary(saved);
         if (previousPublicId != null && !previousPublicId.equals(uploaded.publicId())) {
             try {
                 mediaStore.destroyImage(previousPublicId);
@@ -336,7 +345,7 @@ public class SuperAdminGlobalCatalogService {
                 // orphan acceptable for v1
             }
         }
-        return toProduct(saved);
+        return toProduct(saved, galleryService.listForProduct(saved.getId()));
     }
 
     @Transactional
@@ -346,6 +355,7 @@ public class SuperAdminGlobalCatalogService {
         product.setImageUrl(null);
         product.setImagePublicId(null);
         GlobalProduct saved = globalProductRepository.save(product);
+        galleryService.clearGallery(saved);
         if (publicId != null && mediaStore.isConfigured()) {
             try {
                 mediaStore.destroyImage(publicId);
@@ -353,7 +363,7 @@ public class SuperAdminGlobalCatalogService {
                 // keep row cleared even if CDN destroy fails
             }
         }
-        return toProduct(saved);
+        return toProduct(saved, List.of());
     }
 
     /**
@@ -731,7 +741,11 @@ public class SuperAdminGlobalCatalogService {
         product.setSkuTemplate(blankToNull(req.skuTemplate()));
         product.setBrand(blankToNull(req.brand()));
         product.setSize(blankToNull(req.size()));
+        product.setVariantName(blankToNull(req.variantName()));
         product.setDescription(blankToNull(req.description()));
+        product.setPackageVariant(Boolean.TRUE.equals(req.packageVariant()));
+        product.setPackagingUnitName(blankToNull(req.packagingUnitName()));
+        product.setPackagingUnitQty(req.packagingUnitQty());
         product.setGlobalCategoryId(blankToNull(req.globalCategoryId()));
         product.setItemTypeKeyHint(blankToNull(req.itemTypeKeyHint()) != null ? req.itemTypeKeyHint().trim() : "goods");
         product.setSortOrder(req.sortOrder() != null ? req.sortOrder() : 0);
@@ -779,8 +793,20 @@ public class SuperAdminGlobalCatalogService {
         if (req.size() != null) {
             product.setSize(blankToNull(req.size()));
         }
+        if (req.variantName() != null) {
+            product.setVariantName(blankToNull(req.variantName()));
+        }
         if (req.description() != null) {
             product.setDescription(blankToNull(req.description()));
+        }
+        if (req.packageVariant() != null) {
+            product.setPackageVariant(req.packageVariant());
+        }
+        if (req.packagingUnitName() != null) {
+            product.setPackagingUnitName(blankToNull(req.packagingUnitName()));
+        }
+        if (req.packagingUnitQty() != null) {
+            product.setPackagingUnitQty(req.packagingUnitQty());
         }
         if (req.globalCategoryId() != null) {
             product.setGlobalCategoryId(blankToNull(req.globalCategoryId()));
@@ -910,7 +936,35 @@ public class SuperAdminGlobalCatalogService {
         return product;
     }
 
-    private ProductResponse toProduct(GlobalProduct gp) {
+    private Map<String, List<GlobalProductImage>> imagesByProductId(List<GlobalProduct> products) {
+        if (products == null || products.isEmpty()) {
+            return Map.of();
+        }
+        List<String> ids = products.stream().map(GlobalProduct::getId).toList();
+        Map<String, List<GlobalProductImage>> out = new HashMap<>();
+        for (GlobalProductImage image : galleryService.listForProducts(ids)) {
+            out.computeIfAbsent(image.getGlobalProductId(), ignored -> new ArrayList<>()).add(image);
+        }
+        return out;
+    }
+
+    private ProductResponse toProduct(GlobalProduct gp, List<GlobalProductImage> images) {
+        List<ProductImageResponse> imageResponses = images == null
+                ? List.of()
+                : images.stream()
+                        .map(img -> new ProductImageResponse(
+                                img.getId(),
+                                img.getImageUrl(),
+                                img.getImagePublicId(),
+                                img.getSortOrder(),
+                                img.getAltText(),
+                                img.getWidth(),
+                                img.getHeight()))
+                        .toList();
+        String coverUrl = blankToNull(gp.getImageUrl());
+        if (coverUrl == null && !imageResponses.isEmpty()) {
+            coverUrl = imageResponses.get(0).imageUrl();
+        }
         return new ProductResponse(
                 gp.getId(),
                 gp.getCatalogId(),
@@ -919,12 +973,16 @@ public class SuperAdminGlobalCatalogService {
                 gp.getName(),
                 gp.getBrand(),
                 gp.getSize(),
+                gp.getVariantName(),
                 gp.getDescription(),
                 gp.getBarcode(),
                 gp.getUnitType(),
                 gp.isWeighed(),
                 gp.isSellable(),
                 gp.isStocked(),
+                gp.isPackageVariant(),
+                gp.getPackagingUnitName(),
+                gp.getPackagingUnitQty(),
                 gp.getRecommendedBuyingPrice(),
                 gp.getRecommendedSellingPrice(),
                 gp.getSuggestedMarginPct(),
@@ -933,8 +991,9 @@ public class SuperAdminGlobalCatalogService {
                 gp.getDefaultMinStockLevel(),
                 gp.isHasExpiry(),
                 gp.getExpiresAfterDays(),
-                gp.getImageUrl(),
+                coverUrl,
                 gp.getImagePublicId(),
+                imageResponses,
                 gp.getItemTypeKeyHint(),
                 gp.getStatus(),
                 gp.getSortOrder(),

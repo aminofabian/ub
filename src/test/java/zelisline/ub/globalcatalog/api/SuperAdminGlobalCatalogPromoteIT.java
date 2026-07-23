@@ -24,7 +24,9 @@ import com.jayway.jsonpath.JsonPath;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.domain.ItemImage;
 import zelisline.ub.catalog.repository.CategoryRepository;
+import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.globalcatalog.application.GlobalCatalogJobRunner;
@@ -35,6 +37,7 @@ import zelisline.ub.globalcatalog.domain.GlobalProductStatus;
 import zelisline.ub.globalcatalog.repository.GlobalCatalogJobRepository;
 import zelisline.ub.globalcatalog.repository.GlobalCatalogRepository;
 import zelisline.ub.globalcatalog.repository.GlobalCategoryRepository;
+import zelisline.ub.globalcatalog.repository.GlobalProductImageRepository;
 import zelisline.ub.globalcatalog.repository.GlobalProductRepository;
 import zelisline.ub.identity.domain.SuperAdmin;
 import zelisline.ub.identity.repository.SuperAdminRepository;
@@ -68,7 +71,13 @@ class SuperAdminGlobalCatalogPromoteIT {
     private GlobalCategoryRepository globalCategoryRepository;
 
     @Autowired
+    private GlobalProductImageRepository globalProductImageRepository;
+
+    @Autowired
     private CategoryRepository categoryRepository;
+
+    @Autowired
+    private ItemImageRepository itemImageRepository;
 
     @Autowired
     private ItemRepository itemRepository;
@@ -95,8 +104,10 @@ class SuperAdminGlobalCatalogPromoteIT {
     @BeforeEach
     void seed() throws Exception {
         itemRepository.deleteAll();
+        itemImageRepository.deleteAll();
         categoryRepository.deleteAll();
         globalCatalogJobRepository.deleteAll();
+        globalProductImageRepository.deleteAll();
         globalProductRepository.deleteAll();
         globalCategoryRepository.deleteAll();
         globalCatalogRepository.deleteAll();
@@ -354,6 +365,93 @@ class SuperAdminGlobalCatalogPromoteIT {
                 .findFirst()
                 .orElseThrow();
         org.assertj.core.api.Assertions.assertThat(promoted.getGlobalCategoryId()).isEqualTo(globalChild.getId());
+    }
+
+    @Test
+    void promoteCopiesFullImageGallery() throws Exception {
+        Item item = itemRepository.findById(sourceItemId).orElseThrow();
+        item.setImageKey("https://res.cloudinary.com/demo/image/upload/cover.jpg");
+        itemRepository.save(item);
+
+        ItemImage second = new ItemImage();
+        second.setItemId(item.getId());
+        second.setSecureUrl("https://res.cloudinary.com/demo/image/upload/gallery-2.jpg");
+        second.setSortOrder(0);
+        second.setProvider("cloudinary");
+        second.setCloudinaryPublicId("demo/gallery-2");
+        itemImageRepository.save(second);
+
+        ItemImage third = new ItemImage();
+        third.setItemId(item.getId());
+        third.setSecureUrl("https://res.cloudinary.com/demo/image/upload/gallery-3.jpg");
+        third.setSortOrder(1);
+        third.setProvider("cloudinary");
+        third.setCloudinaryPublicId("demo/gallery-3");
+        itemImageRepository.save(third);
+
+        String body = """
+                {"sourceBusinessId":"%s","itemIds":["%s"],"onConflict":"update","publish":false}
+                """.formatted(SOURCE_BUSINESS, sourceItemId);
+
+        String commit = mockMvc.perform(post("/api/v1/super-admin/global-catalog/promote")
+                        .header("Authorization", "Bearer " + saToken)
+                        .contentType(APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.createdCount").value(1))
+                .andExpect(jsonPath("$.imageRehostCount").value(1))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        String globalId = JsonPath.read(commit, "$.lines[0].globalProductId");
+        var gallery = globalProductImageRepository.findByGlobalProductIdOrderBySortOrderAscIdAsc(globalId);
+        org.assertj.core.api.Assertions.assertThat(gallery).hasSize(3);
+        org.assertj.core.api.Assertions.assertThat(gallery.get(0).getImageUrl())
+                .isEqualTo("https://res.cloudinary.com/demo/image/upload/gallery-2.jpg");
+        org.assertj.core.api.Assertions.assertThat(gallery.get(1).getImageUrl())
+                .isEqualTo("https://res.cloudinary.com/demo/image/upload/gallery-3.jpg");
+        org.assertj.core.api.Assertions.assertThat(gallery.get(2).getImageUrl())
+                .isEqualTo("https://res.cloudinary.com/demo/image/upload/cover.jpg");
+
+        GlobalProduct product = globalProductRepository.findById(globalId).orElseThrow();
+        org.assertj.core.api.Assertions.assertThat(product.getImageUrl())
+                .isEqualTo(gallery.get(0).getImageUrl());
+    }
+
+    @Test
+    void promoteCopiesPackageVariantMetadata() throws Exception {
+        Item item = itemRepository.findById(sourceItemId).orElseThrow();
+        item.setVariantName("Tray of 30");
+        item.setPackageVariant(true);
+        item.setPackagingUnitName("Tray");
+        item.setPackagingUnitQty(new BigDecimal("30"));
+        item.setStocked(false);
+        item.setSize(null);
+        itemRepository.save(item);
+
+        String body = """
+                {"sourceBusinessId":"%s","itemIds":["%s"],"onConflict":"update","publish":false}
+                """.formatted(SOURCE_BUSINESS, sourceItemId);
+
+        String commit = mockMvc.perform(post("/api/v1/super-admin/global-catalog/promote")
+                        .header("Authorization", "Bearer " + saToken)
+                        .contentType(APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.createdCount").value(1))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        String globalId = JsonPath.read(commit, "$.lines[0].globalProductId");
+        GlobalProduct product = globalProductRepository.findById(globalId).orElseThrow();
+        org.assertj.core.api.Assertions.assertThat(product.getVariantName()).isEqualTo("Tray of 30");
+        org.assertj.core.api.Assertions.assertThat(product.isPackageVariant()).isTrue();
+        org.assertj.core.api.Assertions.assertThat(product.getPackagingUnitName()).isEqualTo("Tray");
+        org.assertj.core.api.Assertions.assertThat(product.getPackagingUnitQty())
+                .isEqualByComparingTo("30");
+        org.assertj.core.api.Assertions.assertThat(product.isStocked()).isFalse();
     }
 
     @Test

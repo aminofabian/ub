@@ -93,7 +93,7 @@ public final class TenantCatalogMatchIndex {
                 globalProduct.getName(),
                 globalProduct.getBrand(),
                 globalProduct.getSize(),
-                null
+                globalProduct.getVariantName()
         );
     }
 

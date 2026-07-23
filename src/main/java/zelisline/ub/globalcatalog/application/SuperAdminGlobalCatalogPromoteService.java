@@ -51,9 +51,6 @@ import zelisline.ub.globalcatalog.domain.GlobalProductStatus;
 import zelisline.ub.globalcatalog.repository.GlobalCatalogRepository;
 import zelisline.ub.globalcatalog.repository.GlobalCategoryRepository;
 import zelisline.ub.globalcatalog.repository.GlobalProductRepository;
-import zelisline.ub.platform.media.CloudinaryImageService;
-import zelisline.ub.platform.media.CloudinaryUploadResult;
-import zelisline.ub.platform.media.MediaStore;
 import zelisline.ub.pricing.domain.SellingPrice;
 import zelisline.ub.pricing.repository.SellingPriceRepository;
 import zelisline.ub.tenancy.domain.Business;
@@ -89,7 +86,7 @@ public class SuperAdminGlobalCatalogPromoteService {
     private final GlobalCatalogRepository globalCatalogRepository;
     private final GlobalCategoryRepository globalCategoryRepository;
     private final GlobalProductRepository globalProductRepository;
-    private final MediaStore mediaStore;
+    private final GlobalProductImageGalleryService galleryService;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
 
@@ -247,10 +244,10 @@ public class SuperAdminGlobalCatalogPromoteService {
                 continue;
             }
 
-            String sourceImageUrl = resolveHttpsImageUrl(item);
+            List<String> previewUrls = resolveHttpsImageUrls(item);
             if (dryRun) {
                 String action = existing == null ? "create" : "update";
-                boolean wouldRehost = sourceImageUrl != null;
+                boolean wouldRehost = !previewUrls.isEmpty();
                 if ("create".equals(action)) {
                     created++;
                 } else {
@@ -263,7 +260,9 @@ public class SuperAdminGlobalCatalogPromoteService {
                         itemId,
                         existing == null ? null : existing.getId(),
                         action,
-                        wouldRehost ? "Will re-host image" : "No portable source image",
+                        wouldRehost
+                                ? "Will re-host " + previewUrls.size() + " image(s)"
+                                : "No portable source image",
                         wouldRehost));
                 continue;
             }
@@ -306,10 +305,12 @@ public class SuperAdminGlobalCatalogPromoteService {
 
                 product = globalProductRepository.saveAndFlush(product);
                 boolean imageRehosted = false;
-                if (sourceImageUrl != null) {
-                    imageRehosted = rehostImage(product, sourceImageUrl);
+                List<String> sourceImageUrls = resolveHttpsImageUrls(item);
+                if (!sourceImageUrls.isEmpty()) {
+                    int frames = galleryService.replaceFromSourceUrls(product, sourceImageUrls);
+                    imageRehosted = frames > 0;
                     if (imageRehosted) {
-                        product = globalProductRepository.saveAndFlush(product);
+                        product = globalProductRepository.findById(product.getId()).orElse(product);
                         imageRehosts++;
                     }
                 }
@@ -321,7 +322,9 @@ public class SuperAdminGlobalCatalogPromoteService {
                             itemId,
                             product.getId(),
                             "created",
-                            imageRehosted ? "Created with image" : "Created",
+                            imageRehosted
+                                    ? "Created with " + sourceImageUrls.size() + " image(s)"
+                                    : "Created",
                             imageRehosted));
                 } else {
                     updated++;
@@ -330,7 +333,9 @@ public class SuperAdminGlobalCatalogPromoteService {
                             itemId,
                             product.getId(),
                             "updated",
-                            imageRehosted ? "Updated with image" : "Updated",
+                            imageRehosted
+                                    ? "Updated with " + sourceImageUrls.size() + " image(s)"
+                                    : "Updated",
                             imageRehosted));
                 }
             } catch (Exception ex) {
@@ -374,6 +379,7 @@ public class SuperAdminGlobalCatalogPromoteService {
         product.setName(item.getName());
         product.setBrand(blankToNull(item.getBrand()));
         product.setSize(blankToNull(item.getSize()));
+        product.setVariantName(blankToNull(item.getVariantName()));
         product.setDescription(blankToNull(item.getDescription()));
         product.setBarcode(blankToNull(item.getBarcode()));
         product.setSkuTemplate(blankToNull(item.getSku()));
@@ -381,6 +387,9 @@ public class SuperAdminGlobalCatalogPromoteService {
         product.setWeighed(item.isWeighed());
         product.setSellable(item.isSellable());
         product.setStocked(item.isStocked());
+        product.setPackageVariant(item.isPackageVariant());
+        product.setPackagingUnitName(blankToNull(item.getPackagingUnitName()));
+        product.setPackagingUnitQty(item.getPackagingUnitQty());
         product.setRecommendedBuyingPrice(item.getBuyingPrice());
         product.setRecommendedSellingPrice(sellingPrice != null ? sellingPrice : null);
         product.setDefaultMinStockLevel(item.getMinStockLevel());
@@ -482,55 +491,35 @@ public class SuperAdminGlobalCatalogPromoteService {
         return globalCategoryRepository.save(created);
     }
 
-    private boolean rehostImage(GlobalProduct product, String sourceImageUrl) {
-        if (!mediaStore.isConfigured()) {
-            // Keep portable HTTPS URL even without re-host so tenants can still see covers
-            if (blankToNull(product.getImageUrl()) == null) {
-                product.setImageUrl(sourceImageUrl);
-            }
-            return false;
-        }
-        try {
-            String folder = CloudinaryImageService.folderGlobalCatalog(product.getId());
-            CloudinaryUploadResult uploaded = mediaStore.uploadFromRemoteUrl(sourceImageUrl, folder);
-            if (uploaded == null
-                    || blankToNull(uploaded.publicId()) == null
-                    || blankToNull(uploaded.secureUrl()) == null) {
-                return false;
-            }
-            String previous = blankToNull(product.getImagePublicId());
-            product.setImageUrl(uploaded.secureUrl());
-            product.setImagePublicId(uploaded.publicId());
-            if (previous != null && !previous.equals(uploaded.publicId())) {
-                try {
-                    mediaStore.destroyImage(previous);
-                } catch (Exception ignored) {
-                    // orphan ok
-                }
-            }
-            return true;
-        } catch (Exception ex) {
-            log.warn("Promote image re-host failed for {}: {}", product.getId(), ex.toString());
-            if (blankToNull(product.getImageUrl()) == null) {
-                product.setImageUrl(sourceImageUrl);
-            }
-            return false;
-        }
-    }
-
-    private String resolveHttpsImageUrl(Item item) {
+    /** Portable HTTPS gallery URLs from tenant item images, cover last as fallback. */
+    private List<String> resolveHttpsImageUrls(Item item) {
+        List<String> urls = new ArrayList<>();
         List<ItemImage> images = itemImageRepository.findByItemIdOrderBySortOrderAscIdAsc(item.getId());
         for (ItemImage img : images) {
             String secure = blankToNull(img.getSecureUrl());
             if (secure != null && (secure.startsWith("http://") || secure.startsWith("https://"))) {
-                return secure;
+                if (!urls.contains(secure)) {
+                    urls.add(secure);
+                }
+            }
+            if (urls.size() >= GlobalProductImageGalleryService.MAX_GALLERY_IMAGES) {
+                return urls;
             }
         }
         String key = blankToNull(item.getImageKey());
-        if (key != null && (key.startsWith("http://") || key.startsWith("https://"))) {
-            return key;
+        if (key != null
+                && (key.startsWith("http://") || key.startsWith("https://"))
+                && !urls.contains(key)
+                && urls.size() < GlobalProductImageGalleryService.MAX_GALLERY_IMAGES) {
+            urls.add(key);
         }
-        return null;
+        return urls;
+    }
+
+    /** Cover URL for source-item list thumbnails. */
+    private String resolveHttpsImageUrl(Item item) {
+        List<String> urls = resolveHttpsImageUrls(item);
+        return urls.isEmpty() ? null : urls.get(0);
     }
 
     private Map<String, BigDecimal> loadSellingPrices(String businessId, Set<String> itemIds) {
@@ -709,7 +698,7 @@ public class SuperAdminGlobalCatalogPromoteService {
                 bySku.putIfAbsent(sku.toLowerCase(Locale.ROOT), product);
             }
             for (String key : CatalogProductMatchNormalizer.matchKeys(
-                    product.getName(), product.getBrand(), product.getSize(), null)) {
+                    product.getName(), product.getBrand(), product.getSize(), product.getVariantName())) {
                 byNameKey.putIfAbsent(key, product);
             }
         }

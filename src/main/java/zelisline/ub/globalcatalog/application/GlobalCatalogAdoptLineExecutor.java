@@ -121,23 +121,38 @@ public class GlobalCatalogAdoptLineExecutor {
             String globalImageUrl,
             boolean onlyIfMissingCover
     ) {
+        return attachGalleryAfterCommit(businessId, line, null, globalImageUrl, onlyIfMissingCover);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public AdoptResultLineResponse attachGalleryAfterCommit(
+            String businessId,
+            AdoptResultLineResponse line,
+            String globalProductId,
+            String coverImageUrl,
+            boolean onlyIfMissingCover
+    ) {
         if (line == null || line.itemId() == null || line.itemId().isBlank()) {
             return line;
         }
-        GlobalCatalogAdoptImageAttacher.AttachResult result = imageAttacher.attachFromGlobalUrl(
+        GlobalCatalogAdoptImageAttacher.AttachResult result = imageAttacher.attachGallery(
                 businessId,
                 line.itemId(),
-                globalImageUrl,
+                globalProductId,
+                coverImageUrl,
                 onlyIfMissingCover
         );
         if (result.warning() == null || result.warning().isBlank()) {
             if (result.attached()) {
+                String note = result.frameCount() > 1
+                        ? result.frameCount() + " images registered"
+                        : "Image gallery registered";
                 return new AdoptResultLineResponse(
                         line.globalProductId(),
                         line.status(),
                         line.itemId(),
                         line.sku(),
-                        appendMessage(line.message(), "Image gallery registered"));
+                        appendMessage(line.message(), note));
             }
             return line;
         }

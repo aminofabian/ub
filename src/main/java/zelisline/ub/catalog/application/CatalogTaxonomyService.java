@@ -15,6 +15,7 @@ import java.util.stream.Collectors;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -572,8 +573,11 @@ public class CatalogTaxonomyService {
     /**
      * Idempotent get-or-create for global-catalog adopt: exact slug match (reactivate if inactive).
      * Does not uniqueSlug-suffix — rematch depends on stable hint = slug.
+     *
+     * <p>Uses {@code REQUIRES_NEW} so catalog-replace (outer TX) can soft-delete then adopt
+     * in per-line {@code REQUIRES_NEW} transactions that still see the created category.
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Category ensureActiveCategoryBySlug(String businessId, String slug, String displayName) {
         String normalizedSlug = slug == null ? "" : slug.trim().toLowerCase(Locale.ROOT);
         if (normalizedSlug.isBlank()) {

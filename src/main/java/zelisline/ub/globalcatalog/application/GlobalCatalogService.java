@@ -38,6 +38,7 @@ import zelisline.ub.globalcatalog.api.dto.AdoptResponse;
 import zelisline.ub.globalcatalog.api.dto.AdoptResultLineResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalCatalogMetaResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalCategoryResponse;
+import zelisline.ub.globalcatalog.api.dto.GlobalProductImageResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalProductPackDetailResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalProductPackSummaryResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalProductResponse;
@@ -45,6 +46,7 @@ import zelisline.ub.globalcatalog.api.dto.PreviewAdoptRequest;
 import zelisline.ub.globalcatalog.domain.GlobalCatalog;
 import zelisline.ub.globalcatalog.domain.GlobalCategory;
 import zelisline.ub.globalcatalog.domain.GlobalProduct;
+import zelisline.ub.globalcatalog.domain.GlobalProductImage;
 import zelisline.ub.globalcatalog.domain.GlobalProductPack;
 import zelisline.ub.globalcatalog.domain.GlobalProductStatus;
 import zelisline.ub.globalcatalog.repository.GlobalCatalogRepository;
@@ -78,6 +80,7 @@ public class GlobalCatalogService {
     private final CategoryRepository categoryRepository;
     private final CatalogTaxonomyService catalogTaxonomyService;
     private final GlobalCatalogAdoptLineExecutor adoptLineExecutor;
+    private final GlobalProductImageGalleryService galleryService;
     private final GlobalCatalogResolver globalCatalogResolver;
     private final RegionCatalogAuditService regionCatalogAuditService;
     private final BusinessRepository businessRepository;
@@ -137,9 +140,13 @@ public class GlobalCatalogService {
                     blankToNull(barcode),
                     Pageable.unpaged());
 
-            List<GlobalProductResponse> available = all.getContent().stream()
+            List<GlobalProduct> availableProducts = all.getContent().stream()
                     .filter(gp -> !matchIndex.matches(gp))
-                    .map(gp -> toProductResponse(gp, matchIndex))
+                    .toList();
+            Map<String, List<GlobalProductImage>> imagesByProduct = imagesByProductId(availableProducts);
+            List<GlobalProductResponse> available = availableProducts.stream()
+                    .map(gp -> toProductResponse(
+                            gp, matchIndex, imagesByProduct.getOrDefault(gp.getId(), List.of())))
                     .toList();
 
             int start = (int) pageable.getOffset();
@@ -160,7 +167,9 @@ public class GlobalCatalogService {
                 blankToNull(barcode),
                 p);
 
-        return page.map(gp -> toProductResponse(gp, matchIndex));
+        Map<String, List<GlobalProductImage>> imagesByProduct = imagesByProductId(page.getContent());
+        return page.map(gp -> toProductResponse(
+                gp, matchIndex, imagesByProduct.getOrDefault(gp.getId(), List.of())));
     }
 
     /**
@@ -205,7 +214,7 @@ public class GlobalCatalogService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Global product not found"));
 
         TenantCatalogMatchIndex matchIndex = tenantCatalogMatchIndex(businessId);
-        return toProductResponse(gp, matchIndex);
+        return toProductResponse(gp, matchIndex, galleryService.listForProduct(gp.getId()));
     }
 
     @Transactional(readOnly = true)
@@ -222,7 +231,11 @@ public class GlobalCatalogService {
                 PageRequest.of(0, 20)
         );
         TenantCatalogMatchIndex matchIndex = tenantCatalogMatchIndex(businessId);
-        return products.stream().map(gp -> toProductResponse(gp, matchIndex)).toList();
+        Map<String, List<GlobalProductImage>> imagesByProduct = imagesByProductId(products);
+        return products.stream()
+                .map(gp -> toProductResponse(
+                        gp, matchIndex, imagesByProduct.getOrDefault(gp.getId(), List.of())))
+                .toList();
     }
 
     @Transactional(readOnly = true)
@@ -241,11 +254,14 @@ public class GlobalCatalogService {
                 .collect(Collectors.toMap(GlobalProduct::getId, gp -> gp, (a, b) -> a, LinkedHashMap::new));
 
         TenantCatalogMatchIndex matchIndex = tenantCatalogMatchIndex(businessId);
+        Map<String, List<GlobalProductImage>> imagesByProduct = imagesByProductId(
+                productIds.stream().map(byId::get).filter(gp -> gp != null).toList());
 
         List<GlobalProductResponse> ordered = productIds.stream()
                 .map(byId::get)
                 .filter(gp -> gp != null)
-                .map(gp -> toProductResponse(gp, matchIndex))
+                .map(gp -> toProductResponse(
+                        gp, matchIndex, imagesByProduct.getOrDefault(gp.getId(), List.of())))
                 .filter(gp -> !onlyNotImported || !gp.alreadyImported())
                 .toList();
 
@@ -423,8 +439,8 @@ public class GlobalCatalogService {
                                         mergePrice,
                                         gp.getImageUrl()),
                                 effectiveActor);
-                        merged = adoptLineExecutor.attachImageAfterCommit(
-                                businessId, merged, gp.getImageUrl(), true);
+                        merged = adoptLineExecutor.attachGalleryAfterCommit(
+                                businessId, merged, gp.getId(), gp.getImageUrl(), true);
                         itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(conflictItem.getId(), businessId)
                                 .ifPresent(matchIndex::register);
                         importedCount++;
@@ -505,6 +521,14 @@ public class GlobalCatalogService {
                     createdCategoryIdBySlug
             ).categoryId();
 
+            String size = blankToNull(gp.getSize());
+            if (size == null && blankToNull(gp.getVariantName()) != null) {
+                String variant = gp.getVariantName().trim();
+                size = variant.length() > 50 ? variant.substring(0, 50) : variant;
+            }
+            // Package templates adopt as standalone stockable SKUs (no parent link yet).
+            boolean stocked = gp.isStocked() || gp.isPackageVariant();
+
             CreateItemRequest createReq = new CreateItemRequest(
                     sku,
                     barcode,
@@ -516,9 +540,9 @@ public class GlobalCatalogService {
                     gp.getUnitType(),
                     gp.isWeighed(),
                     gp.isSellable(),
-                    gp.isStocked(),
-                    null,
-                    null,
+                    stocked,
+                    gp.getPackagingUnitName(),
+                    gp.getPackagingUnitQty(),
                     null,
                     null,
                     line.buyingPrice() != null ? line.buyingPrice() : gp.getRecommendedBuyingPrice(),
@@ -530,7 +554,7 @@ public class GlobalCatalogService {
                     gp.isHasExpiry(),
                     gp.getImageUrl(),
                     gp.getBrand(),
-                    gp.getSize(),
+                    size,
                     null
             );
 
@@ -556,8 +580,8 @@ public class GlobalCatalogService {
                                 openingUnitCost,
                                 gp.getImageUrl()),
                         effectiveActor);
-                imported = adoptLineExecutor.attachImageAfterCommit(
-                        businessId, imported, gp.getImageUrl(), false);
+                imported = adoptLineExecutor.attachGalleryAfterCommit(
+                        businessId, imported, gp.getId(), gp.getImageUrl(), false);
                 if (imported.sku() != null && !imported.sku().isBlank()) {
                     skuToItemId.put(imported.sku().trim(), imported.itemId());
                 }
@@ -792,9 +816,40 @@ public class GlobalCatalogService {
                 pack.getSortOrder());
     }
 
-    private GlobalProductResponse toProductResponse(GlobalProduct gp, TenantCatalogMatchIndex matchIndex) {
+    private Map<String, List<GlobalProductImage>> imagesByProductId(List<GlobalProduct> products) {
+        if (products == null || products.isEmpty()) {
+            return Map.of();
+        }
+        List<String> ids = products.stream().map(GlobalProduct::getId).toList();
+        Map<String, List<GlobalProductImage>> out = new HashMap<>();
+        for (GlobalProductImage image : galleryService.listForProducts(ids)) {
+            out.computeIfAbsent(image.getGlobalProductId(), ignored -> new ArrayList<>()).add(image);
+        }
+        return out;
+    }
+
+    private GlobalProductResponse toProductResponse(
+            GlobalProduct gp,
+            TenantCatalogMatchIndex matchIndex,
+            List<GlobalProductImage> images
+    ) {
         String adoptedItemId = matchIndex.findMatchingItemId(gp);
         boolean alreadyImported = adoptedItemId != null;
+        List<GlobalProductImageResponse> imageResponses = images == null
+                ? List.of()
+                : images.stream()
+                        .map(img -> new GlobalProductImageResponse(
+                                img.getId(),
+                                img.getImageUrl(),
+                                img.getSortOrder(),
+                                img.getAltText(),
+                                img.getWidth(),
+                                img.getHeight()))
+                        .toList();
+        String coverUrl = blankToNull(gp.getImageUrl());
+        if (coverUrl == null && !imageResponses.isEmpty()) {
+            coverUrl = imageResponses.get(0).imageUrl();
+        }
         return new GlobalProductResponse(
                 gp.getId(),
                 gp.getCatalogId(),
@@ -804,12 +859,16 @@ public class GlobalCatalogService {
                 gp.getName(),
                 gp.getBrand(),
                 gp.getSize(),
+                gp.getVariantName(),
                 gp.getDescription(),
                 gp.getBarcode(),
                 gp.getUnitType(),
                 gp.isWeighed(),
                 gp.isSellable(),
                 gp.isStocked(),
+                gp.isPackageVariant(),
+                gp.getPackagingUnitName(),
+                gp.getPackagingUnitQty(),
                 gp.getRecommendedBuyingPrice(),
                 gp.getRecommendedSellingPrice(),
                 gp.getSuggestedMarginPct(),
@@ -818,7 +877,8 @@ public class GlobalCatalogService {
                 gp.getDefaultMinStockLevel(),
                 gp.isHasExpiry(),
                 gp.getExpiresAfterDays(),
-                gp.getImageUrl(),
+                coverUrl,
+                imageResponses,
                 gp.getItemTypeKeyHint(),
                 gp.getSortOrder(),
                 alreadyImported,

@@ -47,6 +47,10 @@ public class GlobalProduct {
     @Column(name = "size", length = 50)
     private String size;
 
+    /** Option label from the source tenant (e.g. Large, Tray) — flat metadata, not a parent link. */
+    @Column(name = "variant_name", length = 255)
+    private String variantName;
+
     @Column(name = "description", columnDefinition = "TEXT")
     private String description;
 
@@ -64,6 +68,19 @@ public class GlobalProduct {
 
     @Column(name = "is_stocked", nullable = false)
     private boolean stocked = true;
+
+    /**
+     * True when the source SKU was a package/tray variant. Stored for catalog fidelity;
+     * adopt treats these as standalone stockable SKUs until full variant groups exist.
+     */
+    @Column(name = "is_package_variant", nullable = false)
+    private boolean packageVariant;
+
+    @Column(name = "packaging_unit_name", length = 255)
+    private String packagingUnitName;
+
+    @Column(name = "packaging_unit_qty", precision = 14, scale = 4)
+    private BigDecimal packagingUnitQty;
 
     @Column(name = "recommended_buying_price", precision = 14, scale = 2)
     private BigDecimal recommendedBuyingPrice;

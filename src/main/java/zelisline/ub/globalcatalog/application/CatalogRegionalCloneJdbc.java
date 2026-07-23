@@ -231,6 +231,7 @@ public final class CatalogRegionalCloneJdbc {
     ) throws SQLException {
         Map<String, String> map = new HashMap<>();
         Set<String> seenBarcodes = new HashSet<>();
+        collectExistingBarcodes(connection, targetId, seenBarcodes);
         boolean hasImagePublicId = columnExists(connection, "global_products", "image_public_id");
         boolean hasDedupBarcode = columnExists(connection, "global_products", "dedup_barcode");
         String selectSql = """
@@ -243,7 +244,7 @@ public final class CatalogRegionalCloneJdbc {
                        item_type_key_hint, status, sort_order
                 FROM global_products
                 WHERE catalog_id = ?
-                ORDER BY CASE WHEN LOWER(status) = 'published' THEN 0 ELSE 1 END,
+                ORDER BY CASE WHEN LOWER(TRIM(status)) = 'published' THEN 0 ELSE 1 END,
                          sort_order ASC,
                          id ASC
                 """.formatted(hasImagePublicId ? "image_public_id," : "");
@@ -319,6 +320,8 @@ public final class CatalogRegionalCloneJdbc {
                         )
                         """);
 
+        // One row at a time: MySQL batch rewrite has produced duplicate dedup_barcode
+        // collisions even when parameters looked unique per addBatch() call.
         try (PreparedStatement select = connection.prepareStatement(selectSql);
              PreparedStatement insert = connection.prepareStatement(insertSql)) {
             select.setString(1, sourceId);
@@ -341,60 +344,148 @@ public final class CatalogRegionalCloneJdbc {
                             status,
                             seenBarcodes
                     );
-
-                    int i = 1;
-                    insert.setString(i++, dstId);
-                    insert.setString(i++, targetId);
-                    if (dstCat == null) {
-                        insert.setNull(i++, Types.VARCHAR);
-                    } else {
-                        insert.setString(i++, dstCat);
+                    bindProductInsert(
+                            insert,
+                            rs,
+                            dstId,
+                            targetId,
+                            dstCat,
+                            margin,
+                            barcode,
+                            status,
+                            hasImagePublicId,
+                            hasDedupBarcode
+                    );
+                    try {
+                        insert.executeUpdate();
+                    } catch (SQLException ex) {
+                        if (!hasDedupBarcode || !isDuplicateDedupBarcode(ex) || barcode == null) {
+                            throw ex;
+                        }
+                        // Collided with an unexpected existing/race row — keep the product, drop barcode.
+                        bindProductInsert(
+                                insert,
+                                rs,
+                                dstId,
+                                targetId,
+                                dstCat,
+                                margin,
+                                null,
+                                status,
+                                hasImagePublicId,
+                                hasDedupBarcode
+                        );
+                        insert.executeUpdate();
                     }
-                    insert.setString(i++, rs.getString("sku_template"));
-                    insert.setString(i++, rs.getString("name"));
-                    insert.setString(i++, rs.getString("brand"));
-                    insert.setString(i++, rs.getString("size"));
-                    insert.setString(i++, rs.getString("description"));
-                    insert.setString(i++, barcode);
-                    insert.setString(i++, rs.getString("unit_type"));
-                    insert.setBoolean(i++, rs.getBoolean("is_weighed"));
-                    insert.setBoolean(i++, rs.getBoolean("is_sellable"));
-                    insert.setBoolean(i++, rs.getBoolean("is_stocked"));
-                    insert.setBigDecimal(i++, margin);
-                    setNullableBigDecimal(insert, i++, rs.getBigDecimal("default_reorder_level"));
-                    setNullableBigDecimal(insert, i++, rs.getBigDecimal("default_reorder_qty"));
-                    setNullableBigDecimal(insert, i++, rs.getBigDecimal("default_min_stock_level"));
-                    insert.setBoolean(i++, rs.getBoolean("has_expiry"));
-                    Integer expires = (Integer) rs.getObject("expires_after_days");
-                    if (expires == null) {
-                        insert.setNull(i++, Types.INTEGER);
-                    } else {
-                        insert.setInt(i++, expires);
-                    }
-                    insert.setString(i++, rs.getString("image_url"));
-                    if (hasImagePublicId) {
-                        insert.setString(i++, rs.getString("image_public_id"));
-                    }
-                    if (hasDedupBarcode) {
-                        // Match trigger/JPA rule: null when archived or barcode blank.
-                        boolean archived = status != null && "archived".equalsIgnoreCase(status.trim());
-                        insert.setString(i++, archived || barcode == null ? null : barcode);
-                    }
-                    insert.setString(i++, rs.getString("item_type_key_hint"));
-                    insert.setString(i++, status);
-                    insert.setInt(i, rs.getInt("sort_order"));
-                    insert.addBatch();
                 }
             }
-            insert.executeBatch();
         }
         return map;
     }
 
+    private static void bindProductInsert(
+            PreparedStatement insert,
+            ResultSet rs,
+            String dstId,
+            String targetId,
+            String dstCat,
+            BigDecimal margin,
+            String barcode,
+            String status,
+            boolean hasImagePublicId,
+            boolean hasDedupBarcode
+    ) throws SQLException {
+        int i = 1;
+        insert.setString(i++, dstId);
+        insert.setString(i++, targetId);
+        if (dstCat == null) {
+            insert.setNull(i++, Types.VARCHAR);
+        } else {
+            insert.setString(i++, dstCat);
+        }
+        insert.setString(i++, rs.getString("sku_template"));
+        insert.setString(i++, rs.getString("name"));
+        insert.setString(i++, rs.getString("brand"));
+        insert.setString(i++, rs.getString("size"));
+        insert.setString(i++, rs.getString("description"));
+        insert.setString(i++, barcode);
+        insert.setString(i++, rs.getString("unit_type"));
+        insert.setBoolean(i++, rs.getBoolean("is_weighed"));
+        insert.setBoolean(i++, rs.getBoolean("is_sellable"));
+        insert.setBoolean(i++, rs.getBoolean("is_stocked"));
+        insert.setBigDecimal(i++, margin);
+        setNullableBigDecimal(insert, i++, rs.getBigDecimal("default_reorder_level"));
+        setNullableBigDecimal(insert, i++, rs.getBigDecimal("default_reorder_qty"));
+        setNullableBigDecimal(insert, i++, rs.getBigDecimal("default_min_stock_level"));
+        insert.setBoolean(i++, rs.getBoolean("has_expiry"));
+        Integer expires = (Integer) rs.getObject("expires_after_days");
+        if (expires == null) {
+            insert.setNull(i++, Types.INTEGER);
+        } else {
+            insert.setInt(i++, expires);
+        }
+        insert.setString(i++, rs.getString("image_url"));
+        if (hasImagePublicId) {
+            insert.setString(i++, rs.getString("image_public_id"));
+        }
+        if (hasDedupBarcode) {
+            boolean archived = status != null && "archived".equalsIgnoreCase(status.trim());
+            insert.setString(i++, archived || barcode == null ? null : barcode);
+        }
+        insert.setString(i++, rs.getString("item_type_key_hint"));
+        insert.setString(i++, status);
+        insert.setInt(i, rs.getInt("sort_order"));
+    }
+
+    private static void collectExistingBarcodes(
+            Connection connection,
+            String catalogId,
+            Set<String> seenBarcodes
+    ) throws SQLException {
+        boolean hasDedup = columnExists(connection, "global_products", "dedup_barcode");
+        String sql = hasDedup
+                ? """
+                        SELECT dedup_barcode, barcode FROM global_products
+                        WHERE catalog_id = ?
+                        """
+                : """
+                        SELECT barcode FROM global_products
+                        WHERE catalog_id = ?
+                        """;
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, catalogId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    if (hasDedup) {
+                        rememberBarcode(seenBarcodes, rs.getString("dedup_barcode"));
+                    }
+                    rememberBarcode(seenBarcodes, rs.getString("barcode"));
+                }
+            }
+        }
+    }
+
+    private static void rememberBarcode(Set<String> seenBarcodes, String barcode) {
+        if (barcode == null) {
+            return;
+        }
+        String trimmed = barcode.trim();
+        if (!trimmed.isEmpty()) {
+            seenBarcodes.add(trimmed);
+        }
+    }
+
+    private static boolean isDuplicateDedupBarcode(SQLException ex) {
+        String message = ex.getMessage();
+        return ex.getErrorCode() == 1062
+                && message != null
+                && message.contains("uq_global_products_dedup_barcode");
+    }
+
     /**
-     * First non-archived row keeps a barcode; later clones of the same code get
-     * {@code null} so {@code uq_global_products_dedup_barcode} cannot fire on
-     * KE data that already has duplicate barcodes across rows.
+     * First row keeps a barcode; later clones of the same code get {@code null}
+     * so {@code uq_global_products_dedup_barcode} cannot fire on KE data that
+     * already has duplicate barcodes across rows (any status).
      */
     static String uniqueBarcodeForClone(String barcode, String status, Set<String> seenBarcodes) {
         if (barcode == null) {
@@ -403,9 +494,6 @@ public final class CatalogRegionalCloneJdbc {
         String trimmed = barcode.trim();
         if (trimmed.isEmpty()) {
             return null;
-        }
-        if (status != null && "archived".equalsIgnoreCase(status.trim())) {
-            return trimmed;
         }
         if (!seenBarcodes.add(trimmed)) {
             return null;

@@ -22,15 +22,19 @@ import org.springframework.test.web.servlet.MockMvc;
 import com.jayway.jsonpath.JsonPath;
 
 import zelisline.ub.catalog.application.CatalogBootstrapService;
+import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.globalcatalog.application.GlobalCatalogJobRunner;
 import zelisline.ub.globalcatalog.domain.GlobalCatalog;
+import zelisline.ub.globalcatalog.domain.GlobalCategory;
 import zelisline.ub.globalcatalog.domain.GlobalProduct;
 import zelisline.ub.globalcatalog.domain.GlobalProductStatus;
 import zelisline.ub.globalcatalog.repository.GlobalCatalogJobRepository;
 import zelisline.ub.globalcatalog.repository.GlobalCatalogRepository;
+import zelisline.ub.globalcatalog.repository.GlobalCategoryRepository;
 import zelisline.ub.globalcatalog.repository.GlobalProductRepository;
 import zelisline.ub.identity.domain.SuperAdmin;
 import zelisline.ub.identity.repository.SuperAdminRepository;
@@ -61,6 +65,12 @@ class SuperAdminGlobalCatalogPromoteIT {
     private GlobalProductRepository globalProductRepository;
 
     @Autowired
+    private GlobalCategoryRepository globalCategoryRepository;
+
+    @Autowired
+    private CategoryRepository categoryRepository;
+
+    @Autowired
     private ItemRepository itemRepository;
 
     @Autowired
@@ -85,8 +95,10 @@ class SuperAdminGlobalCatalogPromoteIT {
     @BeforeEach
     void seed() throws Exception {
         itemRepository.deleteAll();
+        categoryRepository.deleteAll();
         globalCatalogJobRepository.deleteAll();
         globalProductRepository.deleteAll();
+        globalCategoryRepository.deleteAll();
         globalCatalogRepository.deleteAll();
         businessRepository.deleteAll();
         superAdminRepository.deleteAll();
@@ -265,6 +277,83 @@ class SuperAdminGlobalCatalogPromoteIT {
                 .andExpect(jsonPath("$.result.createdCount").value(1));
 
         org.assertj.core.api.Assertions.assertThat(globalProductRepository.findAll()).hasSize(1);
+    }
+
+    @Test
+    void promotePreservesCategoryParentsAndRepairsStaleLinks() throws Exception {
+        Category parent = new Category();
+        parent.setBusinessId(SOURCE_BUSINESS);
+        parent.setName("Personal Care");
+        parent.setSlug("personal-care");
+        parent.setPosition(1);
+        parent.setActive(true);
+        parent = categoryRepository.save(parent);
+
+        Category child = new Category();
+        child.setBusinessId(SOURCE_BUSINESS);
+        child.setName("Bath Soap");
+        child.setSlug("bath-soap");
+        child.setParentId(parent.getId());
+        child.setPosition(2);
+        child.setActive(true);
+        child = categoryRepository.save(child);
+
+        // Empty sibling branch should also appear after promote.
+        Category emptyBranch = new Category();
+        emptyBranch.setBusinessId(SOURCE_BUSINESS);
+        emptyBranch.setName("Oral Care");
+        emptyBranch.setSlug("oral-care");
+        emptyBranch.setParentId(parent.getId());
+        emptyBranch.setPosition(3);
+        emptyBranch.setActive(true);
+        categoryRepository.save(emptyBranch);
+
+        // Pre-existing flat category with wrong name/parent — promote must repair it.
+        GlobalCategory staleChild = new GlobalCategory();
+        staleChild.setCatalogId(catalogId);
+        staleChild.setName("Old Bath Soap");
+        staleChild.setSlug("bath-soap");
+        staleChild.setPosition(99);
+        staleChild.setActive(true);
+        globalCategoryRepository.save(staleChild);
+
+        Item item = itemRepository.findById(sourceItemId).orElseThrow();
+        item.setCategoryId(child.getId());
+        itemRepository.save(item);
+
+        String body = """
+                {"sourceBusinessId":"%s","itemIds":["%s"],"onConflict":"update","publish":false}
+                """.formatted(SOURCE_BUSINESS, sourceItemId);
+
+        mockMvc.perform(post("/api/v1/super-admin/global-catalog/promote")
+                        .header("Authorization", "Bearer " + saToken)
+                        .contentType(APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.createdCount").value(1));
+
+        GlobalCategory globalParent = globalCategoryRepository
+                .findByCatalogIdAndSlug(catalogId, "personal-care")
+                .orElseThrow();
+        GlobalCategory globalChild = globalCategoryRepository
+                .findByCatalogIdAndSlug(catalogId, "bath-soap")
+                .orElseThrow();
+        GlobalCategory globalEmpty = globalCategoryRepository
+                .findByCatalogIdAndSlug(catalogId, "oral-care")
+                .orElseThrow();
+
+        org.assertj.core.api.Assertions.assertThat(globalParent.getParentId()).isNull();
+        org.assertj.core.api.Assertions.assertThat(globalParent.getName()).isEqualTo("Personal Care");
+        org.assertj.core.api.Assertions.assertThat(globalChild.getParentId()).isEqualTo(globalParent.getId());
+        org.assertj.core.api.Assertions.assertThat(globalChild.getName()).isEqualTo("Bath Soap");
+        org.assertj.core.api.Assertions.assertThat(globalChild.getPosition()).isEqualTo(2);
+        org.assertj.core.api.Assertions.assertThat(globalEmpty.getParentId()).isEqualTo(globalParent.getId());
+
+        GlobalProduct promoted = globalProductRepository.findAll().stream()
+                .filter(p -> catalogId.equals(p.getCatalogId()))
+                .findFirst()
+                .orElseThrow();
+        org.assertj.core.api.Assertions.assertThat(promoted.getGlobalCategoryId()).isEqualTo(globalChild.getId());
     }
 
     @Test

@@ -234,6 +234,12 @@ public final class SuperAdminGlobalCatalogDtos {
     ) {
     }
 
+    public record ArchiveCatalogProductsResponse(
+            int archivedProductCount,
+            int deactivatedCategoryCount
+    ) {
+    }
+
     public record PromoteRequest(
             @NotBlank String sourceBusinessId,
             @NotEmpty List<@NotBlank String> itemIds,

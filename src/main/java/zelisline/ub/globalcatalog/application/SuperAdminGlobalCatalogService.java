@@ -22,6 +22,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ApplyMarginRequest;
+import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ArchiveCatalogProductsResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.CatalogSummaryResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ApplyMarginResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.BackfillImagesRequest;
@@ -93,6 +94,37 @@ public class SuperAdminGlobalCatalogService {
                         c.getStatus(),
                         c.getVersion()))
                 .toList();
+    }
+
+    /**
+     * Archives every non-archived product and deactivates every active category in the
+     * catalog. Used by the promote flow's "replace catalog contents" option so a fresh
+     * promote mirrors the source tenant exactly. Archiving (not deleting) keeps ids
+     * stable for tenants that already adopted these products.
+     */
+    @Transactional
+    public ArchiveCatalogProductsResponse archiveAllProducts(String catalogId) {
+        GlobalCatalog catalog = requireCatalog(catalogId);
+        String resolvedCatalogId = catalog.getId();
+
+        List<GlobalProduct> toArchive = globalProductRepository.findAll().stream()
+                .filter(p -> resolvedCatalogId.equals(p.getCatalogId()))
+                .filter(p -> !GlobalProductStatus.ARCHIVED.equals(p.getStatus()))
+                .toList();
+        if (!toArchive.isEmpty()) {
+            // Drop pack memberships so replace+promote doesn't leave ghost counts.
+            globalProductPackItemRepository.deleteByGlobalProductIdIn(
+                    toArchive.stream().map(GlobalProduct::getId).toList());
+        }
+        toArchive.forEach(p -> p.setStatus(GlobalProductStatus.ARCHIVED));
+        globalProductRepository.saveAll(toArchive);
+
+        List<GlobalCategory> toDeactivate = globalCategoryRepository
+                .findByCatalogIdAndActiveTrueOrderByPositionAsc(resolvedCatalogId);
+        toDeactivate.forEach(c -> c.setActive(false));
+        globalCategoryRepository.saveAll(toDeactivate);
+
+        return new ArchiveCatalogProductsResponse(toArchive.size(), toDeactivate.size());
     }
 
     @Transactional(readOnly = true)

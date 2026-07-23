@@ -30,6 +30,7 @@ import zelisline.ub.globalcatalog.api.dto.GlobalCatalogJobDtos.CreateJobResponse
 import zelisline.ub.globalcatalog.api.dto.GlobalCatalogJobDtos.JobResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ApplyMarginRequest;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ApplyMarginResponse;
+import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ArchiveCatalogProductsResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.BackfillImagesRequest;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.BackfillImagesResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.CatalogSummaryResponse;
@@ -124,6 +125,14 @@ public class SuperAdminGlobalCatalogController {
             @Valid @RequestBody PatchProductRequest body
     ) {
         return superAdminGlobalCatalogService.patchProduct(id, catalogId, body);
+    }
+
+    /** Archives all products + deactivates all categories so a re-promote can replace the catalog. */
+    @PostMapping("/products/archive-all")
+    public ArchiveCatalogProductsResponse archiveAllProducts(
+            @RequestParam(required = false) String catalogId
+    ) {
+        return superAdminGlobalCatalogService.archiveAllProducts(catalogId);
     }
 
     @PostMapping("/products/publish")

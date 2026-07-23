@@ -1,5 +1,6 @@
 package zelisline.ub.globalcatalog.repository;
 
+import java.util.Collection;
 import java.util.List;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -16,4 +17,8 @@ public interface GlobalProductPackItemRepository extends JpaRepository<GlobalPro
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("delete from GlobalProductPackItem p where p.packId = :packId")
     void deleteByPackId(@Param("packId") String packId);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("delete from GlobalProductPackItem p where p.globalProductId in :productIds")
+    void deleteByGlobalProductIdIn(@Param("productIds") Collection<String> productIds);
 }

@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
@@ -201,6 +202,12 @@ public class SuperAdminGlobalCatalogPromoteService {
         Map<String, ItemType> itemTypes = loadItemTypes(businessId);
         Map<String, Category> categories = loadCategories(businessId, byId.values());
 
+        // Mirror the full active tenant category tree (not only categories on selected
+        // items) so empty parents and sibling branches match the source shop.
+        if (!dryRun) {
+            syncSourceCategoryTree(catalog.getId(), businessId);
+        }
+
         GlobalMatchIndex matchIndex = GlobalMatchIndex.build(
                 globalProductRepository.findAll().stream()
                         .filter(p -> catalog.getId().equals(p.getCatalogId()))
@@ -228,6 +235,11 @@ public class SuperAdminGlobalCatalogPromoteService {
             }
 
             GlobalProduct existing = matchIndex.findMatch(item);
+            if (existing == null) {
+                // After an "archive-all" replace, revive the archived product so ids stay
+                // stable for tenants that already adopted it.
+                existing = findArchivedMatch(catalog.getId(), item);
+            }
             if (existing != null && "skip".equals(onConflict)) {
                 skipped++;
                 lines.add(new PromoteLineResult(
@@ -336,6 +348,20 @@ public class SuperAdminGlobalCatalogPromoteService {
         return new PromoteResponse(created, updated, skipped, imageRehosts, lines);
     }
 
+    private GlobalProduct findArchivedMatch(String catalogId, Item item) {
+        String sourceId = blankToNull(item.getGlobalProductSourceId());
+        if (sourceId != null) {
+            Optional<GlobalProduct> bySource = globalProductRepository.findById(sourceId)
+                    .filter(p -> catalogId.equals(p.getCatalogId()));
+            if (bySource.isPresent()) {
+                return bySource.get();
+            }
+        }
+        return globalProductRepository.findById(item.getId())
+                .filter(p -> catalogId.equals(p.getCatalogId()))
+                .orElse(null);
+    }
+
     private void applyItemFields(
             GlobalProduct product,
             Item item,
@@ -387,14 +413,33 @@ public class SuperAdminGlobalCatalogPromoteService {
                 globalCategoryRepository.findByCatalogIdAndSlug(catalogId, resolvedSlug);
         if (existing.isPresent()) {
             GlobalCategory found = existing.get();
-            // Backfill parent link when promote previously flattened the tree.
-            String desiredParentId = resolveGlobalParentId(catalogId, tenantCategory, visitingTenantIds);
-            if (desiredParentId != null
-                    && (found.getParentId() == null || found.getParentId().isBlank())) {
-                found.setParentId(desiredParentId);
-                return globalCategoryRepository.save(found);
+            boolean dirty = false;
+            // Reactivate categories deactivated by an "archive-all" replace.
+            if (!found.isActive()) {
+                found.setActive(true);
+                dirty = true;
             }
-            return found;
+            // Keep name/position/parent in lockstep with the tenant so re-promote
+            // (and replace) produces a catalog that looks like the source shop.
+            if (!Objects.equals(found.getName(), tenantCategory.getName())) {
+                found.setName(tenantCategory.getName());
+                dirty = true;
+            }
+            if (found.getPosition() != tenantCategory.getPosition()) {
+                found.setPosition(tenantCategory.getPosition());
+                dirty = true;
+            }
+            String desiredParentId = resolveGlobalParentId(catalogId, tenantCategory, visitingTenantIds);
+            String currentParentId = blankToNull(found.getParentId());
+            if (!Objects.equals(currentParentId, desiredParentId)) {
+                found.setParentId(desiredParentId);
+                dirty = true;
+            }
+            if (!Objects.equals(blankToNull(found.getTenantCategorySlugHint()), resolvedSlug)) {
+                found.setTenantCategorySlugHint(resolvedSlug);
+                dirty = true;
+            }
+            return dirty ? globalCategoryRepository.save(found) : found;
         }
 
         if (!visitingTenantIds.add(tenantCategory.getId())) {
@@ -534,6 +579,21 @@ public class SuperAdminGlobalCatalogPromoteService {
             frontier = next;
         }
         return out;
+    }
+
+    /**
+     * Ensures every active tenant category exists in the target global catalog with the
+     * same name, position, and parent links — including empty branches that no selected
+     * item currently references.
+     */
+    private void syncSourceCategoryTree(String catalogId, String businessId) {
+        List<Category> sourceCategories = categoryRepository.findByBusinessIdOrderByPositionAsc(businessId);
+        for (Category category : sourceCategories) {
+            if (!category.isActive()) {
+                continue;
+            }
+            ensureGlobalCategory(catalogId, category);
+        }
     }
 
     private void publishAudit(PromoteRequest request, PromoteResponse result, String actorId) {

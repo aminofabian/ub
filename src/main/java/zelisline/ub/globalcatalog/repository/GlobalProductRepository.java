@@ -1,5 +1,6 @@
 package zelisline.ub.globalcatalog.repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -21,7 +22,7 @@ public interface GlobalProductRepository extends JpaRepository<GlobalProduct, St
             select gp from GlobalProduct gp
              where gp.catalogId = :catalogId
                and gp.status = :status
-               and (:categoryId is null or gp.globalCategoryId = :categoryId)
+               and (:categoryIdsEmpty = true or gp.globalCategoryId in :categoryIds)
                and (:q is null or :q = ''
                     or lower(gp.name) like lower(concat('%', :q, '%'))
                     or lower(coalesce(gp.brand, '')) like lower(concat('%', :q, '%'))
@@ -31,7 +32,8 @@ public interface GlobalProductRepository extends JpaRepository<GlobalProduct, St
     Page<GlobalProduct> search(
             @Param("catalogId") String catalogId,
             @Param("status") String status,
-            @Param("categoryId") String categoryId,
+            @Param("categoryIds") Collection<String> categoryIds,
+            @Param("categoryIdsEmpty") boolean categoryIdsEmpty,
             @Param("q") String q,
             @Param("barcode") String barcode,
             Pageable pageable);

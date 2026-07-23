@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import org.slf4j.Logger;
@@ -369,22 +370,71 @@ public class SuperAdminGlobalCatalogPromoteService {
     }
 
     private GlobalCategory ensureGlobalCategory(String catalogId, Category tenantCategory) {
+        return ensureGlobalCategory(catalogId, tenantCategory, new HashSet<>());
+    }
+
+    private GlobalCategory ensureGlobalCategory(
+            String catalogId,
+            Category tenantCategory,
+            Set<String> visitingTenantIds
+    ) {
         String slug = blankToNull(tenantCategory.getSlug());
         if (slug == null) {
             slug = slugify(tenantCategory.getName());
         }
         final String resolvedSlug = slug;
-        return globalCategoryRepository.findByCatalogIdAndSlug(catalogId, resolvedSlug)
-                .orElseGet(() -> {
-                    GlobalCategory created = new GlobalCategory();
-                    created.setCatalogId(catalogId);
-                    created.setName(tenantCategory.getName());
-                    created.setSlug(resolvedSlug);
-                    created.setTenantCategorySlugHint(resolvedSlug);
-                    created.setPosition(0);
-                    created.setActive(true);
-                    return globalCategoryRepository.save(created);
-                });
+        Optional<GlobalCategory> existing =
+                globalCategoryRepository.findByCatalogIdAndSlug(catalogId, resolvedSlug);
+        if (existing.isPresent()) {
+            GlobalCategory found = existing.get();
+            // Backfill parent link when promote previously flattened the tree.
+            String desiredParentId = resolveGlobalParentId(catalogId, tenantCategory, visitingTenantIds);
+            if (desiredParentId != null
+                    && (found.getParentId() == null || found.getParentId().isBlank())) {
+                found.setParentId(desiredParentId);
+                return globalCategoryRepository.save(found);
+            }
+            return found;
+        }
+
+        if (!visitingTenantIds.add(tenantCategory.getId())) {
+            // Cycle guard — create without parent rather than recurse forever.
+            return createGlobalCategory(catalogId, tenantCategory, resolvedSlug, null);
+        }
+        String parentGlobalId = resolveGlobalParentId(catalogId, tenantCategory, visitingTenantIds);
+        return createGlobalCategory(catalogId, tenantCategory, resolvedSlug, parentGlobalId);
+    }
+
+    private String resolveGlobalParentId(
+            String catalogId,
+            Category tenantCategory,
+            Set<String> visitingTenantIds
+    ) {
+        String parentTenantId = blankToNull(tenantCategory.getParentId());
+        if (parentTenantId == null) {
+            return null;
+        }
+        return categoryRepository
+                .findByIdAndBusinessId(parentTenantId, tenantCategory.getBusinessId())
+                .map(parent -> ensureGlobalCategory(catalogId, parent, visitingTenantIds).getId())
+                .orElse(null);
+    }
+
+    private GlobalCategory createGlobalCategory(
+            String catalogId,
+            Category tenantCategory,
+            String slug,
+            String parentGlobalId
+    ) {
+        GlobalCategory created = new GlobalCategory();
+        created.setCatalogId(catalogId);
+        created.setName(tenantCategory.getName());
+        created.setSlug(slug);
+        created.setTenantCategorySlugHint(slug);
+        created.setParentId(parentGlobalId);
+        created.setPosition(tenantCategory.getPosition());
+        created.setActive(true);
+        return globalCategoryRepository.save(created);
     }
 
     private boolean rehostImage(GlobalProduct product, String sourceImageUrl) {
@@ -466,8 +516,22 @@ public class SuperAdminGlobalCatalogPromoteService {
                 ids.add(item.getCategoryId());
             }
         }
-        for (String id : ids) {
-            categoryRepository.findByIdAndBusinessId(id, businessId).ifPresent(c -> out.put(c.getId(), c));
+        // Walk parent chains so promote can rebuild the category tree.
+        Set<String> frontier = new HashSet<>(ids);
+        while (!frontier.isEmpty()) {
+            Set<String> next = new HashSet<>();
+            for (String id : frontier) {
+                if (out.containsKey(id)) {
+                    continue;
+                }
+                categoryRepository.findByIdAndBusinessId(id, businessId).ifPresent(c -> {
+                    out.put(c.getId(), c);
+                    if (blankToNull(c.getParentId()) != null) {
+                        next.add(c.getParentId());
+                    }
+                });
+            }
+            frontier = next;
         }
         return out;
     }

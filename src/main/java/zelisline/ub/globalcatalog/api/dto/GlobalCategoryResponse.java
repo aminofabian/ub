@@ -5,6 +5,7 @@ public record GlobalCategoryResponse(
         String name,
         String slug,
         int position,
-        String tenantCategorySlugHint
+        String tenantCategorySlugHint,
+        String parentId
 ) {
 }

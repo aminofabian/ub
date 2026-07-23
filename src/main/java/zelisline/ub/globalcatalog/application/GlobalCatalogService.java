@@ -1,9 +1,12 @@
 package zelisline.ub.globalcatalog.application;
 
 import java.math.BigDecimal;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -118,12 +121,18 @@ public class GlobalCatalogService {
     ) {
         GlobalCatalog catalog = resolveCatalog(businessId);
         TenantCatalogMatchIndex matchIndex = tenantCatalogMatchIndex(businessId);
+        Collection<String> categoryIds = expandCategoryFilter(catalog.getId(), blankToNull(categoryId));
+        boolean categoryIdsEmpty = categoryIds.isEmpty();
+        // Hibernate rejects empty IN lists — use a sentinel when no category filter.
+        Collection<String> categoryIdsParam =
+                categoryIdsEmpty ? List.of("__no_category_filter__") : categoryIds;
 
         if (onlyNotImported) {
             Page<GlobalProduct> all = globalProductRepository.search(
                     catalog.getId(),
                     STATUS_PUBLISHED,
-                    blankToNull(categoryId),
+                    categoryIdsParam,
+                    categoryIdsEmpty,
                     blankToNull(q),
                     blankToNull(barcode),
                     Pageable.unpaged());
@@ -145,12 +154,47 @@ public class GlobalCatalogService {
         Page<GlobalProduct> page = globalProductRepository.search(
                 catalog.getId(),
                 STATUS_PUBLISHED,
-                blankToNull(categoryId),
+                categoryIdsParam,
+                categoryIdsEmpty,
                 blankToNull(q),
                 blankToNull(barcode),
                 p);
 
         return page.map(gp -> toProductResponse(gp, matchIndex));
+    }
+
+    /**
+     * When filtering by a parent department, include products in all descendant categories.
+     * Empty collection means "no category filter".
+     */
+    private Collection<String> expandCategoryFilter(String catalogId, String categoryId) {
+        if (categoryId == null) {
+            return List.of();
+        }
+        List<GlobalCategory> all =
+                globalCategoryRepository.findByCatalogIdAndActiveTrueOrderByPositionAsc(catalogId);
+        Map<String, List<String>> childrenByParent = new HashMap<>();
+        for (GlobalCategory cat : all) {
+            String parent = blankToNull(cat.getParentId());
+            if (parent == null) {
+                continue;
+            }
+            childrenByParent.computeIfAbsent(parent, ignored -> new ArrayList<>()).add(cat.getId());
+        }
+        LinkedHashSet<String> ids = new LinkedHashSet<>();
+        ArrayDeque<String> queue = new ArrayDeque<>();
+        queue.add(categoryId);
+        while (!queue.isEmpty()) {
+            String id = queue.removeFirst();
+            if (!ids.add(id)) {
+                continue;
+            }
+            List<String> children = childrenByParent.get(id);
+            if (children != null) {
+                queue.addAll(children);
+            }
+        }
+        return ids;
     }
 
     @Transactional(readOnly = true)
@@ -727,7 +771,13 @@ public class GlobalCatalogService {
     }
 
     private GlobalCategoryResponse toCategoryResponse(GlobalCategory c) {
-        return new GlobalCategoryResponse(c.getId(), c.getName(), c.getSlug(), c.getPosition(), c.getTenantCategorySlugHint());
+        return new GlobalCategoryResponse(
+                c.getId(),
+                c.getName(),
+                c.getSlug(),
+                c.getPosition(),
+                c.getTenantCategorySlugHint(),
+                c.getParentId());
     }
 
     private GlobalProductPackSummaryResponse toPackSummaryResponse(GlobalProductPack pack, String catalogId) {

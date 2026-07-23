@@ -276,23 +276,40 @@ public class GlobalCatalogService {
                 request.lines(),
                 true,
                 null,
-                Boolean.TRUE.equals(request.createMissingCategories())
+                Boolean.TRUE.equals(request.createMissingCategories()),
+                null
         );
     }
 
     public AdoptResponse adopt(String businessId, AdoptRequest request, String actorUserId) {
+        return adopt(businessId, request, actorUserId, null);
+    }
+
+    public AdoptResponse adopt(
+            String businessId,
+            AdoptRequest request,
+            String actorUserId,
+            AdoptProgressListener progressListener
+    ) {
         AdoptResponse response = runAdopt(
                 businessId,
                 request.openingBranchId(),
                 request.lines(),
                 false,
                 actorUserId,
-                Boolean.TRUE.equals(request.createMissingCategories())
+                Boolean.TRUE.equals(request.createMissingCategories()),
+                progressListener
         );
         if (request.packId() != null && !request.packId().isBlank()) {
             emitPackAdopted(businessId, request.packId().trim(), response.importedCount());
         }
         return response;
+    }
+
+    /** Live progress for async adopt jobs (called as each line starts). */
+    @FunctionalInterface
+    public interface AdoptProgressListener {
+        void onLineProcessed(int processedCount, String productName);
     }
 
     private void emitPackAdopted(String businessId, String packId, int importedCount) {
@@ -330,7 +347,8 @@ public class GlobalCatalogService {
             List<AdoptLineRequest> lines,
             boolean dryRun,
             String actorUserId,
-            boolean createMissingCategories
+            boolean createMissingCategories,
+            AdoptProgressListener progressListener
     ) {
         GlobalCatalog catalog = resolveCatalog(businessId);
         Branch branch = null;
@@ -373,9 +391,12 @@ public class GlobalCatalogService {
         int importedCount = 0;
         int skippedCount = 0;
         final String effectiveActor = actorUserIdOrSystem(actorUserId);
+        int lineIndex = 0;
 
         for (AdoptLineRequest line : lines) {
             String gpId = line.globalProductId();
+            String progressName = null;
+            try {
             if (!publishedIdSet.contains(gpId)) {
                 results.add(new AdoptResultLineResponse(gpId, "error_not_found", null, null, "Global product not found or not published"));
                 continue;
@@ -383,6 +404,11 @@ public class GlobalCatalogService {
 
             GlobalProduct gp = globalProductRepository.findById(gpId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Global product not found"));
+            progressName = gp.getName();
+            if (progressListener != null) {
+                // Report the item about to run so the UI can show a live name while images re-host.
+                progressListener.onLineProcessed(lineIndex, progressName);
+            }
 
             String existingItemId = matchIndex.findMatchingItemId(gp);
             if (existingItemId != null) {
@@ -592,6 +618,12 @@ public class GlobalCatalogService {
             } catch (Exception ex) {
                 results.add(mapAdoptLineFailure(ex, businessId, gpId, sku, barcode, skuToItemId));
                 skippedCount++;
+            }
+            } finally {
+                lineIndex++;
+                if (progressListener != null) {
+                    progressListener.onLineProcessed(lineIndex, progressName);
+                }
             }
         }
 

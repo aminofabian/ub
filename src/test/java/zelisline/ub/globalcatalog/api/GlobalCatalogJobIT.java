@@ -223,7 +223,7 @@ class GlobalCatalogJobIT {
                 .andExpect(jsonPath("$.status").value("pending"))
                 .andExpect(jsonPath("$.kind").value("adopt"));
 
-        globalCatalogJobRunner.processNext();
+        globalCatalogJobRunner.processNextBlocking();
 
         mockMvc.perform(get("/api/v1/global-catalog/adopt/jobs/{jobId}", jobId)
                         .header("X-Tenant-Id", TENANT_A)

@@ -278,7 +278,7 @@ class SuperAdminGlobalCatalogPromoteIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("pending"));
 
-        globalCatalogJobRunner.processNext();
+        globalCatalogJobRunner.processNextBlocking();
 
         mockMvc.perform(get("/api/v1/super-admin/global-catalog/promote/jobs/{jobId}", jobId)
                         .header("Authorization", "Bearer " + saToken))

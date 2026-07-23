@@ -173,6 +173,8 @@ public class CloudinaryImageService implements MediaStore {
         final HttpResponse<String> raw;
         try {
             raw = Unirest.post(url)
+                    .connectTimeout(10_000)
+                    .socketTimeout(45_000)
                     .basicAuth(properties.getApiKey(), properties.getApiSecret())
                     .field("file", trimmed)
                     .field("folder", folder)

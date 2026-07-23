@@ -1,5 +1,7 @@
 package zelisline.ub.globalcatalog.repository;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -14,4 +16,6 @@ public interface GlobalCatalogJobRepository extends JpaRepository<GlobalCatalogJ
     Optional<GlobalCatalogJob> findByIdAndBusinessId(String id, String businessId);
 
     Optional<GlobalCatalogJob> findByIdAndBusinessIdIsNull(String id);
+
+    List<GlobalCatalogJob> findByStatusAndUpdatedAtBefore(Status status, Instant updatedAtBefore);
 }

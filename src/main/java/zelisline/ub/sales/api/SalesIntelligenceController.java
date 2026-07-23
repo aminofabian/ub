@@ -16,7 +16,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.sales.api.dto.CategoryDailyRevenueRow;
+import zelisline.ub.sales.api.dto.ItemActivityResponse;
 import zelisline.ub.sales.api.dto.ItemRevenueRow;
+import zelisline.ub.sales.api.dto.ItemVelocityRow;
 import zelisline.ub.sales.api.dto.PaymentLedgerRow;
 import zelisline.ub.sales.api.dto.PaymentMethodBreakdownRow;
 import zelisline.ub.sales.api.dto.RecentSaleRow;
@@ -94,11 +96,18 @@ public class SalesIntelligenceController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam(required = false) String branchId,
             @RequestParam(required = false) String itemTypeId,
+            @RequestParam(required = false) String itemId,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
         return salesIntelligenceService.recentSales(
-                TenantRequestIds.resolveBusinessId(request), from, to, branchId, itemTypeId);
+                TenantRequestIds.resolveBusinessId(request),
+                from,
+                to,
+                branchId,
+                itemTypeId,
+                itemId,
+                500);
     }
 
     @GetMapping("/payments-by-method")
@@ -141,5 +150,32 @@ public class SalesIntelligenceController {
         CurrentTenantUser.require(request);
         return salesIntelligenceService.staffPerformance(
                 TenantRequestIds.resolveBusinessId(request), from, to, branchId, itemTypeId);
+    }
+
+    @GetMapping("/item-velocity")
+    @PreAuthorize("hasPermission(null, 'sales.intelligence.read')")
+    public List<ItemVelocityRow> itemVelocity(
+            @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) String itemTypeId,
+            @RequestParam(required = false) Integer limit,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return salesIntelligenceService.itemVelocity(
+                TenantRequestIds.resolveBusinessId(request), branchId, itemTypeId, limit);
+    }
+
+    @GetMapping("/items/{itemId}/activity")
+    @PreAuthorize("hasPermission(null, 'sales.intelligence.read')")
+    public ItemActivityResponse itemActivity(
+            @PathVariable String itemId,
+            @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return salesIntelligenceService.itemActivity(
+                TenantRequestIds.resolveBusinessId(request), itemId, branchId, from, to);
     }
 }

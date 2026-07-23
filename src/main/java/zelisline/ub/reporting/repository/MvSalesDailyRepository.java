@@ -194,4 +194,182 @@ public interface MvSalesDailyRepository extends JpaRepository<MvSalesDaily, MvSa
     List<PeakHourRow> findPeakSalesHourForDay(
             @Param("businessId") String businessId,
             @Param("businessDay") LocalDate businessDay);
+
+    /**
+     * Past-day velocity buckets per item (excludes {@code today} so the service can
+     * gap-fill live OLTP for the current business day into rolling windows).
+     */
+    interface ItemVelocityPast {
+        String getItemId();
+
+        String getItemName();
+
+        String getSku();
+
+        BigDecimal getCurrentStock();
+
+        BigDecimal getYesterdayQty();
+
+        BigDecimal getYesterdayRevenue();
+
+        BigDecimal getLast3PastQty();
+
+        BigDecimal getLast3PastRevenue();
+
+        BigDecimal getLast7PastQty();
+
+        BigDecimal getLast7PastRevenue();
+
+        BigDecimal getLast30PastQty();
+
+        BigDecimal getLast30PastRevenue();
+    }
+
+    @Query(value = """
+            SELECT i.id AS itemId,
+                   i.name AS itemName,
+                   i.sku AS sku,
+                   i.current_stock AS currentStock,
+                   COALESCE(SUM(CASE WHEN m.business_day = :yesterday THEN m.qty ELSE 0 END), 0) AS yesterdayQty,
+                   COALESCE(SUM(CASE WHEN m.business_day = :yesterday THEN m.revenue ELSE 0 END), 0) AS yesterdayRevenue,
+                   COALESCE(SUM(CASE WHEN m.business_day >= :last3From AND m.business_day < :today THEN m.qty ELSE 0 END), 0) AS last3PastQty,
+                   COALESCE(SUM(CASE WHEN m.business_day >= :last3From AND m.business_day < :today THEN m.revenue ELSE 0 END), 0) AS last3PastRevenue,
+                   COALESCE(SUM(CASE WHEN m.business_day >= :last7From AND m.business_day < :today THEN m.qty ELSE 0 END), 0) AS last7PastQty,
+                   COALESCE(SUM(CASE WHEN m.business_day >= :last7From AND m.business_day < :today THEN m.revenue ELSE 0 END), 0) AS last7PastRevenue,
+                   COALESCE(SUM(CASE WHEN m.business_day >= :last30From AND m.business_day < :today THEN m.qty ELSE 0 END), 0) AS last30PastQty,
+                   COALESCE(SUM(CASE WHEN m.business_day >= :last30From AND m.business_day < :today THEN m.revenue ELSE 0 END), 0) AS last30PastRevenue
+              FROM mv_sales_daily m
+              JOIN items i ON i.id = m.item_id AND i.business_id = m.business_id AND i.deleted_at IS NULL
+             WHERE m.business_id = :businessId
+               AND m.business_day >= :last30From
+               AND m.business_day < :today
+               AND (:branchId IS NULL OR m.branch_id = :branchId)
+               AND (:itemTypeId IS NULL OR i.item_type_id = :itemTypeId)
+             GROUP BY i.id, i.name, i.sku, i.current_stock
+             HAVING COALESCE(SUM(m.qty), 0) > 0
+             ORDER BY last30PastQty DESC
+             LIMIT :limit
+            """, nativeQuery = true)
+    List<ItemVelocityPast> itemVelocityPast(
+            @Param("businessId") String businessId,
+            @Param("today") LocalDate today,
+            @Param("yesterday") LocalDate yesterday,
+            @Param("last3From") LocalDate last3From,
+            @Param("last7From") LocalDate last7From,
+            @Param("last30From") LocalDate last30From,
+            @Param("branchId") String branchId,
+            @Param("itemTypeId") String itemTypeId,
+            @Param("limit") int limit
+    );
+
+    interface ItemDayQtyRevenue {
+        String getItemId();
+
+        BigDecimal getQty();
+
+        BigDecimal getRevenue();
+    }
+
+    @Query(value = """
+            SELECT si.item_id AS itemId,
+                   COALESCE(SUM(si.quantity), 0) AS qty,
+                   COALESCE(SUM(si.line_total), 0) AS revenue
+              FROM sales s
+              JOIN sale_items si ON si.sale_id = s.id
+              JOIN items i ON i.id = si.item_id AND i.business_id = s.business_id AND i.deleted_at IS NULL
+             WHERE s.business_id = :businessId
+               AND s.status = 'completed'
+               AND CAST(s.sold_at AS DATE) = :targetDay
+               AND (:branchId IS NULL OR s.branch_id = :branchId)
+               AND (:itemTypeId IS NULL OR i.item_type_id = :itemTypeId)
+             GROUP BY si.item_id
+            """, nativeQuery = true)
+    List<ItemDayQtyRevenue> sumOltpByItemForDay(
+            @Param("businessId") String businessId,
+            @Param("targetDay") LocalDate targetDay,
+            @Param("branchId") String branchId,
+            @Param("itemTypeId") String itemTypeId
+    );
+
+    interface ItemDailyRollup {
+        LocalDate getBusinessDay();
+
+        BigDecimal getQty();
+
+        BigDecimal getRevenue();
+
+        BigDecimal getCost();
+
+        BigDecimal getProfit();
+    }
+
+    @Query(value = """
+            SELECT m.business_day AS businessDay,
+                   COALESCE(SUM(m.qty), 0) AS qty,
+                   COALESCE(SUM(m.revenue), 0) AS revenue,
+                   COALESCE(SUM(m.cost), 0) AS cost,
+                   COALESCE(SUM(m.profit), 0) AS profit
+              FROM mv_sales_daily m
+             WHERE m.business_id = :businessId
+               AND m.item_id = :itemId
+               AND m.business_day >= :from
+               AND m.business_day <= :to
+               AND (:branchId IS NULL OR m.branch_id = :branchId)
+             GROUP BY m.business_day
+             ORDER BY m.business_day
+            """, nativeQuery = true)
+    List<ItemDailyRollup> sumByDayForItem(
+            @Param("businessId") String businessId,
+            @Param("itemId") String itemId,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to,
+            @Param("branchId") String branchId
+    );
+
+    @Query(value = """
+            SELECT CAST(s.sold_at AS DATE) AS businessDay,
+                   COALESCE(SUM(si.quantity), 0) AS qty,
+                   COALESCE(SUM(si.line_total), 0) AS revenue,
+                   COALESCE(SUM(si.cost_total), 0) AS cost,
+                   COALESCE(SUM(si.profit), 0) AS profit
+              FROM sales s
+              JOIN sale_items si ON si.sale_id = s.id
+             WHERE s.business_id = :businessId
+               AND si.item_id = :itemId
+               AND s.status = 'completed'
+               AND CAST(s.sold_at AS DATE) = :targetDay
+               AND (:branchId IS NULL OR s.branch_id = :branchId)
+             GROUP BY CAST(s.sold_at AS DATE)
+            """, nativeQuery = true)
+    List<ItemDailyRollup> sumOltpForItemDay(
+            @Param("businessId") String businessId,
+            @Param("itemId") String itemId,
+            @Param("targetDay") LocalDate targetDay,
+            @Param("branchId") String branchId
+    );
+
+    @Query(value = """
+            SELECT CAST(s.sold_at AS DATE) AS businessDay,
+                   COALESCE(SUM(si.quantity), 0) AS qty,
+                   COALESCE(SUM(si.line_total), 0) AS revenue,
+                   COALESCE(SUM(si.cost_total), 0) AS cost,
+                   COALESCE(SUM(si.profit), 0) AS profit
+              FROM sales s
+              JOIN sale_items si ON si.sale_id = s.id
+             WHERE s.business_id = :businessId
+               AND si.item_id = :itemId
+               AND s.status = 'completed'
+               AND CAST(s.sold_at AS DATE) >= :from
+               AND CAST(s.sold_at AS DATE) <= :to
+               AND (:branchId IS NULL OR s.branch_id = :branchId)
+             GROUP BY CAST(s.sold_at AS DATE)
+             ORDER BY CAST(s.sold_at AS DATE)
+            """, nativeQuery = true)
+    List<ItemDailyRollup> sumOltpByDayForItem(
+            @Param("businessId") String businessId,
+            @Param("itemId") String itemId,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to,
+            @Param("branchId") String branchId
+    );
 }

@@ -10,7 +10,7 @@ import jakarta.validation.constraints.Pattern;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record OnboardingPatchRequest(
         @Pattern(regexp = "idle|pending|active|completed|dismissed") String status,
-        @Min(1) @Max(5) Integer step,
+        @Min(1) @Max(6) Integer step,
         @Valid OnboardingAnswersDto answers
 ) {
 }

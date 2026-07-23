@@ -24,6 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.audit.AuditEventTypes;
 import zelisline.ub.audit.application.AuditEventBuilder;
@@ -87,6 +88,8 @@ public class SuperAdminGlobalCatalogPromoteService {
     private final GlobalCategoryRepository globalCategoryRepository;
     private final GlobalProductRepository globalProductRepository;
     private final GlobalProductImageGalleryService galleryService;
+    private final SuperAdminGlobalCatalogPromoteLineExecutor lineExecutor;
+    private final EntityManager entityManager;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
 
@@ -148,7 +151,11 @@ public class SuperAdminGlobalCatalogPromoteService {
         return runPromote(request, true, MAX_BATCH, null);
     }
 
-    @Transactional
+    /**
+     * Sync path. Not wrapped in one outer transaction — each product commits via
+     * {@link SuperAdminGlobalCatalogPromoteLineExecutor} so a mid-batch failure cannot
+     * wipe earlier rows (especially after archive-all replace).
+     */
     public PromoteResponse promote(PromoteRequest request) {
         PromoteResponse result = runPromote(request, false, MAX_BATCH, null);
         publishAudit(request, result, currentSuperAdminId());
@@ -160,7 +167,6 @@ public class SuperAdminGlobalCatalogPromoteService {
      * (scheduler has no SecurityContext). Reports per-line progress so the
      * SA UI can render a live progress bar while images re-host.
      */
-    @Transactional
     public PromoteResponse promoteForJob(
             PromoteRequest request,
             String actorUserId,
@@ -205,11 +211,16 @@ public class SuperAdminGlobalCatalogPromoteService {
             syncSourceCategoryTree(catalog.getId(), businessId);
         }
 
-        GlobalMatchIndex matchIndex = GlobalMatchIndex.build(
-                globalProductRepository.findAll().stream()
-                        .filter(p -> catalog.getId().equals(p.getCatalogId()))
-                        .filter(p -> !GlobalProductStatus.ARCHIVED.equals(p.getStatus()))
-                        .toList());
+        List<GlobalProduct> catalogProducts = globalProductRepository.findAll().stream()
+                .filter(p -> catalog.getId().equals(p.getCatalogId()))
+                .toList();
+        GlobalMatchIndex matchIndex = GlobalMatchIndex.build(catalogProducts.stream()
+                .filter(p -> !GlobalProductStatus.ARCHIVED.equals(p.getStatus()))
+                .toList());
+        // After "clear old catalog", live match misses everything — revive by the same keys.
+        GlobalMatchIndex archivedMatchIndex = GlobalMatchIndex.build(catalogProducts.stream()
+                .filter(p -> GlobalProductStatus.ARCHIVED.equals(p.getStatus()))
+                .toList());
 
         int created = 0;
         int updated = 0;
@@ -233,9 +244,7 @@ public class SuperAdminGlobalCatalogPromoteService {
 
             GlobalProduct existing = matchIndex.findMatch(item);
             if (existing == null) {
-                // After an "archive-all" replace, revive the archived product so ids stay
-                // stable for tenants that already adopted it.
-                existing = findArchivedMatch(catalog.getId(), item);
+                existing = archivedMatchIndex.findMatch(item);
             }
             if (existing != null && "skip".equals(onConflict)) {
                 skipped++;
@@ -267,19 +276,28 @@ public class SuperAdminGlobalCatalogPromoteService {
                 continue;
             }
 
+            String existingId = existing != null ? existing.getId() : null;
+            boolean creating = existingId == null;
             try {
-                GlobalProduct product = existing != null ? existing : new GlobalProduct();
-                if (existing == null) {
-                    product.setCatalogId(catalog.getId());
-                    // Prefer keeping seed/legacy id alignment when the tenant item id is free
-                    if (!globalProductRepository.existsById(item.getId())) {
-                        product.setId(item.getId());
+                GlobalProduct product;
+                if (creating) {
+                    product = newGlobalProduct(catalog.getId(), item.getId());
+                } else {
+                    product = globalProductRepository.findById(existingId).orElse(null);
+                    if (product == null) {
+                        creating = true;
+                        product = newGlobalProduct(catalog.getId(), item.getId());
                     }
                 }
+                String statusForRow = resolvePromoteStatus(
+                        creating ? null : product,
+                        publish,
+                        targetStatus
+                );
                 applyItemFields(
                         product,
                         item,
-                        targetStatus,
+                        statusForRow,
                         sellingByItem.get(item.getId()),
                         itemTypes.get(item.getItemTypeId()),
                         categories.get(item.getCategoryId()),
@@ -287,7 +305,7 @@ public class SuperAdminGlobalCatalogPromoteService {
 
                 if (blankToNull(product.getBarcode()) != null
                         && !GlobalProductStatus.ARCHIVED.equals(product.getStatus())) {
-                    long conflicts = existing == null
+                    long conflicts = creating
                             ? globalProductRepository.countByCatalogIdAndBarcodeAndStatusNot(
                                     catalog.getId(), product.getBarcode(), GlobalProductStatus.ARCHIVED)
                             : globalProductRepository.countByCatalogIdAndBarcodeAndStatusNotAndIdNot(
@@ -295,7 +313,7 @@ public class SuperAdminGlobalCatalogPromoteService {
                                     product.getBarcode(),
                                     GlobalProductStatus.ARCHIVED,
                                     product.getId());
-                    if (conflicts > 0 && existing == null) {
+                    if (conflicts > 0 && creating) {
                         skipped++;
                         lines.add(new PromoteLineResult(
                                 itemId, null, "skipped", "Barcode already used by another global product", false));
@@ -303,21 +321,31 @@ public class SuperAdminGlobalCatalogPromoteService {
                     }
                 }
 
-                product = globalProductRepository.saveAndFlush(product);
+                if (!creating) {
+                    // Detach so REQUIRES_NEW save merges cleanly (not dual-managed).
+                    entityManager.detach(product);
+                }
+                // Own transaction so one bad row cannot roll back earlier promotes.
+                SuperAdminGlobalCatalogPromoteLineExecutor.SavedProduct saved =
+                        lineExecutor.saveProduct(product, creating);
+                product = saved.product();
                 boolean imageRehosted = false;
                 List<String> sourceImageUrls = resolveHttpsImageUrls(item);
                 if (!sourceImageUrls.isEmpty()) {
-                    int frames = galleryService.replaceFromSourceUrls(product, sourceImageUrls);
-                    imageRehosted = frames > 0;
-                    if (imageRehosted) {
-                        product = globalProductRepository.findById(product.getId()).orElse(product);
-                        imageRehosts++;
+                    try {
+                        imageRehosted = lineExecutor.rehostImages(product.getId(), sourceImageUrls);
+                        if (imageRehosted) {
+                            imageRehosts++;
+                        }
+                    } catch (RuntimeException imageEx) {
+                        log.warn("Promote image re-host failed for item {}: {}", itemId, imageEx.toString());
                     }
                 }
 
-                if (existing == null) {
+                if (saved.created()) {
                     created++;
                     matchIndex.register(product);
+                    archivedMatchIndex.unregister(product.getId());
                     lines.add(new PromoteLineResult(
                             itemId,
                             product.getId(),
@@ -329,6 +357,7 @@ public class SuperAdminGlobalCatalogPromoteService {
                 } else {
                     updated++;
                     matchIndex.register(product);
+                    archivedMatchIndex.unregister(product.getId());
                     lines.add(new PromoteLineResult(
                             itemId,
                             product.getId(),
@@ -338,8 +367,9 @@ public class SuperAdminGlobalCatalogPromoteService {
                                     : "Updated",
                             imageRehosted));
                 }
-            } catch (Exception ex) {
+            } catch (RuntimeException ex) {
                 log.warn("Promote failed for item {}: {}", itemId, ex.toString());
+                entityManager.clear();
                 skipped++;
                 lines.add(new PromoteLineResult(
                         itemId,
@@ -353,18 +383,34 @@ public class SuperAdminGlobalCatalogPromoteService {
         return new PromoteResponse(created, updated, skipped, imageRehosts, lines);
     }
 
-    private GlobalProduct findArchivedMatch(String catalogId, Item item) {
-        String sourceId = blankToNull(item.getGlobalProductSourceId());
-        if (sourceId != null) {
-            Optional<GlobalProduct> bySource = globalProductRepository.findById(sourceId)
-                    .filter(p -> catalogId.equals(p.getCatalogId()));
-            if (bySource.isPresent()) {
-                return bySource.get();
-            }
+    private GlobalProduct newGlobalProduct(String catalogId, String preferredId) {
+        GlobalProduct product = new GlobalProduct();
+        product.setCatalogId(catalogId);
+        if (preferredId != null && !globalProductRepository.existsById(preferredId)) {
+            product.setId(preferredId);
         }
-        return globalProductRepository.findById(item.getId())
-                .filter(p -> catalogId.equals(p.getCatalogId()))
-                .orElse(null);
+        return product;
+    }
+
+    /**
+     * Draft promote must not silently demote already-published rows (that emptied Curate
+     * "published" after the first batch). Revive archived rows to the requested status;
+     * elevate to published when requested; otherwise keep live status.
+     */
+    static String resolvePromoteStatus(GlobalProduct existing, boolean publish, String targetStatus) {
+        if (existing == null || existing.getStatus() == null) {
+            return targetStatus;
+        }
+        if (GlobalProductStatus.ARCHIVED.equals(existing.getStatus())) {
+            return targetStatus;
+        }
+        if (publish) {
+            return GlobalProductStatus.PUBLISHED;
+        }
+        if (GlobalProductStatus.PUBLISHED.equals(existing.getStatus())) {
+            return GlobalProductStatus.PUBLISHED;
+        }
+        return targetStatus;
     }
 
     private void applyItemFields(
@@ -700,6 +746,30 @@ public class SuperAdminGlobalCatalogPromoteService {
             for (String key : CatalogProductMatchNormalizer.matchKeys(
                     product.getName(), product.getBrand(), product.getSize(), product.getVariantName())) {
                 byNameKey.putIfAbsent(key, product);
+            }
+        }
+
+        void unregister(String productId) {
+            GlobalProduct removed = byId.remove(productId);
+            if (removed == null) {
+                return;
+            }
+            String barcode = blankToNull(removed.getBarcode());
+            if (barcode != null && removed.equals(byBarcode.get(barcode))) {
+                byBarcode.remove(barcode);
+            }
+            String sku = blankToNull(removed.getSkuTemplate());
+            if (sku != null) {
+                String skuKey = sku.toLowerCase(Locale.ROOT);
+                if (removed.equals(bySku.get(skuKey))) {
+                    bySku.remove(skuKey);
+                }
+            }
+            for (String key : CatalogProductMatchNormalizer.matchKeys(
+                    removed.getName(), removed.getBrand(), removed.getSize(), removed.getVariantName())) {
+                if (removed.equals(byNameKey.get(key))) {
+                    byNameKey.remove(key);
+                }
             }
         }
 

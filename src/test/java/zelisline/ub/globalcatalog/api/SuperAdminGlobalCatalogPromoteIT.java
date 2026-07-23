@@ -485,4 +485,94 @@ class SuperAdminGlobalCatalogPromoteIT {
                 globalProductRepository.findAll().stream().filter(p -> catalogId.equals(p.getCatalogId())).count()
         ).isZero();
     }
+
+    @Test
+    void draftRePromoteDoesNotDemotePublished() throws Exception {
+        String publishBody = """
+                {"sourceBusinessId":"%s","itemIds":["%s"],"onConflict":"update","publish":true}
+                """.formatted(SOURCE_BUSINESS, sourceItemId);
+        String commit = mockMvc.perform(post("/api/v1/super-admin/global-catalog/promote")
+                        .header("Authorization", "Bearer " + saToken)
+                        .contentType(APPLICATION_JSON)
+                        .content(publishBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.createdCount").value(1))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String globalId = JsonPath.read(commit, "$.lines[0].globalProductId");
+        org.assertj.core.api.Assertions.assertThat(
+                globalProductRepository.findById(globalId).orElseThrow().getStatus()
+        ).isEqualTo(GlobalProductStatus.PUBLISHED);
+
+        String draftBody = """
+                {"sourceBusinessId":"%s","itemIds":["%s"],"onConflict":"update","publish":false}
+                """.formatted(SOURCE_BUSINESS, sourceItemId);
+        mockMvc.perform(post("/api/v1/super-admin/global-catalog/promote")
+                        .header("Authorization", "Bearer " + saToken)
+                        .contentType(APPLICATION_JSON)
+                        .content(draftBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.updatedCount").value(1));
+
+        org.assertj.core.api.Assertions.assertThat(
+                globalProductRepository.findById(globalId).orElseThrow().getStatus()
+        ).isEqualTo(GlobalProductStatus.PUBLISHED);
+    }
+
+    @Test
+    void archiveAllThenPromoteRevivesByBarcodeAsPublished() throws Exception {
+        String first = """
+                {"sourceBusinessId":"%s","itemIds":["%s"],"onConflict":"update","publish":true}
+                """.formatted(SOURCE_BUSINESS, sourceItemId);
+        String commit = mockMvc.perform(post("/api/v1/super-admin/global-catalog/promote")
+                        .header("Authorization", "Bearer " + saToken)
+                        .contentType(APPLICATION_JSON)
+                        .content(first))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.createdCount").value(1))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String globalId = JsonPath.read(commit, "$.lines[0].globalProductId");
+
+        mockMvc.perform(post("/api/v1/super-admin/global-catalog/products/archive-all")
+                        .header("Authorization", "Bearer " + saToken)
+                        .queryParam("catalogId", catalogId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.archivedProductCount").value(1));
+
+        org.assertj.core.api.Assertions.assertThat(
+                globalProductRepository.findById(globalId).orElseThrow().getStatus()
+        ).isEqualTo(GlobalProductStatus.ARCHIVED);
+
+        // New tenant item id, same barcode — must revive the archived row, not skip/create ghost.
+        Item clone = new Item();
+        clone.setBusinessId(SOURCE_BUSINESS);
+        clone.setSku("PROMOTE-COLA-2");
+        clone.setName("Promote Cola 500ml");
+        clone.setBrand("Promote Cola");
+        clone.setSize("500ml");
+        clone.setBarcode("5554443332221");
+        clone.setItemTypeId(itemRepository.findById(sourceItemId).orElseThrow().getItemTypeId());
+        clone.setUnitType("each");
+        clone.setBuyingPrice(new BigDecimal("55.00"));
+        clone = itemRepository.save(clone);
+
+        String again = """
+                {"sourceBusinessId":"%s","itemIds":["%s"],"onConflict":"update","publish":true,"catalogId":"%s"}
+                """.formatted(SOURCE_BUSINESS, clone.getId(), catalogId);
+        mockMvc.perform(post("/api/v1/super-admin/global-catalog/promote")
+                        .header("Authorization", "Bearer " + saToken)
+                        .contentType(APPLICATION_JSON)
+                        .content(again))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.updatedCount").value(1))
+                .andExpect(jsonPath("$.createdCount").value(0));
+
+        GlobalProduct revived = globalProductRepository.findById(globalId).orElseThrow();
+        org.assertj.core.api.Assertions.assertThat(revived.getStatus()).isEqualTo(GlobalProductStatus.PUBLISHED);
+        org.assertj.core.api.Assertions.assertThat(revived.getRecommendedBuyingPrice())
+                .isEqualByComparingTo("55.00");
+    }
 }

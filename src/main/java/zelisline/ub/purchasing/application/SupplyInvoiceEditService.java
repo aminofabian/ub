@@ -38,6 +38,7 @@ public class SupplyInvoiceEditService {
     private final SupplierRepository supplierRepository;
     private final PathBPurchaseService pathBPurchaseService;
     private final RawPurchaseLineRepository rawPurchaseLineRepository;
+    private final PathBAssociatedCostService pathBAssociatedCostService;
 
     @Transactional(readOnly = true)
     public PathBSupplyInvoiceDetailDto getPathBInvoiceDetail(String businessId, String invoiceId) {
@@ -110,7 +111,9 @@ public class SupplyInvoiceEditService {
         } else {
             supName = sup.getName();
         }
-        BigDecimal grand = inv.getGrandTotal().setScale(2, RoundingMode.HALF_UP);
+        BigDecimal grand = pathBAssociatedCostService
+                .payableGrandTotal(businessId, inv)
+                .setScale(2, RoundingMode.HALF_UP);
         BigDecimal paid = nz(allocationRepository.sumAmountBySupplierInvoiceId(inv.getId()))
                 .setScale(2, RoundingMode.HALF_UP);
         BigDecimal open = grand.subtract(paid).setScale(2, RoundingMode.HALF_UP);

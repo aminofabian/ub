@@ -60,6 +60,7 @@ public class SupplierDisbursementService {
     private final SupplierPaymentService supplierPaymentService;
     private final PaymentWebhookEventRepository webhookEventRepository;
     private final ObjectMapper objectMapper;
+    private final PathBAssociatedCostService pathBAssociatedCostService;
 
     @Value("${app.public.api-base-url:http://localhost:5050}")
     private String publicApiBaseUrl;
@@ -337,7 +338,8 @@ public class SupplierDisbursementService {
 
     private BigDecimal openBalance(SupplierInvoice inv) {
         BigDecimal paid = allocationRepository.sumAmountBySupplierInvoiceId(inv.getId());
-        return inv.getGrandTotal().subtract(paid != null ? paid : BigDecimal.ZERO)
+        BigDecimal payable = pathBAssociatedCostService.payableGrandTotal(inv.getBusinessId(), inv);
+        return payable.subtract(paid != null ? paid : BigDecimal.ZERO)
                 .setScale(2, RoundingMode.HALF_UP);
     }
 

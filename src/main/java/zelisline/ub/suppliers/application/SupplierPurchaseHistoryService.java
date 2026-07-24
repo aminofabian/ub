@@ -13,6 +13,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.purchasing.PurchasingConstants;
+import zelisline.ub.purchasing.application.PathBAssociatedCostService;
 import zelisline.ub.purchasing.domain.SupplierInvoice;
 import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
@@ -34,6 +35,7 @@ public class SupplierPurchaseHistoryService {
     private final SupplierInvoiceRepository supplierInvoiceRepository;
     private final SupplierInvoiceLineRepository supplierInvoiceLineRepository;
     private final SupplierPaymentAllocationRepository allocationRepository;
+    private final PathBAssociatedCostService pathBAssociatedCostService;
 
     @Transactional(readOnly = true)
     public SupplierPurchaseHistoryResponse purchaseHistory(
@@ -67,7 +69,7 @@ public class SupplierPurchaseHistoryService {
 
         List<SupplierPurchaseHistoryRow> orders = new ArrayList<>(Math.min(limit, allInvs.size()));
         for (SupplierInvoice inv : allInvs) {
-            BigDecimal grand = money2(inv.getGrandTotal());
+            BigDecimal grand = pathBAssociatedCostService.payableGrandTotal(businessId, inv);
             BigDecimal paid = money2(nz(allocationRepository.sumAmountBySupplierInvoiceId(inv.getId())));
             BigDecimal open = grand.subtract(paid).setScale(2, RoundingMode.HALF_UP);
             int lineCount = (int) supplierInvoiceLineRepository.countByInvoiceId(inv.getId());

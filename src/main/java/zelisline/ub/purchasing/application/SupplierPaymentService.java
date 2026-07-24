@@ -60,6 +60,7 @@ public class SupplierPaymentService {
     private final LedgerAccountResolver ledgerAccountResolver;
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final ObjectMapper objectMapper;
+    private final PathBAssociatedCostService pathBAssociatedCostService;
 
     public static String postPaymentRoute() {
         return "POST /api/v1/purchasing/supplier-payments";
@@ -80,7 +81,7 @@ public class SupplierPaymentService {
                     && !supplierIdFilter.equals(inv.getSupplierId())) {
                 continue;
             }
-            BigDecimal open = openBalance(inv.getId(), inv.getGrandTotal());
+            BigDecimal open = openBalance(inv.getId(), pathBAssociatedCostService.payableGrandTotal(businessId, inv));
             if (open.compareTo(MONEY) <= 0) {
                 continue;
             }
@@ -123,7 +124,8 @@ public class SupplierPaymentService {
                     && !supplierIdFilter.equals(inv.getSupplierId())) {
                 continue;
             }
-            BigDecimal open = openBalance(inv.getId(), inv.getGrandTotal());
+            BigDecimal payable = pathBAssociatedCostService.payableGrandTotal(businessId, inv);
+            BigDecimal open = openBalance(inv.getId(), payable);
             if (open.compareTo(MONEY) <= 0) {
                 continue;
             }
@@ -133,7 +135,7 @@ public class SupplierPaymentService {
                     inv.getInvoiceNumber(),
                     inv.getInvoiceDate(),
                     inv.getDueDate(),
-                    inv.getGrandTotal().setScale(2, RoundingMode.HALF_UP),
+                    payable,
                     open));
         }
         rows.sort(Comparator.comparing(OpenSupplierInvoiceRow::invoiceDate).reversed());
@@ -279,7 +281,9 @@ public class SupplierPaymentService {
                 if (!inv.getSupplierId().equals(req.supplierId())) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice does not belong to supplier");
                 }
-                BigDecimal open = openBalance(inv.getId(), inv.getGrandTotal());
+                BigDecimal open = openBalance(
+                        inv.getId(),
+                        pathBAssociatedCostService.payableGrandTotal(businessId, inv));
                 if (line.amount().setScale(2, RoundingMode.HALF_UP).compareTo(open) > 0) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Allocation exceeds open balance on invoice");
                 }

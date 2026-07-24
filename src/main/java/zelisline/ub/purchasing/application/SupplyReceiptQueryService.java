@@ -42,6 +42,7 @@ public class SupplyReceiptQueryService {
     private final SupplierPaymentRepository supplierPaymentRepository;
     private final SupplierRepository supplierRepository;
     private final RawPurchaseSessionRepository rawPurchaseSessionRepository;
+    private final PathBAssociatedCostService pathBAssociatedCostService;
 
     @Transactional(readOnly = true)
     public List<PathBSupplyListRow> listPathBSupplies(String businessId, String branchId) {
@@ -69,6 +70,9 @@ public class SupplyReceiptQueryService {
                 .filter(s -> businessId.equals(s.getBusinessId()))
                 .collect(Collectors.toMap(Supplier::getId, s -> s, (a, b) -> a));
 
+        Map<String, BigDecimal> extrasBySession =
+                pathBAssociatedCostService.sumBySessionIds(businessId, sessionIds);
+
         List<PathBSupplyListRow> rows = new ArrayList<>(invs.size());
         for (SupplierInvoice inv : invs) {
             String sessionBranchId = branchBySessionId.get(inv.getRawPurchaseSessionId());
@@ -86,7 +90,12 @@ public class SupplyReceiptQueryService {
                 supName = sup.getName();
             }
             long cnt = supplierInvoiceLineRepository.countByInvoiceId(inv.getId());
-            BigDecimal grand = inv.getGrandTotal().setScale(2, RoundingMode.HALF_UP);
+            BigDecimal extras = extrasBySession
+                    .getOrDefault(inv.getRawPurchaseSessionId(), BigDecimal.ZERO)
+                    .setScale(2, RoundingMode.HALF_UP);
+            BigDecimal grand = inv.getGrandTotal()
+                    .add(extras)
+                    .setScale(2, RoundingMode.HALF_UP);
             BigDecimal paid = nz(allocationRepository.sumAmountBySupplierInvoiceId(inv.getId()))
                     .setScale(2, RoundingMode.HALF_UP);
             BigDecimal open = grand.subtract(paid).setScale(2, RoundingMode.HALF_UP);

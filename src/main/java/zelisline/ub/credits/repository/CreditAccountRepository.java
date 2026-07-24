@@ -79,4 +79,20 @@ public interface CreditAccountRepository extends JpaRepository<CreditAccount, St
             order by c.balanceOwed desc
             """)
     List<CreditAccount> findOutstandingByBusinessId(@Param("businessId") String businessId);
+
+    @Query("""
+            select coalesce(sum(c.balanceOwed), 0)
+            from CreditAccount c
+            where c.businessId = :businessId
+              and c.balanceOwed > 0
+            """)
+    BigDecimal sumOutstandingBalanceByBusinessId(@Param("businessId") String businessId);
+
+    @Query("""
+            select count(c)
+            from CreditAccount c
+            where c.businessId = :businessId
+              and c.balanceOwed > 0
+            """)
+    long countOutstandingByBusinessId(@Param("businessId") String businessId);
 }

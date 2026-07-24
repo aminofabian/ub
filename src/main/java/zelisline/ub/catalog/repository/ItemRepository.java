@@ -24,6 +24,18 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     List<Item> findByGlobalProductSourceIdAndDeletedAtIsNull(String globalProductSourceId);
 
+    /**
+     * Any tenant item (including soft-deleted) that still points at a product in this catalog.
+     * Soft-deleted rows keep the FK and would block a hard product delete.
+     */
+    @Query("""
+            select count(i) from Item i
+             where i.globalProductSourceId in (
+               select gp.id from GlobalProduct gp where gp.catalogId = :catalogId
+             )
+            """)
+    long countReferencingCatalogProducts(@Param("catalogId") String catalogId);
+
     List<Item> findByBusinessIdAndGlobalProductSourceIdInAndDeletedAtIsNull(
             String businessId,
             Collection<String> globalProductSourceIds

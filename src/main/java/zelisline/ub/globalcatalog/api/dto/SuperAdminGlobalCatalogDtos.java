@@ -267,6 +267,24 @@ public final class SuperAdminGlobalCatalogDtos {
     ) {
     }
 
+    public record PurgeCatalogRequest(
+            @NotBlank @Size(max = 64) String confirmCode
+    ) {
+    }
+
+    public record PurgeCatalogResponse(
+            String catalogId,
+            String catalogCode,
+            int deletedProductCount,
+            int deletedCategoryCount,
+            int deletedPackCount,
+            int deletedPackItemCount,
+            int deletedImageCount,
+            int deletedSupplierLinkCount,
+            int deletedSupplierTemplateCount
+    ) {
+    }
+
     public record PromoteRequest(
             @NotBlank String sourceBusinessId,
             @NotEmpty List<@NotBlank String> itemIds,

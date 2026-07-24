@@ -50,6 +50,8 @@ import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PromoteReq
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PromoteResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PublishProductsRequest;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PublishProductsResponse;
+import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PurgeCatalogRequest;
+import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PurgeCatalogResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.SourceBusinessResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.SourceItemResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.SupplierTemplateResponse;
@@ -80,6 +82,19 @@ public class SuperAdminGlobalCatalogController {
     @GetMapping("/catalogs")
     public List<CatalogSummaryResponse> listCatalogs() {
         return superAdminGlobalCatalogService.listCatalogs();
+    }
+
+    /**
+     * Hard-purge catalog content (products, categories, packs, images, supplier templates).
+     * Keeps the catalog shell. Requires {@code confirmCode} = catalog code. Refuses when
+     * any tenant item still references products in this catalog.
+     */
+    @PostMapping("/catalogs/{catalogId}/purge")
+    public PurgeCatalogResponse purgeCatalog(
+            @PathVariable String catalogId,
+            @Valid @RequestBody PurgeCatalogRequest body
+    ) {
+        return superAdminGlobalCatalogService.purgeCatalog(catalogId, body);
     }
 
     @GetMapping("/meta")

@@ -14,6 +14,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.ConnectionCallback;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,6 +45,8 @@ import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductRes
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductSupplierLinkResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PublishProductsRequest;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PublishProductsResponse;
+import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PurgeCatalogRequest;
+import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PurgeCatalogResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.SupplierTemplateResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.UpsertCategoryRequest;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.UpsertProductSupplierLinkRequest;
@@ -86,6 +90,7 @@ public class SuperAdminGlobalCatalogService {
     private final GlobalCatalogAdoptImageAttacher adoptImageAttacher;
     private final GlobalProductImageGalleryService galleryService;
     private final MediaStore mediaStore;
+    private final JdbcTemplate jdbcTemplate;
 
     @Transactional(readOnly = true)
     public List<CatalogSummaryResponse> listCatalogs() {
@@ -130,6 +135,53 @@ public class SuperAdminGlobalCatalogService {
         globalCategoryRepository.saveAll(toDeactivate);
 
         return new ArchiveCatalogProductsResponse(toArchive.size(), toDeactivate.size());
+    }
+
+    /**
+     * Hard-deletes all products/categories/packs/images/supplier data in the catalog.
+     * Keeps the catalog shell. Refuses when any tenant item still references a product
+     * in this catalog (including soft-deleted items — FK has no cascade).
+     */
+    @Transactional
+    public PurgeCatalogResponse purgeCatalog(String catalogId, PurgeCatalogRequest body) {
+        GlobalCatalog catalog = requireCatalog(catalogId);
+        String expectedCode = catalog.getCode();
+        String confirmCode = body == null || body.confirmCode() == null ? "" : body.confirmCode().trim();
+        if (!expectedCode.equals(confirmCode)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "confirmCode must match catalog code '" + expectedCode + "'");
+        }
+
+        long adopted = itemRepository.countReferencingCatalogProducts(catalog.getId());
+        if (adopted > 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Cannot purge: "
+                            + adopted
+                            + " shop item(s) still reference products in this catalog. "
+                            + "Tenant inventory is untouched; use archive-all instead, "
+                            + "or clear provenance before purging.");
+        }
+
+        CatalogRegionalCloneJdbc.PurgeStats stats = jdbcTemplate.execute(
+                (ConnectionCallback<CatalogRegionalCloneJdbc.PurgeStats>) connection ->
+                        CatalogRegionalCloneJdbc.purgeCatalogContent(connection, catalog.getId()));
+        if (stats == null) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Catalog purge failed");
+        }
+
+        return new PurgeCatalogResponse(
+                catalog.getId(),
+                catalog.getCode(),
+                stats.deletedProductCount(),
+                stats.deletedCategoryCount(),
+                stats.deletedPackCount(),
+                stats.deletedPackItemCount(),
+                stats.deletedImageCount(),
+                stats.deletedSupplierLinkCount(),
+                stats.deletedSupplierTemplateCount()
+        );
     }
 
     @Transactional(readOnly = true)

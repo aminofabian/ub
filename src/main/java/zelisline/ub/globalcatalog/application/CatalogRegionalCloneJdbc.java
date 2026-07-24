@@ -38,6 +38,18 @@ public final class CatalogRegionalCloneJdbc {
     ) {
     }
 
+    /** Counts from a hard wipe of catalog-scoped content (catalog shell kept). */
+    public record PurgeStats(
+            int deletedSupplierLinkCount,
+            int deletedImageCount,
+            int deletedPackItemCount,
+            int deletedPackCount,
+            int deletedProductCount,
+            int deletedCategoryCount,
+            int deletedSupplierTemplateCount
+    ) {
+    }
+
     public static CloneStats cloneScrubbingAbsolutePrices(
             Connection connection,
             String sourceCatalogCode,
@@ -133,13 +145,50 @@ public final class CatalogRegionalCloneJdbc {
     }
 
     private static void clearCatalogContent(Connection connection, String catalogId) throws SQLException {
-        try (PreparedStatement deletePackItems = connection.prepareStatement(
+        purgeCatalogContent(connection, catalogId);
+    }
+
+    /**
+     * Hard-deletes all content belonging to a catalog. Keeps the {@code global_catalogs} row.
+     * Caller must ensure no {@code items.global_product_source_id} still references products
+     * in this catalog (FK has no cascade).
+     */
+    public static PurgeStats purgeCatalogContent(Connection connection, String catalogId) throws SQLException {
+        int deletedSupplierLinks;
+        int deletedImages;
+        int deletedPackItems;
+        int deletedPacks;
+        int deletedProducts;
+        int deletedCategories;
+        int deletedSupplierTemplates;
+
+        try (PreparedStatement deleteSupplierLinks = connection.prepareStatement(
                 """
-                        DELETE FROM global_product_pack_items
-                        WHERE pack_id IN (
-                          SELECT id FROM global_product_packs WHERE catalog_id = ?
+                        DELETE FROM global_product_supplier_links
+                        WHERE global_product_id IN (
+                          SELECT id FROM global_products WHERE catalog_id = ?
                         )
                         """);
+             PreparedStatement deleteImages = connection.prepareStatement(
+                     """
+                             DELETE FROM global_product_images
+                             WHERE global_product_id IN (
+                               SELECT id FROM global_products WHERE catalog_id = ?
+                             )
+                             """);
+             PreparedStatement clearVariants = connection.prepareStatement(
+                     """
+                             UPDATE global_products
+                                SET variant_of_global_product_id = NULL
+                              WHERE catalog_id = ?
+                             """);
+             PreparedStatement deletePackItems = connection.prepareStatement(
+                     """
+                             DELETE FROM global_product_pack_items
+                             WHERE pack_id IN (
+                               SELECT id FROM global_product_packs WHERE catalog_id = ?
+                             )
+                             """);
              PreparedStatement deletePacks = connection.prepareStatement(
                      "DELETE FROM global_product_packs WHERE catalog_id = ?");
              PreparedStatement deleteProducts = connection.prepareStatement(
@@ -147,18 +196,38 @@ public final class CatalogRegionalCloneJdbc {
              PreparedStatement clearParents = connection.prepareStatement(
                      "UPDATE global_categories SET parent_id = NULL WHERE catalog_id = ?");
              PreparedStatement deleteCategories = connection.prepareStatement(
-                     "DELETE FROM global_categories WHERE catalog_id = ?")) {
+                     "DELETE FROM global_categories WHERE catalog_id = ?");
+             PreparedStatement deleteSupplierTemplates = connection.prepareStatement(
+                     "DELETE FROM global_supplier_templates WHERE catalog_id = ?")) {
+            deleteSupplierLinks.setString(1, catalogId);
+            deletedSupplierLinks = deleteSupplierLinks.executeUpdate();
+            deleteImages.setString(1, catalogId);
+            deletedImages = deleteImages.executeUpdate();
+            clearVariants.setString(1, catalogId);
+            clearVariants.executeUpdate();
             deletePackItems.setString(1, catalogId);
-            deletePackItems.executeUpdate();
+            deletedPackItems = deletePackItems.executeUpdate();
             deletePacks.setString(1, catalogId);
-            deletePacks.executeUpdate();
+            deletedPacks = deletePacks.executeUpdate();
             deleteProducts.setString(1, catalogId);
-            deleteProducts.executeUpdate();
+            deletedProducts = deleteProducts.executeUpdate();
             clearParents.setString(1, catalogId);
             clearParents.executeUpdate();
             deleteCategories.setString(1, catalogId);
-            deleteCategories.executeUpdate();
+            deletedCategories = deleteCategories.executeUpdate();
+            deleteSupplierTemplates.setString(1, catalogId);
+            deletedSupplierTemplates = deleteSupplierTemplates.executeUpdate();
         }
+
+        return new PurgeStats(
+                deletedSupplierLinks,
+                deletedImages,
+                deletedPackItems,
+                deletedPacks,
+                deletedProducts,
+                deletedCategories,
+                deletedSupplierTemplates
+        );
     }
 
     private static Map<String, String> cloneCategories(

@@ -30,10 +30,13 @@ import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.globalcatalog.domain.GlobalCatalog;
+import zelisline.ub.globalcatalog.domain.GlobalCategory;
 import zelisline.ub.globalcatalog.domain.GlobalProduct;
 import zelisline.ub.globalcatalog.domain.GlobalProductPack;
+import zelisline.ub.globalcatalog.domain.GlobalProductPackItem;
 import zelisline.ub.globalcatalog.domain.GlobalProductStatus;
 import zelisline.ub.globalcatalog.repository.GlobalCatalogRepository;
+import zelisline.ub.globalcatalog.repository.GlobalCategoryRepository;
 import zelisline.ub.globalcatalog.repository.GlobalProductPackItemRepository;
 import zelisline.ub.globalcatalog.repository.GlobalProductPackRepository;
 import zelisline.ub.globalcatalog.repository.GlobalProductRepository;
@@ -58,6 +61,9 @@ class SuperAdminGlobalCatalogIT {
 
     @Autowired
     private GlobalCatalogRepository globalCatalogRepository;
+
+    @Autowired
+    private GlobalCategoryRepository globalCategoryRepository;
 
     @Autowired
     private GlobalProductRepository globalProductRepository;
@@ -100,6 +106,7 @@ class SuperAdminGlobalCatalogIT {
         globalProductPackItemRepository.deleteAll();
         globalProductPackRepository.deleteAll();
         globalProductRepository.deleteAll();
+        globalCategoryRepository.deleteAll();
         globalCatalogRepository.deleteAll();
         businessRepository.deleteAll();
         superAdminRepository.deleteAll();
@@ -448,5 +455,109 @@ class SuperAdminGlobalCatalogIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.catalogCode").value("default"))
                 .andExpect(jsonPath("$.productCount").value(1));
+    }
+
+    @Test
+    void purgeCatalogRemovesContentKeepsShell() throws Exception {
+        GlobalCatalog catalog = globalCatalogRepository.findByCode("default").orElseThrow();
+
+        GlobalCategory category = new GlobalCategory();
+        category.setCatalogId(catalog.getId());
+        category.setName("Beverages");
+        category.setSlug("beverages");
+        category.setPosition(0);
+        category.setActive(true);
+        category = globalCategoryRepository.save(category);
+
+        GlobalProduct product = globalProductRepository.findById(productId).orElseThrow();
+        product.setGlobalCategoryId(category.getId());
+        globalProductRepository.save(product);
+
+        GlobalProductPack pack = new GlobalProductPack();
+        pack.setCatalogId(catalog.getId());
+        pack.setCode("purge-pack");
+        pack.setName("Purge Pack");
+        pack.setStatus("published");
+        pack.setSortOrder(0);
+        pack = globalProductPackRepository.save(pack);
+
+        GlobalProductPackItem membership = new GlobalProductPackItem();
+        membership.setPackId(pack.getId());
+        membership.setGlobalProductId(productId);
+        membership.setSortOrder(0);
+        globalProductPackItemRepository.save(membership);
+
+        mockMvc.perform(post("/api/v1/super-admin/global-catalog/catalogs/{catalogId}/purge", catalog.getId())
+                        .header("Authorization", "Bearer " + saToken)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"confirmCode":"default"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.catalogCode").value("default"))
+                .andExpect(jsonPath("$.deletedProductCount").value(1))
+                .andExpect(jsonPath("$.deletedCategoryCount").value(1))
+                .andExpect(jsonPath("$.deletedPackCount").value(1))
+                .andExpect(jsonPath("$.deletedPackItemCount").value(1));
+
+        org.assertj.core.api.Assertions.assertThat(globalCatalogRepository.findById(catalog.getId())).isPresent();
+        org.assertj.core.api.Assertions.assertThat(globalProductRepository.findAll()).isEmpty();
+        org.assertj.core.api.Assertions.assertThat(globalCategoryRepository.findAll()).isEmpty();
+        org.assertj.core.api.Assertions.assertThat(globalProductPackRepository.findAll()).isEmpty();
+        org.assertj.core.api.Assertions.assertThat(globalProductPackItemRepository.findAll()).isEmpty();
+    }
+
+    @Test
+    void purgeCatalogRejectsWrongConfirmCode() throws Exception {
+        GlobalCatalog catalog = globalCatalogRepository.findByCode("default").orElseThrow();
+
+        mockMvc.perform(post("/api/v1/super-admin/global-catalog/catalogs/{catalogId}/purge", catalog.getId())
+                        .header("Authorization", "Bearer " + saToken)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"confirmCode":"ug-retail"}
+                                """))
+                .andExpect(status().isBadRequest());
+
+        org.assertj.core.api.Assertions.assertThat(globalProductRepository.findById(productId)).isPresent();
+    }
+
+    @Test
+    void purgeCatalogRefusesWhenTenantAdopted() throws Exception {
+        GlobalCatalog catalog = globalCatalogRepository.findByCode("default").orElseThrow();
+
+        Business business = new Business();
+        business.setName("Linked Shop");
+        business.setSlug("linked-shop-purge");
+        business.setCountryCode("KE");
+        business.setCurrency("KES");
+        business = businessRepository.save(business);
+
+        catalogBootstrapService.seedDefaultItemTypesIfMissing(business.getId());
+        String goodsTypeId = itemTypeRepository.findByBusinessIdAndTypeKey(business.getId(), "goods")
+                .orElseThrow()
+                .getId();
+
+        Item item = new Item();
+        item.setBusinessId(business.getId());
+        item.setSku("LINKED-PURGE-1");
+        item.setName("Linked Juice");
+        item.setItemTypeId(goodsTypeId);
+        item.setUnitType("each");
+        item.setGlobalProductSourceId(productId);
+        item = itemRepository.save(item);
+
+        mockMvc.perform(post("/api/v1/super-admin/global-catalog/catalogs/{catalogId}/purge", catalog.getId())
+                        .header("Authorization", "Bearer " + saToken)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"confirmCode":"default"}
+                                """))
+                .andExpect(status().isConflict());
+
+        org.assertj.core.api.Assertions.assertThat(globalProductRepository.findById(productId)).isPresent();
+        Item unchanged = itemRepository.findById(item.getId()).orElseThrow();
+        org.assertj.core.api.Assertions.assertThat(unchanged.getGlobalProductSourceId()).isEqualTo(productId);
+        org.assertj.core.api.Assertions.assertThat(unchanged.getName()).isEqualTo("Linked Juice");
     }
 }

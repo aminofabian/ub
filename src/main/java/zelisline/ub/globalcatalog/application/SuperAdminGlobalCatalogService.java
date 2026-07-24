@@ -10,6 +10,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -164,9 +166,16 @@ public class SuperAdminGlobalCatalogService {
                             + "or clear provenance before purging.");
         }
 
-        CatalogRegionalCloneJdbc.PurgeStats stats = jdbcTemplate.execute(
-                (ConnectionCallback<CatalogRegionalCloneJdbc.PurgeStats>) connection ->
-                        CatalogRegionalCloneJdbc.purgeCatalogContent(connection, catalog.getId()));
+        CatalogRegionalCloneJdbc.PurgeStats stats;
+        try {
+            stats = jdbcTemplate.execute(
+                    (ConnectionCallback<CatalogRegionalCloneJdbc.PurgeStats>) connection ->
+                            CatalogRegionalCloneJdbc.purgeCatalogContent(connection, catalog.getId()));
+        } catch (DataIntegrityViolationException ex) {
+            throw translatePurgeIntegrityFailure(ex);
+        } catch (DataAccessException ex) {
+            throw translatePurgeDataAccessFailure(ex);
+        }
         if (stats == null) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Catalog purge failed");
         }
@@ -182,6 +191,54 @@ public class SuperAdminGlobalCatalogService {
                 stats.deletedSupplierLinkCount(),
                 stats.deletedSupplierTemplateCount()
         );
+    }
+
+    private static ResponseStatusException translatePurgeIntegrityFailure(DataIntegrityViolationException ex) {
+        String flat = flattenThrowableMessages(ex).toLowerCase();
+        if (flat.contains("fk_items_global_product_source")
+                || flat.contains("global_product_source_id")
+                || flat.contains("items")) {
+            return new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Cannot purge: shop item(s) still reference products in this catalog. "
+                            + "Tenant inventory is untouched; use archive-all instead.");
+        }
+        return new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Cannot purge catalog due to a database constraint: " + rootMessage(ex));
+    }
+
+    private static ResponseStatusException translatePurgeDataAccessFailure(DataAccessException ex) {
+        return new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Cannot purge catalog: " + rootMessage(ex));
+    }
+
+    private static String rootMessage(Throwable ex) {
+        Throwable cursor = ex;
+        while (cursor.getCause() != null && cursor.getCause() != cursor) {
+            cursor = cursor.getCause();
+        }
+        String message = cursor.getMessage();
+        if (message == null || message.isBlank()) {
+            return ex.getClass().getSimpleName();
+        }
+        return message.length() > 300 ? message.substring(0, 300) : message;
+    }
+
+    private static String flattenThrowableMessages(Throwable ex) {
+        StringBuilder out = new StringBuilder();
+        Throwable cursor = ex;
+        while (cursor != null) {
+            if (cursor.getMessage() != null) {
+                if (!out.isEmpty()) {
+                    out.append(' ');
+                }
+                out.append(cursor.getMessage());
+            }
+            cursor = cursor.getCause();
+        }
+        return out.toString();
     }
 
     @Transactional(readOnly = true)

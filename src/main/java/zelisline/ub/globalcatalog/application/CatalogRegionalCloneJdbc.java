@@ -3,6 +3,7 @@ package zelisline.ub.globalcatalog.application;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -152,71 +153,112 @@ public final class CatalogRegionalCloneJdbc {
      * Hard-deletes all content belonging to a catalog. Keeps the {@code global_catalogs} row.
      * Caller must ensure no {@code items.global_product_source_id} still references products
      * in this catalog (FK has no cascade).
+     *
+     * <p>Uses derived-table subqueries (MySQL-safe) and skips optional schema pieces
+     * ({@code global_product_images}, {@code variant_of_global_product_id}) when absent.
      */
     public static PurgeStats purgeCatalogContent(Connection connection, String catalogId) throws SQLException {
-        int deletedSupplierLinks;
-        int deletedImages;
-        int deletedPackItems;
-        int deletedPacks;
-        int deletedProducts;
-        int deletedCategories;
-        int deletedSupplierTemplates;
+        int deletedSupplierLinks = 0;
+        if (tableExists(connection, "global_product_supplier_links")) {
+            deletedSupplierLinks = executeUpdate(
+                    connection,
+                    """
+                            DELETE FROM global_product_supplier_links
+                            WHERE global_product_id IN (
+                              SELECT id FROM (
+                                SELECT id FROM global_products WHERE catalog_id = ?
+                              ) catalog_products
+                            )
+                            """,
+                    catalogId
+            );
+        }
 
-        try (PreparedStatement deleteSupplierLinks = connection.prepareStatement(
-                """
-                        DELETE FROM global_product_supplier_links
-                        WHERE global_product_id IN (
-                          SELECT id FROM global_products WHERE catalog_id = ?
-                        )
-                        """);
-             PreparedStatement deleteImages = connection.prepareStatement(
-                     """
-                             DELETE FROM global_product_images
-                             WHERE global_product_id IN (
-                               SELECT id FROM global_products WHERE catalog_id = ?
-                             )
-                             """);
-             PreparedStatement clearVariants = connection.prepareStatement(
-                     """
-                             UPDATE global_products
-                                SET variant_of_global_product_id = NULL
-                              WHERE catalog_id = ?
-                             """);
-             PreparedStatement deletePackItems = connection.prepareStatement(
-                     """
-                             DELETE FROM global_product_pack_items
-                             WHERE pack_id IN (
-                               SELECT id FROM global_product_packs WHERE catalog_id = ?
-                             )
-                             """);
-             PreparedStatement deletePacks = connection.prepareStatement(
-                     "DELETE FROM global_product_packs WHERE catalog_id = ?");
-             PreparedStatement deleteProducts = connection.prepareStatement(
-                     "DELETE FROM global_products WHERE catalog_id = ?");
-             PreparedStatement clearParents = connection.prepareStatement(
-                     "UPDATE global_categories SET parent_id = NULL WHERE catalog_id = ?");
-             PreparedStatement deleteCategories = connection.prepareStatement(
-                     "DELETE FROM global_categories WHERE catalog_id = ?");
-             PreparedStatement deleteSupplierTemplates = connection.prepareStatement(
-                     "DELETE FROM global_supplier_templates WHERE catalog_id = ?")) {
-            deleteSupplierLinks.setString(1, catalogId);
-            deletedSupplierLinks = deleteSupplierLinks.executeUpdate();
-            deleteImages.setString(1, catalogId);
-            deletedImages = deleteImages.executeUpdate();
-            clearVariants.setString(1, catalogId);
-            clearVariants.executeUpdate();
-            deletePackItems.setString(1, catalogId);
-            deletedPackItems = deletePackItems.executeUpdate();
-            deletePacks.setString(1, catalogId);
-            deletedPacks = deletePacks.executeUpdate();
-            deleteProducts.setString(1, catalogId);
-            deletedProducts = deleteProducts.executeUpdate();
-            clearParents.setString(1, catalogId);
-            clearParents.executeUpdate();
-            deleteCategories.setString(1, catalogId);
-            deletedCategories = deleteCategories.executeUpdate();
-            deleteSupplierTemplates.setString(1, catalogId);
-            deletedSupplierTemplates = deleteSupplierTemplates.executeUpdate();
+        int deletedImages = 0;
+        if (tableExists(connection, "global_product_images")) {
+            deletedImages = executeUpdate(
+                    connection,
+                    """
+                            DELETE FROM global_product_images
+                            WHERE global_product_id IN (
+                              SELECT id FROM (
+                                SELECT id FROM global_products WHERE catalog_id = ?
+                              ) catalog_products
+                            )
+                            """,
+                    catalogId
+            );
+        }
+
+        if (columnExists(connection, "global_products", "variant_of_global_product_id")) {
+            executeUpdate(
+                    connection,
+                    """
+                            UPDATE global_products
+                               SET variant_of_global_product_id = NULL
+                             WHERE catalog_id = ?
+                            """,
+                    catalogId
+            );
+        }
+
+        int deletedPackItems = 0;
+        if (tableExists(connection, "global_product_pack_items")) {
+            deletedPackItems = executeUpdate(
+                    connection,
+                    """
+                            DELETE FROM global_product_pack_items
+                            WHERE pack_id IN (
+                              SELECT id FROM (
+                                SELECT id FROM global_product_packs WHERE catalog_id = ?
+                              ) catalog_packs
+                            )
+                            """,
+                    catalogId
+            );
+            deletedPackItems += executeUpdate(
+                    connection,
+                    """
+                            DELETE FROM global_product_pack_items
+                            WHERE global_product_id IN (
+                              SELECT id FROM (
+                                SELECT id FROM global_products WHERE catalog_id = ?
+                              ) catalog_products
+                            )
+                            """,
+                    catalogId
+            );
+        }
+
+        int deletedPacks = tableExists(connection, "global_product_packs")
+                ? executeUpdate(
+                        connection,
+                        "DELETE FROM global_product_packs WHERE catalog_id = ?",
+                        catalogId
+                )
+                : 0;
+        int deletedProducts = executeUpdate(
+                connection,
+                "DELETE FROM global_products WHERE catalog_id = ?",
+                catalogId
+        );
+        executeUpdate(
+                connection,
+                "UPDATE global_categories SET parent_id = NULL WHERE catalog_id = ?",
+                catalogId
+        );
+        int deletedCategories = executeUpdate(
+                connection,
+                "DELETE FROM global_categories WHERE catalog_id = ?",
+                catalogId
+        );
+        int deletedSupplierTemplates = 0;
+        if (tableExists(connection, "global_supplier_templates")) {
+            deletedSupplierTemplates = executeUpdate(
+                    connection,
+                    "DELETE FROM global_supplier_templates WHERE catalog_id = ?",
+                    catalogId
+            );
         }
 
         return new PurgeStats(
@@ -228,6 +270,13 @@ public final class CatalogRegionalCloneJdbc {
                 deletedCategories,
                 deletedSupplierTemplates
         );
+    }
+
+    private static int executeUpdate(Connection connection, String sql, String catalogId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, catalogId);
+            return statement.executeUpdate();
+        }
     }
 
     private static Map<String, String> cloneCategories(
@@ -673,12 +722,35 @@ public final class CatalogRegionalCloneJdbc {
         }
     }
 
+    private static boolean tableExists(Connection connection, String table) throws SQLException {
+        DatabaseMetaData meta = connection.getMetaData();
+        try (ResultSet rs = meta.getTables(null, null, table, new String[] {"TABLE"})) {
+            if (rs.next()) {
+                return true;
+            }
+        }
+        try (ResultSet rs = meta.getTables(null, null, table.toLowerCase(), new String[] {"TABLE"})) {
+            if (rs.next()) {
+                return true;
+            }
+        }
+        try (ResultSet rs = meta.getTables(null, null, table.toUpperCase(), new String[] {"TABLE"})) {
+            return rs.next();
+        }
+    }
+
     private static boolean columnExists(
             Connection connection,
             String table,
             String column
     ) throws SQLException {
         try (ResultSet rs = connection.getMetaData().getColumns(null, null, table, column)) {
+            if (rs.next()) {
+                return true;
+            }
+        }
+        try (ResultSet rs = connection.getMetaData().getColumns(
+                null, null, table.toLowerCase(), column.toLowerCase())) {
             if (rs.next()) {
                 return true;
             }

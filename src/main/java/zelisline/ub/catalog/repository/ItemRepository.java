@@ -30,9 +30,8 @@ public interface ItemRepository extends JpaRepository<Item, String> {
      */
     @Query("""
             select count(i) from Item i
-             where i.globalProductSourceId in (
-               select gp.id from GlobalProduct gp where gp.catalogId = :catalogId
-             )
+             join GlobalProduct gp on gp.id = i.globalProductSourceId
+             where gp.catalogId = :catalogId
             """)
     long countReferencingCatalogProducts(@Param("catalogId") String catalogId);
 

@@ -14,8 +14,8 @@ import lombok.Setter;
 @Getter
 @Setter
 @Entity
-@Table(name = "customer_phones")
-public class CustomerPhone {
+@Table(name = "customer_phone_verifications")
+public class CustomerPhoneVerification {
 
     @Id
     @Column(name = "id", nullable = false, length = 36)
@@ -24,28 +24,50 @@ public class CustomerPhone {
     @Column(name = "business_id", nullable = false, length = 36)
     private String businessId;
 
-    @Column(name = "customer_id", nullable = false, length = 36)
-    private String customerId;
-
     @Column(name = "phone", nullable = false, length = 32)
     private String phone;
 
-    @Column(name = "is_primary", nullable = false)
-    private boolean primary;
+    @Column(name = "code_hash", nullable = false, length = 64)
+    private String codeHash;
+
+    @Column(name = "expires_at", nullable = false)
+    private Instant expiresAt;
+
+    @Column(name = "attempts", nullable = false)
+    private int attempts;
+
+    @Column(name = "max_attempts", nullable = false)
+    private int maxAttempts;
+
+    @Column(name = "consumed_at")
+    private Instant consumedAt;
 
     @Column(name = "verified_at")
     private Instant verifiedAt;
 
+    @Column(name = "registration_token_hash", length = 64)
+    private String registrationTokenHash;
+
+    @Column(name = "registration_token_expires_at")
+    private Instant registrationTokenExpiresAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
+
+    @Column(name = "last_sent_at", nullable = false)
+    private Instant lastSentAt;
 
     @PrePersist
     void onCreate() {
         if (id == null || id.isBlank()) {
             id = UUID.randomUUID().toString();
         }
+        Instant now = Instant.now();
         if (createdAt == null) {
-            createdAt = Instant.now();
+            createdAt = now;
+        }
+        if (lastSentAt == null) {
+            lastSentAt = now;
         }
     }
 }

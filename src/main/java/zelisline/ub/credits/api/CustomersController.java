@@ -34,12 +34,17 @@ import zelisline.ub.credits.api.dto.IssuePaymentClaimResponse;
 import zelisline.ub.credits.api.dto.OutstandingTabRowResponse;
 import zelisline.ub.credits.api.dto.PatchCustomerRequest;
 import zelisline.ub.credits.api.dto.RemindPaymentRequest;
+import zelisline.ub.credits.api.dto.SendCustomerPhoneVerificationRequest;
+import zelisline.ub.credits.api.dto.SendCustomerPhoneVerificationResponse;
 import zelisline.ub.credits.api.dto.TabPurchaseRowResponse;
 import zelisline.ub.credits.api.dto.TopUpWalletRequest;
+import zelisline.ub.credits.api.dto.VerifyCustomerPhoneVerificationRequest;
+import zelisline.ub.credits.api.dto.VerifyCustomerPhoneVerificationResponse;
 import zelisline.ub.credits.application.CashierTabClearanceAccess;
 import zelisline.ub.credits.application.CreditCustomerStatementService;
 import zelisline.ub.credits.application.CreditCustomerStatementService.CreditStatement;
 import zelisline.ub.credits.application.CustomerDirectoryService;
+import zelisline.ub.credits.application.CustomerPhoneVerificationService;
 import zelisline.ub.credits.application.CustomerTabPurchasesService;
 import zelisline.ub.credits.application.OverdueDebtReminderService;
 import zelisline.ub.credits.application.PublicPaymentClaimService;
@@ -63,6 +68,7 @@ public class CustomersController {
     private final PublicPaymentClaimService publicPaymentClaimService;
     private final CashierTabClearanceAccess cashierTabClearanceAccess;
     private final OverdueDebtReminderService overdueDebtReminderService;
+    private final CustomerPhoneVerificationService customerPhoneVerificationService;
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'credits.customers.read')")
@@ -97,6 +103,28 @@ public class CustomersController {
         CurrentTenantUser.require(request);
         return customerDirectoryService.listOutstandingTabs(
                 TenantRequestIds.resolveBusinessId(request), q);
+    }
+
+    @PostMapping("/phone-verifications")
+    @PreAuthorize("hasPermission(null, 'credits.customers.write')")
+    public SendCustomerPhoneVerificationResponse sendPhoneVerification(
+            @Valid @RequestBody SendCustomerPhoneVerificationRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return customerPhoneVerificationService.send(
+                TenantRequestIds.resolveBusinessId(request), body.phone());
+    }
+
+    @PostMapping("/phone-verifications/verify")
+    @PreAuthorize("hasPermission(null, 'credits.customers.write')")
+    public VerifyCustomerPhoneVerificationResponse verifyPhoneVerification(
+            @Valid @RequestBody VerifyCustomerPhoneVerificationRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return customerPhoneVerificationService.verify(
+                TenantRequestIds.resolveBusinessId(request), body.phone(), body.code());
     }
 
     @GetMapping("/{customerId}")

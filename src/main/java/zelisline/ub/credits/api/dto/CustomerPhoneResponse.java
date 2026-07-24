@@ -6,6 +6,7 @@ public record CustomerPhoneResponse(
         String id,
         String phone,
         boolean primary,
+        Instant verifiedAt,
         Instant createdAt
 ) {
 }

@@ -59,6 +59,7 @@ public class CustomerDirectoryService {
     private final CreditAccountRepository creditAccountRepository;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
+    private final CustomerPhoneVerificationService customerPhoneVerificationService;
 
     @Transactional(readOnly = true)
     public Page<CustomerResponse> list(
@@ -182,6 +183,18 @@ public class CustomerDirectoryService {
         for (CustomerPhoneDraft d : drafts) {
             assertPhoneAvailable(businessId, d.phone());
         }
+
+        Instant verifiedAt = null;
+        String token = request.phoneVerificationToken();
+        if (token != null && !token.isBlank()) {
+            CustomerPhoneDraft primary = drafts.stream()
+                    .filter(d -> Boolean.TRUE.equals(d.primary()))
+                    .findFirst()
+                    .orElse(drafts.getFirst());
+            customerPhoneVerificationService.consumeRegistrationToken(businessId, token, primary.phone());
+            verifiedAt = Instant.now();
+        }
+
         Customer customer = new Customer();
         customer.setBusinessId(businessId);
         customer.setName(request.name().trim());
@@ -189,7 +202,7 @@ public class CustomerDirectoryService {
         customer.setNotes(blankToNull(request.notes()));
         customerRepository.save(customer);
 
-        persistPhonesFromDrafts(businessId, customer.getId(), drafts);
+        persistPhonesFromDrafts(businessId, customer.getId(), drafts, verifiedAt);
         openCreditAccount(businessId, customer.getId(), request.creditLimit());
         publishCustomerEvent(businessId, customer, actorUserId, AuditEventTypes.CUSTOMER_CREATED, null);
         if (request.creditLimit() != null && request.creditLimit().signum() >= 0) {
@@ -373,7 +386,8 @@ public class CustomerDirectoryService {
 
     private CustomerResponse assembleResponse(Customer c, List<CustomerPhone> phones, CreditAccount acc) {
         List<CustomerPhoneResponse> phoneResponses = Optional.ofNullable(phones).orElse(List.of()).stream()
-                .map(p -> new CustomerPhoneResponse(p.getId(), p.getPhone(), p.isPrimary(), p.getCreatedAt()))
+                .map(p -> new CustomerPhoneResponse(
+                        p.getId(), p.getPhone(), p.isPrimary(), p.getVerifiedAt(), p.getCreatedAt()))
                 .toList();
         return new CustomerResponse(
                 c.getId(),
@@ -409,7 +423,12 @@ public class CustomerDirectoryService {
         creditAccountRepository.save(row);
     }
 
-    private void persistPhonesFromDrafts(String businessId, String customerId, List<CustomerPhoneDraft> drafts) {
+    private void persistPhonesFromDrafts(
+            String businessId,
+            String customerId,
+            List<CustomerPhoneDraft> drafts,
+            Instant verifiedAt
+    ) {
         for (CustomerPhoneDraft d : drafts) {
             String normalized = normalizedPhoneOrThrow(d.phone());
             CustomerPhone row = new CustomerPhone();
@@ -417,6 +436,9 @@ public class CustomerDirectoryService {
             row.setCustomerId(customerId);
             row.setPhone(normalized);
             row.setPrimary(Boolean.TRUE.equals(d.primary()));
+            if (Boolean.TRUE.equals(d.primary()) && verifiedAt != null) {
+                row.setVerifiedAt(verifiedAt);
+            }
             customerPhoneRepository.save(row);
         }
         ensureSinglePrimary(customerId);

@@ -13,6 +13,7 @@ public record CreateCustomerRequest(
         @Size(max = 255) String email,
         @Size(max = 10_000) String notes,
         BigDecimal creditLimit,
-        @NotEmpty @Valid List<CustomerPhoneDraft> phones
+        @NotEmpty @Valid List<CustomerPhoneDraft> phones,
+        @Size(max = 128) String phoneVerificationToken
 ) {
 }

@@ -29,7 +29,7 @@ public class CustomerPhoneVerificationService {
     static final Duration RESEND_COOLDOWN = Duration.ofSeconds(60);
     static final Duration REGISTRATION_TOKEN_TTL = Duration.ofMinutes(15);
     static final int MAX_ATTEMPTS = 5;
-    static final int OTP_DIGITS = 6;
+    static final int OTP_DIGITS = 4;
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
@@ -109,7 +109,7 @@ public class CustomerPhoneVerificationService {
         String phone = normalizeOrThrow(rawPhone);
         String code = rawCode == null ? "" : rawCode.trim();
         if (!code.matches("\\d{" + OTP_DIGITS + "}")) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter the 6-digit verification code");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter the 4-digit verification code");
         }
 
         CustomerPhoneVerification challenge = verificationRepository

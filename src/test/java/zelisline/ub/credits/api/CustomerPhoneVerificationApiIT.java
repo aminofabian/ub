@@ -65,7 +65,7 @@ class CustomerPhoneVerificationApiIT {
     private static final String P_READ = "11111111-cccc-dddd-eeee-000000000071";
     private static final String P_WRITE = "11111111-cccc-dddd-eeee-000000000072";
     private static final String ROLE_OWNER = "22222222-cccc-dddd-eeee-000000000001";
-    private static final Pattern OTP_IN_MESSAGE = Pattern.compile("\\b(\\d{6})\\b");
+    private static final Pattern OTP_IN_MESSAGE = Pattern.compile("\\b(\\d{4})\\b");
 
     @Autowired
     private MockMvc mockMvc;
@@ -194,7 +194,7 @@ class CustomerPhoneVerificationApiIT {
 
         mockMvc.perform(post("/api/v1/customers/phone-verifications/verify")
                         .contentType(APPLICATION_JSON)
-                        .content("{\"phone\":\"0711999888\",\"code\":\"000000\"}")
+                        .content("{\"phone\":\"0711999888\",\"code\":\"0000\"}")
                         .header("X-Tenant-Id", TENANT)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
@@ -270,7 +270,7 @@ class CustomerPhoneVerificationApiIT {
         for (int i = 0; i < 5; i++) {
             mockMvc.perform(post("/api/v1/customers/phone-verifications/verify")
                             .contentType(APPLICATION_JSON)
-                            .content("{\"phone\":\"0700555666\",\"code\":\"111111\"}")
+                            .content("{\"phone\":\"0700555666\",\"code\":\"1111\"}")
                             .header("X-Tenant-Id", TENANT)
                             .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                             .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))

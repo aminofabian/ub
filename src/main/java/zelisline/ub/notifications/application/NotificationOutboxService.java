@@ -120,10 +120,18 @@ public class NotificationOutboxService {
     }
 
     @Transactional
-    public void enqueueAbandonedCartDigest(String businessId, String reportDay, String cartCount) {
+    public void enqueueAbandonedCartDigest(
+            String businessId,
+            String reportDay,
+            String cartCount,
+            String itemsJson
+    ) {
         var payload = new java.util.LinkedHashMap<String, String>();
         payload.put("reportDay", reportDay);
         payload.put("cartCount", cartCount);
+        if (itemsJson != null && !itemsJson.isBlank()) {
+            payload.put("itemsJson", itemsJson);
+        }
         enqueue(
                 businessId,
                 NotificationEventTypes.ABANDONED_CART_DIGEST,

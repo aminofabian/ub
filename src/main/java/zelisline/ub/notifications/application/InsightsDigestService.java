@@ -1,21 +1,30 @@
 package zelisline.ub.notifications.application;
 
+import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.domain.ItemImage;
+import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.reporting.repository.MvSalesDailyRepository;
 import zelisline.ub.storefront.repository.WebCartRepository;
@@ -29,13 +38,17 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
 @Slf4j
 public class InsightsDigestService {
 
+    private static final int ABANDONED_ITEM_PREVIEW_LIMIT = 8;
+
     private final BusinessRepository businessRepository;
     private final WebCartRepository webCartRepository;
     private final WebOrderRepository webOrderRepository;
     private final MvSalesDailyRepository mvSalesDailyRepository;
     private final ItemRepository itemRepository;
+    private final ItemImageRepository itemImageRepository;
     private final ShopperRecipientResolver shopperRecipientResolver;
     private final NotificationOutboxService notificationOutboxService;
+    private final ObjectMapper objectMapper;
 
     @Value("${app.notifications.insights.zone:Africa/Nairobi}")
     private String zoneId;
@@ -55,10 +68,12 @@ public class InsightsDigestService {
                 if (count <= 0) {
                     continue;
                 }
+                String itemsJson = buildAbandonedItemsJson(business.getId(), staleBefore);
                 notificationOutboxService.enqueueAbandonedCartDigest(
                         business.getId(),
                         reportDay.toString(),
-                        String.valueOf(count));
+                        String.valueOf(count),
+                        itemsJson);
             } catch (RuntimeException ex) {
                 log.warn("abandoned cart digest enqueue failed businessId={}", business.getId(), ex);
             }
@@ -142,6 +157,81 @@ public class InsightsDigestService {
                 log.warn("win-back enqueue failed businessId={}", business.getId(), ex);
             }
         }
+    }
+
+    private String buildAbandonedItemsJson(String businessId, Instant staleBefore) {
+        List<WebCartRepository.AbandonedItemRow> rows = webCartRepository.findTopAbandonedItems(
+                businessId, staleBefore, ABANDONED_ITEM_PREVIEW_LIMIT);
+        if (rows.isEmpty()) {
+            return "[]";
+        }
+        List<String> itemIds = rows.stream().map(WebCartRepository.AbandonedItemRow::getItemId).toList();
+        Map<String, Item> itemsById = itemRepository
+                .findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)
+                .stream()
+                .collect(Collectors.toMap(Item::getId, i -> i));
+        Map<String, String> thumbs = firstGalleryUrlByItemIds(itemIds);
+
+        List<Map<String, Object>> previews = new ArrayList<>();
+        for (WebCartRepository.AbandonedItemRow row : rows) {
+            Item item = itemsById.get(row.getItemId());
+            if (item == null) {
+                continue;
+            }
+            Map<String, Object> preview = new LinkedHashMap<>();
+            preview.put("itemId", item.getId());
+            preview.put("name", item.getName() != null ? item.getName() : item.getId());
+            if (item.getVariantName() != null && !item.getVariantName().isBlank()) {
+                preview.put("variantName", item.getVariantName().trim());
+            }
+            String imageUrl = thumbs.get(item.getId());
+            if (imageUrl != null) {
+                preview.put("imageUrl", imageUrl);
+            }
+            BigDecimal qty = row.getTotalQty() != null ? row.getTotalQty() : BigDecimal.ZERO;
+            preview.put("quantity", qty.stripTrailingZeros().toPlainString());
+            preview.put("cartCount", row.getCartCount() != null ? row.getCartCount().longValue() : 0L);
+            previews.add(preview);
+        }
+        try {
+            return objectMapper.writeValueAsString(previews);
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to serialize abandoned cart item previews", e);
+            return "[]";
+        }
+    }
+
+    private Map<String, String> firstGalleryUrlByItemIds(List<String> itemIds) {
+        if (itemIds.isEmpty()) {
+            return Map.of();
+        }
+        Sort galleryOrder = Sort.by(
+                Sort.Order.asc("itemId"), Sort.Order.asc("sortOrder"), Sort.Order.asc("id"));
+        List<ItemImage> rows = itemImageRepository.findByItemIdIn(itemIds, galleryOrder);
+        Map<String, String> out = new LinkedHashMap<>();
+        for (ItemImage img : rows) {
+            String url = resolveImagePublicUrl(img);
+            if (url == null) {
+                continue;
+            }
+            out.putIfAbsent(img.getItemId(), url);
+        }
+        return out;
+    }
+
+    private static String resolveImagePublicUrl(ItemImage img) {
+        String secure = img.getSecureUrl();
+        if (secure != null && !secure.isBlank()) {
+            return secure.trim();
+        }
+        String key = img.getS3Key();
+        if (key != null) {
+            String k = key.trim();
+            if (k.startsWith("http://") || k.startsWith("https://")) {
+                return k;
+            }
+        }
+        return null;
     }
 
     private List<Business> activeBusinesses() {

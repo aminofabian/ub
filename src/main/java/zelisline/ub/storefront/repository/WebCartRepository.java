@@ -1,6 +1,8 @@
 package zelisline.ub.storefront.repository;
 
+import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -25,4 +27,33 @@ public interface WebCartRepository extends JpaRepository<WebCart, String> {
     long countStaleCartsWithItems(
             @Param("businessId") String businessId,
             @Param("staleBefore") Instant staleBefore);
+
+    /**
+     * Top items sitting in stale carts — ranked by how many abandoned carts
+     * contain them, then by total quantity.
+     */
+    @Query(value = """
+            SELECT l.item_id AS itemId,
+                   COALESCE(SUM(l.quantity), 0) AS totalQty,
+                   COUNT(DISTINCT l.cart_id) AS cartCount
+              FROM web_cart_lines l
+              JOIN web_carts c ON c.id = l.cart_id
+             WHERE c.business_id = :businessId
+               AND c.updated_at < :staleBefore
+             GROUP BY l.item_id
+             ORDER BY cartCount DESC, totalQty DESC
+             LIMIT :limit
+            """, nativeQuery = true)
+    List<AbandonedItemRow> findTopAbandonedItems(
+            @Param("businessId") String businessId,
+            @Param("staleBefore") Instant staleBefore,
+            @Param("limit") int limit);
+
+    interface AbandonedItemRow {
+        String getItemId();
+
+        BigDecimal getTotalQty();
+
+        Number getCartCount();
+    }
 }

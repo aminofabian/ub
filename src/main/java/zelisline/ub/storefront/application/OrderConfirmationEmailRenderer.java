@@ -364,11 +364,11 @@ public class OrderConfirmationEmailRenderer {
 
     // ── branding / name helpers ──────────────────────────────────────────
 
-    static String resolveStoreName(TenantBrandingDto branding, String fallbackBusinessName) {
+    public static String resolveStoreName(TenantBrandingDto branding, String fallbackBusinessName) {
         return resolveStoreName(branding, fallbackBusinessName, null, null);
     }
 
-    static String resolveStoreName(
+    public static String resolveStoreName(
             TenantBrandingDto branding, String fallbackBusinessName, String slug) {
         return resolveStoreName(branding, fallbackBusinessName, slug, null);
     }
@@ -378,7 +378,7 @@ public class OrderConfirmationEmailRenderer {
      * Applies {@code [Area]} / {@code [Country]} / {@code [Name]} placeholders when present
      * (e.g. SEO title mistakenly saved as display name).
      */
-    static String resolveStoreName(
+    public static String resolveStoreName(
             TenantBrandingDto branding,
             String fallbackBusinessName,
             String slug,
@@ -410,7 +410,7 @@ public class OrderConfirmationEmailRenderer {
      * Short brand for headers / subjects — text before {@code |} when the name looks
      * like an SEO title ({@code Palmart | Groceries…}).
      */
-    static String brandWordmark(String storeName) {
+    public static String brandWordmark(String storeName) {
         if (storeName == null || storeName.isBlank()) {
             return "Your store";
         }
@@ -428,7 +428,7 @@ public class OrderConfirmationEmailRenderer {
      * Optional subtitle under the wordmark — prefers text after {@code |}, else
      * a quiet “in {location}” line.
      */
-    static String brandTagline(String storeName, String location) {
+    public static String brandTagline(String storeName, String location) {
         if (storeName != null) {
             int pipe = storeName.indexOf('|');
             if (pipe >= 0 && pipe < storeName.length() - 1) {
@@ -531,7 +531,7 @@ public class OrderConfirmationEmailRenderer {
     }
 
     /** Accept #RGB / #RRGGBB; otherwise fall back. */
-    static String sanitizeHex(String raw, String fallback) {
+    public static String sanitizeHex(String raw, String fallback) {
         if (raw == null || raw.isBlank()) {
             return fallback;
         }
@@ -562,7 +562,7 @@ public class OrderConfirmationEmailRenderer {
      * Format a monetary amount as KES with comma grouping and 2 decimal places.
      * E.g. "KES 1,250.00"
      */
-    static String formatKes(BigDecimal amount) {
+    public static String formatKes(BigDecimal amount) {
         if (amount == null) {
             return "KES 0.00";
         }
@@ -576,7 +576,7 @@ public class OrderConfirmationEmailRenderer {
     /**
      * Format a quantity — strip trailing zeros but keep at least one decimal if needed.
      */
-    static String formatQty(BigDecimal qty) {
+    public static String formatQty(BigDecimal qty) {
         if (qty == null) {
             return "0";
         }
@@ -584,7 +584,7 @@ public class OrderConfirmationEmailRenderer {
     }
 
     /** Minimal HTML entity escaping. */
-    static String escape(String s) {
+    public static String escape(String s) {
         if (s == null) {
             return "";
         }

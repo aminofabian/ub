@@ -58,6 +58,8 @@ public final class AuditEventTypes {
     public static final String SHIFT_SUSPENDED = "shift.suspended";
     public static final String SHIFT_RESUMED = "shift.resumed";
     public static final String SHIFT_CLOSED = "shift.closed";
+    /** Owner/admin corrected opening float on an open shift. */
+    public static final String SHIFT_OPENING_UPDATED = "shift.opening_updated";
     public static final String CASH_PAID_IN = "cash.paid_in";
     public static final String CASH_PAID_OUT = "cash.paid_out";
     public static final String CASH_DROP = "cash.drop";

@@ -41,6 +41,7 @@ import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.DenominationEntry;
 import zelisline.ub.sales.api.dto.DenominationResponse;
 import zelisline.ub.sales.api.dto.LastClosedShiftFloatResponse;
+import zelisline.ub.sales.api.dto.PatchUpdateShiftOpeningRequest;
 import zelisline.ub.sales.api.dto.PostCloseShiftRequest;
 import zelisline.ub.sales.api.dto.PostOpenShiftRequest;
 import zelisline.ub.sales.api.dto.ShiftAuditEntryResponse;
@@ -284,6 +285,99 @@ public class ShiftService {
                 .toList();
 
         return toDto(s, branchName, s.getOpenedBy(), openingDenoms, closingDenoms);
+    }
+
+    // ========================================================================
+    // UPDATE OPENING FLOAT (admin / owner)
+    // ========================================================================
+
+    /**
+     * Corrects opening cash (and optional denominations) on an open shift.
+     * Adjusts {@code expectedClosingCash} by the same delta so in-shift sales/drawouts stay valid.
+     */
+    @Transactional
+    public ShiftResponse updateOpening(
+            String businessId,
+            String shiftId,
+            PatchUpdateShiftOpeningRequest req,
+            String userId
+    ) {
+        Shift s = shiftRepository.findByIdAndBusinessIdForUpdate(shiftId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shift not found"));
+        if (!SalesConstants.SHIFT_STATUS_OPEN.equals(s.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Only open shifts can have their opening float edited.");
+        }
+
+        BigDecimal oldOpening = s.getOpeningCash().setScale(2, RoundingMode.HALF_UP);
+        BigDecimal oldExpected = s.getExpectedClosingCash().setScale(2, RoundingMode.HALF_UP);
+
+        List<DenominationResponse> openingDenoms;
+        BigDecimal newOpening;
+        if (req.denominations() != null) {
+            // Present (even empty) means replace opening denomination rows.
+            openingDenoms = saveDenominations(
+                    s.getId(), SalesConstants.DENOM_COUNT_TYPE_OPENING, req.denominations());
+            newOpening = openingDenoms.stream()
+                    .map(DenominationResponse::total)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add)
+                    .setScale(2, RoundingMode.HALF_UP);
+        } else if (req.openingCash() != null) {
+            newOpening = req.openingCash().setScale(2, RoundingMode.HALF_UP);
+            openingDenoms = shiftDenominationRepository
+                    .findByShiftIdAndCountTypeOrderByDenominationDesc(
+                            s.getId(), SalesConstants.DENOM_COUNT_TYPE_OPENING)
+                    .stream()
+                    .map(ShiftService::toDenomDto)
+                    .toList();
+        } else {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Provide denominations or openingCash.");
+        }
+
+        if (newOpening.compareTo(BigDecimal.ZERO) < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Opening cash cannot be negative.");
+        }
+
+        BigDecimal delta = newOpening.subtract(oldOpening);
+        s.setOpeningCash(newOpening);
+        s.setExpectedClosingCash(oldExpected.add(delta).setScale(2, RoundingMode.HALF_UP));
+        if (req.notes() != null) {
+            s.setOpeningNotes(blankToNull(req.notes()));
+        }
+        shiftRepository.save(s);
+
+        String meta = String.format(
+                "{\"oldOpening\":\"%s\",\"newOpening\":\"%s\",\"delta\":\"%s\",\"reason\":\"%s\"}",
+                oldOpening, newOpening, delta, escapeJson(req.reason().trim()));
+        recordAudit(s.getId(), SalesConstants.AUDIT_SHIFT_OPENING_UPDATED, userId, meta, null);
+
+        auditEventPublisher.publish(auditEventBuilder.builder(
+                        AuditEventCategory.CASH_DRAWER,
+                        AuditEventTypes.SHIFT_OPENING_UPDATED,
+                        AuditEventSeverity.WARN)
+                .businessId(businessId)
+                .branchId(s.getBranchId())
+                .actor(userId, AuditEventActorType.USER)
+                .target("shift", s.getId())
+                .targetLabel("Shift " + s.getId().substring(0, 8))
+                .shiftId(s.getId())
+                .oldState(map(
+                        "openingCash", oldOpening.toPlainString(),
+                        "expectedClosingCash", oldExpected.toPlainString()))
+                .newState(map(
+                        "openingCash", newOpening.toPlainString(),
+                        "expectedClosingCash", s.getExpectedClosingCash().toPlainString(),
+                        "reason", req.reason().trim()))
+                .source("dashboard")
+                .build());
+
+        String branchName = getBranchName(businessId, s.getBranchId());
+        return toDto(s, branchName, userId, openingDenoms, null);
+    }
+
+    private static String escapeJson(String raw) {
+        return raw.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     // ========================================================================

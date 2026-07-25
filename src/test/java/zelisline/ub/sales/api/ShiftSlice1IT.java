@@ -3,6 +3,7 @@ package zelisline.ub.sales.api;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -57,7 +58,9 @@ class ShiftSlice1IT {
     private static final String P_SO = "11111111-0000-0000-0000-000000000064";
     private static final String P_SC = "11111111-0000-0000-0000-000000000065";
     private static final String P_SR = "11111111-0000-0000-0000-000000000066";
+    private static final String P_SU = "11111111-0000-0000-0000-000000000092";
     private static final String ROLE_POS = "22222222-0000-0000-0000-0000000000aa";
+    private static final String ROLE_ADMIN = "22222222-0000-0000-0000-0000000000ab";
 
     @Autowired
     private MockMvc mockMvc;
@@ -89,6 +92,7 @@ class ShiftSlice1IT {
     private DomainMappingRepository domainMappingRepository;
 
     private User cashier;
+    private User admin;
     private String branchId;
 
     @BeforeEach
@@ -119,6 +123,7 @@ class ShiftSlice1IT {
         permissionRepository.save(perm(P_SO, "shifts.open", "o"));
         permissionRepository.save(perm(P_SC, "shifts.close", "c"));
         permissionRepository.save(perm(P_SR, "shifts.read", "r"));
+        permissionRepository.save(perm(P_SU, "shifts.update", "u"));
 
         Role r = new Role();
         r.setId(ROLE_POS);
@@ -133,6 +138,19 @@ class ShiftSlice1IT {
             rolePermissionRepository.save(rp);
         }
 
+        Role adminRole = new Role();
+        adminRole.setId(ROLE_ADMIN);
+        adminRole.setBusinessId(null);
+        adminRole.setRoleKey("admin");
+        adminRole.setName("Admin Test");
+        adminRole.setSystem(true);
+        roleRepository.save(adminRole);
+        for (String pid : List.of(P_SO, P_SC, P_SR, P_SU)) {
+            RolePermission rp = new RolePermission();
+            rp.setId(new RolePermission.Id(ROLE_ADMIN, pid));
+            rolePermissionRepository.save(rp);
+        }
+
         cashier = new User();
         cashier.setBusinessId(TENANT);
         cashier.setEmail("cashier-shift@test");
@@ -142,6 +160,15 @@ class ShiftSlice1IT {
         cashier.setStatus(UserStatus.ACTIVE);
         cashier.setPasswordHash("$2a$10$stubstubstubstubstubstubstubstubst");
         userRepository.save(cashier);
+
+        admin = new User();
+        admin.setBusinessId(TENANT);
+        admin.setEmail("admin-shift@test");
+        admin.setName("Admin");
+        admin.setRoleId(ROLE_ADMIN);
+        admin.setStatus(UserStatus.ACTIVE);
+        admin.setPasswordHash("$2a$10$stubstubstubstubstubstubstubstubst");
+        userRepository.save(admin);
     }
 
     @Test
@@ -193,6 +220,57 @@ class ShiftSlice1IT {
             }
         }
         assertThat(netCash).isEqualByComparingTo(new BigDecimal("-4.50"));
+    }
+
+    @Test
+    void updateOpening_adjustsExpectedByDelta() throws Exception {
+        mockMvc.perform(post("/api/v1/shifts/open")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"branchId\":\"%s\",\"openingCash\":100.00}".formatted(branchId))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isCreated());
+
+        MvcResult cur = mockMvc.perform(get("/api/v1/shifts/current")
+                        .param("branchId", branchId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isOk())
+                .andReturn();
+        String shiftId = objectMapper.readTree(cur.getResponse().getContentAsString()).get("id").asText();
+
+        // Simulate a cash sale bumping expected closing to 150.
+        Shift open = shiftRepository.findById(shiftId).orElseThrow();
+        open.setExpectedClosingCash(new BigDecimal("150.00"));
+        shiftRepository.save(open);
+
+        MvcResult updated = mockMvc.perform(patch("/api/v1/shifts/%s/opening".formatted(shiftId))
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"openingCash":120.00,"reason":"Miscounted opening notes"}
+                                """)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, admin.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ADMIN))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode json = objectMapper.readTree(updated.getResponse().getContentAsString());
+        assertThat(json.get("openingCash").decimalValue()).isEqualByComparingTo("120.00");
+        // expected was 150; delta +20 → 170
+        assertThat(json.get("expectedClosingCash").decimalValue()).isEqualByComparingTo("170.00");
+
+        mockMvc.perform(patch("/api/v1/shifts/%s/opening".formatted(shiftId))
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"openingCash":130.00,"reason":"Cashier cannot edit"}
+                                """)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isForbidden());
     }
 
     @Test

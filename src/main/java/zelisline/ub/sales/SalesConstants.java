@@ -60,6 +60,7 @@ public final class SalesConstants {
     public static final String AUDIT_SHIFT_OPENED = "SHIFT_OPENED";
     public static final String AUDIT_SHIFT_SUSPENDED = "SHIFT_SUSPENDED";
     public static final String AUDIT_SHIFT_RESUMED = "SHIFT_RESUMED";
+    public static final String AUDIT_SHIFT_OPENING_UPDATED = "SHIFT_OPENING_UPDATED";
     public static final String AUDIT_PAID_IN = "PAID_IN";
     public static final String AUDIT_PAID_OUT = "PAID_OUT";
     public static final String AUDIT_CASH_DROP = "CASH_DROP";

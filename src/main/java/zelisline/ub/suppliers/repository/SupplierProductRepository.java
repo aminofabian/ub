@@ -27,8 +27,8 @@ public interface SupplierProductRepository extends JpaRepository<SupplierProduct
               AND sp.active = TRUE
               AND i.deletedAt IS NULL
               AND i.active = TRUE
-              AND (:supplierId IS NULL OR :supplierId = '' OR sp.supplierId = :supplierId)
-              AND (:q IS NULL OR :q = ''
+              AND (:supplierId = '' OR sp.supplierId = :supplierId)
+              AND (:q = ''
                    OR LOWER(i.name) LIKE LOWER(CONCAT('%', :q, '%'))
                    OR LOWER(COALESCE(i.variantName, '')) LIKE LOWER(CONCAT('%', :q, '%'))
                    OR LOWER(COALESCE(i.barcode, '')) LIKE LOWER(CONCAT('%', :q, '%'))

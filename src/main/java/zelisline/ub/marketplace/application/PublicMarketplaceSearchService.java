@@ -93,14 +93,17 @@ public class PublicMarketplaceSearchService {
     @Transactional(readOnly = true)
     public Page<PublicMarketplaceProductSearchRow> searchProducts(
             String q, String location, String supplierId, Pageable pageable) {
+        // Hibernate binds nulls poorly in OR IS NULL checks — use "" as "no filter".
         String query = blankToNull(q);
+        String queryParam = query != null ? query : "";
         String locationFilter = blankToNull(location);
         String supplierFilter = blankToNull(supplierId);
+        String supplierParam = supplierFilter != null ? supplierFilter : "";
         Pageable fetchPage = locationFilter != null
                 ? Pageable.ofSize(Math.max(pageable.getPageSize() * 8, 120)).withPage(0)
                 : pageable;
         Page<SupplierProduct> page = supplierProductRepository.searchPublicDirectory(
-                query, supplierFilter, fetchPage);
+                queryParam, supplierParam, fetchPage);
         List<SupplierProduct> links = page.getContent();
         Map<String, Item> itemsById = loadItems(links.stream().map(SupplierProduct::getItemId).toList());
         Map<String, Supplier> suppliersById = loadSuppliers(

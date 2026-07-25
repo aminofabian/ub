@@ -69,6 +69,7 @@ import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.suppliers.domain.SupplierProduct;
 import zelisline.ub.suppliers.repository.SupplierProductRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
+import zelisline.ub.suppliers.application.SupplierPortalNotifyService;
 import zelisline.ub.tenancy.repository.BranchRepository;
 
 @Service
@@ -100,6 +101,7 @@ public class PathBPurchaseService {
     private final SupplyBatchRepository supplyBatchRepository;
     private final SupplyBatchExpenseRepository supplyBatchExpenseRepository;
     private final SaleItemRepository saleItemRepository;
+    private final SupplierPortalNotifyService supplierPortalNotifyService;
 
     public static String postRoute(String sessionId) {
         return "POST /api/v1/purchasing/path-b/sessions/%s/post".formatted(sessionId);
@@ -435,6 +437,12 @@ public class PathBPurchaseService {
         String sessionStatus = pendingRemaining == 0 ? PurchasingConstants.SESSION_POSTED : PurchasingConstants.SESSION_DRAFT;
         session.setStatus(sessionStatus);
         sessionRepository.save(session);
+
+        supplierPortalNotifyService.notifySupplyPostedAfterCommit(
+                businessId,
+                session.getSupplierId(),
+                invoiceNumber,
+                ap2);
 
         return new PostPathBResponse(session.getId(), sessionStatus, inv.getId(), invoiceNumber, jeId, ap2, postedLines.size(), sb.getId());
     }

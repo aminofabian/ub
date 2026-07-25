@@ -53,6 +53,8 @@ public interface SupplierRepository extends JpaRepository<Supplier, String> {
 
     Optional<Supplier> findByIdAndDeletedAtIsNull(String id);
 
+    List<Supplier> findByMarketplaceSupplierIdAndDeletedAtIsNull(String marketplaceSupplierId);
+
     /**
      * Public marketplace directory: active tenant suppliers that have at least one
      * active product link. Cross-tenant by design.

@@ -13,6 +13,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.application.BusinessCreditMessagingSettingsService;
+import zelisline.ub.marketplace.domain.MarketplaceSupplier;
+import zelisline.ub.marketplace.repository.MarketplaceSupplierRepository;
 import zelisline.ub.messaging.application.CustomerMessageDispatcher;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
@@ -39,12 +41,16 @@ public class SupplierPortalNotifyService {
     private final SupplierContactRepository supplierContactRepository;
     private final BusinessRepository businessRepository;
     private final DomainMappingRepository domainMappingRepository;
+    private final MarketplaceSupplierRepository marketplaceSupplierRepository;
     private final SupplierPurchaseHistoryService purchaseHistoryService;
     private final BusinessCreditMessagingSettingsService messagingSettingsService;
     private final CustomerMessageDispatcher customerMessageDispatcher;
 
     @Value("${app.public.frontend-base-url:http://localhost:3000}")
     private String frontendBaseUrl;
+
+    @Value("${app.tenancy.platform-hosts:kiosk.ke}")
+    private List<String> platformHosts;
 
     /**
      * Schedule a portal SMS after the current transaction commits (never blocks posting).
@@ -120,8 +126,12 @@ public class SupplierPortalNotifyService {
 
             String body = shop + ": supply " + inv + " (" + total + ") received. "
                     + "Amount owed: " + owedStr + ". "
-                    + "View history & note issues: " + portalUrl
-                    + " — Payment within 48hrs.";
+                    + "View history & note issues: " + portalUrl;
+            String globalUrl = resolveGlobalHubUrl(supplier);
+            if (globalUrl != null) {
+                body = body + " · All shops: " + globalUrl;
+            }
+            body = body + " — Payment within 48hrs.";
 
             var delivery = customerMessageDispatcher.deliverSmsOnly(messaging, phoneDigits, body);
             log.info(
@@ -179,6 +189,57 @@ public class SupplierPortalNotifyService {
             base = base.substring(0, base.length() - 1);
         }
         return base + "/s/" + slug;
+    }
+
+    private String resolveGlobalHubUrl(Supplier supplier) {
+        String mid = supplier.getMarketplaceSupplierId();
+        if (mid == null || mid.isBlank()) {
+            return null;
+        }
+        MarketplaceSupplier marketplace = marketplaceSupplierRepository.findById(mid).orElse(null);
+        if (marketplace == null
+                || marketplace.getUsername() == null
+                || marketplace.getUsername().isBlank()) {
+            return null;
+        }
+        String apex = resolvePlatformApexHost();
+        boolean local = apex.endsWith(".localhost") || apex.startsWith("localhost");
+        String scheme = local ? "http://" : "https://";
+        return scheme + apex + "/s/" + marketplace.getUsername().trim();
+    }
+
+    private String resolvePlatformApexHost() {
+        if (platformHosts != null) {
+            for (String raw : platformHosts) {
+                if (raw == null || raw.isBlank()) {
+                    continue;
+                }
+                String h = raw.trim().toLowerCase();
+                if (h.startsWith("www.")) {
+                    h = h.substring(4);
+                }
+                if (h.equals("kiosk.ke") || h.equals("palmart.co.ke")) {
+                    return h;
+                }
+            }
+            for (String raw : platformHosts) {
+                if (raw == null || raw.isBlank()) {
+                    continue;
+                }
+                String h = raw.trim().toLowerCase();
+                if (h.startsWith("www.")) {
+                    h = h.substring(4);
+                }
+                // Skip API-only hosts (e.g. kiosk.zelisline.com).
+                if (h.contains("zelisline") || h.startsWith("api.")) {
+                    continue;
+                }
+                if (!h.isBlank()) {
+                    return h;
+                }
+            }
+        }
+        return "kiosk.ke";
     }
 
     private static String money(BigDecimal n) {

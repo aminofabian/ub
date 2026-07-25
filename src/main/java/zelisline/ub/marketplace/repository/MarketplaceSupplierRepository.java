@@ -23,4 +23,8 @@ public interface MarketplaceSupplierRepository extends JpaRepository<Marketplace
             Pageable pageable);
 
     Optional<MarketplaceSupplier> findByIdAndStatus(String id, String status);
+
+    Optional<MarketplaceSupplier> findByUsernameIgnoreCase(String username);
+
+    boolean existsByUsernameIgnoreCase(String username);
 }

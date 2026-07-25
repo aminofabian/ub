@@ -27,6 +27,10 @@ public class MarketplaceSupplier {
     @Column(name = "name", nullable = false, length = 255)
     private String name;
 
+    /** Unique public vanity handle for kiosk.ke/s/{username}. */
+    @Column(name = "username", length = 64, unique = true)
+    private String username;
+
     @Column(name = "description", columnDefinition = "TEXT")
     private String description;
 

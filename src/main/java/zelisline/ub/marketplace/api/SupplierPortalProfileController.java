@@ -1,16 +1,22 @@
 package zelisline.ub.marketplace.api;
 
+import java.util.List;
+
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.marketplace.api.dto.ClaimSupplierUsernameRequest;
+import zelisline.ub.marketplace.api.dto.LinkLocalSupplierRequest;
 import zelisline.ub.marketplace.api.dto.PatchSupplierPortalProfileRequest;
+import zelisline.ub.marketplace.api.dto.SupplierPortalLinkCandidateRow;
 import zelisline.ub.marketplace.api.dto.SupplierPortalProfileResponse;
 import zelisline.ub.marketplace.application.SupplierPortalProfileService;
 import zelisline.ub.platform.security.CurrentSupplierUser;
@@ -36,5 +42,26 @@ public class SupplierPortalProfileController {
     public SupplierPortalProfileResponse updateProfile(@Valid @RequestBody PatchSupplierPortalProfileRequest request) {
         SupplierPrincipal principal = CurrentSupplierUser.require();
         return supplierPortalProfileService.updateProfile(principal.marketplaceSupplierId(), request);
+    }
+
+    @PostMapping("/username")
+    @PreAuthorize("hasPermission(null, 'supplier.catalog.write')")
+    public SupplierPortalProfileResponse claimUsername(@Valid @RequestBody ClaimSupplierUsernameRequest request) {
+        SupplierPrincipal principal = CurrentSupplierUser.require();
+        return supplierPortalProfileService.claimUsername(principal.marketplaceSupplierId(), request);
+    }
+
+    @GetMapping("/link-candidates")
+    @PreAuthorize("hasPermission(null, 'supplier.catalog.read')")
+    public List<SupplierPortalLinkCandidateRow> linkCandidates() {
+        SupplierPrincipal principal = CurrentSupplierUser.require();
+        return supplierPortalProfileService.listLinkCandidates(principal.marketplaceSupplierId());
+    }
+
+    @PostMapping("/link")
+    @PreAuthorize("hasPermission(null, 'supplier.catalog.write')")
+    public SupplierPortalProfileResponse linkLocal(@Valid @RequestBody LinkLocalSupplierRequest request) {
+        SupplierPrincipal principal = CurrentSupplierUser.require();
+        return supplierPortalProfileService.linkLocalSupplier(principal.marketplaceSupplierId(), request);
     }
 }

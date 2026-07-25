@@ -11,9 +11,11 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.marketplace.api.dto.GlobalSupplierHubResponse;
 import zelisline.ub.marketplace.api.dto.MarketplaceSupplierDetailResponse;
 import zelisline.ub.marketplace.api.dto.PublicMarketplaceProductSearchRow;
 import zelisline.ub.marketplace.api.dto.PublicMarketplaceSupplierSearchRow;
+import zelisline.ub.marketplace.application.GlobalSupplierHubService;
 import zelisline.ub.marketplace.application.PublicMarketplaceSearchService;
 
 @RestController
@@ -22,6 +24,7 @@ import zelisline.ub.marketplace.application.PublicMarketplaceSearchService;
 public class PublicMarketplaceController {
 
     private final PublicMarketplaceSearchService publicMarketplaceSearchService;
+    private final GlobalSupplierHubService globalSupplierHubService;
 
     @GetMapping("/suppliers/search")
     public Page<PublicMarketplaceSupplierSearchRow> searchSuppliers(
@@ -29,6 +32,12 @@ public class PublicMarketplaceController {
             @RequestParam(required = false) String location,
             Pageable pageable) {
         return publicMarketplaceSearchService.searchSuppliers(q, location, pageable);
+    }
+
+    /** Global supplier passport at kiosk.ke/s/{username} — linked shops only. */
+    @GetMapping("/suppliers/by-username/{username}")
+    public GlobalSupplierHubResponse byUsername(@PathVariable String username) {
+        return globalSupplierHubService.byUsername(username);
     }
 
     @GetMapping("/products/search")

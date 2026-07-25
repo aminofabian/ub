@@ -84,4 +84,30 @@ public interface SupplierIdentityIndexRepository extends JpaRepository<SupplierI
               AND s.nameNormalized LIKE CONCAT(:namePrefix, '%')
             """)
     List<SupplierIdentityIndex> findMarketplaceByNamePrefix(@Param("namePrefix") String namePrefix);
+
+    @Query("""
+            SELECT s FROM SupplierIdentityIndex s
+            WHERE s.source = 'tenant'
+              AND s.supplierId IS NOT NULL
+              AND s.phoneNormalized IS NOT NULL
+              AND s.phoneNormalized = :phone
+            """)
+    List<SupplierIdentityIndex> findTenantByPhone(@Param("phone") String phone);
+
+    @Query("""
+            SELECT s FROM SupplierIdentityIndex s
+            WHERE s.source = 'tenant'
+              AND s.supplierId IS NOT NULL
+              AND s.emailNormalized IS NOT NULL
+              AND s.emailNormalized = :email
+            """)
+    List<SupplierIdentityIndex> findTenantByEmail(@Param("email") String email);
+
+    @Query("""
+            SELECT s FROM SupplierIdentityIndex s
+            WHERE s.source = 'tenant'
+              AND s.supplierId IS NOT NULL
+              AND s.nameNormalized LIKE CONCAT(:namePrefix, '%')
+            """)
+    List<SupplierIdentityIndex> findTenantByNamePrefix(@Param("namePrefix") String namePrefix);
 }

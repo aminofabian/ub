@@ -5,6 +5,7 @@ public record SupplierPortalLoginResponse(
         String userId,
         String marketplaceSupplierId,
         String email,
+        String phone,
         String name
 ) {
 }

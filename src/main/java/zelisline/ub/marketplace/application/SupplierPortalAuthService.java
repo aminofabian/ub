@@ -14,6 +14,7 @@ import zelisline.ub.marketplace.api.dto.SupplierPortalLoginRequest;
 import zelisline.ub.marketplace.api.dto.SupplierPortalLoginResponse;
 import zelisline.ub.marketplace.domain.SupplierUser;
 import zelisline.ub.marketplace.repository.SupplierUserRepository;
+import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.platform.security.JwtTokenService;
 
 @Service
@@ -26,8 +27,7 @@ public class SupplierPortalAuthService {
 
     @Transactional
     public SupplierPortalLoginResponse login(SupplierPortalLoginRequest request) {
-        String email = request.email().trim().toLowerCase();
-        SupplierUser user = supplierUserRepository.findByEmail(email)
+        SupplierUser user = findByIdentifier(request.identifier())
                 .orElseThrow(this::invalidCredentials);
         if (!user.isActive()) {
             throw invalidCredentials();
@@ -55,10 +55,26 @@ public class SupplierPortalAuthService {
                 user.getId(),
                 user.getMarketplaceSupplierId(),
                 user.getEmail(),
+                user.getPhone(),
                 user.getName());
     }
 
+    private java.util.Optional<SupplierUser> findByIdentifier(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        String trimmed = raw.trim();
+        if (trimmed.contains("@")) {
+            return supplierUserRepository.findByEmail(trimmed.toLowerCase());
+        }
+        String phone = StkPhoneNormalizer.normalize(trimmed);
+        if (phone != null) {
+            return supplierUserRepository.findByPhone(phone);
+        }
+        return supplierUserRepository.findByEmail(trimmed.toLowerCase());
+    }
+
     private ResponseStatusException invalidCredentials() {
-        return new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Incorrect email or password.");
+        return new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Incorrect phone/email or password.");
     }
 }

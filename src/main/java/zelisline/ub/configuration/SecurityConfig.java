@@ -125,7 +125,7 @@ public class SecurityConfig {
 
                         .requestMatchers("/api/v1/auth/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/super-admin/auth/login").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/v1/supplier-portal/auth/login").permitAll()
+                        .requestMatchers("/api/v1/supplier-portal/auth/**").permitAll()
 
                         .requestMatchers(
                                 "/actuator/health",

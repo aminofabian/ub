@@ -131,6 +131,10 @@ public class SupplierPortalNotifyService {
             if (globalUrl != null) {
                 body = body + " · All shops: " + globalUrl;
             }
+            String claimUrl = buildClaimUrl(phoneDigits);
+            if (claimUrl != null) {
+                body = body + " · Claim account: " + claimUrl;
+            }
             body = body + " — Payment within 48hrs.";
 
             var delivery = customerMessageDispatcher.deliverSmsOnly(messaging, phoneDigits, body);
@@ -206,6 +210,16 @@ public class SupplierPortalNotifyService {
         boolean local = apex.endsWith(".localhost") || apex.startsWith("localhost");
         String scheme = local ? "http://" : "https://";
         return scheme + apex + "/s/" + marketplace.getUsername().trim();
+    }
+
+    private String buildClaimUrl(String phoneDigits) {
+        if (phoneDigits == null || phoneDigits.isBlank()) {
+            return null;
+        }
+        String apex = resolvePlatformApexHost();
+        boolean local = apex.endsWith(".localhost") || apex.startsWith("localhost");
+        String scheme = local ? "http://" : "https://";
+        return scheme + apex + "/supplier-portal/claim?phone=" + phoneDigits;
     }
 
     private String resolvePlatformApexHost() {

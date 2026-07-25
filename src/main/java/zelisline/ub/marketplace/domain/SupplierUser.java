@@ -25,8 +25,12 @@ public class SupplierUser {
     @Column(name = "marketplace_supplier_id", nullable = false, length = 36)
     private String marketplaceSupplierId;
 
-    @Column(name = "email", nullable = false, unique = true, length = 191)
+    @Column(name = "email", unique = true, length = 191)
     private String email;
+
+    /** E.164-ish digits (e.g. 2547…); unique when set. */
+    @Column(name = "phone", unique = true, length = 32)
+    private String phone;
 
     @Column(name = "name", nullable = false, length = 255)
     private String name;
@@ -76,6 +80,9 @@ public class SupplierUser {
     }
 
     private static String normalizeEmail(String value) {
-        return value == null ? null : value.trim().toLowerCase();
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim().toLowerCase();
     }
 }

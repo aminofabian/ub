@@ -8,9 +8,15 @@ import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.marketplace.api.dto.SupplierPortalClaimCompleteRequest;
+import zelisline.ub.marketplace.api.dto.SupplierPortalClaimSendCodeRequest;
+import zelisline.ub.marketplace.api.dto.SupplierPortalClaimSendCodeResponse;
+import zelisline.ub.marketplace.api.dto.SupplierPortalClaimVerifyCodeRequest;
+import zelisline.ub.marketplace.api.dto.SupplierPortalClaimVerifyCodeResponse;
 import zelisline.ub.marketplace.api.dto.SupplierPortalLoginRequest;
 import zelisline.ub.marketplace.api.dto.SupplierPortalLoginResponse;
 import zelisline.ub.marketplace.application.SupplierPortalAuthService;
+import zelisline.ub.marketplace.application.SupplierPortalClaimService;
 
 @Validated
 @RestController
@@ -19,9 +25,31 @@ import zelisline.ub.marketplace.application.SupplierPortalAuthService;
 public class SupplierPortalAuthController {
 
     private final SupplierPortalAuthService supplierPortalAuthService;
+    private final SupplierPortalClaimService supplierPortalClaimService;
 
     @PostMapping("/login")
     public SupplierPortalLoginResponse login(@Valid @RequestBody SupplierPortalLoginRequest request) {
         return supplierPortalAuthService.login(request);
+    }
+
+    @PostMapping("/claim/send-code")
+    public SupplierPortalClaimSendCodeResponse sendClaimCode(
+            @Valid @RequestBody SupplierPortalClaimSendCodeRequest request
+    ) {
+        return supplierPortalClaimService.sendCode(request.phone());
+    }
+
+    @PostMapping("/claim/verify-code")
+    public SupplierPortalClaimVerifyCodeResponse verifyClaimCode(
+            @Valid @RequestBody SupplierPortalClaimVerifyCodeRequest request
+    ) {
+        return supplierPortalClaimService.verifyCode(request.phone(), request.code());
+    }
+
+    @PostMapping("/claim/complete")
+    public SupplierPortalLoginResponse completeClaim(
+            @Valid @RequestBody SupplierPortalClaimCompleteRequest request
+    ) {
+        return supplierPortalClaimService.complete(request);
     }
 }

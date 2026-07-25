@@ -4,7 +4,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 /**
- * Listed Path B supplier receipt (posted invoice tied to a raw purchase session).
+ * Listed supplier receipt (posted invoice from Path B receive or Path A order confirm / GRN).
  */
 public record PathBSupplyListRow(
         String supplierInvoiceId,
@@ -18,7 +18,7 @@ public record PathBSupplyListRow(
         BigDecimal balanceOpen,
         /** {@code PAID}, {@code PARTIAL}, or {@code UNPAID} */
         String paymentStatus,
-        /** Receiving branch from the underlying Path B session. */
+        /** Receiving branch from the Path B session or Path A goods receipt. */
         String branchId
 ) {
 }

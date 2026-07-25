@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -18,10 +19,12 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.api.dto.PathBSupplyListRow;
 import zelisline.ub.purchasing.api.dto.SupplyPaymentHistoryRow;
+import zelisline.ub.purchasing.domain.GoodsReceipt;
 import zelisline.ub.purchasing.domain.RawPurchaseSession;
 import zelisline.ub.purchasing.domain.SupplierInvoice;
 import zelisline.ub.purchasing.domain.SupplierPayment;
 import zelisline.ub.purchasing.domain.SupplierPaymentAllocation;
+import zelisline.ub.purchasing.repository.GoodsReceiptRepository;
 import zelisline.ub.purchasing.repository.RawPurchaseSessionRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
@@ -42,20 +45,32 @@ public class SupplyReceiptQueryService {
     private final SupplierPaymentRepository supplierPaymentRepository;
     private final SupplierRepository supplierRepository;
     private final RawPurchaseSessionRepository rawPurchaseSessionRepository;
+    private final GoodsReceiptRepository goodsReceiptRepository;
     private final PathBAssociatedCostService pathBAssociatedCostService;
 
     @Transactional(readOnly = true)
     public List<PathBSupplyListRow> listPathBSupplies(String businessId, String branchId) {
         List<SupplierInvoice> invs = supplierInvoiceRepository
-                .findByBusinessIdAndStatusAndRawPurchaseSessionIdIsNotNullOrderByCreatedAtDescIdDesc(
-                        businessId, PurchasingConstants.INVOICE_POSTED);
+                .findByBusinessIdAndStatusOrderByCreatedAtDescIdDesc(
+                        businessId, PurchasingConstants.INVOICE_POSTED)
+                .stream()
+                .filter(SupplyReceiptQueryService::isSupplyBoardInvoice)
+                .toList();
         if (invs.isEmpty()) {
             return List.of();
         }
-        Set<String> sessionIds = invs.stream()
-                .map(SupplierInvoice::getRawPurchaseSessionId)
-                .filter(id -> id != null && !id.isBlank())
-                .collect(Collectors.toSet());
+
+        Set<String> sessionIds = new HashSet<>();
+        Set<String> grnIds = new HashSet<>();
+        for (SupplierInvoice inv : invs) {
+            if (hasText(inv.getRawPurchaseSessionId())) {
+                sessionIds.add(inv.getRawPurchaseSessionId());
+            }
+            if (hasText(inv.getGoodsReceiptId())) {
+                grnIds.add(inv.getGoodsReceiptId());
+            }
+        }
+
         Map<String, String> branchBySessionId = new HashMap<>();
         if (!sessionIds.isEmpty()) {
             for (RawPurchaseSession session : rawPurchaseSessionRepository.findAllById(sessionIds)) {
@@ -64,6 +79,16 @@ public class SupplyReceiptQueryService {
                 }
             }
         }
+
+        Map<String, String> branchByGrnId = new HashMap<>();
+        if (!grnIds.isEmpty()) {
+            for (GoodsReceipt grn : goodsReceiptRepository.findAllById(grnIds)) {
+                if (businessId.equals(grn.getBusinessId())) {
+                    branchByGrnId.put(grn.getId(), grn.getBranchId());
+                }
+            }
+        }
+
         String branchFilter = branchId != null ? branchId.trim() : "";
         Set<String> supplierIds = invs.stream().map(SupplierInvoice::getSupplierId).collect(Collectors.toSet());
         Map<String, Supplier> supMap = supplierRepository.findAllById(supplierIds).stream()
@@ -75,8 +100,8 @@ public class SupplyReceiptQueryService {
 
         List<PathBSupplyListRow> rows = new ArrayList<>(invs.size());
         for (SupplierInvoice inv : invs) {
-            String sessionBranchId = branchBySessionId.get(inv.getRawPurchaseSessionId());
-            if (!branchFilter.isEmpty() && !branchFilter.equals(sessionBranchId)) {
+            String rowBranchId = resolveBranchId(inv, branchBySessionId, branchByGrnId);
+            if (!branchFilter.isEmpty() && !branchFilter.equals(rowBranchId)) {
                 continue;
             }
             Supplier sup = supMap.get(inv.getSupplierId());
@@ -90,9 +115,12 @@ public class SupplyReceiptQueryService {
                 supName = sup.getName();
             }
             long cnt = supplierInvoiceLineRepository.countByInvoiceId(inv.getId());
-            BigDecimal extras = extrasBySession
-                    .getOrDefault(inv.getRawPurchaseSessionId(), BigDecimal.ZERO)
-                    .setScale(2, RoundingMode.HALF_UP);
+            BigDecimal extras = BigDecimal.ZERO;
+            if (hasText(inv.getRawPurchaseSessionId())) {
+                extras = extrasBySession
+                        .getOrDefault(inv.getRawPurchaseSessionId(), BigDecimal.ZERO)
+                        .setScale(2, RoundingMode.HALF_UP);
+            }
             BigDecimal grand = inv.getGrandTotal()
                     .add(extras)
                     .setScale(2, RoundingMode.HALF_UP);
@@ -111,7 +139,7 @@ public class SupplyReceiptQueryService {
                     paid,
                     open,
                     status,
-                    sessionBranchId));
+                    rowBranchId));
         }
         return rows;
     }
@@ -125,8 +153,8 @@ public class SupplyReceiptQueryService {
     public List<SupplyPaymentHistoryRow> paymentHistoryForSupplyInvoice(String businessId, String invoiceId) {
         SupplierInvoice inv = supplierInvoiceRepository.findByIdAndBusinessId(invoiceId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Invoice not found"));
-        if (inv.getRawPurchaseSessionId() == null || inv.getRawPurchaseSessionId().isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Not a direct supply (Path B) invoice");
+        if (!isSupplyBoardInvoice(inv)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Not a supply invoice");
         }
         List<SupplierPaymentAllocation> allocs = allocationRepository.findBySupplierInvoiceIdOrderByCreatedAtAsc(invoiceId);
         if (allocs.isEmpty()) {
@@ -157,6 +185,28 @@ public class SupplyReceiptQueryService {
                     p.getNotes()));
         }
         return out;
+    }
+
+    private static boolean isSupplyBoardInvoice(SupplierInvoice inv) {
+        return hasText(inv.getRawPurchaseSessionId()) || hasText(inv.getGoodsReceiptId());
+    }
+
+    private static String resolveBranchId(
+            SupplierInvoice inv,
+            Map<String, String> branchBySessionId,
+            Map<String, String> branchByGrnId
+    ) {
+        if (hasText(inv.getRawPurchaseSessionId())) {
+            return branchBySessionId.get(inv.getRawPurchaseSessionId());
+        }
+        if (hasText(inv.getGoodsReceiptId())) {
+            return branchByGrnId.get(inv.getGoodsReceiptId());
+        }
+        return null;
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private static String paymentStatus(BigDecimal open, BigDecimal paid) {

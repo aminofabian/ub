@@ -331,7 +331,9 @@ public class SupplierDisbursementService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice is not payable");
         }
         if (inv.getRawPurchaseSessionId() == null || inv.getRawPurchaseSessionId().isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Not a Path B supply invoice");
+            if (inv.getGoodsReceiptId() == null || inv.getGoodsReceiptId().isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Not a supply invoice");
+            }
         }
         return inv;
     }

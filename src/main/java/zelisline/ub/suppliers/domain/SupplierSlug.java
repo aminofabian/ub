@@ -63,6 +63,43 @@ public final class SupplierSlug {
         return !codeSlug.isBlank() && codeSlug.equals(needle);
     }
 
+    /**
+     * Loose public match: exact slug, or prefix / first token
+     * (e.g. {@code jamro} → {@code jamro-fresh-meats}).
+     */
+    public static boolean matchesLoose(String supplierId, String name, String code, String segment) {
+        if (matches(supplierId, name, code, segment)) {
+            return true;
+        }
+        if (segment == null || segment.isBlank()) {
+            return false;
+        }
+        String needle = decode(segment).toLowerCase(Locale.ROOT).trim();
+        if (needle.isBlank() || UUID.matcher(needle).matches()) {
+            return false;
+        }
+        String canon = canonical(name, code);
+        if (canon.startsWith(needle + "-")) {
+            return true;
+        }
+        int dash = canon.indexOf('-');
+        String first = dash > 0 ? canon.substring(0, dash) : canon;
+        if (first.equals(needle)) {
+            return true;
+        }
+        String codeSlug = code != null && !code.isBlank() ? slugify(code) : "";
+        return !codeSlug.isBlank()
+                && (codeSlug.equals(needle) || codeSlug.startsWith(needle + "-"));
+    }
+
+    /** Search text derived from a slug ({@code jamro-ltd} → {@code jamro ltd}). */
+    public static String searchHint(String segment) {
+        if (segment == null) {
+            return "";
+        }
+        return decode(segment).replace('-', ' ').trim();
+    }
+
     private static String decode(String segment) {
         try {
             return java.net.URLDecoder.decode(segment.trim(), java.nio.charset.StandardCharsets.UTF_8);

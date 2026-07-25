@@ -108,6 +108,29 @@ public interface SupplierRepository extends JpaRepository<Supplier, String> {
             """)
     List<Supplier> findActiveByBusinessId(@Param("businessId") String businessId);
 
+    @Query("""
+            SELECT s FROM Supplier s
+             WHERE s.businessId = :businessId
+               AND s.deletedAt IS NULL
+             ORDER BY s.name ASC
+            """)
+    List<Supplier> findAllByBusinessIdNotDeleted(@Param("businessId") String businessId);
+
+    @Query("""
+            SELECT s FROM Supplier s
+             WHERE s.businessId = :businessId
+               AND s.deletedAt IS NULL
+               AND (
+                    LOWER(s.name) LIKE LOWER(CONCAT('%', :q, '%'))
+                 OR LOWER(COALESCE(s.code, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+               )
+             ORDER BY s.name ASC
+            """)
+    List<Supplier> searchByNameOrCode(
+            @Param("businessId") String businessId,
+            @Param("q") String q
+    );
+
     /**
      * Resolve a public marketplace supplier from the hex id prefix used in deterministic slugs.
      */

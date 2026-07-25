@@ -21,4 +21,19 @@ class SupplierSlugTest {
         assertTrue(SupplierSlug.matches("id-1", "Jamro Fresh", "JF", "jf"));
         assertFalse(SupplierSlug.matches("id-1", "Jamro Fresh", "JF", "other"));
     }
+
+    @Test
+    void matchesLoosePrefixAndFirstToken() {
+        assertTrue(SupplierSlug.matchesLoose(
+                "id-1", "Jamro Fresh Meats", null, "jamro"));
+        assertTrue(SupplierSlug.matchesLoose(
+                "id-1", "Jamro Fresh Meats", null, "jamro-fresh"));
+        assertFalse(SupplierSlug.matchesLoose(
+                "id-1", "Acme Supplies", null, "jamro"));
+    }
+
+    @Test
+    void searchHintFromSlug() {
+        assertEquals("jamro ltd", SupplierSlug.searchHint("jamro-ltd"));
+    }
 }

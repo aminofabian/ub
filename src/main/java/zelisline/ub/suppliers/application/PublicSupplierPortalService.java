@@ -143,16 +143,38 @@ public class PublicSupplierPortalService {
         if (needle.isBlank()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found");
         }
-        List<Supplier> active = supplierRepository.findActiveByBusinessId(businessId);
-        List<Supplier> matches = active.stream()
+
+        List<Supplier> pool = supplierRepository.findAllByBusinessIdNotDeleted(businessId);
+
+        List<Supplier> exact = pool.stream()
                 .filter(s -> SupplierSlug.matches(s.getId(), s.getName(), s.getCode(), needle))
                 .toList();
-        if (matches.size() == 1) {
-            return matches.getFirst();
+        if (exact.size() == 1) {
+            return exact.getFirst();
         }
-        if (matches.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found");
+
+        List<Supplier> loose = pool.stream()
+                .filter(s -> SupplierSlug.matchesLoose(s.getId(), s.getName(), s.getCode(), needle))
+                .toList();
+        if (loose.size() == 1) {
+            return loose.getFirst();
         }
+
+        String hint = SupplierSlug.searchHint(needle);
+        if (!hint.isBlank()) {
+            List<Supplier> searched = supplierRepository.searchByNameOrCode(businessId, hint);
+            if (searched.size() == 1) {
+                return searched.getFirst();
+            }
+            // Prefer a unique loose match within search hits (narrower than full pool).
+            List<Supplier> searchedLoose = searched.stream()
+                    .filter(s -> SupplierSlug.matchesLoose(s.getId(), s.getName(), s.getCode(), needle))
+                    .toList();
+            if (searchedLoose.size() == 1) {
+                return searchedLoose.getFirst();
+            }
+        }
+
         throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found");
     }
 

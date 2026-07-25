@@ -202,6 +202,17 @@ public class PublicMarketplaceSearchService {
         List<SupplierProduct> links =
                 supplierProductRepository.listActivePublicForSupplier(supplier.getId());
         Map<String, Item> itemsById = loadItems(links.stream().map(SupplierProduct::getItemId).toList());
+        List<String> parentIds = itemsById.values().stream()
+                .map(Item::getVariantOfItemId)
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(id -> !id.isEmpty())
+                .filter(id -> !itemsById.containsKey(id))
+                .distinct()
+                .toList();
+        if (!parentIds.isEmpty()) {
+            itemsById.putAll(loadItems(parentIds));
+        }
         Map<String, String> thumbs = resolveThumbnailUrls(itemsById.values());
         Map<String, String> categories = categoryNamesById(
                 itemsById.values().stream().map(Item::getCategoryId).filter(Objects::nonNull).toList());
@@ -217,6 +228,25 @@ public class PublicMarketplaceSearchService {
             String categoryName = item.getCategoryId() != null
                     ? categories.get(item.getCategoryId())
                     : null;
+            String variantOfItemId = blankToNull(item.getVariantOfItemId());
+            Item parentItem = variantOfItemId != null ? itemsById.get(variantOfItemId) : null;
+            String parentItemName = parentItem != null
+                    ? blankToNull(parentItem.getName())
+                    : null;
+            if (parentItemName == null && displayName != null) {
+                int sep = displayName.indexOf(" · ");
+                if (sep > 0) {
+                    parentItemName = displayName.substring(0, sep).trim();
+                }
+            }
+            String parentKey = variantOfItemId != null ? variantOfItemId : item.getId();
+            String parentImageUrl = thumbs.get(parentKey);
+            if (parentImageUrl == null && parentItemName != null) {
+                // Fall back to this row's image only when the row itself is the parent.
+                if (variantOfItemId == null) {
+                    parentImageUrl = thumbs.get(item.getId());
+                }
+            }
             products.add(new MarketplaceSupplierDetailResponse.MarketplaceCatalogProductPreview(
                     link.getId(),
                     displayName,
@@ -232,7 +262,11 @@ public class PublicMarketplaceSearchService {
                     link.getMinOrderQty(),
                     price,
                     price != null ? currencyFor(supplier.getBusinessId()) : null,
-                    link.isActive()));
+                    link.isActive(),
+                    item.getId(),
+                    variantOfItemId,
+                    parentItemName,
+                    parentImageUrl));
         }
 
         List<SupplierContact> contactRows = supplierContactRepository

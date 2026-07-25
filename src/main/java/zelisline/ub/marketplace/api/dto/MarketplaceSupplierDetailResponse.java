@@ -47,7 +47,15 @@ public record MarketplaceSupplierDetailResponse(
             BigDecimal minOrderQty,
             BigDecimal unitPrice,
             String currency,
-            boolean available
+            boolean available,
+            /** Catalog item id (for parent grouping). */
+            String itemId,
+            /** Parent catalog item id when this row is a variant. */
+            String variantOfItemId,
+            /** Display name of the parent product when this row is a variant. */
+            String parentItemName,
+            /** Thumbnail for the parent product (or this item when it is the parent). */
+            String parentImageUrl
     ) {
     }
 }

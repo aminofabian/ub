@@ -9,6 +9,8 @@ public record SupplierItemLinkResponse(
         String itemName,
         String sku,
         String barcode,
+        /** HTTPS URL for list / till thumbnails when the catalog item has an image. */
+        String thumbnailUrl,
         BigDecimal currentStock,
         boolean primary,
         String supplierSku,

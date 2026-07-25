@@ -17,6 +17,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
@@ -41,6 +42,7 @@ public class ItemSupplierLinkService {
     private final PackageVariantStockResolver packageVariantStockResolver;
     private final InventoryBatchRepository inventoryBatchRepository;
     private final BranchRepository branchRepository;
+    private final ItemCatalogService itemCatalogService;
 
     @Transactional(readOnly = true)
     public java.util.List<ItemSupplierLinkResponse> listLinks(String businessId, String itemId) {
@@ -113,6 +115,8 @@ public class ItemSupplierLinkService {
         }
 
         Map<String, BigDecimal> stockByItemId = branchStockByItemId;
+        Map<String, String> thumbnailByItemId =
+                itemCatalogService.resolveThumbnailUrls(businessId, itemsById.keySet());
         return links.stream()
                 .map(sp -> {
                     Item item = itemsById.get(sp.getItemId());
@@ -130,7 +134,8 @@ public class ItemSupplierLinkService {
                     } else if (item != null) {
                         stock = item.getCurrentStock();
                     }
-                    return toSupplierItemLinkResponse(sp, item, parent, stock);
+                    String thumbnailUrl = resolveLinkThumbnail(item, parent, thumbnailByItemId);
+                    return toSupplierItemLinkResponse(sp, item, parent, stock, thumbnailUrl);
                 })
                 .toList();
     }
@@ -309,11 +314,32 @@ public class ItemSupplierLinkService {
         return family;
     }
 
+    private static String resolveLinkThumbnail(
+            Item item,
+            Item parent,
+            Map<String, String> thumbnailByItemId
+    ) {
+        if (item != null) {
+            String own = thumbnailByItemId.get(item.getId());
+            if (own != null && !own.isBlank()) {
+                return own;
+            }
+        }
+        if (parent != null) {
+            String parentThumb = thumbnailByItemId.get(parent.getId());
+            if (parentThumb != null && !parentThumb.isBlank()) {
+                return parentThumb;
+            }
+        }
+        return null;
+    }
+
     private static SupplierItemLinkResponse toSupplierItemLinkResponse(
             SupplierProduct sp,
             Item item,
             Item parent,
-            BigDecimal stock
+            BigDecimal stock,
+            String thumbnailUrl
     ) {
         String itemName = supplierLinkItemDisplayName(item, parent);
         String sku = item != null ? item.getSku() : "";
@@ -340,6 +366,7 @@ public class ItemSupplierLinkService {
                 itemName,
                 sku,
                 barcode,
+                thumbnailUrl,
                 stock,
                 sp.isPrimaryLink(),
                 sp.getSupplierSku(),

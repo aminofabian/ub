@@ -30,6 +30,7 @@ import zelisline.ub.suppliers.api.dto.PublicSupplierComplaintRequest;
 import zelisline.ub.suppliers.api.dto.PublicSupplierComplaintResponse;
 import zelisline.ub.suppliers.api.dto.PublicSupplierMovementRow;
 import zelisline.ub.suppliers.api.dto.PublicSupplierPortalResponse;
+import zelisline.ub.suppliers.api.dto.PublicSupplierSupplyLine;
 import zelisline.ub.suppliers.api.dto.PublicSupplierSupplyRow;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierProduct;
@@ -76,7 +77,8 @@ public class PublicSupplierPortalService {
                         row.amountPaid(),
                         row.balanceOpen(),
                         row.paymentStatus(),
-                        row.sourceType()))
+                        row.sourceType(),
+                        supplyLines(row.supplierInvoiceId())))
                 .toList();
 
         List<PublicSupplierMovementRow> movements = recentMovements(businessId, supplier.getId());
@@ -95,6 +97,19 @@ public class PublicSupplierPortalService {
                 supplies,
                 movements,
                 linked);
+    }
+
+    private List<PublicSupplierSupplyLine> supplyLines(String invoiceId) {
+        if (invoiceId == null || invoiceId.isBlank()) {
+            return List.of();
+        }
+        return supplierInvoiceLineRepository.findByInvoiceIdOrderBySortOrderAsc(invoiceId).stream()
+                .map(line -> new PublicSupplierSupplyLine(
+                        line.getDescription(),
+                        line.getQty(),
+                        line.getUnitCost(),
+                        line.getLineTotal()))
+                .toList();
     }
 
     @Transactional

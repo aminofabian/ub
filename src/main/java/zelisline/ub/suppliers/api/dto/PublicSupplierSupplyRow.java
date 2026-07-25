@@ -2,6 +2,7 @@ package zelisline.ub.suppliers.api.dto;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 
 public record PublicSupplierSupplyRow(
         String invoiceNumber,
@@ -10,6 +11,7 @@ public record PublicSupplierSupplyRow(
         BigDecimal amountPaid,
         BigDecimal balanceOpen,
         String paymentStatus,
-        String sourceType
+        String sourceType,
+        List<PublicSupplierSupplyLine> lines
 ) {
 }

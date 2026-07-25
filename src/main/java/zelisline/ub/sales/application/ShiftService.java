@@ -339,9 +339,12 @@ public class ShiftService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Opening cash cannot be negative.");
         }
 
+        // Keep cash-sale / drawout movement intact: only shift expected by the opening delta.
         BigDecimal delta = newOpening.subtract(oldOpening);
         s.setOpeningCash(newOpening);
-        s.setExpectedClosingCash(oldExpected.add(delta).setScale(2, RoundingMode.HALF_UP));
+        if (delta.compareTo(BigDecimal.ZERO) != 0) {
+            s.setExpectedClosingCash(oldExpected.add(delta).setScale(2, RoundingMode.HALF_UP));
+        }
         if (req.notes() != null) {
             s.setOpeningNotes(blankToNull(req.notes()));
         }
@@ -349,7 +352,10 @@ public class ShiftService {
 
         String meta = String.format(
                 "{\"oldOpening\":\"%s\",\"newOpening\":\"%s\",\"delta\":\"%s\",\"reason\":\"%s\"}",
-                oldOpening, newOpening, delta, escapeJson(req.reason().trim()));
+                oldOpening.toPlainString(),
+                newOpening.toPlainString(),
+                delta.toPlainString(),
+                escapeJson(req.reason().trim()));
         recordAudit(s.getId(), SalesConstants.AUDIT_SHIFT_OPENING_UPDATED, userId, meta, null);
 
         auditEventPublisher.publish(auditEventBuilder.builder(
@@ -377,7 +383,25 @@ public class ShiftService {
     }
 
     private static String escapeJson(String raw) {
-        return raw.replace("\\", "\\\\").replace("\"", "\\\"");
+        StringBuilder out = new StringBuilder(raw.length() + 16);
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            switch (c) {
+                case '\\' -> out.append("\\\\");
+                case '"' -> out.append("\\\"");
+                case '\n' -> out.append("\\n");
+                case '\r' -> out.append("\\r");
+                case '\t' -> out.append("\\t");
+                default -> {
+                    if (c < 0x20) {
+                        out.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        out.append(c);
+                    }
+                }
+            }
+        }
+        return out.toString();
     }
 
     // ========================================================================

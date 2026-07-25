@@ -92,13 +92,15 @@ public class PublicMarketplaceSearchService {
 
     @Transactional(readOnly = true)
     public Page<PublicMarketplaceProductSearchRow> searchProducts(
-            String q, String location, Pageable pageable) {
+            String q, String location, String supplierId, Pageable pageable) {
         String query = blankToNull(q);
         String locationFilter = blankToNull(location);
+        String supplierFilter = blankToNull(supplierId);
         Pageable fetchPage = locationFilter != null
                 ? Pageable.ofSize(Math.max(pageable.getPageSize() * 8, 120)).withPage(0)
                 : pageable;
-        Page<SupplierProduct> page = supplierProductRepository.searchPublicDirectory(query, fetchPage);
+        Page<SupplierProduct> page = supplierProductRepository.searchPublicDirectory(
+                query, supplierFilter, fetchPage);
         List<SupplierProduct> links = page.getContent();
         Map<String, Item> itemsById = loadItems(links.stream().map(SupplierProduct::getItemId).toList());
         Map<String, Supplier> suppliersById = loadSuppliers(

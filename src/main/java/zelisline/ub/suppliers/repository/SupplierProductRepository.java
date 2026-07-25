@@ -27,6 +27,7 @@ public interface SupplierProductRepository extends JpaRepository<SupplierProduct
               AND sp.active = TRUE
               AND i.deletedAt IS NULL
               AND i.active = TRUE
+              AND (:supplierId IS NULL OR :supplierId = '' OR sp.supplierId = :supplierId)
               AND (:q IS NULL OR :q = ''
                    OR LOWER(i.name) LIKE LOWER(CONCAT('%', :q, '%'))
                    OR LOWER(COALESCE(i.variantName, '')) LIKE LOWER(CONCAT('%', :q, '%'))
@@ -36,7 +37,11 @@ public interface SupplierProductRepository extends JpaRepository<SupplierProduct
                    OR LOWER(s.name) LIKE LOWER(CONCAT('%', :q, '%')))
             ORDER BY i.name ASC
             """)
-    Page<SupplierProduct> searchPublicDirectory(@Param("q") String q, Pageable pageable);
+    Page<SupplierProduct> searchPublicDirectory(
+            @Param("q") String q,
+            @Param("supplierId") String supplierId,
+            Pageable pageable
+    );
 
     @Query("""
             SELECT sp FROM SupplierProduct sp

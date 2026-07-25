@@ -44,8 +44,9 @@ public class PublicMarketplaceController {
     public Page<PublicMarketplaceProductSearchRow> searchProducts(
             @RequestParam(required = false) String q,
             @RequestParam(required = false) String location,
+            @RequestParam(required = false) String supplierId,
             Pageable pageable) {
-        return publicMarketplaceSearchService.searchProducts(q, location, pageable);
+        return publicMarketplaceSearchService.searchProducts(q, location, supplierId, pageable);
     }
 
     /** Distinct listing locations for marketplace filters. */

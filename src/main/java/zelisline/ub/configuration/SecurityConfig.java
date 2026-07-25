@@ -35,6 +35,8 @@ import zelisline.ub.platform.security.ApiKeyRateLimitFilter;
 import zelisline.ub.platform.web.CorrelationIdFilter;
 import zelisline.ub.platform.security.ApiKeyRateLimiter;
 import zelisline.ub.platform.security.InvalidApiKeyIpRateLimiter;
+import zelisline.ub.platform.security.PublicContactMessageRateLimitFilter;
+import zelisline.ub.platform.security.PublicContactMessageRateLimiter;
 import zelisline.ub.platform.security.PublicCreditClaimRateLimitFilter;
 import zelisline.ub.platform.security.PublicCreditClaimRateLimiter;
 import zelisline.ub.platform.security.PublicStorefrontIpRateLimiter;
@@ -94,6 +96,7 @@ public class SecurityConfig {
             DomainBusinessResolverFilter domainBusinessResolverFilter,
             PublicStorefrontRateLimitFilter publicStorefrontRateLimitFilter,
             PublicCreditClaimRateLimitFilter publicCreditClaimRateLimitFilter,
+            PublicContactMessageRateLimitFilter publicContactMessageRateLimitFilter,
             LoginRateLimitFilter loginRateLimitFilter,
             RefreshRateLimitFilter refreshRateLimitFilter,
             JwtAuthenticationFilter jwtAuthenticationFilter,
@@ -172,7 +175,8 @@ public class SecurityConfig {
         http.addFilterBefore(correlationIdFilter, DomainBusinessResolverFilter.class);
         http.addFilterAfter(publicStorefrontRateLimitFilter, DomainBusinessResolverFilter.class);
         http.addFilterAfter(publicCreditClaimRateLimitFilter, PublicStorefrontRateLimitFilter.class);
-        http.addFilterAfter(loginRateLimitFilter, PublicCreditClaimRateLimitFilter.class);
+        http.addFilterAfter(publicContactMessageRateLimitFilter, PublicCreditClaimRateLimitFilter.class);
+        http.addFilterAfter(loginRateLimitFilter, PublicContactMessageRateLimitFilter.class);
         http.addFilterAfter(refreshRateLimitFilter, LoginRateLimitFilter.class);
         http.addFilterAfter(jwtAuthenticationFilter, RefreshRateLimitFilter.class);
         http.addFilterAfter(apiKeyAuthenticationFilter, JwtAuthenticationFilter.class);
@@ -195,6 +199,13 @@ public class SecurityConfig {
             PublicCreditClaimRateLimiter publicCreditClaimRateLimiter
     ) {
         return new PublicCreditClaimRateLimitFilter(publicCreditClaimRateLimiter);
+    }
+
+    @Bean
+    public PublicContactMessageRateLimitFilter publicContactMessageRateLimitFilter(
+            PublicContactMessageRateLimiter publicContactMessageRateLimiter
+    ) {
+        return new PublicContactMessageRateLimitFilter(publicContactMessageRateLimiter);
     }
 
     @Bean

@@ -65,6 +65,47 @@ public class BusinessCreditMessagingSettingsService {
         return buildConfig(s, true);
     }
 
+    /**
+     * Platform-only messaging credentials for super-admin Talk to Us replies
+     * (no tenant business settings).
+     */
+    @Transactional(readOnly = true)
+    public TenantMessagingConfig resolvePlatformForContactReply() {
+        var env = messagingProperties;
+        ResolvedRapidApiWhatsappConfig platformWa =
+                platformIntegrationSettingsService.resolveRapidApiWhatsapp();
+        ResolvedSozuriSmsConfig platformSms =
+                platformIntegrationSettingsService.resolveSozuriSms();
+        ResolvedTextSmsConfig platformTextSms =
+                platformIntegrationSettingsService.resolveTextSms();
+        String smsProvider = firstNonBlank(platformSms.provider(), env.sms().provider(), "none");
+        return new TenantMessagingConfig(
+                true,
+                defaultPaymentUrl(),
+                trimToNull(platformWa.apiKey()),
+                trimToNull(platformWa.host()),
+                trimToNull(platformWa.lookupUrl()),
+                trimToNull(platformWa.phoneField()),
+                platformWa.phoneDigitsOnly(),
+                trimToNull(env.metaWhatsApp().accessToken()),
+                trimToNull(env.metaWhatsApp().phoneNumberId()),
+                trimToNull(env.metaWhatsApp().graphVersion()),
+                smsProvider,
+                trimToNull(env.sms().africasTalkingUsername()),
+                trimToNull(env.sms().africasTalkingApiKey()),
+                trimToNull(platformSms.project()),
+                trimToNull(platformSms.apiKey()),
+                firstNonBlank(platformSms.from(), "Sozuri"),
+                firstNonBlank(platformSms.type(), "transactional"),
+                firstNonBlank(platformSms.apiUrl(), "https://sozuri.net/api/v1/messaging"),
+                trimToNull(platformTextSms.partnerId()),
+                trimToNull(platformTextSms.apiKey()),
+                trimToNull(platformTextSms.shortcode()),
+                firstNonBlank(platformTextSms.apiUrl(), "https://sms.textsms.co.ke/api/services/sendsms/"),
+                true,
+                null);
+    }
+
     private TenantMessagingConfig buildConfig(BusinessCreditSettings s, boolean enabled) {
         var env = messagingProperties;
         ResolvedRapidApiWhatsappConfig platformWa =

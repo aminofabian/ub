@@ -21,4 +21,11 @@ public interface NotificationService {
 
     /** In-app notification projection to email (plain + minimal HTML). */
     void sendNotificationEmail(String toEmail, String subject, String textBody, String htmlBody);
+
+    /**
+     * Owner/platform reply to a Talk to Us contact message.
+     *
+     * @param fromDisplayName shop or platform name for the From header; may be null
+     */
+    void sendContactReplyEmail(String toEmail, String subject, String textBody, String fromDisplayName);
 }

@@ -80,6 +80,21 @@ public class LoggingNotificationService implements NotificationService {
         sendOrLog(toEmail, subject, textBody != null ? textBody : "", "notification");
     }
 
+    @Override
+    public void sendContactReplyEmail(
+            String toEmail, String subject, String textBody, String fromDisplayName) {
+        String safe = textBody == null ? "" : textBody;
+        String escaped = safe
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\n", "<br/>");
+        String html = "<!DOCTYPE html><html><body style=\"font-family:sans-serif;line-height:1.5\">"
+                + escaped
+                + "</body></html>";
+        sendOrLogHtml(toEmail, subject, html, "contact reply", fromDisplayName);
+    }
+
     private void sendOrLogHtml(String toEmail, String subject, String htmlBody, String kind) {
         sendOrLogHtml(toEmail, subject, htmlBody, kind, null);
     }

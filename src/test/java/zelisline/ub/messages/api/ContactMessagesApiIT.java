@@ -248,6 +248,33 @@ class ContactMessagesApiIT {
     }
 
     @Test
+    void rejectsWrongChangeChallenge() throws Exception {
+        mockMvc.perform(post("/api/v1/public/contact-messages")
+                        .contentType(APPLICATION_JSON)
+                        .content(submitBody("Ada", "ada@example.com", null, "Hello", 100)))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void rejectsFilledHoneypot() throws Exception {
+        var node = objectMapper.createObjectNode()
+                .put("name", "Bot")
+                .put("email", "bot@example.com")
+                .put("message", "spam")
+                .put("challengeKind", "CHANGE")
+                .put("tendered", 200)
+                .put("challengeAnswer", 95)
+                .put("website", "https://spam.example");
+        var lines = node.putArray("lines");
+        lines.addObject().put("qty", 2).put("unitPrice", 20);
+        lines.addObject().put("qty", 1).put("unitPrice", 65);
+        mockMvc.perform(post("/api/v1/public/contact-messages")
+                        .contentType(APPLICATION_JSON)
+                        .content(node.toString()))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void emailReplySucceedsAndWhatsAppRequiresPhone() throws Exception {
         MvcResult created = mockMvc.perform(post("/api/v1/public/businesses/" + SLUG_A + "/contact-messages")
                         .contentType(APPLICATION_JSON)
@@ -298,12 +325,28 @@ class ContactMessagesApiIT {
         businessRepository.save(b);
     }
 
-    private static String submitBody(String name, String email, String phone, String message)
-            throws Exception {
+    private static String submitBody(String name, String email, String phone, String message) {
+        // 2×20 + 1×65 = 105; paid 200 → change 95
+        return submitBody(name, email, phone, message, 95);
+    }
+
+    private static String submitBody(
+            String name,
+            String email,
+            String phone,
+            String message,
+            int challengeAnswer
+    ) {
         var node = new ObjectMapper().createObjectNode()
                 .put("name", name)
                 .put("email", email)
-                .put("message", message);
+                .put("message", message)
+                .put("challengeKind", "CHANGE")
+                .put("tendered", 200)
+                .put("challengeAnswer", challengeAnswer);
+        var lines = node.putArray("lines");
+        lines.addObject().put("qty", 2).put("unitPrice", 20);
+        lines.addObject().put("qty", 1).put("unitPrice", 65);
         if (phone != null) {
             node.put("phone", phone);
         }

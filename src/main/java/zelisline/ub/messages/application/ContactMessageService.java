@@ -137,6 +137,7 @@ public class ContactMessageService {
             PublicContactMessageRequest body,
             HttpServletRequest request
     ) {
+        rejectSpam(body);
         ContactMessage message = new ContactMessage();
         message.setScope(scope);
         message.setBusinessId(businessId);
@@ -153,6 +154,10 @@ public class ContactMessageService {
             message.setUserAgent(ua.length() > 512 ? ua.substring(0, 512) : ua);
         }
         return contactMessageRepository.save(message);
+    }
+
+    static void rejectSpam(PublicContactMessageRequest body) {
+        ContactTillChallengeVerifier.verify(body);
     }
 
     private ContactMessage requireTenantMessage(String businessId, String id) {

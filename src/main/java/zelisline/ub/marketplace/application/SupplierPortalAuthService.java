@@ -12,7 +12,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.marketplace.api.dto.SupplierPortalLoginRequest;
 import zelisline.ub.marketplace.api.dto.SupplierPortalLoginResponse;
+import zelisline.ub.marketplace.domain.MarketplaceSupplierStatuses;
 import zelisline.ub.marketplace.domain.SupplierUser;
+import zelisline.ub.marketplace.repository.MarketplaceSupplierRepository;
 import zelisline.ub.marketplace.repository.SupplierUserRepository;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.platform.application.PlatformSupplierPortalSettingsService;
@@ -22,6 +24,7 @@ import zelisline.ub.platform.application.PlatformSupplierPortalSettingsService;
 public class SupplierPortalAuthService {
 
     private final SupplierUserRepository supplierUserRepository;
+    private final MarketplaceSupplierRepository marketplaceSupplierRepository;
     private final PasswordEncoder passwordEncoder;
     private final PlatformSupplierPortalSettingsService portalSettingsService;
     private final SupplierPortalSessionService sessionService;
@@ -35,6 +38,11 @@ public class SupplierPortalAuthService {
             throw invalidCredentials();
         }
         if (user.getLockedUntil() != null && user.getLockedUntil().isAfter(Instant.now())) {
+            throw invalidCredentials();
+        }
+        var marketplace = marketplaceSupplierRepository.findById(user.getMarketplaceSupplierId()).orElse(null);
+        if (marketplace == null
+                || MarketplaceSupplierStatuses.SUSPENDED.equalsIgnoreCase(marketplace.getStatus())) {
             throw invalidCredentials();
         }
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {

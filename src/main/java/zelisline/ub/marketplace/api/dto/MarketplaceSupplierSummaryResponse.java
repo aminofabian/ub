@@ -5,6 +5,9 @@ public record MarketplaceSupplierSummaryResponse(
         String name,
         String description,
         String contactEmail,
-        String status
+        String status,
+        String contactPhone,
+        String username,
+        long portalUserCount
 ) {
 }

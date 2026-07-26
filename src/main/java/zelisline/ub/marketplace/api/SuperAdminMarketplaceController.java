@@ -1,5 +1,7 @@
 package zelisline.ub.marketplace.api;
 
+import java.util.List;
+
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -22,6 +24,8 @@ import zelisline.ub.marketplace.api.dto.CreateMarketplaceSupplierUserRequest;
 import zelisline.ub.marketplace.api.dto.CreateSupplierPortalInviteRequest;
 import zelisline.ub.marketplace.api.dto.CreateSupplierPortalInviteResponse;
 import zelisline.ub.marketplace.api.dto.MarketplaceSupplierSummaryResponse;
+import zelisline.ub.marketplace.api.dto.MarketplaceSupplierUserRow;
+import zelisline.ub.marketplace.api.dto.ResetSupplierPortalUserPasswordRequest;
 import zelisline.ub.marketplace.application.MarketplaceAdminService;
 import zelisline.ub.marketplace.application.SupplierPortalInviteService;
 
@@ -53,12 +57,60 @@ public class SuperAdminMarketplaceController {
         return marketplaceAdminService.activateSupplier(id);
     }
 
+    @PostMapping("/{id}/suspend")
+    public MarketplaceSupplierSummaryResponse suspend(@PathVariable String id) {
+        return marketplaceAdminService.suspendSupplier(id, currentSuperAdminId());
+    }
+
     @PostMapping("/{id}/users")
     @ResponseStatus(HttpStatus.CREATED)
     public void createUser(
             @PathVariable String id,
             @Valid @RequestBody CreateMarketplaceSupplierUserRequest request) {
         marketplaceAdminService.createPortalUser(id, request);
+    }
+
+    @GetMapping("/{id}/users")
+    public List<MarketplaceSupplierUserRow> listUsers(@PathVariable String id) {
+        return marketplaceAdminService.listPortalUsers(id);
+    }
+
+    @PostMapping("/{id}/users/{userId}/suspend")
+    public MarketplaceSupplierUserRow suspendUser(
+            @PathVariable String id,
+            @PathVariable String userId) {
+        return marketplaceAdminService.setPortalUserActive(id, userId, false, currentSuperAdminId());
+    }
+
+    @PostMapping("/{id}/users/{userId}/unsuspend")
+    public MarketplaceSupplierUserRow unsuspendUser(
+            @PathVariable String id,
+            @PathVariable String userId) {
+        return marketplaceAdminService.setPortalUserActive(id, userId, true, currentSuperAdminId());
+    }
+
+    @PostMapping("/{id}/users/{userId}/reset-password")
+    public MarketplaceSupplierUserRow resetPassword(
+            @PathVariable String id,
+            @PathVariable String userId,
+            @Valid @RequestBody ResetSupplierPortalUserPasswordRequest request) {
+        return marketplaceAdminService.resetPortalUserPassword(
+                id, userId, request.password(), currentSuperAdminId());
+    }
+
+    @PostMapping("/{id}/users/{userId}/force-logout")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void forceLogout(
+            @PathVariable String id,
+            @PathVariable String userId) {
+        marketplaceAdminService.forceLogoutPortalUser(id, userId, currentSuperAdminId());
+    }
+
+    @PostMapping("/{id}/users/{userId}/unlock")
+    public MarketplaceSupplierUserRow unlockUser(
+            @PathVariable String id,
+            @PathVariable String userId) {
+        return marketplaceAdminService.unlockPortalUser(id, userId, currentSuperAdminId());
     }
 
     @PostMapping("/{id}/invites")

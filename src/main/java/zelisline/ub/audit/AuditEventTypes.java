@@ -137,6 +137,12 @@ public final class AuditEventTypes {
     public static final String SUPPLIER_CONTACT_DELETED = "supplier.contact_deleted";
     public static final String SUPPLIER_CLAIMED_ACCOUNT = "supplier.claimed_account";
     public static final String SUPPLIER_PORTAL_INVITE_CREATED = "supplier.portal_invite_created";
+    public static final String SUPPLIER_PORTAL_USER_SUSPENDED = "supplier.portal_user_suspended";
+    public static final String SUPPLIER_PORTAL_USER_UNSUSPENDED = "supplier.portal_user_unsuspended";
+    public static final String SUPPLIER_PORTAL_PASSWORD_RESET = "supplier.portal_password_reset";
+    public static final String SUPPLIER_PORTAL_FORCE_LOGOUT = "supplier.portal_force_logout";
+    public static final String SUPPLIER_PORTAL_USER_UNLOCKED = "supplier.portal_user_unlocked";
+    public static final String SUPPLIER_MARKETPLACE_SUSPENDED = "supplier.marketplace_suspended";
 
     // System & integrations
     public static final String SCHEDULER_STARTED = "scheduler.started";

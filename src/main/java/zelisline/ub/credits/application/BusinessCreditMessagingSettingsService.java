@@ -144,6 +144,8 @@ public class BusinessCreditMessagingSettingsService {
                 firstNonBlank(trimToNull(s.getRapidapiLookupUrl()), platformWa.lookupUrl()),
                 firstNonBlank(trimToNull(s.getRapidapiPhoneField()), platformWa.phoneField()),
                 digitsOnly,
+                // Tenant Meta token overrides platform only when it decrypts successfully.
+                // A stale/undecryptable tenant blob must not hide a valid platform token.
                 firstNonBlank(
                         decryptOrNull(s.getWhatsappMetaAccessTokenEnc()),
                         platformMeta.accessToken()),

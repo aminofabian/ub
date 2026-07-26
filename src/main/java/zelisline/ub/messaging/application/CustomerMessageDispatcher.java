@@ -65,7 +65,11 @@ public class CustomerMessageDispatcher {
                     "whatsapp",
                     "failed",
                     "whatsapp_failed:" + send.detail()
-                            + ". Paste a fresh permanent token from Meta Business → WhatsApp → API setup, save, then retry.");
+                            + ". Meta rejected the access token in use. Check: (1) Super Admin → Platform"
+                            + " integrations Meta access token, (2) clear any tenant Meta token under"
+                            + " Credit tab reminders (tenant overrides platform), (3) remove a stale"
+                            + " WHATSAPP_META_ACCESS_TOKEN from server env if set. Use a permanent"
+                            + " System User token from Meta Business → WhatsApp → API setup.");
         }
         String prefix = send.skipped() ? "whatsapp_skipped:" : "whatsapp_failed:";
         return new DeliveryResult(lookup, "whatsapp", "failed", prefix + send.detail());

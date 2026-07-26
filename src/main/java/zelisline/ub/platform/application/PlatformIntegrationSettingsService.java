@@ -328,25 +328,11 @@ public class PlatformIntegrationSettingsService {
     }
 
     private SecretRead readSecrets(PlatformIntegrationSettings row) {
+        String persistenceHint = null;
         if (encryptionService.usesEphemeralKey()) {
-            return new SecretRead(
-                    false,
-                    hasEncrypted(row.getDeepseekApiKeyEnc()),
-                    hasEncrypted(row.getRapidapiWhatsappKeyEnc()),
-                    hasEncrypted(row.getSozuriApiKeyEnc()),
-                    hasEncrypted(row.getTextsmsApiKeyEnc()),
-                    hasEncrypted(row.getWhatsappMetaAccessTokenEnc()),
-                    hasEncrypted(row.getWhatsappMetaWebhookVerifyTokenEnc()),
-                    hasEncrypted(row.getWhatsappMetaAppSecretEnc()),
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    "Server encryption key is not configured; stored secrets cannot be read. "
-                            + "Set APP_PAYMENTS_ENCRYPTION_KEY.");
+            persistenceHint =
+                    "APP_PAYMENTS_ENCRYPTION_KEY is not set; stored secrets work until the next "
+                            + "restart, then must be re-saved. Set the key in production.";
         }
         try {
             return new SecretRead(
@@ -365,7 +351,7 @@ public class PlatformIntegrationSettingsService {
                     decryptOrNull(row.getWhatsappMetaAccessTokenEnc()),
                     decryptOrNull(row.getWhatsappMetaWebhookVerifyTokenEnc()),
                     decryptOrNull(row.getWhatsappMetaAppSecretEnc()),
-                    null);
+                    persistenceHint);
         } catch (RuntimeException ex) {
             return new SecretRead(
                     false,
@@ -383,7 +369,7 @@ public class PlatformIntegrationSettingsService {
                     null,
                     null,
                     null,
-                    ex.getMessage());
+                    firstNonBlank(ex.getMessage(), persistenceHint));
         }
     }
 
@@ -398,11 +384,19 @@ public class PlatformIntegrationSettingsService {
         return encryptionService.encryptSecret(trimmed);
     }
 
+    /**
+     * Decrypt a single field without failing the whole secrets read when one blob is stale
+     * (e.g. encrypted under a previous ephemeral key).
+     */
     private String decryptOrNull(String enc) {
         if (enc == null || enc.isBlank()) {
             return null;
         }
-        return encryptionService.decrypt(enc);
+        try {
+            return encryptionService.decrypt(enc);
+        } catch (RuntimeException ex) {
+            return null;
+        }
     }
 
     private static boolean hasEncrypted(String enc) {

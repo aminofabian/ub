@@ -2,12 +2,18 @@ package zelisline.ub.marketplace.application;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,19 +23,28 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.domain.ItemImage;
+import zelisline.ub.catalog.repository.ItemImageRepository;
+import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.marketplace.api.dto.CreateSupplierPortalProductRequest;
 import zelisline.ub.marketplace.api.dto.PatchSupplierPortalProductRequest;
 import zelisline.ub.marketplace.api.dto.SupplierPortalProductResponse;
+import zelisline.ub.marketplace.domain.BusinessSupplierConnection;
+import zelisline.ub.marketplace.domain.BusinessSupplierConnectionStatuses;
 import zelisline.ub.marketplace.domain.MarketplaceSupplierPriceOffer;
 import zelisline.ub.marketplace.domain.MarketplaceSupplierProduct;
 import zelisline.ub.marketplace.domain.MarketplaceSupplierProductEditRequest;
 import zelisline.ub.marketplace.domain.MarketplaceSupplierProductStatuses;
+import zelisline.ub.marketplace.repository.BusinessSupplierConnectionRepository;
 import zelisline.ub.marketplace.repository.MarketplaceSupplierPriceOfferRepository;
 import zelisline.ub.marketplace.repository.MarketplaceSupplierProductEditRequestRepository;
 import zelisline.ub.marketplace.repository.MarketplaceSupplierProductRepository;
 import zelisline.ub.notifications.SupplierPortalNotificationTypes;
 import zelisline.ub.platform.application.PlatformSupplierPortalSettingsService;
 import zelisline.ub.platform.domain.PlatformSupplierPortalSettings;
+import zelisline.ub.suppliers.domain.SupplierProduct;
+import zelisline.ub.suppliers.repository.SupplierProductRepository;
 
 @Service
 @RequiredArgsConstructor
@@ -41,6 +56,10 @@ public class SupplierPortalCatalogService {
     private final PlatformSupplierPortalSettingsService portalSettingsService;
     private final SupplierPortalNotificationsService notificationsService;
     private final SupplierPortalShopLinkService shopLinkService;
+    private final BusinessSupplierConnectionRepository connectionRepository;
+    private final SupplierProductRepository supplierProductRepository;
+    private final ItemRepository itemRepository;
+    private final ItemImageRepository itemImageRepository;
     private final ObjectMapper objectMapper;
 
     @Transactional(readOnly = true)
@@ -50,12 +69,13 @@ public class SupplierPortalCatalogService {
             String status,
             Pageable pageable
     ) {
-        return productRepository.searchForSupplier(
-                        marketplaceSupplierId,
-                        blankToNull(q),
-                        blankToNull(status),
-                        pageable)
-                .map(this::toResponse);
+        Page<MarketplaceSupplierProduct> page = productRepository.searchForSupplier(
+                marketplaceSupplierId,
+                blankToNull(q),
+                blankToNull(status),
+                pageable);
+        Map<String, String> images = resolveImageUrls(marketplaceSupplierId, page.getContent());
+        return page.map(product -> toResponse(product, images.get(product.getId())));
     }
 
     /** List after healing shop links + importing shop-linked catalogue into marketplace products. */
@@ -393,6 +413,10 @@ public class SupplierPortalCatalogService {
     }
 
     private SupplierPortalProductResponse toResponse(MarketplaceSupplierProduct product) {
+        return toResponse(product, null);
+    }
+
+    private SupplierPortalProductResponse toResponse(MarketplaceSupplierProduct product, String imageUrl) {
         MarketplaceSupplierPriceOffer offer = currentPrimaryOffer(product.getId()).orElse(null);
         var pending = editRequestRepository.findFirstByProductIdAndStatusOrderByCreatedAtDesc(
                 product.getId(), MarketplaceSupplierProductEditRequest.PENDING);
@@ -414,7 +438,129 @@ public class SupplierPortalCatalogService {
                 product.getCreatedAt(),
                 product.getUpdatedAt(),
                 pending.map(MarketplaceSupplierProductEditRequest::getId).orElse(null),
-                pending.map(p -> readMap(p.getProposedJson())).orElse(null));
+                pending.map(p -> readMap(p.getProposedJson())).orElse(null),
+                blankToNull(imageUrl));
+    }
+
+    /**
+     * Prefer shop catalog photos (linked items) matched by barcode, then by product name.
+     */
+    private Map<String, String> resolveImageUrls(
+            String marketplaceSupplierId,
+            List<MarketplaceSupplierProduct> products
+    ) {
+        Map<String, String> out = new HashMap<>();
+        if (products == null || products.isEmpty()) {
+            return out;
+        }
+        List<BusinessSupplierConnection> links = connectionRepository.findByMarketplaceSupplierIdAndStatus(
+                marketplaceSupplierId, BusinessSupplierConnectionStatuses.ACTIVE);
+        if (links.isEmpty()) {
+            return out;
+        }
+
+        List<SupplierProduct> shopLinks = new ArrayList<>();
+        for (BusinessSupplierConnection link : links) {
+            if (link.getLocalSupplierId() == null) {
+                continue;
+            }
+            shopLinks.addAll(supplierProductRepository.listActivePublicForSupplier(link.getLocalSupplierId()));
+        }
+        if (shopLinks.isEmpty()) {
+            return out;
+        }
+
+        List<String> itemIds = shopLinks.stream()
+                .map(SupplierProduct::getItemId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (itemIds.isEmpty()) {
+            return out;
+        }
+
+        Map<String, Item> itemsById = new HashMap<>();
+        for (Item item : itemRepository.findAllById(itemIds)) {
+            if (item.getId() != null) {
+                itemsById.put(item.getId(), item);
+            }
+        }
+        Map<String, String> thumbs = thumbnailsForItems(itemsById.values());
+
+        Map<String, String> byBarcode = new HashMap<>();
+        Map<String, String> byName = new HashMap<>();
+        for (Item item : itemsById.values()) {
+            String thumb = thumbs.get(item.getId());
+            if (thumb == null || thumb.isBlank()) {
+                continue;
+            }
+            if (item.getBarcode() != null && !item.getBarcode().isBlank()) {
+                byBarcode.putIfAbsent(item.getBarcode().trim().toLowerCase(Locale.ROOT), thumb);
+            }
+            if (item.getName() != null && !item.getName().isBlank()) {
+                byName.putIfAbsent(item.getName().trim().toLowerCase(Locale.ROOT), thumb);
+            }
+        }
+
+        for (MarketplaceSupplierProduct product : products) {
+            String image = null;
+            if (product.getBarcode() != null && !product.getBarcode().isBlank()) {
+                image = byBarcode.get(product.getBarcode().trim().toLowerCase(Locale.ROOT));
+            }
+            if (image == null && product.getName() != null) {
+                image = byName.get(product.getName().trim().toLowerCase(Locale.ROOT));
+            }
+            if (image != null) {
+                out.put(product.getId(), image);
+            }
+        }
+        return out;
+    }
+
+    private Map<String, String> thumbnailsForItems(Collection<Item> items) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (items == null || items.isEmpty()) {
+            return out;
+        }
+        List<String> itemIds = items.stream().map(Item::getId).filter(Objects::nonNull).distinct().toList();
+        Sort galleryOrder = Sort.by(Sort.Order.asc("itemId"), Sort.Order.asc("sortOrder"), Sort.Order.asc("id"));
+        Map<String, String> gallery = new LinkedHashMap<>();
+        for (ItemImage img : itemImageRepository.findByItemIdIn(itemIds, galleryOrder)) {
+            String url = resolveImageRowPublicUrl(img);
+            if (url != null && img.getItemId() != null) {
+                gallery.putIfAbsent(img.getItemId(), url);
+            }
+        }
+        for (Item item : items) {
+            if (item.getId() == null) {
+                continue;
+            }
+            String key = item.getImageKey();
+            if (key != null && (key.startsWith("http://") || key.startsWith("https://"))) {
+                out.put(item.getId(), key.trim());
+                continue;
+            }
+            String galleryUrl = gallery.get(item.getId());
+            if (galleryUrl != null) {
+                out.put(item.getId(), galleryUrl);
+            }
+        }
+        return out;
+    }
+
+    private static String resolveImageRowPublicUrl(ItemImage img) {
+        String secure = img.getSecureUrl();
+        if (secure != null && !secure.isBlank()) {
+            return secure.trim();
+        }
+        String key = img.getS3Key();
+        if (key != null) {
+            String k = key.trim();
+            if (k.startsWith("http://") || k.startsWith("https://")) {
+                return k;
+            }
+        }
+        return null;
     }
 
     private static void applyProductFields(

@@ -22,6 +22,7 @@ public record SupplierPortalProductResponse(
         Instant createdAt,
         Instant updatedAt,
         String pendingEditId,
-        Map<String, Object> pendingProposed
+        Map<String, Object> pendingProposed,
+        String imageUrl
 ) {
 }

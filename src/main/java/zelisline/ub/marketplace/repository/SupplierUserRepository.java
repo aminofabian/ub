@@ -14,6 +14,8 @@ public interface SupplierUserRepository extends JpaRepository<SupplierUser, Stri
 
     Optional<SupplierUser> findByIdAndMarketplaceSupplierId(String id, String marketplaceSupplierId);
 
+    java.util.List<SupplierUser> findByMarketplaceSupplierIdAndActiveTrue(String marketplaceSupplierId);
+
     boolean existsByPhone(String phone);
 
     boolean existsByEmail(String email);

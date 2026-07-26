@@ -32,6 +32,7 @@ public class MarketplacePurchaseOrderService {
     private final SupplierRepository supplierRepository;
     private final BusinessSupplierConnectionRepository connectionRepository;
     private final PathAPurchaseService pathAPurchaseService;
+    private final SupplierPortalEventNotifyService eventNotifyService;
 
     @Transactional
     public PathAPurchaseOrderDetailResponse sendToSupplier(String businessId, String purchaseOrderId) {
@@ -72,6 +73,11 @@ public class MarketplacePurchaseOrderService {
             purchaseOrderLineRepository.save(line);
         }
         purchaseOrderRepository.save(po);
+        eventNotifyService.notifyPoSentAfterCommit(
+                businessId,
+                supplier.getMarketplaceSupplierId(),
+                po.getPoNumber(),
+                po.getId());
         return pathAPurchaseService.getPurchaseOrder(businessId, purchaseOrderId);
     }
 

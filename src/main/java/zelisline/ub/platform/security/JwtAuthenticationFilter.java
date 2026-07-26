@@ -41,6 +41,8 @@ import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.identity.repository.UserSessionRepository;
 import zelisline.ub.marketplace.domain.SupplierUser;
 import zelisline.ub.marketplace.repository.SupplierUserRepository;
+import zelisline.ub.marketplace.repository.SupplierUserSessionRepository;
+import zelisline.ub.marketplace.application.SupplierPortalSessionService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
 /**
@@ -60,6 +62,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final UserRepository userRepository;
     private final SuperAdminRepository superAdminRepository;
     private final SupplierUserRepository supplierUserRepository;
+    private final SupplierUserSessionRepository supplierUserSessionRepository;
+    private final SupplierPortalSessionService supplierPortalSessionService;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
     private final UserSessionActivity userSessionActivity;
@@ -278,8 +282,18 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String id = claims.getSubject();
         String marketplaceSupplierId = claims.get(JwtTokenService.CLAIM_MARKETPLACE_SUPPLIER_ID, String.class);
         String roleKey = claims.get(JwtTokenService.CLAIM_SUPPLIER_ROLE, String.class);
+        String jti = claims.getId();
         if (id == null || id.isBlank() || marketplaceSupplierId == null || marketplaceSupplierId.isBlank()) {
             writeProblem(response, HttpStatus.UNAUTHORIZED, "Invalid token claims", "unauthorized");
+            return false;
+        }
+        if (jti == null || jti.isBlank()) {
+            writeProblem(response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
+            return false;
+        }
+        var sessionOpt = supplierUserSessionRepository.findByAccessTokenJtiAndRevokedAtIsNull(jti);
+        if (sessionOpt.isEmpty()) {
+            writeProblem(response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
             return false;
         }
         SupplierUser user = supplierUserRepository.findByIdAndMarketplaceSupplierId(id, marketplaceSupplierId).orElse(null);
@@ -292,7 +306,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return false;
         }
         String resolvedRole = roleKey == null || roleKey.isBlank() ? user.getRoleKey() : roleKey;
-        var principal = new SupplierPrincipal(user.getId(), marketplaceSupplierId, resolvedRole);
+        var principal = new SupplierPrincipal(user.getId(), marketplaceSupplierId, resolvedRole, jti);
         var authorities = new java.util.ArrayList<SimpleGrantedAuthority>();
         authorities.add(new SimpleGrantedAuthority("ROLE_SUPPLIER"));
         zelisline.ub.marketplace.domain.SupplierUserRoles.permissionsFor(resolvedRole).stream()
@@ -300,6 +314,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 .forEach(authorities::add);
         var authentication = new SupplierAuthenticationToken(principal, authorities);
         SecurityContextHolder.getContext().setAuthentication(authentication);
+        try {
+            supplierPortalSessionService.touch(jti);
+        } catch (Exception ignored) {
+            // Never fail the request because of a last_seen write failure.
+        }
         return true;
     }
 

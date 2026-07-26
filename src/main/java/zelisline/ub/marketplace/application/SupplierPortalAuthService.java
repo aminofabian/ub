@@ -1,7 +1,6 @@
 package zelisline.ub.marketplace.application;
 
 import java.time.Instant;
-import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -9,6 +8,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.marketplace.api.dto.SupplierPortalLoginRequest;
 import zelisline.ub.marketplace.api.dto.SupplierPortalLoginResponse;
@@ -16,7 +16,6 @@ import zelisline.ub.marketplace.domain.SupplierUser;
 import zelisline.ub.marketplace.repository.SupplierUserRepository;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.platform.application.PlatformSupplierPortalSettingsService;
-import zelisline.ub.platform.security.JwtTokenService;
 
 @Service
 @RequiredArgsConstructor
@@ -24,11 +23,11 @@ public class SupplierPortalAuthService {
 
     private final SupplierUserRepository supplierUserRepository;
     private final PasswordEncoder passwordEncoder;
-    private final JwtTokenService jwtTokenService;
     private final PlatformSupplierPortalSettingsService portalSettingsService;
+    private final SupplierPortalSessionService sessionService;
 
     @Transactional
-    public SupplierPortalLoginResponse login(SupplierPortalLoginRequest request) {
+    public SupplierPortalLoginResponse login(SupplierPortalLoginRequest request, HttpServletRequest http) {
         portalSettingsService.requirePortalEnabled();
         SupplierUser user = findByIdentifier(request.identifier())
                 .orElseThrow(this::invalidCredentials);
@@ -47,19 +46,7 @@ public class SupplierPortalAuthService {
         user.setLockedUntil(null);
         user.setLastLoginAt(Instant.now());
         supplierUserRepository.save(user);
-        String jti = UUID.randomUUID().toString();
-        String access = jwtTokenService.createSupplierAccessToken(
-                user.getId(),
-                user.getMarketplaceSupplierId(),
-                user.getRoleKey(),
-                jti);
-        return new SupplierPortalLoginResponse(
-                access,
-                user.getId(),
-                user.getMarketplaceSupplierId(),
-                user.getEmail(),
-                user.getPhone(),
-                user.getName());
+        return sessionService.issueLogin(user, http);
     }
 
     private java.util.Optional<SupplierUser> findByIdentifier(String raw) {

@@ -225,13 +225,15 @@ public class SecurityConfig {
             UserRepository userRepository,
             SuperAdminRepository superAdminRepository,
             zelisline.ub.marketplace.repository.SupplierUserRepository supplierUserRepository,
+            zelisline.ub.marketplace.repository.SupplierUserSessionRepository supplierUserSessionRepository,
+            zelisline.ub.marketplace.application.SupplierPortalSessionService supplierPortalSessionService,
             zelisline.ub.audit.application.AuditEventPublisher auditEventPublisher,
             zelisline.ub.audit.application.AuditEventBuilder auditEventBuilder,
             zelisline.ub.identity.application.UserSessionActivity userSessionActivity
     ) {
         return new JwtAuthenticationFilter(
                 jwtTokenService, userSessionRepository, userRepository, superAdminRepository,
-                supplierUserRepository,
+                supplierUserRepository, supplierUserSessionRepository, supplierPortalSessionService,
                 auditEventPublisher, auditEventBuilder, userSessionActivity);
     }
 

@@ -36,8 +36,11 @@ public class SupplierPortalAuthController {
     }
 
     @PostMapping("/login")
-    public SupplierPortalLoginResponse login(@Valid @RequestBody SupplierPortalLoginRequest request) {
-        return supplierPortalAuthService.login(request);
+    public SupplierPortalLoginResponse login(
+            @Valid @RequestBody SupplierPortalLoginRequest request,
+            jakarta.servlet.http.HttpServletRequest http
+    ) {
+        return supplierPortalAuthService.login(request, http);
     }
 
     @PostMapping("/claim/send-code")
@@ -63,8 +66,9 @@ public class SupplierPortalAuthController {
 
     @PostMapping("/claim/complete")
     public SupplierPortalLoginResponse completeClaim(
-            @Valid @RequestBody SupplierPortalClaimCompleteRequest request
+            @Valid @RequestBody SupplierPortalClaimCompleteRequest request,
+            jakarta.servlet.http.HttpServletRequest http
     ) {
-        return supplierPortalClaimService.complete(request);
+        return supplierPortalClaimService.complete(request, http);
     }
 }

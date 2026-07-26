@@ -48,10 +48,11 @@ import zelisline.ub.messaging.application.TenantMessagingConfig;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.platform.application.PlatformSupplierPortalSettingsService;
 import zelisline.ub.platform.domain.PlatformSupplierPortalSettings;
-import zelisline.ub.platform.security.JwtTokenService;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierSlug;
 import zelisline.ub.suppliers.repository.SupplierRepository;
+
+import jakarta.servlet.http.HttpServletRequest;
 
 @Service
 @RequiredArgsConstructor
@@ -73,7 +74,7 @@ public class SupplierPortalClaimService {
     private final CustomerMessageDispatcher customerMessageDispatcher;
     private final PlatformSupplierPortalSettingsService portalSettingsService;
     private final PasswordEncoder passwordEncoder;
-    private final JwtTokenService jwtTokenService;
+    private final SupplierPortalSessionService sessionService;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
 
@@ -298,7 +299,10 @@ public class SupplierPortalClaimService {
     }
 
     @Transactional
-    public SupplierPortalLoginResponse complete(SupplierPortalClaimCompleteRequest request) {
+    public SupplierPortalLoginResponse complete(
+            SupplierPortalClaimCompleteRequest request,
+            HttpServletRequest http
+    ) {
         portalSettingsService.requireClaimEnabled();
         PlatformSupplierPortalSettings settings = portalSettingsService.loadSingleton();
         portalSettingsService.validatePassword(request.password());
@@ -310,15 +314,16 @@ public class SupplierPortalClaimService {
                 .findFirstBySetupTokenHashAndConsumedAtIsNull(tokenHash)
                 .orElse(null);
         if (invite != null) {
-            return completeInvite(invite, request, settings);
+            return completeInvite(invite, request, settings, http);
         }
-        return completeSelfClaim(request, settings, tokenHash);
+        return completeSelfClaim(request, settings, tokenHash, http);
     }
 
     private SupplierPortalLoginResponse completeInvite(
             SupplierPortalClaimInvite invite,
             SupplierPortalClaimCompleteRequest request,
-            PlatformSupplierPortalSettings settings
+            PlatformSupplierPortalSettings settings,
+            HttpServletRequest http
     ) {
         Instant now = Instant.now();
         if (invite.getVerifiedAt() == null
@@ -369,13 +374,14 @@ public class SupplierPortalClaimService {
         inviteRepository.save(invite);
 
         publishClaimed(marketplace.getId(), user.getId(), phone, "invite");
-        return loginResponse(user, settings.isAutoLoginAfterSetup());
+        return loginResponse(user, settings.isAutoLoginAfterSetup(), http);
     }
 
     private SupplierPortalLoginResponse completeSelfClaim(
             SupplierPortalClaimCompleteRequest request,
             PlatformSupplierPortalSettings settings,
-            String tokenHash
+            String tokenHash,
+            HttpServletRequest http
     ) {
         portalSettingsService.requireSelfClaimAllowed();
 
@@ -443,32 +449,18 @@ public class SupplierPortalClaimService {
         verificationRepository.save(challenge);
 
         publishClaimed(marketplace.getId(), user.getId(), phone, "self_claim");
-        return loginResponse(user, settings.isAutoLoginAfterSetup());
+        return loginResponse(user, settings.isAutoLoginAfterSetup(), http);
     }
 
-    private SupplierPortalLoginResponse loginResponse(SupplierUser user, boolean autoLogin) {
+    private SupplierPortalLoginResponse loginResponse(
+            SupplierUser user,
+            boolean autoLogin,
+            HttpServletRequest http
+    ) {
         if (!autoLogin) {
-            return new SupplierPortalLoginResponse(
-                    null,
-                    user.getId(),
-                    user.getMarketplaceSupplierId(),
-                    user.getEmail(),
-                    user.getPhone(),
-                    user.getName());
+            return sessionService.loginWithoutToken(user);
         }
-        String jti = UUID.randomUUID().toString();
-        String access = jwtTokenService.createSupplierAccessToken(
-                user.getId(),
-                user.getMarketplaceSupplierId(),
-                user.getRoleKey(),
-                jti);
-        return new SupplierPortalLoginResponse(
-                access,
-                user.getId(),
-                user.getMarketplaceSupplierId(),
-                user.getEmail(),
-                user.getPhone(),
-                user.getName());
+        return sessionService.issueLogin(user, http);
     }
 
     private void publishClaimed(String marketplaceSupplierId, String userId, String phone, String path) {

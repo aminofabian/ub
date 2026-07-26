@@ -45,6 +45,7 @@ public class SupplierPortalNotifyService {
     private final SupplierPurchaseHistoryService purchaseHistoryService;
     private final BusinessCreditMessagingSettingsService messagingSettingsService;
     private final CustomerMessageDispatcher customerMessageDispatcher;
+    private final zelisline.ub.marketplace.application.SupplierPortalEventNotifyService eventNotifyService;
 
     @Value("${app.public.frontend-base-url:http://localhost:3000}")
     private String frontendBaseUrl;
@@ -143,6 +144,17 @@ public class SupplierPortalNotifyService {
             List<String> invoiceNumbers
     ) {
         try {
+            Supplier supplier = supplierRepository.findByIdAndBusinessId(supplierId, businessId).orElse(null);
+            if (supplier != null
+                    && supplier.getMarketplaceSupplierId() != null
+                    && !supplier.getMarketplaceSupplierId().isBlank()) {
+                eventNotifyService.notifyPaymentReceived(
+                        businessId,
+                        supplier.getMarketplaceSupplierId(),
+                        amountPaid,
+                        reference);
+            }
+
             SupplierNotifyContext ctx = resolveNotifyContext(businessId, supplierId);
             if (ctx == null) {
                 return;

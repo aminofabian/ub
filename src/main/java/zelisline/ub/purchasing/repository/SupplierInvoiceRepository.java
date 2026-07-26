@@ -16,8 +16,16 @@ public interface SupplierInvoiceRepository extends JpaRepository<SupplierInvoice
     @Query("""
             SELECT si FROM SupplierInvoice si
             JOIN Supplier s ON s.id = si.supplierId
-            WHERE s.marketplaceSupplierId = :marketplaceSupplierId
-              AND s.deletedAt IS NULL
+            WHERE s.deletedAt IS NULL
+              AND (
+                s.marketplaceSupplierId = :marketplaceSupplierId
+                OR EXISTS (
+                  SELECT 1 FROM BusinessSupplierConnection c
+                  WHERE c.localSupplierId = s.id
+                    AND c.marketplaceSupplierId = :marketplaceSupplierId
+                    AND c.status = 'active'
+                )
+              )
             ORDER BY si.invoiceDate DESC, si.createdAt DESC
             """)
     List<SupplierInvoice> findForSupplierPortal(@Param("marketplaceSupplierId") String marketplaceSupplierId);

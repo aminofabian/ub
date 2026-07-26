@@ -44,10 +44,16 @@ public class SupplierPortalOrdersService {
     private final BusinessRepository businessRepository;
     private final ItemRepository itemRepository;
     private final SupplierPerformanceEventRepository performanceEventRepository;
+    private final SupplierPortalShopLinkService shopLinkService;
     private final ObjectMapper objectMapper;
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<SupplierPortalOrderListRow> listOrders(String marketplaceSupplierId) {
+        try {
+            shopLinkService.ensureLinksAndCatalogue(marketplaceSupplierId);
+        } catch (RuntimeException ignored) {
+            // Soft heal — still return whatever inbox exists.
+        }
         return purchaseOrderRepository.findSupplierPortalInbox(marketplaceSupplierId).stream()
                 .map(po -> {
                     String businessName = businessRepository.findById(po.getBusinessId())

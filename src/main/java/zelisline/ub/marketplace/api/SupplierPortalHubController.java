@@ -31,14 +31,14 @@ public class SupplierPortalHubController {
     private final GlobalSupplierHubService globalSupplierHubService;
 
     @GetMapping("/shops")
-    @PreAuthorize("hasPermission(null, 'supplier.money.read')")
+    @PreAuthorize("hasRole('SUPPLIER')")
     public GlobalSupplierHubResponse listShops() {
         SupplierPrincipal principal = CurrentSupplierUser.require();
         return globalSupplierHubService.forMarketplaceSupplierId(principal.marketplaceSupplierId());
     }
 
     @GetMapping("/shops/{localSupplierId}/supplies")
-    @PreAuthorize("hasPermission(null, 'supplier.money.read')")
+    @PreAuthorize("hasRole('SUPPLIER')")
     public SupplierPortalHubShopDetailResponse shopSupplies(@PathVariable String localSupplierId) {
         SupplierPrincipal principal = CurrentSupplierUser.require();
         return supplierPortalHubService.shopSupplies(principal.marketplaceSupplierId(), localSupplierId);

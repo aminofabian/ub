@@ -28,9 +28,15 @@ public class SupplierPortalPaymentsService {
     private final SupplierPaymentRepository supplierPaymentRepository;
     private final BusinessRepository businessRepository;
     private final SupplierPurchaseHistoryService purchaseHistoryService;
+    private final SupplierPortalShopLinkService shopLinkService;
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<SupplierPortalPaymentRow> listPayments(String marketplaceSupplierId, String localSupplierIdFilter) {
+        try {
+            shopLinkService.ensureLinksAndCatalogue(marketplaceSupplierId);
+        } catch (RuntimeException ignored) {
+            // Soft heal.
+        }
         List<BusinessSupplierConnection> links = connectionRepository
                 .findByMarketplaceSupplierIdAndStatus(marketplaceSupplierId, BusinessSupplierConnectionStatuses.ACTIVE)
                 .stream()

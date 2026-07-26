@@ -21,9 +21,17 @@ public interface PurchaseOrderRepository extends JpaRepository<PurchaseOrder, St
     @Query("""
             SELECT po FROM PurchaseOrder po
             JOIN Supplier s ON s.id = po.supplierId
-            WHERE s.marketplaceSupplierId = :marketplaceSupplierId
-              AND po.sentToSupplierAt IS NOT NULL
+            WHERE po.sentToSupplierAt IS NOT NULL
               AND po.status <> 'cancelled'
+              AND (
+                s.marketplaceSupplierId = :marketplaceSupplierId
+                OR EXISTS (
+                  SELECT 1 FROM BusinessSupplierConnection c
+                  WHERE c.localSupplierId = s.id
+                    AND c.marketplaceSupplierId = :marketplaceSupplierId
+                    AND c.status = 'active'
+                )
+              )
             ORDER BY po.sentToSupplierAt DESC
             """)
     List<PurchaseOrder> findSupplierPortalInbox(@Param("marketplaceSupplierId") String marketplaceSupplierId);
@@ -32,8 +40,16 @@ public interface PurchaseOrderRepository extends JpaRepository<PurchaseOrder, St
             SELECT po FROM PurchaseOrder po
             JOIN Supplier s ON s.id = po.supplierId
             WHERE po.id = :purchaseOrderId
-              AND s.marketplaceSupplierId = :marketplaceSupplierId
               AND po.sentToSupplierAt IS NOT NULL
+              AND (
+                s.marketplaceSupplierId = :marketplaceSupplierId
+                OR EXISTS (
+                  SELECT 1 FROM BusinessSupplierConnection c
+                  WHERE c.localSupplierId = s.id
+                    AND c.marketplaceSupplierId = :marketplaceSupplierId
+                    AND c.status = 'active'
+                )
+              )
             """)
     Optional<PurchaseOrder> findSupplierPortalOrder(
             @Param("marketplaceSupplierId") String marketplaceSupplierId,

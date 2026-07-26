@@ -27,7 +27,7 @@ public class SupplierPortalStatementsController {
     private final SupplierPortalStatementsService statementsService;
 
     @GetMapping
-    @PreAuthorize("hasPermission(null, 'supplier.orders.read')")
+    @PreAuthorize("hasPermission(null, 'supplier.money.read')")
     public Object get(
             @RequestParam String localSupplierId,
             @RequestParam(required = false) Integer year,

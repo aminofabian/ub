@@ -24,7 +24,7 @@ public class SupplierPortalReportsController {
     private final SupplierPortalReportsService reportsService;
 
     @GetMapping
-    @PreAuthorize("hasPermission(null, 'supplier.orders.read')")
+    @PreAuthorize("hasPermission(null, 'supplier.money.read')")
     public ResponseEntity<byte[]> export(@RequestParam String type) {
         SupplierPrincipal principal = CurrentSupplierUser.require();
         byte[] body = reportsService.exportCsv(principal.marketplaceSupplierId(), type);

@@ -25,14 +25,14 @@ public class SupplierPortalPaymentDetailsController {
     private final SupplierPortalPaymentDetailsService paymentDetailsService;
 
     @GetMapping
-    @PreAuthorize("hasPermission(null, 'supplier.catalog.read')")
+    @PreAuthorize("hasPermission(null, 'supplier.money.read')")
     public SupplierPortalPaymentDetailsResponse get() {
         SupplierPrincipal principal = CurrentSupplierUser.require();
         return paymentDetailsService.get(principal.marketplaceSupplierId());
     }
 
     @PatchMapping
-    @PreAuthorize("hasPermission(null, 'supplier.catalog.write')")
+    @PreAuthorize("hasPermission(null, 'supplier.money.write')")
     public SupplierPortalPaymentDetailsResponse patch(
             @Valid @RequestBody PatchSupplierPortalPaymentDetailsRequest body
     ) {

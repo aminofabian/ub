@@ -100,7 +100,15 @@ public class MarketplaceAdminService {
         user.setEmail(email);
         user.setName(request.name().trim());
         user.setPasswordHash(passwordEncoder.encode(request.password()));
-        user.setRoleKey(SupplierUserRoles.ADMIN);
+        String roleKey = SupplierUserRoles.ADMIN;
+        if (request.roleKey() != null && !request.roleKey().isBlank()) {
+            try {
+                roleKey = SupplierUserRoles.normalize(request.roleKey());
+            } catch (IllegalArgumentException ex) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+            }
+        }
+        user.setRoleKey(roleKey);
         supplierUserRepository.save(user);
     }
 

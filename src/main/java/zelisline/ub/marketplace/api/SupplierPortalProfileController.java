@@ -38,28 +38,28 @@ public class SupplierPortalProfileController {
     }
 
     @PatchMapping
-    @PreAuthorize("hasPermission(null, 'supplier.catalog.write')")
+    @PreAuthorize("hasPermission(null, 'supplier.profile.write')")
     public SupplierPortalProfileResponse updateProfile(@Valid @RequestBody PatchSupplierPortalProfileRequest request) {
         SupplierPrincipal principal = CurrentSupplierUser.require();
         return supplierPortalProfileService.updateProfile(principal.marketplaceSupplierId(), request);
     }
 
     @PostMapping("/username")
-    @PreAuthorize("hasPermission(null, 'supplier.catalog.write')")
+    @PreAuthorize("hasPermission(null, 'supplier.profile.write')")
     public SupplierPortalProfileResponse claimUsername(@Valid @RequestBody ClaimSupplierUsernameRequest request) {
         SupplierPrincipal principal = CurrentSupplierUser.require();
         return supplierPortalProfileService.claimUsername(principal.marketplaceSupplierId(), request);
     }
 
     @GetMapping("/link-candidates")
-    @PreAuthorize("hasPermission(null, 'supplier.catalog.read')")
+    @PreAuthorize("hasPermission(null, 'supplier.profile.write')")
     public List<SupplierPortalLinkCandidateRow> linkCandidates() {
         SupplierPrincipal principal = CurrentSupplierUser.require();
         return supplierPortalProfileService.listLinkCandidates(principal.marketplaceSupplierId());
     }
 
     @PostMapping("/link")
-    @PreAuthorize("hasPermission(null, 'supplier.catalog.write')")
+    @PreAuthorize("hasPermission(null, 'supplier.profile.write')")
     public SupplierPortalProfileResponse linkLocal(@Valid @RequestBody LinkLocalSupplierRequest request) {
         SupplierPrincipal principal = CurrentSupplierUser.require();
         return supplierPortalProfileService.linkLocalSupplier(principal.marketplaceSupplierId(), request);

@@ -1,13 +1,13 @@
 package zelisline.ub.marketplace.api.dto;
 
-import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
-public record CreateMarketplaceSupplierUserRequest(
-        @NotBlank @Email String email,
+public record CreateSupplierPortalTeamUserRequest(
         @NotBlank @Size(max = 255) String name,
+        @Size(max = 191) String email,
+        @Size(max = 32) String phone,
         @NotBlank @Size(min = 8, max = 128) String password,
-        @Size(max = 32) String roleKey
+        @NotBlank @Size(max = 32) String roleKey
 ) {
 }

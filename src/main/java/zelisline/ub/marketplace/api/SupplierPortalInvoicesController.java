@@ -21,7 +21,7 @@ public class SupplierPortalInvoicesController {
     private final SupplierPortalInvoicesService supplierPortalInvoicesService;
 
     @GetMapping
-    @PreAuthorize("hasPermission(null, 'supplier.orders.read')")
+    @PreAuthorize("hasPermission(null, 'supplier.money.read')")
     public List<SupplierPortalInvoiceRow> list() {
         SupplierPrincipal principal = CurrentSupplierUser.require();
         return supplierPortalInvoicesService.listInvoices(principal.marketplaceSupplierId());

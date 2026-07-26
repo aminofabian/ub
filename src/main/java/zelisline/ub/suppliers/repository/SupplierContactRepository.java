@@ -4,6 +4,8 @@ import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import zelisline.ub.suppliers.domain.SupplierContact;
 
@@ -12,4 +14,25 @@ public interface SupplierContactRepository extends JpaRepository<SupplierContact
     List<SupplierContact> findBySupplierIdOrderByPrimaryContactDescNameAsc(String supplierId);
 
     Optional<SupplierContact> findByIdAndSupplierId(String id, String supplierId);
+
+    @Query("""
+            SELECT c FROM SupplierContact c
+            WHERE c.phone IS NOT NULL
+              AND (
+                c.phone = :phone
+                OR c.phone = :altPhone
+                OR c.phone LIKE CONCAT('%', :phoneTail)
+              )
+            """)
+    List<SupplierContact> findByPhoneVariants(
+            @Param("phone") String phone,
+            @Param("altPhone") String altPhone,
+            @Param("phoneTail") String phoneTail);
+
+    @Query("""
+            SELECT c FROM SupplierContact c
+            WHERE c.email IS NOT NULL
+              AND LOWER(c.email) = LOWER(:email)
+            """)
+    List<SupplierContact> findByEmailIgnoreCase(@Param("email") String email);
 }

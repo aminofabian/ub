@@ -14,6 +14,7 @@ import zelisline.ub.messaging.application.TenantMessagingConfig;
 import zelisline.ub.messaging.config.MessagingProperties;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
 import zelisline.ub.platform.application.PlatformIntegrationSettingsService;
+import zelisline.ub.platform.application.ResolvedMetaWhatsAppConfig;
 import zelisline.ub.platform.application.ResolvedRapidApiWhatsappConfig;
 import zelisline.ub.platform.application.ResolvedSozuriSmsConfig;
 import zelisline.ub.platform.application.ResolvedTextSmsConfig;
@@ -78,6 +79,8 @@ public class BusinessCreditMessagingSettingsService {
                 platformIntegrationSettingsService.resolveSozuriSms();
         ResolvedTextSmsConfig platformTextSms =
                 platformIntegrationSettingsService.resolveTextSms();
+        ResolvedMetaWhatsAppConfig platformMeta =
+                platformIntegrationSettingsService.resolveMetaWhatsApp();
         String smsProvider = firstNonBlank(platformSms.provider(), env.sms().provider(), "none");
         return new TenantMessagingConfig(
                 true,
@@ -87,9 +90,9 @@ public class BusinessCreditMessagingSettingsService {
                 trimToNull(platformWa.lookupUrl()),
                 trimToNull(platformWa.phoneField()),
                 platformWa.phoneDigitsOnly(),
-                trimToNull(env.metaWhatsApp().accessToken()),
-                trimToNull(env.metaWhatsApp().phoneNumberId()),
-                trimToNull(env.metaWhatsApp().graphVersion()),
+                trimToNull(platformMeta.accessToken()),
+                trimToNull(platformMeta.phoneNumberId()),
+                trimToNull(platformMeta.graphVersion()),
                 smsProvider,
                 trimToNull(env.sms().africasTalkingUsername()),
                 trimToNull(env.sms().africasTalkingApiKey()),
@@ -114,6 +117,8 @@ public class BusinessCreditMessagingSettingsService {
                 platformIntegrationSettingsService.resolveSozuriSms();
         ResolvedTextSmsConfig platformTextSms =
                 platformIntegrationSettingsService.resolveTextSms();
+        ResolvedMetaWhatsAppConfig platformMeta =
+                platformIntegrationSettingsService.resolveMetaWhatsApp();
         String paymentUrl = firstNonBlank(
                 trimToNull(s.getCreditSaleReminderPaymentUrl()),
                 env.creditSaleReminder().paymentAccountUrl(),
@@ -139,9 +144,15 @@ public class BusinessCreditMessagingSettingsService {
                 firstNonBlank(trimToNull(s.getRapidapiLookupUrl()), platformWa.lookupUrl()),
                 firstNonBlank(trimToNull(s.getRapidapiPhoneField()), platformWa.phoneField()),
                 digitsOnly,
-                firstNonBlank(trimToNull(decryptOrNull(s.getWhatsappMetaAccessTokenEnc())), trimToNull(env.metaWhatsApp().accessToken())),
-                firstNonBlank(trimToNull(s.getWhatsappMetaPhoneNumberId()), trimToNull(env.metaWhatsApp().phoneNumberId())),
-                firstNonBlank(trimToNull(s.getWhatsappMetaGraphVersion()), env.metaWhatsApp().graphVersion()),
+                firstNonBlank(
+                        decryptOrNull(s.getWhatsappMetaAccessTokenEnc()),
+                        platformMeta.accessToken()),
+                firstNonBlank(
+                        trimToNull(s.getWhatsappMetaPhoneNumberId()),
+                        platformMeta.phoneNumberId()),
+                firstNonBlank(
+                        trimToNull(s.getWhatsappMetaGraphVersion()),
+                        platformMeta.graphVersion()),
                 smsProvider,
                 firstNonBlank(trimToNull(s.getSmsAfricasTalkingUsername()), env.sms().africasTalkingUsername()),
                 firstNonBlank(decryptOrNull(s.getSmsAfricasTalkingApiKeyEnc()), env.sms().africasTalkingApiKey()),

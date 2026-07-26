@@ -23,5 +23,10 @@ public record UpdatePlatformIntegrationsRequest(
         String textsmsPartnerId,
         String textsmsApiKey,
         String textsmsShortcode,
-        String textsmsApiUrl
+        String textsmsApiUrl,
+        String whatsappMetaAccessToken,
+        String whatsappMetaPhoneNumberId,
+        String whatsappMetaGraphVersion,
+        String whatsappMetaWebhookVerifyToken,
+        String whatsappMetaAppSecret
 ) {}

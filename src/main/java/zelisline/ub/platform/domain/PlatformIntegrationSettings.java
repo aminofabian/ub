@@ -78,6 +78,21 @@ public class PlatformIntegrationSettings {
     @Column(name = "textsms_api_url", length = 512)
     private String textsmsApiUrl;
 
+    @Column(name = "whatsapp_meta_access_token_enc", columnDefinition = "TEXT")
+    private String whatsappMetaAccessTokenEnc;
+
+    @Column(name = "whatsapp_meta_phone_number_id", length = 64)
+    private String whatsappMetaPhoneNumberId;
+
+    @Column(name = "whatsapp_meta_graph_version", length = 32)
+    private String whatsappMetaGraphVersion;
+
+    @Column(name = "whatsapp_meta_webhook_verify_token_enc", columnDefinition = "TEXT")
+    private String whatsappMetaWebhookVerifyTokenEnc;
+
+    @Column(name = "whatsapp_meta_app_secret_enc", columnDefinition = "TEXT")
+    private String whatsappMetaAppSecretEnc;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt = Instant.now();
 }

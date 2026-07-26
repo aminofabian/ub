@@ -22,6 +22,7 @@ public class PlatformIntegrationSettingsService {
     private static final String DEFAULT_PHONE_FIELD = "phone";
     private static final String DEFAULT_SOZURI_URL = "https://sozuri.net/api/v1/messaging";
     private static final String DEFAULT_TEXTSMS_URL = "https://sms.textsms.co.ke/api/services/sendsms/";
+    private static final String DEFAULT_GRAPH_VERSION = "v25.0";
 
     private final PlatformIntegrationSettingsRepository repository;
     private final CredentialEncryptionService encryptionService;
@@ -113,6 +114,22 @@ public class PlatformIntegrationSettingsService {
         if (body.textsmsApiUrl() != null) {
             row.setTextsmsApiUrl(blankToNull(body.textsmsApiUrl()));
         }
+        if (body.whatsappMetaAccessToken() != null) {
+            row.setWhatsappMetaAccessTokenEnc(encryptOrClear(body.whatsappMetaAccessToken()));
+        }
+        if (body.whatsappMetaPhoneNumberId() != null) {
+            row.setWhatsappMetaPhoneNumberId(blankToNull(body.whatsappMetaPhoneNumberId()));
+        }
+        if (body.whatsappMetaGraphVersion() != null) {
+            row.setWhatsappMetaGraphVersion(blankToNull(body.whatsappMetaGraphVersion()));
+        }
+        if (body.whatsappMetaWebhookVerifyToken() != null) {
+            row.setWhatsappMetaWebhookVerifyTokenEnc(
+                    encryptOrClear(body.whatsappMetaWebhookVerifyToken()));
+        }
+        if (body.whatsappMetaAppSecret() != null) {
+            row.setWhatsappMetaAppSecretEnc(encryptOrClear(body.whatsappMetaAppSecret()));
+        }
         row.setUpdatedAt(Instant.now());
         PlatformIntegrationSettings saved = repository.save(row);
         return toResponse(saved, readSecrets(saved));
@@ -160,6 +177,13 @@ public class PlatformIntegrationSettingsService {
         return resolveTextSmsFromRow(row, secrets);
     }
 
+    @Transactional(readOnly = true)
+    public ResolvedMetaWhatsAppConfig resolveMetaWhatsApp() {
+        PlatformIntegrationSettings row = loadSingleton();
+        SecretRead secrets = readSecrets(row);
+        return resolveMetaWhatsAppFromRow(row, secrets);
+    }
+
     private PlatformIntegrationsResponse toResponse(
             PlatformIntegrationSettings row,
             SecretRead secrets
@@ -169,6 +193,7 @@ public class PlatformIntegrationSettingsService {
         ResolvedRapidApiWhatsappConfig wa = resolveWhatsappFromRow(row, secrets, msgEnv);
         ResolvedSozuriSmsConfig sozuri = resolveSozuriFromRow(row, secrets);
         ResolvedTextSmsConfig textsms = resolveTextSmsFromRow(row, secrets);
+        ResolvedMetaWhatsAppConfig meta = resolveMetaWhatsAppFromRow(row, secrets);
         return new PlatformIntegrationsResponse(
                 secrets.hasDeepseekApiKey,
                 firstNonBlank(trimToNull(row.getDeepseekHost()), catalogEnv.host()),
@@ -189,10 +214,16 @@ public class PlatformIntegrationSettingsService {
                 textsms.shortcode(),
                 textsms.apiUrl(),
                 secrets.hasTextsmsApiKey,
+                secrets.hasWhatsappMetaAccessToken,
+                meta.phoneNumberId(),
+                meta.graphVersion(),
+                secrets.hasWhatsappMetaWebhookVerifyToken,
+                secrets.hasWhatsappMetaAppSecret,
                 envHasDeepseekKey(catalogEnv),
                 envHasRapidApiWhatsappKey(msgEnv),
                 envHasSozuriKey(messagingProperties.sms()),
                 envHasTextsmsKey(messagingProperties.sms()),
+                messagingProperties.metaWhatsApp().configured(),
                 secrets.readable,
                 secrets.errorMessage,
                 encryptionService.usesEphemeralKey());
@@ -255,6 +286,34 @@ public class PlatformIntegrationSettingsService {
         return new ResolvedTextSmsConfig(partnerId, apiKey, shortcode, apiUrl);
     }
 
+    private ResolvedMetaWhatsAppConfig resolveMetaWhatsAppFromRow(
+            PlatformIntegrationSettings row,
+            SecretRead secrets
+    ) {
+        var env = messagingProperties.metaWhatsApp();
+        String accessToken =
+                secrets.readable
+                        ? firstNonBlank(secrets.whatsappMetaAccessToken, env.accessToken())
+                        : blankToNull(env.accessToken());
+        String phoneNumberId =
+                firstNonBlank(trimToNull(row.getWhatsappMetaPhoneNumberId()), env.phoneNumberId());
+        String graphVersion =
+                firstNonBlank(
+                        trimToNull(row.getWhatsappMetaGraphVersion()),
+                        env.graphVersion(),
+                        DEFAULT_GRAPH_VERSION);
+        String webhookVerifyToken =
+                secrets.readable
+                        ? firstNonBlank(secrets.whatsappMetaWebhookVerifyToken, env.webhookVerifyToken())
+                        : blankToNull(env.webhookVerifyToken());
+        String appSecret =
+                secrets.readable
+                        ? firstNonBlank(secrets.whatsappMetaAppSecret, env.appSecret())
+                        : blankToNull(env.appSecret());
+        return new ResolvedMetaWhatsAppConfig(
+                accessToken, phoneNumberId, graphVersion, webhookVerifyToken, appSecret);
+    }
+
     private PlatformIntegrationSettings loadSingleton() {
         return repository
                 .findById(PlatformIntegrationSettings.SINGLETON_ID)
@@ -276,6 +335,12 @@ public class PlatformIntegrationSettingsService {
                     hasEncrypted(row.getRapidapiWhatsappKeyEnc()),
                     hasEncrypted(row.getSozuriApiKeyEnc()),
                     hasEncrypted(row.getTextsmsApiKeyEnc()),
+                    hasEncrypted(row.getWhatsappMetaAccessTokenEnc()),
+                    hasEncrypted(row.getWhatsappMetaWebhookVerifyTokenEnc()),
+                    hasEncrypted(row.getWhatsappMetaAppSecretEnc()),
+                    null,
+                    null,
+                    null,
                     null,
                     null,
                     null,
@@ -290,10 +355,16 @@ public class PlatformIntegrationSettingsService {
                     hasEncrypted(row.getRapidapiWhatsappKeyEnc()),
                     hasEncrypted(row.getSozuriApiKeyEnc()),
                     hasEncrypted(row.getTextsmsApiKeyEnc()),
+                    hasEncrypted(row.getWhatsappMetaAccessTokenEnc()),
+                    hasEncrypted(row.getWhatsappMetaWebhookVerifyTokenEnc()),
+                    hasEncrypted(row.getWhatsappMetaAppSecretEnc()),
                     decryptOrNull(row.getDeepseekApiKeyEnc()),
                     decryptOrNull(row.getRapidapiWhatsappKeyEnc()),
                     decryptOrNull(row.getSozuriApiKeyEnc()),
                     decryptOrNull(row.getTextsmsApiKeyEnc()),
+                    decryptOrNull(row.getWhatsappMetaAccessTokenEnc()),
+                    decryptOrNull(row.getWhatsappMetaWebhookVerifyTokenEnc()),
+                    decryptOrNull(row.getWhatsappMetaAppSecretEnc()),
                     null);
         } catch (RuntimeException ex) {
             return new SecretRead(
@@ -302,6 +373,12 @@ public class PlatformIntegrationSettingsService {
                     hasEncrypted(row.getRapidapiWhatsappKeyEnc()),
                     hasEncrypted(row.getSozuriApiKeyEnc()),
                     hasEncrypted(row.getTextsmsApiKeyEnc()),
+                    hasEncrypted(row.getWhatsappMetaAccessTokenEnc()),
+                    hasEncrypted(row.getWhatsappMetaWebhookVerifyTokenEnc()),
+                    hasEncrypted(row.getWhatsappMetaAppSecretEnc()),
+                    null,
+                    null,
+                    null,
                     null,
                     null,
                     null,
@@ -377,10 +454,16 @@ public class PlatformIntegrationSettingsService {
             boolean hasRapidapiWhatsappKey,
             boolean hasSozuriApiKey,
             boolean hasTextsmsApiKey,
+            boolean hasWhatsappMetaAccessToken,
+            boolean hasWhatsappMetaWebhookVerifyToken,
+            boolean hasWhatsappMetaAppSecret,
             String deepseekApiKey,
             String rapidapiWhatsappKey,
             String sozuriApiKey,
             String textsmsApiKey,
+            String whatsappMetaAccessToken,
+            String whatsappMetaWebhookVerifyToken,
+            String whatsappMetaAppSecret,
             String errorMessage
     ) {}
 }

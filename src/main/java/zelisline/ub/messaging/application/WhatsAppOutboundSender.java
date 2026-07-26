@@ -9,8 +9,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import kong.unirest.HttpResponse;
 import kong.unirest.Unirest;
 
-import zelisline.ub.messaging.config.MessagingProperties;
 import zelisline.ub.messaging.dto.WhatsAppSendRequest;
+import zelisline.ub.platform.application.PlatformIntegrationSettingsService;
+import zelisline.ub.platform.application.ResolvedMetaWhatsAppConfig;
 
 /**
  * Sends outbound WhatsApp messages via Meta Cloud API.
@@ -23,11 +24,14 @@ public class WhatsAppOutboundSender {
 
     private static final Logger log = LoggerFactory.getLogger(WhatsAppOutboundSender.class);
 
-    private final MessagingProperties messagingProperties;
+    private final PlatformIntegrationSettingsService platformIntegrationSettingsService;
     private final ObjectMapper objectMapper;
 
-    public WhatsAppOutboundSender(MessagingProperties messagingProperties, ObjectMapper objectMapper) {
-        this.messagingProperties = messagingProperties;
+    public WhatsAppOutboundSender(
+            PlatformIntegrationSettingsService platformIntegrationSettingsService,
+            ObjectMapper objectMapper
+    ) {
+        this.platformIntegrationSettingsService = platformIntegrationSettingsService;
         this.objectMapper = objectMapper;
     }
 
@@ -38,19 +42,20 @@ public class WhatsAppOutboundSender {
      * @return true if HTTP 200, false otherwise
      */
     public boolean sendMessage(WhatsAppSendRequest request) {
-        if (!isConfigured()) {
+        ResolvedMetaWhatsAppConfig meta = platformIntegrationSettingsService.resolveMetaWhatsApp();
+        if (!meta.configured()) {
             log.warn("WhatsApp outbound: Meta WhatsApp not configured — message to {} not sent", request.to());
             return false;
         }
 
         try {
-            String url = buildUrl();
+            String url = buildUrl(meta);
             String jsonBody = objectMapper.writeValueAsString(request);
 
             log.debug("WhatsApp outbound: POST {} body={}", url, jsonBody);
 
             HttpResponse<String> response = Unirest.post(url)
-                .header("Authorization", "Bearer " + messagingProperties.metaWhatsApp().accessToken())
+                .header("Authorization", "Bearer " + meta.accessToken())
                 .header("Content-Type", "application/json")
                 .body(jsonBody)
                 .asString();
@@ -92,15 +97,11 @@ public class WhatsAppOutboundSender {
         return sendMessage(WhatsAppSendRequest.template(to, templateName, languageCode));
     }
 
-    private boolean isConfigured() {
-        return messagingProperties != null
-            && messagingProperties.metaWhatsApp() != null
-            && messagingProperties.metaWhatsApp().configured();
-    }
-
-    private String buildUrl() {
-        String graphVersion = messagingProperties.metaWhatsApp().graphVersion();
-        String phoneNumberId = messagingProperties.metaWhatsApp().phoneNumberId();
-        return "https://graph.facebook.com/" + graphVersion + "/" + phoneNumberId + "/messages";
+    private static String buildUrl(ResolvedMetaWhatsAppConfig meta) {
+        String graphVersion = meta.graphVersion() == null || meta.graphVersion().isBlank()
+                ? "v25.0"
+                : meta.graphVersion().trim();
+        return "https://graph.facebook.com/" + graphVersion + "/" + meta.phoneNumberId().trim()
+                + "/messages";
     }
 }

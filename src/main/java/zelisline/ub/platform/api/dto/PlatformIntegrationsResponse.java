@@ -1,6 +1,6 @@
 package zelisline.ub.platform.api.dto;
 
-/** API keys are never returned; use {@code has*} flags. */
+/** API keys / secrets are never returned; use {@code has*} flags. */
 public record PlatformIntegrationsResponse(
         boolean hasDeepseekApiKey,
         String deepseekHost,
@@ -21,10 +21,16 @@ public record PlatformIntegrationsResponse(
         String textsmsShortcode,
         String textsmsApiUrl,
         boolean hasTextsmsApiKey,
+        boolean hasWhatsappMetaAccessToken,
+        String whatsappMetaPhoneNumberId,
+        String whatsappMetaGraphVersion,
+        boolean hasWhatsappMetaWebhookVerifyToken,
+        boolean hasWhatsappMetaAppSecret,
         boolean envDeepseekConfigured,
         boolean envRapidapiWhatsappConfigured,
         boolean envSozuriConfigured,
         boolean envTextsmsConfigured,
+        boolean envWhatsappMetaConfigured,
         boolean secretsReadable,
         String secretsError,
         boolean encryptionEphemeral

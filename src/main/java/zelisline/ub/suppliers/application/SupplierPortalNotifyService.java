@@ -29,7 +29,7 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
 
 /**
- * Soft SMS/WhatsApp ping to the supplier after a Path B post with their public portal link.
+ * Soft SMS ping to the supplier after a Path B post or supplier payment, with their public portal link.
  */
 @Service
 @RequiredArgsConstructor
@@ -73,6 +73,29 @@ public class SupplierPortalNotifyService {
         });
     }
 
+    /**
+     * Schedule a payment confirmation SMS after the current transaction commits (never blocks payment).
+     */
+    public void notifySupplyPaidAfterCommit(
+            String businessId,
+            String supplierId,
+            BigDecimal amountPaid,
+            String paymentMethod,
+            String reference,
+            List<String> invoiceNumbers
+    ) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            notifySupplyPaid(businessId, supplierId, amountPaid, paymentMethod, reference, invoiceNumbers);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                notifySupplyPaid(businessId, supplierId, amountPaid, paymentMethod, reference, invoiceNumbers);
+            }
+        });
+    }
+
     public void notifySupplyPosted(
             String businessId,
             String supplierId,
@@ -80,73 +103,174 @@ public class SupplierPortalNotifyService {
             BigDecimal grandTotal
     ) {
         try {
-            Supplier supplier = supplierRepository
-                    .findByIdAndBusinessIdAndDeletedAtIsNull(supplierId, businessId)
-                    .orElse(null);
-            if (supplier == null) {
-                return;
-            }
-            String phoneDigits = resolvePhoneDigits(supplier);
-            if (phoneDigits == null) {
-                log.debug("Supplier portal SMS skipped — no phone for supplier {}", supplierId);
+            SupplierNotifyContext ctx = resolveNotifyContext(businessId, supplierId);
+            if (ctx == null) {
                 return;
             }
 
-            TenantMessagingConfig messaging = messagingSettingsService.resolveForTest(businessId);
-            if (!messaging.enabled() || !messaging.smsConfigured()) {
-                log.debug("Supplier portal SMS skipped — messaging not configured for {}", businessId);
-                return;
-            }
-
-            Business business = businessRepository.findById(businessId).orElse(null);
-            String shop = business != null && business.getName() != null
-                    ? business.getName().trim()
-                    : "Shop";
-            String currency = business != null && business.getCurrency() != null
-                    ? business.getCurrency().trim()
-                    : "KES";
-            String slug = SupplierSlug.canonical(supplier.getName(), supplier.getCode());
-            String portalUrl = buildPortalUrl(businessId, slug);
-
-            BigDecimal owed = BigDecimal.ZERO;
-            try {
-                owed = purchaseHistoryService
-                        .purchaseHistory(businessId, supplierId, 1)
-                        .summary()
-                        .openBalance();
-            } catch (Exception e) {
-                log.debug("Could not load open balance for supplier SMS: {}", e.toString());
-            }
-
-            String total = money(grandTotal) + " " + currency;
-            String owedStr = money(owed) + " " + currency;
+            BigDecimal owed = loadOpenBalance(businessId, supplierId);
+            String total = money(grandTotal) + " " + ctx.currency();
+            String owedStr = money(owed) + " " + ctx.currency();
             String inv = invoiceNumber != null && !invoiceNumber.isBlank()
                     ? invoiceNumber.trim()
                     : "supply";
 
-            String body = shop + ": supply " + inv + " (" + total + ") received. "
+            String body = ctx.shop() + ": supply " + inv + " (" + total + ") received. "
                     + "Amount owed: " + owedStr + ". "
-                    + "View history & note issues: " + portalUrl;
-            String globalUrl = resolveGlobalHubUrl(supplier);
+                    + "View history & note issues: " + ctx.portalUrl();
+            String globalUrl = resolveGlobalHubUrl(ctx.supplier());
             if (globalUrl != null) {
                 body = body + " · All shops: " + globalUrl;
             }
-            String claimUrl = buildClaimUrl(phoneDigits);
+            String claimUrl = buildClaimUrl(ctx.phoneDigits());
             if (claimUrl != null) {
                 body = body + " · Claim account: " + claimUrl;
             }
             body = body + " — Payment within 48hrs.";
 
-            var delivery = customerMessageDispatcher.deliverSmsOnly(messaging, phoneDigits, body);
-            log.info(
-                    "Supplier portal SMS supplier={} channel={} outcome={} detail={}",
-                    supplierId,
-                    delivery.channel(),
-                    delivery.outcome(),
-                    delivery.detail());
+            deliverSupplierSms(ctx, body);
         } catch (Exception e) {
             log.warn("Supplier portal SMS failed soft: {}", e.toString());
         }
+    }
+
+    public void notifySupplyPaid(
+            String businessId,
+            String supplierId,
+            BigDecimal amountPaid,
+            String paymentMethod,
+            String reference,
+            List<String> invoiceNumbers
+    ) {
+        try {
+            SupplierNotifyContext ctx = resolveNotifyContext(businessId, supplierId);
+            if (ctx == null) {
+                return;
+            }
+
+            BigDecimal owed = loadOpenBalance(businessId, supplierId);
+            String body = buildPaidMessage(
+                    ctx.shop(),
+                    ctx.currency(),
+                    amountPaid,
+                    paymentMethod,
+                    reference,
+                    invoiceNumbers,
+                    owed,
+                    ctx.portalUrl());
+            deliverSupplierSms(ctx, body);
+        } catch (Exception e) {
+            log.warn("Supplier payment SMS failed soft: {}", e.toString());
+        }
+    }
+
+    static String buildPaidMessage(
+            String shop,
+            String currency,
+            BigDecimal amountPaid,
+            String paymentMethod,
+            String reference,
+            List<String> invoiceNumbers,
+            BigDecimal openBalance,
+            String portalUrl
+    ) {
+        String paid = money(amountPaid) + " " + currency;
+        String owedStr = money(openBalance) + " " + currency;
+        String supplies = formatInvoiceLabel(invoiceNumbers);
+        String method = paymentMethod != null && !paymentMethod.isBlank()
+                ? paymentMethod.trim().toLowerCase()
+                : "cash";
+        String ref = reference != null && !reference.isBlank() ? reference.trim() : null;
+
+        StringBuilder body = new StringBuilder();
+        body.append(shop).append(": paid ").append(paid)
+                .append(" (").append(method).append(") for ").append(supplies).append(".");
+        if (ref != null) {
+            body.append(" Ref: ").append(ref).append(".");
+        }
+        body.append(" Balance owed: ").append(owedStr).append(".")
+                .append(" View: ").append(portalUrl);
+        return body.toString();
+    }
+
+    private SupplierNotifyContext resolveNotifyContext(String businessId, String supplierId) {
+        // Soft-deleted suppliers may still be paid; allow SMS on payout phone / contacts.
+        Supplier supplier = supplierRepository.findByIdAndBusinessId(supplierId, businessId).orElse(null);
+        if (supplier == null) {
+            return null;
+        }
+        String phoneDigits = resolvePhoneDigits(supplier);
+        if (phoneDigits == null) {
+            log.debug("Supplier SMS skipped — no phone for supplier {}", supplierId);
+            return null;
+        }
+
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForTest(businessId);
+        if (!messaging.enabled() || !messaging.smsConfigured()) {
+            log.debug("Supplier SMS skipped — messaging not configured for {}", businessId);
+            return null;
+        }
+
+        Business business = businessRepository.findById(businessId).orElse(null);
+        String shop = business != null && business.getName() != null
+                ? business.getName().trim()
+                : "Shop";
+        String currency = business != null && business.getCurrency() != null
+                ? business.getCurrency().trim()
+                : "KES";
+        String slug = SupplierSlug.canonical(supplier.getName(), supplier.getCode());
+        String portalUrl = buildPortalUrl(businessId, slug);
+        return new SupplierNotifyContext(supplier, phoneDigits, messaging, shop, currency, portalUrl);
+    }
+
+    private BigDecimal loadOpenBalance(String businessId, String supplierId) {
+        try {
+            return purchaseHistoryService
+                    .purchaseHistory(businessId, supplierId, 1)
+                    .summary()
+                    .openBalance();
+        } catch (Exception e) {
+            log.debug("Could not load open balance for supplier SMS: {}", e.toString());
+            return BigDecimal.ZERO;
+        }
+    }
+
+    private void deliverSupplierSms(SupplierNotifyContext ctx, String body) {
+        var delivery = customerMessageDispatcher.deliverSmsOnly(ctx.messaging(), ctx.phoneDigits(), body);
+        log.info(
+                "Supplier SMS supplier={} channel={} outcome={} detail={}",
+                ctx.supplier().getId(),
+                delivery.channel(),
+                delivery.outcome(),
+                delivery.detail());
+    }
+
+    private static String formatInvoiceLabel(List<String> invoiceNumbers) {
+        if (invoiceNumbers == null || invoiceNumbers.isEmpty()) {
+            return "supply";
+        }
+        List<String> cleaned = invoiceNumbers.stream()
+                .filter(n -> n != null && !n.isBlank())
+                .map(String::trim)
+                .distinct()
+                .toList();
+        if (cleaned.isEmpty()) {
+            return "supply";
+        }
+        if (cleaned.size() == 1) {
+            return "supply " + cleaned.getFirst();
+        }
+        return "supplies " + String.join(", ", cleaned);
+    }
+
+    private record SupplierNotifyContext(
+            Supplier supplier,
+            String phoneDigits,
+            TenantMessagingConfig messaging,
+            String shop,
+            String currency,
+            String portalUrl
+    ) {
     }
 
     private String resolvePhoneDigits(Supplier supplier) {

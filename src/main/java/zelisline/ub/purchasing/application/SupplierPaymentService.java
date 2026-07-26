@@ -43,6 +43,7 @@ import zelisline.ub.purchasing.domain.SupplierPaymentAllocation;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
 import zelisline.ub.purchasing.repository.SupplierPaymentAllocationRepository;
 import zelisline.ub.purchasing.repository.SupplierPaymentRepository;
+import zelisline.ub.suppliers.application.SupplierPortalNotifyService;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.repository.SupplierRepository;
 
@@ -61,6 +62,7 @@ public class SupplierPaymentService {
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final ObjectMapper objectMapper;
     private final PathBAssociatedCostService pathBAssociatedCostService;
+    private final SupplierPortalNotifyService supplierPortalNotifyService;
 
     public static String postPaymentRoute() {
         return "POST /api/v1/purchasing/supplier-payments";
@@ -269,6 +271,7 @@ public class SupplierPaymentService {
             if (totalIn.compareTo(allocSum) < 0) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Payment and credit must cover total allocations");
             }
+            List<String> invoiceNumbers = new ArrayList<>();
             for (PostSupplierPaymentAllocationLine line : req.allocations()) {
                 if (line.amount().signum() <= 0) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Allocation amounts must be positive");
@@ -287,6 +290,9 @@ public class SupplierPaymentService {
                 if (line.amount().setScale(2, RoundingMode.HALF_UP).compareTo(open) > 0) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Allocation exceeds open balance on invoice");
                 }
+                if (inv.getInvoiceNumber() != null && !inv.getInvoiceNumber().isBlank()) {
+                    invoiceNumbers.add(inv.getInvoiceNumber().trim());
+                }
             }
 
             BigDecimal surplus = totalIn.subtract(allocSum);
@@ -300,7 +306,11 @@ public class SupplierPaymentService {
             payment.setPaymentMethod(req.paymentMethod().trim().toLowerCase());
             payment.setAmount(cash);
             payment.setCreditApplied(credit);
-            payment.setReference(blankToNull(req.reference()));
+            String reference = blankToNull(req.reference());
+            if (reference == null) {
+                reference = shortPaymentRef(payment.getId());
+            }
+            payment.setReference(reference);
             payment.setNotes(blankToNull(req.notes()));
             payment.setStatus(PurchasingConstants.PAYMENT_POSTED);
             supplierPaymentRepository.save(payment);
@@ -336,8 +346,25 @@ public class SupplierPaymentService {
                 allocationRepository.save(a);
             }
 
+            supplierPortalNotifyService.notifySupplyPaidAfterCommit(
+                    businessId,
+                    req.supplierId(),
+                    allocSum,
+                    payment.getPaymentMethod(),
+                    payment.getReference(),
+                    List.copyOf(invoiceNumbers));
+
             return new PostSupplierPaymentResponse(payment.getId(), jeId, allocSum, prepayAfter);
         }
+    }
+
+    private static String shortPaymentRef(String paymentId) {
+        if (paymentId == null || paymentId.isBlank()) {
+            return null;
+        }
+        String compact = paymentId.replace("-", "");
+        int end = Math.min(8, compact.length());
+        return compact.substring(0, end).toUpperCase();
     }
 
     private BigDecimal openBalance(String invoiceId, BigDecimal grandTotal) {

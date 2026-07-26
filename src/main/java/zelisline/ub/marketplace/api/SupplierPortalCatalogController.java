@@ -49,7 +49,8 @@ public class SupplierPortalCatalogController {
     @ResponseStatus(HttpStatus.CREATED)
     public SupplierPortalProductResponse create(@Valid @RequestBody CreateSupplierPortalProductRequest request) {
         SupplierPrincipal principal = CurrentSupplierUser.require();
-        return supplierPortalCatalogService.createProduct(principal.marketplaceSupplierId(), request);
+        return supplierPortalCatalogService.createProduct(
+                principal.marketplaceSupplierId(), principal.userId(), request);
     }
 
     @PatchMapping("/{productId}")
@@ -59,7 +60,7 @@ public class SupplierPortalCatalogController {
             @Valid @RequestBody PatchSupplierPortalProductRequest request) {
         SupplierPrincipal principal = CurrentSupplierUser.require();
         return supplierPortalCatalogService.updateProduct(
-                principal.marketplaceSupplierId(), productId, request);
+                principal.marketplaceSupplierId(), principal.userId(), productId, request);
     }
 
     @DeleteMapping("/{productId}")

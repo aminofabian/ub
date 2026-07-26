@@ -42,6 +42,7 @@ public class SupplierPortalHubService {
     private final SupplierPurchaseHistoryService purchaseHistoryService;
     private final SupplierInvoiceLineRepository supplierInvoiceLineRepository;
     private final ContactMessageRepository contactMessageRepository;
+    private final SupplierPortalMessagesService messagesService;
 
     @Transactional(readOnly = true)
     public SupplierPortalHubShopDetailResponse shopSupplies(
@@ -123,6 +124,13 @@ public class SupplierPortalHubService {
             row.setUserAgent(ua.length() > 512 ? ua.substring(0, 512) : ua);
         }
         ContactMessage saved = contactMessageRepository.save(row);
+        messagesService.recordFromShop(
+                marketplaceSupplierId,
+                link.getBusinessId(),
+                localSupplierId,
+                fromName,
+                message,
+                saved.getId());
         return new PublicSupplierComplaintResponse(true, saved.getId());
     }
 

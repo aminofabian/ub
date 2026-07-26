@@ -17,6 +17,8 @@ public interface BusinessSupplierConnectionRepository extends JpaRepository<Busi
     List<BusinessSupplierConnection> findByMarketplaceSupplierIdAndStatus(
             String marketplaceSupplierId, String status);
 
+    List<BusinessSupplierConnection> findByBusinessIdAndStatus(String businessId, String status);
+
     Optional<BusinessSupplierConnection> findByMarketplaceSupplierIdAndLocalSupplierId(
             String marketplaceSupplierId, String localSupplierId);
 

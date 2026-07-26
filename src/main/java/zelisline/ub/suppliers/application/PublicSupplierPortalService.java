@@ -56,6 +56,7 @@ public class PublicSupplierPortalService {
     private final ItemRepository itemRepository;
     private final BusinessRepository businessRepository;
     private final ContactMessageRepository contactMessageRepository;
+    private final zelisline.ub.marketplace.application.SupplierPortalMessagesService messagesService;
 
     @Transactional(readOnly = true)
     public PublicSupplierPortalResponse overview(String businessId, String slugRaw) {
@@ -150,6 +151,15 @@ public class PublicSupplierPortalService {
             row.setUserAgent(ua.length() > 512 ? ua.substring(0, 512) : ua);
         }
         ContactMessage saved = contactMessageRepository.save(row);
+        if (supplier.getMarketplaceSupplierId() != null && !supplier.getMarketplaceSupplierId().isBlank()) {
+            messagesService.recordFromShop(
+                    supplier.getMarketplaceSupplierId(),
+                    businessId,
+                    supplier.getId(),
+                    fromName,
+                    message,
+                    saved.getId());
+        }
         return new PublicSupplierComplaintResponse(true, saved.getId());
     }
 

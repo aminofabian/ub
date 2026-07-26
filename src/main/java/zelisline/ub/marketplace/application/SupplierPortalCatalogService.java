@@ -2,7 +2,9 @@ package zelisline.ub.marketplace.application;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -11,15 +13,23 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.marketplace.api.dto.CreateSupplierPortalProductRequest;
 import zelisline.ub.marketplace.api.dto.PatchSupplierPortalProductRequest;
 import zelisline.ub.marketplace.api.dto.SupplierPortalProductResponse;
 import zelisline.ub.marketplace.domain.MarketplaceSupplierPriceOffer;
 import zelisline.ub.marketplace.domain.MarketplaceSupplierProduct;
+import zelisline.ub.marketplace.domain.MarketplaceSupplierProductEditRequest;
 import zelisline.ub.marketplace.domain.MarketplaceSupplierProductStatuses;
 import zelisline.ub.marketplace.repository.MarketplaceSupplierPriceOfferRepository;
+import zelisline.ub.marketplace.repository.MarketplaceSupplierProductEditRequestRepository;
 import zelisline.ub.marketplace.repository.MarketplaceSupplierProductRepository;
+import zelisline.ub.notifications.SupplierPortalNotificationTypes;
+import zelisline.ub.platform.application.PlatformSupplierPortalSettingsService;
+import zelisline.ub.platform.domain.PlatformSupplierPortalSettings;
 
 @Service
 @RequiredArgsConstructor
@@ -27,6 +37,10 @@ public class SupplierPortalCatalogService {
 
     private final MarketplaceSupplierProductRepository productRepository;
     private final MarketplaceSupplierPriceOfferRepository priceOfferRepository;
+    private final MarketplaceSupplierProductEditRequestRepository editRequestRepository;
+    private final PlatformSupplierPortalSettingsService portalSettingsService;
+    private final SupplierPortalNotificationsService notificationsService;
+    private final ObjectMapper objectMapper;
 
     @Transactional(readOnly = true)
     public Page<SupplierPortalProductResponse> listProducts(
@@ -46,8 +60,10 @@ public class SupplierPortalCatalogService {
     @Transactional
     public SupplierPortalProductResponse createProduct(
             String marketplaceSupplierId,
+            String supplierUserId,
             CreateSupplierPortalProductRequest request
     ) {
+        requireProductEditsAllowed();
         MarketplaceSupplierProduct product = new MarketplaceSupplierProduct();
         product.setMarketplaceSupplierId(marketplaceSupplierId);
         applyProductFields(product, request.name(), request.barcode(), request.sku(),
@@ -72,10 +88,96 @@ public class SupplierPortalCatalogService {
     @Transactional
     public SupplierPortalProductResponse updateProduct(
             String marketplaceSupplierId,
+            String supplierUserId,
             String productId,
             PatchSupplierPortalProductRequest request
     ) {
+        requireProductEditsAllowed();
         MarketplaceSupplierProduct product = requireProduct(marketplaceSupplierId, productId);
+        PlatformSupplierPortalSettings settings = portalSettingsService.loadSingleton();
+
+        if (settings.isRequireStoreApprovalProductEdits() && hasReviewableChange(request)) {
+            return queueEdit(product, supplierUserId, request);
+        }
+        applyLivePatch(product, request);
+        return toResponse(product);
+    }
+
+    @Transactional
+    public void deleteProduct(String marketplaceSupplierId, String productId) {
+        requireProductEditsAllowed();
+        MarketplaceSupplierProduct product = requireProduct(marketplaceSupplierId, productId);
+        product.setStatus(MarketplaceSupplierProductStatuses.INACTIVE);
+        productRepository.save(product);
+        for (MarketplaceSupplierPriceOffer offer : priceOfferRepository.findByProductId(product.getId())) {
+            offer.setAvailable(false);
+            priceOfferRepository.save(offer);
+        }
+    }
+
+    @Transactional
+    public void applyProposedEdit(MarketplaceSupplierProductEditRequest edit) {
+        MarketplaceSupplierProduct product = requireProduct(edit.getMarketplaceSupplierId(), edit.getProductId());
+        Map<String, Object> proposed = readMap(edit.getProposedJson());
+        PatchSupplierPortalProductRequest patch = mapToPatch(proposed);
+        applyLivePatch(product, patch);
+    }
+
+    @Transactional
+    public void notifyEditDecision(MarketplaceSupplierProductEditRequest edit, boolean approved) {
+        MarketplaceSupplierProduct product = productRepository.findById(edit.getProductId()).orElse(null);
+        String name = product == null ? "product" : product.getName();
+        String title = approved ? "Product edit approved" : "Product edit rejected";
+        String body = approved
+                ? "Your change to \"" + name + "\" is now live."
+                : "Your change to \"" + name + "\" was rejected"
+                        + (edit.getReviewNote() != null && !edit.getReviewNote().isBlank()
+                        ? ": " + edit.getReviewNote().trim()
+                        : ".");
+        notificationsService.create(
+                edit.getMarketplaceSupplierId(),
+                approved
+                        ? SupplierPortalNotificationTypes.PRODUCT_APPROVED
+                        : SupplierPortalNotificationTypes.PRODUCT_REJECTED,
+                title,
+                body,
+                "/supplier-portal/catalog");
+    }
+
+    private SupplierPortalProductResponse queueEdit(
+            MarketplaceSupplierProduct product,
+            String supplierUserId,
+            PatchSupplierPortalProductRequest request
+    ) {
+        editRequestRepository.findFirstByProductIdAndStatusOrderByCreatedAtDesc(
+                        product.getId(), MarketplaceSupplierProductEditRequest.PENDING)
+                .ifPresent(existing -> {
+                    existing.setStatus(MarketplaceSupplierProductEditRequest.REJECTED);
+                    existing.setReviewNote("Superseded by a newer edit request");
+                    existing.setReviewedAt(Instant.now());
+                    editRequestRepository.save(existing);
+                });
+
+        Map<String, Object> proposed = proposedFromPatch(request);
+        if (proposed.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "No editable fields in request");
+        }
+
+        MarketplaceSupplierProductEditRequest edit = new MarketplaceSupplierProductEditRequest();
+        edit.setMarketplaceSupplierId(product.getMarketplaceSupplierId());
+        edit.setProductId(product.getId());
+        edit.setRequestedByUserId(supplierUserId);
+        edit.setStatus(MarketplaceSupplierProductEditRequest.PENDING);
+        edit.setProposedJson(writeJson(proposed));
+        edit.setLiveSnapshotJson(writeJson(liveSnapshot(product)));
+        editRequestRepository.save(edit);
+
+        // Non-price metadata can still update immediately when not in proposed? Spec says pending
+        // cannot change live price — keep all reviewable fields pending only.
+        return toResponse(product);
+    }
+
+    private void applyLivePatch(MarketplaceSupplierProduct product, PatchSupplierPortalProductRequest request) {
         if (request.name() != null) {
             if (request.name().isBlank()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Name cannot be empty");
@@ -113,7 +215,7 @@ public class SupplierPortalCatalogService {
             MarketplaceSupplierPriceOffer offer = currentPrimaryOffer(product.getId())
                     .orElseGet(() -> {
                         MarketplaceSupplierPriceOffer created = new MarketplaceSupplierPriceOffer();
-                        created.setMarketplaceSupplierId(marketplaceSupplierId);
+                        created.setMarketplaceSupplierId(product.getMarketplaceSupplierId());
                         created.setProductId(product.getId());
                         created.setPackageSize(defaultPackSize(product.getPackSize()));
                         created.setPackageUnit(defaultPackUnit(product.getPackUnit()));
@@ -138,18 +240,75 @@ public class SupplierPortalCatalogService {
             }
             priceOfferRepository.save(offer);
         }
-        return toResponse(product);
     }
 
-    @Transactional
-    public void deleteProduct(String marketplaceSupplierId, String productId) {
-        MarketplaceSupplierProduct product = requireProduct(marketplaceSupplierId, productId);
-        product.setStatus(MarketplaceSupplierProductStatuses.INACTIVE);
-        productRepository.save(product);
-        for (MarketplaceSupplierPriceOffer offer : priceOfferRepository.findByProductId(product.getId())) {
-            offer.setAvailable(false);
-            priceOfferRepository.save(offer);
+    private void requireProductEditsAllowed() {
+        PlatformSupplierPortalSettings settings = portalSettingsService.loadSingleton();
+        if (!settings.isAllowProductEdits()) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Product edits are disabled by platform settings");
         }
+    }
+
+    private static boolean hasReviewableChange(PatchSupplierPortalProductRequest request) {
+        return request.name() != null
+                || request.description() != null
+                || request.unitPrice() != null
+                || request.currency() != null
+                || request.packSize() != null
+                || request.packUnit() != null
+                || request.minOrderQty() != null
+                || request.available() != null;
+    }
+
+    private Map<String, Object> proposedFromPatch(PatchSupplierPortalProductRequest request) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        putIfPresent(map, "name", request.name());
+        putIfPresent(map, "barcode", request.barcode());
+        putIfPresent(map, "sku", request.sku());
+        putIfPresent(map, "categoryName", request.categoryName());
+        putIfPresent(map, "description", request.description());
+        putIfPresent(map, "packSize", request.packSize());
+        putIfPresent(map, "packUnit", request.packUnit());
+        putIfPresent(map, "minOrderQty", request.minOrderQty());
+        putIfPresent(map, "unitPrice", request.unitPrice());
+        putIfPresent(map, "currency", request.currency());
+        if (request.available() != null) {
+            map.put("available", request.available());
+        }
+        return map;
+    }
+
+    private Map<String, Object> liveSnapshot(MarketplaceSupplierProduct product) {
+        MarketplaceSupplierPriceOffer offer = currentPrimaryOffer(product.getId()).orElse(null);
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("name", product.getName());
+        map.put("barcode", product.getBarcode());
+        map.put("sku", product.getSku());
+        map.put("categoryName", product.getCategoryName());
+        map.put("description", product.getDescription());
+        map.put("packSize", product.getPackSize());
+        map.put("packUnit", product.getPackUnit());
+        map.put("minOrderQty", product.getMinOrderQty());
+        map.put("unitPrice", offer == null ? null : offer.getUnitPrice());
+        map.put("currency", offer == null ? null : offer.getCurrency());
+        map.put("available", offer != null && offer.isAvailable());
+        return map;
+    }
+
+    private PatchSupplierPortalProductRequest mapToPatch(Map<String, Object> proposed) {
+        return new PatchSupplierPortalProductRequest(
+                asString(proposed.get("name")),
+                asString(proposed.get("barcode")),
+                asString(proposed.get("sku")),
+                asString(proposed.get("categoryName")),
+                asString(proposed.get("description")),
+                asDecimal(proposed.get("packSize")),
+                asString(proposed.get("packUnit")),
+                asDecimal(proposed.get("minOrderQty")),
+                asDecimal(proposed.get("unitPrice")),
+                asString(proposed.get("currency")),
+                asBoolean(proposed.get("available")),
+                null);
     }
 
     private MarketplaceSupplierProduct requireProduct(String marketplaceSupplierId, String productId) {
@@ -165,6 +324,8 @@ public class SupplierPortalCatalogService {
 
     private SupplierPortalProductResponse toResponse(MarketplaceSupplierProduct product) {
         MarketplaceSupplierPriceOffer offer = currentPrimaryOffer(product.getId()).orElse(null);
+        var pending = editRequestRepository.findFirstByProductIdAndStatusOrderByCreatedAtDesc(
+                product.getId(), MarketplaceSupplierProductEditRequest.PENDING);
         return new SupplierPortalProductResponse(
                 product.getId(),
                 product.getName(),
@@ -181,7 +342,9 @@ public class SupplierPortalCatalogService {
                 product.getStatus(),
                 product.getVersion(),
                 product.getCreatedAt(),
-                product.getUpdatedAt());
+                product.getUpdatedAt(),
+                pending.map(MarketplaceSupplierProductEditRequest::getId).orElse(null),
+                pending.map(p -> readMap(p.getProposedJson())).orElse(null));
     }
 
     private static void applyProductFields(
@@ -205,6 +368,59 @@ public class SupplierPortalCatalogService {
         product.setPackUnit(blankToNull(packUnit));
         product.setMinOrderQty(minOrderQty);
         product.setStatus(status);
+    }
+
+    private String writeJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception ex) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Could not serialize edit payload");
+        }
+    }
+
+    private Map<String, Object> readMap(String json) {
+        if (json == null || json.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<>() {
+            });
+        } catch (Exception ex) {
+            return Map.of();
+        }
+    }
+
+    private static void putIfPresent(Map<String, Object> map, String key, Object value) {
+        if (value != null) {
+            map.put(key, value);
+        }
+    }
+
+    private static String asString(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private static BigDecimal asDecimal(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof BigDecimal bd) {
+            return bd;
+        }
+        if (value instanceof Number n) {
+            return BigDecimal.valueOf(n.doubleValue());
+        }
+        return new BigDecimal(String.valueOf(value));
+    }
+
+    private static Boolean asBoolean(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Boolean b) {
+            return b;
+        }
+        return Boolean.parseBoolean(String.valueOf(value));
     }
 
     private static BigDecimal defaultPackSize(BigDecimal packSize) {

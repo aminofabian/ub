@@ -16,6 +16,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.marketplace.api.dto.CreateSupplierPortalMessageRequest;
 import zelisline.ub.marketplace.api.dto.SupplierPortalMessageRow;
+import zelisline.ub.marketplace.api.dto.SupplierPortalMessageShopOption;
 import zelisline.ub.marketplace.application.SupplierPortalMessagesService;
 import zelisline.ub.platform.security.CurrentSupplierUser;
 import zelisline.ub.platform.security.SupplierPrincipal;
@@ -33,6 +34,13 @@ public class SupplierPortalMessagesController {
     public List<SupplierPortalMessageRow> list() {
         SupplierPrincipal principal = CurrentSupplierUser.require();
         return messagesService.listForSupplier(principal.marketplaceSupplierId());
+    }
+
+    @GetMapping("/shops")
+    @PreAuthorize("hasRole('SUPPLIER')")
+    public List<SupplierPortalMessageShopOption> shops() {
+        SupplierPrincipal principal = CurrentSupplierUser.require();
+        return messagesService.listShopsForSupplier(principal.marketplaceSupplierId());
     }
 
     @PostMapping

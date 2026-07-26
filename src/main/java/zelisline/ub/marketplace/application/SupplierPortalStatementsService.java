@@ -25,7 +25,9 @@ import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.application.PathBAssociatedCostService;
 import zelisline.ub.purchasing.domain.SupplierInvoice;
 import zelisline.ub.purchasing.domain.SupplierPayment;
+import zelisline.ub.purchasing.domain.SupplierPaymentAllocation;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
+import zelisline.ub.purchasing.repository.SupplierPaymentAllocationRepository;
 import zelisline.ub.purchasing.repository.SupplierPaymentRepository;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.repository.SupplierRepository;
@@ -43,6 +45,7 @@ public class SupplierPortalStatementsService {
     private final BusinessRepository businessRepository;
     private final SupplierInvoiceRepository supplierInvoiceRepository;
     private final SupplierPaymentRepository supplierPaymentRepository;
+    private final SupplierPaymentAllocationRepository allocationRepository;
     private final PathBAssociatedCostService pathBAssociatedCostService;
     private final PlatformSupplierPortalSettingsService portalSettingsService;
 
@@ -53,7 +56,6 @@ public class SupplierPortalStatementsService {
             int year,
             int month
     ) {
-        requireDownloadsAllowed();
         if (month < 1 || month > 12) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Month must be 1–12");
         }
@@ -101,6 +103,11 @@ public class SupplierPortalStatementsService {
             }
         }
 
+        // Amounts settled against invoices (allocations), not raw cash: payments can
+        // apply prepayment credit or overpay into credit, and the invoices page
+        // computes open balances from allocations — the ledger must reconcile with it.
+        java.util.Map<String, BigDecimal> allocatedByPayment = allocationsByPayment(payments);
+
         for (SupplierPayment pay : payments) {
             if (!PurchasingConstants.PAYMENT_POSTED.equals(pay.getStatus())) {
                 continue;
@@ -111,7 +118,10 @@ public class SupplierPortalStatementsService {
             if (date == null) {
                 continue;
             }
-            BigDecimal amount = money(pay.getAmount());
+            BigDecimal amount = money(allocatedByPayment.getOrDefault(pay.getId(), BigDecimal.ZERO));
+            if (amount.signum() <= 0) {
+                continue;
+            }
             if (date.isBefore(periodStart)) {
                 opening = opening.subtract(amount);
             } else if (!date.isAfter(periodEnd)) {
@@ -185,7 +195,20 @@ public class SupplierPortalStatementsService {
         return SupplierPortalStatementPdfRenderer.render(statement);
     }
 
-    private void requireDownloadsAllowed() {
+    private java.util.Map<String, BigDecimal> allocationsByPayment(List<SupplierPayment> payments) {
+        List<String> ids = payments.stream().map(SupplierPayment::getId).toList();
+        if (ids.isEmpty()) {
+            return java.util.Map.of();
+        }
+        java.util.Map<String, BigDecimal> sums = new java.util.HashMap<>();
+        for (SupplierPaymentAllocation alloc : allocationRepository.findBySupplierPaymentIdIn(ids)) {
+            sums.merge(alloc.getSupplierPaymentId(), money(alloc.getAmount()), BigDecimal::add);
+        }
+        return sums;
+    }
+
+    /** Gates only CSV/PDF exports — the on-screen JSON statement is always viewable. */
+    public void assertDownloadsAllowed() {
         if (!portalSettingsService.loadSingleton().isAllowStatementDownloads()) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Statement downloads are disabled");
         }

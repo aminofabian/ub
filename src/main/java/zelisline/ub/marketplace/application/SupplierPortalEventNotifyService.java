@@ -98,6 +98,19 @@ public class SupplierPortalEventNotifyService {
         }
     }
 
+    /** True when at least one active portal user wants payment SMS (default when unclaimed). */
+    public boolean paymentSmsWanted(String marketplaceSupplierId) {
+        List<SupplierUser> users = supplierUserRepository.findByMarketplaceSupplierIdAndActiveTrue(
+                marketplaceSupplierId);
+        if (users.isEmpty()) {
+            return true;
+        }
+        return users.stream()
+                .anyMatch(user -> notificationsService
+                        .loadOrDefault(user.getId(), marketplaceSupplierId)
+                        .isNotifyPaymentSms());
+    }
+
     void notifyPoSent(
             String businessId,
             String marketplaceSupplierId,

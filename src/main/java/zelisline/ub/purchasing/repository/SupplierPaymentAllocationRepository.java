@@ -14,4 +14,6 @@ public interface SupplierPaymentAllocationRepository extends JpaRepository<Suppl
     java.math.BigDecimal sumAmountBySupplierInvoiceId(@Param("invId") String supplierInvoiceId);
 
     List<SupplierPaymentAllocation> findBySupplierInvoiceIdOrderByCreatedAtAsc(String supplierInvoiceId);
+
+    List<SupplierPaymentAllocation> findBySupplierPaymentIdIn(java.util.Collection<String> supplierPaymentIds);
 }

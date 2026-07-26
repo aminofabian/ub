@@ -8,6 +8,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.marketplace.api.dto.PatchSupplierPortalPaymentDetailsRequest;
 import zelisline.ub.marketplace.api.dto.SupplierPortalPaymentDetailsResponse;
 import zelisline.ub.marketplace.domain.BusinessSupplierConnection;
@@ -29,6 +35,8 @@ public class SupplierPortalPaymentDetailsService {
     private final BusinessSupplierConnectionRepository connectionRepository;
     private final SupplierRepository supplierRepository;
     private final PlatformSupplierPortalSettingsService portalSettingsService;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
 
     @Transactional(readOnly = true)
     public SupplierPortalPaymentDetailsResponse get(String marketplaceSupplierId) {
@@ -41,6 +49,7 @@ public class SupplierPortalPaymentDetailsService {
     @Transactional
     public SupplierPortalPaymentDetailsResponse patch(
             String marketplaceSupplierId,
+            String supplierUserId,
             PatchSupplierPortalPaymentDetailsRequest body
     ) {
         PlatformSupplierPortalSettings settings = portalSettingsService.loadSingleton();
@@ -101,7 +110,50 @@ public class SupplierPortalPaymentDetailsService {
         }
         marketplaceSupplierRepository.save(m);
         syncToLinkedLocals(m);
+        publishUpdated(marketplaceSupplierId, supplierUserId, body);
         return toResponse(m, true);
+    }
+
+    /** Field names only — bank/till values are sensitive and stay out of the audit log. */
+    private void publishUpdated(
+            String marketplaceSupplierId,
+            String supplierUserId,
+            PatchSupplierPortalPaymentDetailsRequest body
+    ) {
+        List<String> fields = new java.util.ArrayList<>();
+        addIfSet(fields, "businessLegalName", body.businessLegalName());
+        addIfSet(fields, "paybill", body.paybill());
+        addIfSet(fields, "tillNumber", body.tillNumber());
+        addIfSet(fields, "bankName", body.bankName());
+        addIfSet(fields, "bankBranch", body.bankBranch());
+        addIfSet(fields, "bankAccountNumber", body.bankAccountNumber());
+        addIfSet(fields, "bankAccountName", body.bankAccountName());
+        addIfSet(fields, "mobileMoney", body.mobileMoney());
+        addIfSet(fields, "preferredPaymentMethod", body.preferredPaymentMethod());
+        addIfSet(fields, "taxPin", body.taxPin());
+        addIfSet(fields, "vatNumber", body.vatNumber());
+        addIfSet(fields, "contactPerson", body.contactPerson());
+        addIfSet(fields, "phone", body.phone());
+        addIfSet(fields, "email", body.email());
+        try {
+            auditEventPublisher.publish(auditEventBuilder
+                    .builder(AuditEventCategory.SUPPLIERS,
+                            AuditEventTypes.SUPPLIER_PORTAL_PAYMENT_DETAILS_UPDATED,
+                            AuditEventSeverity.INFO)
+                    .actor(supplierUserId, AuditEventActorType.USER)
+                    .target("marketplace_supplier", marketplaceSupplierId)
+                    .source("supplier_portal")
+                    .diff(java.util.Map.of("fields", fields))
+                    .build());
+        } catch (RuntimeException ignored) {
+            // Never fail the edit because of an audit write failure.
+        }
+    }
+
+    private static void addIfSet(List<String> fields, String name, String value) {
+        if (value != null) {
+            fields.add(name);
+        }
     }
 
     private void syncToLinkedLocals(MarketplaceSupplier m) {

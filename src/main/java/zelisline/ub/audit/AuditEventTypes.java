@@ -142,6 +142,7 @@ public final class AuditEventTypes {
     public static final String SUPPLIER_PORTAL_PASSWORD_RESET = "supplier.portal_password_reset";
     public static final String SUPPLIER_PORTAL_FORCE_LOGOUT = "supplier.portal_force_logout";
     public static final String SUPPLIER_PORTAL_USER_UNLOCKED = "supplier.portal_user_unlocked";
+    public static final String SUPPLIER_PORTAL_PAYMENT_DETAILS_UPDATED = "supplier.portal_payment_details_updated";
     public static final String SUPPLIER_MARKETPLACE_SUSPENDED = "supplier.marketplace_suspended";
 
     // System & integrations

@@ -310,6 +310,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             writeProblem(response, HttpStatus.UNAUTHORIZED, "Account is temporarily locked", "unauthorized");
             return false;
         }
+        // Force-logout cutoff: rejects tokens minted before revoke-all even when
+        // their session row is missing (legacy tokens, best-effort persist failures).
+        if (user.getSessionsRevokedAt() != null) {
+            Instant issuedAt = claims.getIssuedAt() == null ? null : claims.getIssuedAt().toInstant();
+            if (issuedAt == null || issuedAt.isBefore(user.getSessionsRevokedAt())) {
+                writeProblem(response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
+                return false;
+            }
+        }
         String resolvedRole = roleKey == null || roleKey.isBlank() ? user.getRoleKey() : roleKey;
         var principal = new SupplierPrincipal(user.getId(), marketplaceSupplierId, resolvedRole, jti);
         var authorities = new java.util.ArrayList<SimpleGrantedAuthority>();

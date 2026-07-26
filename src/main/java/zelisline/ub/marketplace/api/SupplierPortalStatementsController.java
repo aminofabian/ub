@@ -42,6 +42,9 @@ public class SupplierPortalStatementsController {
                 principal.marketplaceSupplierId(), localSupplierId, y, m);
 
         String fmt = format == null ? "json" : format.trim().toLowerCase();
+        if ("csv".equals(fmt) || "pdf".equals(fmt)) {
+            statementsService.assertDownloadsAllowed();
+        }
         if ("csv".equals(fmt)) {
             String filename = "statement-" + y + "-" + String.format("%02d", m) + ".csv";
             return ResponseEntity.ok()

@@ -64,11 +64,17 @@ public class SupplierPortalCatalogService {
             CreateSupplierPortalProductRequest request
     ) {
         requireProductEditsAllowed();
+        PlatformSupplierPortalSettings settings = portalSettingsService.loadSingleton();
+        boolean needsApproval = settings.isRequireStoreApprovalProductEdits();
+
         MarketplaceSupplierProduct product = new MarketplaceSupplierProduct();
         product.setMarketplaceSupplierId(marketplaceSupplierId);
         applyProductFields(product, request.name(), request.barcode(), request.sku(),
                 request.categoryName(), request.description(), request.packSize(),
-                request.packUnit(), request.minOrderQty(), MarketplaceSupplierProductStatuses.ACTIVE);
+                request.packUnit(), request.minOrderQty(),
+                needsApproval
+                        ? MarketplaceSupplierProductStatuses.INACTIVE
+                        : MarketplaceSupplierProductStatuses.ACTIVE);
         productRepository.save(product);
 
         MarketplaceSupplierPriceOffer offer = new MarketplaceSupplierPriceOffer();
@@ -79,9 +85,13 @@ public class SupplierPortalCatalogService {
         offer.setMinQty(BigDecimal.ONE);
         offer.setUnitPrice(request.unitPrice());
         offer.setCurrency(defaultCurrency(request.currency()));
-        offer.setAvailable(request.available() == null || request.available());
+        boolean requestedAvailable = request.available() == null || request.available();
+        offer.setAvailable(!needsApproval && requestedAvailable);
         priceOfferRepository.save(offer);
 
+        if (needsApproval) {
+            queueActivationForNewProduct(product, supplierUserId, requestedAvailable);
+        }
         return toResponse(product);
     }
 
@@ -104,9 +114,22 @@ public class SupplierPortalCatalogService {
     }
 
     @Transactional
-    public void deleteProduct(String marketplaceSupplierId, String productId) {
+    public void deleteProduct(
+            String marketplaceSupplierId,
+            String supplierUserId,
+            String productId
+    ) {
         requireProductEditsAllowed();
         MarketplaceSupplierProduct product = requireProduct(marketplaceSupplierId, productId);
+        PlatformSupplierPortalSettings settings = portalSettingsService.loadSingleton();
+        if (settings.isRequireStoreApprovalProductEdits()
+                && MarketplaceSupplierProductStatuses.ACTIVE.equals(product.getStatus())) {
+            queueEdit(product, supplierUserId, new PatchSupplierPortalProductRequest(
+                    null, null, null, null, null, null, null, null, null, null,
+                    Boolean.FALSE,
+                    MarketplaceSupplierProductStatuses.INACTIVE));
+            return;
+        }
         product.setStatus(MarketplaceSupplierProductStatuses.INACTIVE);
         productRepository.save(product);
         for (MarketplaceSupplierPriceOffer offer : priceOfferRepository.findByProductId(product.getId())) {
@@ -142,6 +165,25 @@ public class SupplierPortalCatalogService {
                 title,
                 body,
                 "/supplier-portal/catalog");
+    }
+
+    private void queueActivationForNewProduct(
+            MarketplaceSupplierProduct product,
+            String supplierUserId,
+            boolean requestedAvailable
+    ) {
+        Map<String, Object> proposed = new LinkedHashMap<>();
+        proposed.put("status", MarketplaceSupplierProductStatuses.ACTIVE);
+        proposed.put("available", requestedAvailable);
+
+        MarketplaceSupplierProductEditRequest edit = new MarketplaceSupplierProductEditRequest();
+        edit.setMarketplaceSupplierId(product.getMarketplaceSupplierId());
+        edit.setProductId(product.getId());
+        edit.setRequestedByUserId(supplierUserId);
+        edit.setStatus(MarketplaceSupplierProductEditRequest.PENDING);
+        edit.setProposedJson(writeJson(proposed));
+        edit.setLiveSnapshotJson(writeJson(liveSnapshot(product)));
+        editRequestRepository.save(edit);
     }
 
     private SupplierPortalProductResponse queueEdit(
@@ -206,7 +248,12 @@ public class SupplierPortalCatalogService {
             product.setMinOrderQty(request.minOrderQty());
         }
         if (request.status() != null) {
-            product.setStatus(request.status().trim());
+            String status = request.status().trim().toLowerCase();
+            if (!MarketplaceSupplierProductStatuses.ACTIVE.equals(status)
+                    && !MarketplaceSupplierProductStatuses.INACTIVE.equals(status)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Status must be active or inactive");
+            }
+            product.setStatus(status);
         }
         productRepository.save(product);
 
@@ -251,13 +298,17 @@ public class SupplierPortalCatalogService {
 
     private static boolean hasReviewableChange(PatchSupplierPortalProductRequest request) {
         return request.name() != null
+                || request.barcode() != null
+                || request.sku() != null
+                || request.categoryName() != null
                 || request.description() != null
                 || request.unitPrice() != null
                 || request.currency() != null
                 || request.packSize() != null
                 || request.packUnit() != null
                 || request.minOrderQty() != null
-                || request.available() != null;
+                || request.available() != null
+                || request.status() != null;
     }
 
     private Map<String, Object> proposedFromPatch(PatchSupplierPortalProductRequest request) {
@@ -272,6 +323,7 @@ public class SupplierPortalCatalogService {
         putIfPresent(map, "minOrderQty", request.minOrderQty());
         putIfPresent(map, "unitPrice", request.unitPrice());
         putIfPresent(map, "currency", request.currency());
+        putIfPresent(map, "status", request.status());
         if (request.available() != null) {
             map.put("available", request.available());
         }
@@ -289,6 +341,7 @@ public class SupplierPortalCatalogService {
         map.put("packSize", product.getPackSize());
         map.put("packUnit", product.getPackUnit());
         map.put("minOrderQty", product.getMinOrderQty());
+        map.put("status", product.getStatus());
         map.put("unitPrice", offer == null ? null : offer.getUnitPrice());
         map.put("currency", offer == null ? null : offer.getCurrency());
         map.put("available", offer != null && offer.isAvailable());
@@ -308,7 +361,7 @@ public class SupplierPortalCatalogService {
                 asDecimal(proposed.get("unitPrice")),
                 asString(proposed.get("currency")),
                 asBoolean(proposed.get("available")),
-                null);
+                asString(proposed.get("status")));
     }
 
     private MarketplaceSupplierProduct requireProduct(String marketplaceSupplierId, String productId) {

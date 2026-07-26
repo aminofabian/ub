@@ -21,6 +21,7 @@ import zelisline.ub.marketplace.api.dto.SupplierPortalLoginResponse;
 import zelisline.ub.marketplace.api.dto.SupplierPortalSessionRow;
 import zelisline.ub.marketplace.domain.SupplierUser;
 import zelisline.ub.marketplace.domain.SupplierUserSession;
+import zelisline.ub.marketplace.repository.SupplierUserRepository;
 import zelisline.ub.marketplace.repository.SupplierUserSessionRepository;
 import zelisline.ub.platform.security.ClientIpResolver;
 import zelisline.ub.platform.security.JwtTokenService;
@@ -32,6 +33,7 @@ public class SupplierPortalSessionService {
     private static final Logger log = LoggerFactory.getLogger(SupplierPortalSessionService.class);
 
     private final SupplierUserSessionRepository sessionRepository;
+    private final SupplierUserRepository supplierUserRepository;
     private final JwtTokenService jwtTokenService;
 
     @Value("${app.jwt.access-ttl-minutes:60}")
@@ -119,11 +121,18 @@ public class SupplierPortalSessionService {
 
     @Transactional
     public void revokeAll(String supplierUserId) {
+        Instant now = Instant.now();
         try {
-            sessionRepository.revokeAllActiveForUser(supplierUserId, Instant.now());
+            sessionRepository.revokeAllActiveForUser(supplierUserId, now);
         } catch (DataAccessException ex) {
             log.warn("supplier portal revoke-all failed (is Flyway V172 applied?): {}", ex.getMessage());
         }
+        // Cutoff also invalidates tokens without a session row (legacy tokens or
+        // best-effort persist failures), so force-logout cannot fail open.
+        supplierUserRepository.findById(supplierUserId).ifPresent(user -> {
+            user.setSessionsRevokedAt(now);
+            supplierUserRepository.save(user);
+        });
     }
 
     public void touch(String jti) {

@@ -37,6 +37,6 @@ public class SupplierPortalPaymentDetailsController {
             @Valid @RequestBody PatchSupplierPortalPaymentDetailsRequest body
     ) {
         SupplierPrincipal principal = CurrentSupplierUser.require();
-        return paymentDetailsService.patch(principal.marketplaceSupplierId(), body);
+        return paymentDetailsService.patch(principal.marketplaceSupplierId(), principal.userId(), body);
     }
 }

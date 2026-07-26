@@ -54,6 +54,10 @@ public class SupplierUser {
     @Column(name = "locked_until")
     private Instant lockedUntil;
 
+    /** Force-logout cutoff — tokens issued before this instant are rejected. */
+    @Column(name = "sessions_revoked_at")
+    private Instant sessionsRevokedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

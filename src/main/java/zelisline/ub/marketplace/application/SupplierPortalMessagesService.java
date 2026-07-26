@@ -10,6 +10,7 @@ import org.springframework.web.server.ResponseStatusException;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.marketplace.api.dto.CreateSupplierPortalMessageRequest;
 import zelisline.ub.marketplace.api.dto.SupplierPortalMessageRow;
+import zelisline.ub.marketplace.api.dto.SupplierPortalMessageShopOption;
 import zelisline.ub.marketplace.domain.BusinessSupplierConnection;
 import zelisline.ub.marketplace.domain.BusinessSupplierConnectionStatuses;
 import zelisline.ub.marketplace.domain.SupplierPortalMessage;
@@ -35,6 +36,21 @@ public class SupplierPortalMessagesService {
         return messageRepository.findByMarketplaceSupplierIdOrderByCreatedAtDesc(marketplaceSupplierId)
                 .stream()
                 .map(this::toRow)
+                .toList();
+    }
+
+    /** Shop picker for messaging — needs no money permission, unlike the hub shops API. */
+    @Transactional(readOnly = true)
+    public List<SupplierPortalMessageShopOption> listShopsForSupplier(String marketplaceSupplierId) {
+        return connectionRepository
+                .findByMarketplaceSupplierIdAndStatus(
+                        marketplaceSupplierId, BusinessSupplierConnectionStatuses.ACTIVE)
+                .stream()
+                .map(link -> new SupplierPortalMessageShopOption(
+                        link.getLocalSupplierId(),
+                        businessRepository.findById(link.getBusinessId())
+                                .map(b -> b.getName())
+                                .orElse("Shop")))
                 .toList();
     }
 

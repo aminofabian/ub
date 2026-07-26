@@ -145,14 +145,19 @@ public class SupplierPortalNotifyService {
     ) {
         try {
             Supplier supplier = supplierRepository.findByIdAndBusinessId(supplierId, businessId).orElse(null);
-            if (supplier != null
+            boolean claimed = supplier != null
                     && supplier.getMarketplaceSupplierId() != null
-                    && !supplier.getMarketplaceSupplierId().isBlank()) {
+                    && !supplier.getMarketplaceSupplierId().isBlank();
+            if (claimed) {
                 eventNotifyService.notifyPaymentReceived(
                         businessId,
                         supplier.getMarketplaceSupplierId(),
                         amountPaid,
                         reference);
+                // Claimed suppliers can opt out of payment SMS in portal settings.
+                if (!eventNotifyService.paymentSmsWanted(supplier.getMarketplaceSupplierId())) {
+                    return;
+                }
             }
 
             SupplierNotifyContext ctx = resolveNotifyContext(businessId, supplierId);

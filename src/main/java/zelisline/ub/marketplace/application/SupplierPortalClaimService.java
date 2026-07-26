@@ -468,6 +468,9 @@ public class SupplierPortalClaimService {
         if (marketplace.getStatus() == null || marketplace.getStatus().isBlank()) {
             marketplace.setStatus(MarketplaceSupplierStatuses.ACTIVE);
         }
+        if (marketplace.getUsername() == null || marketplace.getUsername().isBlank()) {
+            marketplace.setUsername(allocateUsername(displayName, phone));
+        }
         marketplaceSupplierRepository.saveAndFlush(marketplace);
 
         SupplierUser user = new SupplierUser();

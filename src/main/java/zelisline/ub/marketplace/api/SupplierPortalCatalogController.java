@@ -68,6 +68,7 @@ public class SupplierPortalCatalogController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable String productId) {
         SupplierPrincipal principal = CurrentSupplierUser.require();
-        supplierPortalCatalogService.deleteProduct(principal.marketplaceSupplierId(), productId);
+        supplierPortalCatalogService.deleteProduct(
+                principal.marketplaceSupplierId(), principal.userId(), productId);
     }
 }

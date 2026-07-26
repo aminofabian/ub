@@ -93,6 +93,7 @@ public class BusinessCreditMessagingSettingsService {
                 trimToNull(platformMeta.accessToken()),
                 trimToNull(platformMeta.phoneNumberId()),
                 trimToNull(platformMeta.graphVersion()),
+                platformMeta.accessTokenSource(),
                 smsProvider,
                 trimToNull(env.sms().africasTalkingUsername()),
                 trimToNull(env.sms().africasTalkingApiKey()),
@@ -134,6 +135,16 @@ public class BusinessCreditMessagingSettingsService {
         } else {
             smsProvider = firstNonBlank(platformSms.provider(), env.sms().provider(), "none");
         }
+        String tenantMetaToken = decryptOrNull(s.getWhatsappMetaAccessTokenEnc());
+        String metaAccessToken;
+        String metaAccessTokenSource;
+        if (tenantMetaToken != null && !tenantMetaToken.isBlank()) {
+            metaAccessToken = tenantMetaToken.trim();
+            metaAccessTokenSource = "tenant";
+        } else {
+            metaAccessToken = trimToNull(platformMeta.accessToken());
+            metaAccessTokenSource = platformMeta.accessTokenSource();
+        }
         return new TenantMessagingConfig(
                 enabled,
                 paymentUrl,
@@ -144,17 +155,14 @@ public class BusinessCreditMessagingSettingsService {
                 firstNonBlank(trimToNull(s.getRapidapiLookupUrl()), platformWa.lookupUrl()),
                 firstNonBlank(trimToNull(s.getRapidapiPhoneField()), platformWa.phoneField()),
                 digitsOnly,
-                // Tenant Meta token overrides platform only when it decrypts successfully.
-                // A stale/undecryptable tenant blob must not hide a valid platform token.
-                firstNonBlank(
-                        decryptOrNull(s.getWhatsappMetaAccessTokenEnc()),
-                        platformMeta.accessToken()),
+                metaAccessToken,
                 firstNonBlank(
                         trimToNull(s.getWhatsappMetaPhoneNumberId()),
                         platformMeta.phoneNumberId()),
                 firstNonBlank(
                         trimToNull(s.getWhatsappMetaGraphVersion()),
                         platformMeta.graphVersion()),
+                metaAccessTokenSource,
                 smsProvider,
                 firstNonBlank(trimToNull(s.getSmsAfricasTalkingUsername()), env.sms().africasTalkingUsername()),
                 firstNonBlank(decryptOrNull(s.getSmsAfricasTalkingApiKeyEnc()), env.sms().africasTalkingApiKey()),
@@ -385,7 +393,7 @@ public class BusinessCreditMessagingSettingsService {
 
     private static TenantMessagingConfig disabledConfig(String readError) {
         return new TenantMessagingConfig(
-                false, "", null, null, null, null, false, null, null, null, "none",
+                false, "", null, null, null, null, false, null, null, null, "none", "none",
                 null, null, null, null, null, null, null, null, null, null, null,
                 readError == null, readError);
     }

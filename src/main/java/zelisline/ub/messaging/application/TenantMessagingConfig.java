@@ -14,6 +14,7 @@ public record TenantMessagingConfig(
         String metaAccessToken,
         String metaPhoneNumberId,
         String metaGraphVersion,
+        String metaAccessTokenSource,
         String smsProvider,
         String smsUsername,
         String smsApiKey,
@@ -38,6 +39,17 @@ public record TenantMessagingConfig(
     public boolean metaWhatsAppConfigured() {
         return metaAccessToken != null && !metaAccessToken.isBlank()
                 && metaPhoneNumberId != null && !metaPhoneNumberId.isBlank();
+    }
+
+    public String metaAccessTokenFingerprint() {
+        if (metaAccessToken == null || metaAccessToken.isBlank()) {
+            return "none";
+        }
+        String t = metaAccessToken.trim();
+        if (t.length() <= 4) {
+            return "****";
+        }
+        return "…" + t.substring(t.length() - 4);
     }
 
     public boolean smsConfigured() {

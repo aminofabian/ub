@@ -291,10 +291,28 @@ public class PlatformIntegrationSettingsService {
             SecretRead secrets
     ) {
         var env = messagingProperties.metaWhatsApp();
-        String accessToken =
-                secrets.readable
-                        ? firstNonBlank(secrets.whatsappMetaAccessToken, env.accessToken())
-                        : blankToNull(env.accessToken());
+        String accessToken;
+        String accessTokenSource;
+        boolean platformCipherPresent = hasEncrypted(row.getWhatsappMetaAccessTokenEnc());
+        if (platformCipherPresent) {
+            // Prefer the saved platform token. Never silently fall back to env when a DB
+            // ciphertext exists — that caused 401s from a stale WHATSAPP_META_ACCESS_TOKEN
+            // while the UI reported "stored: yes".
+            String decrypted = secrets.whatsappMetaAccessToken;
+            if (decrypted != null && !decrypted.isBlank()) {
+                accessToken = decrypted.trim();
+                accessTokenSource = "platform";
+            } else {
+                accessToken = null;
+                accessTokenSource = "platform_unreadable";
+            }
+        } else if (env.accessToken() != null && !env.accessToken().isBlank()) {
+            accessToken = env.accessToken().trim();
+            accessTokenSource = "env";
+        } else {
+            accessToken = null;
+            accessTokenSource = "none";
+        }
         String phoneNumberId =
                 firstNonBlank(trimToNull(row.getWhatsappMetaPhoneNumberId()), env.phoneNumberId());
         String graphVersion =
@@ -302,16 +320,25 @@ public class PlatformIntegrationSettingsService {
                         trimToNull(row.getWhatsappMetaGraphVersion()),
                         env.graphVersion(),
                         DEFAULT_GRAPH_VERSION);
-        String webhookVerifyToken =
-                secrets.readable
-                        ? firstNonBlank(secrets.whatsappMetaWebhookVerifyToken, env.webhookVerifyToken())
-                        : blankToNull(env.webhookVerifyToken());
-        String appSecret =
-                secrets.readable
-                        ? firstNonBlank(secrets.whatsappMetaAppSecret, env.appSecret())
-                        : blankToNull(env.appSecret());
+        String webhookVerifyToken;
+        if (hasEncrypted(row.getWhatsappMetaWebhookVerifyTokenEnc())) {
+            webhookVerifyToken = blankToNull(secrets.whatsappMetaWebhookVerifyToken);
+        } else {
+            webhookVerifyToken = blankToNull(env.webhookVerifyToken());
+        }
+        String appSecret;
+        if (hasEncrypted(row.getWhatsappMetaAppSecretEnc())) {
+            appSecret = blankToNull(secrets.whatsappMetaAppSecret);
+        } else {
+            appSecret = blankToNull(env.appSecret());
+        }
         return new ResolvedMetaWhatsAppConfig(
-                accessToken, phoneNumberId, graphVersion, webhookVerifyToken, appSecret);
+                accessToken,
+                phoneNumberId,
+                graphVersion,
+                webhookVerifyToken,
+                appSecret,
+                accessTokenSource);
     }
 
     private PlatformIntegrationSettings loadSingleton() {

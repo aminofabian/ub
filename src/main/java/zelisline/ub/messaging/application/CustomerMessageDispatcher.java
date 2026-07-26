@@ -65,11 +65,13 @@ public class CustomerMessageDispatcher {
                     "whatsapp",
                     "failed",
                     "whatsapp_failed:" + send.detail()
-                            + ". Meta rejected the access token in use. Check: (1) Super Admin → Platform"
-                            + " integrations Meta access token, (2) clear any tenant Meta token under"
-                            + " Credit tab reminders (tenant overrides platform), (3) remove a stale"
-                            + " WHATSAPP_META_ACCESS_TOKEN from server env if set. Use a permanent"
-                            + " System User token from Meta Business → WhatsApp → API setup.");
+                            + " [source=" + nullToNone(messaging.metaAccessTokenSource())
+                            + " token=" + messaging.metaAccessTokenFingerprint()
+                            + " phone_id=" + nullToNone(messaging.metaPhoneNumberId())
+                            + "]. If source=tenant, clear the Credit tab Meta token."
+                            + " If source=env, remove WHATSAPP_META_ACCESS_TOKEN from the server."
+                            + " If source=platform, paste a fresh permanent System User token in"
+                            + " Super Admin → Platform integrations (must match this phone number ID).");
         }
         String prefix = send.skipped() ? "whatsapp_skipped:" : "whatsapp_failed:";
         return new DeliveryResult(lookup, "whatsapp", "failed", prefix + send.detail());
@@ -137,5 +139,12 @@ public class CustomerMessageDispatcher {
             String outcome,
             String detail
     ) {
+    }
+
+    private static String nullToNone(String value) {
+        if (value == null || value.isBlank()) {
+            return "none";
+        }
+        return value.trim();
     }
 }

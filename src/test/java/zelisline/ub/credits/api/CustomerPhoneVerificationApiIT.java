@@ -309,6 +309,7 @@ class CustomerPhoneVerificationApiIT {
                 null,
                 null,
                 "v21.0",
+                "none",
                 "africas_talking",
                 "test-user",
                 "test-key",

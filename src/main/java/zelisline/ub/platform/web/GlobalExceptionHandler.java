@@ -177,6 +177,20 @@ public class GlobalExceptionHandler {
             return problem(body, HttpStatus.CONFLICT);
         }
         String flat = flattenMessages(ex).toLowerCase();
+        if (flat.contains("supplier_users") && (flat.contains("phone") || flat.contains("uq_supplier_users_phone"))) {
+            ProblemDetail body = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+            body.setTitle("Conflict");
+            body.setType(URI.create(PROBLEM_BASE + "duplicate-supplier-phone"));
+            body.setDetail("This phone already has an account — sign in");
+            return problem(body, HttpStatus.CONFLICT);
+        }
+        if (flat.contains("supplier_users") && (flat.contains("email") || flat.contains("uq_supplier_users_email"))) {
+            ProblemDetail body = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+            body.setTitle("Conflict");
+            body.setType(URI.create(PROBLEM_BASE + "duplicate-supplier-email"));
+            body.setDetail("This email already has an account — sign in");
+            return problem(body, HttpStatus.CONFLICT);
+        }
         if (flat.contains("uq_supplier_invoices_business_no") || flat.contains("invoice_number")) {
             ProblemDetail body = ProblemDetail.forStatus(HttpStatus.CONFLICT);
             body.setTitle("Conflict");
@@ -226,6 +240,17 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ProblemDetail> handleUnexpected(Exception ex) {
         String correlationId = MDC.get(CorrelationIdFilter.CORRELATION_ID_MDC_KEY);
+        // Spring marks the TX rollback-only when a caught DB error happens inside @Transactional.
+        if (ex instanceof org.springframework.transaction.UnexpectedRollbackException
+                || (ex.getCause() instanceof org.springframework.transaction.UnexpectedRollbackException)) {
+            log.error("Unexpected rollback (correlationId={})", correlationId, ex);
+            ProblemDetail body = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
+            body.setTitle("Database not ready");
+            body.setType(URI.create(PROBLEM_BASE + "schema-mismatch"));
+            body.setDetail(
+                    "A database write rolled back unexpectedly. Ensure Flyway V172 (supplier_user_sessions) is applied, then retry.");
+            return problem(body, HttpStatus.INTERNAL_SERVER_ERROR);
+        }
         log.error("Unhandled exception (correlationId={})", correlationId, ex);
         ProblemDetail body = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
         body.setTitle("Internal server error");
@@ -264,6 +289,9 @@ public class GlobalExceptionHandler {
                 || message.contains("draft_sell_price")
                 || message.contains("draft_expiry_date")) {
             return "Path B draft columns are missing. Redeploy the API so Flyway can apply migrations V154/V155 (path_b draft fields).";
+        }
+        if (message.contains("supplier_user_sessions")) {
+            return "Supplier portal sessions table is missing. Redeploy the API so Flyway can apply migration V172__supplier_portal_sessions_notifications.sql.";
         }
         return "A required database migration may be missing. Redeploy the API so Flyway can run pending migrations.";
     }

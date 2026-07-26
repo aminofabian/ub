@@ -37,33 +37,17 @@ public class SupplierPortalSessionService {
     @Value("${app.jwt.access-ttl-minutes:60}")
     private long accessTtlMinutes;
 
-    @Transactional
+    /**
+     * Mint a supplier JWT. Session row persistence is best-effort and must not
+     * share a transaction with the JWT response — a failed insert would otherwise
+     * mark the TX rollback-only and surface as HTTP 500 ({@code UnexpectedRollbackException}).
+     */
     public SupplierPortalLoginResponse issueLogin(SupplierUser user, HttpServletRequest http) {
         String jti = UUID.randomUUID().toString();
         Instant now = Instant.now();
         Instant expiresAt = now.plus(accessTtlMinutes, ChronoUnit.MINUTES);
 
-        String sessionId = null;
-        try {
-            SupplierUserSession session = new SupplierUserSession();
-            session.setSupplierUserId(user.getId());
-            session.setMarketplaceSupplierId(user.getMarketplaceSupplierId());
-            session.setAccessTokenJti(jti);
-            session.setUserAgent(trimUa(http == null ? null : http.getHeader("User-Agent")));
-            session.setIp(http == null ? null : ClientIpResolver.resolve(http));
-            session.setIssuedAt(now);
-            session.setExpiresAt(expiresAt);
-            session.setLastSeenAt(now);
-            sessionRepository.saveAndFlush(session);
-            sessionId = session.getId();
-        } catch (DataAccessException ex) {
-            // V172 may not be applied yet — still mint a usable access token.
-            log.warn(
-                    "supplier portal session persist failed (is Flyway V172 applied?): {}",
-                    ex.getMostSpecificCause() != null
-                            ? ex.getMostSpecificCause().getMessage()
-                            : ex.getMessage());
-        }
+        String sessionId = persistSessionBestEffort(user, jti, now, expiresAt, http);
 
         String access = jwtTokenService.createSupplierAccessToken(
                 user.getId(),
@@ -105,7 +89,7 @@ public class SupplierPortalSessionService {
                             currentJti != null && currentJti.equals(s.getAccessTokenJti()),
                             s.getRevokedAt() != null))
                     .toList();
-        } catch (DataAccessException ex) {
+        } catch (RuntimeException ex) {
             log.warn("supplier portal sessions list failed: {}", ex.getMessage());
             return List.of();
         }
@@ -127,14 +111,17 @@ public class SupplierPortalSessionService {
 
     @Transactional
     public void revokeAll(String supplierUserId) {
-        sessionRepository.revokeAllActiveForUser(supplierUserId, Instant.now());
+        try {
+            sessionRepository.revokeAllActiveForUser(supplierUserId, Instant.now());
+        } catch (DataAccessException ex) {
+            log.warn("supplier portal revoke-all failed (is Flyway V172 applied?): {}", ex.getMessage());
+        }
     }
 
-    @Transactional
     public void touch(String jti) {
         try {
             sessionRepository.touchLastSeen(jti, Instant.now());
-        } catch (DataAccessException ex) {
+        } catch (RuntimeException ex) {
             log.debug("supplier portal session touch failed: {}", ex.getMessage());
         }
     }
@@ -143,10 +130,47 @@ public class SupplierPortalSessionService {
     public Optional<SupplierUserSession> findByJti(String jti) {
         try {
             return sessionRepository.findByAccessTokenJti(jti);
-        } catch (DataAccessException ex) {
+        } catch (RuntimeException ex) {
             log.debug("supplier portal session lookup failed: {}", ex.getMessage());
             return Optional.empty();
         }
+    }
+
+    private String persistSessionBestEffort(
+            SupplierUser user,
+            String jti,
+            Instant now,
+            Instant expiresAt,
+            HttpServletRequest http
+    ) {
+        try {
+            SupplierUserSession session = new SupplierUserSession();
+            session.setSupplierUserId(user.getId());
+            session.setMarketplaceSupplierId(user.getMarketplaceSupplierId());
+            session.setAccessTokenJti(jti);
+            session.setUserAgent(trimUa(http == null ? null : http.getHeader("User-Agent")));
+            session.setIp(http == null ? null : ClientIpResolver.resolve(http));
+            session.setIssuedAt(now);
+            session.setExpiresAt(expiresAt);
+            session.setLastSeenAt(now);
+            sessionRepository.saveAndFlush(session);
+            return session.getId();
+        } catch (RuntimeException ex) {
+            // Missing V172 table, FK failure, etc. — claim/login must still succeed.
+            Throwable root = rootCause(ex);
+            log.warn(
+                    "supplier portal session persist failed (is Flyway V172 applied?): {}",
+                    root != null && root.getMessage() != null ? root.getMessage() : ex.getMessage());
+            return null;
+        }
+    }
+
+    private static Throwable rootCause(Throwable ex) {
+        Throwable cur = ex;
+        while (cur.getCause() != null && cur.getCause() != cur) {
+            cur = cur.getCause();
+        }
+        return cur;
     }
 
     private static String trimUa(String ua) {

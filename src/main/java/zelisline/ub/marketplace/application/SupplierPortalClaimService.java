@@ -379,12 +379,27 @@ public class SupplierPortalClaimService {
 
         // Commit account creation before session insert so a missing V172 table
         // cannot roll back a successful claim (nested TX / DataAccessException).
-        SupplierUser user = claimAccountTransaction.execute(status -> {
-            if (invite != null) {
-                return createUserFromInvite(invite, request, settings);
+        SupplierUser user;
+        try {
+            user = claimAccountTransaction.execute(status -> {
+                if (invite != null) {
+                    return createUserFromInvite(invite, request, settings);
+                }
+                return createUserFromSelfClaim(request, settings, tokenHash);
+            });
+        } catch (org.springframework.transaction.TransactionException ex) {
+            Throwable root = ex.getMostSpecificCause() != null ? ex.getMostSpecificCause() : ex;
+            if (root instanceof ResponseStatusException rse) {
+                throw rse;
             }
-            return createUserFromSelfClaim(request, settings, tokenHash);
-        });
+            log.error("supplier portal claim transaction failed: {}", root.getMessage(), ex);
+            throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Could not finish account setup — try again or sign in if the account was created");
+        }
+        if (user == null) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Could not create account");
+        }
         return loginResponse(user, settings.isAutoLoginAfterSetup(), http);
     }
 
@@ -530,7 +545,17 @@ public class SupplierPortalClaimService {
         if (!autoLogin) {
             return sessionService.loginWithoutToken(user);
         }
-        return sessionService.issueLogin(user, http);
+        try {
+            return sessionService.issueLogin(user, http);
+        } catch (RuntimeException ex) {
+            // Account already committed — never fail claim because auto-login broke.
+            log.error(
+                    "supplier portal auto-login after claim failed for user {}: {}",
+                    user.getId(),
+                    ex.getMessage(),
+                    ex);
+            return sessionService.loginWithoutToken(user);
+        }
     }
 
     private void publishClaimed(String marketplaceSupplierId, String userId, String phone, String path) {

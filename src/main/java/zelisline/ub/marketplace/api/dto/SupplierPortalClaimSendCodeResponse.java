@@ -7,6 +7,8 @@ public record SupplierPortalClaimSendCodeResponse(
         String maskedPhone,
         Instant expiresAt,
         String channel,
-        boolean alreadyRegistered
+        boolean alreadyRegistered,
+        /** Present only when SMS is stubbed and expose-stub-otp is enabled (local/dev). */
+        String devCode
 ) {
 }

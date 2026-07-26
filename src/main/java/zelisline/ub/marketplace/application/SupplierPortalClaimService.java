@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -15,6 +16,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import zelisline.ub.audit.AuditEventTypes;
 import zelisline.ub.audit.application.AuditEventBuilder;
 import zelisline.ub.audit.application.AuditEventPublisher;
@@ -58,6 +61,8 @@ import jakarta.servlet.http.HttpServletRequest;
 @RequiredArgsConstructor
 public class SupplierPortalClaimService {
 
+    private static final Logger log = LoggerFactory.getLogger(SupplierPortalClaimService.class);
+
     static final Duration SETUP_TOKEN_TTL = Duration.ofMinutes(15);
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
@@ -77,6 +82,9 @@ public class SupplierPortalClaimService {
     private final SupplierPortalSessionService sessionService;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
+
+    @Value("${app.supplier-portal.claim.return-otp-when-stubbed:true}")
+    private boolean returnOtpWhenStubbed;
 
     @Transactional(readOnly = true)
     public SupplierPortalClaimPublicConfigResponse publicConfig() {
@@ -111,7 +119,7 @@ public class SupplierPortalClaimService {
         String phone = normalizePhoneOrThrow(rawPhone);
         if (supplierUserRepository.existsByPhone(phone)) {
             return new SupplierPortalClaimSendCodeResponse(
-                    phone, maskPhone(phone), null, null, true);
+                    phone, maskPhone(phone), null, null, true, null);
         }
 
         Instant now = Instant.now();
@@ -150,26 +158,44 @@ public class SupplierPortalClaimService {
         verificationRepository.save(challenge);
 
         TenantMessagingConfig messaging = messagingSettingsService.resolvePlatformForContactReply();
-        if (!messaging.enabled() || (!messaging.smsConfigured() && !messaging.metaWhatsAppConfigured())) {
+        boolean messagingReady = messaging.enabled()
+                && (messaging.smsConfigured() || messaging.metaWhatsAppConfigured());
+        if (!messagingReady && !returnOtpWhenStubbed) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "Messaging is not configured to send a verification code");
+                    "Messaging is not configured. Set SMS under Super Admin → Platform → Integrations "
+                            + "(Sozuri or TextSMS), then try again.");
         }
 
         String message = portalSettingsService.defaultSmsBody(code, settings.getCodeExpiryMinutes());
-        var delivery = customerMessageDispatcher.deliver(messaging, phone, message);
-        if (!"sent".equals(delivery.outcome()) && !"stub".equals(delivery.outcome())) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_GATEWAY,
-                    "Could not send verification code");
+        String channel;
+        String outcome;
+        if (!messagingReady) {
+            log.info("Supplier claim OTP stub (SMS not configured): phone={} code={}", phone, code);
+            channel = "sms_stub";
+            outcome = "stub";
+        } else {
+            var delivery = customerMessageDispatcher.deliver(messaging, phone, message);
+            channel = delivery.channel();
+            outcome = delivery.outcome();
+            if (!"sent".equals(outcome) && !"stub".equals(outcome)) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_GATEWAY,
+                        "Could not send verification code");
+            }
+            if ("stub".equals(outcome)) {
+                log.info("Supplier claim OTP stubbed by provider: phone={} code={}", phone, code);
+            }
         }
 
+        String devCode = returnOtpWhenStubbed && "stub".equals(outcome) ? code : null;
         return new SupplierPortalClaimSendCodeResponse(
                 phone,
                 maskPhone(phone),
                 challenge.getExpiresAt(),
-                delivery.channel(),
-                false);
+                channel,
+                false,
+                devCode);
     }
 
     @Transactional(noRollbackFor = ResponseStatusException.class)

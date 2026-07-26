@@ -31,10 +31,17 @@ RUN printf '%s\n' \
 	'org.gradle.jvmargs=-Xmx288m -XX:MaxMetaspaceSize=96m -XX:+UseSerialGC -Xss256k -XX:MaxDirectMemorySize=16m' \
 	> gradle.properties
 
-# Prime dependency cache (layer reused when only src changes).
-RUN ./gradlew dependencies --no-daemon -x test --no-parallel --max-workers=1 \
-	|| ./gradlew help --no-daemon \
-	|| true
+# Prime the exact configurations bootJar needs. Must succeed (no || true): a soft
+# failure here used to cache an empty deps layer, then offline compile blew up.
+# Resolve runtimeClasspath last so compile + runtime jars are all on disk.
+# Bump the echo below when you need to bust a bad Coolify BuildKit cache layer.
+RUN echo "deps-prime-v2" \
+	&& ./gradlew --no-daemon -x test --no-parallel --max-workers=1 \
+		dependencies --configuration compileClasspath \
+	&& ./gradlew --no-daemon -x test --no-parallel --max-workers=1 \
+		dependencies --configuration annotationProcessor \
+	&& ./gradlew --no-daemon -x test --no-parallel --max-workers=1 \
+		dependencies --configuration runtimeClasspath
 
 COPY src ./src
 
@@ -46,15 +53,13 @@ RUN rm -rf /tmp/* \
 	"$GRADLE_USER_HOME"/native \
 	|| true
 
-# Split compile from packaging so peak RSS during bootJar stays lower and
-# Coolify logs show which phase died if the builder is still too small.
-# --offline avoids download buffers after the dependencies layer warmed the cache.
-RUN ./gradlew compileJava --offline --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace \
-	|| ./gradlew compileJava --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace
-RUN ./gradlew classes --offline --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace \
-	|| ./gradlew classes --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace
-RUN (./gradlew bootJar --offline --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace \
-	|| ./gradlew bootJar --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace) \
+# Split compile from packaging so peak RSS during bootJar stays lower.
+# Do NOT use --offline with a || online fallback: Coolify scrapes build logs for
+# "BUILD FAILED" / "FAILURE" and aborts the deploy even when Docker exit code is 0.
+# After a successful deps prime, online resolve is a no-op (cache hit).
+RUN ./gradlew compileJava --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace
+RUN ./gradlew classes --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace
+RUN ./gradlew bootJar --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace \
 	&& JAR="$(ls -1 build/libs/*.jar | grep -v -- '-plain.jar$' | head -n1)" \
 	&& test -n "$JAR" && test -s "$JAR" \
 	&& cp "$JAR" /app/application.jar

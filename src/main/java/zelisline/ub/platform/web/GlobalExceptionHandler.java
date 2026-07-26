@@ -191,6 +191,14 @@ public class GlobalExceptionHandler {
             body.setDetail("This email already has an account — sign in");
             return problem(body, HttpStatus.CONFLICT);
         }
+        if (flat.contains("uq_marketplace_suppliers_username")
+                || (flat.contains("marketplace_suppliers") && flat.contains("username"))) {
+            ProblemDetail body = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+            body.setTitle("Conflict");
+            body.setType(URI.create(PROBLEM_BASE + "duplicate-supplier-username"));
+            body.setDetail("Username is taken");
+            return problem(body, HttpStatus.CONFLICT);
+        }
         if (flat.contains("uq_supplier_invoices_business_no") || flat.contains("invoice_number")) {
             ProblemDetail body = ProblemDetail.forStatus(HttpStatus.CONFLICT);
             body.setTitle("Conflict");
@@ -237,24 +245,45 @@ public class GlobalExceptionHandler {
         return problem(body, HttpStatus.BAD_REQUEST);
     }
 
+    @ExceptionHandler({
+            org.springframework.transaction.UnexpectedRollbackException.class,
+            org.springframework.transaction.TransactionSystemException.class
+    })
+    public ResponseEntity<ProblemDetail> handleTransactionFailure(Exception ex) {
+        String correlationId = MDC.get(CorrelationIdFilter.CORRELATION_ID_MDC_KEY);
+        log.error("Transaction failure (correlationId={})", correlationId, ex);
+        ProblemDetail body = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
+        body.setTitle("Database not ready");
+        body.setType(URI.create(PROBLEM_BASE + "schema-mismatch"));
+        body.setDetail(schemaMismatchDetail(ex));
+        return problem(body, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ProblemDetail> handleUnexpected(Exception ex) {
         String correlationId = MDC.get(CorrelationIdFilter.CORRELATION_ID_MDC_KEY);
-        // Spring marks the TX rollback-only when a caught DB error happens inside @Transactional.
-        if (ex instanceof org.springframework.transaction.UnexpectedRollbackException
-                || (ex.getCause() instanceof org.springframework.transaction.UnexpectedRollbackException)) {
-            log.error("Unexpected rollback (correlationId={})", correlationId, ex);
+        // Nested UnexpectedRollbackException under a different wrapper.
+        if (ex.getCause() instanceof org.springframework.transaction.UnexpectedRollbackException
+                || ex.getCause() instanceof org.springframework.transaction.TransactionSystemException) {
+            return handleTransactionFailure(ex);
+        }
+        String flat = flattenMessages(ex).toLowerCase();
+        if (flat.contains("supplier_user_sessions")
+                || flat.contains("supplier_phone_verifications")
+                || flat.contains("supplier_users")
+                || flat.contains("marketplace_suppliers")) {
+            log.error("Supplier portal persistence failure (correlationId={})", correlationId, ex);
             ProblemDetail body = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
             body.setTitle("Database not ready");
             body.setType(URI.create(PROBLEM_BASE + "schema-mismatch"));
-            body.setDetail(
-                    "A database write rolled back unexpectedly. Ensure Flyway V172 (supplier_user_sessions) is applied, then retry.");
+            body.setDetail(schemaMismatchDetail(ex));
             return problem(body, HttpStatus.INTERNAL_SERVER_ERROR);
         }
         log.error("Unhandled exception (correlationId={})", correlationId, ex);
         ProblemDetail body = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
         body.setTitle("Internal server error");
         body.setType(URI.create(PROBLEM_BASE + "internal-error"));
+        body.setDetail("Unexpected server error. Retry, or sign in if your account was already created.");
         return problem(body, HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
@@ -292,6 +321,14 @@ public class GlobalExceptionHandler {
         }
         if (message.contains("supplier_user_sessions")) {
             return "Supplier portal sessions table is missing. Redeploy the API so Flyway can apply migration V172__supplier_portal_sessions_notifications.sql.";
+        }
+        if (message.contains("supplier_phone_verifications")
+                || message.contains("platform_supplier_portal")
+                || message.contains("supplier_portal_claim")) {
+            return "Supplier Portal claim tables are missing. Redeploy the API so Flyway can apply migrations V169–V172.";
+        }
+        if (message.contains("supplier_users") || message.contains("marketplace_suppliers")) {
+            return "Supplier Portal identity tables are incomplete. Redeploy the API so Flyway can apply migrations V136/V168/V169.";
         }
         return "A required database migration may be missing. Redeploy the API so Flyway can run pending migrations.";
     }

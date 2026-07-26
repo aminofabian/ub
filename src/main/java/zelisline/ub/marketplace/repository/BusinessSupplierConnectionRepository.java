@@ -23,4 +23,6 @@ public interface BusinessSupplierConnectionRepository extends JpaRepository<Busi
             String marketplaceSupplierId, String localSupplierId);
 
     boolean existsByLocalSupplierIdAndStatus(String localSupplierId, String status);
+
+    boolean existsByLocalSupplierId(String localSupplierId);
 }

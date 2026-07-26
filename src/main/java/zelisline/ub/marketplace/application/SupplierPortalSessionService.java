@@ -49,19 +49,27 @@ public class SupplierPortalSessionService {
 
         String sessionId = persistSessionBestEffort(user, jti, now, expiresAt, http);
 
-        String access = jwtTokenService.createSupplierAccessToken(
-                user.getId(),
-                user.getMarketplaceSupplierId(),
-                user.getRoleKey(),
-                jti);
-        return new SupplierPortalLoginResponse(
-                access,
-                sessionId,
-                user.getId(),
-                user.getMarketplaceSupplierId(),
-                user.getEmail(),
-                user.getPhone(),
-                user.getName());
+        try {
+            String roleKey = user.getRoleKey() == null || user.getRoleKey().isBlank()
+                    ? "admin"
+                    : user.getRoleKey();
+            String access = jwtTokenService.createSupplierAccessToken(
+                    user.getId(),
+                    user.getMarketplaceSupplierId(),
+                    roleKey,
+                    jti);
+            return new SupplierPortalLoginResponse(
+                    access,
+                    sessionId,
+                    user.getId(),
+                    user.getMarketplaceSupplierId(),
+                    user.getEmail(),
+                    user.getPhone(),
+                    user.getName());
+        } catch (RuntimeException ex) {
+            log.error("supplier portal JWT mint failed for user {}: {}", user.getId(), ex.getMessage(), ex);
+            return loginWithoutToken(user);
+        }
     }
 
     public SupplierPortalLoginResponse loginWithoutToken(SupplierUser user) {

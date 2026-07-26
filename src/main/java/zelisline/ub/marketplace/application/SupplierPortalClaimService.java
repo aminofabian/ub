@@ -9,10 +9,13 @@ import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionException;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
@@ -56,8 +59,6 @@ import zelisline.ub.platform.domain.PlatformSupplierPortalSettings;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierSlug;
 import zelisline.ub.suppliers.repository.SupplierRepository;
-
-import jakarta.servlet.http.HttpServletRequest;
 
 @Service
 public class SupplierPortalClaimService {
@@ -371,14 +372,19 @@ public class SupplierPortalClaimService {
         portalSettingsService.validatePassword(request.password());
 
         String token = request.setupToken() == null ? "" : request.setupToken().trim();
+        if (token.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Invalid or expired setup token — verify the code again");
+        }
         String tokenHash = TokenHasher.sha256Hex(token);
 
         SupplierPortalClaimInvite invite = inviteRepository
                 .findFirstBySetupTokenHashAndConsumedAtIsNull(tokenHash)
                 .orElse(null);
 
-        // Commit account creation before session insert so a missing V172 table
-        // cannot roll back a successful claim (nested TX / DataAccessException).
+        // Account create commits in its own TX. Session mint / shop linking must never
+        // share that TX — a missing V172 table or a connection unique conflict used to
+        // mark the TX rollback-only and surface as a bare HTTP 500.
         SupplierUser user;
         try {
             user = claimAccountTransaction.execute(status -> {
@@ -387,29 +393,53 @@ public class SupplierPortalClaimService {
                 }
                 return createUserFromSelfClaim(request, settings, tokenHash);
             });
-        } catch (org.springframework.transaction.TransactionException ex) {
-            Throwable root = ex.getMostSpecificCause() != null ? ex.getMostSpecificCause() : ex;
-            if (root instanceof ResponseStatusException rse) {
-                throw rse;
+        } catch (ResponseStatusException ex) {
+            throw ex;
+        } catch (DataIntegrityViolationException ex) {
+            throw mapClaimIntegrityViolation(ex);
+        } catch (DataAccessException ex) {
+            throw mapClaimDataAccess(ex);
+        } catch (TransactionException ex) {
+            throw mapClaimTransactionFailure(ex);
+        } catch (RuntimeException ex) {
+            ResponseStatusException nested = findResponseStatus(ex);
+            if (nested != null) {
+                throw nested;
             }
-            log.error("supplier portal claim transaction failed: {}", root.getMessage(), ex);
+            if (ex instanceof DataIntegrityViolationException dive) {
+                throw mapClaimIntegrityViolation(dive);
+            }
+            log.error("supplier portal claim failed: {}", rootMessage(ex), ex);
             throw new ResponseStatusException(
-                    HttpStatus.INTERNAL_SERVER_ERROR,
-                    "Could not finish account setup — try again or sign in if the account was created");
+                    HttpStatus.BAD_REQUEST,
+                    "Could not finish account setup. If you already registered, sign in instead.");
         }
         if (user == null) {
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Could not create account");
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Could not create account — verify the code again");
         }
+
+        // Post-commit side effects only — never join the account TX.
+        upsertMarketplaceIdentityBestEffort(user.getMarketplaceSupplierId());
+        linkLocalsBestEffort(user.getMarketplaceSupplierId(), user.getPhone());
+        publishClaimedBestEffort(user.getMarketplaceSupplierId(), user.getId(), user.getPhone(),
+                invite != null ? "invite" : "self_claim");
         return loginResponse(user, settings.isAutoLoginAfterSetup(), http);
     }
 
     private SupplierUser createUserFromInvite(
-            SupplierPortalClaimInvite invite,
+            SupplierPortalClaimInvite inviteRef,
             SupplierPortalClaimCompleteRequest request,
             PlatformSupplierPortalSettings settings
     ) {
+        // Reload inside the TX — the lookup above is outside and may be detached.
+        SupplierPortalClaimInvite invite = inviteRepository.findById(inviteRef.getId())
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Invalid or expired setup token — verify the code again"));
+
         Instant now = Instant.now();
-        if (invite.getVerifiedAt() == null
+        if (invite.getConsumedAt() != null
+                || invite.getVerifiedAt() == null
                 || invite.getSetupTokenExpiresAt() == null
                 || invite.getSetupTokenExpiresAt().isBefore(now)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Setup token expired — verify the code again");
@@ -438,8 +468,7 @@ public class SupplierPortalClaimService {
         if (marketplace.getStatus() == null || marketplace.getStatus().isBlank()) {
             marketplace.setStatus(MarketplaceSupplierStatuses.ACTIVE);
         }
-        marketplaceSupplierRepository.save(marketplace);
-        identityIndexService.upsertMarketplaceSupplier(marketplace);
+        marketplaceSupplierRepository.saveAndFlush(marketplace);
 
         SupplierUser user = new SupplierUser();
         user.setMarketplaceSupplierId(marketplace.getId());
@@ -448,15 +477,12 @@ public class SupplierPortalClaimService {
         user.setName(displayName);
         user.setPasswordHash(passwordEncoder.encode(request.password()));
         user.setRoleKey(SupplierUserRoles.ADMIN);
+        user.setActive(true);
         user.setLastLoginAt(now);
         supplierUserRepository.saveAndFlush(user);
 
-        linkLocalsByPhone(marketplace.getId(), phone);
-
         invite.setConsumedAt(now);
-        inviteRepository.save(invite);
-
-        publishClaimed(marketplace.getId(), user.getId(), phone, "invite");
+        inviteRepository.saveAndFlush(invite);
         return user;
     }
 
@@ -515,8 +541,7 @@ public class SupplierPortalClaimService {
         } else {
             marketplace.setUsername(allocateUsername(displayName, phone));
         }
-        marketplaceSupplierRepository.save(marketplace);
-        identityIndexService.upsertMarketplaceSupplier(marketplace);
+        marketplaceSupplierRepository.saveAndFlush(marketplace);
 
         SupplierUser user = new SupplierUser();
         user.setMarketplaceSupplierId(marketplace.getId());
@@ -525,15 +550,12 @@ public class SupplierPortalClaimService {
         user.setName(displayName);
         user.setPasswordHash(passwordEncoder.encode(request.password()));
         user.setRoleKey(SupplierUserRoles.ADMIN);
+        user.setActive(true);
         user.setLastLoginAt(now);
         supplierUserRepository.saveAndFlush(user);
 
-        linkLocalsByPhone(marketplace.getId(), phone);
-
         challenge.setConsumedAt(now);
-        verificationRepository.save(challenge);
-
-        publishClaimed(marketplace.getId(), user.getId(), phone, "self_claim");
+        verificationRepository.saveAndFlush(challenge);
         return user;
     }
 
@@ -558,54 +580,207 @@ public class SupplierPortalClaimService {
         }
     }
 
-    private void publishClaimed(String marketplaceSupplierId, String userId, String phone, String path) {
-        Map<String, Object> diff = new LinkedHashMap<>();
-        diff.put("marketplaceSupplierId", marketplaceSupplierId);
-        diff.put("userId", userId);
-        diff.put("phone", phone);
-        diff.put("path", path);
-        auditEventPublisher.publish(auditEventBuilder
-                .builder(AuditEventCategory.SUPPLIERS, AuditEventTypes.SUPPLIER_CLAIMED_ACCOUNT, AuditEventSeverity.INFO)
-                .actor(userId, AuditEventActorType.USER)
-                .target("marketplace_supplier", marketplaceSupplierId)
-                .source("supplier_portal")
-                .diff(diff)
-                .build());
+    private void publishClaimedBestEffort(
+            String marketplaceSupplierId,
+            String userId,
+            String phone,
+            String path
+    ) {
+        try {
+            Map<String, Object> diff = new LinkedHashMap<>();
+            diff.put("marketplaceSupplierId", marketplaceSupplierId);
+            diff.put("userId", userId);
+            diff.put("phone", phone);
+            diff.put("path", path);
+            // Platform-scoped event: audit_events.business_id is NOT NULL — use sentinel.
+            auditEventPublisher.publish(auditEventBuilder
+                    .builder(AuditEventCategory.SUPPLIERS, AuditEventTypes.SUPPLIER_CLAIMED_ACCOUNT, AuditEventSeverity.INFO)
+                    .businessId("platform")
+                    .actor(userId, AuditEventActorType.USER)
+                    .target("marketplace_supplier", marketplaceSupplierId)
+                    .source("supplier_portal")
+                    .diff(diff)
+                    .build());
+        } catch (RuntimeException ex) {
+            log.warn("supplier portal claim audit skipped: {}", rootMessage(ex));
+        }
+    }
+
+    private void upsertMarketplaceIdentityBestEffort(String marketplaceSupplierId) {
+        if (marketplaceSupplierId == null || marketplaceSupplierId.isBlank()) {
+            return;
+        }
+        try {
+            MarketplaceSupplier marketplace = marketplaceSupplierRepository.findById(marketplaceSupplierId)
+                    .orElse(null);
+            if (marketplace == null) {
+                return;
+            }
+            identityIndexService.upsertMarketplaceSupplier(marketplace);
+        } catch (RuntimeException ex) {
+            // Index is searchable convenience — never abort account creation.
+            log.warn(
+                    "supplier identity index upsert skipped for {}: {}",
+                    marketplaceSupplierId,
+                    rootMessage(ex));
+        }
+    }
+
+    private void linkLocalsBestEffort(String marketplaceSupplierId, String phone) {
+        if (marketplaceSupplierId == null || phone == null || phone.isBlank()) {
+            return;
+        }
+        try {
+            linkLocalsByPhone(marketplaceSupplierId, phone);
+        } catch (RuntimeException ex) {
+            log.warn(
+                    "supplier portal auto-link shops skipped for {}: {}",
+                    marketplaceSupplierId,
+                    rootMessage(ex));
+        }
     }
 
     private void linkLocalsByPhone(String marketplaceSupplierId, String phone) {
         List<SupplierIdentityIndex> hits = identityIndexRepository.findTenantByPhone(phone);
         for (SupplierIdentityIndex row : hits) {
-            if (row.getSupplierId() == null || row.getBusinessId() == null) {
-                continue;
+            try {
+                linkOneLocal(marketplaceSupplierId, phone, row);
+            } catch (RuntimeException ex) {
+                log.warn(
+                        "supplier portal auto-link skipped for local {}: {}",
+                        row.getSupplierId(),
+                        rootMessage(ex));
             }
-            if (connectionRepository.existsByLocalSupplierIdAndStatus(
-                    row.getSupplierId(), BusinessSupplierConnectionStatuses.ACTIVE)) {
-                continue;
-            }
-            Supplier local = supplierRepository.findByIdAndDeletedAtIsNull(row.getSupplierId()).orElse(null);
-            if (local == null) {
-                continue;
-            }
-            if (local.getMarketplaceSupplierId() != null
-                    && !local.getMarketplaceSupplierId().equals(marketplaceSupplierId)) {
-                continue;
-            }
-            if (connectionRepository.existsByBusinessIdAndMarketplaceSupplierId(
-                    local.getBusinessId(), marketplaceSupplierId)) {
-                continue;
-            }
-            BusinessSupplierConnection connection = new BusinessSupplierConnection();
-            connection.setBusinessId(local.getBusinessId());
-            connection.setMarketplaceSupplierId(marketplaceSupplierId);
-            connection.setLocalSupplierId(local.getId());
-            connection.setStatus(BusinessSupplierConnectionStatuses.ACTIVE);
-            connection.setCanViewPurchaseHistory(true);
-            connectionRepository.save(connection);
-            local.setMarketplaceSupplierId(marketplaceSupplierId);
-            supplierRepository.save(local);
-            identityIndexService.upsertTenantSupplier(local, phone, null);
         }
+    }
+
+    private void linkOneLocal(String marketplaceSupplierId, String phone, SupplierIdentityIndex row) {
+        if (row.getSupplierId() == null || row.getBusinessId() == null) {
+            return;
+        }
+        // uq_bsc_local_supplier is unique regardless of status — skip any existing row.
+        if (connectionRepository.existsByLocalSupplierId(row.getSupplierId())) {
+            return;
+        }
+        Supplier local = supplierRepository.findByIdAndDeletedAtIsNull(row.getSupplierId()).orElse(null);
+        if (local == null) {
+            return;
+        }
+        if (local.getMarketplaceSupplierId() != null
+                && !local.getMarketplaceSupplierId().equals(marketplaceSupplierId)) {
+            return;
+        }
+        if (connectionRepository.existsByBusinessIdAndMarketplaceSupplierId(
+                local.getBusinessId(), marketplaceSupplierId)) {
+            return;
+        }
+        BusinessSupplierConnection connection = new BusinessSupplierConnection();
+        connection.setBusinessId(local.getBusinessId());
+        connection.setMarketplaceSupplierId(marketplaceSupplierId);
+        connection.setLocalSupplierId(local.getId());
+        connection.setStatus(BusinessSupplierConnectionStatuses.ACTIVE);
+        connection.setCanViewPurchaseHistory(true);
+        connectionRepository.saveAndFlush(connection);
+        local.setMarketplaceSupplierId(marketplaceSupplierId);
+        supplierRepository.save(local);
+        try {
+            identityIndexService.upsertTenantSupplier(local, phone, null);
+        } catch (RuntimeException ex) {
+            log.warn("tenant identity index upsert skipped for {}: {}", local.getId(), rootMessage(ex));
+        }
+    }
+
+    private static ResponseStatusException mapClaimIntegrityViolation(DataIntegrityViolationException ex) {
+        String flat = flattenMessages(ex).toLowerCase();
+        if (flat.contains("uq_supplier_users_phone") || (flat.contains("supplier_users") && flat.contains("phone"))) {
+            return new ResponseStatusException(HttpStatus.CONFLICT, "This phone already has an account — sign in");
+        }
+        if (flat.contains("uq_supplier_users_email") || (flat.contains("supplier_users") && flat.contains("email"))) {
+            return new ResponseStatusException(HttpStatus.CONFLICT, "That email is already in use");
+        }
+        if (flat.contains("uq_marketplace_suppliers_username") || flat.contains("username")) {
+            return new ResponseStatusException(HttpStatus.CONFLICT, "Username is taken");
+        }
+        if (flat.contains("business_supplier_connections") || flat.contains("uq_bsc_")) {
+            // Should be best-effort outside TX now; keep a clear client message if it races in.
+            return new ResponseStatusException(
+                    HttpStatus.CONFLICT, "Shop link conflict — account may already exist; try signing in");
+        }
+        return new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Could not finish account setup. If you already registered, sign in instead.");
+    }
+
+    private static ResponseStatusException mapClaimDataAccess(DataAccessException ex) {
+        String flat = flattenMessages(ex).toLowerCase();
+        if (flat.contains("supplier_user_sessions")
+                || flat.contains("supplier_phone_verifications")
+                || flat.contains("supplier_portal_claim")
+                || flat.contains("marketplace_suppliers")
+                || flat.contains("supplier_users")
+                || flat.contains("unknown column")
+                || flat.contains("doesn't exist")) {
+            return new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Database is missing a Supplier Portal migration (V169–V172). Redeploy the API and retry.");
+        }
+        return new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Could not finish account setup. If you already registered, sign in instead.");
+    }
+
+    private static ResponseStatusException mapClaimTransactionFailure(TransactionException ex) {
+        Throwable root = ex.getMostSpecificCause() != null ? ex.getMostSpecificCause() : ex;
+        if (root instanceof ResponseStatusException rse) {
+            return rse;
+        }
+        if (root instanceof DataIntegrityViolationException dive) {
+            return mapClaimIntegrityViolation(dive);
+        }
+        if (root instanceof DataAccessException dae) {
+            return mapClaimDataAccess(dae);
+        }
+        return new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Could not finish account setup. If you already registered, sign in instead.");
+    }
+
+    private static ResponseStatusException findResponseStatus(Throwable ex) {
+        Throwable cur = ex;
+        int depth = 0;
+        while (cur != null && depth < 8) {
+            if (cur instanceof ResponseStatusException rse) {
+                return rse;
+            }
+            cur = cur.getCause();
+            depth++;
+        }
+        return null;
+    }
+
+    private static String rootMessage(Throwable ex) {
+        Throwable root = ex;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        return root.getMessage() != null ? root.getMessage() : ex.getMessage();
+    }
+
+    private static String flattenMessages(Throwable ex) {
+        StringBuilder sb = new StringBuilder();
+        Throwable cur = ex;
+        int depth = 0;
+        while (cur != null && depth < 8) {
+            if (cur.getMessage() != null) {
+                if (!sb.isEmpty()) {
+                    sb.append(' ');
+                }
+                sb.append(cur.getMessage());
+            }
+            cur = cur.getCause();
+            depth++;
+        }
+        return sb.toString();
     }
 
     private String allocateUsername(String displayName, String phone) {

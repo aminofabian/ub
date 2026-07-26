@@ -8,9 +8,13 @@ import org.junit.jupiter.api.Test;
 class PublicAuthEndpointsTest {
 
     @Test
-    void unlockPinIsPublic() {
-        assertTrue(PublicAuthEndpoints.matches("/api/v1/auth/unlock-pin"));
-        assertTrue(PublicAuthEndpoints.matches("/api/v1/auth/login-pin"));
-        assertFalse(PublicAuthEndpoints.matches("/api/v1/till-devices"));
+    void supplierPortalClaimRoutesBypassJwtFilter() {
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/supplier-portal/auth/login"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/supplier-portal/auth/claim/config"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/supplier-portal/auth/claim/send-code"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/supplier-portal/auth/claim/verify-code"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/supplier-portal/auth/claim/verify-invite"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/supplier-portal/auth/claim/complete"));
+        assertFalse(PublicAuthEndpoints.matches("/api/v1/supplier-portal/profile"));
     }
 }

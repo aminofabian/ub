@@ -21,7 +21,12 @@ public final class PublicAuthEndpoints {
             "/api/v1/auth/password/forgot",
             "/api/v1/auth/password/reset",
             "/api/v1/auth/clear-session-cookie",
-            "/api/v1/supplier-portal/auth/login"
+            "/api/v1/supplier-portal/auth/login",
+            "/api/v1/supplier-portal/auth/claim/config",
+            "/api/v1/supplier-portal/auth/claim/send-code",
+            "/api/v1/supplier-portal/auth/claim/verify-code",
+            "/api/v1/supplier-portal/auth/claim/verify-invite",
+            "/api/v1/supplier-portal/auth/claim/complete"
     );
 
     private PublicAuthEndpoints() {

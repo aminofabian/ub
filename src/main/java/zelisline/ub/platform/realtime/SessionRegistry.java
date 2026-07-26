@@ -116,6 +116,31 @@ public class SessionRegistry {
         return result;
     }
 
+    /**
+     * Branch sessions plus business-wide listeners (null {@code branchId} on the ticket).
+     * Used for hub/owner surfaces that subscribe to {@code pos} without a fixed branch claim.
+     */
+    public Set<String> findSessionsByBranchOrBusinessWide(
+            String businessId, String branchId, String channel) {
+        Set<String> result = ConcurrentHashMap.newKeySet();
+        for (Map.Entry<String, RealtimeSession> entry : sessionMeta.entrySet()) {
+            RealtimeSession meta = entry.getValue();
+            if (!businessId.equals(meta.businessId())) {
+                continue;
+            }
+            if (!sessionSubscriptions.getOrDefault(entry.getKey(), Set.of()).contains(channel)) {
+                continue;
+            }
+            String sessionBranch = meta.branchId();
+            if (sessionBranch == null
+                    || branchId == null
+                    || branchId.equals(sessionBranch)) {
+                result.add(entry.getKey());
+            }
+        }
+        return result;
+    }
+
     public int activeSessionCount() {
         return sessions.size();
     }

@@ -200,6 +200,29 @@ public class RealtimeBridge {
     }
 
     /**
+     * Fan-out sale.completed to branch POS listeners and business-wide hub sessions
+     * (owners/managers with null branch claim). Invalidates Morning board pulse.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onSaleCompleted(SaleCompletedEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        var dataMap = new LinkedHashMap<String, String>();
+        dataMap.put("saleId", event.saleId());
+        dataMap.put("branchId", event.branchId() != null ? event.branchId() : "");
+        dataMap.put("amount", event.amount().toPlainString());
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) return;
+
+        Set<String> sessionIds = sessionRegistry.findSessionsByBranchOrBusinessWide(
+                event.businessId(), event.branchId(), "pos");
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "sale.completed", eventId, "MEDIUM", Instant.now(), payloadJson);
+        }
+        log.debug("POS event sale.completed: sale={} branch={} sessions={}",
+                event.saleId(), event.branchId(), sessionIds.size());
+    }
+
+    /**
      * Fan-out approval.requested to all users with approve permission on the branch.
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -327,7 +350,7 @@ public class RealtimeBridge {
         ));
         if (payloadJson == null) return;
 
-        Set<String> sessionIds = sessionRegistry.findSessionsByBranchChannel(
+        Set<String> sessionIds = sessionRegistry.findSessionsByBranchOrBusinessWide(
                 event.businessId(), event.branchId(), "pos");
         for (String sid : sessionIds) {
             handler.sendFrame(sid, "shift.opened", eventId, "MEDIUM", Instant.now(), payloadJson);
@@ -347,7 +370,7 @@ public class RealtimeBridge {
         String payloadJson = toJson(dataMap);
         if (payloadJson == null) return;
 
-        Set<String> sessionIds = sessionRegistry.findSessionsByBranchChannel(
+        Set<String> sessionIds = sessionRegistry.findSessionsByBranchOrBusinessWide(
                 event.businessId(), event.branchId(), "pos");
         for (String sid : sessionIds) {
             handler.sendFrame(sid, "shift.closed", eventId, "MEDIUM", Instant.now(), payloadJson);
@@ -675,6 +698,10 @@ private String resolveNotificationPriority(String type) {
     public record PaymentConfirmedEvent(
             String businessId, String branchId, String saleId, BigDecimal amount,
             String paymentMethod, String cashierUserId) {}
+
+    /** Once-per-sale invalidate signal for dashboards (not cashier payment UX). */
+    public record SaleCompletedEvent(
+            String businessId, String branchId, String saleId, BigDecimal amount) {}
 
     public record StkPaymentSettledEvent(
             String businessId,

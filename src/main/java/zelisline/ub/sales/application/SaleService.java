@@ -201,6 +201,10 @@ public class SaleService {
         publishSaleEvents(businessId, req.branchId(), shift.getId(), saleId, userId, grandTotal, resolved.normalized(), cashIn);
         enqueueSaleCompletedWebhook(businessId, completed, effectiveSoldAt);
 
+        eventPublisher.publishEvent(
+                new zelisline.ub.platform.realtime.RealtimeBridge.SaleCompletedEvent(
+                        businessId, req.branchId(), saleId, grandTotal));
+
         // Publish real-time payment.confirmed for each payment method
         for (NormalizedPayment p : resolved.normalized()) {
             eventPublisher.publishEvent(

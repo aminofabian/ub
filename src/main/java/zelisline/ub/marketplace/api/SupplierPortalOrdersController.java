@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.marketplace.api.dto.CreateSupplierPortalOrderRequest;
 import zelisline.ub.marketplace.api.dto.SupplierPortalOrderDetailResponse;
 import zelisline.ub.marketplace.api.dto.SupplierPortalOrderListRow;
 import zelisline.ub.marketplace.api.dto.SupplierPortalRespondRequest;
@@ -34,6 +35,14 @@ public class SupplierPortalOrdersController {
     public List<SupplierPortalOrderListRow> list() {
         SupplierPrincipal principal = CurrentSupplierUser.require();
         return supplierPortalOrdersService.listOrders(principal.marketplaceSupplierId());
+    }
+
+    @PostMapping
+    @PreAuthorize("hasPermission(null, 'supplier.orders.respond')")
+    public SupplierPortalOrderDetailResponse create(
+            @Valid @RequestBody CreateSupplierPortalOrderRequest request) {
+        SupplierPrincipal principal = CurrentSupplierUser.require();
+        return supplierPortalOrdersService.createOrder(principal.marketplaceSupplierId(), request);
     }
 
     @GetMapping("/{purchaseOrderId}")

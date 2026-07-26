@@ -20,17 +20,27 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.marketplace.api.dto.CreateSupplierPortalOrderRequest;
 import zelisline.ub.marketplace.api.dto.SupplierPortalOrderDetailResponse;
 import zelisline.ub.marketplace.api.dto.SupplierPortalOrderListRow;
 import zelisline.ub.marketplace.api.dto.SupplierPortalRespondRequest;
 import zelisline.ub.marketplace.api.dto.SupplierPortalShipRequest;
+import zelisline.ub.marketplace.domain.BusinessSupplierConnection;
+import zelisline.ub.marketplace.domain.BusinessSupplierConnectionStatuses;
 import zelisline.ub.marketplace.domain.SupplierPerformanceEvent;
+import zelisline.ub.marketplace.repository.BusinessSupplierConnectionRepository;
 import zelisline.ub.marketplace.repository.SupplierPerformanceEventRepository;
 import zelisline.ub.purchasing.PurchasingConstants;
+import zelisline.ub.purchasing.api.dto.AddPathAPurchaseOrderLineRequest;
+import zelisline.ub.purchasing.api.dto.CreatePathAPurchaseOrderRequest;
+import zelisline.ub.purchasing.application.PathAPurchaseService;
 import zelisline.ub.purchasing.domain.PurchaseOrder;
 import zelisline.ub.purchasing.domain.PurchaseOrderLine;
 import zelisline.ub.purchasing.repository.PurchaseOrderLineRepository;
 import zelisline.ub.purchasing.repository.PurchaseOrderRepository;
+import zelisline.ub.suppliers.domain.SupplierProduct;
+import zelisline.ub.suppliers.repository.SupplierProductRepository;
+import zelisline.ub.tenancy.application.BranchResolutionService;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
 @Service
@@ -38,6 +48,7 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
 public class SupplierPortalOrdersService {
 
     private static final int UNIT_SCALE = 4;
+    private static final BigDecimal MIN_UNIT_COST = new BigDecimal("0.01");
 
     private final PurchaseOrderRepository purchaseOrderRepository;
     private final PurchaseOrderLineRepository purchaseOrderLineRepository;
@@ -45,6 +56,10 @@ public class SupplierPortalOrdersService {
     private final ItemRepository itemRepository;
     private final SupplierPerformanceEventRepository performanceEventRepository;
     private final SupplierPortalShopLinkService shopLinkService;
+    private final BusinessSupplierConnectionRepository connectionRepository;
+    private final SupplierProductRepository supplierProductRepository;
+    private final PathAPurchaseService pathAPurchaseService;
+    private final BranchResolutionService branchResolutionService;
     private final ObjectMapper objectMapper;
 
     @Transactional
@@ -79,6 +94,100 @@ public class SupplierPortalOrdersService {
     @Transactional(readOnly = true)
     public SupplierPortalOrderDetailResponse getOrder(String marketplaceSupplierId, String purchaseOrderId) {
         PurchaseOrder po = requirePortalOrder(marketplaceSupplierId, purchaseOrderId);
+        return toDetail(po);
+    }
+
+    /**
+     * Supplier-taken order for a connected shop: creates a Path A PO from linked
+     * products, marks it sent, and auto-accepts every line so the shop can receive.
+     */
+    @Transactional
+    public SupplierPortalOrderDetailResponse createOrder(
+            String marketplaceSupplierId,
+            CreateSupplierPortalOrderRequest request
+    ) {
+        try {
+            shopLinkService.ensureLinksAndCatalogue(marketplaceSupplierId);
+        } catch (RuntimeException ignored) {
+            // Soft heal.
+        }
+
+        BusinessSupplierConnection link = connectionRepository
+                .findByMarketplaceSupplierIdAndLocalSupplierId(
+                        marketplaceSupplierId, request.localSupplierId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shop link not found"));
+        if (!BusinessSupplierConnectionStatuses.ACTIVE.equals(link.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Shop link not found");
+        }
+
+        String businessId = link.getBusinessId();
+        String localSupplierId = link.getLocalSupplierId();
+        String branchId = branchResolutionService.resolveDefaultBranch(businessId);
+
+        Set<String> seenItems = new HashSet<>();
+        for (CreateSupplierPortalOrderRequest.Line line : request.lines()) {
+            if (!seenItems.add(line.itemId())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Duplicate item in order");
+            }
+            SupplierProduct productLink = supplierProductRepository
+                    .findBySupplierIdAndItemId(localSupplierId, line.itemId())
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST,
+                            "Item is not linked to this shop supplier"));
+            if (productLink.getDeletedAt() != null || !productLink.isActive()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item link is inactive");
+            }
+        }
+
+        String notes = blankToNull(request.notes());
+        String portalNote = "[Taken via supplier portal]";
+        String mergedNotes = notes == null ? portalNote : portalNote + "\n" + notes;
+
+        var created = pathAPurchaseService.createPurchaseOrder(
+                businessId,
+                new CreatePathAPurchaseOrderRequest(
+                        localSupplierId,
+                        branchId,
+                        request.expectedDate(),
+                        null,
+                        mergedNotes));
+
+        Map<String, SupplierProduct> linksByItem = request.lines().stream()
+                .map(CreateSupplierPortalOrderRequest.Line::itemId)
+                .distinct()
+                .map(itemId -> supplierProductRepository.findBySupplierIdAndItemId(localSupplierId, itemId).orElseThrow())
+                .collect(Collectors.toMap(SupplierProduct::getItemId, Function.identity(), (a, b) -> a));
+
+        for (CreateSupplierPortalOrderRequest.Line line : request.lines()) {
+            SupplierProduct productLink = linksByItem.get(line.itemId());
+            BigDecimal unitCost = resolveUnitCost(line.unitEstimatedCost(), productLink);
+            pathAPurchaseService.addPurchaseOrderLine(
+                    businessId,
+                    created.id(),
+                    new AddPathAPurchaseOrderLineRequest(
+                            line.itemId(),
+                            scaleQty(line.qtyOrdered()),
+                            unitCost));
+        }
+
+        PurchaseOrder po = purchaseOrderRepository.findByIdAndBusinessId(created.id(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Order missing"));
+        Instant now = Instant.now();
+        po.setStatus(PurchasingConstants.PO_SENT);
+        po.setSource(PurchasingConstants.PO_SOURCE_MARKETPLACE);
+        po.setSentToSupplierAt(now);
+        po.setSupplierResponseAt(now);
+        po.setDeliveryStatus(PurchasingConstants.DELIVERY_NOT_SHIPPED);
+        purchaseOrderRepository.save(po);
+
+        for (PurchaseOrderLine poLine : purchaseOrderLineRepository
+                .findByPurchaseOrderIdOrderBySortOrderAscIdAsc(po.getId())) {
+            poLine.setSupplierLineStatus(PurchasingConstants.SUPPLIER_LINE_ACCEPTED);
+            poLine.setQtyAccepted(poLine.getQtyOrdered());
+            purchaseOrderLineRepository.save(poLine);
+        }
+
+        logPerformanceEvent(marketplaceSupplierId, businessId, "po_supplier_taken", po.getId());
         return toDetail(po);
     }
 
@@ -136,6 +245,19 @@ public class SupplierPortalOrdersService {
         purchaseOrderRepository.save(po);
         logPerformanceEvent(marketplaceSupplierId, po.getBusinessId(), "po_delivery_" + request.deliveryStatus(), po.getId());
         return toDetail(po);
+    }
+
+    private BigDecimal resolveUnitCost(BigDecimal requested, SupplierProduct productLink) {
+        if (requested != null && requested.signum() > 0) {
+            return requested.setScale(UNIT_SCALE, RoundingMode.HALF_UP);
+        }
+        if (productLink.getDefaultCostPrice() != null && productLink.getDefaultCostPrice().signum() > 0) {
+            return productLink.getDefaultCostPrice().setScale(UNIT_SCALE, RoundingMode.HALF_UP);
+        }
+        if (productLink.getLastCostPrice() != null && productLink.getLastCostPrice().signum() > 0) {
+            return productLink.getLastCostPrice().setScale(UNIT_SCALE, RoundingMode.HALF_UP);
+        }
+        return MIN_UNIT_COST.setScale(UNIT_SCALE, RoundingMode.HALF_UP);
     }
 
     private void applyLineResponse(PurchaseOrderLine line, SupplierPortalRespondRequest.LineResponse input) {

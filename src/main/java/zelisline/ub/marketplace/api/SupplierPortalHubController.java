@@ -12,8 +12,11 @@ import org.springframework.web.bind.annotation.RestController;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import java.util.List;
+
 import zelisline.ub.marketplace.api.dto.GlobalSupplierHubResponse;
 import zelisline.ub.marketplace.api.dto.SupplierPortalHubShopDetailResponse;
+import zelisline.ub.marketplace.api.dto.SupplierPortalShopProductRow;
 import zelisline.ub.marketplace.application.GlobalSupplierHubService;
 import zelisline.ub.marketplace.application.SupplierPortalHubService;
 import zelisline.ub.platform.security.CurrentSupplierUser;
@@ -42,6 +45,13 @@ public class SupplierPortalHubController {
     public SupplierPortalHubShopDetailResponse shopSupplies(@PathVariable String localSupplierId) {
         SupplierPrincipal principal = CurrentSupplierUser.require();
         return supplierPortalHubService.shopSupplies(principal.marketplaceSupplierId(), localSupplierId);
+    }
+
+    @GetMapping("/shops/{localSupplierId}/products")
+    @PreAuthorize("hasPermission(null, 'supplier.orders.read')")
+    public List<SupplierPortalShopProductRow> shopProducts(@PathVariable String localSupplierId) {
+        SupplierPrincipal principal = CurrentSupplierUser.require();
+        return supplierPortalHubService.shopProducts(principal.marketplaceSupplierId(), localSupplierId);
     }
 
     @PostMapping("/shops/{localSupplierId}/complaints")

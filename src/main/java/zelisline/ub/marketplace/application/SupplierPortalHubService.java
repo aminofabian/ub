@@ -11,6 +11,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.marketplace.api.dto.SupplierPortalHubShopDetailResponse;
+import zelisline.ub.marketplace.api.dto.SupplierPortalShopProductRow;
 import zelisline.ub.marketplace.domain.BusinessSupplierConnection;
 import zelisline.ub.marketplace.domain.BusinessSupplierConnectionStatuses;
 import zelisline.ub.marketplace.repository.BusinessSupplierConnectionRepository;
@@ -23,10 +24,13 @@ import zelisline.ub.suppliers.api.dto.PublicSupplierComplaintRequest;
 import zelisline.ub.suppliers.api.dto.PublicSupplierComplaintResponse;
 import zelisline.ub.suppliers.api.dto.PublicSupplierSupplyLine;
 import zelisline.ub.suppliers.api.dto.PublicSupplierSupplyRow;
+import zelisline.ub.suppliers.api.dto.SupplierItemLinkResponse;
+import zelisline.ub.suppliers.application.ItemSupplierLinkService;
 import zelisline.ub.suppliers.application.SupplierPurchaseHistoryService;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierSlug;
 import zelisline.ub.suppliers.repository.SupplierRepository;
+import zelisline.ub.tenancy.application.BranchResolutionService;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
@@ -43,6 +47,35 @@ public class SupplierPortalHubService {
     private final SupplierInvoiceLineRepository supplierInvoiceLineRepository;
     private final ContactMessageRepository contactMessageRepository;
     private final SupplierPortalMessagesService messagesService;
+    private final ItemSupplierLinkService itemSupplierLinkService;
+    private final BranchResolutionService branchResolutionService;
+
+    @Transactional(readOnly = true)
+    public List<SupplierPortalShopProductRow> shopProducts(
+            String marketplaceSupplierId,
+            String localSupplierId
+    ) {
+        BusinessSupplierConnection link = requireActiveLink(marketplaceSupplierId, localSupplierId);
+        String branchId = branchResolutionService.resolveDefaultBranch(link.getBusinessId());
+        List<SupplierItemLinkResponse> links = itemSupplierLinkService.listLinksForSupplier(
+                link.getBusinessId(), localSupplierId, branchId);
+        return links.stream()
+                .filter(SupplierItemLinkResponse::active)
+                .map(row -> new SupplierPortalShopProductRow(
+                        row.itemId(),
+                        row.itemName(),
+                        row.sku(),
+                        row.barcode(),
+                        row.thumbnailUrl(),
+                        row.currentStock(),
+                        row.defaultCostPrice(),
+                        row.lastCostPrice(),
+                        row.packSize(),
+                        row.packUnit(),
+                        row.variantName(),
+                        row.parentItemName()))
+                .toList();
+    }
 
     @Transactional(readOnly = true)
     public SupplierPortalHubShopDetailResponse shopSupplies(

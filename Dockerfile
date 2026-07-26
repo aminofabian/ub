@@ -7,12 +7,15 @@ WORKDIR /app
 # Coolify build VMs are often ~2GB total. A Spring Boot fat JAR + a large Gradle
 # heap leaves no headroom: the kernel SIGKILLs Gradle (exit 255, logs cut mid-task).
 # Keep heap low, one worker, Serial GC, in-process javac (UB_LOW_MEM_BUILD), split steps.
+#
+# CRITICAL: do NOT put -Xmx in JAVA_TOOL_OPTIONS. Gradle --no-daemon still forks a
+# single-use daemon, so JAVA_TOOL_OPTIONS -Xmx doubles the heap (client + daemon)
+# and was the exit-255 / truncated-log pattern on compileJava.
+# Tiny client via GRADLE_OPTS; real budget only on the daemon (javac shares it).
 ENV UB_LOW_MEM_BUILD=1
-ENV GRADLE_OPTS="-Dorg.gradle.daemon=false -Dorg.gradle.parallel=false -Dorg.gradle.workers.max=1"
 ENV GRADLE_USER_HOME=/home/gradle/.gradle
-# Single JVM budget: with fork=false, Gradle + javac share this heap (do NOT raise
-# while Coolify builders stay ~2GB — two 384m heaps was the previous OOM pattern).
-ENV JAVA_TOOL_OPTIONS="-XX:+UseSerialGC -Xss256k -Xmx288m -XX:MaxMetaspaceSize=96m -XX:MaxDirectMemorySize=16m"
+ENV GRADLE_OPTS="-Xmx64m -XX:MaxMetaspaceSize=64m -XX:+UseSerialGC -Xss256k -XX:MaxDirectMemorySize=8m -Dorg.gradle.daemon=false -Dorg.gradle.parallel=false -Dorg.gradle.workers.max=1"
+ENV JAVA_TOOL_OPTIONS="-XX:+UseSerialGC -Xss256k"
 
 COPY gradle ./gradle
 COPY gradlew build.gradle settings.gradle gradle.properties ./
@@ -21,6 +24,7 @@ RUN chmod +x gradlew
 # Override local/desktop gradle.properties for the constrained builder.
 # No HeapDumpOnOutOfMemoryError — dumps on a 2GB VM often tip the process into SIGKILL.
 # configureondemand=false: on-demand config has spiked RSS during compile on small VMs.
+# Daemon ~384m is the only large heap; client stays at GRADLE_OPTS 64m.
 RUN printf '%s\n' \
 	'org.gradle.daemon=false' \
 	'org.gradle.parallel=false' \
@@ -28,7 +32,7 @@ RUN printf '%s\n' \
 	'org.gradle.configureondemand=false' \
 	'org.gradle.workers.max=1' \
 	'org.gradle.vfs.watch=false' \
-	'org.gradle.jvmargs=-Xmx288m -XX:MaxMetaspaceSize=96m -XX:+UseSerialGC -Xss256k -XX:MaxDirectMemorySize=16m' \
+	'org.gradle.jvmargs=-Xmx384m -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -Xss256k -XX:MaxDirectMemorySize=16m' \
 	> gradle.properties
 
 # Prime the exact configurations bootJar needs. Must succeed (no || true): a soft
@@ -45,12 +49,16 @@ RUN echo "deps-prime-v2" \
 
 COPY src ./src
 
-# Drop transform/journal junk so compileJava has more free RAM on ~2GB builders.
+# Drop transform/journal/daemon junk so compileJava has more free RAM on ~2GB builders.
+# Keep modules-2 / files-2.1 (resolved jars) from the deps-prime layer.
 RUN rm -rf /tmp/* \
-	"$GRADLE_USER_HOME"/caches/*/transforms \
+	"$GRADLE_USER_HOME"/caches/*/transforms* \
 	"$GRADLE_USER_HOME"/caches/journal-* \
+	"$GRADLE_USER_HOME"/caches/*/scripts \
+	"$GRADLE_USER_HOME"/caches/*/executionHistory \
 	"$GRADLE_USER_HOME"/daemon \
 	"$GRADLE_USER_HOME"/native \
+	"$GRADLE_USER_HOME"/workers \
 	|| true
 
 # Split compile from packaging so peak RSS during bootJar stays lower.

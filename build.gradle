@@ -85,11 +85,14 @@ tasks.named('test') {
 	}
 }
 
-// Coolify / small Docker builders (~2GB): avoid a forked javac worker (Gradle + javac
-// each capped by JAVA_TOOL_OPTIONS ≈ 2× heap → SIGKILL / exit 255 with truncated logs).
+// Coolify / small Docker builders (~2GB): keep javac in the Gradle daemon process.
+// A forked javac worker + daemon ≈ 2× heap → SIGKILL / exit 255 with truncated logs.
+// Also drop debug symbols and incremental state to shrink peak RSS during compileJava.
 if (System.getenv('UB_LOW_MEM_BUILD') == '1') {
 	tasks.withType(JavaCompile).configureEach {
 		options.fork = false
+		options.incremental = false
+		options.debug = false
 	}
 }
 

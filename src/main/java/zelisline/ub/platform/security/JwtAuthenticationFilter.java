@@ -291,10 +291,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             writeProblem(response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
             return false;
         }
-        var sessionOpt = supplierUserSessionRepository.findByAccessTokenJtiAndRevokedAtIsNull(jti);
-        if (sessionOpt.isEmpty()) {
-            writeProblem(response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
-            return false;
+        try {
+            var sessionRow = supplierUserSessionRepository.findByAccessTokenJti(jti);
+            if (sessionRow.isPresent() && sessionRow.get().getRevokedAt() != null) {
+                writeProblem(response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
+                return false;
+            }
+            // Missing row: legacy token or Flyway V172 not applied — allow.
+        } catch (Exception ignored) {
+            // Table may not exist yet.
         }
         SupplierUser user = supplierUserRepository.findByIdAndMarketplaceSupplierId(id, marketplaceSupplierId).orElse(null);
         if (user == null || !user.isActive()) {

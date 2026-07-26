@@ -14,6 +14,8 @@ public interface SupplierUserSessionRepository extends JpaRepository<SupplierUse
 
     Optional<SupplierUserSession> findByAccessTokenJtiAndRevokedAtIsNull(String accessTokenJti);
 
+    Optional<SupplierUserSession> findByAccessTokenJti(String accessTokenJti);
+
     List<SupplierUserSession> findBySupplierUserIdOrderByIssuedAtDesc(String supplierUserId);
 
     @Modifying(clearAutomatically = true)

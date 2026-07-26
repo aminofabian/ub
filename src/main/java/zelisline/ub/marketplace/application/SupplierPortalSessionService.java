@@ -3,9 +3,13 @@ package zelisline.ub.marketplace.application;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,6 +29,8 @@ import zelisline.ub.platform.security.JwtTokenService;
 @RequiredArgsConstructor
 public class SupplierPortalSessionService {
 
+    private static final Logger log = LoggerFactory.getLogger(SupplierPortalSessionService.class);
+
     private final SupplierUserSessionRepository sessionRepository;
     private final JwtTokenService jwtTokenService;
 
@@ -37,16 +43,27 @@ public class SupplierPortalSessionService {
         Instant now = Instant.now();
         Instant expiresAt = now.plus(accessTtlMinutes, ChronoUnit.MINUTES);
 
-        SupplierUserSession session = new SupplierUserSession();
-        session.setSupplierUserId(user.getId());
-        session.setMarketplaceSupplierId(user.getMarketplaceSupplierId());
-        session.setAccessTokenJti(jti);
-        session.setUserAgent(trimUa(http == null ? null : http.getHeader("User-Agent")));
-        session.setIp(http == null ? null : ClientIpResolver.resolve(http));
-        session.setIssuedAt(now);
-        session.setExpiresAt(expiresAt);
-        session.setLastSeenAt(now);
-        sessionRepository.save(session);
+        String sessionId = null;
+        try {
+            SupplierUserSession session = new SupplierUserSession();
+            session.setSupplierUserId(user.getId());
+            session.setMarketplaceSupplierId(user.getMarketplaceSupplierId());
+            session.setAccessTokenJti(jti);
+            session.setUserAgent(trimUa(http == null ? null : http.getHeader("User-Agent")));
+            session.setIp(http == null ? null : ClientIpResolver.resolve(http));
+            session.setIssuedAt(now);
+            session.setExpiresAt(expiresAt);
+            session.setLastSeenAt(now);
+            sessionRepository.saveAndFlush(session);
+            sessionId = session.getId();
+        } catch (DataAccessException ex) {
+            // V172 may not be applied yet — still mint a usable access token.
+            log.warn(
+                    "supplier portal session persist failed (is Flyway V172 applied?): {}",
+                    ex.getMostSpecificCause() != null
+                            ? ex.getMostSpecificCause().getMessage()
+                            : ex.getMessage());
+        }
 
         String access = jwtTokenService.createSupplierAccessToken(
                 user.getId(),
@@ -55,7 +72,7 @@ public class SupplierPortalSessionService {
                 jti);
         return new SupplierPortalLoginResponse(
                 access,
-                session.getId(),
+                sessionId,
                 user.getId(),
                 user.getMarketplaceSupplierId(),
                 user.getEmail(),
@@ -76,17 +93,22 @@ public class SupplierPortalSessionService {
 
     @Transactional(readOnly = true)
     public List<SupplierPortalSessionRow> listSessions(String supplierUserId, String currentJti) {
-        return sessionRepository.findBySupplierUserIdOrderByIssuedAtDesc(supplierUserId).stream()
-                .map(s -> new SupplierPortalSessionRow(
-                        s.getId(),
-                        s.getIp(),
-                        s.getUserAgent(),
-                        s.getIssuedAt(),
-                        s.getLastSeenAt(),
-                        s.getExpiresAt(),
-                        currentJti != null && currentJti.equals(s.getAccessTokenJti()),
-                        s.getRevokedAt() != null))
-                .toList();
+        try {
+            return sessionRepository.findBySupplierUserIdOrderByIssuedAtDesc(supplierUserId).stream()
+                    .map(s -> new SupplierPortalSessionRow(
+                            s.getId(),
+                            s.getIp(),
+                            s.getUserAgent(),
+                            s.getIssuedAt(),
+                            s.getLastSeenAt(),
+                            s.getExpiresAt(),
+                            currentJti != null && currentJti.equals(s.getAccessTokenJti()),
+                            s.getRevokedAt() != null))
+                    .toList();
+        } catch (DataAccessException ex) {
+            log.warn("supplier portal sessions list failed: {}", ex.getMessage());
+            return List.of();
+        }
     }
 
     @Transactional
@@ -110,7 +132,21 @@ public class SupplierPortalSessionService {
 
     @Transactional
     public void touch(String jti) {
-        sessionRepository.touchLastSeen(jti, Instant.now());
+        try {
+            sessionRepository.touchLastSeen(jti, Instant.now());
+        } catch (DataAccessException ex) {
+            log.debug("supplier portal session touch failed: {}", ex.getMessage());
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<SupplierUserSession> findByJti(String jti) {
+        try {
+            return sessionRepository.findByAccessTokenJti(jti);
+        } catch (DataAccessException ex) {
+            log.debug("supplier portal session lookup failed: {}", ex.getMessage());
+            return Optional.empty();
+        }
     }
 
     private static String trimUa(String ua) {

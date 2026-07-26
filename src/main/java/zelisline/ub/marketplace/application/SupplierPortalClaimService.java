@@ -12,10 +12,12 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
-import lombok.RequiredArgsConstructor;
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zelisline.ub.audit.AuditEventTypes;
@@ -58,7 +60,6 @@ import zelisline.ub.suppliers.repository.SupplierRepository;
 import jakarta.servlet.http.HttpServletRequest;
 
 @Service
-@RequiredArgsConstructor
 public class SupplierPortalClaimService {
 
     private static final Logger log = LoggerFactory.getLogger(SupplierPortalClaimService.class);
@@ -82,9 +83,46 @@ public class SupplierPortalClaimService {
     private final SupplierPortalSessionService sessionService;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
+    private final TransactionTemplate claimAccountTransaction;
 
     @Value("${app.supplier-portal.claim.return-otp-when-stubbed:true}")
     private boolean returnOtpWhenStubbed;
+
+    public SupplierPortalClaimService(
+            SupplierPhoneVerificationRepository verificationRepository,
+            SupplierPortalClaimInviteRepository inviteRepository,
+            SupplierUserRepository supplierUserRepository,
+            MarketplaceSupplierRepository marketplaceSupplierRepository,
+            SupplierIdentityIndexRepository identityIndexRepository,
+            SupplierRepository supplierRepository,
+            BusinessSupplierConnectionRepository connectionRepository,
+            SupplierIdentityIndexService identityIndexService,
+            BusinessCreditMessagingSettingsService messagingSettingsService,
+            CustomerMessageDispatcher customerMessageDispatcher,
+            PlatformSupplierPortalSettingsService portalSettingsService,
+            PasswordEncoder passwordEncoder,
+            SupplierPortalSessionService sessionService,
+            AuditEventPublisher auditEventPublisher,
+            AuditEventBuilder auditEventBuilder,
+            PlatformTransactionManager transactionManager
+    ) {
+        this.verificationRepository = verificationRepository;
+        this.inviteRepository = inviteRepository;
+        this.supplierUserRepository = supplierUserRepository;
+        this.marketplaceSupplierRepository = marketplaceSupplierRepository;
+        this.identityIndexRepository = identityIndexRepository;
+        this.supplierRepository = supplierRepository;
+        this.connectionRepository = connectionRepository;
+        this.identityIndexService = identityIndexService;
+        this.messagingSettingsService = messagingSettingsService;
+        this.customerMessageDispatcher = customerMessageDispatcher;
+        this.portalSettingsService = portalSettingsService;
+        this.passwordEncoder = passwordEncoder;
+        this.sessionService = sessionService;
+        this.auditEventPublisher = auditEventPublisher;
+        this.auditEventBuilder = auditEventBuilder;
+        this.claimAccountTransaction = new TransactionTemplate(transactionManager);
+    }
 
     @Transactional(readOnly = true)
     public SupplierPortalClaimPublicConfigResponse publicConfig() {
@@ -324,7 +362,6 @@ public class SupplierPortalClaimService {
         return new SupplierPortalClaimVerifyCodeResponse(setupToken, tokenExpires, suggested);
     }
 
-    @Transactional
     public SupplierPortalLoginResponse complete(
             SupplierPortalClaimCompleteRequest request,
             HttpServletRequest http
@@ -339,17 +376,22 @@ public class SupplierPortalClaimService {
         SupplierPortalClaimInvite invite = inviteRepository
                 .findFirstBySetupTokenHashAndConsumedAtIsNull(tokenHash)
                 .orElse(null);
-        if (invite != null) {
-            return completeInvite(invite, request, settings, http);
-        }
-        return completeSelfClaim(request, settings, tokenHash, http);
+
+        // Commit account creation before session insert so a missing V172 table
+        // cannot roll back a successful claim (nested TX / DataAccessException).
+        SupplierUser user = claimAccountTransaction.execute(status -> {
+            if (invite != null) {
+                return createUserFromInvite(invite, request, settings);
+            }
+            return createUserFromSelfClaim(request, settings, tokenHash);
+        });
+        return loginResponse(user, settings.isAutoLoginAfterSetup(), http);
     }
 
-    private SupplierPortalLoginResponse completeInvite(
+    private SupplierUser createUserFromInvite(
             SupplierPortalClaimInvite invite,
             SupplierPortalClaimCompleteRequest request,
-            PlatformSupplierPortalSettings settings,
-            HttpServletRequest http
+            PlatformSupplierPortalSettings settings
     ) {
         Instant now = Instant.now();
         if (invite.getVerifiedAt() == null
@@ -392,7 +434,7 @@ public class SupplierPortalClaimService {
         user.setPasswordHash(passwordEncoder.encode(request.password()));
         user.setRoleKey(SupplierUserRoles.ADMIN);
         user.setLastLoginAt(now);
-        supplierUserRepository.save(user);
+        supplierUserRepository.saveAndFlush(user);
 
         linkLocalsByPhone(marketplace.getId(), phone);
 
@@ -400,14 +442,13 @@ public class SupplierPortalClaimService {
         inviteRepository.save(invite);
 
         publishClaimed(marketplace.getId(), user.getId(), phone, "invite");
-        return loginResponse(user, settings.isAutoLoginAfterSetup(), http);
+        return user;
     }
 
-    private SupplierPortalLoginResponse completeSelfClaim(
+    private SupplierUser createUserFromSelfClaim(
             SupplierPortalClaimCompleteRequest request,
             PlatformSupplierPortalSettings settings,
-            String tokenHash,
-            HttpServletRequest http
+            String tokenHash
     ) {
         portalSettingsService.requireSelfClaimAllowed();
 
@@ -449,6 +490,9 @@ public class SupplierPortalClaimService {
             if (username.length() < 2) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Username too short");
             }
+            if (username.length() > 64) {
+                username = username.substring(0, 64).replaceAll("-+$", "");
+            }
             if (marketplaceSupplierRepository.existsByUsernameIgnoreCase(username)) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Username is taken");
             }
@@ -467,7 +511,7 @@ public class SupplierPortalClaimService {
         user.setPasswordHash(passwordEncoder.encode(request.password()));
         user.setRoleKey(SupplierUserRoles.ADMIN);
         user.setLastLoginAt(now);
-        supplierUserRepository.save(user);
+        supplierUserRepository.saveAndFlush(user);
 
         linkLocalsByPhone(marketplace.getId(), phone);
 
@@ -475,7 +519,7 @@ public class SupplierPortalClaimService {
         verificationRepository.save(challenge);
 
         publishClaimed(marketplace.getId(), user.getId(), phone, "self_claim");
-        return loginResponse(user, settings.isAutoLoginAfterSetup(), http);
+        return user;
     }
 
     private SupplierPortalLoginResponse loginResponse(
@@ -544,13 +588,18 @@ public class SupplierPortalClaimService {
         if (base.length() < 2) {
             base = "s" + phone.substring(Math.max(0, phone.length() - 8));
         }
+        if (base.length() > 60) {
+            base = base.substring(0, 60).replaceAll("-+$", "");
+        }
         String candidate = base;
         int i = 0;
         while (marketplaceSupplierRepository.existsByUsernameIgnoreCase(candidate)) {
             i += 1;
-            candidate = base + "-" + i;
+            String suffix = "-" + i;
+            candidate = base.substring(0, Math.min(base.length(), 64 - suffix.length())) + suffix;
             if (i > 50) {
-                candidate = base + "-" + UUID.randomUUID().toString().substring(0, 6);
+                suffix = "-" + UUID.randomUUID().toString().substring(0, 6);
+                candidate = base.substring(0, Math.min(base.length(), 64 - suffix.length())) + suffix;
                 break;
             }
         }

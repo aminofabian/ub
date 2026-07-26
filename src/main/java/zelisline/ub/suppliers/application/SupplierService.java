@@ -396,6 +396,7 @@ public class SupplierService {
                 s.getPayoutType(),
                 s.getPayoutPhone(),
                 s.getKopokopoExternalRecipientUrl(),
+                s.getMarketplaceSupplierId(),
                 s.getVersion(),
                 s.getCreatedAt(),
                 s.getUpdatedAt(),

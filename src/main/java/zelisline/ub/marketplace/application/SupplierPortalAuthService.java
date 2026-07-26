@@ -15,6 +15,7 @@ import zelisline.ub.marketplace.api.dto.SupplierPortalLoginResponse;
 import zelisline.ub.marketplace.domain.SupplierUser;
 import zelisline.ub.marketplace.repository.SupplierUserRepository;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
+import zelisline.ub.platform.application.PlatformSupplierPortalSettingsService;
 import zelisline.ub.platform.security.JwtTokenService;
 
 @Service
@@ -24,9 +25,11 @@ public class SupplierPortalAuthService {
     private final SupplierUserRepository supplierUserRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenService jwtTokenService;
+    private final PlatformSupplierPortalSettingsService portalSettingsService;
 
     @Transactional
     public SupplierPortalLoginResponse login(SupplierPortalLoginRequest request) {
+        portalSettingsService.requirePortalEnabled();
         SupplierUser user = findByIdentifier(request.identifier())
                 .orElseThrow(this::invalidCredentials);
         if (!user.isActive()) {

@@ -3,6 +3,8 @@ package zelisline.ub.marketplace.api;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -17,8 +19,11 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.marketplace.api.dto.CreateMarketplaceSupplierRequest;
 import zelisline.ub.marketplace.api.dto.CreateMarketplaceSupplierUserRequest;
+import zelisline.ub.marketplace.api.dto.CreateSupplierPortalInviteRequest;
+import zelisline.ub.marketplace.api.dto.CreateSupplierPortalInviteResponse;
 import zelisline.ub.marketplace.api.dto.MarketplaceSupplierSummaryResponse;
 import zelisline.ub.marketplace.application.MarketplaceAdminService;
+import zelisline.ub.marketplace.application.SupplierPortalInviteService;
 
 @Validated
 @RestController
@@ -27,6 +32,7 @@ import zelisline.ub.marketplace.application.MarketplaceAdminService;
 public class SuperAdminMarketplaceController {
 
     private final MarketplaceAdminService marketplaceAdminService;
+    private final SupplierPortalInviteService supplierPortalInviteService;
 
     @GetMapping
     public Page<MarketplaceSupplierSummaryResponse> list(
@@ -53,5 +59,24 @@ public class SuperAdminMarketplaceController {
             @PathVariable String id,
             @Valid @RequestBody CreateMarketplaceSupplierUserRequest request) {
         marketplaceAdminService.createPortalUser(id, request);
+    }
+
+    @PostMapping("/{id}/invites")
+    @ResponseStatus(HttpStatus.CREATED)
+    public CreateSupplierPortalInviteResponse createInvite(
+            @PathVariable String id,
+            @RequestBody(required = false) CreateSupplierPortalInviteRequest request) {
+        return supplierPortalInviteService.createInvite(
+                id,
+                request != null ? request : new CreateSupplierPortalInviteRequest(null, false),
+                currentSuperAdminId());
+    }
+
+    private static String currentSuperAdminId() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || authentication.getPrincipal() == null) {
+            return null;
+        }
+        return String.valueOf(authentication.getPrincipal());
     }
 }

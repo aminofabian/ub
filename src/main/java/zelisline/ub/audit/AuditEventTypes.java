@@ -135,6 +135,8 @@ public final class AuditEventTypes {
     public static final String SUPPLIER_CONTACT_ADDED = "supplier.contact_added";
     public static final String SUPPLIER_CONTACT_UPDATED = "supplier.contact_updated";
     public static final String SUPPLIER_CONTACT_DELETED = "supplier.contact_deleted";
+    public static final String SUPPLIER_CLAIMED_ACCOUNT = "supplier.claimed_account";
+    public static final String SUPPLIER_PORTAL_INVITE_CREATED = "supplier.portal_invite_created";
 
     // System & integrations
     public static final String SCHEDULER_STARTED = "scheduler.started";

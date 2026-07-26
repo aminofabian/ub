@@ -53,6 +53,7 @@ public class SupplierPurchaseHistoryService {
         BigDecimal totalSpent = BigDecimal.ZERO;
         BigDecimal totalPaid = BigDecimal.ZERO;
         BigDecimal openBalance = BigDecimal.ZERO;
+        BigDecimal partialOpenBalance = BigDecimal.ZERO;
         LocalDate lastInvoiceDate = null;
 
         allInvs.sort((a, b) -> {
@@ -78,6 +79,9 @@ public class SupplierPurchaseHistoryService {
             totalPaid = totalPaid.add(paid);
             if (open.compareTo(MONEY) > 0) {
                 openBalance = openBalance.add(open);
+                if (paid.compareTo(MONEY) > 0) {
+                    partialOpenBalance = partialOpenBalance.add(open);
+                }
             }
             if (lastInvoiceDate == null) {
                 lastInvoiceDate = inv.getInvoiceDate();
@@ -105,6 +109,7 @@ public class SupplierPurchaseHistoryService {
                         money2(totalSpent),
                         money2(totalPaid),
                         money2(openBalance),
+                        money2(partialOpenBalance),
                         invoiceCount,
                         lastInvoiceDate),
                 List.copyOf(orders));

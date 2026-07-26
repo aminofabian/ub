@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.marketplace.api.dto.CreateSupplierPortalInviteResponse;
 import zelisline.ub.marketplace.application.SupplierDuplicateCheckService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.suppliers.api.dto.CreateSupplierContactRequest;
@@ -36,6 +37,7 @@ import zelisline.ub.suppliers.api.dto.SupplierItemLinkResponse;
 import zelisline.ub.suppliers.application.ItemSupplierLinkService;
 import zelisline.ub.suppliers.application.SupplierPurchaseHistoryService;
 import zelisline.ub.suppliers.application.SupplierService;
+import zelisline.ub.suppliers.application.TenantSupplierPortalInviteService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
 @Validated
@@ -48,6 +50,7 @@ public class SuppliersController {
     private final ItemSupplierLinkService itemSupplierLinkService;
     private final SupplierPurchaseHistoryService supplierPurchaseHistoryService;
     private final SupplierDuplicateCheckService supplierDuplicateCheckService;
+    private final TenantSupplierPortalInviteService tenantSupplierPortalInviteService;
 
     @PostMapping("/duplicate-check")
     @PreAuthorize("hasPermission(null, 'suppliers.write')")
@@ -128,6 +131,22 @@ public class SuppliersController {
                 supplierId,
                 CurrentTenantUser.auditActorId(request)
         );
+    }
+
+    @PostMapping("/{supplierId}/portal-invite")
+    @PreAuthorize("hasPermission(null, 'suppliers.write')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public CreateSupplierPortalInviteResponse portalInvite(
+            @PathVariable String supplierId,
+            @RequestParam(defaultValue = "true") boolean sendSms,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return tenantSupplierPortalInviteService.invite(
+                TenantRequestIds.resolveBusinessId(request),
+                supplierId,
+                CurrentTenantUser.auditActorId(request),
+                sendSms);
     }
 
     @GetMapping("/{supplierId}/item-links")

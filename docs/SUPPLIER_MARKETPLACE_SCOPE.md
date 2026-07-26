@@ -4,9 +4,9 @@
 >
 > **Strategy:** Build as a long-term wholesale marketplace, released in phases to avoid overbuilding too early.
 
-**Status:** Scoped (not started)  
-**Last reviewed:** 2026-07-08  
-**Related:** [Daily Audit Restock](../../frontend/app/(dashboard)/inventory/stock-take/README-RESTOCK.md) · [Global Products Catalog](./GLOBAL_PRODUCTS_CATALOG_PLAN.md) · `/suppliers` · Path A purchasing
+**Status:** Phase 1 partially shipped (platform identity + portal auth/catalogue/orders live) · marketplace directory & procurement depth still open  
+**Last reviewed:** 2026-07-26  
+**Related:** [Supplier Portal README](../../docs/SUPPLIER_PORTAL_README.md) (portal product scope — claim, money hub, SA config) · [Daily Audit Restock](../../frontend/app/(dashboard)/inventory/stock-take/README-RESTOCK.md) · [Global Products Catalog](./GLOBAL_PRODUCTS_CATALOG_PLAN.md) · `/suppliers` · Path A purchasing
 
 ---
 
@@ -43,28 +43,38 @@ The supplier flow should be built as a long-term wholesale marketplace inside th
 | Restock suggestions | Daily audit → `stock_take_restock_items` → PDF → optional PO | Phase 2 builds on this directly |
 | Purchasing intelligence | Spend, price competitiveness, single-source risk | Seed for supplier scoring (Phase 3) |
 | Public cross-tenant search | `/barcode` platform page + `PublicBarcodeController` | **UI/API pattern** for supplier directory |
-| Supplier payments | KopoKopo disbursements, AP aging | Invoice/payment tracking in Phase 1 |
+| Supplier payments / AP | KopoKopo disbursements, invoices, allocations, aging | Portal money views via `SupplierPurchaseHistoryService` |
+| **Platform supplier identity** | ✅ `marketplace_suppliers`, connections, identity index | Foundation for portal + directory |
+| **Supplier portal auth** | ✅ Phone self-claim OTP, login JWT, `supplier_users` | Extend claim config / invites — see portal README |
+| **Supplier portal app** | ✅ Profile, catalogue CRUD, orders respond/ship | `/supplier-portal/*` |
+| **Global Supplier Hub** | ✅ Public `/s/{username}` owed/paid + auth hub supplies | Authenticated Shops UI should reuse this |
+| **Supply SMS nudges** | ✅ Posted/paid SMS + soft claim URL | `SupplierPortalNotifyService` |
 
 ### Key files (today)
 
 | Area | Path |
 |---|---|
 | Supplier domain | `backend/src/main/java/zelisline/ub/suppliers/` |
-| Supplier UI | `frontend/app/(dashboard)/suppliers/` |
+| Marketplace / portal | `backend/src/main/java/zelisline/ub/marketplace/` |
+| Supplier portal UI | `frontend/app/(supplier-portal)/`, `frontend/components/supplier-portal/` |
+| Supplier UI (tenant) | `frontend/app/(dashboard)/suppliers/` |
 | Path A purchasing | `backend/src/main/java/zelisline/ub/purchasing/` |
 | Restock flow | `frontend/app/(dashboard)/inventory/stock-take/README-RESTOCK.md` |
 | Public barcode search | `frontend/app/barcode/page.tsx`, `PublicBarcodeController` |
-| Supplier schema | `backend/src/main/resources/db/migration/V14__suppliers_slice_1.sql` |
+| Supplier schema | `V14__suppliers_slice_1.sql`, `V136__supplier_marketplace_phase1.sql`, `V169__supplier_portal_phone_claim.sql` |
 | PO schema | `backend/src/main/resources/db/migration/V16__path_a_po_grn_invoice.sql` |
+| Portal product scope | `docs/SUPPLIER_PORTAL_README.md` |
 
-### Critical gap
+### Remaining gaps (not “from zero”)
 
-Suppliers today are **`business_id`-scoped records**. There is:
+Platform identity and a working portal MVP **exist**. Still open:
 
-- No supplier login or portal
-- No platform-level supplier entity
-- No line-item supplier accept/reject on purchase orders
-- No cross-tenant supplier discovery
+- Full business-facing **marketplace directory** (cross-supplier discovery / compare)
+- Shop-issued **invite / claim codes** + Super Admin portal settings (portal README Phase A)
+- Authenticated portal **money UX** (shops, payments, statements) — data already on Hub/AP
+- Richer line-level PO marketplace workflow + restock → send-to-supplier polish
+- Cross-tenant duplicate-check UX on every “add supplier” (identity index exists; productize)
+- Visibility permissions, scorecards, multi-supplier cart (Phase 2–3)
 
 ---
 
@@ -74,9 +84,10 @@ Two supplier concepts are required, not one:
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│  PLATFORM LAYER (new)                                       │
+│  PLATFORM LAYER (exists — extend)                           │
 │  marketplace_suppliers  →  catalogue, pricing, delivery     │
-│  supplier_users         →  portal auth                      │
+│  supplier_users         →  portal auth (claim + login live) │
+│  business_supplier_connections · supplier_identity_index    │
 └──────────────────────┬──────────────────────────────────────┘
                        │ connected via
                        ▼
@@ -248,30 +259,33 @@ When a supplier is added to the marketplace, they receive access to a Supplier P
 
 ### Supplier capabilities
 
-| Feature | Phase |
-|---|---|
-| Manage business profile | 1 |
-| Upload products | 1 |
-| Set prices, package sizes, MOQ | 1 |
-| Define delivery locations | 1 |
-| Receive purchase orders | 1 |
-| Accept, reject, or partially fulfill orders | 1 |
-| Track deliveries | 1 |
-| View invoices and payments | 1 (read-only) |
-| View permitted inventory data | 2 |
-| Suggest restocking | 2 |
+| Feature | Phase | Status |
+|---|---|---|
+| Manage business profile | 1 | ✅ Live |
+| Upload products | 1 | ✅ Live |
+| Set prices, package sizes, MOQ | 1 | ✅ Live |
+| Define delivery locations | 1 | ✅ Partial (profile fields) |
+| Receive purchase orders | 1 | ✅ Live inbox |
+| Accept, reject, or partially fulfill orders | 1 | ✅ Respond / ship APIs |
+| Track deliveries | 1 | 🔄 Ship flag only; full history still open |
+| View invoices and payments | 1 (read-only) | 🔄 Invoices API; Hub shows balances; no portal Payments/Statements UI |
+| Phone self-claim + login | 1 | ✅ Live (`/supplier-portal/claim`) |
+| Invite claim codes + SA portal config | 1 | ❌ See [Supplier Portal README](../../docs/SUPPLIER_PORTAL_README.md) Phase A |
+| View permitted inventory data | 2 | ❌ |
+| Suggest restocking | 2 | ❌ |
 
 ### Auth
 
-New route plane: `/supplier-portal/*` (or subdomain `supplier.kiosk.ke`).
+Route plane live: `/supplier-portal/*` (path on main domain; subdomain still optional via `portal_url`).
 
 | Piece | Detail |
 |---|---|
-| Principal | `SupplierPrincipal` JWT |
-| Permissions | `supplier.catalog.write`, `supplier.orders.respond`, etc. |
-| Pattern | Mirror `SecurityConfig` patterns from `SUPER_ADMIN` and shopper hub |
+| Principal | `SupplierPrincipal` JWT — live |
+| Permissions | `SupplierUserRoles` (`catalog.*`, `orders.*`); invoices reuse `orders.read` |
+| Claim | Phone OTP self-claim + setup token; invite Path C not built yet |
+| Pattern | Separate from tenant/staff JWT (cookie `ub.sp.accessToken`) |
 
-This prevents the platform owner or business users from becoming responsible for updating supplier catalogues manually.
+This prevents the platform owner or business users from becoming responsible for updating supplier catalogues manually. **Portal money / claim-governance work continues in** [Supplier Portal README](../../docs/SUPPLIER_PORTAL_README.md).
 
 ---
 
@@ -517,48 +531,55 @@ Extends existing super-admin plane (`/super-admin/*`).
 
 **Goal:** A business can discover a supplier, place a PO, and the supplier can respond — without building the full marketplace.
 
+**Progress:** Platform registry + portal auth/catalogue/orders are largely live. Directory discovery UX, invite onboarding, and portal money surfaces remain the main Phase 1 leftovers (portal leftovers tracked in [Supplier Portal README](../../docs/SUPPLIER_PORTAL_README.md)).
+
 #### 1A. Platform supplier registry (minimal)
 
-| Deliverable | Detail |
-|---|---|
-| `marketplace_suppliers` table | Name, description, categories, delivery regions, status, contact email |
-| `marketplace_supplier_products` | Platform catalogue: name, barcode, SKU, category, package options |
-| `marketplace_supplier_price_offers` | Simple v1: one price per product/package/region |
-| Supplier onboarding | Host invites supplier → creates portal account |
+| Deliverable | Detail | Status |
+|---|---|---|
+| `marketplace_suppliers` table | Name, description, categories, delivery regions, status, contact email | ✅ |
+| `marketplace_supplier_products` | Platform catalogue: name, barcode, SKU, category, package options | ✅ |
+| `marketplace_supplier_price_offers` | Simple v1: one price per product/package/region | 🔄 Partial / evolving |
+| Supplier onboarding | Self-claim phone OTP live; host invite + claim codes still open | 🔄 |
 
 **Defer:** cross-supplier comparison UI, ranking, price trends.
 
 #### 1B. Supplier directory (business-facing)
 
-| Deliverable | Detail |
-|---|---|
-| Search UI | `/barcode` search UX + `/suppliers` master-detail |
-| "Add supplier" action | Creates `business_supplier_connections` + local `suppliers` row + imports catalogue links into `supplier_products` |
-| Duplicate check on entry | Fuzzy match name + phone + email + tax ID against own suppliers, marketplace suppliers, and cross-tenant identity index before submit (§4) |
+| Deliverable | Detail | Status |
+|---|---|---|
+| Search UI | `/barcode` search UX + `/suppliers` master-detail | 🔄 Connect exists; full public directory still open |
+| "Add supplier" / connect | Creates `business_supplier_connections` + local `suppliers` row | ✅ API (`POST .../connect`) |
+| Duplicate check on entry | Fuzzy match via identity index before submit (§4) | 🔄 Index live; productize UX |
 
 #### 1C. Supplier portal (v1)
 
-| Feature | Scope |
-|---|---|
-| Business profile | Edit description, delivery areas, contact |
-| Catalogue | CRUD products, prices, pack sizes, MOQ |
-| Orders inbox | List POs from connected businesses |
-| Order actions | Accept / reject / partial fulfill per line |
-| Delivery | Mark shipped, add tracking note |
-| Invoices | View invoices created by business (read-only) |
+| Feature | Scope | Status |
+|---|---|---|
+| Business profile | Edit description, delivery areas, contact | ✅ |
+| Catalogue | CRUD products, prices, pack sizes, MOQ | ✅ |
+| Orders inbox | List POs from connected businesses | ✅ |
+| Order actions | Accept / reject / partial fulfill per line | ✅ |
+| Delivery | Mark shipped, add tracking note | 🔄 Ship; history UI later |
+| Invoices | View invoices created by business (read-only) | 🔄 API only |
+| Claim / login | Phone claim + password login | ✅ |
+| Hub balances | Public hub + auth supplies | ✅ (portal Shops UI still open) |
 
 #### 1D. Purchase order extensions
 
-Extend Path A with send-to-supplier and line-level supplier response (see §9).
+Extend Path A with send-to-supplier and line-level supplier response (see §9). **Partial** — respond/ship exist; notification + restock wiring still thin.
 
 #### Phase 1 exit criteria
 
 - [ ] Business searches directory, adds supplier, sees their catalogue
 - [ ] Adding a supplier that already exists (own business or marketplace) surfaces the match before submit
-- [ ] Business creates PO from catalogue or restock approval
-- [ ] Supplier logs in, responds to PO at line level
-- [ ] Business receives goods via existing GRN flow
-- [ ] No manual catalogue maintenance by platform owner
+- [x] Supplier can claim/login and manage catalogue *(live)*
+- [x] Supplier responds to PO at line level *(live)*
+- [ ] Business creates PO from catalogue or restock approval (end-to-end polish)
+- [ ] Business receives goods via existing GRN flow after portal accept
+- [x] No manual catalogue maintenance by platform owner *(supplier self-serves)*
+- [ ] Shop/SA invite Path C + configurable claim templates *(portal README Phase A)*
+- [ ] Authenticated portal surfaces Hub balances / statements *(portal README Phase B)*
 
 ---
 
@@ -573,7 +594,7 @@ Build on daily audit restock (already live) rather than starting fresh.
 | Suggested reorder qty | `(reorder_point - on_hand) / pack_size`, rounded to MOQ |
 | Supplier visibility permissions | Enforce `business_supplier_connections` flags |
 | Supplier restocking suggestions | Supplier portal → creates restock item with `source = supplier` |
-| Purchase history | Surface existing `SupplierPurchaseHistoryService` in portal (scoped) |
+| Purchase history | Surface existing `SupplierPurchaseHistoryService` in portal (scoped) — **Hub already uses it; authenticated Shops/Payments UI is portal Phase B** |
 | Supplier performance (business view) | Acceptance rate, fulfillment rate, late delivery from PO data |
 
 #### Phase 2 exit criteria
@@ -609,12 +630,12 @@ The first version should not try to build the full marketplace immediately.
 
 ### Concrete MVP slice
 
-1. Host onboards 3–5 marketplace suppliers
-2. Business searches by product name/barcode, adds supplier
+1. Host onboards 3–5 marketplace suppliers — **partial:** self-claim + SA create-user API; invite UX still open
+2. Business searches by product name/barcode, adds supplier — **connect API live; directory search still open**
 3. Business creates PO (manual or from restock approval)
-4. Supplier accepts/rejects/partially fulfills in portal
+4. Supplier accepts/rejects/partially fulfills in portal — **✅ live**
 5. Business posts GRN for accepted quantities
-6. Invoice/payment uses existing AP flow
+6. Invoice/payment uses existing AP flow — **✅;** portal money UI still open ([portal README](../../docs/SUPPLIER_PORTAL_README.md) Phase B)
 
 Everything else — comparison, forecasting, platform dashboard, trust scores — waits until this loop has 30+ real orders.
 
@@ -637,80 +658,88 @@ Everything else — comparison, forecasting, platform dashboard, trust scores �
 ## 16. Suggested Build Sequence
 
 ```text
-Sprint 1–2:  Data model (marketplace_supplier*, connections, price_offers)
-             Supplier auth plane + portal shell
+✅ Done:     Data model (marketplace_supplier*, connections, identity index)
+             Supplier auth plane + portal shell (claim/login)
+             Portal catalogue CRUD + profile + orders respond/ship
+             Global Hub balances (public + auth supplies)
+             Soft claim SMS after Path B supply
 
-Sprint 3–4:  Portal catalogue CRUD
-             Business "add supplier" + import links
-             Duplicate-check endpoint + identity index backfill
+Next (portal):  SA Supplier Portal settings + invite Path C
+                Authenticated Shops / Payments / Statements on Hub APIs
+                → docs/SUPPLIER_PORTAL_README.md Phases A–B
 
-Sprint 5–6:  Supplier directory search UI (barcode pattern)
-             PO send-to-supplier + line-level supplier response
-
-Sprint 7:    Wire restock → PO → supplier notification
+Next (marketplace Phase 1 leftovers):
+             Business directory search UI + duplicate-check UX
+             PO send-to-supplier notification polish
+             Wire restock → PO → supplier notification
              Phase 1 QA + pilot with 2–3 suppliers
 
 --- Phase 2 ---
 
-Sprint 8–9:  Reorder point engine + auto-suggestions
+             Reorder point engine + auto-suggestions
              Visibility permissions UI + enforcement
-
-Sprint 10:   Supplier scorecard (business view)
+             Supplier scorecard (business view)
              Supplier-suggested restock
 
 --- Phase 3 ---
 
-Sprint 11+:  Multi-supplier cart, comparison, platform dashboard
+             Multi-supplier cart, comparison, platform dashboard
 ```
 
 ---
 
-## 17. API Surface (Phase 1 sketch)
+## 17. API Surface (Phase 1)
+
+Legend: ✅ live · 🔄 partial · 📋 planned
 
 ### Public / business directory
 
-| Method | Endpoint | Auth | Purpose |
-|---|---|---|---|
-| `GET` | `/api/v1/public/marketplace/suppliers/search` | Public | Search suppliers by product, category, location |
-| `GET` | `/api/v1/public/marketplace/products/search` | Public | Search products across suppliers |
-| `GET` | `/api/v1/marketplace/suppliers/{id}` | Business | Supplier detail + catalogue preview |
-| `POST` | `/api/v1/marketplace/suppliers/{id}/connect` | Business | Add supplier → create connection + local `suppliers` row |
+| Method | Endpoint | Auth | Purpose | Status |
+|---|---|---|---|---|
+| `GET` | `/api/v1/public/marketplace/suppliers/by-username/{username}` | Public | Global Hub shop cards + totals | ✅ |
+| `GET` | `/api/v1/public/marketplace/suppliers/search` | Public | Search suppliers by product, category, location | 📋 |
+| `GET` | `/api/v1/public/marketplace/products/search` | Public | Search products across suppliers | 📋 |
+| `GET` | `/api/v1/marketplace/suppliers/{id}` | Business | Supplier detail + catalogue preview | 🔄 |
+| `POST` | `/api/v1/marketplace/suppliers/{id}/connect` | Business | Add supplier → connection + local row | ✅ |
 
 ### Supplier deduplication (see §4)
 
-| Method | Endpoint | Auth | Purpose |
-|---|---|---|---|
-| `POST` | `/api/v1/suppliers/duplicate-check` | Business (`suppliers.write`) | Fuzzy match name + phone + email + tax ID against own suppliers, marketplace suppliers, and cross-tenant identity index; returns tiered matches with privacy masking |
+| Method | Endpoint | Auth | Purpose | Status |
+|---|---|---|---|---|
+| `POST` | `/api/v1/suppliers/duplicate-check` | Business (`suppliers.write`) | Fuzzy match via identity index; masked matches | 🔄 Index live; productize endpoint/UX |
 
 ### Supplier portal
 
-| Method | Endpoint | Auth | Purpose |
-|---|---|---|---|
-| `GET` | `/api/v1/supplier-portal/profile` | Supplier | Business profile |
-| `PATCH` | `/api/v1/supplier-portal/profile` | Supplier | Update profile, delivery areas |
-| `GET/POST/PATCH/DELETE` | `/api/v1/supplier-portal/products` | Supplier | Catalogue CRUD |
-| `GET` | `/api/v1/supplier-portal/orders` | Supplier | PO inbox |
-| `POST` | `/api/v1/supplier-portal/orders/{id}/respond` | Supplier | Per-line accept/reject/partial |
-| `POST` | `/api/v1/supplier-portal/orders/{id}/ship` | Supplier | Mark in transit / delivered |
+| Method | Endpoint | Auth | Purpose | Status |
+|---|---|---|---|---|
+| `POST` | `/api/v1/supplier-portal/auth/login` | Public | Login | ✅ |
+| `POST` | `/api/v1/supplier-portal/auth/claim/*` | Public | Send/verify/complete phone claim | ✅ |
+| `GET`/`PATCH` | `/api/v1/supplier-portal/profile` | Supplier | Profile + username + link locals | ✅ |
+| `GET/POST/PATCH/DELETE` | `/api/v1/supplier-portal/products` | Supplier | Catalogue CRUD | ✅ |
+| `GET` | `/api/v1/supplier-portal/orders` | Supplier | PO inbox | ✅ |
+| `POST` | `/api/v1/supplier-portal/orders/{id}/respond` | Supplier | Per-line accept/reject/partial | ✅ |
+| `POST` | `/api/v1/supplier-portal/orders/{id}/ship` | Supplier | Mark in transit / delivered | ✅ |
+| `GET` | `/api/v1/supplier-portal/invoices` | Supplier | Invoice list (read-only) | ✅ API / ❌ UI |
+| `GET` | `/api/v1/supplier-portal/hub/shops/{localSupplierId}/supplies` | Supplier | Shop supply detail | ✅ |
 
 ### Purchase order extensions (business)
 
-| Method | Endpoint | Auth | Purpose |
-|---|---|---|---|
-| `POST` | `/api/v1/purchasing/path-a/purchase-orders/{id}/send-to-supplier` | Business | Notify supplier portal |
-| `GET` | `/api/v1/purchasing/path-a/purchase-orders/{id}/supplier-response` | Business | View supplier line responses |
+| Method | Endpoint | Auth | Purpose | Status |
+|---|---|---|---|---|
+| `POST` | `/api/v1/purchasing/path-a/purchase-orders/{id}/send-to-supplier` | Business | Notify supplier portal | 🔄 |
+| `GET` | `/api/v1/purchasing/path-a/purchase-orders/{id}/supplier-response` | Business | View supplier line responses | 🔄 |
 
 ---
 
 ## 18. Open Decisions
 
-| # | Question | Options |
+| # | Question | Options / current lean |
 |---|---|---|
-| 1 | Supplier onboarding | Invite-only (host creates) vs self-registration with approval |
+| 1 | Supplier onboarding | **Both:** self-claim live; invite Path C still required (portal README). Invite-only via SA kill switch. |
 | 2 | Catalogue import | Auto-import all products on connect vs pick-and-choose |
-| 3 | Private suppliers | Confirm local-only suppliers (no portal) remain supported |
+| 3 | Private suppliers | Confirm local-only suppliers (no portal) remain supported — **lean yes** |
 | 4 | Pricing precedence | Marketplace listed price vs negotiated `supplier_products.default_cost_price` at PO creation |
-| 5 | Portal hosting | Path on main domain (`/supplier-portal`) vs subdomain (`supplier.kiosk.ke`) |
+| 5 | Portal hosting | **Decided for now:** path on main domain (`/supplier-portal`); `portal_url` setting for future subdomain |
 | 6 | Restock integration | Phase 1 send-to-supplier from restock approval vs Phase 2 only |
 | 7 | Global catalog link | Tie `marketplace_supplier_products` to `global_products` for barcode dedup |
 | 8 | Cross-tenant match hints | Show masked "known on the platform" hints to businesses in Phase 1, or link silently and surface hints only in Phase 2 |
@@ -722,7 +751,7 @@ Sprint 11+:  Multi-supplier cart, comparison, platform dashboard
 | Risk | Mitigation |
 |---|---|
 | Breaking existing `/suppliers` and restock flows | Keep `suppliers` as business layer; marketplace is additive |
-| Supplier adoption (chicken-and-egg) | Phase 1 invite-only; platform owner seeds initial suppliers |
+| Supplier adoption (chicken-and-egg) | Self-claim + soft SMS claim URL live; add shop/SA invites (portal Phase A); seed known distributors |
 | Pricing complexity paralysis | Schema supports tiers; UI shows flat price until needed |
 | PO workflow confusion (Path A vs B vs restock PDF) | One "send to supplier" action; restock PDF remains fallback for non-portal suppliers |
 | Data leakage across tenants | Supplier principal scoped to `marketplace_supplier_id`; connection permissions enforced server-side |

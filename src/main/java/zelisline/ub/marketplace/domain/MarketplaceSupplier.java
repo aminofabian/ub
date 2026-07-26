@@ -40,6 +40,42 @@ public class MarketplaceSupplier {
     @Column(name = "contact_phone", length = 32)
     private String contactPhone;
 
+    @Column(name = "business_legal_name", length = 255)
+    private String businessLegalName;
+
+    @Column(name = "paybill", length = 64)
+    private String paybill;
+
+    @Column(name = "till_number", length = 64)
+    private String tillNumber;
+
+    @Column(name = "bank_name", length = 128)
+    private String bankName;
+
+    @Column(name = "bank_branch", length = 128)
+    private String bankBranch;
+
+    @Column(name = "bank_account_number", length = 64)
+    private String bankAccountNumber;
+
+    @Column(name = "bank_account_name", length = 255)
+    private String bankAccountName;
+
+    @Column(name = "mobile_money", length = 64)
+    private String mobileMoney;
+
+    @Column(name = "preferred_payment_method", length = 64)
+    private String preferredPaymentMethod;
+
+    @Column(name = "tax_pin", length = 64)
+    private String taxPin;
+
+    @Column(name = "vat_number", length = 64)
+    private String vatNumber;
+
+    @Column(name = "contact_person", length = 255)
+    private String contactPerson;
+
     /** draft | active | suspended */
     @Column(name = "status", nullable = false, length = 16)
     private String status = MarketplaceSupplierStatuses.DRAFT;

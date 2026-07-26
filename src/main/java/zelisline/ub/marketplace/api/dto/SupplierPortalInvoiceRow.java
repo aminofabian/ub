@@ -13,6 +13,9 @@ public record SupplierPortalInvoiceRow(
         BigDecimal subtotal,
         BigDecimal taxTotal,
         BigDecimal grandTotal,
+        BigDecimal amountPaid,
+        BigDecimal balanceOpen,
+        String paymentStatus,
         String status
 ) {
 }

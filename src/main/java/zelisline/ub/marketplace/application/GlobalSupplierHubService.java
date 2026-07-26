@@ -52,7 +52,17 @@ public class GlobalSupplierHubService {
         }
         MarketplaceSupplier marketplace = marketplaceSupplierRepository.findByUsernameIgnoreCase(username)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
+        return forMarketplaceSupplier(marketplace);
+    }
 
+    @Transactional(readOnly = true)
+    public GlobalSupplierHubResponse forMarketplaceSupplierId(String marketplaceSupplierId) {
+        MarketplaceSupplier marketplace = marketplaceSupplierRepository.findById(marketplaceSupplierId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
+        return forMarketplaceSupplier(marketplace);
+    }
+
+    private GlobalSupplierHubResponse forMarketplaceSupplier(MarketplaceSupplier marketplace) {
         List<BusinessSupplierConnection> links = connectionRepository.findByMarketplaceSupplierIdAndStatus(
                 marketplace.getId(), BusinessSupplierConnectionStatuses.ACTIVE);
 
@@ -77,13 +87,12 @@ public class GlobalSupplierHubService {
                 currency = business.getCurrency().trim();
             }
 
-            SupplierPurchaseHistorySummary summary = purchaseHistoryService
-                    .purchaseHistory(link.getBusinessId(), local.getId(), 1)
-                    .summary();
+            var history = purchaseHistoryService.purchaseHistory(link.getBusinessId(), local.getId(), 1);
+            SupplierPurchaseHistorySummary summary = history.summary();
 
             BigDecimal owed = money(summary.openBalance());
             BigDecimal paid = money(summary.totalPaid());
-            BigDecimal pending = money(summary.openBalance());
+            BigDecimal pending = money(summary.partialOpenBalance());
             LocalDate lastSupply = summary.lastInvoiceDate();
 
             totalOwed = totalOwed.add(owed);

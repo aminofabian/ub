@@ -1,7 +1,6 @@
 package zelisline.ub.marketplace.domain;
 
 import java.time.Instant;
-import java.util.UUID;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -11,26 +10,29 @@ import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
 
+@Entity
+@Table(name = "supplier_portal_claim_invites")
 @Getter
 @Setter
-@Entity
-@Table(name = "supplier_phone_verifications")
-public class SupplierPhoneVerification {
+public class SupplierPortalClaimInvite {
 
     @Id
-    @Column(name = "id", nullable = false, length = 36)
+    @Column(length = 36, nullable = false)
     private String id;
 
-    @Column(name = "phone", nullable = false, length = 32)
-    private String phone;
+    @Column(name = "marketplace_supplier_id", length = 36, nullable = false)
+    private String marketplaceSupplierId;
 
-    @Column(name = "code_hash", nullable = false, length = 64)
+    @Column(name = "code_hash", length = 64, nullable = false)
     private String codeHash;
+
+    @Column(length = 32)
+    private String phone;
 
     @Column(name = "expires_at", nullable = false)
     private Instant expiresAt;
 
-    @Column(name = "attempts", nullable = false)
+    @Column(nullable = false)
     private int attempts;
 
     @Column(name = "max_attempts", nullable = false)
@@ -51,23 +53,22 @@ public class SupplierPhoneVerification {
     @Column(name = "setup_token_expires_at")
     private Instant setupTokenExpiresAt;
 
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @Column(name = "created_by_actor_id", length = 36)
+    private String createdByActorId;
+
+    @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
-    @Column(name = "last_sent_at", nullable = false)
+    @Column(name = "last_sent_at")
     private Instant lastSentAt;
 
     @PrePersist
     void onCreate() {
         if (id == null || id.isBlank()) {
-            id = UUID.randomUUID().toString();
+            id = java.util.UUID.randomUUID().toString();
         }
-        Instant now = Instant.now();
         if (createdAt == null) {
-            createdAt = now;
-        }
-        if (lastSentAt == null) {
-            lastSentAt = now;
+            createdAt = Instant.now();
         }
     }
 }

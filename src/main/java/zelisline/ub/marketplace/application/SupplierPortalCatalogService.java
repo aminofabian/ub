@@ -40,6 +40,7 @@ public class SupplierPortalCatalogService {
     private final MarketplaceSupplierProductEditRequestRepository editRequestRepository;
     private final PlatformSupplierPortalSettingsService portalSettingsService;
     private final SupplierPortalNotificationsService notificationsService;
+    private final SupplierPortalShopLinkService shopLinkService;
     private final ObjectMapper objectMapper;
 
     @Transactional(readOnly = true)
@@ -55,6 +56,22 @@ public class SupplierPortalCatalogService {
                         blankToNull(status),
                         pageable)
                 .map(this::toResponse);
+    }
+
+    /** List after healing shop links + importing shop-linked catalogue into marketplace products. */
+    @Transactional
+    public Page<SupplierPortalProductResponse> listProductsHealed(
+            String marketplaceSupplierId,
+            String q,
+            String status,
+            Pageable pageable
+    ) {
+        try {
+            shopLinkService.ensureLinksAndCatalogue(marketplaceSupplierId);
+        } catch (RuntimeException ignored) {
+            // Soft heal — still return whatever catalogue exists.
+        }
+        return listProducts(marketplaceSupplierId, q, status, pageable);
     }
 
     @Transactional

@@ -27,6 +27,7 @@ import zelisline.ub.marketplace.domain.SupplierIdentityIndex;
 import zelisline.ub.marketplace.repository.BusinessSupplierConnectionRepository;
 import zelisline.ub.marketplace.repository.MarketplaceSupplierRepository;
 import zelisline.ub.marketplace.repository.SupplierIdentityIndexRepository;
+import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierSlug;
 import zelisline.ub.suppliers.repository.SupplierRepository;
@@ -47,10 +48,16 @@ public class SupplierPortalProfileService {
     private final BusinessRepository businessRepository;
     private final SupplierIdentityIndexRepository identityIndexRepository;
     private final SupplierIdentityIndexService identityIndexService;
+    private final SupplierPortalShopLinkService shopLinkService;
     private final ObjectMapper objectMapper;
 
-    @Transactional(readOnly = true)
+    @Transactional
     public SupplierPortalProfileResponse getProfile(String marketplaceSupplierId) {
+        try {
+            shopLinkService.ensureLinksAndCatalogue(marketplaceSupplierId);
+        } catch (RuntimeException ignored) {
+            // Soft heal.
+        }
         MarketplaceSupplier supplier = requireSupplier(marketplaceSupplierId);
         return toResponse(supplier);
     }
@@ -105,24 +112,40 @@ public class SupplierPortalProfileService {
     @Transactional(readOnly = true)
     public List<SupplierPortalLinkCandidateRow> listLinkCandidates(String marketplaceSupplierId) {
         MarketplaceSupplier supplier = requireSupplier(marketplaceSupplierId);
+        // Heal first so tagged locals show up as linked shops, not stale candidates.
+        try {
+            // Injected lazily via field below — see shopLinkService.
+            shopLinkService.ensureLinksAndCatalogue(marketplaceSupplierId);
+        } catch (RuntimeException ignored) {
+            // Soft.
+        }
         Map<String, SupplierPortalLinkCandidateRow> byLocalId = new LinkedHashMap<>();
 
-        String phone = SupplierIdentityNormalizer.normalizePhone(supplier.getContactPhone());
+        String phone = StkPhoneNormalizer.normalize(supplier.getContactPhone());
+        if (phone == null) {
+            phone = SupplierIdentityNormalizer.normalizePhone(supplier.getContactPhone());
+        }
+        String alt = SupplierIdentityNormalizer.normalizePhone(supplier.getContactPhone());
+        if (alt == null) {
+            alt = phone;
+        }
         if (phone != null) {
-            for (SupplierIdentityIndex row : identityIndexRepository.findTenantByPhone(phone)) {
-                addCandidate(byLocalId, row, "phone");
+            String tail = phone.length() >= 9 ? phone.substring(phone.length() - 9) : phone;
+            for (SupplierIdentityIndex row : identityIndexRepository.findTenantByPhoneVariants(
+                    phone, alt != null ? alt : phone, tail)) {
+                addCandidate(byLocalId, row, "phone", marketplaceSupplierId);
             }
         }
         String email = SupplierIdentityNormalizer.normalizeEmail(supplier.getContactEmail());
         if (email != null) {
             for (SupplierIdentityIndex row : identityIndexRepository.findTenantByEmail(email)) {
-                addCandidate(byLocalId, row, "email");
+                addCandidate(byLocalId, row, "email", marketplaceSupplierId);
             }
         }
         String namePrefix = SupplierIdentityNormalizer.normalizeName(supplier.getName());
         if (namePrefix.length() >= 3) {
             for (SupplierIdentityIndex row : identityIndexRepository.findTenantByNamePrefix(namePrefix)) {
-                addCandidate(byLocalId, row, "name");
+                addCandidate(byLocalId, row, "name", marketplaceSupplierId);
             }
         }
 
@@ -182,7 +205,8 @@ public class SupplierPortalProfileService {
     private void addCandidate(
             Map<String, SupplierPortalLinkCandidateRow> byLocalId,
             SupplierIdentityIndex row,
-            String reason
+            String reason,
+            String marketplaceSupplierId
     ) {
         if (row.getSupplierId() == null || row.getBusinessId() == null) {
             return;
@@ -198,7 +222,8 @@ public class SupplierPortalProfileService {
         if (local == null) {
             return;
         }
-        if (local.getMarketplaceSupplierId() != null) {
+        if (local.getMarketplaceSupplierId() != null
+                && !local.getMarketplaceSupplierId().equals(marketplaceSupplierId)) {
             return;
         }
         Business business = businessRepository.findById(row.getBusinessId()).orElse(null);

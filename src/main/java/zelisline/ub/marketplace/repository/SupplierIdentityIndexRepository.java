@@ -90,6 +90,20 @@ public interface SupplierIdentityIndexRepository extends JpaRepository<SupplierI
             WHERE s.source = 'tenant'
               AND s.supplierId IS NOT NULL
               AND s.phoneNormalized IS NOT NULL
+              AND (s.phoneNormalized = :phone
+                   OR s.phoneNormalized = :altPhone
+                   OR s.phoneNormalized LIKE CONCAT('%', :phoneTail))
+            """)
+    List<SupplierIdentityIndex> findTenantByPhoneVariants(
+            @Param("phone") String phone,
+            @Param("altPhone") String altPhone,
+            @Param("phoneTail") String phoneTail);
+
+    @Query("""
+            SELECT s FROM SupplierIdentityIndex s
+            WHERE s.source = 'tenant'
+              AND s.supplierId IS NOT NULL
+              AND s.phoneNormalized IS NOT NULL
               AND s.phoneNormalized = :phone
             """)
     List<SupplierIdentityIndex> findTenantByPhone(@Param("phone") String phone);

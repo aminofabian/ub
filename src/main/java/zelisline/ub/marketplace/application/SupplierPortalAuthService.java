@@ -28,6 +28,7 @@ public class SupplierPortalAuthService {
     private final PasswordEncoder passwordEncoder;
     private final PlatformSupplierPortalSettingsService portalSettingsService;
     private final SupplierPortalSessionService sessionService;
+    private final SupplierPortalShopLinkService shopLinkService;
 
     @Transactional
     public SupplierPortalLoginResponse login(SupplierPortalLoginRequest request, HttpServletRequest http) {
@@ -54,6 +55,11 @@ public class SupplierPortalAuthService {
         user.setLockedUntil(null);
         user.setLastLoginAt(Instant.now());
         supplierUserRepository.save(user);
+        try {
+            shopLinkService.ensureLinksAndCatalogue(user.getMarketplaceSupplierId());
+        } catch (RuntimeException ignored) {
+            // Soft heal — login must still succeed.
+        }
         return sessionService.issueLogin(user, http);
     }
 

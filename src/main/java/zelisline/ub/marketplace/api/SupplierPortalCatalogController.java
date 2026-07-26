@@ -40,7 +40,7 @@ public class SupplierPortalCatalogController {
             @RequestParam(required = false) String status,
             Pageable pageable) {
         SupplierPrincipal principal = CurrentSupplierUser.require();
-        return supplierPortalCatalogService.listProducts(
+        return supplierPortalCatalogService.listProductsHealed(
                 principal.marketplaceSupplierId(), q, status, pageable);
     }
 

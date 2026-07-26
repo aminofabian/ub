@@ -43,6 +43,7 @@ public class GlobalSupplierHubService {
     private final BusinessRepository businessRepository;
     private final DomainMappingRepository domainMappingRepository;
     private final SupplierPurchaseHistoryService purchaseHistoryService;
+    private final SupplierPortalShopLinkService shopLinkService;
 
     @Transactional(readOnly = true)
     public GlobalSupplierHubResponse byUsername(String usernameRaw) {
@@ -55,8 +56,14 @@ public class GlobalSupplierHubService {
         return forMarketplaceSupplier(marketplace);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public GlobalSupplierHubResponse forMarketplaceSupplierId(String marketplaceSupplierId) {
+        // Heal missing connections / import shop-linked products before projecting shops.
+        try {
+            shopLinkService.ensureLinksAndCatalogue(marketplaceSupplierId);
+        } catch (RuntimeException ex) {
+            // Never fail the hub read because heal had a soft error.
+        }
         MarketplaceSupplier marketplace = marketplaceSupplierRepository.findById(marketplaceSupplierId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
         return forMarketplaceSupplier(marketplace);

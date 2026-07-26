@@ -48,4 +48,15 @@ public interface MarketplaceSupplierProductRepository extends JpaRepository<Mark
 
     List<MarketplaceSupplierProduct> findByMarketplaceSupplierIdAndStatus(
             String marketplaceSupplierId, String status);
+
+    boolean existsByMarketplaceSupplierIdAndBarcodeIgnoreCase(String marketplaceSupplierId, String barcode);
+
+    @Query("""
+            SELECT COUNT(p) > 0 FROM MarketplaceSupplierProduct p
+            WHERE p.marketplaceSupplierId = :supplierId
+              AND LOWER(p.name) = LOWER(:name)
+            """)
+    boolean existsByMarketplaceSupplierIdAndNameIgnoreCase(
+            @Param("supplierId") String marketplaceSupplierId,
+            @Param("name") String name);
 }

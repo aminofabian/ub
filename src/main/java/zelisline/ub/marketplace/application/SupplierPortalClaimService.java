@@ -84,6 +84,7 @@ public class SupplierPortalClaimService {
     private final SupplierPortalSessionService sessionService;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
+    private final SupplierPortalShopLinkService shopLinkService;
     private final TransactionTemplate claimAccountTransaction;
 
     @Value("${app.supplier-portal.claim.return-otp-when-stubbed:true}")
@@ -105,6 +106,7 @@ public class SupplierPortalClaimService {
             SupplierPortalSessionService sessionService,
             AuditEventPublisher auditEventPublisher,
             AuditEventBuilder auditEventBuilder,
+            SupplierPortalShopLinkService shopLinkService,
             PlatformTransactionManager transactionManager
     ) {
         this.verificationRepository = verificationRepository;
@@ -122,6 +124,7 @@ public class SupplierPortalClaimService {
         this.sessionService = sessionService;
         this.auditEventPublisher = auditEventPublisher;
         this.auditEventBuilder = auditEventBuilder;
+        this.shopLinkService = shopLinkService;
         this.claimAccountTransaction = new TransactionTemplate(transactionManager);
     }
 
@@ -522,29 +525,49 @@ public class SupplierPortalClaimService {
             displayName = suggestName(phone);
         }
 
-        MarketplaceSupplier marketplace = new MarketplaceSupplier();
-        marketplace.setName(displayName);
-        marketplace.setContactPhone(phone);
-        marketplace.setContactEmail(email);
-        marketplace.setStatus(MarketplaceSupplierStatuses.ACTIVE);
-
-        String usernameRaw = blankToNull(request.username());
-        if (usernameRaw != null) {
-            String username = SupplierPortalProfileService.normalizeUsername(usernameRaw);
-            if (username.length() < 2) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Username too short");
+        // Prefer an existing marketplace passport for this phone (invite / shop provision)
+        // so we don't orphan connections that already point at it.
+        MarketplaceSupplier marketplace = findReusableMarketplaceByPhone(phone).orElse(null);
+        if (marketplace == null) {
+            marketplace = new MarketplaceSupplier();
+            marketplace.setName(displayName);
+            marketplace.setContactPhone(phone);
+            marketplace.setContactEmail(email);
+            marketplace.setStatus(MarketplaceSupplierStatuses.ACTIVE);
+            String usernameRaw = blankToNull(request.username());
+            if (usernameRaw != null) {
+                String username = SupplierPortalProfileService.normalizeUsername(usernameRaw);
+                if (username.length() < 2) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Username too short");
+                }
+                if (username.length() > 64) {
+                    username = username.substring(0, 64).replaceAll("-+$", "");
+                }
+                if (marketplaceSupplierRepository.existsByUsernameIgnoreCase(username)) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, "Username is taken");
+                }
+                marketplace.setUsername(username);
+            } else {
+                marketplace.setUsername(allocateUsername(displayName, phone));
             }
-            if (username.length() > 64) {
-                username = username.substring(0, 64).replaceAll("-+$", "");
-            }
-            if (marketplaceSupplierRepository.existsByUsernameIgnoreCase(username)) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "Username is taken");
-            }
-            marketplace.setUsername(username);
+            marketplaceSupplierRepository.saveAndFlush(marketplace);
         } else {
-            marketplace.setUsername(allocateUsername(displayName, phone));
+            if (marketplace.getContactPhone() == null || marketplace.getContactPhone().isBlank()) {
+                marketplace.setContactPhone(phone);
+            }
+            if (email != null && (marketplace.getContactEmail() == null || marketplace.getContactEmail().isBlank())) {
+                marketplace.setContactEmail(email);
+            }
+            if (marketplace.getUsername() == null || marketplace.getUsername().isBlank()) {
+                marketplace.setUsername(allocateUsername(
+                        marketplace.getName() != null ? marketplace.getName() : displayName, phone));
+            }
+            if (!MarketplaceSupplierStatuses.ACTIVE.equalsIgnoreCase(marketplace.getStatus())
+                    && !MarketplaceSupplierStatuses.SUSPENDED.equalsIgnoreCase(marketplace.getStatus())) {
+                marketplace.setStatus(MarketplaceSupplierStatuses.ACTIVE);
+            }
+            marketplaceSupplierRepository.saveAndFlush(marketplace);
         }
-        marketplaceSupplierRepository.saveAndFlush(marketplace);
 
         SupplierUser user = new SupplierUser();
         user.setMarketplaceSupplierId(marketplace.getId());
@@ -560,6 +583,28 @@ public class SupplierPortalClaimService {
         challenge.setConsumedAt(now);
         verificationRepository.saveAndFlush(challenge);
         return user;
+    }
+
+    private java.util.Optional<MarketplaceSupplier> findReusableMarketplaceByPhone(String phone) {
+        // Only reuse if no portal user already owns that passport.
+        var byPhone = marketplaceSupplierRepository.findFirstByContactPhoneOrderByCreatedAtAsc(phone);
+        if (byPhone.isPresent()) {
+            String id = byPhone.get().getId();
+            if (supplierUserRepository.findByMarketplaceSupplierIdOrderByCreatedAtAsc(id).isEmpty()) {
+                return byPhone;
+            }
+        }
+        for (SupplierIdentityIndex row : identityIndexRepository.findMarketplaceByPhone(phone)) {
+            if (row.getMarketplaceSupplierId() == null) {
+                continue;
+            }
+            if (!supplierUserRepository.findByMarketplaceSupplierIdOrderByCreatedAtAsc(
+                    row.getMarketplaceSupplierId()).isEmpty()) {
+                continue;
+            }
+            return marketplaceSupplierRepository.findById(row.getMarketplaceSupplierId());
+        }
+        return java.util.Optional.empty();
     }
 
     private SupplierPortalLoginResponse loginResponse(
@@ -630,16 +675,26 @@ public class SupplierPortalClaimService {
     }
 
     private void linkLocalsBestEffort(String marketplaceSupplierId, String phone) {
-        if (marketplaceSupplierId == null || phone == null || phone.isBlank()) {
+        if (marketplaceSupplierId == null) {
             return;
         }
         try {
-            linkLocalsByPhone(marketplaceSupplierId, phone);
+            // Prefer the heal service — matches phone variants + already-tagged locals
+            // and imports shop-linked products into the portal catalogue.
+            shopLinkService.ensureLinksAndCatalogue(marketplaceSupplierId);
         } catch (RuntimeException ex) {
             log.warn(
                     "supplier portal auto-link shops skipped for {}: {}",
                     marketplaceSupplierId,
                     rootMessage(ex));
+            // Fallback to legacy phone-index link only.
+            if (phone != null && !phone.isBlank()) {
+                try {
+                    linkLocalsByPhone(marketplaceSupplierId, phone);
+                } catch (RuntimeException ignored) {
+                    // Already logged above.
+                }
+            }
         }
     }
 

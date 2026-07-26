@@ -26,5 +26,7 @@ public interface MarketplaceSupplierRepository extends JpaRepository<Marketplace
 
     Optional<MarketplaceSupplier> findByUsernameIgnoreCase(String username);
 
+    Optional<MarketplaceSupplier> findFirstByContactPhoneOrderByCreatedAtAsc(String contactPhone);
+
     boolean existsByUsernameIgnoreCase(String username);
 }

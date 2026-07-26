@@ -12,6 +12,9 @@ import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.marketplace.api.dto.MarketplaceConnectResponse;
 import zelisline.ub.marketplace.api.dto.MarketplaceSupplierDetailResponse;
+import zelisline.ub.marketplace.domain.BusinessSupplierConnection;
+import zelisline.ub.marketplace.domain.BusinessSupplierConnectionStatuses;
+import zelisline.ub.marketplace.repository.BusinessSupplierConnectionRepository;
 import zelisline.ub.suppliers.SupplierCodes;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierContact;
@@ -35,6 +38,8 @@ public class MarketplaceConnectService {
     private final SupplierContactRepository supplierContactRepository;
     private final ItemRepository itemRepository;
     private final SupplierIdentityIndexService supplierIdentityIndexService;
+    private final BusinessSupplierConnectionRepository connectionRepository;
+    private final SupplierPortalShopLinkService shopLinkService;
 
     @Transactional(readOnly = true)
     public MarketplaceSupplierDetailResponse getSupplierDetail(String supplierId) {
@@ -72,6 +77,9 @@ public class MarketplaceConnectService {
         local.setVatPin(source.getVatPin());
         local.setTaxExempt(source.isTaxExempt());
         local.setNotes("Added from marketplace directory (source supplier " + source.getId() + ")");
+        if (source.getMarketplaceSupplierId() != null && !source.getMarketplaceSupplierId().isBlank()) {
+            local.setMarketplaceSupplierId(source.getMarketplaceSupplierId());
+        }
         if (primary != null && primary.getPhone() != null && !primary.getPhone().isBlank()) {
             local.setPayoutPhone(primary.getPhone());
         }
@@ -99,13 +107,50 @@ public class MarketplaceConnectService {
 
         int imported = importCatalogueLinks(businessId, local.getId(), source.getId());
 
+        String connectionId = local.getId();
+        if (local.getMarketplaceSupplierId() != null) {
+            connectionId = ensurePortalConnection(businessId, local);
+            try {
+                shopLinkService.ensureLinksAndCatalogue(local.getMarketplaceSupplierId());
+            } catch (RuntimeException ignored) {
+                // Soft.
+            }
+        }
+
         return new MarketplaceConnectResponse(
-                local.getId(),
+                connectionId,
                 local.getId(),
                 source.getId(),
                 local.getName(),
                 imported,
                 "active");
+    }
+
+    private String ensurePortalConnection(String businessId, Supplier local) {
+        String marketplaceSupplierId = local.getMarketplaceSupplierId();
+        var existing = connectionRepository.findByBusinessIdAndMarketplaceSupplierId(
+                businessId, marketplaceSupplierId);
+        if (existing.isPresent()) {
+            BusinessSupplierConnection conn = existing.get();
+            if (!BusinessSupplierConnectionStatuses.ACTIVE.equals(conn.getStatus())) {
+                conn.setStatus(BusinessSupplierConnectionStatuses.ACTIVE);
+                connectionRepository.save(conn);
+            }
+            return conn.getId();
+        }
+        if (connectionRepository.existsByLocalSupplierId(local.getId())) {
+            return connectionRepository.findByLocalSupplierId(local.getId())
+                    .map(BusinessSupplierConnection::getId)
+                    .orElse(local.getId());
+        }
+        BusinessSupplierConnection connection = new BusinessSupplierConnection();
+        connection.setBusinessId(businessId);
+        connection.setMarketplaceSupplierId(marketplaceSupplierId);
+        connection.setLocalSupplierId(local.getId());
+        connection.setStatus(BusinessSupplierConnectionStatuses.ACTIVE);
+        connection.setCanViewPurchaseHistory(true);
+        connectionRepository.save(connection);
+        return connection.getId();
     }
 
     private int importCatalogueLinks(String businessId, String localSupplierId, String sourceSupplierId) {

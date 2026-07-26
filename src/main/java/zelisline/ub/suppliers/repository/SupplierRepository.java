@@ -55,6 +55,21 @@ public interface SupplierRepository extends JpaRepository<Supplier, String> {
 
     List<Supplier> findByMarketplaceSupplierIdAndDeletedAtIsNull(String marketplaceSupplierId);
 
+    @Query("""
+            SELECT s FROM Supplier s
+            WHERE s.deletedAt IS NULL
+              AND s.payoutPhone IS NOT NULL
+              AND (
+                s.payoutPhone = :phone
+                OR s.payoutPhone = :altPhone
+                OR s.payoutPhone LIKE CONCAT('%', :phoneTail)
+              )
+            """)
+    List<Supplier> findActiveByPayoutPhoneVariants(
+            @Param("phone") String phone,
+            @Param("altPhone") String altPhone,
+            @Param("phoneTail") String phoneTail);
+
     /**
      * Public marketplace directory: active tenant suppliers that have at least one
      * active product link. Cross-tenant by design.

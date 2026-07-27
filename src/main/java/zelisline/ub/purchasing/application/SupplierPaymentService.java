@@ -164,7 +164,8 @@ public class SupplierPaymentService {
                 BigDecimal.ZERO,
                 reference,
                 "Paid via KopoKopo Send Money",
-                List.of(new PostSupplierPaymentAllocationLine(supplierInvoiceId, amount.setScale(2, RoundingMode.HALF_UP))));
+                List.of(new PostSupplierPaymentAllocationLine(supplierInvoiceId, amount.setScale(2, RoundingMode.HALF_UP))),
+                true);
         return executePayment(businessId, req);
     }
 
@@ -346,13 +347,16 @@ public class SupplierPaymentService {
                 allocationRepository.save(a);
             }
 
-            supplierPortalNotifyService.notifySupplyPaidAfterCommit(
-                    businessId,
-                    req.supplierId(),
-                    allocSum,
-                    payment.getPaymentMethod(),
-                    payment.getReference(),
-                    List.copyOf(invoiceNumbers));
+            // Default (null/true): notify supplier. Explicit false skips SMS + portal payment alerts.
+            if (!Boolean.FALSE.equals(req.notifySupplier())) {
+                supplierPortalNotifyService.notifySupplyPaidAfterCommit(
+                        businessId,
+                        req.supplierId(),
+                        allocSum,
+                        payment.getPaymentMethod(),
+                        payment.getReference(),
+                        List.copyOf(invoiceNumbers));
+            }
 
             return new PostSupplierPaymentResponse(payment.getId(), jeId, allocSum, prepayAfter);
         }

@@ -3254,6 +3254,11 @@ components:
           items:
             $ref: '#/components/schemas/PostSupplierPaymentAllocationLine'
           minItems: 1
+        notifySupplier:
+          type: boolean
+          description: >
+            When false, records the payment without SMS or portal payment notification.
+            Omitting or true keeps the default notify-on-pay behaviour.
       required:
       - allocations
       - creditApplied

@@ -17,6 +17,11 @@ public record PostSupplierPaymentRequest(
         @NotNull BigDecimal creditApplied,
         String reference,
         String notes,
-        @NotEmpty @Valid List<PostSupplierPaymentAllocationLine> allocations
+        @NotEmpty @Valid List<PostSupplierPaymentAllocationLine> allocations,
+        /**
+         * When {@code false}, records the payment without SMS / portal payment notification.
+         * Null or true keeps the default notify-on-pay behaviour.
+         */
+        Boolean notifySupplier
 ) {
 }

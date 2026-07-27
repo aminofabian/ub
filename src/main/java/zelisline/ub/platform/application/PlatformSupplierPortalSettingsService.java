@@ -63,6 +63,12 @@ public class PlatformSupplierPortalSettingsService {
         if (body.allowStatementDownloads() != null) {
             row.setAllowStatementDownloads(body.allowStatementDownloads());
         }
+        if (body.allowFindUnclaimedDrafts() != null) {
+            row.setAllowFindUnclaimedDrafts(body.allowFindUnclaimedDrafts());
+        }
+        if (body.autoPromoteOnCreate() != null) {
+            row.setAutoPromoteOnCreate(body.autoPromoteOnCreate());
+        }
         if (body.portalPublicUrl() != null) {
             String url = body.portalPublicUrl().trim();
             if (url.isBlank()) {
@@ -257,6 +263,8 @@ public class PlatformSupplierPortalSettingsService {
                 row.isRequireStoreApprovalProductEdits(),
                 row.isAllowInvoiceDownloads(),
                 row.isAllowStatementDownloads(),
+                row.isAllowFindUnclaimedDrafts(),
+                row.isAutoPromoteOnCreate(),
                 row.getPortalPublicUrl(),
                 row.isClaimEnabled(),
                 row.getClaimMethod(),

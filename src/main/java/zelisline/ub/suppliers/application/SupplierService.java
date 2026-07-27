@@ -28,8 +28,14 @@ import zelisline.ub.suppliers.api.dto.PatchSupplierContactRequest;
 import zelisline.ub.suppliers.api.dto.PatchSupplierRequest;
 import zelisline.ub.suppliers.api.dto.SupplierContactResponse;
 import zelisline.ub.suppliers.api.dto.SupplierResponse;
+import zelisline.ub.marketplace.application.MarketplaceSupplierPassportService;
 import zelisline.ub.marketplace.application.SupplierIdentityIndexService;
+import zelisline.ub.marketplace.domain.BusinessSupplierConnection;
+import zelisline.ub.marketplace.domain.BusinessSupplierConnectionStatuses;
+import zelisline.ub.marketplace.repository.BusinessSupplierConnectionRepository;
+import zelisline.ub.marketplace.repository.MarketplaceSupplierRepository;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
+import zelisline.ub.platform.application.PlatformSupplierPortalSettingsService;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierContact;
 import zelisline.ub.suppliers.domain.SupplierPayoutTypes;
@@ -43,6 +49,10 @@ public class SupplierService {
     private final SupplierRepository supplierRepository;
     private final SupplierContactRepository supplierContactRepository;
     private final SupplierIdentityIndexService supplierIdentityIndexService;
+    private final MarketplaceSupplierPassportService passportService;
+    private final PlatformSupplierPortalSettingsService portalSettingsService;
+    private final MarketplaceSupplierRepository marketplaceSupplierRepository;
+    private final BusinessSupplierConnectionRepository connectionRepository;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
 
@@ -51,7 +61,7 @@ public class SupplierService {
         String q = blankToNull(searchRaw);
         String st = blankToNull(statusRaw);
         Pageable pg = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize());
-        return supplierRepository.searchSuppliers(businessId, q, st, pg).map(SupplierService::toResponse);
+        return supplierRepository.searchSuppliers(businessId, q, st, pg).map(this::toResponse);
     }
 
     @Transactional(readOnly = true)
@@ -99,6 +109,26 @@ public class SupplierService {
         } catch (DataIntegrityViolationException ex) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Supplier code already in use", ex);
         }
+
+        if (portalSettingsService.loadSingleton().isAutoPromoteOnCreate()) {
+            var marketplace = passportService.createDraftPassport(
+                    s.getName(),
+                    s.getPayoutPhone(),
+                    null,
+                    s.getVatPin());
+            s.setMarketplaceSupplierId(marketplace.getId());
+            supplierRepository.save(s);
+            if (!connectionRepository.existsByLocalSupplierId(s.getId())) {
+                BusinessSupplierConnection connection = new BusinessSupplierConnection();
+                connection.setBusinessId(businessId);
+                connection.setMarketplaceSupplierId(marketplace.getId());
+                connection.setLocalSupplierId(s.getId());
+                connection.setStatus(BusinessSupplierConnectionStatuses.ACTIVE);
+                connection.setCanViewPurchaseHistory(true);
+                connectionRepository.save(connection);
+            }
+        }
+
         supplierIdentityIndexService.upsertTenantSupplier(s, s.getPayoutPhone(), null);
         publishSupplierEvent(businessId, s, actorUserId, AuditEventTypes.SUPPLIER_CREATED, null);
         return toResponse(s);
@@ -378,7 +408,13 @@ public class SupplierService {
         }
     }
 
-    private static SupplierResponse toResponse(Supplier s) {
+    private SupplierResponse toResponse(Supplier s) {
+        String supplierNumber = null;
+        if (s.getMarketplaceSupplierId() != null && !s.getMarketplaceSupplierId().isBlank()) {
+            supplierNumber = marketplaceSupplierRepository.findById(s.getMarketplaceSupplierId())
+                    .map(m -> m.getSupplierNumber())
+                    .orElse(null);
+        }
         return new SupplierResponse(
                 s.getId(),
                 s.getName(),
@@ -397,6 +433,7 @@ public class SupplierService {
                 s.getPayoutPhone(),
                 s.getKopokopoExternalRecipientUrl(),
                 s.getMarketplaceSupplierId(),
+                supplierNumber,
                 s.getVersion(),
                 s.getCreatedAt(),
                 s.getUpdatedAt(),

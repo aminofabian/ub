@@ -24,6 +24,10 @@ public class MarketplaceSupplier {
     @Column(name = "id", nullable = false, length = 36)
     private String id;
 
+    /** Global sequential number, e.g. S-000001. Assigned on create; never reused. */
+    @Column(name = "supplier_number", nullable = false, length = 32, unique = true)
+    private String supplierNumber;
+
     @Column(name = "name", nullable = false, length = 255)
     private String name;
 

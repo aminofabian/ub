@@ -7,12 +7,14 @@ public record SupplierDuplicateCheckRequest(
         @Size(max = 255) String name,
         @Size(max = 32) String phone,
         @Email @Size(max = 255) String email,
-        @Size(max = 64) String taxId
+        @Size(max = 64) String taxId,
+        @Size(max = 32) String supplierNumber
 ) {
     public boolean hasAnyKey() {
         return (name != null && !name.isBlank())
                 || (phone != null && !phone.isBlank())
                 || (email != null && !email.isBlank())
-                || (taxId != null && !taxId.isBlank());
+                || (taxId != null && !taxId.isBlank())
+                || (supplierNumber != null && !supplierNumber.isBlank());
     }
 }

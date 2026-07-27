@@ -124,4 +124,12 @@ public interface SupplierIdentityIndexRepository extends JpaRepository<SupplierI
               AND s.nameNormalized LIKE CONCAT(:namePrefix, '%')
             """)
     List<SupplierIdentityIndex> findTenantByNamePrefix(@Param("namePrefix") String namePrefix);
+
+    @Query("""
+            SELECT s FROM SupplierIdentityIndex s
+            WHERE s.marketplaceSupplierId IS NOT NULL
+              AND s.supplierNumberNormalized IS NOT NULL
+              AND s.supplierNumberNormalized = :supplierNumber
+            """)
+    List<SupplierIdentityIndex> findMarketplaceBySupplierNumber(@Param("supplierNumber") String supplierNumber);
 }

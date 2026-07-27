@@ -13,6 +13,8 @@ public record UpdateSupplierPortalSettingsRequest(
         Boolean requireStoreApprovalProductEdits,
         Boolean allowInvoiceDownloads,
         Boolean allowStatementDownloads,
+        Boolean allowFindUnclaimedDrafts,
+        Boolean autoPromoteOnCreate,
         @Size(max = 512) String portalPublicUrl,
         Boolean claimEnabled,
         @Size(max = 32) String claimMethod,

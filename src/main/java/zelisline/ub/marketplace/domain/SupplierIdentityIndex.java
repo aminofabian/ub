@@ -47,6 +47,10 @@ public class SupplierIdentityIndex {
     @Column(name = "tax_id_normalized", length = 64)
     private String taxIdNormalized;
 
+    /** Canonical S-000001 form when linked to a marketplace supplier. */
+    @Column(name = "supplier_number_normalized", length = 32)
+    private String supplierNumberNormalized;
+
     @Column(name = "region_hint", length = 64)
     private String regionHint;
 

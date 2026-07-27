@@ -41,6 +41,10 @@ public class SupplierIdentityIndexService {
                 phone != null ? phone : supplier.getPayoutPhone()));
         row.setEmailNormalized(SupplierIdentityNormalizer.normalizeEmail(email));
         row.setTaxIdNormalized(SupplierIdentityNormalizer.normalizeTaxId(supplier.getVatPin()));
+        row.setSupplierNumberNormalized(null);
+        if (supplier.getMarketplaceSupplierId() != null && !supplier.getMarketplaceSupplierId().isBlank()) {
+            // Number lives on marketplace passport; resolved by callers that have it loaded.
+        }
         supplierIdentityIndexRepository.save(row);
     }
 
@@ -56,7 +60,8 @@ public class SupplierIdentityIndexService {
         row.setNameNormalized(SupplierIdentityNormalizer.normalizeName(supplier.getName()));
         row.setPhoneNormalized(SupplierIdentityNormalizer.normalizePhone(supplier.getContactPhone()));
         row.setEmailNormalized(SupplierIdentityNormalizer.normalizeEmail(supplier.getContactEmail()));
-        row.setTaxIdNormalized(null);
+        row.setTaxIdNormalized(SupplierIdentityNormalizer.normalizeTaxId(supplier.getTaxPin()));
+        row.setSupplierNumberNormalized(SupplierNumberFormat.normalize(supplier.getSupplierNumber()));
         supplierIdentityIndexRepository.save(row);
     }
 }

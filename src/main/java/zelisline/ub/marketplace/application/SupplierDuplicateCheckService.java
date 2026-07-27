@@ -15,9 +15,11 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.marketplace.domain.MarketplaceSupplier;
+import zelisline.ub.marketplace.domain.MarketplaceSupplierStatuses;
 import zelisline.ub.marketplace.domain.SupplierIdentityIndex;
 import zelisline.ub.marketplace.repository.MarketplaceSupplierRepository;
 import zelisline.ub.marketplace.repository.SupplierIdentityIndexRepository;
+import zelisline.ub.platform.application.PlatformSupplierPortalSettingsService;
 import zelisline.ub.suppliers.api.dto.SupplierDuplicateCheckRequest;
 import zelisline.ub.suppliers.api.dto.SupplierDuplicateCheckResponse;
 import zelisline.ub.suppliers.domain.Supplier;
@@ -32,27 +34,37 @@ public class SupplierDuplicateCheckService {
     private final SupplierIdentityIndexRepository identityIndexRepository;
     private final SupplierRepository supplierRepository;
     private final MarketplaceSupplierRepository marketplaceSupplierRepository;
+    private final PlatformSupplierPortalSettingsService portalSettingsService;
 
     @Transactional(readOnly = true)
     public SupplierDuplicateCheckResponse check(String businessId, SupplierDuplicateCheckRequest request) {
         if (!request.hasAnyKey()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Provide at least one of name, phone, email, or tax ID");
+                    "Provide at least one of name, phone, email, tax ID, or supplier number");
         }
 
         String taxId = SupplierIdentityNormalizer.normalizeTaxId(request.taxId());
         String phone = SupplierIdentityNormalizer.normalizePhone(request.phone());
         String email = SupplierIdentityNormalizer.normalizeEmail(request.email());
         String nameNorm = SupplierIdentityNormalizer.normalizeName(request.name());
+        String supplierNumber = SupplierNumberFormat.normalize(request.supplierNumber());
+        boolean allowDrafts = portalSettingsService.loadSingleton().isAllowFindUnclaimedDrafts();
 
         Map<String, SupplierDuplicateCheckResponse.SupplierDuplicateMatch> matches = new LinkedHashMap<>();
 
+        if (supplierNumber != null) {
+            for (SupplierIdentityIndex row : identityIndexRepository.findMarketplaceBySupplierNumber(supplierNumber)) {
+                addMarketplaceMatch(matches, row, "strong", null, null, null, allowDrafts);
+            }
+            marketplaceSupplierRepository.findBySupplierNumber(supplierNumber).ifPresent(ms ->
+                    addMarketplaceEntity(matches, ms, "strong", null, null, null, allowDrafts));
+        }
         if (taxId != null) {
             for (SupplierIdentityIndex row : identityIndexRepository.findOwnBusinessByTaxId(businessId, taxId)) {
                 addOwnBusinessMatch(matches, row, "strong", revealTaxId(request.taxId(), taxId));
             }
             for (SupplierIdentityIndex row : identityIndexRepository.findMarketplaceByTaxId(taxId)) {
-                addMarketplaceMatch(matches, row, "strong", revealTaxId(request.taxId(), taxId), null, null);
+                addMarketplaceMatch(matches, row, "strong", revealTaxId(request.taxId(), taxId), null, null, allowDrafts);
             }
         }
         if (phone != null) {
@@ -60,7 +72,7 @@ public class SupplierDuplicateCheckService {
                 addOwnBusinessMatch(matches, row, "strong", null, revealPhone(request.phone(), phone), null);
             }
             for (SupplierIdentityIndex row : identityIndexRepository.findMarketplaceByPhone(phone)) {
-                addMarketplaceMatch(matches, row, "strong", null, revealPhone(request.phone(), phone), null);
+                addMarketplaceMatch(matches, row, "strong", null, revealPhone(request.phone(), phone), null, allowDrafts);
             }
         }
         if (email != null) {
@@ -68,7 +80,7 @@ public class SupplierDuplicateCheckService {
                 addOwnBusinessMatch(matches, row, "strong", null, null, revealEmail(request.email(), email));
             }
             for (SupplierIdentityIndex row : identityIndexRepository.findMarketplaceByEmail(email)) {
-                addMarketplaceMatch(matches, row, "strong", null, null, revealEmail(request.email(), email));
+                addMarketplaceMatch(matches, row, "strong", null, null, revealEmail(request.email(), email), allowDrafts);
             }
         }
         if (!nameNorm.isBlank()) {
@@ -80,7 +92,7 @@ public class SupplierDuplicateCheckService {
             }
             for (SupplierIdentityIndex row : identityIndexRepository.findMarketplaceByNamePrefix(prefix)) {
                 if (nameSimilarity(nameNorm, row.getNameNormalized()) >= NAME_SIMILARITY_THRESHOLD) {
-                    addMarketplaceMatch(matches, row, "possible", null, null, null);
+                    addMarketplaceMatch(matches, row, "possible", null, null, null, allowDrafts);
                 }
             }
         }
@@ -113,16 +125,23 @@ public class SupplierDuplicateCheckService {
         if (supplier == null || supplier.getDeletedAt() != null) {
             return;
         }
+        String supplierNumber = null;
+        if (supplier.getMarketplaceSupplierId() != null) {
+            supplierNumber = marketplaceSupplierRepository.findById(supplier.getMarketplaceSupplierId())
+                    .map(MarketplaceSupplier::getSupplierNumber)
+                    .orElse(null);
+        }
         matches.putIfAbsent(key, new SupplierDuplicateCheckResponse.SupplierDuplicateMatch(
                 confidence,
                 "own_business",
                 row.getSupplierId(),
-                null,
+                supplier.getMarketplaceSupplierId(),
                 supplier.getName(),
                 phone,
                 email,
                 taxId,
-                row.getRegionHint()));
+                row.getRegionHint(),
+                supplierNumber));
     }
 
     private void addMarketplaceMatch(
@@ -131,26 +150,46 @@ public class SupplierDuplicateCheckService {
             String confidence,
             String taxId,
             String phone,
-            String email
+            String email,
+            boolean allowDrafts
     ) {
         if (row.getMarketplaceSupplierId() == null) {
             return;
         }
-        String key = "marketplace:" + row.getMarketplaceSupplierId();
         MarketplaceSupplier supplier = marketplaceSupplierRepository.findById(row.getMarketplaceSupplierId()).orElse(null);
         if (supplier == null) {
             return;
         }
+        addMarketplaceEntity(matches, supplier, confidence, taxId, phone, email, allowDrafts);
+    }
+
+    private void addMarketplaceEntity(
+            Map<String, SupplierDuplicateCheckResponse.SupplierDuplicateMatch> matches,
+            MarketplaceSupplier supplier,
+            String confidence,
+            String taxId,
+            String phone,
+            String email,
+            boolean allowDrafts
+    ) {
+        if (MarketplaceSupplierStatuses.SUSPENDED.equalsIgnoreCase(supplier.getStatus())) {
+            return;
+        }
+        if (MarketplaceSupplierStatuses.DRAFT.equalsIgnoreCase(supplier.getStatus()) && !allowDrafts) {
+            return;
+        }
+        String key = "marketplace:" + supplier.getId();
         matches.putIfAbsent(key, new SupplierDuplicateCheckResponse.SupplierDuplicateMatch(
                 confidence,
                 "marketplace",
                 null,
-                row.getMarketplaceSupplierId(),
+                supplier.getId(),
                 supplier.getName(),
                 phone != null ? phone : supplier.getContactPhone(),
                 email != null ? email : supplier.getContactEmail(),
                 taxId,
-                row.getRegionHint()));
+                null,
+                supplier.getSupplierNumber()));
     }
 
     private static String revealTaxId(String raw, String normalized) {

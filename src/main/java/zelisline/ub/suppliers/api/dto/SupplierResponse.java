@@ -21,6 +21,7 @@ public record SupplierResponse(
         String payoutPhone,
         String kopokopoExternalRecipientUrl,
         String marketplaceSupplierId,
+        String supplierNumber,
         long version,
         Instant createdAt,
         Instant updatedAt,

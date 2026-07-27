@@ -14,7 +14,8 @@ public record SupplierDuplicateCheckResponse(
             String phone,
             String email,
             String taxId,
-            String regionHint
+            String regionHint,
+            String supplierNumber
     ) {
     }
 }

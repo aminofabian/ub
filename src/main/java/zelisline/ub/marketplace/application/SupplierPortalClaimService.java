@@ -77,6 +77,7 @@ public class SupplierPortalClaimService {
     private final SupplierRepository supplierRepository;
     private final BusinessSupplierConnectionRepository connectionRepository;
     private final SupplierIdentityIndexService identityIndexService;
+    private final MarketplaceSupplierPassportService passportService;
     private final BusinessCreditMessagingSettingsService messagingSettingsService;
     private final CustomerMessageDispatcher customerMessageDispatcher;
     private final PlatformSupplierPortalSettingsService portalSettingsService;
@@ -99,6 +100,7 @@ public class SupplierPortalClaimService {
             SupplierRepository supplierRepository,
             BusinessSupplierConnectionRepository connectionRepository,
             SupplierIdentityIndexService identityIndexService,
+            MarketplaceSupplierPassportService passportService,
             BusinessCreditMessagingSettingsService messagingSettingsService,
             CustomerMessageDispatcher customerMessageDispatcher,
             PlatformSupplierPortalSettingsService portalSettingsService,
@@ -117,6 +119,7 @@ public class SupplierPortalClaimService {
         this.supplierRepository = supplierRepository;
         this.connectionRepository = connectionRepository;
         this.identityIndexService = identityIndexService;
+        this.passportService = passportService;
         this.messagingSettingsService = messagingSettingsService;
         this.customerMessageDispatcher = customerMessageDispatcher;
         this.portalSettingsService = portalSettingsService;
@@ -475,6 +478,7 @@ public class SupplierPortalClaimService {
             marketplace.setUsername(allocateUsername(displayName, phone));
         }
         marketplaceSupplierRepository.saveAndFlush(marketplace);
+        passportService.ensureNumberAndIndex(marketplace);
 
         SupplierUser user = new SupplierUser();
         user.setMarketplaceSupplierId(marketplace.getId());
@@ -568,6 +572,7 @@ public class SupplierPortalClaimService {
             }
             marketplaceSupplierRepository.saveAndFlush(marketplace);
         }
+        passportService.ensureNumberAndIndex(marketplace);
 
         SupplierUser user = new SupplierUser();
         user.setMarketplaceSupplierId(marketplace.getId());
@@ -664,7 +669,7 @@ public class SupplierPortalClaimService {
             if (marketplace == null) {
                 return;
             }
-            identityIndexService.upsertMarketplaceSupplier(marketplace);
+            passportService.ensureNumberAndIndex(marketplace);
         } catch (RuntimeException ex) {
             // Index is searchable convenience — never abort account creation.
             log.warn(

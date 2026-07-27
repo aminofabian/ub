@@ -8,6 +8,7 @@ import org.springframework.web.server.ResponseStatusException;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.marketplace.api.dto.CreateSupplierPortalInviteRequest;
 import zelisline.ub.marketplace.api.dto.CreateSupplierPortalInviteResponse;
+import zelisline.ub.marketplace.application.MarketplaceSupplierPassportService;
 import zelisline.ub.marketplace.application.SupplierIdentityIndexService;
 import zelisline.ub.marketplace.application.SupplierPortalInviteService;
 import zelisline.ub.marketplace.domain.BusinessSupplierConnection;
@@ -32,6 +33,7 @@ public class TenantSupplierPortalInviteService {
     private final MarketplaceSupplierRepository marketplaceSupplierRepository;
     private final BusinessSupplierConnectionRepository connectionRepository;
     private final SupplierIdentityIndexService identityIndexService;
+    private final MarketplaceSupplierPassportService passportService;
     private final SupplierPortalInviteService inviteService;
     private final PlatformSupplierPortalSettingsService portalSettingsService;
 
@@ -66,8 +68,7 @@ public class TenantSupplierPortalInviteService {
         marketplace.setContactPhone(normalizePhone(local.getPayoutPhone()));
         marketplace.setStatus(MarketplaceSupplierStatuses.ACTIVE);
         marketplace.setUsername(allocateUsername(local.getName(), local.getCode()));
-        marketplaceSupplierRepository.save(marketplace);
-        identityIndexService.upsertMarketplaceSupplier(marketplace);
+        passportService.ensureNumberAndIndex(marketplace);
 
         local.setMarketplaceSupplierId(marketplace.getId());
         supplierRepository.save(local);

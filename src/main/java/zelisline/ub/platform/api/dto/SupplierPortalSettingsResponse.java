@@ -11,6 +11,8 @@ public record SupplierPortalSettingsResponse(
         boolean requireStoreApprovalProductEdits,
         boolean allowInvoiceDownloads,
         boolean allowStatementDownloads,
+        boolean allowFindUnclaimedDrafts,
+        boolean autoPromoteOnCreate,
         String portalPublicUrl,
         boolean claimEnabled,
         String claimMethod,

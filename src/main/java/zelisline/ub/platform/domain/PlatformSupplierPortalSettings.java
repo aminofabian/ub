@@ -49,6 +49,14 @@ public class PlatformSupplierPortalSettings {
     @Column(name = "allow_statement_downloads", nullable = false)
     private boolean allowStatementDownloads = true;
 
+    /** When true, shop lookup can find draft/unclaimed marketplace suppliers. */
+    @Column(name = "allow_find_unclaimed_drafts", nullable = false)
+    private boolean allowFindUnclaimedDrafts = true;
+
+    /** When true, creating a local supplier with no match also creates a global passport + S-number. */
+    @Column(name = "auto_promote_on_create", nullable = false)
+    private boolean autoPromoteOnCreate = true;
+
     @Column(name = "portal_public_url", length = 512, nullable = false)
     private String portalPublicUrl = "https://kiosk.ke/supplier-portal";
 

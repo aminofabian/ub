@@ -37,7 +37,7 @@ public class MarketplaceAdminService {
 
     private final MarketplaceSupplierRepository marketplaceSupplierRepository;
     private final SupplierUserRepository supplierUserRepository;
-    private final SupplierIdentityIndexService supplierIdentityIndexService;
+    private final MarketplaceSupplierPassportService passportService;
     private final PasswordEncoder passwordEncoder;
     private final PlatformSupplierPortalSettingsService portalSettingsService;
     private final SupplierPortalSessionService sessionService;
@@ -58,8 +58,7 @@ public class MarketplaceAdminService {
         supplier.setContactEmail(blankToNull(request.contactEmail()));
         supplier.setContactPhone(SupplierIdentityNormalizer.normalizePhone(request.contactPhone()));
         supplier.setStatus(MarketplaceSupplierStatuses.DRAFT);
-        marketplaceSupplierRepository.save(supplier);
-        supplierIdentityIndexService.upsertMarketplaceSupplier(supplier);
+        passportService.ensureNumberAndIndex(supplier);
         return toSummary(supplier);
     }
 
@@ -210,6 +209,7 @@ public class MarketplaceAdminService {
         long userCount = supplierUserRepository.countByMarketplaceSupplierId(supplier.getId());
         return new MarketplaceSupplierSummaryResponse(
                 supplier.getId(),
+                supplier.getSupplierNumber(),
                 supplier.getName(),
                 supplier.getDescription(),
                 supplier.getContactEmail(),

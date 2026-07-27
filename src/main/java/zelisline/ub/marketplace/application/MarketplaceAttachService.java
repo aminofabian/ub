@@ -27,6 +27,7 @@ import zelisline.ub.marketplace.repository.MarketplaceSupplierProductRepository;
 import zelisline.ub.marketplace.repository.MarketplaceSupplierRepository;
 import zelisline.ub.platform.application.PlatformSupplierPortalSettingsService;
 import zelisline.ub.platform.domain.PlatformSupplierPortalSettings;
+import zelisline.ub.suppliers.application.SupplierContactUniquenessService;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierContact;
 import zelisline.ub.suppliers.domain.SupplierProduct;
@@ -56,6 +57,7 @@ public class MarketplaceAttachService {
     private final MarketplaceSupplierPassportService passportService;
     private final PlatformSupplierPortalSettingsService portalSettingsService;
     private final SupplierPortalShopLinkService shopLinkService;
+    private final SupplierContactUniquenessService contactUniquenessService;
 
     @Transactional
     public MarketplaceAttachResponse attachByMarketplaceId(String businessId, String marketplaceSupplierId) {
@@ -183,6 +185,12 @@ public class MarketplaceAttachService {
         if (supplierRepository.existsDuplicateName(businessId, preferredName, null)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "A local supplier with this name already exists; open it or rename before attaching.");
+        }
+        if (marketplace.getContactPhone() != null && !marketplace.getContactPhone().isBlank()) {
+            contactUniquenessService.assertPhoneAvailable(businessId, marketplace.getContactPhone(), null);
+        }
+        if (marketplace.getContactEmail() != null && !marketplace.getContactEmail().isBlank()) {
+            contactUniquenessService.assertEmailAvailable(businessId, marketplace.getContactEmail(), null);
         }
 
         Supplier local = new Supplier();

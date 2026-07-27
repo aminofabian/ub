@@ -71,6 +71,28 @@ public interface SupplierRepository extends JpaRepository<Supplier, String> {
             @Param("phoneTail") String phoneTail);
 
     /**
+     * Same-business payout phone collision using exact / alt / last-9 forms.
+     */
+    @Query("""
+            SELECT s FROM Supplier s
+            WHERE s.businessId = :businessId
+              AND s.deletedAt IS NULL
+              AND (:ignoreId IS NULL OR s.id <> :ignoreId)
+              AND s.payoutPhone IS NOT NULL
+              AND (
+                s.payoutPhone = :phone
+                OR s.payoutPhone = :altPhone
+                OR s.payoutPhone LIKE CONCAT('%', :phoneTail)
+              )
+            """)
+    List<Supplier> findOwnBusinessByPayoutPhoneVariants(
+            @Param("businessId") String businessId,
+            @Param("phone") String phone,
+            @Param("altPhone") String altPhone,
+            @Param("phoneTail") String phoneTail,
+            @Param("ignoreId") String ignoreId);
+
+    /**
      * Public marketplace directory: active tenant suppliers that have at least one
      * active product link. Cross-tenant by design.
      */

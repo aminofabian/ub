@@ -15,7 +15,12 @@ public record SupplierDuplicateCheckResponse(
             String email,
             String taxId,
             String regionHint,
-            String supplierNumber
+            String supplierNumber,
+            /** Why this matched, e.g. phone_last9, email, name, tax_id, supplier_number. */
+            List<String> matchReasons
     ) {
+        public SupplierDuplicateMatch {
+            matchReasons = matchReasons == null ? List.of() : List.copyOf(matchReasons);
+        }
     }
 }

@@ -23,6 +23,7 @@ import zelisline.ub.platform.application.PlatformSupplierPortalSettingsService;
 import zelisline.ub.suppliers.api.dto.SupplierDuplicateCheckRequest;
 import zelisline.ub.suppliers.api.dto.SupplierDuplicateCheckResponse;
 import zelisline.ub.suppliers.domain.Supplier;
+import zelisline.ub.suppliers.repository.SupplierContactRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
 
 @Service
@@ -33,6 +34,7 @@ public class SupplierDuplicateCheckService {
 
     private final SupplierIdentityIndexRepository identityIndexRepository;
     private final SupplierRepository supplierRepository;
+    private final SupplierContactRepository supplierContactRepository;
     private final MarketplaceSupplierRepository marketplaceSupplierRepository;
     private final PlatformSupplierPortalSettingsService portalSettingsService;
 
@@ -65,54 +67,96 @@ public class SupplierDuplicateCheckService {
         String nameNorm = SupplierIdentityNormalizer.normalizeName(nameRaw);
         String supplierNumber = SupplierNumberFormat.normalize(supplierNumberRaw);
         boolean allowDrafts = portalSettingsService.loadSingleton().isAllowFindUnclaimedDrafts();
+        var phoneForms = phoneRaw != null && !phoneRaw.isBlank()
+                ? SupplierIdentityNormalizer.phoneLookupForms(phoneRaw)
+                : null;
 
         Map<String, SupplierDuplicateCheckResponse.SupplierDuplicateMatch> matches = new LinkedHashMap<>();
 
         if (supplierNumber != null) {
             for (SupplierIdentityIndex row : identityIndexRepository.findMarketplaceBySupplierNumber(supplierNumber)) {
-                addMarketplaceMatch(matches, row, "strong", null, null, null, allowDrafts);
+                addMarketplaceMatch(matches, row, "strong", null, null, null, allowDrafts, List.of("supplier_number"));
             }
             marketplaceSupplierRepository.findBySupplierNumber(supplierNumber).ifPresent(ms ->
-                    addMarketplaceEntity(matches, ms, "strong", null, null, null, allowDrafts));
+                    addMarketplaceEntity(matches, ms, "strong", null, null, null, allowDrafts, List.of("supplier_number")));
         }
         if (taxId != null) {
             for (SupplierIdentityIndex row : identityIndexRepository.findOwnBusinessByTaxId(businessId, taxId)) {
-                addOwnBusinessMatch(matches, row, "strong", revealTaxId(request.taxId(), taxId));
+                addOwnBusinessMatch(matches, row, "strong", revealTaxId(request.taxId(), taxId), null, null, List.of("tax_id"));
             }
             for (SupplierIdentityIndex row : identityIndexRepository.findMarketplaceByTaxId(taxId)) {
-                addMarketplaceMatch(matches, row, "strong", revealTaxId(request.taxId(), taxId), null, null, allowDrafts);
+                addMarketplaceMatch(matches, row, "strong", revealTaxId(request.taxId(), taxId), null, null, allowDrafts, List.of("tax_id"));
             }
             for (SupplierIdentityIndex row : identityIndexRepository.findTenantByTaxId(taxId)) {
-                addPlatformTenantMatch(matches, businessId, row, "strong", revealTaxId(request.taxId(), taxId), null, null, allowDrafts);
+                addPlatformTenantMatch(matches, businessId, row, "strong", revealTaxId(request.taxId(), taxId), null, null, allowDrafts, List.of("tax_id"));
             }
         }
-        if (phone != null) {
+        if (phoneForms != null) {
+            String revealed = revealPhone(phoneRaw, phoneForms.phone());
+            List<String> reasons = List.of("phone_last9");
+            for (SupplierIdentityIndex row : identityIndexRepository.findOwnBusinessByPhoneVariants(
+                    businessId, phoneForms.phone(), phoneForms.altPhone(), phoneForms.phoneTail())) {
+                addOwnBusinessMatch(matches, row, "strong", null, revealed, null, reasons);
+            }
+            // Direct table scan covers contacts/payout not yet indexed.
+            for (Supplier payoutHit : supplierRepository.findOwnBusinessByPayoutPhoneVariants(
+                    businessId, phoneForms.phone(), phoneForms.altPhone(), phoneForms.phoneTail(), null)) {
+                addOwnSupplierEntity(matches, payoutHit, "strong", null, revealed, null, reasons);
+            }
+            for (var contactHit : supplierContactRepository.findOwnBusinessByPhoneVariants(
+                    businessId, phoneForms.phone(), phoneForms.altPhone(), phoneForms.phoneTail(), null)) {
+                supplierRepository.findByIdAndDeletedAtIsNull(contactHit.getSupplierId()).ifPresent(owner ->
+                        addOwnSupplierEntity(matches, owner, "strong", null, revealed, null, reasons));
+            }
+            for (SupplierIdentityIndex row : identityIndexRepository.findMarketplaceByPhoneVariants(
+                    phoneForms.phone(), phoneForms.altPhone(), phoneForms.phoneTail())) {
+                addMarketplaceMatch(matches, row, "strong", null, revealed, null, allowDrafts, reasons);
+            }
+            for (SupplierIdentityIndex row : identityIndexRepository.findTenantByPhoneVariants(
+                    phoneForms.phone(), phoneForms.altPhone(), phoneForms.phoneTail())) {
+                addPlatformTenantMatch(matches, businessId, row, "strong", null, revealed, null, allowDrafts, reasons);
+            }
+        } else if (phone != null) {
+            String revealed = revealPhone(phoneRaw, phone);
             for (SupplierIdentityIndex row : identityIndexRepository.findOwnBusinessByPhone(businessId, phone)) {
-                addOwnBusinessMatch(matches, row, "strong", null, revealPhone(phoneRaw, phone), null);
+                addOwnBusinessMatch(matches, row, "strong", null, revealed, null, List.of("phone"));
             }
             for (SupplierIdentityIndex row : identityIndexRepository.findMarketplaceByPhone(phone)) {
-                addMarketplaceMatch(matches, row, "strong", null, revealPhone(phoneRaw, phone), null, allowDrafts);
+                addMarketplaceMatch(matches, row, "strong", null, revealed, null, allowDrafts, List.of("phone"));
             }
             for (SupplierIdentityIndex row : identityIndexRepository.findTenantByPhone(phone)) {
-                addPlatformTenantMatch(matches, businessId, row, "strong", null, revealPhone(phoneRaw, phone), null, allowDrafts);
+                addPlatformTenantMatch(matches, businessId, row, "strong", null, revealed, null, allowDrafts, List.of("phone"));
             }
         }
         if (email != null) {
+            String revealed = revealEmail(request.email(), email);
+            List<String> reasons = List.of("email");
             for (SupplierIdentityIndex row : identityIndexRepository.findOwnBusinessByEmail(businessId, email)) {
-                addOwnBusinessMatch(matches, row, "strong", null, null, revealEmail(request.email(), email));
+                addOwnBusinessMatch(matches, row, "strong", null, null, revealed, reasons);
+            }
+            for (var contactHit : supplierContactRepository.findOwnBusinessByEmail(businessId, email, null)) {
+                supplierRepository.findByIdAndDeletedAtIsNull(contactHit.getSupplierId()).ifPresent(owner ->
+                        addOwnSupplierEntity(matches, owner, "strong", null, null, revealed, reasons));
             }
             for (SupplierIdentityIndex row : identityIndexRepository.findMarketplaceByEmail(email)) {
-                addMarketplaceMatch(matches, row, "strong", null, null, revealEmail(request.email(), email), allowDrafts);
+                addMarketplaceMatch(matches, row, "strong", null, null, revealed, allowDrafts, reasons);
             }
             for (SupplierIdentityIndex row : identityIndexRepository.findTenantByEmail(email)) {
-                addPlatformTenantMatch(matches, businessId, row, "strong", null, null, revealEmail(request.email(), email), allowDrafts);
+                addPlatformTenantMatch(matches, businessId, row, "strong", null, null, revealed, allowDrafts, reasons);
             }
         }
         if (!nameNorm.isBlank()) {
             String prefix = nameNorm.length() >= 3 ? nameNorm.substring(0, 3) : nameNorm;
             for (SupplierIdentityIndex row : identityIndexRepository.findOwnBusinessByNamePrefix(businessId, prefix)) {
                 if (namesMatch(nameNorm, row.getNameNormalized())) {
-                    addOwnBusinessMatch(matches, row, confidenceForName(nameNorm, row.getNameNormalized()), null, null, null);
+                    addOwnBusinessMatch(
+                            matches,
+                            row,
+                            confidenceForName(nameNorm, row.getNameNormalized()),
+                            null,
+                            null,
+                            null,
+                            List.of("name"));
                 }
             }
             for (SupplierIdentityIndex row : identityIndexRepository.findMarketplaceByNamePrefix(prefix)) {
@@ -124,10 +168,10 @@ public class SupplierDuplicateCheckService {
                             null,
                             null,
                             null,
-                            allowDrafts);
+                            allowDrafts,
+                            List.of("name"));
                 }
             }
-            // Cross-tenant local suppliers (most shops still only have tenant rows).
             for (SupplierIdentityIndex row : identityIndexRepository.findTenantByNamePrefix(prefix)) {
                 if (namesMatch(nameNorm, row.getNameNormalized())) {
                     addPlatformTenantMatch(
@@ -138,7 +182,8 @@ public class SupplierDuplicateCheckService {
                             null,
                             null,
                             null,
-                            allowDrafts);
+                            allowDrafts,
+                            List.of("name"));
                 }
             }
         }
@@ -146,11 +191,6 @@ public class SupplierDuplicateCheckService {
         return new SupplierDuplicateCheckResponse(collapseOwnAndMarketplaceDuplicates(matches));
     }
 
-    /**
-     * If this shop already has a local supplier linked to a marketplace passport,
-     * drop the separate marketplace row so the UI doesn't show
-     * "Grocery (Githurai)" and "Supplier 2874" for the same S-number.
-     */
     private static List<SupplierDuplicateCheckResponse.SupplierDuplicateMatch> collapseOwnAndMarketplaceDuplicates(
             Map<String, SupplierDuplicateCheckResponse.SupplierDuplicateMatch> matches
     ) {
@@ -188,27 +228,31 @@ public class SupplierDuplicateCheckService {
             Map<String, SupplierDuplicateCheckResponse.SupplierDuplicateMatch> matches,
             SupplierIdentityIndex row,
             String confidence,
-            String taxId
-    ) {
-        addOwnBusinessMatch(matches, row, confidence, taxId, null, null);
-    }
-
-    private void addOwnBusinessMatch(
-            Map<String, SupplierDuplicateCheckResponse.SupplierDuplicateMatch> matches,
-            SupplierIdentityIndex row,
-            String confidence,
             String taxId,
             String phone,
-            String email
+            String email,
+            List<String> reasons
     ) {
         if (row.getSupplierId() == null) {
             return;
         }
-        String key = "own:" + row.getSupplierId();
         Supplier supplier = supplierRepository.findById(row.getSupplierId()).orElse(null);
         if (supplier == null || supplier.getDeletedAt() != null) {
             return;
         }
+        addOwnSupplierEntity(matches, supplier, confidence, taxId, phone, email, reasons);
+    }
+
+    private void addOwnSupplierEntity(
+            Map<String, SupplierDuplicateCheckResponse.SupplierDuplicateMatch> matches,
+            Supplier supplier,
+            String confidence,
+            String taxId,
+            String phone,
+            String email,
+            List<String> reasons
+    ) {
+        String key = "own:" + supplier.getId();
         String supplierNumber = null;
         String marketplaceId = supplier.getMarketplaceSupplierId();
         if (marketplaceId != null) {
@@ -216,23 +260,20 @@ public class SupplierDuplicateCheckService {
                     .map(MarketplaceSupplier::getSupplierNumber)
                     .orElse(null);
         }
-        matches.putIfAbsent(key, new SupplierDuplicateCheckResponse.SupplierDuplicateMatch(
+        putMerged(matches, key, new SupplierDuplicateCheckResponse.SupplierDuplicateMatch(
                 confidence,
                 "own_business",
-                row.getSupplierId(),
+                supplier.getId(),
                 marketplaceId,
                 supplier.getName(),
                 phone,
                 email,
                 taxId,
-                row.getRegionHint(),
-                supplierNumber));
+                null,
+                supplierNumber,
+                reasons));
     }
 
-    /**
-     * Other shops' local suppliers. Prefer marketplace passport when linked;
-     * otherwise expose as platform seed that attach will promote.
-     */
     private void addPlatformTenantMatch(
             Map<String, SupplierDuplicateCheckResponse.SupplierDuplicateMatch> matches,
             String businessId,
@@ -241,13 +282,14 @@ public class SupplierDuplicateCheckService {
             String taxId,
             String phone,
             String email,
-            boolean allowDrafts
+            boolean allowDrafts,
+            List<String> reasons
     ) {
         if (row.getSupplierId() == null) {
             return;
         }
         if (businessId.equals(row.getBusinessId())) {
-            addOwnBusinessMatch(matches, row, confidence, taxId, phone, email);
+            addOwnBusinessMatch(matches, row, confidence, taxId, phone, email, reasons);
             return;
         }
         Supplier supplier = supplierRepository.findById(row.getSupplierId()).orElse(null);
@@ -258,12 +300,12 @@ public class SupplierDuplicateCheckService {
             MarketplaceSupplier ms = marketplaceSupplierRepository.findById(supplier.getMarketplaceSupplierId())
                     .orElse(null);
             if (ms != null) {
-                addMarketplaceEntity(matches, ms, confidence, taxId, phone, email, allowDrafts);
+                addMarketplaceEntity(matches, ms, confidence, taxId, phone, email, allowDrafts, reasons);
                 return;
             }
         }
         String key = "platform:" + supplier.getId();
-        matches.putIfAbsent(key, new SupplierDuplicateCheckResponse.SupplierDuplicateMatch(
+        putMerged(matches, key, new SupplierDuplicateCheckResponse.SupplierDuplicateMatch(
                 confidence,
                 "platform",
                 supplier.getId(),
@@ -273,7 +315,8 @@ public class SupplierDuplicateCheckService {
                 email != null ? email : row.getEmailNormalized(),
                 taxId,
                 row.getRegionHint(),
-                null));
+                null,
+                reasons));
     }
 
     private void addMarketplaceMatch(
@@ -283,7 +326,8 @@ public class SupplierDuplicateCheckService {
             String taxId,
             String phone,
             String email,
-            boolean allowDrafts
+            boolean allowDrafts,
+            List<String> reasons
     ) {
         if (row.getMarketplaceSupplierId() == null) {
             return;
@@ -292,7 +336,7 @@ public class SupplierDuplicateCheckService {
         if (supplier == null) {
             return;
         }
-        addMarketplaceEntity(matches, supplier, confidence, taxId, phone, email, allowDrafts);
+        addMarketplaceEntity(matches, supplier, confidence, taxId, phone, email, allowDrafts, reasons);
     }
 
     private void addMarketplaceEntity(
@@ -302,7 +346,8 @@ public class SupplierDuplicateCheckService {
             String taxId,
             String phone,
             String email,
-            boolean allowDrafts
+            boolean allowDrafts,
+            List<String> reasons
     ) {
         if (MarketplaceSupplierStatuses.SUSPENDED.equalsIgnoreCase(supplier.getStatus())) {
             return;
@@ -311,7 +356,7 @@ public class SupplierDuplicateCheckService {
             return;
         }
         String key = "marketplace:" + supplier.getId();
-        matches.putIfAbsent(key, new SupplierDuplicateCheckResponse.SupplierDuplicateMatch(
+        putMerged(matches, key, new SupplierDuplicateCheckResponse.SupplierDuplicateMatch(
                 confidence,
                 "marketplace",
                 null,
@@ -321,7 +366,44 @@ public class SupplierDuplicateCheckService {
                 email != null ? email : supplier.getContactEmail(),
                 taxId,
                 null,
-                supplier.getSupplierNumber()));
+                supplier.getSupplierNumber(),
+                reasons));
+    }
+
+    private static void putMerged(
+            Map<String, SupplierDuplicateCheckResponse.SupplierDuplicateMatch> matches,
+            String key,
+            SupplierDuplicateCheckResponse.SupplierDuplicateMatch incoming
+    ) {
+        matches.merge(key, incoming, SupplierDuplicateCheckService::mergeMatches);
+    }
+
+    private static SupplierDuplicateCheckResponse.SupplierDuplicateMatch mergeMatches(
+            SupplierDuplicateCheckResponse.SupplierDuplicateMatch a,
+            SupplierDuplicateCheckResponse.SupplierDuplicateMatch b
+    ) {
+        String confidence = "strong".equals(a.confidence()) || "strong".equals(b.confidence())
+                ? "strong"
+                : a.confidence();
+        Set<String> reasons = new LinkedHashSet<>();
+        if (a.matchReasons() != null) {
+            reasons.addAll(a.matchReasons());
+        }
+        if (b.matchReasons() != null) {
+            reasons.addAll(b.matchReasons());
+        }
+        return new SupplierDuplicateCheckResponse.SupplierDuplicateMatch(
+                confidence,
+                a.source(),
+                a.localSupplierId() != null ? a.localSupplierId() : b.localSupplierId(),
+                a.marketplaceSupplierId() != null ? a.marketplaceSupplierId() : b.marketplaceSupplierId(),
+                a.name() != null ? a.name() : b.name(),
+                a.phone() != null ? a.phone() : b.phone(),
+                a.email() != null ? a.email() : b.email(),
+                a.taxId() != null ? a.taxId() : b.taxId(),
+                a.regionHint() != null ? a.regionHint() : b.regionHint(),
+                a.supplierNumber() != null ? a.supplierNumber() : b.supplierNumber(),
+                new ArrayList<>(reasons));
     }
 
     private static boolean namesMatch(String query, String candidate) {

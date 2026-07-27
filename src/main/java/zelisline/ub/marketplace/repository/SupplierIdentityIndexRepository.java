@@ -37,6 +37,20 @@ public interface SupplierIdentityIndexRepository extends JpaRepository<SupplierI
 
     @Query("""
             SELECT s FROM SupplierIdentityIndex s
+            WHERE s.businessId = :businessId
+              AND s.phoneNormalized IS NOT NULL
+              AND (s.phoneNormalized = :phone
+                   OR s.phoneNormalized = :altPhone
+                   OR s.phoneNormalized LIKE CONCAT('%', :phoneTail))
+            """)
+    List<SupplierIdentityIndex> findOwnBusinessByPhoneVariants(
+            @Param("businessId") String businessId,
+            @Param("phone") String phone,
+            @Param("altPhone") String altPhone,
+            @Param("phoneTail") String phoneTail);
+
+    @Query("""
+            SELECT s FROM SupplierIdentityIndex s
             WHERE s.marketplaceSupplierId IS NOT NULL
               AND s.taxIdNormalized IS NOT NULL
               AND s.taxIdNormalized = :taxId
@@ -50,6 +64,19 @@ public interface SupplierIdentityIndexRepository extends JpaRepository<SupplierI
               AND s.phoneNormalized = :phone
             """)
     List<SupplierIdentityIndex> findMarketplaceByPhone(@Param("phone") String phone);
+
+    @Query("""
+            SELECT s FROM SupplierIdentityIndex s
+            WHERE s.marketplaceSupplierId IS NOT NULL
+              AND s.phoneNormalized IS NOT NULL
+              AND (s.phoneNormalized = :phone
+                   OR s.phoneNormalized = :altPhone
+                   OR s.phoneNormalized LIKE CONCAT('%', :phoneTail))
+            """)
+    List<SupplierIdentityIndex> findMarketplaceByPhoneVariants(
+            @Param("phone") String phone,
+            @Param("altPhone") String altPhone,
+            @Param("phoneTail") String phoneTail);
 
     @Query("""
             SELECT s FROM SupplierIdentityIndex s

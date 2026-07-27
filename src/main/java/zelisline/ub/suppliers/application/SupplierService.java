@@ -30,6 +30,7 @@ import zelisline.ub.suppliers.api.dto.SupplierContactResponse;
 import zelisline.ub.suppliers.api.dto.SupplierResponse;
 import zelisline.ub.marketplace.application.MarketplaceSupplierPassportService;
 import zelisline.ub.marketplace.application.SupplierIdentityIndexService;
+import zelisline.ub.marketplace.application.SupplierIdentityNormalizer;
 import zelisline.ub.marketplace.domain.BusinessSupplierConnection;
 import zelisline.ub.marketplace.domain.BusinessSupplierConnectionStatuses;
 import zelisline.ub.marketplace.repository.BusinessSupplierConnectionRepository;
@@ -48,6 +49,7 @@ public class SupplierService {
 
     private final SupplierRepository supplierRepository;
     private final SupplierContactRepository supplierContactRepository;
+    private final SupplierContactUniquenessService contactUniquenessService;
     private final SupplierIdentityIndexService supplierIdentityIndexService;
     private final MarketplaceSupplierPassportService passportService;
     private final PlatformSupplierPortalSettingsService portalSettingsService;
@@ -104,6 +106,9 @@ public class SupplierService {
         s.setPaymentMethodPreferred(blankToNull(request.paymentMethodPreferred()));
         s.setPaymentDetails(blankToNull(request.paymentDetails()));
         applyPayoutFields(s, request.payoutType(), request.payoutPhone(), null);
+        if (s.getPayoutPhone() != null) {
+            contactUniquenessService.assertPhoneAvailable(businessId, s.getPayoutPhone(), null);
+        }
         try {
             supplierRepository.save(s);
         } catch (DataIntegrityViolationException ex) {
@@ -196,6 +201,9 @@ public class SupplierService {
                     patch.payoutType(),
                     patch.payoutPhone(),
                     patch.kopokopoExternalRecipientUrl());
+            if (patch.payoutPhone() != null && s.getPayoutPhone() != null) {
+                contactUniquenessService.assertPhoneAvailable(businessId, s.getPayoutPhone(), supplierId);
+            }
         }
         try {
             supplierRepository.save(s);
@@ -248,14 +256,22 @@ public class SupplierService {
         if (Boolean.TRUE.equals(body.primaryContact())) {
             demotePrimaryContacts(supplierId);
         }
+        String phone = normalizeContactPhone(body.phone());
+        String email = blankToNull(body.email());
+        if (email != null) {
+            email = SupplierIdentityNormalizer.normalizeEmail(email);
+        }
+        contactUniquenessService.assertPhoneAvailable(businessId, phone, supplierId);
+        contactUniquenessService.assertEmailAvailable(businessId, email, supplierId);
         SupplierContact c = new SupplierContact();
         c.setSupplierId(supplierId);
         c.setName(blankToNull(body.name()));
         c.setRoleLabel(blankToNull(body.roleLabel()));
-        c.setPhone(blankToNull(body.phone()));
-        c.setEmail(blankToNull(body.email()));
+        c.setPhone(phone);
+        c.setEmail(email);
         c.setPrimaryContact(Boolean.TRUE.equals(body.primaryContact()));
         supplierContactRepository.save(c);
+        refreshIdentityIndex(supplier);
         publishSupplierEvent(businessId, supplier, actorUserId, AuditEventTypes.SUPPLIER_CONTACT_ADDED,
                 map("contact", map(
                         "id", c.getId(),
@@ -302,12 +318,20 @@ public class SupplierService {
             c.setRoleLabel(blankToNull(patch.roleLabel()));
         }
         if (patch.phone() != null) {
-            c.setPhone(blankToNull(patch.phone()));
+            String phone = normalizeContactPhone(patch.phone());
+            contactUniquenessService.assertPhoneAvailable(businessId, phone, supplierId);
+            c.setPhone(phone);
         }
         if (patch.email() != null) {
-            c.setEmail(blankToNull(patch.email()));
+            String email = blankToNull(patch.email());
+            if (email != null) {
+                email = SupplierIdentityNormalizer.normalizeEmail(email);
+            }
+            contactUniquenessService.assertEmailAvailable(businessId, email, supplierId);
+            c.setEmail(email);
         }
         supplierContactRepository.save(c);
+        refreshIdentityIndex(supplier);
         Map<String, Object> newState = contactSnapshot(c);
         Map<String, Object> diff = compactDiff(oldState, newState);
         if (!diff.isEmpty()) {
@@ -342,6 +366,44 @@ public class SupplierService {
                 supplierContactRepository.save(c);
             }
         }
+    }
+
+    private void refreshIdentityIndex(Supplier supplier) {
+        String phone = supplier.getPayoutPhone();
+        String email = null;
+        for (SupplierContact contact : supplierContactRepository
+                .findBySupplierIdOrderByPrimaryContactDescNameAsc(supplier.getId())) {
+            if (phone == null && contact.getPhone() != null && !contact.getPhone().isBlank()) {
+                phone = contact.getPhone();
+            }
+            if (email == null && contact.getEmail() != null && !contact.getEmail().isBlank()) {
+                email = contact.getEmail();
+            }
+            if (contact.isPrimaryContact()) {
+                if (contact.getPhone() != null && !contact.getPhone().isBlank()
+                        && (supplier.getPayoutPhone() == null || supplier.getPayoutPhone().isBlank())) {
+                    phone = contact.getPhone();
+                }
+                if (contact.getEmail() != null && !contact.getEmail().isBlank()) {
+                    email = contact.getEmail();
+                }
+            }
+        }
+        supplierIdentityIndexService.upsertTenantSupplier(supplier, phone, email);
+    }
+
+    private static String normalizeContactPhone(String raw) {
+        String blank = blankToNull(raw);
+        if (blank == null) {
+            return null;
+        }
+        String stk = StkPhoneNormalizer.normalize(blank);
+        if (stk != null) {
+            return stk;
+        }
+        // Keep digits if not a full KE MSISDN yet — uniqueness still uses last-9 when possible.
+        String digits = blank.replaceAll("[^0-9+]", "").trim();
+        return digits.isBlank() ? blank : digits;
     }
 
     private void assertNameAvailable(String businessId, String name, String ignoreId) {

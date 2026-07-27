@@ -35,4 +35,38 @@ public interface SupplierContactRepository extends JpaRepository<SupplierContact
               AND LOWER(c.email) = LOWER(:email)
             """)
     List<SupplierContact> findByEmailIgnoreCase(@Param("email") String email);
+
+    @Query("""
+            SELECT c FROM SupplierContact c, Supplier s
+            WHERE c.supplierId = s.id
+              AND s.businessId = :businessId
+              AND s.deletedAt IS NULL
+              AND (:ignoreSupplierId IS NULL OR s.id <> :ignoreSupplierId)
+              AND c.phone IS NOT NULL
+              AND (
+                c.phone = :phone
+                OR c.phone = :altPhone
+                OR c.phone LIKE CONCAT('%', :phoneTail)
+              )
+            """)
+    List<SupplierContact> findOwnBusinessByPhoneVariants(
+            @Param("businessId") String businessId,
+            @Param("phone") String phone,
+            @Param("altPhone") String altPhone,
+            @Param("phoneTail") String phoneTail,
+            @Param("ignoreSupplierId") String ignoreSupplierId);
+
+    @Query("""
+            SELECT c FROM SupplierContact c, Supplier s
+            WHERE c.supplierId = s.id
+              AND s.businessId = :businessId
+              AND s.deletedAt IS NULL
+              AND (:ignoreSupplierId IS NULL OR s.id <> :ignoreSupplierId)
+              AND c.email IS NOT NULL
+              AND LOWER(c.email) = LOWER(:email)
+            """)
+    List<SupplierContact> findOwnBusinessByEmail(
+            @Param("businessId") String businessId,
+            @Param("email") String email,
+            @Param("ignoreSupplierId") String ignoreSupplierId);
 }

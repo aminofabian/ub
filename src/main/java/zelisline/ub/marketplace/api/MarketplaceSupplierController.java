@@ -15,6 +15,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.marketplace.api.dto.AttachMarketplaceSupplierByNumberRequest;
+import zelisline.ub.marketplace.api.dto.AttachMarketplaceSupplierFromSeedRequest;
 import zelisline.ub.marketplace.api.dto.MarketplaceAttachResponse;
 import zelisline.ub.marketplace.api.dto.MarketplaceConnectResponse;
 import zelisline.ub.marketplace.api.dto.MarketplaceSupplierDetailResponse;
@@ -70,5 +71,17 @@ public class MarketplaceSupplierController {
         CurrentTenantUser.require(request);
         return marketplaceAttachService.attachBySupplierNumber(
                 TenantRequestIds.resolveBusinessId(request), body.supplierNumber());
+    }
+
+    @PostMapping("/attach-from-seed")
+    @PreAuthorize("hasPermission(null, 'marketplace.suppliers.connect')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public MarketplaceAttachResponse attachFromSeed(
+            @Valid @RequestBody AttachMarketplaceSupplierFromSeedRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return marketplaceAttachService.attachFromPlatformSeed(
+                TenantRequestIds.resolveBusinessId(request), body.sourceLocalSupplierId());
     }
 }

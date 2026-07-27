@@ -53,13 +53,14 @@ public class MarketplaceAttachService {
     private final ItemTypeRepository itemTypeRepository;
     private final MarketplaceItemImportHelper itemImportHelper;
     private final SupplierIdentityIndexService identityIndexService;
+    private final MarketplaceSupplierPassportService passportService;
     private final PlatformSupplierPortalSettingsService portalSettingsService;
     private final SupplierPortalShopLinkService shopLinkService;
 
     @Transactional
     public MarketplaceAttachResponse attachByMarketplaceId(String businessId, String marketplaceSupplierId) {
         MarketplaceSupplier marketplace = requireFindableMarketplace(marketplaceSupplierId);
-        return attachMarketplace(businessId, marketplace);
+        return attachMarketplace(businessId, marketplace, null);
     }
 
     @Transactional
@@ -71,10 +72,65 @@ public class MarketplaceAttachService {
         MarketplaceSupplier marketplace = marketplaceSupplierRepository.findBySupplierNumber(number)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
         assertFindable(marketplace);
-        return attachMarketplace(businessId, marketplace);
+        return attachMarketplace(businessId, marketplace, null);
     }
 
-    private MarketplaceAttachResponse attachMarketplace(String businessId, MarketplaceSupplier marketplace) {
+    /**
+     * Attach using another shop's local supplier row (platform discovery).
+     * Promotes that seed to a global passport if needed, then attaches.
+     */
+    @Transactional
+    public MarketplaceAttachResponse attachFromPlatformSeed(String businessId, String sourceLocalSupplierId) {
+        Supplier source = supplierRepository.findByIdAndDeletedAtIsNull(sourceLocalSupplierId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
+        if (businessId.equals(source.getBusinessId())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "This supplier already belongs to your business");
+        }
+
+        MarketplaceSupplier marketplace;
+        if (source.getMarketplaceSupplierId() != null && !source.getMarketplaceSupplierId().isBlank()) {
+            marketplace = marketplaceSupplierRepository.findById(source.getMarketplaceSupplierId())
+                    .orElse(null);
+        } else {
+            marketplace = null;
+        }
+        if (marketplace == null) {
+            String phone = source.getPayoutPhone();
+            if (phone == null || phone.isBlank()) {
+                phone = supplierContactRepository
+                        .findBySupplierIdOrderByPrimaryContactDescNameAsc(source.getId())
+                        .stream()
+                        .map(SupplierContact::getPhone)
+                        .filter(p -> p != null && !p.isBlank())
+                        .findFirst()
+                        .orElse(null);
+            }
+            marketplace = passportService.createDraftPassport(
+                    source.getName(),
+                    phone,
+                    null,
+                    source.getVatPin());
+            source.setMarketplaceSupplierId(marketplace.getId());
+            supplierRepository.save(source);
+            identityIndexService.upsertTenantSupplier(source, phone, null);
+            try {
+                shopLinkService.ensureLinksAndCatalogue(marketplace.getId());
+            } catch (RuntimeException ignored) {
+                // Soft.
+            }
+        } else {
+            assertFindable(marketplace);
+        }
+
+        return attachMarketplace(businessId, marketplace, source.getId());
+    }
+
+    private MarketplaceAttachResponse attachMarketplace(
+            String businessId,
+            MarketplaceSupplier marketplace,
+            String seedLocalSupplierId
+    ) {
         var existingConn = connectionRepository.findByBusinessIdAndMarketplaceSupplierId(
                 businessId, marketplace.getId());
         if (existingConn.isPresent()) {
@@ -84,6 +140,9 @@ public class MarketplaceAttachService {
                         .orElseThrow(() -> new ResponseStatusException(
                                 HttpStatus.CONFLICT, "Existing connection points to a missing local supplier"));
                 ImportStats stats = importMarketplaceCatalogue(businessId, local.getId(), marketplace.getId());
+                if (seedLocalSupplierId != null) {
+                    stats = stats.merge(importSeedLocalCatalogue(businessId, local.getId(), seedLocalSupplierId));
+                }
                 return toResponse(conn.getId(), local, marketplace, stats);
             }
             conn.setStatus(BusinessSupplierConnectionStatuses.ACTIVE);
@@ -92,6 +151,9 @@ public class MarketplaceAttachService {
                     .orElseThrow(() -> new ResponseStatusException(
                             HttpStatus.CONFLICT, "Existing connection points to a missing local supplier"));
             ImportStats stats = importMarketplaceCatalogue(businessId, local.getId(), marketplace.getId());
+            if (seedLocalSupplierId != null) {
+                stats = stats.merge(importSeedLocalCatalogue(businessId, local.getId(), seedLocalSupplierId));
+            }
             return toResponse(conn.getId(), local, marketplace, stats);
         }
 
@@ -138,6 +200,9 @@ public class MarketplaceAttachService {
         connectionRepository.save(connection);
 
         ImportStats stats = importMarketplaceCatalogue(businessId, local.getId(), marketplace.getId());
+        if (seedLocalSupplierId != null) {
+            stats = stats.merge(importSeedLocalCatalogue(businessId, local.getId(), seedLocalSupplierId));
+        }
 
         try {
             shopLinkService.ensureLinksAndCatalogue(marketplace.getId());
@@ -146,6 +211,56 @@ public class MarketplaceAttachService {
         }
 
         return toResponse(connection.getId(), local, marketplace, stats);
+    }
+
+    private ImportStats importSeedLocalCatalogue(
+            String businessId,
+            String localSupplierId,
+            String sourceSupplierId
+    ) {
+        List<SupplierProduct> sourceLinks =
+                supplierProductRepository.listActivePublicForSupplier(sourceSupplierId);
+        int linkedExisting = 0;
+        int alreadyLinked = 0;
+        int skipped = 0;
+        for (SupplierProduct sourceLink : sourceLinks) {
+            Item sourceItem = itemRepository.findById(sourceLink.getItemId()).orElse(null);
+            if (sourceItem == null
+                    || sourceItem.getDeletedAt() != null
+                    || !sourceItem.isActive()
+                    || sourceItem.getBarcode() == null
+                    || sourceItem.getBarcode().isBlank()) {
+                skipped++;
+                continue;
+            }
+            var localItem = itemRepository.findByBusinessIdAndBarcodeAndDeletedAtIsNull(
+                    businessId, sourceItem.getBarcode().trim());
+            if (localItem.isEmpty()) {
+                skipped++;
+                continue;
+            }
+            String itemId = localItem.get().getId();
+            SupplierProduct link = supplierProductRepository.findBySupplierIdAndItemId(localSupplierId, itemId)
+                    .orElseGet(SupplierProduct::new);
+            if (link.getId() != null && link.getDeletedAt() == null) {
+                alreadyLinked++;
+                continue;
+            }
+            link.setSupplierId(localSupplierId);
+            link.setItemId(itemId);
+            link.setSupplierSku(sourceLink.getSupplierSku());
+            link.setPackSize(sourceLink.getPackSize());
+            link.setPackUnit(sourceLink.getPackUnit());
+            link.setMinOrderQty(sourceLink.getMinOrderQty());
+            link.setDefaultCostPrice(sourceLink.getDefaultCostPrice() != null
+                    ? sourceLink.getDefaultCostPrice()
+                    : sourceLink.getLastCostPrice());
+            link.setActive(true);
+            link.setDeletedAt(null);
+            supplierProductRepository.save(link);
+            linkedExisting++;
+        }
+        return new ImportStats(linkedExisting, 0, alreadyLinked, skipped);
     }
 
     private ImportStats importMarketplaceCatalogue(
@@ -318,5 +433,12 @@ public class MarketplaceAttachService {
     }
 
     private record ImportStats(int linkedExisting, int createdItems, int alreadyLinked, int skipped) {
+        ImportStats merge(ImportStats other) {
+            return new ImportStats(
+                    linkedExisting + other.linkedExisting,
+                    createdItems + other.createdItems,
+                    alreadyLinked + other.alreadyLinked,
+                    skipped + other.skipped);
+        }
     }
 }

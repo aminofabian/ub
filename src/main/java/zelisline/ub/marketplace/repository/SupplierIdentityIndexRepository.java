@@ -127,6 +127,15 @@ public interface SupplierIdentityIndexRepository extends JpaRepository<SupplierI
 
     @Query("""
             SELECT s FROM SupplierIdentityIndex s
+            WHERE s.source = 'tenant'
+              AND s.supplierId IS NOT NULL
+              AND s.taxIdNormalized IS NOT NULL
+              AND s.taxIdNormalized = :taxId
+            """)
+    List<SupplierIdentityIndex> findTenantByTaxId(@Param("taxId") String taxId);
+
+    @Query("""
+            SELECT s FROM SupplierIdentityIndex s
             WHERE s.marketplaceSupplierId IS NOT NULL
               AND s.supplierNumberNormalized IS NOT NULL
               AND s.supplierNumberNormalized = :supplierNumber

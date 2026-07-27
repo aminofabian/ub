@@ -29,6 +29,24 @@ public class MarketplaceSupplierPassportService {
         return supplier;
     }
 
+    /**
+     * If the passport still has a phone-derived placeholder name and {@code betterName}
+     * is a real shop name, upgrade the passport (and re-index).
+     */
+    @Transactional
+    public MarketplaceSupplier upgradeNameIfPlaceholder(MarketplaceSupplier supplier, String betterName) {
+        if (supplier == null) {
+            return null;
+        }
+        if (betterName != null
+                && !betterName.isBlank()
+                && !MarketplaceSupplierNaming.isPlaceholderName(betterName)
+                && MarketplaceSupplierNaming.isPlaceholderName(supplier.getName())) {
+            supplier.setName(betterName.trim());
+        }
+        return ensureNumberAndIndex(supplier);
+    }
+
     @Transactional
     public MarketplaceSupplier createDraftPassport(
             String name,
@@ -36,8 +54,11 @@ public class MarketplaceSupplierPassportService {
             String contactEmail,
             String taxPin
     ) {
+        String resolved = MarketplaceSupplierNaming.preferDisplayName(
+                name,
+                MarketplaceSupplierNaming.placeholderFromPhone(contactPhone));
         MarketplaceSupplier marketplace = new MarketplaceSupplier();
-        marketplace.setName(name.trim());
+        marketplace.setName(resolved);
         marketplace.setContactPhone(SupplierIdentityNormalizer.normalizePhone(contactPhone));
         marketplace.setContactEmail(SupplierIdentityNormalizer.normalizeEmail(contactEmail));
         marketplace.setTaxPin(SupplierIdentityNormalizer.normalizeTaxId(taxPin));

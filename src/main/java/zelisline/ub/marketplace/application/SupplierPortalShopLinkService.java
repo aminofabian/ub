@@ -57,6 +57,7 @@ public class SupplierPortalShopLinkService {
     private final SupplierUserRepository supplierUserRepository;
     private final SupplierIdentityIndexRepository identityIndexRepository;
     private final SupplierIdentityIndexService identityIndexService;
+    private final MarketplaceSupplierPassportService passportService;
     private final SupplierProductRepository supplierProductRepository;
     private final MarketplaceSupplierProductRepository productRepository;
     private final MarketplaceSupplierPriceOfferRepository priceOfferRepository;
@@ -82,6 +83,8 @@ public class SupplierPortalShopLinkService {
             linked += linkLocalsByEmail(marketplaceSupplierId, email);
         }
 
+        healPlaceholderName(marketplace);
+
         int imported = 0;
         for (BusinessSupplierConnection link : connectionRepository.findByMarketplaceSupplierIdAndStatus(
                 marketplaceSupplierId, BusinessSupplierConnectionStatuses.ACTIVE)) {
@@ -95,6 +98,22 @@ public class SupplierPortalShopLinkService {
                     imported);
         }
         return linked + imported;
+    }
+
+    private void healPlaceholderName(MarketplaceSupplier marketplace) {
+        if (!MarketplaceSupplierNaming.isPlaceholderName(marketplace.getName())) {
+            return;
+        }
+        String better = supplierRepository
+                .findByMarketplaceSupplierIdAndDeletedAtIsNull(marketplace.getId())
+                .stream()
+                .map(Supplier::getName)
+                .filter(n -> n != null && !MarketplaceSupplierNaming.isPlaceholderName(n))
+                .findFirst()
+                .orElse(null);
+        if (better != null) {
+            passportService.upgradeNameIfPlaceholder(marketplace, better);
+        }
     }
 
     private Set<String> collectPhones(MarketplaceSupplier marketplace) {

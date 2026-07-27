@@ -477,14 +477,23 @@ public class SupplierPortalClaimService {
         if (marketplace.getUsername() == null || marketplace.getUsername().isBlank()) {
             marketplace.setUsername(allocateUsername(displayName, phone));
         }
+        if (MarketplaceSupplierNaming.isPlaceholderName(marketplace.getName())
+                && displayName != null
+                && !MarketplaceSupplierNaming.isPlaceholderName(displayName)) {
+            marketplace.setName(displayName);
+        }
         marketplaceSupplierRepository.saveAndFlush(marketplace);
         passportService.ensureNumberAndIndex(marketplace);
+        String localPreferred = suggestName(phone);
+        if (!MarketplaceSupplierNaming.isPlaceholderName(localPreferred)) {
+            passportService.upgradeNameIfPlaceholder(marketplace, localPreferred);
+        }
 
         SupplierUser user = new SupplierUser();
         user.setMarketplaceSupplierId(marketplace.getId());
         user.setPhone(phone);
         user.setEmail(email);
-        user.setName(displayName);
+        user.setName(MarketplaceSupplierNaming.preferDisplayName(displayName, marketplace.getName()));
         user.setPasswordHash(passwordEncoder.encode(request.password()));
         user.setRoleKey(SupplierUserRoles.ADMIN);
         user.setActive(true);
@@ -562,6 +571,15 @@ public class SupplierPortalClaimService {
             if (email != null && (marketplace.getContactEmail() == null || marketplace.getContactEmail().isBlank())) {
                 marketplace.setContactEmail(email);
             }
+            // Prefer a real shop/claim name over phone-derived "Supplier 2874".
+            if (MarketplaceSupplierNaming.isPlaceholderName(marketplace.getName())
+                    && displayName != null
+                    && !MarketplaceSupplierNaming.isPlaceholderName(displayName)) {
+                marketplace.setName(displayName);
+            } else if ((marketplace.getName() == null || marketplace.getName().isBlank())
+                    && displayName != null) {
+                marketplace.setName(displayName);
+            }
             if (marketplace.getUsername() == null || marketplace.getUsername().isBlank()) {
                 marketplace.setUsername(allocateUsername(
                         marketplace.getName() != null ? marketplace.getName() : displayName, phone));
@@ -574,11 +592,17 @@ public class SupplierPortalClaimService {
         }
         passportService.ensureNumberAndIndex(marketplace);
 
+        // Heal placeholder passport names from any linked local shop supplier.
+        String localPreferred = suggestName(phone);
+        if (!MarketplaceSupplierNaming.isPlaceholderName(localPreferred)) {
+            passportService.upgradeNameIfPlaceholder(marketplace, localPreferred);
+        }
+
         SupplierUser user = new SupplierUser();
         user.setMarketplaceSupplierId(marketplace.getId());
         user.setPhone(phone);
         user.setEmail(email);
-        user.setName(displayName);
+        user.setName(MarketplaceSupplierNaming.preferDisplayName(displayName, marketplace.getName()));
         user.setPasswordHash(passwordEncoder.encode(request.password()));
         user.setRoleKey(SupplierUserRoles.ADMIN);
         user.setActive(true);
@@ -870,14 +894,36 @@ public class SupplierPortalClaimService {
     }
 
     private String suggestName(String phone) {
-        return identityIndexRepository.findTenantByPhone(phone).stream()
+        String fromIndex = identityIndexRepository.findTenantByPhone(phone).stream()
                 .map(SupplierIdentityIndex::getSupplierId)
                 .filter(id -> id != null && !id.isBlank())
                 .map(id -> supplierRepository.findByIdAndDeletedAtIsNull(id).orElse(null))
                 .filter(s -> s != null && s.getName() != null && !s.getName().isBlank())
                 .map(Supplier::getName)
+                .filter(name -> !MarketplaceSupplierNaming.isPlaceholderName(name))
                 .findFirst()
-                .orElse("Supplier " + phone.substring(Math.max(0, phone.length() - 4)));
+                .orElse(null);
+        if (fromIndex != null) {
+            return fromIndex;
+        }
+        // Broader phone variants (0… vs 254…)
+        String alt = phone.startsWith("254") && phone.length() == 12
+                ? "0" + phone.substring(3)
+                : (phone.startsWith("0") && phone.length() == 10 ? "254" + phone.substring(1) : phone);
+        String tail = phone.length() >= 9 ? phone.substring(phone.length() - 9) : phone;
+        String fromVariants = identityIndexRepository.findTenantByPhoneVariants(phone, alt, tail).stream()
+                .map(SupplierIdentityIndex::getSupplierId)
+                .filter(id -> id != null && !id.isBlank())
+                .map(id -> supplierRepository.findByIdAndDeletedAtIsNull(id).orElse(null))
+                .filter(s -> s != null && s.getName() != null && !s.getName().isBlank())
+                .map(Supplier::getName)
+                .filter(name -> !MarketplaceSupplierNaming.isPlaceholderName(name))
+                .findFirst()
+                .orElse(null);
+        if (fromVariants != null) {
+            return fromVariants;
+        }
+        return MarketplaceSupplierNaming.placeholderFromPhone(phone);
     }
 
     static String normalizePhoneOrThrow(String raw) {

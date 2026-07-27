@@ -143,7 +143,45 @@ public class SupplierDuplicateCheckService {
             }
         }
 
-        return new SupplierDuplicateCheckResponse(new ArrayList<>(matches.values()));
+        return new SupplierDuplicateCheckResponse(collapseOwnAndMarketplaceDuplicates(matches));
+    }
+
+    /**
+     * If this shop already has a local supplier linked to a marketplace passport,
+     * drop the separate marketplace row so the UI doesn't show
+     * "Grocery (Githurai)" and "Supplier 2874" for the same S-number.
+     */
+    private static List<SupplierDuplicateCheckResponse.SupplierDuplicateMatch> collapseOwnAndMarketplaceDuplicates(
+            Map<String, SupplierDuplicateCheckResponse.SupplierDuplicateMatch> matches
+    ) {
+        Set<String> ownMarketplaceIds = new LinkedHashSet<>();
+        Set<String> ownSupplierNumbers = new LinkedHashSet<>();
+        for (SupplierDuplicateCheckResponse.SupplierDuplicateMatch match : matches.values()) {
+            if (!"own_business".equals(match.source())) {
+                continue;
+            }
+            if (match.marketplaceSupplierId() != null && !match.marketplaceSupplierId().isBlank()) {
+                ownMarketplaceIds.add(match.marketplaceSupplierId());
+            }
+            if (match.supplierNumber() != null && !match.supplierNumber().isBlank()) {
+                ownSupplierNumbers.add(match.supplierNumber().trim().toUpperCase(Locale.ROOT));
+            }
+        }
+        List<SupplierDuplicateCheckResponse.SupplierDuplicateMatch> out = new ArrayList<>();
+        for (SupplierDuplicateCheckResponse.SupplierDuplicateMatch match : matches.values()) {
+            if ("marketplace".equals(match.source())) {
+                if (match.marketplaceSupplierId() != null
+                        && ownMarketplaceIds.contains(match.marketplaceSupplierId())) {
+                    continue;
+                }
+                if (match.supplierNumber() != null
+                        && ownSupplierNumbers.contains(match.supplierNumber().trim().toUpperCase(Locale.ROOT))) {
+                    continue;
+                }
+            }
+            out.add(match);
+        }
+        return out;
     }
 
     private void addOwnBusinessMatch(

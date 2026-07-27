@@ -121,6 +121,8 @@ public class MarketplaceAttachService {
             }
         } else {
             assertFindable(marketplace);
+            // Prefer the seed shop's real name over phone-derived "Supplier 2874".
+            passportService.upgradeNameIfPlaceholder(marketplace, source.getName());
         }
 
         return attachMarketplace(businessId, marketplace, source.getId());
@@ -157,14 +159,35 @@ public class MarketplaceAttachService {
             return toResponse(conn.getId(), local, marketplace, stats);
         }
 
-        if (supplierRepository.existsDuplicateName(businessId, marketplace.getName(), null)) {
+        String preferredName = marketplace.getName();
+        if (seedLocalSupplierId != null) {
+            Supplier seed = supplierRepository.findByIdAndDeletedAtIsNull(seedLocalSupplierId).orElse(null);
+            if (seed != null && seed.getName() != null && !seed.getName().isBlank()) {
+                passportService.upgradeNameIfPlaceholder(marketplace, seed.getName());
+                preferredName = MarketplaceSupplierNaming.preferDisplayName(
+                        seed.getName(), marketplace.getName());
+            }
+        } else if (MarketplaceSupplierNaming.isPlaceholderName(marketplace.getName())) {
+            // Heal from any already-linked local shop name before cloning into this shop.
+            preferredName = supplierRepository
+                    .findByMarketplaceSupplierIdAndDeletedAtIsNull(marketplace.getId())
+                    .stream()
+                    .map(Supplier::getName)
+                    .filter(n -> n != null && !MarketplaceSupplierNaming.isPlaceholderName(n))
+                    .findFirst()
+                    .orElse(preferredName);
+            passportService.upgradeNameIfPlaceholder(marketplace, preferredName);
+            preferredName = MarketplaceSupplierNaming.preferDisplayName(preferredName, marketplace.getName());
+        }
+
+        if (supplierRepository.existsDuplicateName(businessId, preferredName, null)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "A local supplier with this name already exists; open it or rename before attaching.");
         }
 
         Supplier local = new Supplier();
         local.setBusinessId(businessId);
-        local.setName(marketplace.getName());
+        local.setName(preferredName);
         local.setSupplierType("distributor");
         local.setStatus("active");
         local.setVatPin(marketplace.getTaxPin() != null ? marketplace.getTaxPin() : marketplace.getVatNumber());

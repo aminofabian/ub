@@ -44,15 +44,14 @@ class SupplierPortalNotifyServiceTest {
                 "Palmart",
                 "KES",
                 new BigDecimal("1500.00"),
-                "mpesa",
                 "QK7X9M2P1A",
                 List.of("PB-ABC123"),
                 BigDecimal.ZERO,
                 "https://palmart.co.ke/s/fresh-farm");
         assertEquals(
-                "Palmart: paid 1500.00 KES (mpesa) for supply PB-ABC123. "
-                        + "Ref: QK7X9M2P1A. Balance owed: 0.00 KES. "
-                        + "View: https://palmart.co.ke/s/fresh-farm",
+                "Palmart: Payment of KES 1,500.00 received for supply PB-ABC123. "
+                        + "Ref: QK7X9M2P1A. Balance: KES 0.00. "
+                        + "https://palmart.co.ke/s/fresh-farm",
                 msg);
     }
 
@@ -62,16 +61,35 @@ class SupplierPortalNotifyServiceTest {
                 "Palmart",
                 "KES",
                 new BigDecimal("800.50"),
-                "cash",
                 "A1B2C3D4",
                 List.of("PB-ONE", "PB-TWO"),
                 new BigDecimal("200.00"),
                 "https://palmart.co.ke/s/fresh-farm");
         assertEquals(
-                "Palmart: paid 800.50 KES (cash) for supplies PB-ONE, PB-TWO. "
-                        + "Ref: A1B2C3D4. Balance owed: 200.00 KES. "
-                        + "View: https://palmart.co.ke/s/fresh-farm",
+                "Palmart: Payment of KES 800.50 received for supplies PB-ONE, PB-TWO. "
+                        + "Ref: A1B2C3D4. Balance: KES 200.00. "
+                        + "https://palmart.co.ke/s/fresh-farm",
                 msg);
         assertFalse(msg.contains("null"));
+    }
+
+    @Test
+    void buildPaidMessage_omitsMethodAndViewPrefix() {
+        String msg = SupplierPortalNotifyService.buildPaidMessage(
+                "Palmart",
+                "KES",
+                new BigDecimal("440.00"),
+                "UGS970UE5Y",
+                List.of("PB-6EBCC58AA66F"),
+                BigDecimal.ZERO,
+                "https://palmart.co.ke/s/simon-mukiha-broadways");
+        assertEquals(
+                "Palmart: Payment of KES 440.00 received for supply PB-6EBCC58AA66F. "
+                        + "Ref: UGS970UE5Y. Balance: KES 0.00. "
+                        + "https://palmart.co.ke/s/simon-mukiha-broadways",
+                msg);
+        assertFalse(msg.contains("(cash)"));
+        assertFalse(msg.contains("View:"));
+        assertFalse(msg.contains("Balance owed"));
     }
 }

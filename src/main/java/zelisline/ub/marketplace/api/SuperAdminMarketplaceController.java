@@ -23,6 +23,8 @@ import zelisline.ub.marketplace.api.dto.CreateMarketplaceSupplierRequest;
 import zelisline.ub.marketplace.api.dto.CreateMarketplaceSupplierUserRequest;
 import zelisline.ub.marketplace.api.dto.CreateSupplierPortalInviteRequest;
 import zelisline.ub.marketplace.api.dto.CreateSupplierPortalInviteResponse;
+import zelisline.ub.marketplace.api.dto.MarketplaceSupplierShopLinkRow;
+import zelisline.ub.marketplace.api.dto.MarketplaceSupplierStatsResponse;
 import zelisline.ub.marketplace.api.dto.MarketplaceSupplierSummaryResponse;
 import zelisline.ub.marketplace.api.dto.MarketplaceSupplierUserRow;
 import zelisline.ub.marketplace.api.dto.ResetSupplierPortalUserPasswordRequest;
@@ -44,6 +46,16 @@ public class SuperAdminMarketplaceController {
             @RequestParam(required = false) String status,
             Pageable pageable) {
         return marketplaceAdminService.listSuppliers(q, status, pageable);
+    }
+
+    @GetMapping("/stats")
+    public MarketplaceSupplierStatsResponse stats() {
+        return marketplaceAdminService.stats();
+    }
+
+    @GetMapping("/{id}/shops")
+    public List<MarketplaceSupplierShopLinkRow> shops(@PathVariable String id) {
+        return marketplaceAdminService.listShopLinks(id);
     }
 
     @PostMapping

@@ -151,7 +151,6 @@ public class SupplierPortalNotifyService {
                     ctx.shop(),
                     ctx.currency(),
                     amountPaid,
-                    paymentMethod,
                     reference,
                     invoiceNumbers,
                     owed,
@@ -186,32 +185,33 @@ public class SupplierPortalNotifyService {
         return body.toString();
     }
 
+    /**
+     * Short payment SMS, e.g.
+     * {@code Palmart: Payment of KES 440.00 received for supply PB-1. Ref: ABC. Balance: KES 0.00. https://…}
+     */
     static String buildPaidMessage(
             String shop,
             String currency,
             BigDecimal amountPaid,
-            String paymentMethod,
             String reference,
             List<String> invoiceNumbers,
             BigDecimal openBalance,
             String portalUrl
     ) {
-        String paid = money(amountPaid) + " " + currency;
-        String owedStr = money(openBalance) + " " + currency;
         String supplies = formatInvoiceLabel(invoiceNumbers);
-        String method = paymentMethod != null && !paymentMethod.isBlank()
-                ? paymentMethod.trim().toLowerCase()
-                : "cash";
         String ref = reference != null && !reference.isBlank() ? reference.trim() : null;
 
         StringBuilder body = new StringBuilder();
-        body.append(shop).append(": paid ").append(paid)
-                .append(" (").append(method).append(") for ").append(supplies).append(".");
+        body.append(shop).append(": Payment of ")
+                .append(moneyWithCurrency(currency, amountPaid))
+                .append(" received for ").append(supplies).append(".");
         if (ref != null) {
             body.append(" Ref: ").append(ref).append(".");
         }
-        body.append(" Balance owed: ").append(owedStr).append(".")
-                .append(" View: ").append(portalUrl);
+        body.append(" Balance: ").append(moneyWithCurrency(currency, openBalance)).append(".");
+        if (portalUrl != null && !portalUrl.isBlank()) {
+            body.append(" ").append(portalUrl.trim());
+        }
         return body.toString();
     }
 
@@ -341,15 +341,7 @@ public class SupplierPortalNotifyService {
         return base + "/s/" + slug;
     }
 
-    private static String money(BigDecimal n) {
-        if (n == null) {
-            return "0.00";
-        }
-        return n.setScale(2, RoundingMode.HALF_UP).toPlainString();
-    }
-
-    /** e.g. {@code KES 8,999.00} */
-    static String moneyWithCurrency(String currency, BigDecimal n) {
+    private static String moneyWithCurrency(String currency, BigDecimal n) {
         String code = currency != null && !currency.isBlank() ? currency.trim() : "KES";
         BigDecimal amount = n == null ? BigDecimal.ZERO : n;
         java.text.DecimalFormat df = new java.text.DecimalFormat("#,##0.00");

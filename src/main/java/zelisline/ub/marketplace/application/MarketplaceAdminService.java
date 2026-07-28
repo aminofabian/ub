@@ -1,8 +1,15 @@
 package zelisline.ub.marketplace.application;
 
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -21,22 +28,36 @@ import zelisline.ub.audit.domain.AuditEventCategory;
 import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.marketplace.api.dto.CreateMarketplaceSupplierRequest;
 import zelisline.ub.marketplace.api.dto.CreateMarketplaceSupplierUserRequest;
+import zelisline.ub.marketplace.api.dto.MarketplaceSupplierShopLinkRow;
+import zelisline.ub.marketplace.api.dto.MarketplaceSupplierStatsResponse;
 import zelisline.ub.marketplace.api.dto.MarketplaceSupplierSummaryResponse;
 import zelisline.ub.marketplace.api.dto.MarketplaceSupplierUserRow;
+import zelisline.ub.marketplace.domain.BusinessSupplierConnection;
+import zelisline.ub.marketplace.domain.BusinessSupplierConnectionStatuses;
 import zelisline.ub.marketplace.domain.MarketplaceSupplier;
 import zelisline.ub.marketplace.domain.MarketplaceSupplierStatuses;
 import zelisline.ub.marketplace.domain.SupplierUser;
 import zelisline.ub.marketplace.domain.SupplierUserRoles;
+import zelisline.ub.marketplace.repository.BusinessSupplierConnectionRepository;
 import zelisline.ub.marketplace.repository.MarketplaceSupplierRepository;
 import zelisline.ub.marketplace.repository.SupplierUserRepository;
 import zelisline.ub.platform.application.PlatformSupplierPortalSettingsService;
+import zelisline.ub.suppliers.domain.Supplier;
+import zelisline.ub.suppliers.repository.SupplierRepository;
+import zelisline.ub.tenancy.domain.Business;
+import zelisline.ub.tenancy.repository.BusinessRepository;
 
 @Service
 @RequiredArgsConstructor
 public class MarketplaceAdminService {
 
+    private static final int SHOP_NAME_PREVIEW_LIMIT = 3;
+
     private final MarketplaceSupplierRepository marketplaceSupplierRepository;
     private final SupplierUserRepository supplierUserRepository;
+    private final BusinessSupplierConnectionRepository connectionRepository;
+    private final SupplierRepository supplierRepository;
+    private final BusinessRepository businessRepository;
     private final MarketplaceSupplierPassportService passportService;
     private final PasswordEncoder passwordEncoder;
     private final PlatformSupplierPortalSettingsService portalSettingsService;
@@ -46,8 +67,64 @@ public class MarketplaceAdminService {
 
     @Transactional(readOnly = true)
     public Page<MarketplaceSupplierSummaryResponse> listSuppliers(String q, String status, Pageable pageable) {
-        return marketplaceSupplierRepository.search(blankToNull(q), blankToNull(status), pageable)
-                .map(this::toSummary);
+        Page<MarketplaceSupplier> page = marketplaceSupplierRepository.search(blankToNull(q), blankToNull(status), pageable);
+        List<String> ids = page.getContent().stream().map(MarketplaceSupplier::getId).toList();
+        Enrichment enrichment = enrich(ids);
+        return page.map(supplier -> toSummary(supplier, enrichment));
+    }
+
+    @Transactional(readOnly = true)
+    public MarketplaceSupplierStatsResponse stats() {
+        long total = marketplaceSupplierRepository.count();
+        long active = marketplaceSupplierRepository.countByStatus(MarketplaceSupplierStatuses.ACTIVE);
+        long draft = marketplaceSupplierRepository.countByStatus(MarketplaceSupplierStatuses.DRAFT);
+        long suspended = marketplaceSupplierRepository.countByStatus(MarketplaceSupplierStatuses.SUSPENDED);
+        long withPortalUsers = supplierUserRepository.countDistinctMarketplaceSuppliers();
+        long withLinkedShops = connectionRepository.countDistinctMarketplaceSuppliersByStatus(
+                BusinessSupplierConnectionStatuses.ACTIVE);
+        long needingInvite = Math.max(0, total - withPortalUsers);
+        return new MarketplaceSupplierStatsResponse(
+                total,
+                active,
+                draft,
+                suspended,
+                withPortalUsers,
+                withLinkedShops,
+                needingInvite);
+    }
+
+    @Transactional(readOnly = true)
+    public List<MarketplaceSupplierShopLinkRow> listShopLinks(String supplierId) {
+        requireSupplier(supplierId);
+        List<BusinessSupplierConnection> connections =
+                connectionRepository.findByMarketplaceSupplierIdOrderByCreatedAtAsc(supplierId);
+        if (connections.isEmpty()) {
+            return List.of();
+        }
+        Map<String, Business> businesses = businessRepository
+                .findAllById(connections.stream().map(BusinessSupplierConnection::getBusinessId).distinct().toList())
+                .stream()
+                .collect(Collectors.toMap(Business::getId, Function.identity()));
+        Map<String, Supplier> locals = supplierRepository
+                .findAllById(connections.stream().map(BusinessSupplierConnection::getLocalSupplierId).distinct().toList())
+                .stream()
+                .collect(Collectors.toMap(Supplier::getId, Function.identity()));
+        return connections.stream()
+                .map(conn -> {
+                    Business business = businesses.get(conn.getBusinessId());
+                    Supplier local = locals.get(conn.getLocalSupplierId());
+                    return new MarketplaceSupplierShopLinkRow(
+                            conn.getId(),
+                            conn.getBusinessId(),
+                            business != null ? business.getName() : "Unknown shop",
+                            business != null ? business.getSlug() : null,
+                            conn.getLocalSupplierId(),
+                            local != null ? local.getName() : "Unknown local supplier",
+                            local != null ? local.getStatus() : null,
+                            conn.getStatus(),
+                            conn.getCreatedAt());
+                })
+                .toList();
     }
 
     @Transactional
@@ -59,7 +136,7 @@ public class MarketplaceAdminService {
         supplier.setContactPhone(SupplierIdentityNormalizer.normalizePhone(request.contactPhone()));
         supplier.setStatus(MarketplaceSupplierStatuses.DRAFT);
         passportService.ensureNumberAndIndex(supplier);
-        return toSummary(supplier);
+        return toSummary(supplier, Enrichment.empty());
     }
 
     @Transactional
@@ -67,7 +144,7 @@ public class MarketplaceAdminService {
         MarketplaceSupplier supplier = requireSupplier(supplierId);
         supplier.setStatus(MarketplaceSupplierStatuses.ACTIVE);
         marketplaceSupplierRepository.save(supplier);
-        return toSummary(supplier);
+        return toSummary(supplier, enrich(List.of(supplierId)));
     }
 
     @Transactional
@@ -84,7 +161,7 @@ public class MarketplaceAdminService {
                 supplierId,
                 null,
                 Map.of("marketplaceSupplierId", supplierId));
-        return toSummary(supplier);
+        return toSummary(supplier, enrich(List.of(supplierId)));
     }
 
     @Transactional
@@ -205,10 +282,62 @@ public class MarketplaceAdminService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Portal user not found"));
     }
 
-    private MarketplaceSupplierSummaryResponse toSummary(MarketplaceSupplier supplier) {
-        long userCount = supplierUserRepository.countByMarketplaceSupplierId(supplier.getId());
+    private Enrichment enrich(List<String> supplierIds) {
+        if (supplierIds == null || supplierIds.isEmpty()) {
+            return Enrichment.empty();
+        }
+        Map<String, Long> portalUserCounts = new HashMap<>();
+        Map<String, Instant> lastLogins = new HashMap<>();
+        for (SupplierUser user : supplierUserRepository.findByMarketplaceSupplierIdIn(supplierIds)) {
+            portalUserCounts.merge(user.getMarketplaceSupplierId(), 1L, Long::sum);
+            Instant login = user.getLastLoginAt();
+            if (login != null) {
+                lastLogins.merge(user.getMarketplaceSupplierId(), login, (a, b) -> a.isAfter(b) ? a : b);
+            }
+        }
+
+        List<BusinessSupplierConnection> connections = connectionRepository.findByMarketplaceSupplierIdIn(supplierIds);
+        Map<String, List<BusinessSupplierConnection>> bySupplier = connections.stream()
+                .collect(Collectors.groupingBy(BusinessSupplierConnection::getMarketplaceSupplierId));
+
+        List<String> businessIds = connections.stream()
+                .map(BusinessSupplierConnection::getBusinessId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        Map<String, Business> businesses = businessIds.isEmpty()
+                ? Map.of()
+                : businessRepository.findAllById(businessIds).stream()
+                        .collect(Collectors.toMap(Business::getId, Function.identity()));
+
+        Map<String, Long> shopCounts = new HashMap<>();
+        Map<String, List<String>> shopNames = new HashMap<>();
+        for (Map.Entry<String, List<BusinessSupplierConnection>> entry : bySupplier.entrySet()) {
+            List<BusinessSupplierConnection> active = entry.getValue().stream()
+                    .filter(c -> BusinessSupplierConnectionStatuses.ACTIVE.equals(c.getStatus()))
+                    .sorted(Comparator.comparing(BusinessSupplierConnection::getCreatedAt))
+                    .toList();
+            shopCounts.put(entry.getKey(), (long) active.size());
+            List<String> names = new ArrayList<>();
+            for (BusinessSupplierConnection conn : active) {
+                if (names.size() >= SHOP_NAME_PREVIEW_LIMIT) {
+                    break;
+                }
+                Business business = businesses.get(conn.getBusinessId());
+                if (business != null && business.getName() != null && !business.getName().isBlank()) {
+                    names.add(business.getName());
+                }
+            }
+            shopNames.put(entry.getKey(), names);
+        }
+
+        return new Enrichment(portalUserCounts, shopCounts, shopNames, lastLogins);
+    }
+
+    private MarketplaceSupplierSummaryResponse toSummary(MarketplaceSupplier supplier, Enrichment enrichment) {
+        String id = supplier.getId();
         return new MarketplaceSupplierSummaryResponse(
-                supplier.getId(),
+                id,
                 supplier.getSupplierNumber(),
                 supplier.getName(),
                 supplier.getDescription(),
@@ -216,7 +345,12 @@ public class MarketplaceAdminService {
                 supplier.getStatus(),
                 supplier.getContactPhone(),
                 supplier.getUsername(),
-                userCount);
+                enrichment.portalUserCounts().getOrDefault(id, 0L),
+                enrichment.shopCounts().getOrDefault(id, 0L),
+                enrichment.shopNames().getOrDefault(id, List.of()),
+                supplier.getCreatedAt(),
+                supplier.getUpdatedAt(),
+                enrichment.lastLogins().get(id));
     }
 
     private static MarketplaceSupplierUserRow toUserRow(SupplierUser user) {
@@ -262,5 +396,16 @@ public class MarketplaceAdminService {
             return null;
         }
         return value.trim();
+    }
+
+    private record Enrichment(
+            Map<String, Long> portalUserCounts,
+            Map<String, Long> shopCounts,
+            Map<String, List<String>> shopNames,
+            Map<String, Instant> lastLogins
+    ) {
+        static Enrichment empty() {
+            return new Enrichment(Map.of(), Map.of(), Map.of(), Map.of());
+        }
     }
 }

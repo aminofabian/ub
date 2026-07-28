@@ -13,8 +13,6 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.application.BusinessCreditMessagingSettingsService;
-import zelisline.ub.marketplace.domain.MarketplaceSupplier;
-import zelisline.ub.marketplace.repository.MarketplaceSupplierRepository;
 import zelisline.ub.messaging.application.CustomerMessageDispatcher;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
@@ -41,7 +39,6 @@ public class SupplierPortalNotifyService {
     private final SupplierContactRepository supplierContactRepository;
     private final BusinessRepository businessRepository;
     private final DomainMappingRepository domainMappingRepository;
-    private final MarketplaceSupplierRepository marketplaceSupplierRepository;
     private final SupplierPurchaseHistoryService purchaseHistoryService;
     private final BusinessCreditMessagingSettingsService messagingSettingsService;
     private final CustomerMessageDispatcher customerMessageDispatcher;
@@ -49,9 +46,6 @@ public class SupplierPortalNotifyService {
 
     @Value("${app.public.frontend-base-url:http://localhost:3000}")
     private String frontendBaseUrl;
-
-    @Value("${app.tenancy.platform-hosts:kiosk.ke}")
-    private List<String> platformHosts;
 
     /**
      * Schedule a portal SMS after the current transaction commits (never blocks posting).
@@ -109,25 +103,12 @@ public class SupplierPortalNotifyService {
                 return;
             }
 
-            BigDecimal owed = loadOpenBalance(businessId, supplierId);
-            String total = money(grandTotal) + " " + ctx.currency();
-            String owedStr = money(owed) + " " + ctx.currency();
-            String inv = invoiceNumber != null && !invoiceNumber.isBlank()
-                    ? invoiceNumber.trim()
-                    : "supply";
-
-            String body = ctx.shop() + ": supply " + inv + " (" + total + ") received. "
-                    + "Amount owed: " + owedStr + ". "
-                    + "View history & note issues: " + ctx.portalUrl();
-            String globalUrl = resolveGlobalHubUrl(ctx.supplier());
-            if (globalUrl != null) {
-                body = body + " · All shops: " + globalUrl;
-            }
-            String claimUrl = buildClaimUrl(ctx.phoneDigits());
-            if (claimUrl != null) {
-                body = body + " · Claim account: " + claimUrl;
-            }
-            body = body + " — Payment within 48hrs.";
+            String body = buildPostedMessage(
+                    ctx.shop(),
+                    ctx.currency(),
+                    invoiceNumber,
+                    grandTotal,
+                    ctx.portalUrl());
 
             deliverSupplierSms(ctx, body);
         } catch (Exception e) {
@@ -179,6 +160,30 @@ public class SupplierPortalNotifyService {
         } catch (Exception e) {
             log.warn("Supplier payment SMS failed soft: {}", e.toString());
         }
+    }
+
+    /**
+     * Short supply-received SMS, e.g.
+     * {@code Shop: Thanks! We've received supply PB-1. KES 8,999.00 will be paid within 48hrs. https://…}
+     */
+    static String buildPostedMessage(
+            String shop,
+            String currency,
+            String invoiceNumber,
+            BigDecimal grandTotal,
+            String portalUrl
+    ) {
+        String inv = invoiceNumber != null && !invoiceNumber.isBlank()
+                ? invoiceNumber.trim()
+                : "supply";
+        StringBuilder body = new StringBuilder();
+        body.append(shop).append(": Thanks! We've received supply ").append(inv).append(". ")
+                .append(moneyWithCurrency(currency, grandTotal))
+                .append(" will be paid within 48hrs.");
+        if (portalUrl != null && !portalUrl.isBlank()) {
+            body.append(" ").append(portalUrl.trim());
+        }
+        return body.toString();
     }
 
     static String buildPaidMessage(
@@ -336,71 +341,19 @@ public class SupplierPortalNotifyService {
         return base + "/s/" + slug;
     }
 
-    private String resolveGlobalHubUrl(Supplier supplier) {
-        String mid = supplier.getMarketplaceSupplierId();
-        if (mid == null || mid.isBlank()) {
-            return null;
-        }
-        MarketplaceSupplier marketplace = marketplaceSupplierRepository.findById(mid).orElse(null);
-        if (marketplace == null
-                || marketplace.getUsername() == null
-                || marketplace.getUsername().isBlank()) {
-            return null;
-        }
-        String apex = resolvePlatformApexHost();
-        boolean local = apex.endsWith(".localhost") || apex.startsWith("localhost");
-        String scheme = local ? "http://" : "https://";
-        return scheme + apex + "/s/" + marketplace.getUsername().trim();
-    }
-
-    private String buildClaimUrl(String phoneDigits) {
-        if (phoneDigits == null || phoneDigits.isBlank()) {
-            return null;
-        }
-        String apex = resolvePlatformApexHost();
-        boolean local = apex.endsWith(".localhost") || apex.startsWith("localhost");
-        String scheme = local ? "http://" : "https://";
-        return scheme + apex + "/supplier-portal/claim?phone=" + phoneDigits;
-    }
-
-    private String resolvePlatformApexHost() {
-        if (platformHosts != null) {
-            for (String raw : platformHosts) {
-                if (raw == null || raw.isBlank()) {
-                    continue;
-                }
-                String h = raw.trim().toLowerCase();
-                if (h.startsWith("www.")) {
-                    h = h.substring(4);
-                }
-                if (h.equals("kiosk.ke") || h.equals("palmart.co.ke")) {
-                    return h;
-                }
-            }
-            for (String raw : platformHosts) {
-                if (raw == null || raw.isBlank()) {
-                    continue;
-                }
-                String h = raw.trim().toLowerCase();
-                if (h.startsWith("www.")) {
-                    h = h.substring(4);
-                }
-                // Skip API-only hosts (e.g. kiosk.zelisline.com).
-                if (h.contains("zelisline") || h.startsWith("api.")) {
-                    continue;
-                }
-                if (!h.isBlank()) {
-                    return h;
-                }
-            }
-        }
-        return "kiosk.ke";
-    }
-
     private static String money(BigDecimal n) {
         if (n == null) {
             return "0.00";
         }
         return n.setScale(2, RoundingMode.HALF_UP).toPlainString();
+    }
+
+    /** e.g. {@code KES 8,999.00} */
+    static String moneyWithCurrency(String currency, BigDecimal n) {
+        String code = currency != null && !currency.isBlank() ? currency.trim() : "KES";
+        BigDecimal amount = n == null ? BigDecimal.ZERO : n;
+        java.text.DecimalFormat df = new java.text.DecimalFormat("#,##0.00");
+        df.setRoundingMode(RoundingMode.HALF_UP);
+        return code + " " + df.format(amount);
     }
 }

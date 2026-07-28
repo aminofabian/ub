@@ -11,6 +11,34 @@ import org.junit.jupiter.api.Test;
 class SupplierPortalNotifyServiceTest {
 
     @Test
+    void buildPostedMessage_shortSupplyReceivedTemplate() {
+        String msg = SupplierPortalNotifyService.buildPostedMessage(
+                "Palmart",
+                "KES",
+                "PB-ED29096EE823",
+                new BigDecimal("8999.00"),
+                "https://palmart.co.ke/s/david-mutuku");
+        assertEquals(
+                "Palmart: Thanks! We've received supply PB-ED29096EE823. "
+                        + "KES 8,999.00 will be paid within 48hrs. "
+                        + "https://palmart.co.ke/s/david-mutuku",
+                msg);
+    }
+
+    @Test
+    void buildPostedMessage_omitsUrlWhenMissing() {
+        String msg = SupplierPortalNotifyService.buildPostedMessage(
+                "Shop",
+                "KES",
+                "PB-1",
+                new BigDecimal("100"),
+                null);
+        assertEquals(
+                "Shop: Thanks! We've received supply PB-1. KES 100.00 will be paid within 48hrs.",
+                msg);
+    }
+
+    @Test
     void buildPaidMessage_includesReferenceAmountAndSupply() {
         String msg = SupplierPortalNotifyService.buildPaidMessage(
                 "Palmart",

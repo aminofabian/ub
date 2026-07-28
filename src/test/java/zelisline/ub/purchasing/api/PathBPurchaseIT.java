@@ -248,6 +248,7 @@ class PathBPurchaseIT {
 
         JsonNode json = objectMapper.readTree(r.getResponse().getContentAsString());
         String journalId = json.get("journalEntryId").asText();
+        assertThat(json.get("invoiceNumber").asText()).isEqualTo("PB-1");
         assertThat(json.get("grandTotal").decimalValue()).isEqualByComparingTo(new BigDecimal("100.00"));
 
         var item = itemRepository.findById(itemId).orElseThrow();
@@ -565,13 +566,13 @@ class PathBPurchaseIT {
         JsonNode json = objectMapper.readTree(r.getResponse().getContentAsString());
         assertThat(json.get("sessionStatus").asText()).isEqualTo("draft");
         assertThat(json.get("linesPosted").asInt()).isEqualTo(1);
+        assertThat(json.get("invoiceNumber").asText()).isEqualTo("PB-1");
         assertThat(json.get("grandTotal").decimalValue()).isEqualByComparingTo(new BigDecimal("100.00"));
 
-        // One line posted, one still pending.
+        // One line posted, one still pending — session stays draft/editable.
         assertThat(rawPurchaseLineRepository.countBySessionIdAndLineStatus(sessionId, "posted")).isEqualTo(1);
         assertThat(rawPurchaseLineRepository.countBySessionIdAndLineStatus(sessionId, "pending")).isEqualTo(1);
 
-        // Session should still be editable.
         MvcResult detail = mockMvc.perform(get("/api/v1/purchasing/path-b/sessions/" + sessionId)
                         .header("X-Tenant-Id", TENANT)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
@@ -580,6 +581,22 @@ class PathBPurchaseIT {
                 .andReturn();
         assertThat(objectMapper.readTree(detail.getResponse().getContentAsString()).get("status").asText())
                 .isEqualTo("draft");
+
+        // Second receive on the same session gets the next sequential supply number.
+        String postBody2 = """
+                {"lines":[{"lineId":"%s","itemId":"%s","usableQty":50,"wastageQty":0}]}
+                """.formatted(line2, itemId);
+        MvcResult r2 = mockMvc.perform(post("/api/v1/purchasing/path-b/sessions/" + sessionId + "/post")
+                        .contentType(APPLICATION_JSON)
+                        .content(postBody2)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode json2 = objectMapper.readTree(r2.getResponse().getContentAsString());
+        assertThat(json2.get("invoiceNumber").asText()).isEqualTo("PB-2");
+        assertThat(json2.get("sessionStatus").asText()).isEqualTo("posted");
     }
 
     private String createSession() throws Exception {

@@ -385,7 +385,7 @@ public class PathBPurchaseService {
         supplyBatchRepository.save(sb);
 
         LocalDate invoiceDate = LocalDate.ofInstant(session.getReceivedAt(), ZoneOffset.UTC);
-        String invoiceNumber = nextPathBInvoiceNumber(businessId, session.getId());
+        String invoiceNumber = nextPathBInvoiceNumber(businessId);
         SupplierInvoice inv = new SupplierInvoice();
         inv.setBusinessId(businessId);
         inv.setSupplierId(session.getSupplierId());
@@ -578,20 +578,33 @@ public class PathBPurchaseService {
         }
     }
 
-    private String nextPathBInvoiceNumber(String businessId, String sessionId) {
-        String compact = sessionId.replace("-", "");
-        String base = "PB-" + compact.substring(0, Math.min(12, compact.length())).toUpperCase();
-        int seq = supplierInvoiceRepository.countByRawPurchaseSessionId(sessionId) + 1;
-        String candidate = seq <= 1 ? base : base + "-" + seq;
+    /** Allocates the next short sequential supply code for the shop: {@code PB-1}, {@code PB-2}, … */
+    private String nextPathBInvoiceNumber(String businessId) {
+        long seq = 1L;
+        for (String existing : supplierInvoiceRepository.findPbPrefixedInvoiceNumbers(businessId)) {
+            if (existing == null || existing.length() < 4) {
+                continue;
+            }
+            String suffix = existing.substring(3);
+            if (suffix.isEmpty() || !suffix.chars().allMatch(Character::isDigit)) {
+                continue; // skip legacy UUID-style codes like PB-ED29096EE823
+            }
+            try {
+                seq = Math.max(seq, Long.parseLong(suffix) + 1L);
+            } catch (NumberFormatException ignored) {
+                // skip
+            }
+        }
+        String candidate = "PB-" + seq;
         int guard = 0;
         while (supplierInvoiceRepository.existsByBusinessIdAndInvoiceNumber(businessId, candidate)
                 && guard < 50) {
             seq++;
-            candidate = base + "-" + seq;
+            candidate = "PB-" + seq;
             guard++;
         }
         if (supplierInvoiceRepository.existsByBusinessIdAndInvoiceNumber(businessId, candidate)) {
-            candidate = base + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+            candidate = "PB-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         }
         return candidate;
     }

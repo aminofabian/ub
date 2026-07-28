@@ -36,6 +36,14 @@ public interface SupplierInvoiceRepository extends JpaRepository<SupplierInvoice
 
     boolean existsByBusinessIdAndInvoiceNumberAndIdNot(String businessId, String invoiceNumber, String id);
 
+    /** Invoice numbers for a shop that start with {@code PB-} (used to allocate the next sequential Path B code). */
+    @Query("""
+            SELECT si.invoiceNumber FROM SupplierInvoice si
+            WHERE si.businessId = :businessId
+              AND si.invoiceNumber LIKE 'PB-%'
+            """)
+    List<String> findPbPrefixedInvoiceNumbers(@Param("businessId") String businessId);
+
     int countByRawPurchaseSessionId(String rawPurchaseSessionId);
 
     Optional<SupplierInvoice> findByIdAndBusinessId(String id, String businessId);

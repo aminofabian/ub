@@ -44,6 +44,7 @@ import zelisline.ub.grocery.domain.GroceryInvoiceLine;
 import zelisline.ub.grocery.repository.GroceryInvoiceLineRepository;
 import zelisline.ub.grocery.repository.GroceryInvoiceRepository;
 import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.messaging.application.CreditSaleReminderLineItem;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.PaymentGatewayStkService;
 import zelisline.ub.payments.application.StkPushRetryHelper;
@@ -175,6 +176,13 @@ public class GroceryInvoiceService {
         }
 
         if (remote) {
+            List<CreditSaleReminderLineItem> notifyItems = new ArrayList<>();
+            for (GroceryInvoiceLine line : savedLines) {
+                notifyItems.add(new CreditSaleReminderLineItem(
+                        line.getItemName() != null ? line.getItemName() : "Item",
+                        line.getQuantity(),
+                        line.getLineTotal()));
+            }
             eventPublisher.publishEvent(new RemoteGroceryInvoiceNotifyEvent(
                     businessId,
                     invoice.getId(),
@@ -182,7 +190,8 @@ public class GroceryInvoiceService {
                     invoice.getCustomerPhone(),
                     invoice.getBarcodeCode(),
                     invoice.getGrandTotal(),
-                    savedLines.size()));
+                    savedLines.size(),
+                    List.copyOf(notifyItems)));
             try {
                 initiateRemoteStk(businessId, invoice);
                 invoice = invoiceRepository.findById(invoice.getId()).orElse(invoice);

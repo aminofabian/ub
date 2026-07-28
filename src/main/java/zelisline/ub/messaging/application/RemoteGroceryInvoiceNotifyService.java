@@ -3,6 +3,7 @@ package zelisline.ub.messaging.application;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.text.NumberFormat;
+import java.util.List;
 import java.util.Locale;
 
 import org.slf4j.Logger;
@@ -21,6 +22,7 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
 public class RemoteGroceryInvoiceNotifyService {
 
     private static final Logger log = LoggerFactory.getLogger(RemoteGroceryInvoiceNotifyService.class);
+    static final int MAX_ITEM_LINES = 5;
 
     private final BusinessCreditMessagingSettingsService messagingSettingsService;
     private final BusinessRepository businessRepository;
@@ -45,13 +47,16 @@ public class RemoteGroceryInvoiceNotifyService {
         String shopName = business != null && business.getName() != null
                 ? business.getName().trim()
                 : "our shop";
+        String accountUrl = CustomerTabPaymentUrl.build(messaging.paymentAccountUrl(), phoneDigits);
 
         String message = buildMessage(
                 shopName,
                 event.barcodeCode(),
                 event.grandTotal(),
                 event.lineCount(),
-                currency);
+                event.items(),
+                currency,
+                accountUrl);
 
         CustomerMessageDispatcher.DeliveryResult delivery =
                 customerMessageDispatcher.deliver(messaging, phoneDigits, message);
@@ -64,19 +69,51 @@ public class RemoteGroceryInvoiceNotifyService {
             String barcodeCode,
             BigDecimal amount,
             int lineCount,
-            String currency
+            List<CreditSaleReminderLineItem> items,
+            String currency,
+            String accountUrl
     ) {
-        int count = Math.max(1, lineCount);
-        String items = count == 1 ? "1 item" : count + " items";
-        return "Hi,\n\n"
-                + "Your bill at " + shopName + " is ready (" + items + ").\n"
-                + "Amount: " + formatMoney(amount, currency) + "\n"
-                + "Ref: " + barcodeCode + "\n\n"
-                + "Check your phone for the M-Pesa prompt to pay.";
+        StringBuilder sb = new StringBuilder();
+        sb.append("Hi,\n\n");
+        sb.append("Your bill at ").append(shopName).append(" is ready:\n");
+
+        List<CreditSaleReminderLineItem> lines = items != null ? items : List.of();
+        if (lines.isEmpty()) {
+            int count = Math.max(1, lineCount);
+            String label = count == 1 ? "item" : "items";
+            sb.append("• ").append(count).append(" ").append(label).append("\n");
+        } else {
+            int shown = 0;
+            for (CreditSaleReminderLineItem line : lines) {
+                if (shown >= MAX_ITEM_LINES) {
+                    break;
+                }
+                sb.append("• ")
+                        .append(line.name() != null ? line.name() : "Item")
+                        .append(" — ")
+                        .append(formatMoney(line.lineTotal(), currency))
+                        .append("\n");
+                shown++;
+            }
+            int remaining = lines.size() - shown;
+            if (remaining > 0) {
+                sb.append("• and ").append(remaining).append(" more\n");
+            }
+        }
+
+        sb.append("\nAmount: ").append(formatMoney(amount, currency));
+        sb.append("\nRef: ").append(barcodeCode);
+        sb.append("\n\nCheck your phone for the M-Pesa prompt to pay.");
+        if (accountUrl != null && !accountUrl.isBlank()) {
+            sb.append("\nView / pay: ").append(accountUrl.trim());
+        }
+        return sb.toString();
     }
 
     private static String formatMoney(BigDecimal amount, String currency) {
-        BigDecimal scaled = amount.setScale(2, RoundingMode.HALF_UP);
+        BigDecimal scaled = amount == null
+                ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP)
+                : amount.setScale(2, RoundingMode.HALF_UP);
         NumberFormat nf = NumberFormat.getNumberInstance(Locale.UK);
         nf.setMinimumFractionDigits(scaled.scale() > 0 && scaled.remainder(BigDecimal.ONE).signum() != 0 ? 2 : 0);
         nf.setMaximumFractionDigits(2);

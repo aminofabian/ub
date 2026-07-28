@@ -118,6 +118,49 @@ public class MpesaStkIntentService {
         }
     }
 
+    /**
+     * Public STK that tops up wallet credit (not tab AR).
+     *
+     * @param stkPhoneOverride optional M-Pesa number to prompt; defaults to customer primary
+     */
+    @Transactional
+    public MpesaStkIntent initiateWalletTopUp(
+            String businessId,
+            String creditAccountId,
+            BigDecimal rawAmount,
+            String idempotencyKey,
+            String customerId,
+            String stkPhoneOverride
+    ) {
+        CreditAccount account = creditAccountRepository.findByIdAndBusinessIdForUpdate(creditAccountId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Credit account not found"));
+        BigDecimal amt = rawAmount.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        if (amt.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Amount must be positive");
+        }
+
+        String phone = resolveStkPhone(customerId, stkPhoneOverride);
+        if (phone == null || phone.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter a valid M-Pesa number");
+        }
+
+        try {
+            return createRow(
+                    businessId,
+                    account.getId(),
+                    amt,
+                    idempotencyKey,
+                    phone,
+                    MpesaStkIntentPurposes.WALLET,
+                    StkPushContextType.WALLET_INTENT,
+                    "Wallet Top Up");
+        } catch (DataIntegrityViolationException duplicate) {
+            return mpesaStkIntentRepository
+                    .findByBusinessIdAndIdempotencyKey(businessId, idempotencyKey)
+                    .orElseThrow(() -> duplicate);
+        }
+    }
+
     private String resolveStkPhone(String customerId, String overrideRaw) {
         if (overrideRaw != null && !overrideRaw.isBlank()) {
             if (!KenyanPhoneForms.looksLikeKenyanMobile(overrideRaw)) {

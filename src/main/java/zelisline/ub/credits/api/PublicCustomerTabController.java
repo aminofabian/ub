@@ -60,6 +60,22 @@ public class PublicCustomerTabController {
                 idempotencyKey);
     }
 
+    @PostMapping("/{phone}/wallet/stk")
+    @ResponseStatus(HttpStatus.CREATED)
+    public PublicTabStkResponse initiateWalletStk(
+            @PathVariable String phone,
+            @Valid @RequestBody PublicTabStkRequest body,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            HttpServletRequest request
+    ) {
+        return publicCustomerTabService.initiateWalletStk(
+                publicHostBusinessResolver.resolveOrThrow(request),
+                phone,
+                body.amount(),
+                body.phone(),
+                idempotencyKey);
+    }
+
     @GetMapping("/{phone}/stk/{intentId}")
     public PublicTabStkResponse stkStatus(
             @PathVariable String phone,

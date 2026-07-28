@@ -7,6 +7,7 @@ public record PublicTabStkResponse(
         String checkoutRequestId,
         String status,
         BigDecimal amount,
-        BigDecimal balanceOwed
+        BigDecimal balanceOwed,
+        BigDecimal walletBalance
 ) {
 }

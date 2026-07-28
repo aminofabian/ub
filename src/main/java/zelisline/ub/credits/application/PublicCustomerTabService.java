@@ -87,12 +87,50 @@ public class PublicCustomerTabService {
         BigDecimal owed = resolved.account().getBalanceOwed() != null
                 ? resolved.account().getBalanceOwed()
                 : BigDecimal.ZERO;
+        BigDecimal wallet = resolved.account().getWalletBalance() != null
+                ? resolved.account().getWalletBalance()
+                : BigDecimal.ZERO;
         return new PublicTabStkResponse(
                 intent.getId(),
                 intent.getCheckoutRequestId(),
                 intent.getStatus(),
                 intent.getAmount(),
-                owed);
+                owed,
+                wallet);
+    }
+
+    @Transactional
+    public PublicTabStkResponse initiateWalletStk(
+            String businessId,
+            String phoneRaw,
+            BigDecimal amount,
+            String stkPhoneOverride,
+            String idempotencyKey
+    ) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Idempotency-Key required");
+        }
+        ResolvedCustomer resolved = resolveCustomerOrThrow(businessId, phoneRaw);
+        MpesaStkIntent intent = mpesaStkIntentService.initiateWalletTopUp(
+                businessId,
+                resolved.account().getId(),
+                amount,
+                idempotencyKey.trim(),
+                resolved.customer().getId(),
+                stkPhoneOverride);
+        BigDecimal owed = resolved.account().getBalanceOwed() != null
+                ? resolved.account().getBalanceOwed()
+                : BigDecimal.ZERO;
+        BigDecimal wallet = resolved.account().getWalletBalance() != null
+                ? resolved.account().getWalletBalance()
+                : BigDecimal.ZERO;
+        return new PublicTabStkResponse(
+                intent.getId(),
+                intent.getCheckoutRequestId(),
+                intent.getStatus(),
+                intent.getAmount(),
+                owed,
+                wallet);
     }
 
     @Transactional
@@ -123,16 +161,24 @@ public class PublicCustomerTabService {
         BigDecimal owed = resolved.account().getBalanceOwed() != null
                 ? resolved.account().getBalanceOwed()
                 : BigDecimal.ZERO;
+        BigDecimal wallet = resolved.account().getWalletBalance() != null
+                ? resolved.account().getWalletBalance()
+                : BigDecimal.ZERO;
         // Refresh account in case fulfilled
-        owed = creditAccountRepository.findByCustomerIdAndBusinessId(resolved.customer().getId(), businessId)
-                .map(CreditAccount::getBalanceOwed)
-                .orElse(owed);
+        CreditAccount fresh = creditAccountRepository
+                .findByCustomerIdAndBusinessId(resolved.customer().getId(), businessId)
+                .orElse(null);
+        if (fresh != null) {
+            owed = fresh.getBalanceOwed() != null ? fresh.getBalanceOwed() : owed;
+            wallet = fresh.getWalletBalance() != null ? fresh.getWalletBalance() : wallet;
+        }
         return new PublicTabStkResponse(
                 intent.getId(),
                 intent.getCheckoutRequestId(),
                 intent.getStatus(),
                 intent.getAmount(),
-                owed);
+                owed,
+                wallet);
     }
 
     private ResolvedCustomer resolveCustomerOrThrow(String businessId, String phoneRaw) {

@@ -10,15 +10,12 @@ import org.junit.jupiter.api.Test;
 class WalletCreditNotificationServiceTest {
 
     @Test
-    void buildMessage_formatsItemsCreditBalanceAndLink() {
-        List<CreditSaleReminderLineItem> items = List.of(
-                new CreditSaleReminderLineItem("Sugar 2kg", new BigDecimal("2"), new BigDecimal("240.00")),
-                new CreditSaleReminderLineItem("Milk 1L", BigDecimal.ONE, new BigDecimal("65.00")));
+    void buildMessage_walletOnly_isCompact() {
         String msg = WalletCreditNotificationService.buildMessage(
                 "Jane",
                 "Mama's Kiosk",
-                items,
-                items.size(),
+                List.of(),
+                2,
                 new BigDecimal("130.00"),
                 BigDecimal.ZERO,
                 new BigDecimal("250.00"),
@@ -26,23 +23,34 @@ class WalletCreditNotificationServiceTest {
                 "KES",
                 "https://palmart.co.ke/0714282874");
         assertEquals(
-                "Hi Jane,\n\n"
-                        + "KES 130 was added to your wallet at Mama's Kiosk (change from your purchase):\n"
-                        + "• Sugar 2kg — KES 240\n"
-                        + "• Milk 1L — KES 65\n\n"
-                        + "Wallet balance: KES 250\n\n"
-                        + "View purchases: https://palmart.co.ke/0714282874",
+                "Mama's: Your purchase change (KES 130) was added to your wallet. Balance: KES 250. https://palmart.co.ke/0714282874",
                 msg);
     }
 
     @Test
-    void buildMessage_mentionsTabPaydownWhenCreditConsidered() {
-        List<CreditSaleReminderLineItem> items = List.of(
-                new CreditSaleReminderLineItem("Bread", BigDecimal.ONE, new BigDecimal("60.00")));
+    void buildMessage_tabOnly_matchesSmsStyle() {
+        String msg = WalletCreditNotificationService.buildMessage(
+                "Fabian Amino",
+                "Palmart Fresh Foods & Butchery",
+                List.of(new CreditSaleReminderLineItem("Kales (Sukuma)", BigDecimal.ONE, new BigDecimal("5.00"))),
+                1,
+                BigDecimal.ZERO,
+                new BigDecimal("45.00"),
+                BigDecimal.ZERO,
+                new BigDecimal("7970.00"),
+                "KES",
+                "https://palmart.co.ke/0714282874");
+        assertEquals(
+                "Palmart: Your purchase change (KES 45) reduced your outstanding balance. Now owed: KES 7,970 (was KES 8,015). https://palmart.co.ke/0714282874",
+                msg);
+    }
+
+    @Test
+    void buildMessage_splitTabAndWallet() {
         String msg = WalletCreditNotificationService.buildMessage(
                 "Jane",
                 "Mama's Kiosk",
-                items,
+                List.of(),
                 1,
                 new BigDecimal("30.00"),
                 new BigDecimal("100.00"),
@@ -51,46 +59,7 @@ class WalletCreditNotificationServiceTest {
                 "KES",
                 "https://palmart.co.ke/0714282874");
         assertEquals(
-                "Hi Jane,\n\n"
-                        + "KES 100 went to your tab and KES 30 to your wallet at Mama's Kiosk (change from your purchase):\n"
-                        + "• Bread — KES 60\n\n"
-                        + "Tab balance: KES 50\n"
-                        + "Wallet balance: KES 30\n\n"
-                        + "View purchases: https://palmart.co.ke/0714282874",
-                msg);
-    }
-
-    @Test
-    void buildMessage_capsItemLinesAndShowsMore() {
-        List<CreditSaleReminderLineItem> items = List.of(
-                new CreditSaleReminderLineItem("A", BigDecimal.ONE, BigDecimal.TEN),
-                new CreditSaleReminderLineItem("B", BigDecimal.ONE, BigDecimal.TEN),
-                new CreditSaleReminderLineItem("C", BigDecimal.ONE, BigDecimal.TEN),
-                new CreditSaleReminderLineItem("D", BigDecimal.ONE, BigDecimal.TEN),
-                new CreditSaleReminderLineItem("E", BigDecimal.ONE, BigDecimal.TEN),
-                new CreditSaleReminderLineItem("F", BigDecimal.ONE, BigDecimal.TEN));
-        String msg = WalletCreditNotificationService.buildMessage(
-                null,
-                "Shop",
-                items,
-                items.size(),
-                new BigDecimal("40.00"),
-                BigDecimal.ZERO,
-                new BigDecimal("40.00"),
-                BigDecimal.ZERO,
-                "KES",
-                "https://palmart.co.ke/0711111111");
-        assertEquals(
-                "Hi,\n\n"
-                        + "KES 40 was added to your wallet at Shop (change from your purchase):\n"
-                        + "• A — KES 10\n"
-                        + "• B — KES 10\n"
-                        + "• C — KES 10\n"
-                        + "• D — KES 10\n"
-                        + "• E — KES 10\n"
-                        + "• and 1 more\n\n"
-                        + "Wallet balance: KES 40\n\n"
-                        + "View purchases: https://palmart.co.ke/0711111111",
+                "Mama's: Your purchase change — KES 100 to tab, KES 30 to wallet. Now owed: KES 50 (was KES 150). Wallet: KES 30. https://palmart.co.ke/0714282874",
                 msg);
     }
 }

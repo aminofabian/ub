@@ -39,7 +39,6 @@ public class WalletCreditNotificationService {
     private static final Logger log = LoggerFactory.getLogger(WalletCreditNotificationService.class);
 
     static final String NOTIFICATION_TYPE = "wallet_credit.notification";
-    static final int MAX_ITEM_LINES = 5;
 
     private final BusinessCreditMessagingSettingsService messagingSettingsService;
     private final WalletCreditNotificationDispatchRepository dispatchRepository;
@@ -188,64 +187,73 @@ public class WalletCreditNotificationService {
             String currency,
             String accountUrl
     ) {
-        StringBuilder sb = new StringBuilder();
-        String greeting = (customerName == null || customerName.isBlank()) ? "Hi" : "Hi " + customerName.trim();
-        sb.append(greeting).append(",\n\n");
+        BigDecimal walletAmt = n(walletCreditedAmount);
+        BigDecimal tabAmt = n(tabAppliedAmount);
+        BigDecimal owed = n(balanceOwed);
+        BigDecimal walletBal = n(walletBalance);
+        BigDecimal changeTotal = tabAmt.add(walletAmt);
+        BigDecimal wasOwed = owed.add(tabAmt);
+        String shop = shortShopLabel(shopName);
 
-        BigDecimal walletAmt = walletCreditedAmount != null ? walletCreditedAmount : BigDecimal.ZERO;
-        BigDecimal tabAmt = tabAppliedAmount != null ? tabAppliedAmount : BigDecimal.ZERO;
+        StringBuilder sb = new StringBuilder();
+        sb.append(shop).append(": ");
 
         if (tabAmt.signum() > 0 && walletAmt.signum() > 0) {
-            sb.append(formatMoney(tabAmt, currency))
-                    .append(" went to your tab and ")
+            sb.append("Your purchase change — ")
+                    .append(formatMoney(tabAmt, currency))
+                    .append(" to tab, ")
                     .append(formatMoney(walletAmt, currency))
-                    .append(" to your wallet at ")
-                    .append(shopName)
-                    .append(" (change from your purchase):\n");
+                    .append(" to wallet. Now owed: ")
+                    .append(formatMoney(owed, currency))
+                    .append(" (was ")
+                    .append(formatMoney(wasOwed, currency))
+                    .append("). Wallet: ")
+                    .append(formatMoney(walletBal, currency))
+                    .append(".");
         } else if (tabAmt.signum() > 0) {
-            sb.append(formatMoney(tabAmt, currency))
-                    .append(" was applied to your tab at ")
-                    .append(shopName)
-                    .append(" (change from your purchase):\n");
+            sb.append("Your purchase change (")
+                    .append(formatMoney(changeTotal, currency))
+                    .append(") reduced your outstanding balance. Now owed: ")
+                    .append(formatMoney(owed, currency))
+                    .append(" (was ")
+                    .append(formatMoney(wasOwed, currency))
+                    .append(").");
         } else {
-            sb.append(formatMoney(walletAmt, currency))
-                    .append(" was added to your wallet at ")
-                    .append(shopName)
-                    .append(" (change from your purchase):\n");
+            sb.append("Your purchase change (")
+                    .append(formatMoney(changeTotal, currency))
+                    .append(") was added to your wallet. Balance: ")
+                    .append(formatMoney(walletBal, currency))
+                    .append(".");
         }
 
-        List<CreditSaleReminderLineItem> lines = items != null ? items : List.of();
-        if (lines.isEmpty()) {
-            int count = Math.max(1, itemCount);
-            String label = count == 1 ? "item" : "items";
-            sb.append("• ").append(count).append(" ").append(label).append("\n");
-        } else {
-            int shown = 0;
-            for (CreditSaleReminderLineItem line : lines) {
-                if (shown >= MAX_ITEM_LINES) {
-                    break;
-                }
-                sb.append("• ")
-                        .append(line.name() != null ? line.name() : "Item")
-                        .append(" — ")
-                        .append(formatMoney(line.lineTotal(), currency))
-                        .append("\n");
-                shown++;
-            }
-            int remaining = lines.size() - shown;
-            if (remaining > 0) {
-                sb.append("• and ").append(remaining).append(" more\n");
-            }
+        if (accountUrl != null && !accountUrl.isBlank()) {
+            sb.append(" ").append(accountUrl.trim());
         }
-
-        sb.append("\n");
-        if (tabAmt.signum() > 0 || (balanceOwed != null && balanceOwed.signum() > 0)) {
-            sb.append("Tab balance: ").append(formatMoney(balanceOwed != null ? balanceOwed : BigDecimal.ZERO, currency));
-            sb.append("\n");
-        }
-        sb.append("Wallet balance: ").append(formatMoney(walletBalance, currency));
-        sb.append("\n\nView purchases: ").append(accountUrl);
         return sb.toString();
+    }
+
+    /** Prefer a short SMS brand label (first word when multi-word / before &). */
+    static String shortShopLabel(String shopName) {
+        if (shopName == null || shopName.isBlank()) {
+            return "Shop";
+        }
+        String trimmed = shopName.trim();
+        int amp = trimmed.indexOf('&');
+        if (amp > 0) {
+            trimmed = trimmed.substring(0, amp).trim();
+        }
+        int space = trimmed.indexOf(' ');
+        if (space > 0) {
+            return trimmed.substring(0, space);
+        }
+        if (trimmed.length() > 32) {
+            return trimmed.substring(0, 32).trim();
+        }
+        return trimmed;
+    }
+
+    private static BigDecimal n(BigDecimal raw) {
+        return raw == null ? BigDecimal.ZERO : raw;
     }
 
     private static String formatMoney(BigDecimal amount, String currency) {

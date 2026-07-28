@@ -142,6 +142,7 @@ class PublicCustomerTabApiIT {
                 .andExpect(jsonPath("$.customerName").value("Amina"))
                 .andExpect(jsonPath("$.shopName").value("Palmart"))
                 .andExpect(jsonPath("$.balanceOwed").value(500.00))
+                .andExpect(jsonPath("$.walletBalance").value(0.00))
                 .andExpect(jsonPath("$.phoneDisplay").value(PHONE));
     }
 

@@ -9,6 +9,7 @@ public record PublicCustomerTabResponse(
         String shopName,
         String currency,
         BigDecimal balanceOwed,
+        BigDecimal walletBalance,
         List<TabPurchaseRowResponse> purchases
 ) {
 }

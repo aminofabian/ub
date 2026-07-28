@@ -46,6 +46,9 @@ public class PublicCustomerTabService {
         BigDecimal owed = resolved.account().getBalanceOwed() != null
                 ? resolved.account().getBalanceOwed()
                 : BigDecimal.ZERO;
+        BigDecimal wallet = resolved.account().getWalletBalance() != null
+                ? resolved.account().getWalletBalance()
+                : BigDecimal.ZERO;
         List<TabPurchaseRowResponse> purchases =
                 customerTabPurchasesService.list(businessId, resolved.customer().getId());
         String display = KenyanPhoneForms.toLocal07(phoneRaw);
@@ -58,6 +61,7 @@ public class PublicCustomerTabService {
                 shopName,
                 currency,
                 owed,
+                wallet,
                 purchases);
     }
 

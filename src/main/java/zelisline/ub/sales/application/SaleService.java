@@ -47,6 +47,7 @@ import zelisline.ub.integrations.webhook.WebhookEventTypes;
 import zelisline.ub.integrations.webhook.application.WebhookEnqueueService;
 import zelisline.ub.messaging.application.CreditSaleReminderEvent;
 import zelisline.ub.messaging.application.CreditSaleReminderLineItem;
+import zelisline.ub.messaging.application.WalletCreditNotificationEvent;
 import zelisline.ub.sales.SalePaymentLedger;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.PostSaleLineRequest;
@@ -188,6 +189,10 @@ public class SaleService {
         }
         walletLedgerService.applyWalletForCompletedSale(
                 businessId, saleId, customerId, walletTenderTotal, resolved.overpay());
+        if (resolved.overpay().signum() > 0 && customerId != null && !customerId.isBlank()) {
+            eventPublisher.publishEvent(buildWalletCreditNotificationEvent(
+                    businessId, saleId, customerId, resolved.overpay(), saleItems));
+        }
         loyaltyPointsService.applyAfterCompletedSale(
                 businessId, customerId, saleId, grandTotal, redeemTenderTotal, creditSettingsResolved);
 
@@ -298,6 +303,8 @@ public class SaleService {
     /**
      * Persist cash tendered for receipt "Received" / "Change". Only accepted when
      * the sale is a single cash payment covering the total (no split / wallet overpay).
+     * When cash payment amount exceeds the sale total, excess is wallet credit — do not
+     * store cashReceived (that would imply physical change was handed back).
      */
     private static BigDecimal resolveCashReceived(
             BigDecimal requested,
@@ -317,6 +324,11 @@ public class SaleService {
         boolean singleCash = paymentsNorm.size() == 1
                 && SalesConstants.PAYMENT_METHOD_CASH.equals(paymentsNorm.get(0).method());
         if (!singleCash) {
+            return null;
+        }
+        BigDecimal cashPayment = paymentsNorm.get(0).amount().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        if (cashPayment.compareTo(gp) > 0) {
+            // Overpay → wallet path: receipt should show wallet credit, not cash change.
             return null;
         }
         return cash;
@@ -758,6 +770,28 @@ public class SaleService {
                 countCreditSaleItems(saleItems),
                 items,
                 balanceOwed);
+    }
+
+    private WalletCreditNotificationEvent buildWalletCreditNotificationEvent(
+            String businessId,
+            String saleId,
+            String customerId,
+            BigDecimal overpayToWallet,
+            List<SaleItem> saleItems
+    ) {
+        List<CreditSaleReminderLineItem> items = buildReminderLineItems(businessId, saleItems);
+        BigDecimal walletBalance = creditAccountRepository
+                .findByCustomerIdAndBusinessId(customerId, businessId)
+                .map(acc -> acc.getWalletBalance())
+                .orElse(BigDecimal.ZERO);
+        return new WalletCreditNotificationEvent(
+                businessId,
+                saleId,
+                customerId,
+                overpayToWallet,
+                countCreditSaleItems(saleItems),
+                items,
+                walletBalance);
     }
 
     private List<CreditSaleReminderLineItem> buildReminderLineItems(String businessId, List<SaleItem> saleItems) {

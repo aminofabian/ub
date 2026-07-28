@@ -80,6 +80,22 @@ public class GroceryInvoice {
     @Column(name = "notes", length = 2000)
     private String notes;
 
+    /** MSISDN for remote (delivery) invoices awaiting M-Pesa. */
+    @Column(name = "customer_phone", length = 32)
+    private String customerPhone;
+
+    @Column(name = "customer_id", length = 36)
+    private String customerId;
+
+    @Column(name = "is_remote", nullable = false)
+    private boolean remote;
+
+    @Column(name = "last_stk_status", length = 24)
+    private String lastStkStatus;
+
+    @Column(name = "last_stk_at")
+    private Instant lastStkAt;
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;

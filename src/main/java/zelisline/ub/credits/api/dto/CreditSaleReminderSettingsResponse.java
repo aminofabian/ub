@@ -25,6 +25,8 @@ public record CreditSaleReminderSettingsResponse(
         boolean hasSmsSozuriApiKey,
         boolean hasSmsTextsmsApiKey,
         boolean secretsReadable,
-        String secretsReadError
+        String secretsReadError,
+        /** Default true: remote invoice STK success auto-pays. False = cashier must clear. */
+        boolean remoteInvoiceStkAutoSettle
 ) {
 }

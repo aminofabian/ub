@@ -58,6 +58,7 @@ public class BusinessCreditSettingsService {
         s.setCreditSaleReminderEnabled(false);
         s.setWhatsappMetaGraphVersion("v25.0");
         s.setSmsProvider("none");
+        s.setRemoteInvoiceStkAutoSettle(true);
         try {
             return businessCreditSettingsRepository.save(s);
         } catch (DataIntegrityViolationException e) {

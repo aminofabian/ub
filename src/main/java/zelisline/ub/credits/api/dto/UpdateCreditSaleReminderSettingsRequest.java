@@ -32,6 +32,8 @@ public record UpdateCreditSaleReminderSettingsRequest(
         String smsTextsmsPartnerId,
         String smsTextsmsApiKey,
         String smsTextsmsShortcode,
-        String smsTextsmsApiUrl
+        String smsTextsmsApiUrl,
+        /** null = leave unchanged */
+        Boolean remoteInvoiceStkAutoSettle
 ) {
 }

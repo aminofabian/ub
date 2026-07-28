@@ -14,6 +14,11 @@ public record GroceryInvoiceSummaryResponse(
         Instant createdAt,
         Instant expiresAt,
         String lockedBy,
-        String lockedByName
+        String lockedByName,
+        boolean remote,
+        String customerPhone,
+        String customerId,
+        String lastStkStatus,
+        Instant lastStkAt
 ) {
 }

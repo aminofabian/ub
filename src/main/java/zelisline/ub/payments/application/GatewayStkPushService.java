@@ -10,6 +10,7 @@ import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -21,6 +22,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.MpesaStkStatuses;
+import zelisline.ub.credits.application.BusinessCreditSettingsService;
 import zelisline.ub.credits.application.CreditSaleDebtService;
 import zelisline.ub.credits.application.CreditsJournalService;
 import zelisline.ub.credits.application.CustomerPhoneOnPaymentService;
@@ -29,6 +31,7 @@ import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.MpesaStkIntent;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.MpesaStkIntentRepository;
+import zelisline.ub.grocery.application.GroceryInvoiceService;
 import zelisline.ub.notifications.application.NotificationOutboxService;
 import zelisline.ub.payments.domain.GatewayStkPush;
 import zelisline.ub.payments.domain.GatewayStkPushStatuses;
@@ -78,6 +81,8 @@ public class GatewayStkPushService {
     private final NotificationOutboxService notificationOutboxService;
     private final WebOrderFulfillmentService webOrderFulfillmentService;
     private final org.springframework.context.ApplicationEventPublisher eventPublisher;
+    private final BusinessCreditSettingsService businessCreditSettingsService;
+    private final ObjectProvider<GroceryInvoiceService> groceryInvoiceService;
 
     @Transactional
     public GatewayStkPush registerPush(
@@ -485,6 +490,7 @@ public class GatewayStkPushService {
             case WALLET_INTENT -> confirmWalletIntent(push);
             case CREDIT_AR -> confirmCreditArIntent(push);
             case POS_PAYMENT -> publishPosConfirmation(push);
+            case GROCERY_INVOICE -> confirmGroceryInvoice(push);
             default -> log.warn("Unknown STK context type: {}", push.getContextType());
         }
     }
@@ -514,6 +520,16 @@ public class GatewayStkPushService {
                     mpesaStkIntentRepository.save(intent);
                 }
             });
+        }
+        if (push.getContextType() == StkPushContextType.GROCERY_INVOICE && push.getContextId() != null) {
+            try {
+                GroceryInvoiceService grocery = groceryInvoiceService.getIfAvailable();
+                if (grocery != null) {
+                    grocery.markRemoteStkFailed(push.getBusinessId(), push.getContextId(), reason);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to mark remote grocery invoice STK failed {}", push.getContextId(), e);
+            }
         }
         publishStkRealtime(push, false, reason);
     }
@@ -637,6 +653,38 @@ public class GatewayStkPushService {
 
     private void publishPosConfirmation(GatewayStkPush push) {
         publishStkRealtime(push, true, "M-Pesa payment received");
+    }
+
+    private void confirmGroceryInvoice(GatewayStkPush push) {
+        if (push.getContextId() == null) {
+            return;
+        }
+        GroceryInvoiceService grocery = groceryInvoiceService.getIfAvailable();
+        if (grocery == null) {
+            log.warn("GroceryInvoiceService unavailable for STK settle {}", push.getId());
+            return;
+        }
+        boolean autoSettle = businessCreditSettingsService
+                .resolveForBusiness(push.getBusinessId())
+                .isRemoteInvoiceStkAutoSettle();
+        try {
+            boolean settled = grocery.settleRemoteInvoiceFromStk(
+                    push.getBusinessId(),
+                    push.getContextId(),
+                    push.getGatewayTransactionId(),
+                    autoSettle);
+            publishStkRealtime(
+                    push,
+                    true,
+                    settled && autoSettle
+                            ? "Remote bill paid"
+                            : "M-Pesa received — clear the bill on the till");
+            log.info("Remote grocery invoice STK settled invoice={} autoSettle={} paid={}",
+                    push.getContextId(), autoSettle, settled && autoSettle);
+        } catch (Exception e) {
+            log.error("Failed to settle remote grocery invoice {}", push.getContextId(), e);
+            markFailed(push, e.getMessage());
+        }
     }
 
     private void publishStkRealtime(GatewayStkPush push, boolean success, String message) {

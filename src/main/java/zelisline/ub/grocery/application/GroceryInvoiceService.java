@@ -38,13 +38,22 @@ import zelisline.ub.grocery.api.dto.GroceryInvoiceSummaryResponse;
 import zelisline.ub.grocery.api.dto.GroceryTopProductResponse;
 import zelisline.ub.grocery.api.dto.PayGroceryInvoiceRequest;
 import zelisline.ub.grocery.api.dto.PayGroceryInvoiceResponse;
+import zelisline.ub.grocery.api.dto.RemoteInvoiceStkResponse;
 import zelisline.ub.grocery.domain.GroceryInvoice;
 import zelisline.ub.grocery.domain.GroceryInvoiceLine;
 import zelisline.ub.grocery.repository.GroceryInvoiceLineRepository;
 import zelisline.ub.grocery.repository.GroceryInvoiceRepository;
+import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.payments.application.GatewayStkPushService;
+import zelisline.ub.payments.application.PaymentGatewayStkService;
+import zelisline.ub.payments.application.StkPushRetryHelper;
+import zelisline.ub.payments.domain.GatewayStkPushStatuses;
+import zelisline.ub.payments.domain.GatewayType;
+import zelisline.ub.payments.domain.StkPushContextType;
 import zelisline.ub.platform.realtime.RealtimeBridge;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.PostSaleLineRequest;
+import zelisline.ub.sales.api.dto.PostSalePaymentRequest;
 import zelisline.ub.sales.api.dto.PostSaleRequest;
 import zelisline.ub.sales.application.SaleActorNameService;
 import zelisline.ub.sales.application.SaleCreationOutcome;
@@ -72,6 +81,9 @@ public class GroceryInvoiceService {
     private final ShiftRepository shiftRepository;
     private final SaleActorNameService saleActorNameService;
     private final ApplicationEventPublisher eventPublisher;
+    private final StkPushRetryHelper stkPushRetryHelper;
+    private final GatewayStkPushService gatewayStkPushService;
+    private final UserRepository userRepository;
 
     @Transactional
     public GroceryInvoiceResponse createInvoice(
@@ -129,6 +141,20 @@ public class GroceryInvoiceService {
         invoice.setExpiresAt(Instant.now().plus(GroceryConstants.DEFAULT_EXPIRY_HOURS, ChronoUnit.HOURS));
         invoice.setNotes(request.notes());
 
+        boolean remote = Boolean.TRUE.equals(request.remote());
+        if (remote) {
+            String phone = normalizeRemotePhone(request.customerPhone());
+            if (phone == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Customer phone is required for remote invoices");
+            }
+            invoice.setRemote(true);
+            invoice.setCustomerPhone(phone);
+            if (request.customerId() != null && !request.customerId().isBlank()) {
+                invoice.setCustomerId(request.customerId().trim());
+            }
+        }
+
         invoice = invoiceRepository.save(invoice);
 
         for (GroceryInvoiceLine line : lineEntities) {
@@ -142,9 +168,28 @@ public class GroceryInvoiceService {
             String createdByName = saleActorNameService.resolveSoldByName(businessId, userId);
             eventPublisher.publishEvent(new RealtimeBridge.GroceryInvoiceCreatedEvent(
                     businessId, request.branchId(), invoice.getId(),
-                    barcode, grandTotal, lineEntities.size(), userId, createdByName));
+                    barcode, grandTotal, lineEntities.size(), userId, createdByName,
+                    invoice.isRemote(), invoice.getCustomerPhone()));
         } catch (Exception e) {
             log.warn("Failed to publish grocery invoice created event for {}", invoice.getId(), e);
+        }
+
+        if (remote) {
+            eventPublisher.publishEvent(new RemoteGroceryInvoiceNotifyEvent(
+                    businessId,
+                    invoice.getId(),
+                    invoice.getBranchId(),
+                    invoice.getCustomerPhone(),
+                    invoice.getBarcodeCode(),
+                    invoice.getGrandTotal(),
+                    savedLines.size()));
+            try {
+                initiateRemoteStk(businessId, invoice);
+                invoice = invoiceRepository.findById(invoice.getId()).orElse(invoice);
+                response = toResponse(invoice, savedLines);
+            } catch (Exception e) {
+                log.warn("Remote invoice {} created but STK failed: {}", invoice.getId(), e.getMessage());
+            }
         }
 
         return response;
@@ -216,7 +261,12 @@ public class GroceryInvoiceService {
                     invoice.getCreatedAt(),
                     invoice.getExpiresAt(),
                     invoice.getLockedBy(),
-                    lockedByName
+                    lockedByName,
+                    invoice.isRemote(),
+                    invoice.getCustomerPhone(),
+                    invoice.getCustomerId(),
+                    invoice.getLastStkStatus(),
+                    invoice.getLastStkAt()
             ));
         }
 
@@ -387,7 +437,7 @@ public class GroceryInvoiceService {
                 saleLines,
                 request.payments(),
                 null,
-                null,
+                invoice.getCustomerId(),
                 null
         );
 
@@ -631,7 +681,174 @@ public class GroceryInvoiceService {
                 invoice.getLockedBy(),
                 lockedByName,
                 invoice.getLockedAt(),
-                invoice.getLockExpiresAt()
+                invoice.getLockExpiresAt(),
+                invoice.isRemote(),
+                invoice.getCustomerPhone(),
+                invoice.getCustomerId(),
+                invoice.getLastStkStatus(),
+                invoice.getLastStkAt()
         );
+    }
+
+    private static String normalizeRemotePhone(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        return zelisline.ub.payments.application.StkPhoneNormalizer.normalize(raw);
+    }
+
+    @Transactional
+    public RemoteInvoiceStkResponse resendRemoteStk(String businessId, String invoiceId) {
+        GroceryInvoice invoice = loadInvoiceOrThrow(businessId, invoiceId);
+        if (!invoice.isRemote()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice is not a remote bill");
+        }
+        if (!invoice.isPending()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Invoice is not awaiting payment");
+        }
+        if (invoice.getExpiresAt().isBefore(Instant.now())) {
+            invoice.setStatus(GroceryConstants.STATUS_EXPIRED);
+            invoiceRepository.save(invoice);
+            throw new ResponseStatusException(HttpStatus.GONE, "Invoice has expired");
+        }
+        return initiateRemoteStk(businessId, invoice);
+    }
+
+    /**
+     * Called when GROCERY_INVOICE STK succeeds. Idempotent if already paid.
+     *
+     * @return true if auto-settled (or already paid), false if cashier-confirm mode left it pending
+     */
+    @Transactional
+    public boolean settleRemoteInvoiceFromStk(
+            String businessId,
+            String invoiceId,
+            String gatewayTxnId,
+            boolean autoSettle
+    ) {
+        GroceryInvoice invoice = invoiceRepository.findByIdAndBusinessId(invoiceId, businessId).orElse(null);
+        if (invoice == null || !invoice.isRemote()) {
+            return false;
+        }
+        invoice.setLastStkStatus(GatewayStkPushStatuses.SUCCESS);
+        invoice.setLastStkAt(Instant.now());
+        invoiceRepository.save(invoice);
+
+        eventPublisher.publishEvent(new RealtimeBridge.GroceryInvoiceStkEvent(
+                businessId,
+                invoice.getBranchId(),
+                invoice.getId(),
+                invoice.getBarcodeCode(),
+                GatewayStkPushStatuses.SUCCESS,
+                invoice.getCustomerPhone(),
+                invoice.getGrandTotal()));
+
+        if (invoice.isPaid()) {
+            return true;
+        }
+        if (!invoice.isPending()) {
+            return false;
+        }
+        if (!autoSettle) {
+            return false;
+        }
+
+        String userId = invoice.getCreatedBy();
+        String roleId = userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(userId, businessId)
+                .map(u -> u.getRoleId())
+                .orElse(null);
+
+        String reference = gatewayTxnId != null && !gatewayTxnId.isBlank() ? gatewayTxnId.trim() : "STK";
+        PayGroceryInvoiceRequest payReq = new PayGroceryInvoiceRequest(List.of(
+                new PostSalePaymentRequest(
+                        SalesConstants.PAYMENT_METHOD_MPESA_MANUAL,
+                        invoice.getGrandTotal(),
+                        reference)));
+        try {
+            payInvoice(businessId, invoiceId, payReq, userId, roleId);
+            return true;
+        } catch (ResponseStatusException e) {
+            if (e.getStatusCode() == HttpStatus.CONFLICT
+                    && invoiceRepository.findByIdAndBusinessId(invoiceId, businessId)
+                    .map(GroceryInvoice::isPaid)
+                    .orElse(false)) {
+                return true;
+            }
+            throw e;
+        }
+    }
+
+    @Transactional
+    public void markRemoteStkFailed(String businessId, String invoiceId, String reason) {
+        GroceryInvoice invoice = invoiceRepository.findByIdAndBusinessId(invoiceId, businessId).orElse(null);
+        if (invoice == null || !invoice.isRemote() || !invoice.isPending()) {
+            return;
+        }
+        invoice.setLastStkStatus(GatewayStkPushStatuses.FAILED);
+        invoice.setLastStkAt(Instant.now());
+        invoiceRepository.save(invoice);
+        eventPublisher.publishEvent(new RealtimeBridge.GroceryInvoiceStkEvent(
+                businessId,
+                invoice.getBranchId(),
+                invoice.getId(),
+                invoice.getBarcodeCode(),
+                GatewayStkPushStatuses.FAILED,
+                invoice.getCustomerPhone(),
+                invoice.getGrandTotal()));
+        log.info("Remote invoice STK failed invoice={} reason={}", invoiceId, reason);
+    }
+
+    private RemoteInvoiceStkResponse initiateRemoteStk(String businessId, GroceryInvoice invoice) {
+        String phone = invoice.getCustomerPhone();
+        if (phone == null || phone.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice has no customer phone");
+        }
+        String reference = "gi-" + invoice.getId().replace("-", "").substring(0, 16)
+                + "-" + UUID.randomUUID().toString().substring(0, 6);
+        String description = "Bill " + invoice.getBarcodeCode();
+
+        PaymentGatewayStkService.StkPushOutcome outcome = stkPushRetryHelper.initiateAfterClearingPhone(
+                businessId,
+                null,
+                phone,
+                invoice.getGrandTotal(),
+                reference,
+                description);
+
+        if (outcome.accepted() && outcome.checkoutRequestId() != null) {
+            GatewayType gatewayType = GatewayType.valueOf(outcome.gatewayType());
+            gatewayStkPushService.registerPush(
+                    businessId,
+                    gatewayType,
+                    outcome.configId(),
+                    outcome.checkoutRequestId(),
+                    reference,
+                    StkPushContextType.GROCERY_INVOICE,
+                    invoice.getId(),
+                    invoice.getGrandTotal(),
+                    phone);
+            invoice.setLastStkStatus(GatewayStkPushStatuses.PENDING);
+            invoice.setLastStkAt(Instant.now());
+            invoiceRepository.save(invoice);
+            eventPublisher.publishEvent(new RealtimeBridge.GroceryInvoiceStkEvent(
+                    businessId,
+                    invoice.getBranchId(),
+                    invoice.getId(),
+                    invoice.getBarcodeCode(),
+                    GatewayStkPushStatuses.PENDING,
+                    phone,
+                    invoice.getGrandTotal()));
+        } else {
+            invoice.setLastStkStatus(GatewayStkPushStatuses.FAILED);
+            invoice.setLastStkAt(Instant.now());
+            invoiceRepository.save(invoice);
+        }
+
+        return new RemoteInvoiceStkResponse(
+                invoice.getId(),
+                outcome.checkoutRequestId(),
+                outcome.accepted() ? GatewayStkPushStatuses.PENDING : GatewayStkPushStatuses.FAILED,
+                outcome.message(),
+                outcome.accepted());
     }
 }

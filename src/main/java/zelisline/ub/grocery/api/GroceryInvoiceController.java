@@ -24,6 +24,7 @@ import zelisline.ub.grocery.api.dto.GroceryInvoiceResponse;
 import zelisline.ub.grocery.api.dto.GroceryTopProductResponse;
 import zelisline.ub.grocery.api.dto.PayGroceryInvoiceRequest;
 import zelisline.ub.grocery.api.dto.PayGroceryInvoiceResponse;
+import zelisline.ub.grocery.api.dto.RemoteInvoiceStkResponse;
 import zelisline.ub.grocery.application.GroceryInvoiceService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
@@ -49,7 +50,12 @@ public class GroceryInvoiceController {
         String validatedBranch = branchResolutionService.requireBranchForLockedRole(
                 principal.roleId(), principal.branchId(), body.branchId());
         CreateGroceryInvoiceRequest safe = new CreateGroceryInvoiceRequest(
-                validatedBranch, body.lines(), body.notes());
+                validatedBranch,
+                body.lines(),
+                body.notes(),
+                body.remote(),
+                body.customerPhone(),
+                body.customerId());
         var response = service.createInvoice(
                 TenantRequestIds.resolveBusinessId(request),
                 safe,
@@ -168,6 +174,19 @@ public class GroceryInvoiceController {
                 body,
                 principal.userId(),
                 principal.roleId()
+        );
+    }
+
+    @PostMapping("/invoices/{id}/stk")
+    @PreAuthorize("hasPermission(null, 'grocery.invoices.pay')")
+    public RemoteInvoiceStkResponse resendRemoteStk(
+            @PathVariable String id,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return service.resendRemoteStk(
+                TenantRequestIds.resolveBusinessId(request),
+                id
         );
     }
 

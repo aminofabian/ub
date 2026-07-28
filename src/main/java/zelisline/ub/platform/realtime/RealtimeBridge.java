@@ -453,6 +453,10 @@ public class RealtimeBridge {
         dataMap.put("lineCount", String.valueOf(event.lineCount()));
         dataMap.put("createdBy", event.createdBy());
         dataMap.put("createdByName", event.createdByName());
+        dataMap.put("remote", event.remote() ? "true" : "false");
+        if (event.customerPhone() != null) {
+            dataMap.put("customerPhone", event.customerPhone());
+        }
         String payloadJson = toJson(dataMap);
         if (payloadJson == null) return;
 
@@ -473,6 +477,10 @@ public class RealtimeBridge {
             payload.put("grandTotal", event.grandTotal().toPlainString());
             payload.put("lineCount", event.lineCount());
             payload.put("createdByName", event.createdByName());
+            payload.put("remote", event.remote());
+            if (event.customerPhone() != null) {
+                payload.put("customerPhone", event.customerPhone());
+            }
             payload.put("actionUrl", "/cashier?invoice=" + event.barcodeCode());
 
             Notification notif = new Notification();
@@ -574,7 +582,30 @@ public class RealtimeBridge {
         }
     }
 
-private String resolveNotificationPriority(String type) {
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onGroceryInvoiceStk(GroceryInvoiceStkEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        var dataMap = new LinkedHashMap<String, String>();
+        dataMap.put("invoiceId", event.invoiceId());
+        dataMap.put("barcodeCode", event.barcodeCode());
+        dataMap.put("stkStatus", event.stkStatus() != null ? event.stkStatus() : "");
+        if (event.customerPhone() != null) {
+            dataMap.put("customerPhone", event.customerPhone());
+        }
+        if (event.grandTotal() != null) {
+            dataMap.put("grandTotal", event.grandTotal().toPlainString());
+        }
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) return;
+
+        Set<String> sessionIds = sessionRegistry.findSessionsByBranchChannel(
+                event.businessId(), event.branchId(), "grocery");
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "grocery.invoice.stk", eventId, "HIGH", Instant.now(), payloadJson);
+        }
+    }
+
+    private String resolveNotificationPriority(String type) {
         return switch (type) {
             case "stock.low", "shift.variance_detected", "storefront.order.placed",
                  "storefront.order.paid", "approval.requested", "approval.resolved",
@@ -769,7 +800,8 @@ private String resolveNotificationPriority(String type) {
     public record GroceryInvoiceCreatedEvent(
             String businessId, String branchId, String invoiceId,
             String barcodeCode, java.math.BigDecimal grandTotal,
-            int lineCount, String createdBy, String createdByName) {}
+            int lineCount, String createdBy, String createdByName,
+            boolean remote, String customerPhone) {}
 
     public record GroceryInvoiceLockedEvent(
             String businessId, String branchId, String invoiceId,
@@ -791,5 +823,14 @@ private String resolveNotificationPriority(String type) {
     public record GroceryInvoiceExpiredEvent(
             String businessId, String branchId, String invoiceId,
             String barcodeCode) {}
+
+    public record GroceryInvoiceStkEvent(
+            String businessId,
+            String branchId,
+            String invoiceId,
+            String barcodeCode,
+            String stkStatus,
+            String customerPhone,
+            java.math.BigDecimal grandTotal) {}
 
 }

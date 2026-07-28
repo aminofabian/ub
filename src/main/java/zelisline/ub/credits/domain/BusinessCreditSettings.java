@@ -93,4 +93,11 @@ public class BusinessCreditSettings {
 
     @Column(name = "sms_textsms_api_url", length = 512)
     private String smsTextsmsApiUrl;
+
+    /**
+     * When true (default), remote grocery invoice STK success auto-pays the invoice.
+     * When false, STK only notifies the till; cashier must clear manually.
+     */
+    @Column(name = "remote_invoice_stk_auto_settle", nullable = false)
+    private boolean remoteInvoiceStkAutoSettle = true;
 }

@@ -292,6 +292,9 @@ public class BusinessCreditMessagingSettingsService {
         if (body.smsTextsmsApiKey() != null) {
             s.setSmsTextsmsApiKeyEnc(encryptOrClear(body.smsTextsmsApiKey()));
         }
+        if (body.remoteInvoiceStkAutoSettle() != null) {
+            s.setRemoteInvoiceStkAutoSettle(body.remoteInvoiceStkAutoSettle());
+        }
 
         BusinessCreditSettings saved = businessCreditSettingsService.saveSettings(s);
         return toResponse(saved, readSecrets(saved));
@@ -341,7 +344,8 @@ public class BusinessCreditMessagingSettingsService {
                 read.hasSmsTextsmsApiKey
                         || (platformTextSms.apiKey() != null && !platformTextSms.apiKey().isBlank()),
                 read.readable,
-                read.errorMessage);
+                read.errorMessage,
+                s.isRemoteInvoiceStkAutoSettle());
     }
 
     private SecretRead readSecrets(BusinessCreditSettings s) {

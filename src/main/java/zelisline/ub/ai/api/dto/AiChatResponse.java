@@ -10,5 +10,8 @@ public record AiChatResponse(
         List<String> suggestions,
         String provider,
         String model,
-        long latencyMs
+        long latencyMs,
+        List<String> toolsUsed,
+        boolean usedLiveData,
+        String draftBody
 ) {}

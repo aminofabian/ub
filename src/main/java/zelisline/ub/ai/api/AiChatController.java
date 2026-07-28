@@ -57,7 +57,7 @@ public class AiChatController {
     public AiChatResponse chat(@Valid @RequestBody AiChatRequest body, HttpServletRequest request) {
         TenantPrincipal user = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
-        return guideChatService.chat(businessId, user.userId(), body);
+        return guideChatService.chat(businessId, user.userId(), user.branchId(), body);
     }
 
     @PostMapping("/feedback")

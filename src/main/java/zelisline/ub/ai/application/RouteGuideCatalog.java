@@ -35,6 +35,7 @@ public class RouteGuideCatalog {
                             "Stock health cards deep-link into restock and audit.",
                             "AP aging lives under Suppliers — not on this hub."),
                     List.of(
+                            "Give me a morning briefing",
                             "What should I check first this morning?",
                             "Why might profit look down?",
                             "Where do I see what shops owe suppliers?"));
@@ -63,6 +64,7 @@ public class RouteGuideCatalog {
                             "Invite suppliers to the Supplier Portal from marketplace/portal flows.",
                             "Path B is for quick purchase notes; Path A is PO → GRN → invoice."),
                     List.of(
+                            "Draft a polite payment reminder SMS",
                             "How do I record a supplier payment?",
                             "What is Path A vs Path B?",
                             "How do I invite a supplier to the portal?"));

@@ -18,7 +18,9 @@ import zelisline.ub.ai.api.dto.AiChatResponse;
 import zelisline.ub.ai.api.dto.AiFeedbackRequest;
 import zelisline.ub.ai.api.dto.AiRouteGuideResponse;
 import zelisline.ub.ai.api.dto.AiStatusResponse;
+import zelisline.ub.ai.api.dto.PriceRadarResponse;
 import zelisline.ub.ai.application.GuideChatService;
+import zelisline.ub.ai.application.PriceRadarService;
 import zelisline.ub.ai.application.RouteGuideCatalog;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
@@ -32,6 +34,7 @@ public class AiChatController {
 
     private final GuideChatService guideChatService;
     private final RouteGuideCatalog routeGuideCatalog;
+    private final PriceRadarService priceRadarService;
 
     @GetMapping("/status")
     @PreAuthorize("isAuthenticated()")
@@ -50,6 +53,26 @@ public class AiChatController {
         CurrentTenantUser.requireHuman(request);
         RouteGuideCatalog.RouteGuide guide = routeGuideCatalog.resolve(route, surface);
         return new AiRouteGuideResponse(guide.surface(), guide.title(), guide.summary(), guide.suggestions());
+    }
+
+    @GetMapping("/price-radar")
+    @PreAuthorize(
+            "hasPermission(null, 'pricing.read') or hasPermission(null, 'purchasing.path_b.read') "
+                    + "or hasPermission(null, 'purchasing.path_b.write')")
+    public PriceRadarResponse priceRadar(
+            @RequestParam String itemId,
+            @RequestParam(required = false) String supplierId,
+            @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) java.math.BigDecimal unitCost,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return priceRadarService.radar(
+                TenantRequestIds.resolveBusinessId(request),
+                itemId,
+                supplierId,
+                branchId,
+                unitCost);
     }
 
     @PostMapping("/chat")

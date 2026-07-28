@@ -40,6 +40,20 @@ public class RouteGuideCatalog {
                             "Why might profit look down?",
                             "Where do I see what shops owe suppliers?"));
         }
+        if (matches(path, surf, "/pricing", "pricing", "price")) {
+            return guide(
+                    "pricing",
+                    "Pricing",
+                    "Set shelf (sell) prices, cost history, and margin rules. Price Radar combines rule suggest with global catalog recommends.",
+                    List.of(
+                            "Suggest sell uses latest landed cost × active margin rule.",
+                            "Price Radar needs Brain enabled in Super Admin → SokoMind.",
+                            "Global catalog recommended sell appears when the item is linked."),
+                    List.of(
+                            "How does suggest sell work?",
+                            "What is Price Radar?",
+                            "Where do I set margin rules?"));
+        }
         if (matches(path, surf, "/products", "products", "catalog")) {
             return guide(
                     "products.catalog",

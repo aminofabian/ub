@@ -19,6 +19,9 @@ public interface SaleRepository extends JpaRepository<Sale, String> {
 
     List<Sale> findByBusinessIdAndCustomerIdOrderBySoldAtDesc(String businessId, String customerId);
 
+    List<Sale> findByBusinessIdAndCustomerIdOrderBySoldAtDesc(
+            String businessId, String customerId, org.springframework.data.domain.Pageable pageable);
+
     List<Sale> findByBusinessIdAndSoldByOrderBySoldAtDesc(String businessId, String soldBy);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)

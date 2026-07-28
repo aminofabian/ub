@@ -19,13 +19,17 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.credits.CreditTxnTypes;
+import zelisline.ub.credits.WalletTxnTypes;
 import zelisline.ub.credits.api.dto.TabPurchaseLineResponse;
 import zelisline.ub.credits.api.dto.TabPurchaseRowResponse;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.CreditTransaction;
+import zelisline.ub.credits.domain.WalletTransaction;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CreditTransactionRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
+import zelisline.ub.credits.repository.WalletTransactionRepository;
+import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.SaleItem;
 import zelisline.ub.sales.repository.SaleItemRepository;
@@ -42,6 +46,7 @@ public class CustomerTabPurchasesService {
     private final CustomerRepository customerRepository;
     private final CreditAccountRepository creditAccountRepository;
     private final CreditTransactionRepository creditTransactionRepository;
+    private final WalletTransactionRepository walletTransactionRepository;
     private final SaleRepository saleRepository;
     private final SaleItemRepository saleItemRepository;
     private final ItemRepository itemRepository;
@@ -53,26 +58,88 @@ public class CustomerTabPurchasesService {
         CreditAccount acc = creditAccountRepository.findByCustomerIdAndBusinessId(customerId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Credit profile not found"));
 
-        List<CreditTransaction> debts = creditTransactionRepository
-                .findByCreditAccountIdAndTxnTypeAndSaleIdIsNotNullOrderByCreatedAtDesc(
-                        acc.getId(),
-                        CreditTxnTypes.DEBT,
-                        PageRequest.of(0, DEFAULT_LIMIT));
-        if (debts.isEmpty()) {
+        // Include cash / wallet visits linked to the customer — not only tab (debt) sales.
+        List<Sale> sales = new ArrayList<>(saleRepository.findByBusinessIdAndCustomerIdOrderBySoldAtDesc(
+                businessId, customerId, PageRequest.of(0, DEFAULT_LIMIT)));
+
+        // Also pull sales that credited this wallet (covers edge cases where customerId
+        // was not persisted on the sale row but the wallet ledger was updated).
+        Set<String> knownIds = new HashSet<>();
+        for (Sale s : sales) {
+            knownIds.add(s.getId());
+        }
+        List<WalletTransaction> walletRows =
+                walletTransactionRepository.findByCreditAccountIdOrderByCreatedAtDesc(acc.getId());
+        Set<String> walletSaleIds = new HashSet<>();
+        for (WalletTransaction w : walletRows) {
+            if (w.getSaleId() == null || w.getSaleId().isBlank()) {
+                continue;
+            }
+            if (!WalletTxnTypes.CREDIT_OVERPAY_CHANGE.equals(w.getTxnType())
+                    && !WalletTxnTypes.CREDIT_REFUND.equals(w.getTxnType())) {
+                continue;
+            }
+            String sid = w.getSaleId().trim();
+            if (!knownIds.contains(sid)) {
+                walletSaleIds.add(sid);
+            }
+        }
+        if (!walletSaleIds.isEmpty()) {
+            for (Sale sale : saleRepository.findAllById(walletSaleIds)) {
+                if (businessId.equals(sale.getBusinessId()) && !knownIds.contains(sale.getId())) {
+                    sales.add(sale);
+                    knownIds.add(sale.getId());
+                }
+            }
+            sales.sort((a, b) -> {
+                if (a.getSoldAt() == null && b.getSoldAt() == null) return 0;
+                if (a.getSoldAt() == null) return 1;
+                if (b.getSoldAt() == null) return -1;
+                return b.getSoldAt().compareTo(a.getSoldAt());
+            });
+            if (sales.size() > DEFAULT_LIMIT) {
+                sales = new ArrayList<>(sales.subList(0, DEFAULT_LIMIT));
+            }
+        }
+
+        if (sales.isEmpty()) {
             return List.of();
         }
 
         Set<String> saleIds = new HashSet<>();
+        for (Sale sale : sales) {
+            if (isVisibleSale(sale)) {
+                saleIds.add(sale.getId());
+            }
+        }
+        if (saleIds.isEmpty()) {
+            return List.of();
+        }
+
+        Map<String, BigDecimal> debtBySale = new HashMap<>();
+        List<CreditTransaction> debts = creditTransactionRepository
+                .findByCreditAccountIdAndTxnTypeAndSaleIdIsNotNullOrderByCreatedAtDesc(
+                        acc.getId(),
+                        CreditTxnTypes.DEBT,
+                        PageRequest.of(0, DEFAULT_LIMIT * 2));
         for (CreditTransaction t : debts) {
-            if (t.getSaleId() != null && !t.getSaleId().isBlank()) {
-                saleIds.add(t.getSaleId().trim());
+            if (t.getSaleId() != null && saleIds.contains(t.getSaleId().trim())) {
+                debtBySale.merge(t.getSaleId().trim(), scaleMoney(t.getAmount()), BigDecimal::add);
             }
         }
 
-        Map<String, Sale> salesById = new HashMap<>();
-        for (Sale sale : saleRepository.findAllById(saleIds)) {
-            if (businessId.equals(sale.getBusinessId())) {
-                salesById.put(sale.getId(), sale);
+        Map<String, BigDecimal> walletCreditBySale = new HashMap<>();
+        for (WalletTransaction w : walletRows) {
+            if (w.getSaleId() == null || w.getSaleId().isBlank()) {
+                continue;
+            }
+            String sid = w.getSaleId().trim();
+            if (!saleIds.contains(sid)) {
+                continue;
+            }
+            if (WalletTxnTypes.CREDIT_OVERPAY_CHANGE.equals(w.getTxnType())
+                    || WalletTxnTypes.CREDIT_REFUND.equals(w.getTxnType())) {
+                walletCreditBySale.merge(sid, scaleMoney(w.getAmount()), BigDecimal::add);
             }
         }
 
@@ -96,13 +163,8 @@ public class CustomerTabPurchasesService {
         }
 
         List<TabPurchaseRowResponse> out = new ArrayList<>();
-        for (CreditTransaction debt : debts) {
-            String saleId = debt.getSaleId();
-            if (saleId == null || saleId.isBlank()) {
-                continue;
-            }
-            Sale sale = salesById.get(saleId.trim());
-            if (sale == null) {
+        for (Sale sale : sales) {
+            if (!saleIds.contains(sale.getId())) {
                 continue;
             }
             List<SaleItem> saleItems = itemsBySale.getOrDefault(sale.getId(), List.of());
@@ -119,11 +181,22 @@ public class CustomerTabPurchasesService {
                     sale.getReceiptNo(),
                     sale.getSoldAt(),
                     sale.getStatus(),
-                    scaleMoney(debt.getAmount()),
+                    debtBySale.getOrDefault(sale.getId(), BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP)),
                     scaleMoney(sale.getGrandTotal()),
+                    walletCreditBySale.getOrDefault(
+                            sale.getId(), BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP)),
                     List.copyOf(lines)));
         }
         return List.copyOf(out);
+    }
+
+    private static boolean isVisibleSale(Sale sale) {
+        if (sale == null || sale.getStatus() == null) {
+            return false;
+        }
+        String status = sale.getStatus().trim().toLowerCase();
+        return SalesConstants.SALE_STATUS_COMPLETED.equals(status)
+                || "completed".equals(status);
     }
 
     private static BigDecimal scaleMoney(BigDecimal v) {

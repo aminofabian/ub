@@ -92,13 +92,16 @@ public class WalletCreditNotificationService {
                 : "our shop";
         String accountUrl = CustomerTabPaymentUrl.build(messaging.paymentAccountUrl(), phoneDigits);
         BigDecimal walletBalance = event.walletBalance() != null ? event.walletBalance() : BigDecimal.ZERO;
+        BigDecimal balanceOwed = event.balanceOwed() != null ? event.balanceOwed() : BigDecimal.ZERO;
         String message = buildMessage(
                 customer.getName(),
                 shopName,
                 event.items(),
                 event.itemCount(),
-                event.creditedAmount(),
+                event.walletCreditedAmount(),
+                event.tabAppliedAmount(),
                 walletBalance,
+                balanceOwed,
                 currency,
                 accountUrl);
 
@@ -124,13 +127,19 @@ public class WalletCreditNotificationService {
             return;
         }
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("title", "Wallet credit");
+        payload.put("title", event.tabAppliedAmount() != null && event.tabAppliedAmount().signum() > 0
+                && (event.walletCreditedAmount() == null || event.walletCreditedAmount().signum() <= 0)
+                ? "Tab payment"
+                : "Wallet credit");
         payload.put("body", message);
         payload.put("accountUrl", accountUrl);
         payload.put("saleId", event.saleId());
         payload.put("customerId", event.customerId());
         payload.put("itemCount", event.itemCount());
-        payload.put("amount", event.creditedAmount().setScale(2, RoundingMode.HALF_UP).toPlainString());
+        BigDecimal walletAmt = event.walletCreditedAmount() != null ? event.walletCreditedAmount() : BigDecimal.ZERO;
+        BigDecimal tabAmt = event.tabAppliedAmount() != null ? event.tabAppliedAmount() : BigDecimal.ZERO;
+        payload.put("amount", walletAmt.setScale(2, RoundingMode.HALF_UP).toPlainString());
+        payload.put("tabApplied", tabAmt.setScale(2, RoundingMode.HALF_UP).toPlainString());
         payload.put("walletBalance", walletBalance.setScale(2, RoundingMode.HALF_UP).toPlainString());
         payload.put("currency", currency);
         if (event.items() != null && !event.items().isEmpty()) {
@@ -172,18 +181,38 @@ public class WalletCreditNotificationService {
             String shopName,
             List<CreditSaleReminderLineItem> items,
             int itemCount,
-            BigDecimal creditedAmount,
+            BigDecimal walletCreditedAmount,
+            BigDecimal tabAppliedAmount,
             BigDecimal walletBalance,
+            BigDecimal balanceOwed,
             String currency,
             String accountUrl
     ) {
         StringBuilder sb = new StringBuilder();
         String greeting = (customerName == null || customerName.isBlank()) ? "Hi" : "Hi " + customerName.trim();
         sb.append(greeting).append(",\n\n");
-        sb.append(formatMoney(creditedAmount, currency))
-                .append(" was added to your wallet at ")
-                .append(shopName)
-                .append(" (change from your purchase):\n");
+
+        BigDecimal walletAmt = walletCreditedAmount != null ? walletCreditedAmount : BigDecimal.ZERO;
+        BigDecimal tabAmt = tabAppliedAmount != null ? tabAppliedAmount : BigDecimal.ZERO;
+
+        if (tabAmt.signum() > 0 && walletAmt.signum() > 0) {
+            sb.append(formatMoney(tabAmt, currency))
+                    .append(" went to your tab and ")
+                    .append(formatMoney(walletAmt, currency))
+                    .append(" to your wallet at ")
+                    .append(shopName)
+                    .append(" (change from your purchase):\n");
+        } else if (tabAmt.signum() > 0) {
+            sb.append(formatMoney(tabAmt, currency))
+                    .append(" was applied to your tab at ")
+                    .append(shopName)
+                    .append(" (change from your purchase):\n");
+        } else {
+            sb.append(formatMoney(walletAmt, currency))
+                    .append(" was added to your wallet at ")
+                    .append(shopName)
+                    .append(" (change from your purchase):\n");
+        }
 
         List<CreditSaleReminderLineItem> lines = items != null ? items : List.of();
         if (lines.isEmpty()) {
@@ -209,7 +238,12 @@ public class WalletCreditNotificationService {
             }
         }
 
-        sb.append("\nWallet balance: ").append(formatMoney(walletBalance, currency));
+        sb.append("\n");
+        if (tabAmt.signum() > 0 || (balanceOwed != null && balanceOwed.signum() > 0)) {
+            sb.append("Tab balance: ").append(formatMoney(balanceOwed != null ? balanceOwed : BigDecimal.ZERO, currency));
+            sb.append("\n");
+        }
+        sb.append("Wallet balance: ").append(formatMoney(walletBalance, currency));
         sb.append("\n\nView purchases: ").append(accountUrl);
         return sb.toString();
     }

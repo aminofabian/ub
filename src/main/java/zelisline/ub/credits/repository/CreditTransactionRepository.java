@@ -15,6 +15,8 @@ public interface CreditTransactionRepository extends JpaRepository<CreditTransac
 
     List<CreditTransaction> findByCreditAccountIdOrderByCreatedAtAsc(String creditAccountId);
 
+    List<CreditTransaction> findBySaleIdOrderByCreatedAtAsc(String saleId);
+
     List<CreditTransaction> findByCreditAccountIdAndTxnTypeAndSaleIdIsNotNullOrderByCreatedAtDesc(
             String creditAccountId,
             String txnType,

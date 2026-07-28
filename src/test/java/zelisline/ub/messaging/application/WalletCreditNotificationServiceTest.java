@@ -20,7 +20,9 @@ class WalletCreditNotificationServiceTest {
                 items,
                 items.size(),
                 new BigDecimal("130.00"),
+                BigDecimal.ZERO,
                 new BigDecimal("250.00"),
+                BigDecimal.ZERO,
                 "KES",
                 "https://palmart.co.ke/0714282874");
         assertEquals(
@@ -29,6 +31,31 @@ class WalletCreditNotificationServiceTest {
                         + "• Sugar 2kg — KES 240\n"
                         + "• Milk 1L — KES 65\n\n"
                         + "Wallet balance: KES 250\n\n"
+                        + "View purchases: https://palmart.co.ke/0714282874",
+                msg);
+    }
+
+    @Test
+    void buildMessage_mentionsTabPaydownWhenCreditConsidered() {
+        List<CreditSaleReminderLineItem> items = List.of(
+                new CreditSaleReminderLineItem("Bread", BigDecimal.ONE, new BigDecimal("60.00")));
+        String msg = WalletCreditNotificationService.buildMessage(
+                "Jane",
+                "Mama's Kiosk",
+                items,
+                1,
+                new BigDecimal("30.00"),
+                new BigDecimal("100.00"),
+                new BigDecimal("30.00"),
+                new BigDecimal("50.00"),
+                "KES",
+                "https://palmart.co.ke/0714282874");
+        assertEquals(
+                "Hi Jane,\n\n"
+                        + "KES 100 went to your tab and KES 30 to your wallet at Mama's Kiosk (change from your purchase):\n"
+                        + "• Bread — KES 60\n\n"
+                        + "Tab balance: KES 50\n"
+                        + "Wallet balance: KES 30\n\n"
                         + "View purchases: https://palmart.co.ke/0714282874",
                 msg);
     }
@@ -48,7 +75,9 @@ class WalletCreditNotificationServiceTest {
                 items,
                 items.size(),
                 new BigDecimal("40.00"),
+                BigDecimal.ZERO,
                 new BigDecimal("40.00"),
+                BigDecimal.ZERO,
                 "KES",
                 "https://palmart.co.ke/0711111111");
         assertEquals(

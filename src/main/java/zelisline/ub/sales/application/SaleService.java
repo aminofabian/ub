@@ -42,6 +42,7 @@ import zelisline.ub.credits.application.BusinessCreditSettingsService;
 import zelisline.ub.credits.application.CreditSaleDebtService;
 import zelisline.ub.credits.application.LoyaltyPointsService;
 import zelisline.ub.credits.application.WalletLedgerService;
+import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.integrations.webhook.WebhookEventTypes;
 import zelisline.ub.integrations.webhook.application.WebhookEnqueueService;
@@ -179,19 +180,27 @@ public class SaleService {
         );
         saleItemRepository.saveAll(saleItems);
 
-        String journalId = postSaleJournal(businessId, saleId, grandTotal, cogsTotal,
-                resolved.normalized(), resolved.overpay());
-        attachJournalToSale(saleId, businessId, journalId);
         creditSaleDebtService.applyDebtForNewSale(businessId, saleId, customerId, creditTenderTotal);
         if (creditTenderTotal.signum() > 0 && customerId != null && !customerId.isBlank()) {
             eventPublisher.publishEvent(buildCreditSaleReminderEvent(
                     businessId, saleId, customerId, creditTenderTotal, saleItems));
         }
-        walletLedgerService.applyWalletForCompletedSale(
+        WalletLedgerService.OverpayAllocation overpayAlloc = walletLedgerService.applyWalletForCompletedSale(
                 businessId, saleId, customerId, walletTenderTotal, resolved.overpay());
-        if (resolved.overpay().signum() > 0 && customerId != null && !customerId.isBlank()) {
+        String journalId = postSaleJournal(
+                businessId,
+                saleId,
+                grandTotal,
+                cogsTotal,
+                resolved.normalized(),
+                overpayAlloc.towardWallet(),
+                overpayAlloc.towardAr());
+        attachJournalToSale(saleId, businessId, journalId);
+        if ((overpayAlloc.towardWallet().signum() > 0 || overpayAlloc.towardAr().signum() > 0)
+                && customerId != null
+                && !customerId.isBlank()) {
             eventPublisher.publishEvent(buildWalletCreditNotificationEvent(
-                    businessId, saleId, customerId, resolved.overpay(), saleItems));
+                    businessId, saleId, customerId, overpayAlloc, saleItems));
         }
         loyaltyPointsService.applyAfterCompletedSale(
                 businessId, customerId, saleId, grandTotal, redeemTenderTotal, creditSettingsResolved);
@@ -514,7 +523,8 @@ public class SaleService {
             BigDecimal grandTotal,
             BigDecimal cogs,
             List<NormalizedPayment> paymentsNorm,
-            BigDecimal overpayToWallet
+            BigDecimal overpayToWallet,
+            BigDecimal overpayToAr
     ) {
         Map<String, BigDecimal> tenderDr = new LinkedHashMap<>();
         for (NormalizedPayment p : paymentsNorm) {
@@ -534,8 +544,15 @@ public class SaleService {
             entry.debit(ledgerAccountResolver.resolveId(businessId, e.getKey()), amt);
         }
         entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SALES_REVENUE), grandTotal);
-        if (overpayToWallet.signum() > 0) {
-            entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.CUSTOMER_WALLET_LIABILITY), overpayToWallet);
+        if (overpayToAr != null && overpayToAr.signum() > 0) {
+            entry.credit(
+                    ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.ACCOUNTS_RECEIVABLE_CUSTOMERS),
+                    overpayToAr.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+        }
+        if (overpayToWallet != null && overpayToWallet.signum() > 0) {
+            entry.credit(
+                    ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.CUSTOMER_WALLET_LIABILITY),
+                    overpayToWallet.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
         }
         entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.COST_OF_GOODS_SOLD), cogs);
         entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY), cogs);
@@ -776,22 +793,29 @@ public class SaleService {
             String businessId,
             String saleId,
             String customerId,
-            BigDecimal overpayToWallet,
+            WalletLedgerService.OverpayAllocation allocation,
             List<SaleItem> saleItems
     ) {
         List<CreditSaleReminderLineItem> items = buildReminderLineItems(businessId, saleItems);
-        BigDecimal walletBalance = creditAccountRepository
+        CreditAccount acc = creditAccountRepository
                 .findByCustomerIdAndBusinessId(customerId, businessId)
-                .map(acc -> acc.getWalletBalance())
-                .orElse(BigDecimal.ZERO);
+                .orElse(null);
+        BigDecimal walletBalance = acc != null && acc.getWalletBalance() != null
+                ? acc.getWalletBalance()
+                : BigDecimal.ZERO;
+        BigDecimal balanceOwed = acc != null && acc.getBalanceOwed() != null
+                ? acc.getBalanceOwed()
+                : BigDecimal.ZERO;
         return new WalletCreditNotificationEvent(
                 businessId,
                 saleId,
                 customerId,
-                overpayToWallet,
+                allocation.towardWallet(),
+                allocation.towardAr(),
                 countCreditSaleItems(saleItems),
                 items,
-                walletBalance);
+                walletBalance,
+                balanceOwed);
     }
 
     private List<CreditSaleReminderLineItem> buildReminderLineItems(String businessId, List<SaleItem> saleItems) {

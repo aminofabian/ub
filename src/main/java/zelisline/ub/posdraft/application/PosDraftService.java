@@ -76,7 +76,12 @@ public class PosDraftService {
             if (!draft.getBranchId().equals(request.branchId().trim())) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Draft belongs to a different branch");
             }
-            return toResponse(draft, loadActiveLines(draft.getId()));
+            // Completed/cancelled drafts must not be reused — cashier may still
+            // hold the old clientDraftId after a finished sale (local mirror).
+            if (draft.isPending()) {
+                return toResponse(draft, loadActiveLines(draft.getId()));
+            }
+            clientDraftId = java.util.UUID.randomUUID().toString();
         }
 
         branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(request.branchId(), businessId)

@@ -15,6 +15,7 @@ import org.springframework.web.server.ResponseStatusException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.messages.domain.ContactMessage;
@@ -256,7 +257,7 @@ public class PublicSupplierPortalService {
             }
             String label = item.getName() != null ? item.getName().trim() : "";
             if (item.getVariantName() != null && !item.getVariantName().isBlank()) {
-                label = label + " · " + item.getVariantName().trim();
+                label = ProductDisplayName.join(label, item.getVariantName());
             }
             if (!label.isBlank()) {
                 names.add(label);

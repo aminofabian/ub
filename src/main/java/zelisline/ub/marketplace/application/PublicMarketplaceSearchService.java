@@ -21,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.ItemImage;
 import zelisline.ub.catalog.repository.CategoryRepository;
@@ -587,7 +588,7 @@ public class PublicMarketplaceSearchService {
         String name = item.getName();
         if (name != null && !name.isBlank() && !looksLikeUuid(name)) {
             if (item.getVariantName() != null && !item.getVariantName().isBlank()) {
-                return name.trim() + " · " + item.getVariantName().trim();
+                return ProductDisplayName.join(name, item.getVariantName());
             }
             return name.trim();
         }

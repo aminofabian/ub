@@ -19,6 +19,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.application.PackageVariantStockResolver;
+import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
@@ -305,11 +306,11 @@ public class ItemSupplierLinkService {
                 : name;
         String vn = item.getVariantName();
         if (vn != null && !vn.isBlank() && !isGenericVariantLabel(vn)) {
-            return family + " · " + vn.trim();
+            return ProductDisplayName.join(family, vn);
         }
         String sku = item.getSku();
         if (sku != null && !sku.isBlank()) {
-            return family + " · " + sku.trim();
+            return ProductDisplayName.withCode(family, sku);
         }
         return family;
     }

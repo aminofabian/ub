@@ -789,7 +789,16 @@ public class KopokopoPaymentGateway implements PaymentGateway {
 
             if (response.getStatus() != 200) {
                 String error = parseKopokopoError(response.getBody());
-                throw new RuntimeException("OAuth failed: HTTP " + response.getStatus() + " — " + error);
+                String hint = "";
+                String lower = error != null ? error.toLowerCase() : "";
+                if (lower.contains("invalid_client") || response.getStatus() == 401) {
+                    boolean prod = isProduction(creds);
+                    hint = prod
+                            ? " — Use Client ID + Client Secret from https://app.kopokopo.com/applications (Production), not Sandbox, and not the API Key."
+                            : " — Use Client ID + Client Secret from https://sandbox.kopokopo.com/applications (Sandbox), not Production, and not the API Key.";
+                }
+                throw new RuntimeException(
+                        "OAuth failed: HTTP " + response.getStatus() + " — " + error + hint);
             }
 
             var node = objectMapper.readTree(response.getBody());
@@ -818,7 +827,17 @@ public class KopokopoPaymentGateway implements PaymentGateway {
     }
 
     private static String trimCred(String value) {
-        return value == null ? null : value.trim();
+        if (value == null) {
+            return null;
+        }
+        String v = value.trim();
+        // Pasted credentials sometimes include wrapping quotes.
+        if (v.length() >= 2
+                && ((v.startsWith("\"") && v.endsWith("\""))
+                || (v.startsWith("'") && v.endsWith("'")))) {
+            v = v.substring(1, v.length() - 1).trim();
+        }
+        return v;
     }
 
     private String parseKopokopoError(String body) {

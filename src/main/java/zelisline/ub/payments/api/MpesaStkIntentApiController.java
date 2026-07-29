@@ -22,6 +22,8 @@ import zelisline.ub.credits.application.MpesaStkIntentService;
 import zelisline.ub.credits.domain.MpesaStkIntent;
 import zelisline.ub.payments.api.dto.PosStkPushRequest;
 import zelisline.ub.payments.api.dto.PosStkPushResponse;
+import zelisline.ub.payments.api.dto.PosTillAwaitRequest;
+import zelisline.ub.payments.api.dto.PosTillAwaitResponse;
 import zelisline.ub.payments.api.dto.StkPushStatusResponse;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.PaymentGatewayStkService;
@@ -133,6 +135,31 @@ public class MpesaStkIntentApiController {
         }
 
         return toStatusResponse(push);
+    }
+
+    /**
+     * Cashier is waiting for a customer to pay the Buy Goods till (no STK prompt).
+     * Buygoods webhooks confirm this await by amount (+ optional phone).
+     */
+    @PostMapping("/till-await")
+    @PreAuthorize("hasPermission(null, 'payments.stk.initiate')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public PosTillAwaitResponse tillAwait(
+            @Valid @RequestBody PosTillAwaitRequest body,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        GatewayStkPush push = gatewayStkPushService.registerTillAwait(
+                businessId,
+                body.amount(),
+                body.phoneNumber(),
+                idempotencyKey != null ? idempotencyKey.trim() : null);
+        return new PosTillAwaitResponse(
+                true,
+                push.getGatewayCheckoutId(),
+                "Waiting for till payment");
     }
 
     private static StkPushStatusResponse toStatusResponse(GatewayStkPush push) {

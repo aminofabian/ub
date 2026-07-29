@@ -63,6 +63,8 @@ public class GatewayStkPushService {
 
     private static final int RECONCILE_LOOKBACK_HOURS = 48;
 
+    public static final String TILL_AWAIT_CHECKOUT_PREFIX = "till-await-";
+
     /** After this age, a still-pending local STK row is marked failed so cashier can retry. */
     @Value("${app.payments.stk.stale-pending-seconds:30}")
     private int stalePendingSeconds;
@@ -127,6 +129,61 @@ public class GatewayStkPushService {
         }
     }
 
+    /**
+     * Open a POS "waiting for buygoods till payment" slot (no STK prompt).
+     * Buygoods webhooks match these by amount (+ phone when present).
+     */
+    @Transactional
+    public GatewayStkPush registerTillAwait(
+            String businessId,
+            BigDecimal amount,
+            String phoneNumber,
+            String merchantReference
+    ) {
+        if (amount == null || amount.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "amount must be positive");
+        }
+        PaymentGatewayConfig cfg = configRepository
+                .findByBusinessIdAndGatewayTypeAndStatus(businessId, GatewayType.KOPOKOPO, GatewayStatus.ACTIVE)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "No ACTIVE KopoKopo gateway — activate KopoKopo and click Till webhooks first."));
+
+        // Replace prior open till-awaits for this business so amount collisions stay rare.
+        Instant since = Instant.now().minus(Duration.ofMinutes(15));
+        List<GatewayStkPush> open = pushRepository
+                .findByBusinessIdAndContextTypeAndStatusAndCreatedAtAfterOrderByCreatedAtDesc(
+                        businessId,
+                        StkPushContextType.POS_PAYMENT,
+                        GatewayStkPushStatuses.PENDING,
+                        since);
+        for (GatewayStkPush prior : open) {
+            if (isTillAwaitCheckout(prior.getGatewayCheckoutId())) {
+                markFailed(prior, "Replaced by a new till payment wait");
+            }
+        }
+
+        String checkoutId = TILL_AWAIT_CHECKOUT_PREFIX + java.util.UUID.randomUUID();
+        String ref = merchantReference != null && !merchantReference.isBlank()
+                ? merchantReference.trim()
+                : checkoutId;
+        return registerPush(
+                businessId,
+                GatewayType.KOPOKOPO,
+                cfg.getId(),
+                checkoutId,
+                ref,
+                StkPushContextType.POS_PAYMENT,
+                null,
+                amount.setScale(2, RoundingMode.HALF_UP),
+                phoneNumber != null ? phoneNumber : "");
+    }
+
+    public static boolean isTillAwaitCheckout(String gatewayCheckoutId) {
+        return gatewayCheckoutId != null && gatewayCheckoutId.startsWith(TILL_AWAIT_CHECKOUT_PREFIX);
+    }
+
     @Transactional
     public boolean processKopokopoWebhook(
             String businessId,
@@ -187,6 +244,10 @@ public class GatewayStkPushService {
             return Optional.of(push);
         }
         if (push.getGatewayType() != GatewayType.KOPOKOPO) {
+            return Optional.of(push);
+        }
+        // Till-awaits have no KopoKopo incoming_payment id — only buygoods webhooks settle them.
+        if (isTillAwaitCheckout(push.getGatewayCheckoutId())) {
             return Optional.of(push);
         }
         PaymentGatewayConfig cfg = resolveConfig(push);
@@ -447,7 +508,8 @@ public class GatewayStkPushService {
             return;
         }
         if (push.getPollCount() >= maxPolls
-                && GatewayStkPushStatuses.PENDING.equals(push.getStatus())) {
+                && GatewayStkPushStatuses.PENDING.equals(push.getStatus())
+                && !isTillAwaitCheckout(push.getGatewayCheckoutId())) {
             markFailed(push, "M-Pesa prompt timed out — you can send a new prompt");
         }
     }

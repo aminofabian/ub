@@ -5,6 +5,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -38,11 +40,14 @@ import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
 @RequiredArgsConstructor
 public class PaymentGatewayConfigService {
 
+    private static final Logger log = LoggerFactory.getLogger(PaymentGatewayConfigService.class);
+
     private final PaymentGatewayConfigRepository configRepository;
     private final PlatformPaymentGatewayService platformService;
     private final PaymentGatewayRegistry registry;
     private final CredentialEncryptionService encryptionService;
     private final ObjectMapper objectMapper;
+    private final KopokopoWebhookSubscriptionService webhookSubscriptionService;
 
     // ── Available gateways ────────────────────────────────────────
 
@@ -275,6 +280,17 @@ public class PaymentGatewayConfigService {
         }
         cfg.setStatus(GatewayStatus.ACTIVE);
         configRepository.save(cfg);
+        if (cfg.getGatewayType() == GatewayType.KOPOKOPO) {
+            try {
+                var sub = webhookSubscriptionService.subscribeBuygoodsTills(businessId, configId, null);
+                long ok = sub.subscriptions().stream().filter(s -> s.success()).count();
+                log.info("KopoKopo activate: auto-subscribed {}/{} till webhook(s) for config={}",
+                        ok, sub.subscriptions().size(), configId);
+            } catch (Exception e) {
+                log.warn("KopoKopo activate: webhook subscribe skipped for config={}: {}",
+                        configId, e.getMessage());
+            }
+        }
         return toResponse(cfg);
     }
 

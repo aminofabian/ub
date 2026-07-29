@@ -122,9 +122,12 @@ public class KopokopoWebhookSubscriptionService {
         if (raw == null) {
             return;
         }
-        String till = raw.trim();
-        if (!till.isEmpty()) {
-            out.add(till);
+        // Allow accidental "3020127, 3502582" pasted into a single till field.
+        for (String part : raw.split("[,\\s]+")) {
+            String till = part.trim();
+            if (!till.isEmpty() && till.chars().allMatch(Character::isDigit)) {
+                out.add(till);
+            }
         }
     }
 

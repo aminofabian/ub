@@ -20,6 +20,8 @@ public record PaymentLedgerRow(
         String branchId,
         String cashierName,
         String customerName,
-        BigDecimal saleGrandTotal
+        BigDecimal saleGrandTotal,
+        /** True when this tender has a gateway receipt (KopoKopo/STK verified). */
+        Boolean mpesaVerified
 ) {
 }

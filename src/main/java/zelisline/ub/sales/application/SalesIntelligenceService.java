@@ -557,7 +557,11 @@ public class SalesIntelligenceService {
                    s.branch_id,
                    COALESCE(NULLIF(TRIM(u.name), ''), u.email, s.sold_by) AS cashier_name,
                    COALESCE(cu.name, '') AS customer_name,
-                   s.grand_total
+                   s.grand_total,
+                   CASE
+                       WHEN sp.gateway_txn_id IS NOT NULL AND TRIM(sp.gateway_txn_id) <> ''
+                       THEN TRUE ELSE FALSE
+                   END AS mpesa_verified
               FROM sale_payments sp
               JOIN sales s ON s.id = sp.sale_id
          LEFT JOIN users u ON u.id = s.sold_by AND u.business_id = s.business_id AND u.deleted_at IS NULL
@@ -1104,7 +1108,8 @@ public class SalesIntelligenceService {
                             rs.getString("branch_id"),
                             rs.getString("cashier_name"),
                             rs.getString("customer_name"),
-                            rs.getBigDecimal("grand_total").setScale(2, RoundingMode.HALF_UP)
+                            rs.getBigDecimal("grand_total").setScale(2, RoundingMode.HALF_UP),
+                            rs.getBoolean("mpesa_verified")
                     ));
                 },
                 businessId,

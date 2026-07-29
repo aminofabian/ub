@@ -96,7 +96,7 @@ public class PaymentGatewayConfigService {
     }
 
     /**
-     * Non-secret credential fields for the admin edit form (till number, environment, etc.).
+     * Credential fields for the admin edit form (includes decrypted secrets for verification).
      */
     @Transactional(readOnly = true)
     public GatewayCredentialSettingsResponse getCredentialSettings(String businessId, String configId) {
@@ -420,8 +420,8 @@ public class PaymentGatewayConfigService {
                 env,
                 till,
                 blankToNull(creds.get("webhookTillNumbers")),
-                creds.get("shortcode"),
-                creds.get("shortcodeType"),
+                blankToNull(creds.get("shortcode")),
+                blankToNull(creds.get("shortcodeType")),
                 isPresent(creds, "clientId"),
                 isPresent(creds, "clientSecret"),
                 isPresent(creds, "apiKey"),
@@ -430,6 +430,14 @@ public class PaymentGatewayConfigService {
                 isPresent(creds, "consumerKey"),
                 isPresent(creds, "consumerSecret"),
                 isPresent(creds, "passkey"),
+                blankToNull(creds.get("clientId")),
+                blankToNull(creds.get("clientSecret")),
+                blankToNull(creds.get("apiKey")),
+                blankToNull(creds.get("secretKey")),
+                blankToNull(creds.get("publicKey")),
+                blankToNull(creds.get("consumerKey")),
+                blankToNull(creds.get("consumerSecret")),
+                blankToNull(creds.get("passkey")),
                 true,
                 null
         );

@@ -1,8 +1,9 @@
 package zelisline.ub.payments.api.dto;
 
 /**
- * Non-secret gateway credential fields for the admin edit form.
- * Secrets are never returned; flags indicate whether each secret is already stored.
+ * Gateway credential fields for the admin edit form.
+ * Secrets are returned in plaintext so operators can verify the stored values
+ * (endpoint is permission-gated to payment settings admins).
  */
 public record GatewayCredentialSettingsResponse(
         String environment,
@@ -19,6 +20,14 @@ public record GatewayCredentialSettingsResponse(
         boolean hasConsumerKey,
         boolean hasConsumerSecret,
         boolean hasPasskey,
+        String clientId,
+        String clientSecret,
+        String apiKey,
+        String secretKey,
+        String publicKey,
+        String consumerKey,
+        String consumerSecret,
+        String passkey,
         boolean credentialsReadable,
         String readError
 ) {
@@ -37,6 +46,14 @@ public record GatewayCredentialSettingsResponse(
                 false,
                 false,
                 false,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
                 false,
                 readError
         );

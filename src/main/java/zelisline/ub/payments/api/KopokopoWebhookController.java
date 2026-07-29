@@ -1,6 +1,5 @@
 package zelisline.ub.payments.api;
 
-import java.io.BufferedReader;
 import java.util.List;
 import java.util.Map;
 
@@ -49,14 +48,15 @@ public class KopokopoWebhookController {
     @PostMapping("/payment")
     public ResponseEntity<String> receivePayment(HttpServletRequest request) {
         String signature = request.getHeader(SIGNATURE_HEADER);
-        String rawBody = readBody(request);
+        String rawBody = readRawBody(request);
 
         if (rawBody == null || rawBody.isBlank()) {
             log.warn("KopoKopo webhook: empty body");
             return ResponseEntity.badRequest().body("Empty body");
         }
 
-        log.info("KopoKopo webhook received: sig={}", signature != null ? "present" : "missing");
+        log.info("KopoKopo webhook received: sig={} bytes={}",
+                signature != null ? "present" : "missing", rawBody.length());
 
         // Find all ACTIVE KopoKopo configs across all businesses
         List<PaymentGatewayConfig> activeConfigs = configRepository
@@ -67,7 +67,8 @@ public class KopokopoWebhookController {
             return ResponseEntity.ok("Received"); // ACK to avoid retries
         }
 
-        // Try to match signature against any active config's API key
+        // Try to match signature against any active config's API key or client secret.
+        // KopoKopo docs mention both; SDKs vary — accept either.
         PaymentGatewayConfig matchedConfig = null;
         for (PaymentGatewayConfig cfg : activeConfigs) {
             try {
@@ -75,7 +76,10 @@ public class KopokopoWebhookController {
                 Map<String, String> creds = objectMapper.readValue(decrypted,
                         objectMapper.getTypeFactory().constructMapType(Map.class, String.class, String.class));
                 String apiKey = creds.get("apiKey");
-                if (apiKey != null && kopokopoGateway.verifyWebhookSignature(apiKey, rawBody, signature)) {
+                String clientSecret = creds.get("clientSecret");
+                boolean ok = (apiKey != null && kopokopoGateway.verifyWebhookSignature(apiKey, rawBody, signature))
+                        || (clientSecret != null && kopokopoGateway.verifyWebhookSignature(clientSecret, rawBody, signature));
+                if (ok) {
                     matchedConfig = cfg;
                     log.info("KopoKopo webhook: signature matched business={}", cfg.getBusinessId());
                     break;
@@ -86,7 +90,7 @@ public class KopokopoWebhookController {
         }
 
         if (matchedConfig == null) {
-            log.warn("KopoKopo webhook: signature did not match any ACTIVE config");
+            log.warn("KopoKopo webhook: signature did not match any ACTIVE config (check apiKey/clientSecret)");
             return ResponseEntity.ok("Received"); // ACK to avoid retries
         }
 
@@ -113,16 +117,21 @@ public class KopokopoWebhookController {
         return ResponseEntity.ok("Received");
     }
 
-    private String readBody(HttpServletRequest request) {
+    /**
+     * Raw body for HMAC — must match KopoKopo's signed bytes exactly.
+     * Do not use {@link BufferedReader#readLine()} (alters newlines) or trim.
+     */
+    private String readRawBody(HttpServletRequest request) {
         try {
-            StringBuilder sb = new StringBuilder();
-            BufferedReader reader = request.getReader();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line).append("\n");
+            byte[] bytes = request.getInputStream().readAllBytes();
+            if (bytes.length == 0) {
+                return null;
             }
-            String body = sb.toString().trim();
-            return body.isEmpty() ? null : body;
+            String encoding = request.getCharacterEncoding();
+            if (encoding == null || encoding.isBlank()) {
+                encoding = "UTF-8";
+            }
+            return new String(bytes, encoding);
         } catch (Exception e) {
             log.error("KopoKopo webhook: failed to read body", e);
             return null;

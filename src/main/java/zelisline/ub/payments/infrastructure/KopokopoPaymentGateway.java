@@ -731,16 +731,16 @@ public class KopokopoPaymentGateway implements PaymentGateway {
         if (apiKey == null || body == null || signature == null) return false;
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
-            SecretKeySpec keySpec = new SecretKeySpec(apiKey.getBytes(), "HmacSHA256");
+            SecretKeySpec keySpec = new SecretKeySpec(apiKey.getBytes(java.nio.charset.StandardCharsets.UTF_8), "HmacSHA256");
             mac.init(keySpec);
-            byte[] computed = mac.doFinal(body.getBytes());
+            byte[] computed = mac.doFinal(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             // KopoKopo signature is hex-encoded
-            StringBuilder sb = new StringBuilder();
+            StringBuilder sb = new StringBuilder(computed.length * 2);
             for (byte b : computed) {
                 sb.append(String.format("%02x", b));
             }
             String computedHex = sb.toString();
-            return computedHex.equalsIgnoreCase(signature);
+            return computedHex.equalsIgnoreCase(signature.trim());
         } catch (Exception e) {
             log.error("HMAC verification error", e);
             return false;

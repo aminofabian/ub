@@ -457,7 +457,13 @@ public class SalesIntelligenceService {
                    sil.line_total,
                    sil.profit,
                    s.status,
-                   'walk_in' AS channel
+                   'walk_in' AS channel,
+                   EXISTS (
+                       SELECT 1 FROM sale_payments spv
+                        WHERE spv.sale_id = s.id
+                          AND spv.gateway_txn_id IS NOT NULL
+                          AND TRIM(spv.gateway_txn_id) <> ''
+                   ) AS mpesa_verified
               FROM sale_items sil
               JOIN sales s ON s.id = sil.sale_id
               JOIN items i ON i.id = sil.item_id AND i.business_id = s.business_id AND i.deleted_at IS NULL
@@ -633,7 +639,8 @@ public class SalesIntelligenceService {
                             rs.getBigDecimal("line_total").setScale(2, RoundingMode.HALF_UP),
                             rs.getBigDecimal("profit").setScale(2, RoundingMode.HALF_UP),
                             rs.getString("status"),
-                            rs.getString("channel")
+                            rs.getString("channel"),
+                            rs.getBoolean("mpesa_verified")
                     ));
                 },
                 businessId,
@@ -1016,7 +1023,8 @@ public class SalesIntelligenceService {
                             rs.getBigDecimal("line_total").setScale(2, RoundingMode.HALF_UP),
                             rs.getBigDecimal("profit").setScale(2, RoundingMode.HALF_UP),
                             rs.getString("status"),
-                            rs.getString("channel")
+                            rs.getString("channel"),
+                            false
                     ));
                 },
                 businessId,

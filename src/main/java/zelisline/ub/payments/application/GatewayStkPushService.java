@@ -1,6 +1,8 @@
 package zelisline.ub.payments.application;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -463,10 +465,85 @@ public class GatewayStkPushService {
             }
         }
         if (parsed.reference() != null && !parsed.reference().isBlank()) {
-            return pushRepository.findFirstByBusinessIdAndMerchantReferenceAndStatus(
-                    businessId, parsed.reference().trim(), GatewayStkPushStatuses.PENDING);
+            Optional<GatewayStkPush> byMerchantRef = pushRepository
+                    .findFirstByBusinessIdAndMerchantReferenceAndStatus(
+                            businessId, parsed.reference().trim(), GatewayStkPushStatuses.PENDING);
+            if (byMerchantRef.isPresent()) {
+                return byMerchantRef;
+            }
         }
+        // Buygoods / till payments: match open POS STK by phone + amount (receipt ≠ merchant ref).
+        return resolvePosBuygoodsPush(businessId, parsed);
+    }
+
+    /**
+     * Match an unmatched till webhook to a pending POS STK push.
+     * Prefers phone+amount; falls back to unique amount-only within the window.
+     */
+    private Optional<GatewayStkPush> resolvePosBuygoodsPush(String businessId, WebhookResult parsed) {
+        if (!parsed.success() || parsed.amount() == null) {
+            return Optional.empty();
+        }
+        boolean buygoods = parsed.topic() != null
+                && parsed.topic().equalsIgnoreCase("buygoods_transaction_received");
+        // Also allow amount matching for other success topics without a checkout id
+        // (defensive — primary path is buygoods).
+        if (!buygoods && parsed.gatewayCheckoutId() != null && !parsed.gatewayCheckoutId().isBlank()) {
+            return Optional.empty();
+        }
+
+        Instant since = Instant.now().minus(Duration.ofMinutes(5));
+        List<GatewayStkPush> pending = pushRepository
+                .findByBusinessIdAndContextTypeAndStatusAndCreatedAtAfterOrderByCreatedAtDesc(
+                        businessId,
+                        StkPushContextType.POS_PAYMENT,
+                        GatewayStkPushStatuses.PENDING,
+                        since);
+        if (pending.isEmpty()) {
+            return Optional.empty();
+        }
+
+        BigDecimal amount = parsed.amount().setScale(2, RoundingMode.HALF_UP);
+        String phone = StkPhoneNormalizer.normalize(parsed.phoneNumber());
+
+        List<GatewayStkPush> amountMatches = pending.stream()
+                .filter(p -> amountsClose(p.getAmount(), amount))
+                .toList();
+        if (amountMatches.isEmpty()) {
+            log.info("Buygoods webhook: no pending POS amount match business={} amount={}",
+                    businessId, amount);
+            return Optional.empty();
+        }
+
+        if (phone != null) {
+            List<GatewayStkPush> phoneMatches = amountMatches.stream()
+                    .filter(p -> phone.equals(StkPhoneNormalizer.normalize(p.getPhoneNumber())))
+                    .toList();
+            if (phoneMatches.size() == 1) {
+                return Optional.of(phoneMatches.get(0));
+            }
+            if (phoneMatches.size() > 1) {
+                // Most recent phone+amount match (list is createdAt DESC).
+                log.info("Buygoods webhook: multiple phone+amount matches — using most recent pushId={}",
+                        phoneMatches.get(0).getId());
+                return Optional.of(phoneMatches.get(0));
+            }
+        }
+
+        if (amountMatches.size() == 1) {
+            return Optional.of(amountMatches.get(0));
+        }
+
+        log.warn("Buygoods webhook: ambiguous amount match business={} amount={} candidates={} — skipping auto-confirm",
+                businessId, amount, amountMatches.size());
         return Optional.empty();
+    }
+
+    private static boolean amountsClose(BigDecimal a, BigDecimal b) {
+        if (a == null || b == null) {
+            return false;
+        }
+        return a.subtract(b).abs().compareTo(new BigDecimal("1.00")) <= 0;
     }
 
     private void confirmPush(GatewayStkPush push, String gatewayTxnId, BigDecimal webhookAmount) {
@@ -695,7 +772,8 @@ public class GatewayStkPushService {
                 push.getContextType().name(),
                 push.getContextId(),
                 success,
-                message));
+                message,
+                push.getGatewayTransactionId()));
     }
 
     private PaymentGatewayConfig resolveConfig(GatewayStkPush push) {

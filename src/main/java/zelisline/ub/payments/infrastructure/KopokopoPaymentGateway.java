@@ -63,6 +63,7 @@ public class KopokopoPaymentGateway implements PaymentGateway {
     private static final String OAUTH_PATH = "/oauth/token";
     private static final String INCOMING_PAYMENTS_PATH = "/api/v2/incoming_payments";
     private static final String SEND_MONEY_PATH = "/api/v2/send_money";
+    private static final String WEBHOOK_SUBSCRIPTIONS_PATH = "/api/v2/webhook_subscriptions";
     private static final String USER_AGENT = "PalMart/1.0 KopoKopo";
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -288,6 +289,84 @@ public class KopokopoPaymentGateway implements PaymentGateway {
             log.error("KopoKopo status query failed: paymentId={}", paymentId, e);
             // Network/parse errors are transient — leave the push pending for the next poll.
             return new StkStatusResponse("ERROR", e.getMessage(), false, false, null, null);
+        }
+    }
+
+    // ── Webhook subscriptions (buygoods / till scope) ────────────────
+
+    /**
+     * Creates a KopoKopo webhook subscription for a till (or company) scope.
+     *
+     * @see <a href="https://developers.kopokopo.com/guides/webhooks/create-subscription.html">Create subscription</a>
+     */
+    public WebhookSubscriptionResult createWebhookSubscription(
+            Map<String, String> creds,
+            String eventType,
+            String webhookUrl,
+            String scope,
+            String scopeReference
+    ) {
+        if (creds == null) {
+            return WebhookSubscriptionResult.failed("Credentials are required");
+        }
+        if (eventType == null || eventType.isBlank()) {
+            return WebhookSubscriptionResult.failed("event_type is required");
+        }
+        if (webhookUrl == null || webhookUrl.isBlank()) {
+            return WebhookSubscriptionResult.failed("webhook url is required");
+        }
+        if (scope == null || scope.isBlank()) {
+            return WebhookSubscriptionResult.failed("scope is required");
+        }
+        if (scopeReference == null || scopeReference.isBlank()) {
+            return WebhookSubscriptionResult.failed("scope_reference (till number) is required");
+        }
+
+        try {
+            String authBase = resolveAuthBaseUrl(creds);
+            String apiBase = resolveApiBaseUrl(creds);
+            String accessToken = obtainAccessToken(creds, authBase);
+
+            Map<String, Object> body = Map.of(
+                    "event_type", eventType.trim(),
+                    "url", webhookUrl.trim(),
+                    "scope", scope.trim(),
+                    "scope_reference", scopeReference.trim()
+            );
+            String json = objectMapper.writeValueAsString(body);
+            HttpResponse<String> response = Unirest.post(apiBase + WEBHOOK_SUBSCRIPTIONS_PATH)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .header("User-Agent", USER_AGENT)
+                    .body(json)
+                    .asString();
+
+            if (response.getStatus() == 201) {
+                String location = response.getHeaders().getFirst("Location");
+                log.info("KopoKopo webhook subscription created: event={} till={} location={}",
+                        eventType, scopeReference, location);
+                return WebhookSubscriptionResult.ok(location);
+            }
+
+            String error = parseKopokopoError(response.getBody());
+            log.warn("KopoKopo webhook subscription failed: status={} till={} body={}",
+                    response.getStatus(), scopeReference, response.getBody());
+            return WebhookSubscriptionResult.failed(
+                    "HTTP " + response.getStatus() + (error != null ? " — " + error : ""));
+        } catch (Exception e) {
+            log.error("KopoKopo webhook subscription error for till={}", scopeReference, e);
+            return WebhookSubscriptionResult.failed(e.getMessage() != null ? e.getMessage() : "Subscription failed");
+        }
+    }
+
+    public record WebhookSubscriptionResult(boolean success, String locationUrl, String errorMessage) {
+        public static WebhookSubscriptionResult ok(String locationUrl) {
+            return new WebhookSubscriptionResult(true, locationUrl, null);
+        }
+
+        public static WebhookSubscriptionResult failed(String errorMessage) {
+            return new WebhookSubscriptionResult(false, null, errorMessage);
         }
     }
 

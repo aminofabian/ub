@@ -7,6 +7,8 @@ package zelisline.ub.payments.api.dto;
 public record GatewayCredentialSettingsResponse(
         String environment,
         String tillNumber,
+        /** Comma-separated extra tills subscribed for buygoods webhooks (in addition to tillNumber). */
+        String webhookTillNumbers,
         String shortcode,
         String shortcodeType,
         boolean hasClientId,
@@ -23,6 +25,7 @@ public record GatewayCredentialSettingsResponse(
     public static GatewayCredentialSettingsResponse unreadable(String readError) {
         return new GatewayCredentialSettingsResponse(
                 "sandbox",
+                null,
                 null,
                 null,
                 null,

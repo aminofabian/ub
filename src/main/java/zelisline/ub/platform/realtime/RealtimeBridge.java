@@ -157,14 +157,16 @@ public class RealtimeBridge {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onStkPaymentSettled(StkPaymentSettledEvent event) {
         String eventId = UUID.randomUUID().toString();
-        String payloadJson = toJson(Map.of(
-                "checkoutRequestId", event.checkoutRequestId() != null ? event.checkoutRequestId() : "",
-                "merchantReference", event.merchantReference() != null ? event.merchantReference() : "",
-                "contextType", event.contextType() != null ? event.contextType() : "",
-                "contextId", event.contextId() != null ? event.contextId() : "",
-                "success", event.success(),
-                "message", event.message() != null ? event.message() : ""
-        ));
+        var dataMap = new LinkedHashMap<String, Object>();
+        dataMap.put("checkoutRequestId", event.checkoutRequestId() != null ? event.checkoutRequestId() : "");
+        dataMap.put("merchantReference", event.merchantReference() != null ? event.merchantReference() : "");
+        dataMap.put("contextType", event.contextType() != null ? event.contextType() : "");
+        dataMap.put("contextId", event.contextId() != null ? event.contextId() : "");
+        dataMap.put("success", event.success());
+        dataMap.put("message", event.message() != null ? event.message() : "");
+        dataMap.put("gatewayTransactionId",
+                event.gatewayTransactionId() != null ? event.gatewayTransactionId() : "");
+        String payloadJson = toJson(dataMap);
         if (payloadJson == null) {
             return;
         }
@@ -741,7 +743,8 @@ public class RealtimeBridge {
             String contextType,
             String contextId,
             boolean success,
-            String message) {}
+            String message,
+            String gatewayTransactionId) {}
 
     public record ApprovalRequestedEvent(
             String businessId, String branchId, String approvalId, String adjustmentType,

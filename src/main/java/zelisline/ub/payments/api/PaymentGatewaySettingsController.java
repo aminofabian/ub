@@ -22,7 +22,10 @@ import zelisline.ub.payments.api.dto.AvailableGatewayResponse;
 import zelisline.ub.payments.api.dto.GatewayConfigRequest;
 import zelisline.ub.payments.api.dto.GatewayConfigResponse;
 import zelisline.ub.payments.api.dto.GatewayCredentialSettingsResponse;
+import zelisline.ub.payments.api.dto.SubscribeWebhookTillsRequest;
+import zelisline.ub.payments.api.dto.SubscribeWebhookTillsResponse;
 import zelisline.ub.payments.api.dto.TestConnectionResponse;
+import zelisline.ub.payments.application.KopokopoWebhookSubscriptionService;
 import zelisline.ub.payments.application.PaymentGatewayConfigService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.TenantRequestIds;
@@ -40,6 +43,7 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class PaymentGatewaySettingsController {
 
     private final PaymentGatewayConfigService configService;
+    private final KopokopoWebhookSubscriptionService webhookSubscriptionService;
 
     // ── Available gateways ──────────────────────────────────────────
 
@@ -136,5 +140,22 @@ public class PaymentGatewaySettingsController {
     ) {
         CurrentTenantUser.require(request);
         return configService.deactivate(TenantRequestIds.resolveBusinessId(request), id);
+    }
+
+    /**
+     * Create KopoKopo {@code buygoods_transaction_received} subscriptions for the given tills
+     * (or configured till + webhookTillNumbers when the body omits tills).
+     */
+    @PostMapping("/{id}/webhook-subscriptions")
+    @PreAuthorize("hasPermission(null, 'payments.gateways.write')")
+    public SubscribeWebhookTillsResponse subscribeWebhooks(
+            @PathVariable String id,
+            @RequestBody(required = false) SubscribeWebhookTillsRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        List<String> tills = body != null ? body.tillNumbers() : null;
+        return webhookSubscriptionService.subscribeBuygoodsTills(
+                TenantRequestIds.resolveBusinessId(request), id, tills);
     }
 }

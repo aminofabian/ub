@@ -22,6 +22,8 @@ public record RecentSaleRow(
         BigDecimal profit,
         String status,
         /** {@code walk_in} for POS; {@code online_store} for storefront checkout. */
-        String channel
+        String channel,
+        /** True when an M-Pesa tender was confirmed via gateway webhook/STK receipt. */
+        Boolean mpesaVerified
 ) {
 }

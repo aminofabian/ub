@@ -44,4 +44,17 @@ public interface GatewayStkPushRepository extends JpaRepository<GatewayStkPush, 
             String phoneNumber,
             Instant createdAfter
     );
+
+    List<GatewayStkPush> findByBusinessIdAndContextTypeAndStatusAndCreatedAtAfterOrderByCreatedAtDesc(
+            String businessId,
+            zelisline.ub.payments.domain.StkPushContextType contextType,
+            String status,
+            Instant createdAfter
+    );
+
+    Optional<GatewayStkPush> findFirstByBusinessIdAndGatewayTransactionIdIgnoreCaseAndStatus(
+            String businessId,
+            String gatewayTransactionId,
+            String status
+    );
 }

@@ -403,6 +403,7 @@ public class PaymentGatewayConfigService {
         return new GatewayCredentialSettingsResponse(
                 env,
                 till,
+                blankToNull(creds.get("webhookTillNumbers")),
                 creds.get("shortcode"),
                 creds.get("shortcodeType"),
                 isPresent(creds, "clientId"),
@@ -450,5 +451,12 @@ public class PaymentGatewayConfigService {
             }
         }
         return null;
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
     }
 }

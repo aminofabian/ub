@@ -49,6 +49,8 @@ import zelisline.ub.integrations.webhook.application.WebhookEnqueueService;
 import zelisline.ub.messaging.application.CreditSaleReminderEvent;
 import zelisline.ub.messaging.application.CreditSaleReminderLineItem;
 import zelisline.ub.messaging.application.WalletCreditNotificationEvent;
+import zelisline.ub.payments.domain.GatewayStkPushStatuses;
+import zelisline.ub.payments.repository.GatewayStkPushRepository;
 import zelisline.ub.sales.SalePaymentLedger;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.PostSaleLineRequest;
@@ -88,6 +90,7 @@ public class SaleService {
     private final BranchRepository branchRepository;
     private final InventoryBatchPickerService inventoryBatchPickerService;
     private final LedgerPostingPort ledgerPostingPort;
+    private final GatewayStkPushRepository gatewayStkPushRepository;
     private final LedgerAccountResolver ledgerAccountResolver;
     private final CreditSaleDebtService creditSaleDebtService;
     private final WalletLedgerService walletLedgerService;
@@ -304,6 +307,16 @@ public class SaleService {
             row.setMethod(p.method());
             row.setAmount(p.amount());
             row.setReference(p.reference());
+            if (SalesConstants.PAYMENT_METHOD_MPESA_MANUAL.equals(p.method())
+                    && p.reference() != null
+                    && !p.reference().isBlank()) {
+                gatewayStkPushRepository
+                        .findFirstByBusinessIdAndGatewayTransactionIdIgnoreCaseAndStatus(
+                                businessId,
+                                p.reference().trim(),
+                                GatewayStkPushStatuses.SUCCESS)
+                        .ifPresent(push -> row.setGatewayTxnId(push.getGatewayTransactionId()));
+            }
             row.setSortOrder(order++);
             salePaymentRepository.save(row);
         }

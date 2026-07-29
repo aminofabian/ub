@@ -139,25 +139,35 @@ public class GatewayStkPushService {
         String eventId = parsed.webhookEventId() != null && !parsed.webhookEventId().isBlank()
                 ? parsed.webhookEventId()
                 : parsed.gatewayTransactionId();
-        if (eventId != null && !eventId.isBlank()) {
-            if (webhookEventRepository.existsByGatewayTypeAndGatewayEventId(GatewayType.KOPOKOPO, eventId)) {
-                log.info("KopoKopo webhook duplicate ignored: eventId={}", eventId);
-                return true;
-            }
-            PaymentWebhookEvent audit = new PaymentWebhookEvent();
-            audit.setBusinessId(businessId);
-            audit.setGatewayType(GatewayType.KOPOKOPO);
-            audit.setGatewayEventId(eventId);
-            audit.setTopic(parsed.topic());
-            audit.setRawPayload(parsed.rawPayload());
-            webhookEventRepository.save(audit);
+        if (eventId != null && !eventId.isBlank()
+                && webhookEventRepository.existsByGatewayTypeAndGatewayEventId(GatewayType.KOPOKOPO, eventId)) {
+            log.info("KopoKopo webhook duplicate ignored: eventId={}", eventId);
+            return true;
         }
 
         Optional<GatewayStkPush> push = resolvePush(businessId, parsed);
         if (push.isEmpty()) {
-            log.warn("KopoKopo webhook: no matching STK push business={} checkout={} ref={}",
-                    businessId, parsed.gatewayCheckoutId(), parsed.reference());
+            // Intentionally do not record unmatched events — buygoods may arrive before the
+            // POS STK row exists, and KopoKopo retries should still be able to confirm.
+            log.warn("KopoKopo webhook: no matching STK push business={} checkout={} ref={} topic={} amount={}",
+                    businessId, parsed.gatewayCheckoutId(), parsed.reference(),
+                    parsed.topic(), parsed.amount());
             return true;
+        }
+
+        if (eventId != null && !eventId.isBlank()) {
+            try {
+                PaymentWebhookEvent audit = new PaymentWebhookEvent();
+                audit.setBusinessId(businessId);
+                audit.setGatewayType(GatewayType.KOPOKOPO);
+                audit.setGatewayEventId(eventId);
+                audit.setTopic(parsed.topic());
+                audit.setRawPayload(parsed.rawPayload());
+                webhookEventRepository.save(audit);
+            } catch (DataIntegrityViolationException e) {
+                log.info("KopoKopo webhook duplicate on save ignored: eventId={}", eventId);
+                return true;
+            }
         }
 
         if (parsed.success()) {
@@ -479,16 +489,15 @@ public class GatewayStkPushService {
     /**
      * Match an unmatched till webhook to a pending POS STK push.
      * Prefers phone+amount; falls back to unique amount-only within the window.
+     * Only runs for {@code buygoods_transaction_received} — never amount-match
+     * other topics (avoids confirming POS from unrelated callbacks).
      */
     private Optional<GatewayStkPush> resolvePosBuygoodsPush(String businessId, WebhookResult parsed) {
         if (!parsed.success() || parsed.amount() == null) {
             return Optional.empty();
         }
-        boolean buygoods = parsed.topic() != null
-                && parsed.topic().equalsIgnoreCase("buygoods_transaction_received");
-        // Also allow amount matching for other success topics without a checkout id
-        // (defensive — primary path is buygoods).
-        if (!buygoods && parsed.gatewayCheckoutId() != null && !parsed.gatewayCheckoutId().isBlank()) {
+        if (parsed.topic() == null
+                || !parsed.topic().equalsIgnoreCase("buygoods_transaction_received")) {
             return Optional.empty();
         }
 

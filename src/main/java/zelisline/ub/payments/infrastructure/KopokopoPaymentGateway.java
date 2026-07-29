@@ -349,6 +349,17 @@ public class KopokopoPaymentGateway implements PaymentGateway {
                 return WebhookSubscriptionResult.ok(location);
             }
 
+            // Treat conflict / already-subscribed as soft success so re-clicks are idempotent.
+            if (response.getStatus() == 409 || response.getStatus() == 422) {
+                String error = parseKopokopoError(response.getBody());
+                String lower = error != null ? error.toLowerCase() : "";
+                if (lower.contains("already") || lower.contains("exist") || lower.contains("duplicate")) {
+                    log.info("KopoKopo webhook subscription already present: till={} status={} body={}",
+                            scopeReference, response.getStatus(), response.getBody());
+                    return WebhookSubscriptionResult.ok(null);
+                }
+            }
+
             String error = parseKopokopoError(response.getBody());
             log.warn("KopoKopo webhook subscription failed: status={} till={} body={}",
                     response.getStatus(), scopeReference, response.getBody());

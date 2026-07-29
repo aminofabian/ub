@@ -58,6 +58,10 @@ public class KopokopoWebhookSubscriptionService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Webhook subscriptions are only supported for KopoKopo");
         }
+        if (!cfg.isActive()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Activate the KopoKopo gateway before subscribing till webhooks.");
+        }
 
         Map<String, String> creds = decryptCredentials(cfg);
         List<String> tills = resolveTillNumbers(creds, requestedTillNumbers);
@@ -66,7 +70,16 @@ public class KopokopoWebhookSubscriptionService {
                     "No till numbers provided. Set tillNumber / webhookTillNumbers on the gateway, or pass tillNumbers.");
         }
 
-        String webhookUrl = publicApiBaseUrl.replaceAll("/$", "") + "/webhooks/kopokopo/payment";
+        String base = publicApiBaseUrl == null ? "" : publicApiBaseUrl.replaceAll("/$", "");
+        if (base.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "API_PUBLIC_BASE_URL is not configured — KopoKopo cannot reach your webhook.");
+        }
+        if (!base.toLowerCase().startsWith("https://")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "KopoKopo requires an HTTPS webhook URL. Set API_PUBLIC_BASE_URL to a public https origin (not localhost).");
+        }
+        String webhookUrl = base + "/webhooks/kopokopo/payment";
         List<WebhookSubscriptionItemResponse> results = new ArrayList<>();
         for (String till : tills) {
             var result = kopokopoGateway.createWebhookSubscription(

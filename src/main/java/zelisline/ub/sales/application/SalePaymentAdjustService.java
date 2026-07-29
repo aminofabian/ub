@@ -27,6 +27,8 @@ import zelisline.ub.credits.application.CreditSaleDebtService;
 import zelisline.ub.finance.application.LedgerAccountResolver;
 import zelisline.ub.finance.application.LedgerPostingPort;
 import zelisline.ub.finance.domain.JournalEntry;
+import zelisline.ub.payments.domain.GatewayStkPushStatuses;
+import zelisline.ub.payments.repository.GatewayStkPushRepository;
 import zelisline.ub.sales.SalePaymentLedger;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.AdjustSalePaymentsRequest;
@@ -62,6 +64,7 @@ public class SalePaymentAdjustService {
     private final SaleActorNameService saleActorNameService;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
+    private final GatewayStkPushRepository gatewayStkPushRepository;
 
     @Transactional
     public SaleResponse adjustPayments(
@@ -89,7 +92,7 @@ public class SalePaymentAdjustService {
 
         postReclassJournal(businessId, saleId, oldPayments, newPayments);
         applyCreditDebtDelta(businessId, sale, oldPayments, newPayments);
-        replacePayments(saleId, newPayments);
+        replacePayments(businessId, saleId, newPayments);
         clearCashReceivedIfNeeded(sale, newPayments);
         saleRepository.save(sale);
 
@@ -195,7 +198,7 @@ public class SalePaymentAdjustService {
         }
     }
 
-    private void replacePayments(String saleId, List<NormalizedPayment> newPayments) {
+    private void replacePayments(String businessId, String saleId, List<NormalizedPayment> newPayments) {
         salePaymentRepository.deleteBySaleId(saleId);
         salePaymentRepository.flush();
         int order = 0;
@@ -205,6 +208,16 @@ public class SalePaymentAdjustService {
             row.setMethod(p.method());
             row.setAmount(p.amount());
             row.setReference(p.reference());
+            if (SalesConstants.PAYMENT_METHOD_MPESA_MANUAL.equals(p.method())
+                    && p.reference() != null
+                    && !p.reference().isBlank()) {
+                gatewayStkPushRepository
+                        .findFirstByBusinessIdAndGatewayTransactionIdIgnoreCaseAndStatus(
+                                businessId,
+                                p.reference().trim(),
+                                GatewayStkPushStatuses.SUCCESS)
+                        .ifPresent(push -> row.setGatewayTxnId(push.getGatewayTransactionId()));
+            }
             row.setSortOrder(order++);
             salePaymentRepository.save(row);
         }

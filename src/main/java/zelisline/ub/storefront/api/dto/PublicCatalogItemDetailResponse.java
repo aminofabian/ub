@@ -18,6 +18,8 @@ public record PublicCatalogItemDetailResponse(
         BigDecimal qtyOnHand,
         List<PublicItemImageResponse> images,
         List<PublicCatalogVariantResponse> variants,
-        String onlinePurchaseMode
+        String onlinePurchaseMode,
+        boolean weighed,
+        String unitType
 ) {
 }

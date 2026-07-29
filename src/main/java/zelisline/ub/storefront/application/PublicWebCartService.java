@@ -100,8 +100,8 @@ public class PublicWebCartService {
             touchCart(cart);
             return buildResponse(ctx, cart, webCartLineRepository.findByCartIdOrderByCreatedAtAsc(cartId));
         }
-        requireWebItem(ctx, itemId);
-        StorefrontOnlinePurchaseRules.requireWholeUnitQuantity(q);
+        Item item = requireWebItem(ctx, itemId);
+        StorefrontOnlinePurchaseRules.requireValidQuantity(item, q);
         BigDecimal available = availableQtyAtCatalogBranch(ctx, itemId);
         if (available.compareTo(BigDecimal.ZERO) <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "This item is out of stock at this store");
@@ -164,13 +164,14 @@ public class PublicWebCartService {
         webCartRepository.save(cart);
     }
 
-    private void requireWebItem(PublicStorefrontContext ctx, String itemId) {
+    private Item requireWebItem(PublicStorefrontContext ctx, String itemId) {
         Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, ctx.business().getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid item"));
         if (!item.isWebPublished() || !item.isActive()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not available");
         }
         StorefrontOnlinePurchaseRules.requireWebCartEligible(item);
+        return item;
     }
 
     private BigDecimal availableQtyAtCatalogBranch(PublicStorefrontContext ctx, String itemId) {
@@ -218,7 +219,7 @@ public class PublicWebCartService {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item no longer available");
             }
             StorefrontOnlinePurchaseRules.requireWebCartEligible(it);
-            StorefrontOnlinePurchaseRules.requireWholeUnitQuantity(row.getQuantity());
+            StorefrontOnlinePurchaseRules.requireValidQuantity(it, row.getQuantity());
             BigDecimal avail = availableQtyAtCatalogBranch(ctx, row.getItemId());
             if (row.getQuantity().compareTo(avail) > 0) {
                 throw new ResponseStatusException(
@@ -330,7 +331,9 @@ public class PublicWebCartService {
                     thumbs.get(L.getItemId()),
                     L.getQuantity(),
                     unit,
-                    lineTotal
+                    lineTotal,
+                    it.isWeighed(),
+                    blankToNull(it.getUnitType())
             ));
         }
         return new PublicCartResponse(

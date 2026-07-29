@@ -12,22 +12,22 @@ Roadmap for the three remaining butcher vertical milestones after counter POS (P
 
 | Layer | Rule |
 |-------|------|
-| API | `onlinePurchaseMode`: `web_cart` (default) or `in_store_only` (`is_weighed = true`) |
-| Cart | Rejects weighed items + non-integer quantities |
-| Shop UI | “In store” badge; no add-to-cart; PDP explains counter-only |
+| API | `onlinePurchaseMode`: always `web_cart`; weighed SKUs expose `weighed` + `unitType` |
+| Cart | Weighed: fractional qty (≤3 decimals); non-weighed: whole units only |
+| Shop UI | PDP “Whole / Custom weight” toggle for weighed items; grid quick-add uses whole units |
 
 ### Files
 
 - `StorefrontOnlinePurchaseRules.java`
 - `PublicStorefrontCatalogService.java`, `PublicWebCartService.java`
-- Public catalog DTOs (`onlinePurchaseMode`)
+- Public catalog / cart DTOs (`weighed`, `unitType`)
 - `shop-product-grid.tsx`, `shop-add-to-cart.tsx`, `app/[sku]/page.tsx`
 - Tests: `StorefrontOnlinePurchaseRulesTest`, `PublicWebCartIT`
 
 ### Not in P5 (future polish)
 
 - Butcher-specific category nav labels (Meat / Poultry / Deli) — use existing `item_types` departments
-- Hide weighed items entirely from catalog (tenant setting) — currently show with badge
+- Merchant setting to disable fractional online orders for weighed SKUs
 
 ---
 

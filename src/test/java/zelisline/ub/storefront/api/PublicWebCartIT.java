@@ -289,7 +289,7 @@ class PublicWebCartIT {
     }
 
     @Test
-    void upsertWeighedItem_returns400() throws Exception {
+    void upsertWeighedItem_allowsWholeAndFractionalQty() throws Exception {
         String goodsTypeId = itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(TENANT).getFirst().getId();
         String weighedId = itemCatalogService.createItem(
                 TENANT,
@@ -328,7 +328,16 @@ class PublicWebCartIT {
                         post("/api/v1/public/businesses/" + SLUG + "/carts/" + cartId + "/lines")
                                 .contentType(MediaType.APPLICATION_JSON)
                                 .content("{\"itemId\":\"%s\",\"quantity\":1}".formatted(weighedId)))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lines[0].weighed").value(true))
+                .andExpect(jsonPath("$.lines[0].quantity").value(1));
+
+        mockMvc.perform(
+                        post("/api/v1/public/businesses/" + SLUG + "/carts/" + cartId + "/lines")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("{\"itemId\":\"%s\",\"quantity\":0.75}".formatted(weighedId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lines[0].quantity").value(0.75));
     }
 
     @Test

@@ -13,6 +13,8 @@ public record PublicCatalogVariantResponse(
         String imageUrl,
         BigDecimal price,
         BigDecimal qtyOnHand,
-        String onlinePurchaseMode
+        String onlinePurchaseMode,
+        boolean weighed,
+        String unitType
 ) {
 }

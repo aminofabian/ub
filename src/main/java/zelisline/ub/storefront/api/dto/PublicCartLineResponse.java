@@ -13,6 +13,8 @@ public record PublicCartLineResponse(
         String imageUrl,
         BigDecimal quantity,
         BigDecimal unitPrice,
-        BigDecimal lineTotal
+        BigDecimal lineTotal,
+        boolean weighed,
+        String unitType
 ) {
 }

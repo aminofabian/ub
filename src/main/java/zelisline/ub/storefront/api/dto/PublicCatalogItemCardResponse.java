@@ -16,7 +16,11 @@ public record PublicCatalogItemCardResponse(
         BigDecimal qtyOnHand,
         /** Latest buying price across all suppliers (most recent effectiveFrom). */
         BigDecimal buyingPrice,
-        /** {@link zelisline.ub.storefront.application.StorefrontOnlinePurchaseRules#WEB_CART} or IN_STORE_ONLY. */
-        String onlinePurchaseMode
+        /** {@link zelisline.ub.storefront.application.StorefrontOnlinePurchaseRules#WEB_CART}. */
+        String onlinePurchaseMode,
+        /** When true, shoppers may order fractional quantities (kg / weight). */
+        boolean weighed,
+        /** Sale unit label (e.g. kg, each). */
+        String unitType
 ) {
 }

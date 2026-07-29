@@ -78,6 +78,7 @@ public class PathBPurchaseService {
 
     private static final BigDecimal MONEY_SCALE = new BigDecimal("0.01");
     private static final int UNIT_SCALE = 4;
+    private static final int MAX_SEQUENCE_DIGITS = 6;
 
     private final BatchNumberGenerator batchNumberGenerator;
 
@@ -580,21 +581,7 @@ public class PathBPurchaseService {
 
     /** Allocates the next short sequential supply code for the shop: {@code PB-1}, {@code PB-2}, … */
     private String nextPathBInvoiceNumber(String businessId) {
-        long seq = 1L;
-        for (String existing : supplierInvoiceRepository.findPbPrefixedInvoiceNumbers(businessId)) {
-            if (existing == null || existing.length() < 4) {
-                continue;
-            }
-            String suffix = existing.substring(3);
-            if (suffix.isEmpty() || !suffix.chars().allMatch(Character::isDigit)) {
-                continue; // skip legacy UUID-style codes like PB-ED29096EE823
-            }
-            try {
-                seq = Math.max(seq, Long.parseLong(suffix) + 1L);
-            } catch (NumberFormatException ignored) {
-                // skip
-            }
-        }
+        long seq = nextSequence(supplierInvoiceRepository.findPbPrefixedInvoiceNumbers(businessId));
         String candidate = "PB-" + seq;
         int guard = 0;
         while (supplierInvoiceRepository.existsByBusinessIdAndInvoiceNumber(businessId, candidate)
@@ -607,6 +594,36 @@ public class PathBPurchaseService {
             candidate = "PB-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         }
         return candidate;
+    }
+
+    static long nextSequence(List<String> existingPbNumbers) {
+        long seq = 1L;
+        for (String existing : existingPbNumbers) {
+            long value = sequenceValue(existing);
+            if (value >= seq) {
+                seq = value + 1L;
+            }
+        }
+        return seq;
+    }
+
+    /**
+     * Sequence value of a {@code PB-<n>} code, or 0 for anything else. Legacy codes carried a slice of the
+     * session UUID (e.g. {@code PB-ED29096EE823}, or all-digit ones like {@code PB-64974384}), so only short
+     * suffixes count — otherwise one legacy code would push the whole shop's numbering into the millions.
+     */
+    private static long sequenceValue(String invoiceNumber) {
+        if (invoiceNumber == null || !invoiceNumber.startsWith("PB-")) {
+            return 0L;
+        }
+        String suffix = invoiceNumber.substring(3);
+        if (suffix.isEmpty() || suffix.length() > MAX_SEQUENCE_DIGITS || suffix.charAt(0) == '0') {
+            return 0L;
+        }
+        if (!suffix.chars().allMatch(Character::isDigit)) {
+            return 0L;
+        }
+        return Long.parseLong(suffix);
     }
 
     private record CostSplit(BigDecimal inventoryMoney, BigDecimal wastageMoney) {

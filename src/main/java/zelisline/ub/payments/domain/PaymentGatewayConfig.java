@@ -102,6 +102,10 @@ public class PaymentGatewayConfig {
     }
 
     public boolean canTest() {
-        return status == GatewayStatus.DRAFT || status == GatewayStatus.ERROR;
+        // ACTIVE/TESTED are testable too — a test must never require demoting a working gateway.
+        return status == GatewayStatus.DRAFT
+                || status == GatewayStatus.ERROR
+                || status == GatewayStatus.TESTED
+                || status == GatewayStatus.ACTIVE;
     }
 }

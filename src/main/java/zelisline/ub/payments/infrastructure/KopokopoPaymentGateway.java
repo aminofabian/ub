@@ -704,15 +704,19 @@ public class KopokopoPaymentGateway implements PaymentGateway {
         }
 
         String authBase = resolveAuthBaseUrl(creds);
+        String envLabel = (isProduction(creds) ? "Production" : "Sandbox")
+                + " via " + authBase.replace("https://", "");
 
         try {
             String token = obtainAccessToken(creds, authBase);
             if (token != null && !token.isBlank()) {
                 return ValidationResult.success();
             }
-            return ValidationResult.failure("AUTH_FAILED", "Could not obtain access token", null);
+            return ValidationResult.failure("AUTH_FAILED",
+                    "[" + envLabel + "] Could not obtain access token", null);
         } catch (Exception e) {
-            return ValidationResult.failure("AUTH_FAILED", e.getMessage(), null);
+            return ValidationResult.failure("AUTH_FAILED",
+                    "[" + envLabel + "] " + e.getMessage(), null);
         }
     }
 
@@ -830,12 +834,16 @@ public class KopokopoPaymentGateway implements PaymentGateway {
         if (value == null) {
             return null;
         }
-        String v = value.trim();
+        // Pasted credentials often carry invisible unicode (zero-width, BOM, NBSP)
+        // that survives trim() and makes OAuth fail with invalid_client.
+        String v = value.replaceAll("[\\u200B\\u200C\\u200D\\u2060\\uFEFF]", "");
+        v = v.replaceAll("[\\u00A0\\u1680\\u2000-\\u200A\\u202F\\u205F\\u3000]", " ");
+        v = v.strip();
         // Pasted credentials sometimes include wrapping quotes.
         if (v.length() >= 2
                 && ((v.startsWith("\"") && v.endsWith("\""))
                 || (v.startsWith("'") && v.endsWith("'")))) {
-            v = v.substring(1, v.length() - 1).trim();
+            v = v.substring(1, v.length() - 1).strip();
         }
         return v;
     }

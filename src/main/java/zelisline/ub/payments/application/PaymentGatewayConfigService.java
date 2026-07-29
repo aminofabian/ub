@@ -170,13 +170,34 @@ public class PaymentGatewayConfigService {
         cfg.setDefault(request.isDefault());
 
         if (request.credentialsJson() != null && !request.credentialsJson().isBlank()) {
+            // Compare decrypted plaintext maps — ciphertext comparison is meaningless
+            // (AES-GCM uses a random IV, so re-encrypting identical creds differs every time).
+            Map<String, String> before = null;
+            String atRest = cfg.getCredentialsJson();
+            if (atRest != null && !atRest.isBlank()) {
+                CredentialReadResult existing = tryReadCredentialsFromBlob(atRest);
+                if (existing.readable()) {
+                    before = existing.credentials();
+                }
+            } else {
+                before = Map.of();
+            }
+
             String mergedPlaintext = mergeCredentialsPlaintext(
                     cfg.getCredentialsJson(),
                     request.credentialsJson());
-            String newEncrypted = encryptionService.encrypt(mergedPlaintext);
-            if (!newEncrypted.equals(cfg.getCredentialsJson())) {
-                cfg.setCredentialsJson(newEncrypted);
-                credentialsChanged = true;
+            Map<String, String> after;
+            try {
+                after = parseCredentialsMap(mergedPlaintext);
+            } catch (JsonProcessingException e) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Invalid credentials JSON: " + e.getMessage());
+            }
+
+            boolean sameAsBefore = before != null && before.equals(after);
+            if (!sameAsBefore) {
+                cfg.setCredentialsJson(encryptionService.encrypt(mergedPlaintext));
+                credentialsChanged = requiresRetest(before, after);
             }
         }
         if (request.displayInstructionsJson() != null) {
@@ -208,11 +229,16 @@ public class PaymentGatewayConfigService {
 
         if (!cfg.canTest()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Gateway must be in DRAFT or ERROR status to test. Current: " + cfg.getStatus());
+                    "Gateway cannot be tested right now. Current: " + cfg.getStatus());
         }
 
-        cfg.setStatus(GatewayStatus.TESTING);
-        configRepository.save(cfg);
+        // A test must never take down a working gateway: ACTIVE stays ACTIVE
+        // throughout (no TESTING window, no ERROR demotion on failure).
+        boolean wasActive = cfg.getStatus() == GatewayStatus.ACTIVE;
+        if (!wasActive) {
+            cfg.setStatus(GatewayStatus.TESTING);
+            configRepository.save(cfg);
+        }
 
         String encryptedAtRest = cfg.getCredentialsJson();
         String decryptedPlaintext = null;
@@ -227,18 +253,16 @@ public class PaymentGatewayConfigService {
 
             ValidationResult result = gw.validateConfiguration(cfg);
 
-            if (decryptedPlaintext != null && !decryptedPlaintext.isBlank()) {
-                cfg.setCredentialsJson(encryptionService.encrypt(decryptedPlaintext));
-            }
+            cfg.setCredentialsJson(encryptedAtRest);
 
             if (result.valid()) {
-                cfg.setStatus(GatewayStatus.TESTED);
+                cfg.setStatus(wasActive ? GatewayStatus.ACTIVE : GatewayStatus.TESTED);
                 cfg.setLastTestedAt(Instant.now());
                 cfg.setTestErrorJson(null);
                 configRepository.save(cfg);
-                return new TestConnectionResponse(true, GatewayStatus.TESTED.name(), null, null);
+                return new TestConnectionResponse(true, cfg.getStatus().name(), null, null);
             } else {
-                cfg.setStatus(GatewayStatus.ERROR);
+                cfg.setStatus(wasActive ? GatewayStatus.ACTIVE : GatewayStatus.ERROR);
                 cfg.setLastTestedAt(Instant.now());
                 cfg.setTestErrorJson(toJson(Map.of(
                         "code", result.errorCode() != null ? result.errorCode() : "UNKNOWN",
@@ -246,14 +270,14 @@ public class PaymentGatewayConfigService {
                         "timestamp", Instant.now().toString()
                 )));
                 configRepository.save(cfg);
-                return new TestConnectionResponse(false, GatewayStatus.ERROR.name(),
-                        result.errorCode(), result.errorMessage());
+                String message = result.errorMessage()
+                        + (wasActive ? " (Gateway remains ACTIVE — payments continue on the stored credentials.)" : "");
+                return new TestConnectionResponse(false, cfg.getStatus().name(),
+                        result.errorCode(), message);
             }
         } catch (Exception e) {
-            if (encryptedAtRest != null && !encryptedAtRest.isBlank()) {
-                cfg.setCredentialsJson(encryptedAtRest);
-            }
-            cfg.setStatus(GatewayStatus.ERROR);
+            cfg.setCredentialsJson(encryptedAtRest);
+            cfg.setStatus(wasActive ? GatewayStatus.ACTIVE : GatewayStatus.ERROR);
             cfg.setLastTestedAt(Instant.now());
             cfg.setTestErrorJson(toJson(Map.of(
                     "code", "INTERNAL_ERROR",
@@ -261,7 +285,7 @@ public class PaymentGatewayConfigService {
                     "timestamp", Instant.now().toString()
             )));
             configRepository.save(cfg);
-            return new TestConnectionResponse(false, GatewayStatus.ERROR.name(),
+            return new TestConnectionResponse(false, cfg.getStatus().name(),
                     "INTERNAL_ERROR", e.getMessage());
         }
     }
@@ -397,8 +421,9 @@ public class PaymentGatewayConfigService {
             }
             Map<String, String> incoming = parseCredentialsMap(incomingJson);
             for (var entry : incoming.entrySet()) {
-                if (entry.getValue() != null && !entry.getValue().isBlank()) {
-                    merged.put(entry.getKey(), entry.getValue().trim());
+                String cleaned = sanitizeCredentialValue(entry.getValue());
+                if (cleaned != null && !cleaned.isBlank()) {
+                    merged.put(entry.getKey(), cleaned);
                 }
             }
             return objectMapper.writeValueAsString(merged);
@@ -406,6 +431,49 @@ public class PaymentGatewayConfigService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Invalid credentials JSON: " + e.getMessage());
         }
+    }
+
+    /**
+     * Cleans a pasted credential: removes zero-width/BOM characters, converts
+     * unicode spaces to plain spaces, strips wrapping quotes and outer whitespace.
+     * Pasted values from dashboards/PDFs often carry invisible characters that
+     * make OAuth fail with {@code invalid_client} despite looking correct.
+     */
+    static String sanitizeCredentialValue(String value) {
+        if (value == null) {
+            return null;
+        }
+        String v = value.replaceAll("[\\u200B\\u200C\\u200D\\u2060\\uFEFF]", "");
+        v = v.replaceAll("[\\u00A0\\u1680\\u2000-\\u200A\\u202F\\u205F\\u3000]", " ");
+        v = v.strip();
+        if (v.length() >= 2
+                && ((v.startsWith("\"") && v.endsWith("\""))
+                || (v.startsWith("'") && v.endsWith("'")))) {
+            v = v.substring(1, v.length() - 1).strip();
+        }
+        return v;
+    }
+
+    /**
+     * True when the credential diff touches anything used for OAuth/API calls.
+     * Webhook till lists only affect which tills we subscribe — no retest needed,
+     * and crucially an ACTIVE gateway must not be demoted for editing them.
+     */
+    private static boolean requiresRetest(Map<String, String> before, Map<String, String> after) {
+        if (before == null) {
+            return true;
+        }
+        java.util.Set<String> keys = new java.util.HashSet<>(before.keySet());
+        keys.addAll(after.keySet());
+        for (String key : keys) {
+            if ("webhookTillNumbers".equals(key)) {
+                continue;
+            }
+            if (!java.util.Objects.equals(before.get(key), after.get(key))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static GatewayCredentialSettingsResponse toCredentialSettings(

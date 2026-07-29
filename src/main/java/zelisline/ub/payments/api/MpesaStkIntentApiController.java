@@ -140,10 +140,10 @@ public class MpesaStkIntentApiController {
     /**
      * Cashier is waiting for a customer to pay the Buy Goods till (no STK prompt).
      * Buygoods webhooks confirm this await by amount (+ optional phone).
+     * Soft-fails with {@code accepted=false} when KopoKopo is not ACTIVE (STK still usable once activated).
      */
     @PostMapping("/till-await")
     @PreAuthorize("hasPermission(null, 'payments.stk.initiate')")
-    @ResponseStatus(HttpStatus.CREATED)
     public PosTillAwaitResponse tillAwait(
             @Valid @RequestBody PosTillAwaitRequest body,
             @RequestHeader("Idempotency-Key") String idempotencyKey,
@@ -151,15 +151,19 @@ public class MpesaStkIntentApiController {
     ) {
         CurrentTenantUser.require(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
-        GatewayStkPush push = gatewayStkPushService.registerTillAwait(
-                businessId,
-                body.amount(),
-                body.phoneNumber(),
-                idempotencyKey != null ? idempotencyKey.trim() : null);
-        return new PosTillAwaitResponse(
-                true,
-                push.getGatewayCheckoutId(),
-                "Waiting for till payment");
+        return gatewayStkPushService.registerTillAwait(
+                        businessId,
+                        body.amount(),
+                        body.phoneNumber(),
+                        idempotencyKey != null ? idempotencyKey.trim() : null)
+                .map(push -> new PosTillAwaitResponse(
+                        true,
+                        push.getGatewayCheckoutId(),
+                        "Waiting for till payment"))
+                .orElseGet(() -> new PosTillAwaitResponse(
+                        false,
+                        null,
+                        "KopoKopo is not ACTIVE — use STK after activating, or activate + Till webhooks for direct till pay"));
     }
 
     private static StkPushStatusResponse toStatusResponse(GatewayStkPush push) {

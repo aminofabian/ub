@@ -131,10 +131,11 @@ public class GatewayStkPushService {
 
     /**
      * Open a POS "waiting for buygoods till payment" slot (no STK prompt).
-     * Buygoods webhooks match these by amount (+ phone when present).
+     * Returns empty when KopoKopo is not ACTIVE — callers must not treat that as fatal
+     * (STK push remains available once the gateway is activated).
      */
     @Transactional
-    public GatewayStkPush registerTillAwait(
+    public Optional<GatewayStkPush> registerTillAwait(
             String businessId,
             BigDecimal amount,
             String phoneNumber,
@@ -147,8 +148,11 @@ public class GatewayStkPushService {
                 .findByBusinessIdAndGatewayTypeAndStatus(businessId, GatewayType.KOPOKOPO, GatewayStatus.ACTIVE)
                 .stream()
                 .findFirst()
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "No ACTIVE KopoKopo gateway — activate KopoKopo and click Till webhooks first."));
+                .orElse(null);
+        if (cfg == null) {
+            log.info("Till await skipped — no ACTIVE KopoKopo for business={}", businessId);
+            return Optional.empty();
+        }
 
         // Replace prior open till-awaits for this business so amount collisions stay rare.
         Instant since = Instant.now().minus(Duration.ofMinutes(15));
@@ -168,7 +172,7 @@ public class GatewayStkPushService {
         String ref = merchantReference != null && !merchantReference.isBlank()
                 ? merchantReference.trim()
                 : checkoutId;
-        return registerPush(
+        return Optional.of(registerPush(
                 businessId,
                 GatewayType.KOPOKOPO,
                 cfg.getId(),
@@ -177,7 +181,7 @@ public class GatewayStkPushService {
                 StkPushContextType.POS_PAYMENT,
                 null,
                 amount.setScale(2, RoundingMode.HALF_UP),
-                phoneNumber != null ? phoneNumber : "");
+                phoneNumber != null ? phoneNumber : ""));
     }
 
     public static boolean isTillAwaitCheckout(String gatewayCheckoutId) {

@@ -9,5 +9,7 @@ public enum StkPushContextType {
     /** Customer tab / AR paydown via public phone portal or staff STK. */
     CREDIT_AR,
     /** Remote grocery / delivery invoice awaiting M-Pesa. */
-    GROCERY_INVOICE
+    GROCERY_INVOICE,
+    /** Kenyan TLD purchase — Palmart platform till; settles via DomainPurchaseService.markPaid. */
+    DOMAIN_ORDER
 }

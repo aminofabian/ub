@@ -69,6 +69,18 @@ public class MyDomainsController {
         );
     }
 
+    @PostMapping("/{domainId}/verify")
+    @PreAuthorize(REQUIRES_MANAGE_SETTINGS)
+    public DomainResponse verifyMyDomain(
+            HttpServletRequest request,
+            @PathVariable String domainId
+    ) {
+        return tenancyService.verifyDomain(
+                TenantRequestIds.resolveBusinessId(request),
+                domainId
+        );
+    }
+
     @DeleteMapping("/{domainId}")
     @PreAuthorize(REQUIRES_MANAGE_SETTINGS)
     @ResponseStatus(HttpStatus.NO_CONTENT)

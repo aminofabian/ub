@@ -232,6 +232,9 @@ public class PublicHostResolverService {
             mapping.setDomain(subdomain);
             mapping.setPrimary(true);
             mapping.setActive(true);
+            mapping.setStatus(zelisline.ub.tenancy.domain.DomainStatus.ACTIVE);
+            mapping.setSource(zelisline.ub.tenancy.domain.DomainSource.PLATFORM_SUBDOMAIN);
+            mapping.setVerifiedAt(java.time.Instant.now());
             domainMappingRepository.save(mapping);
         }
 

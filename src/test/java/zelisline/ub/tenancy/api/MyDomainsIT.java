@@ -108,14 +108,16 @@ class MyDomainsIT {
     }
 
     @Test
-    void addDomain_firstBecomesPrimary() throws Exception {
+    void addDomain_firstBecomesPrimaryPendingUntilVerified() throws Exception {
         mockMvc.perform(authed(post("/api/v1/businesses/me/domains"))
                         .contentType(APPLICATION_JSON)
                         .content("{\"domain\":\"shop.acme.com\"}"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.domain").value("shop.acme.com"))
                 .andExpect(jsonPath("$.primary").value(true))
-                .andExpect(jsonPath("$.active").value(true));
+                .andExpect(jsonPath("$.active").value(false))
+                .andExpect(jsonPath("$.status").value("pending"))
+                .andExpect(jsonPath("$.source").value("manual_connect"));
     }
 
     @Test
@@ -128,6 +130,14 @@ class MyDomainsIT {
     }
 
     @Test
+    void addDomain_rejectsReservedPlatformHost() throws Exception {
+        mockMvc.perform(authed(post("/api/v1/businesses/me/domains"))
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"domain\":\"kiosk.ke\"}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void addDomain_conflictsWhenAlreadyMapped() throws Exception {
         mockMvc.perform(authed(post("/api/v1/businesses/me/domains"))
                         .contentType(APPLICATION_JSON)
@@ -136,10 +146,41 @@ class MyDomainsIT {
     }
 
     @Test
+    void addDomain_reclaimsAfterSoftDelete() throws Exception {
+        domainMappingRepository.save(domain(TENANT_A, "tenant-a.example.com", true));
+        String secondaryId = domainMappingRepository.save(
+                domain(TENANT_A, "extra.acme.com", false)).getId();
+
+        mockMvc.perform(authed(delete("/api/v1/businesses/me/domains/" + secondaryId)))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(authed(post("/api/v1/businesses/me/domains"))
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"domain\":\"extra.acme.com\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.domain").value("extra.acme.com"))
+                .andExpect(jsonPath("$.active").value(false))
+                .andExpect(jsonPath("$.status").value("pending"));
+    }
+
+    @Test
     void setPrimary_onForeignDomainIsNotFound() throws Exception {
         mockMvc.perform(authed(post(
                         "/api/v1/businesses/me/domains/" + otherTenantDomainId + "/primary")))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void setPrimary_refusesPendingDomain() throws Exception {
+        domainMappingRepository.save(domain(TENANT_A, "tenant-a.example.com", true));
+        DomainMapping pending = domain(TENANT_A, "pending.acme.com", false);
+        pending.setActive(false);
+        pending.setStatus(zelisline.ub.tenancy.domain.DomainStatus.PENDING);
+        String pendingId = domainMappingRepository.save(pending).getId();
+
+        mockMvc.perform(authed(post(
+                        "/api/v1/businesses/me/domains/" + pendingId + "/primary")))
+                .andExpect(status().isConflict());
     }
 
     @Test
@@ -209,6 +250,9 @@ class MyDomainsIT {
         d.setDomain(host);
         d.setPrimary(primary);
         d.setActive(true);
+        d.setStatus(zelisline.ub.tenancy.domain.DomainStatus.ACTIVE);
+        d.setSource(zelisline.ub.tenancy.domain.DomainSource.MANUAL_CONNECT);
+        d.setVerifiedAt(java.time.Instant.now());
         return d;
     }
 

@@ -161,7 +161,6 @@ public class PaymentGatewayStkService {
         if (!gatewayRegistry.has(type.name())) {
             return null;
         }
-        PaymentGateway gw = gatewayRegistry.get(type.name());
         try {
             String decrypted;
             try {
@@ -177,30 +176,87 @@ public class PaymentGatewayStkService {
             }
             @SuppressWarnings("unchecked")
             Map<String, String> creds = objectMapper.readValue(decrypted, Map.class);
-
-            StkPushRequest pushReq = new StkPushRequest(
+            return pushWithCredentials(
+                    type.name(),
+                    cfg.getId(),
                     cfg.getBusinessId(),
+                    creds,
                     phoneNumber,
                     amount,
                     reference,
-                    description != null ? description : "Order payment",
-                    publicApiBaseUrl.replaceAll("/$", ""),
-                    creds
-            );
-
-            StkPushResponse response = gw.initiateStkPush(pushReq);
-            if (response.accepted() && response.gatewayCheckoutRequestId() != null) {
-                log.info("STK Push via {} accepted: checkoutId={}", type, response.gatewayCheckoutRequestId());
-                return StkPushOutcome.accepted(type.name(), cfg.getId(), response.gatewayCheckoutRequestId(),
-                        "Check your phone to complete M-Pesa payment.");
-            }
-            log.warn("STK Push via {} rejected: {} {}", type, response.responseCode(), response.responseDescription());
-            return StkPushOutcome.rejected(type.name(), response.responseCode(),
-                    response.responseDescription() != null ? response.responseDescription() : "Payment request declined");
+                    description);
         } catch (Exception e) {
             log.error("STK Push via {} failed for config={}", type, cfg.getId(), e);
             return StkPushOutcome.rejected(type.name(), "ERROR", e.getMessage() != null ? e.getMessage() : "Payment request failed");
         }
+    }
+
+    /**
+     * Initiate STK with an explicit credential map (e.g. Palmart platform till for domain orders).
+     */
+    public StkPushOutcome initiateWithCredentials(
+            String gatewayType,
+            String configId,
+            String businessIdForRequest,
+            Map<String, String> credentials,
+            String phoneNumber,
+            BigDecimal amount,
+            String reference,
+            String description
+    ) {
+        if (credentials == null || credentials.isEmpty()) {
+            return StkPushOutcome.rejected(gatewayType, "NO_GATEWAY", "Platform STK credentials are not configured.");
+        }
+        if (!gatewayRegistry.has(gatewayType)) {
+            return StkPushOutcome.rejected(gatewayType, "NO_GATEWAY", "Gateway is not available.");
+        }
+        try {
+            return pushWithCredentials(
+                    gatewayType,
+                    configId,
+                    businessIdForRequest,
+                    credentials,
+                    phoneNumber,
+                    amount,
+                    reference,
+                    description);
+        } catch (Exception e) {
+            log.error("STK Push via {} (explicit creds) failed", gatewayType, e);
+            return StkPushOutcome.rejected(
+                    gatewayType, "ERROR", e.getMessage() != null ? e.getMessage() : "Payment request failed");
+        }
+    }
+
+    private StkPushOutcome pushWithCredentials(
+            String gatewayType,
+            String configId,
+            String businessIdForRequest,
+            Map<String, String> creds,
+            String phoneNumber,
+            BigDecimal amount,
+            String reference,
+            String description
+    ) {
+        PaymentGateway gw = gatewayRegistry.get(gatewayType);
+        StkPushRequest pushReq = new StkPushRequest(
+                businessIdForRequest,
+                phoneNumber,
+                amount,
+                reference,
+                description != null ? description : "Order payment",
+                publicApiBaseUrl.replaceAll("/$", ""),
+                creds
+        );
+
+        StkPushResponse response = gw.initiateStkPush(pushReq);
+        if (response.accepted() && response.gatewayCheckoutRequestId() != null) {
+            log.info("STK Push via {} accepted: checkoutId={}", gatewayType, response.gatewayCheckoutRequestId());
+            return StkPushOutcome.accepted(gatewayType, configId, response.gatewayCheckoutRequestId(),
+                    "Check your phone to complete M-Pesa payment.");
+        }
+        log.warn("STK Push via {} rejected: {} {}", gatewayType, response.responseCode(), response.responseDescription());
+        return StkPushOutcome.rejected(gatewayType, response.responseCode(),
+                response.responseDescription() != null ? response.responseDescription() : "Payment request declined");
     }
 
     public record StkPushOutcome(

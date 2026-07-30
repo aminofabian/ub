@@ -122,6 +122,11 @@ public class SuperAdminBusinessController {
         return tenancyService.setPrimaryDomain(businessId, domainId);
     }
 
+    @PostMapping("/{businessId}/domains/{domainId}/verify")
+    public DomainResponse verifyDomain(@PathVariable String businessId, @PathVariable String domainId) {
+        return tenancyService.verifyDomain(businessId, domainId);
+    }
+
     @DeleteMapping("/{businessId}/domains/{domainId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteDomain(@PathVariable String businessId, @PathVariable String domainId) {

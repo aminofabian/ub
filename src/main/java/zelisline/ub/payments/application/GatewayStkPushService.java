@@ -88,6 +88,8 @@ public class GatewayStkPushService {
     private final org.springframework.context.ApplicationEventPublisher eventPublisher;
     private final BusinessCreditSettingsService businessCreditSettingsService;
     private final ObjectProvider<GroceryInvoiceService> groceryInvoiceService;
+    private final ObjectProvider<zelisline.ub.tenancy.application.DomainPurchaseService> domainPurchaseService;
+    private final ObjectProvider<zelisline.ub.platform.application.PlatformDomainSettingsService> platformDomainSettingsService;
 
     @Transactional
     public GatewayStkPush registerPush(
@@ -273,6 +275,54 @@ public class GatewayStkPushService {
             return true;
         }
 
+        return settleMatchedWebhook(push.get(), businessId, eventId, parsed);
+    }
+
+    /**
+     * Webhook authenticated with Palmart platform KopoKopo credentials (domain-order STK).
+     * Resolves the push by checkout id globally (business id comes from the push row).
+     */
+    @Transactional
+    public boolean processPlatformKopokopoWebhook(WebhookResult parsed) {
+        if (parsed == null) {
+            return false;
+        }
+        String eventId = parsed.webhookEventId() != null && !parsed.webhookEventId().isBlank()
+                ? parsed.webhookEventId()
+                : parsed.gatewayTransactionId();
+        if (eventId != null && !eventId.isBlank()
+                && webhookEventRepository.existsByGatewayTypeAndGatewayEventId(GatewayType.KOPOKOPO, eventId)) {
+            log.info("KopoKopo platform webhook duplicate ignored: eventId={}", eventId);
+            return true;
+        }
+
+        Optional<GatewayStkPush> push = Optional.empty();
+        if (parsed.gatewayCheckoutId() != null && !parsed.gatewayCheckoutId().isBlank()) {
+            push = pushRepository.findByGatewayTypeAndGatewayCheckoutId(
+                    GatewayType.KOPOKOPO, parsed.gatewayCheckoutId().trim());
+        }
+        if (push.isEmpty() && parsed.reference() != null && !parsed.reference().isBlank()) {
+            push = pushRepository.findFirstByMerchantReferenceAndStatusAndContextType(
+                    parsed.reference().trim(),
+                    GatewayStkPushStatuses.PENDING,
+                    StkPushContextType.DOMAIN_ORDER);
+        }
+        if (push.isEmpty()
+                || push.get().getContextType() != StkPushContextType.DOMAIN_ORDER) {
+            log.warn("KopoKopo platform webhook: no DOMAIN_ORDER push checkout={} ref={}",
+                    parsed.gatewayCheckoutId(), parsed.reference());
+            return true;
+        }
+
+        return settleMatchedWebhook(push.get(), push.get().getBusinessId(), eventId, parsed);
+    }
+
+    private boolean settleMatchedWebhook(
+            GatewayStkPush push,
+            String businessId,
+            String eventId,
+            WebhookResult parsed
+    ) {
         if (eventId != null && !eventId.isBlank()) {
             try {
                 PaymentWebhookEvent audit = new PaymentWebhookEvent();
@@ -289,11 +339,11 @@ public class GatewayStkPushService {
         }
 
         if (parsed.success()) {
-            confirmPush(push.get(), parsed.gatewayTransactionId(), parsed.amount());
+            confirmPush(push, parsed.gatewayTransactionId(), parsed.amount());
             return true;
         }
         if (parsed.terminalFailure()) {
-            markFailed(push.get(), "Payment declined by M-Pesa");
+            markFailed(push, "Payment declined by M-Pesa");
             return true;
         }
         return true;
@@ -311,13 +361,8 @@ public class GatewayStkPushService {
         if (isTillAwaitCheckout(push.getGatewayCheckoutId())) {
             return Optional.of(push);
         }
-        PaymentGatewayConfig cfg = resolveConfig(push);
-        if (cfg == null) {
-            return Optional.of(push);
-        }
-
-        Map<String, String> creds = decryptCredentials(cfg);
-        if (creds == null) {
+        Map<String, String> creds = resolveCredentialsForPush(push);
+        if (creds == null || creds.isEmpty()) {
             return Optional.of(push);
         }
 
@@ -713,6 +758,7 @@ public class GatewayStkPushService {
                     "Storefront till payment confirmed push={} txn={}",
                     push.getId(), gatewayTxnId);
             case GROCERY_INVOICE -> confirmGroceryInvoice(push);
+            case DOMAIN_ORDER -> confirmDomainOrder(push);
             default -> log.warn("Unknown STK context type: {}", push.getContextType());
         }
     }
@@ -751,6 +797,16 @@ public class GatewayStkPushService {
                 }
             } catch (Exception e) {
                 log.warn("Failed to mark remote grocery invoice STK failed {}", push.getContextId(), e);
+            }
+        }
+        if (push.getContextType() == StkPushContextType.DOMAIN_ORDER && push.getContextId() != null) {
+            try {
+                var purchase = domainPurchaseService.getIfAvailable();
+                if (purchase != null) {
+                    purchase.markStkFailed(push.getBusinessId(), push.getContextId(), reason);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to mark domain order STK failed {}", push.getContextId(), e);
             }
         }
         publishStkRealtime(push, false, reason);
@@ -909,6 +965,31 @@ public class GatewayStkPushService {
         }
     }
 
+    private void confirmDomainOrder(GatewayStkPush push) {
+        if (push.getContextId() == null) {
+            return;
+        }
+        try {
+            var purchase = domainPurchaseService.getIfAvailable();
+            if (purchase == null) {
+                log.warn("DomainPurchaseService unavailable for STK settle {}", push.getId());
+                return;
+            }
+            purchase.settleFromStk(
+                    push.getBusinessId(),
+                    push.getContextId(),
+                    push.getGatewayCheckoutId(),
+                    push.getGatewayTransactionId(),
+                    push.getPhoneNumber());
+            publishStkRealtime(push, true, "Domain order paid");
+            log.info("Domain order STK settled order={} txn={}",
+                    push.getContextId(), push.getGatewayTransactionId());
+        } catch (Exception e) {
+            log.error("Failed to settle domain order {}", push.getContextId(), e);
+            markFailed(push, e.getMessage());
+        }
+    }
+
     private void publishStkRealtime(GatewayStkPush push, boolean success, String message) {
         eventPublisher.publishEvent(new RealtimeBridge.StkPaymentSettledEvent(
                 push.getBusinessId(),
@@ -923,6 +1004,10 @@ public class GatewayStkPushService {
 
     private PaymentGatewayConfig resolveConfig(GatewayStkPush push) {
         if (push.getConfigId() != null && !push.getConfigId().isBlank()) {
+            if (zelisline.ub.platform.application.PlatformDomainSettingsService.PLATFORM_DOMAIN_STK_CONFIG_ID
+                    .equals(push.getConfigId())) {
+                return null;
+            }
             PaymentGatewayConfig cfg = configRepository.findById(push.getConfigId()).orElse(null);
             if (cfg != null && push.getBusinessId().equals(cfg.getBusinessId())) {
                 return cfg;
@@ -933,6 +1018,24 @@ public class GatewayStkPushService {
                 .stream()
                 .findFirst()
                 .orElse(null);
+    }
+
+    private Map<String, String> resolveCredentialsForPush(GatewayStkPush push) {
+        if (push.getConfigId() != null
+                && zelisline.ub.platform.application.PlatformDomainSettingsService.PLATFORM_DOMAIN_STK_CONFIG_ID
+                        .equals(push.getConfigId())) {
+            var settings = platformDomainSettingsService.getIfAvailable();
+            if (settings == null) {
+                return null;
+            }
+            Map<String, String> creds = settings.resolvePalmartStkCredentials();
+            return creds.isEmpty() ? null : creds;
+        }
+        PaymentGatewayConfig cfg = resolveConfig(push);
+        if (cfg == null) {
+            return null;
+        }
+        return decryptCredentials(cfg);
     }
 
     @SuppressWarnings("unchecked")

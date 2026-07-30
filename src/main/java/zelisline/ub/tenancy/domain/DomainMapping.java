@@ -5,6 +5,8 @@ import java.util.UUID;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
@@ -34,6 +36,30 @@ public class DomainMapping {
     @Column(name = "active", nullable = false)
     private boolean active = true;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false, length = 32)
+    private DomainStatus status = DomainStatus.ACTIVE;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "source", nullable = false, length = 32)
+    private DomainSource source = DomainSource.MANUAL_CONNECT;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "zone_source", length = 32)
+    private DomainZoneSource zoneSource;
+
+    @Column(name = "hostafrica_domain_id", length = 64)
+    private String hostafricaDomainId;
+
+    @Column(name = "verified_at")
+    private Instant verifiedAt;
+
+    @Column(name = "last_error", columnDefinition = "TEXT")
+    private String lastError;
+
+    @Column(name = "dns_instruction_json", columnDefinition = "JSON")
+    private String dnsInstructionJson;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -54,6 +80,12 @@ public class DomainMapping {
         }
         updatedAt = now;
         domain = normalizeDomain(domain);
+        if (status == null) {
+            status = DomainStatus.ACTIVE;
+        }
+        if (source == null) {
+            source = DomainSource.MANUAL_CONNECT;
+        }
     }
 
     @PreUpdate

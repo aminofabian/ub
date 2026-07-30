@@ -2,11 +2,14 @@ package zelisline.ub.tenancy.application;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
@@ -44,6 +47,10 @@ import zelisline.ub.tenancy.api.dto.UpdateBusinessRequest;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.domain.DomainMapping;
+import zelisline.ub.tenancy.domain.DomainSource;
+import zelisline.ub.tenancy.domain.DomainStatus;
+import zelisline.ub.tenancy.domain.DomainZoneSource;
+import zelisline.ub.tenancy.integrations.vercel.VercelProjectDomainClient;
 import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
@@ -74,6 +81,9 @@ public class TenancyService {
     private final GlobalCatalogResolver globalCatalogResolver;
     private final RegionDefaults regionDefaults;
     private final RegionCatalogAuditService regionCatalogAuditService;
+    private final ReservedHostnameGuard reservedHostnameGuard;
+    private final VercelProjectDomainClient vercelProjectDomainClient;
+    private final ObjectMapper objectMapper;
 
     @Transactional
     public BusinessResponse createBusiness(CreateBusinessRequest request) {
@@ -116,11 +126,7 @@ public class TenancyService {
             normalizedSlug
         );
         if (hostname != null) {
-            DomainMapping domain = new DomainMapping();
-            domain.setBusinessId(saved.getId());
-            domain.setDomain(hostname);
-            domain.setPrimary(true);
-            domain.setActive(true);
+            DomainMapping domain = newPlatformSubdomain(saved.getId(), hostname);
             domainMappingRepository.save(domain);
         }
 
@@ -229,9 +235,10 @@ public class TenancyService {
             );
         }
         String normalized = normalizeHostname(domainName);
+        reservedHostnameGuard.assertClaimable(normalized);
         if (
             domainMappingRepository
-                .findByDomainAndActiveTrue(normalized)
+                .findByDomainAndDeletedAtIsNull(normalized)
                 .isPresent()
         ) {
             throw new ResponseStatusException(
@@ -243,64 +250,101 @@ public class TenancyService {
         DomainMapping domain = new DomainMapping();
         domain.setBusinessId(businessId);
         domain.setDomain(normalized);
-        domain.setActive(true);
+        // Pending until Vercel verify (or ops activation). Host resolve ignores inactive.
+        domain.setActive(false);
+        domain.setStatus(DomainStatus.PENDING);
+        domain.setSource(DomainSource.MANUAL_CONNECT);
+        domain.setZoneSource(DomainZoneSource.EXTERNAL);
 
-        boolean hasExistingPrimary = !domainMappingRepository
+        boolean hasExistingDomain = !domainMappingRepository
             .findByBusinessIdAndDeletedAtIsNull(businessId)
             .isEmpty();
-        domain.setPrimary(!hasExistingPrimary);
+        // Keep platform subdomain as default primary when present.
+        domain.setPrimary(!hasExistingDomain);
 
+        applyVercelAttach(domain);
         DomainMapping saved = domainMappingRepository.save(domain);
         return toResponse(saved);
     }
 
     @Transactional
-    public void deleteDomain(String businessId, String domainId) {
-        DomainMapping domain = domainMappingRepository
-            .findById(domainId)
-            .orElseThrow(() ->
-                new ResponseStatusException(
-                    HttpStatus.NOT_FOUND,
-                    "Domain not found"
-                )
-            );
-        if (
-            !domain.getBusinessId().equals(businessId) ||
-            domain.getDeletedAt() != null
-        ) {
+    public DomainResponse verifyDomain(String businessId, String domainId) {
+        DomainMapping domain = requireOwnedDomain(businessId, domainId);
+        if (domain.getSource() == DomainSource.PLATFORM_SUBDOMAIN) {
+            return toResponse(domain);
+        }
+        domain.setStatus(DomainStatus.VERIFYING);
+        domain.setLastError(null);
+
+        if (!vercelProjectDomainClient.configured()) {
+            domain.setStatus(DomainStatus.PENDING);
+            domain.setLastError("vercel_not_configured");
+            domainMappingRepository.save(domain);
             throw new ResponseStatusException(
-                HttpStatus.NOT_FOUND,
-                "Domain not found"
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "Domain verification requires Vercel configuration"
             );
         }
+
+        var result = vercelProjectDomainClient.verifyDomain(domain.getDomain());
+        if (result.skipped()) {
+            domain.setStatus(DomainStatus.PENDING);
+            domain.setLastError(result.error());
+            domainMappingRepository.save(domain);
+            throw new ResponseStatusException(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "Domain verification unavailable"
+            );
+        }
+        if (!result.ok()) {
+            domain.setStatus(DomainStatus.FAILED);
+            domain.setLastError(result.error());
+            writeDnsInstructions(domain, result.dnsInstructions());
+            domainMappingRepository.save(domain);
+            throw new ResponseStatusException(
+                HttpStatus.BAD_GATEWAY,
+                "Vercel verification failed: " + result.error()
+            );
+        }
+
+        writeDnsInstructions(domain, result.dnsInstructions());
+        if (result.verified()) {
+            activateVerified(domain);
+        } else {
+            domain.setStatus(DomainStatus.PENDING);
+            domain.setActive(false);
+        }
+        return toResponse(domainMappingRepository.save(domain));
+    }
+
+    @Transactional
+    public void deleteDomain(String businessId, String domainId) {
+        DomainMapping domain = requireOwnedDomain(businessId, domainId);
         if (domain.isPrimary()) {
             throw new ResponseStatusException(
                 HttpStatus.CONFLICT,
                 "Cannot delete the primary domain. Promote another domain first."
             );
         }
+        if (domain.getSource() != DomainSource.PLATFORM_SUBDOMAIN
+                && vercelProjectDomainClient.configured()) {
+            vercelProjectDomainClient.removeDomain(domain.getDomain());
+        }
+        // Vacate UNIQUE(domain) so the hostname can be reclaimed.
+        domain.setDomain(vacateHostname(domain.getDomain(), domain.getId()));
         domain.setActive(false);
+        domain.setStatus(DomainStatus.FAILED);
         domain.setDeletedAt(Instant.now());
         domainMappingRepository.save(domain);
     }
 
     @Transactional
     public DomainResponse setPrimaryDomain(String businessId, String domainId) {
-        DomainMapping toPromote = domainMappingRepository
-            .findById(domainId)
-            .orElseThrow(() ->
-                new ResponseStatusException(
-                    HttpStatus.NOT_FOUND,
-                    "Domain not found"
-                )
-            );
-        if (
-            !toPromote.getBusinessId().equals(businessId) ||
-            toPromote.getDeletedAt() != null
-        ) {
+        DomainMapping toPromote = requireOwnedDomain(businessId, domainId);
+        if (!toPromote.isActive() || toPromote.getStatus() != DomainStatus.ACTIVE) {
             throw new ResponseStatusException(
-                HttpStatus.NOT_FOUND,
-                "Domain not found"
+                HttpStatus.CONFLICT,
+                "Only verified active domains can be primary"
             );
         }
 
@@ -838,8 +882,137 @@ public class TenancyService {
             domain.getBusinessId(),
             domain.getDomain(),
             domain.isPrimary(),
-            domain.isActive()
+            domain.isActive(),
+            domain.getStatus() == null ? null : domain.getStatus().name().toLowerCase(Locale.ROOT),
+            domain.getSource() == null ? null : domain.getSource().name().toLowerCase(Locale.ROOT),
+            domain.getZoneSource() == null ? null : domain.getZoneSource().name().toLowerCase(Locale.ROOT),
+            domain.getVerifiedAt(),
+            readDnsInstructions(domain),
+            domain.getLastError()
         );
+    }
+
+    private DomainMapping newPlatformSubdomain(String businessId, String hostname) {
+        DomainMapping domain = new DomainMapping();
+        domain.setBusinessId(businessId);
+        domain.setDomain(hostname);
+        domain.setPrimary(true);
+        domain.setActive(true);
+        domain.setStatus(DomainStatus.ACTIVE);
+        domain.setSource(DomainSource.PLATFORM_SUBDOMAIN);
+        domain.setZoneSource(null);
+        domain.setVerifiedAt(Instant.now());
+        return domain;
+    }
+
+    private DomainMapping requireOwnedDomain(String businessId, String domainId) {
+        DomainMapping domain = domainMappingRepository
+            .findById(domainId)
+            .orElseThrow(() ->
+                new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Domain not found"
+                )
+            );
+        if (
+            !domain.getBusinessId().equals(businessId) ||
+            domain.getDeletedAt() != null
+        ) {
+            throw new ResponseStatusException(
+                HttpStatus.NOT_FOUND,
+                "Domain not found"
+            );
+        }
+        return domain;
+    }
+
+    private void applyVercelAttach(DomainMapping domain) {
+        Map<String, Object> fallback = defaultExternalDnsInstructions(domain.getDomain());
+        if (!vercelProjectDomainClient.configured()) {
+            writeDnsInstructions(domain, fallback);
+            return;
+        }
+        var result = vercelProjectDomainClient.addDomain(domain.getDomain());
+        if (result.skipped()) {
+            writeDnsInstructions(domain, fallback);
+            return;
+        }
+        if (!result.ok()) {
+            domain.setStatus(DomainStatus.FAILED);
+            domain.setLastError(result.error());
+            writeDnsInstructions(domain, fallback);
+            return;
+        }
+        writeDnsInstructions(
+            domain,
+            result.dnsInstructions() == null || result.dnsInstructions().isEmpty()
+                ? fallback
+                : result.dnsInstructions()
+        );
+        if (result.verified()) {
+            activateVerified(domain);
+        }
+    }
+
+    private void activateVerified(DomainMapping domain) {
+        domain.setActive(true);
+        domain.setStatus(DomainStatus.ACTIVE);
+        domain.setVerifiedAt(Instant.now());
+        domain.setLastError(null);
+    }
+
+    private void writeDnsInstructions(DomainMapping domain, Map<String, Object> instructions) {
+        if (instructions == null || instructions.isEmpty()) {
+            domain.setDnsInstructionJson(null);
+            return;
+        }
+        try {
+            domain.setDnsInstructionJson(objectMapper.writeValueAsString(instructions));
+        } catch (Exception ex) {
+            domain.setDnsInstructionJson(null);
+        }
+    }
+
+    private Map<String, Object> readDnsInstructions(DomainMapping domain) {
+        String raw = domain.getDnsInstructionJson();
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(raw, new TypeReference<Map<String, Object>>() {});
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private static Map<String, Object> defaultExternalDnsInstructions(String hostname) {
+        Map<String, Object> instructions = new LinkedHashMap<>();
+        instructions.put("provider", "external");
+        instructions.put("hostname", hostname);
+        instructions.put(
+            "recommendedRecords",
+            List.of(
+                Map.of("type", "CNAME", "name", "www", "value", "cname.vercel-dns.com"),
+                Map.of("type", "A", "name", "@", "value", "76.76.21.21")
+            )
+        );
+        instructions.put(
+            "note",
+            "Point DNS at Vercel, then click Verify. Apex may use A 76.76.21.21; www should CNAME to cname.vercel-dns.com."
+        );
+        return instructions;
+    }
+
+    /** Soft-delete vacate so UNIQUE(domain) can be reclaimed (mirrors archived business slugs). */
+    static String vacateHostname(String hostname, String id) {
+        String base = hostname == null ? "domain" : hostname.trim().toLowerCase(Locale.ROOT);
+        String suffix = "-" + id;
+        int max = 255;
+        if (base.length() + suffix.length() <= max) {
+            return base + suffix;
+        }
+        int keep = Math.max(1, max - suffix.length());
+        return base.substring(0, keep) + suffix;
     }
 
     // ── Super-admin: business users ────────────────────────────────────

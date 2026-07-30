@@ -146,6 +146,9 @@ class SuperAdminDomainsIT {
         d.setDomain(host);
         d.setPrimary(primary);
         d.setActive(true);
+        d.setStatus(zelisline.ub.tenancy.domain.DomainStatus.ACTIVE);
+        d.setSource(zelisline.ub.tenancy.domain.DomainSource.MANUAL_CONNECT);
+        d.setVerifiedAt(java.time.Instant.now());
         return d;
     }
 }

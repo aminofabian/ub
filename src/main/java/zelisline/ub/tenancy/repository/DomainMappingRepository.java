@@ -14,6 +14,8 @@ import zelisline.ub.tenancy.domain.DomainMapping;
 public interface DomainMappingRepository extends JpaRepository<DomainMapping, String> {
     Optional<DomainMapping> findByDomainAndActiveTrue(String domain);
 
+    Optional<DomainMapping> findByDomainAndDeletedAtIsNull(String domain);
+
     List<DomainMapping> findByBusinessIdAndDeletedAtIsNull(String businessId);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)

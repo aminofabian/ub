@@ -22,6 +22,12 @@ public interface GatewayStkPushRepository extends JpaRepository<GatewayStkPush, 
             String status
     );
 
+    Optional<GatewayStkPush> findFirstByMerchantReferenceAndStatusAndContextType(
+            String merchantReference,
+            String status,
+            zelisline.ub.payments.domain.StkPushContextType contextType
+    );
+
     List<GatewayStkPush> findByStatusAndCreatedAtAfterOrderByCreatedAtAsc(
             String status,
             Instant createdAfter

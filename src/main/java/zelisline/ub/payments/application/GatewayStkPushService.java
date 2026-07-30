@@ -624,7 +624,8 @@ public class GatewayStkPushService {
             return Optional.empty();
         }
 
-        Instant since = Instant.now().minus(Duration.ofMinutes(5));
+        // Window for matching Buy Goods to an open till-await / STK (cashier + storefront).
+        Instant since = Instant.now().minus(Duration.ofMinutes(10));
         List<GatewayStkPush> pending = new java.util.ArrayList<>();
         pending.addAll(pushRepository
                 .findByBusinessIdAndContextTypeAndStatusAndCreatedAtAfterOrderByCreatedAtDesc(

@@ -29,10 +29,14 @@ import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
 import zelisline.ub.storefront.WebOrderStatuses;
 import zelisline.ub.storefront.api.dto.PublicCheckoutPaymentOptions;
 import zelisline.ub.storefront.api.dto.PublicOnlinePaymentMethod;
+import zelisline.ub.storefront.api.dto.PublicTillAwaitRequest;
+import zelisline.ub.storefront.api.dto.PublicTillAwaitResponse;
+import zelisline.ub.storefront.api.dto.PublicTillAwaitStatusResponse;
 import zelisline.ub.storefront.api.dto.PublicWebOrderPaymentStatusResponse;
 import zelisline.ub.storefront.api.dto.PublicWebStkPushResponse;
 import zelisline.ub.storefront.domain.WebOrder;
 import zelisline.ub.storefront.repository.WebOrderRepository;
+import zelisline.ub.tenancy.application.FeatureFlagService;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
@@ -54,11 +58,13 @@ public class PublicStorefrontPaymentService {
     private final GatewayStkPushService gatewayStkPushService;
     private final StkPushRetryHelper stkPushRetryHelper;
     private final ObjectMapper objectMapper;
+    private final FeatureFlagService featureFlagService;
 
     @Transactional(readOnly = true)
     public PublicCheckoutPaymentOptions checkoutOptions(String slug) {
         Business business = requireBusiness(slug);
         String businessId = business.getId();
+        boolean tillListenEnabled = featureFlagService.isStorefrontTillListen(businessId);
 
         List<PlatformPaymentGateway> platformEnabled = platformPaymentGatewayService.listEnabled();
         Set<GatewayType> enabledTypes = platformEnabled.stream()
@@ -94,7 +100,64 @@ public class PublicStorefrontPaymentService {
         }
 
         online.sort((a, b) -> a.displayName().compareToIgnoreCase(b.displayName()));
-        return new PublicCheckoutPaymentOptions(manual, online);
+        return new PublicCheckoutPaymentOptions(manual, online, tillListenEnabled);
+    }
+
+    @Transactional
+    public PublicTillAwaitResponse registerTillAwait(String slug, PublicTillAwaitRequest body) {
+        Business business = requireBusiness(slug);
+        if (!featureFlagService.isStorefrontTillListen(business.getId())) {
+            return new PublicTillAwaitResponse(
+                    false,
+                    false,
+                    null,
+                    "Till listening is disabled for this storefront");
+        }
+        return gatewayStkPushService
+                .registerStorefrontTillAwait(
+                        business.getId(),
+                        body.amount(),
+                        body.phoneNumber(),
+                        null)
+                .map(push -> new PublicTillAwaitResponse(
+                        true,
+                        true,
+                        push.getGatewayCheckoutId(),
+                        "Waiting for till payment"))
+                .orElseGet(() -> new PublicTillAwaitResponse(
+                        false,
+                        true,
+                        null,
+                        "Online till payments are not available right now"));
+    }
+
+    @Transactional
+    public PublicTillAwaitStatusResponse tillAwaitStatus(String slug, String checkoutRequestId) {
+        Business business = requireBusiness(slug);
+        if (checkoutRequestId == null || checkoutRequestId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "checkoutRequestId is required");
+        }
+        GatewayStkPush push = gatewayStkPushService
+                .findByCheckoutId(GatewayType.KOPOKOPO, checkoutRequestId.trim())
+                .filter(p -> business.getId().equals(p.getBusinessId()))
+                .filter(p -> p.getContextType() == StkPushContextType.STOREFRONT_CART)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Till await not found"));
+
+        if (zelisline.ub.payments.domain.GatewayStkPushStatuses.PENDING.equals(push.getStatus())) {
+            // Storefront awaits settle via buygoods only — no KopoKopo poll.
+        }
+
+        boolean success = zelisline.ub.payments.domain.GatewayStkPushStatuses.SUCCESS.equals(push.getStatus());
+        boolean failed = zelisline.ub.payments.domain.GatewayStkPushStatuses.FAILED.equals(push.getStatus());
+        boolean pending = zelisline.ub.payments.domain.GatewayStkPushStatuses.PENDING.equals(push.getStatus());
+        return new PublicTillAwaitStatusResponse(
+                push.getStatus(),
+                push.getGatewayCheckoutId(),
+                push.getGatewayTransactionId(),
+                push.getFailureReason(),
+                success,
+                failed,
+                pending);
     }
 
     /**

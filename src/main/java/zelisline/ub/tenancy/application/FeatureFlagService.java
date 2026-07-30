@@ -69,6 +69,30 @@ public class FeatureFlagService {
     public static final String FLAG_POS_CASHIER_ADD_PHOTO = "pos.cashier_add_photo";
 
     /**
+     * Listen for Buy Goods till payments when the cashier opens checkout / pay.
+     * Absent defaults to enabled.
+     */
+    public static final String FLAG_POS_TILL_LISTEN_CHECKOUT = "pos.till_listen_checkout";
+
+    /**
+     * Listen whenever an open cart tab has a positive total (before checkout).
+     * Absent defaults to disabled.
+     */
+    public static final String FLAG_POS_TILL_LISTEN_OPEN_CART = "pos.till_listen_open_cart";
+
+    /**
+     * Listen when the M-Pesa tender is selected on the pay drawer.
+     * Absent defaults to disabled.
+     */
+    public static final String FLAG_POS_TILL_LISTEN_MPESA = "pos.till_listen_mpesa";
+
+    /**
+     * Listen for Buy Goods on the public storefront (cart preview + checkout).
+     * Absent defaults to enabled.
+     */
+    public static final String FLAG_STOREFRONT_TILL_LISTEN = "storefront.till_listen";
+
+    /**
      * When enabled, opening a shift prefills denomination quantities from the
      * most recently closed shift at that branch (cashier can still edit).
      */
@@ -113,6 +137,30 @@ public class FeatureFlagService {
     public boolean isEnabled(String businessId, String flag) {
         Boolean v = allFlags(businessId).get(flag);
         return Boolean.TRUE.equals(v);
+    }
+
+    /**
+     * Flags that default ON when absent (till listen at checkout / storefront).
+     */
+    public boolean isEnabledDefaultTrue(String businessId, String flag) {
+        Boolean v = allFlags(businessId).get(flag);
+        return v == null || Boolean.TRUE.equals(v);
+    }
+
+    public boolean isPosTillListenCheckout(String businessId) {
+        return isEnabledDefaultTrue(businessId, FLAG_POS_TILL_LISTEN_CHECKOUT);
+    }
+
+    public boolean isPosTillListenOpenCart(String businessId) {
+        return isEnabled(businessId, FLAG_POS_TILL_LISTEN_OPEN_CART);
+    }
+
+    public boolean isPosTillListenMpesa(String businessId) {
+        return isEnabled(businessId, FLAG_POS_TILL_LISTEN_MPESA);
+    }
+
+    public boolean isStorefrontTillListen(String businessId) {
+        return isEnabledDefaultTrue(businessId, FLAG_STOREFRONT_TILL_LISTEN);
     }
 
     /** Shortcut for Phase 9 multi-branch check. */

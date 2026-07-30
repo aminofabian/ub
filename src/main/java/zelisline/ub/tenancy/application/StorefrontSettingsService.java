@@ -19,6 +19,7 @@ import zelisline.ub.tenancy.api.dto.DeliveryAreaDefaults;
 import zelisline.ub.tenancy.api.dto.DeliveryAreaDto;
 import zelisline.ub.tenancy.api.dto.FeatureFlagsPatchRequest;
 import zelisline.ub.tenancy.api.dto.PosDraftsFeatureFlagsPatch;
+import zelisline.ub.tenancy.api.dto.PosTillListenFeatureFlagsPatch;
 import zelisline.ub.tenancy.api.dto.StorefrontPatchRequest;
 import zelisline.ub.tenancy.api.dto.StorefrontSettingsResponse;
 import zelisline.ub.tenancy.api.dto.TenantAuthConfigDto;
@@ -619,7 +620,8 @@ public class StorefrontSettingsService {
                         && patch.posCashierCreateProduct() == null
                         && patch.posCashierWeighedToggle() == null
                         && patch.posCashierAddPhoto() == null
-                        && patch.shiftsPrefillOpeningFromLastClose() == null)) {
+                        && patch.shiftsPrefillOpeningFromLastClose() == null
+                        && patch.tillListen() == null)) {
             return currentSettings;
         }
         ObjectNode root = parseRoot(currentSettings);
@@ -653,8 +655,21 @@ public class StorefrontSettingsService {
                 FeatureFlagService.FLAG_SHIFTS_PREFILL_OPENING_FROM_LAST_CLOSE,
                 patch.shiftsPrefillOpeningFromLastClose()
         );
+        if (patch.tillListen() != null) {
+            applyTillListenFlags(flags, patch.tillListen());
+        }
         root.set(KEY_FEATURES, flags);
         return writeRoot(root);
+    }
+
+    private void applyTillListenFlags(
+            ObjectNode flags,
+            PosTillListenFeatureFlagsPatch patch
+    ) {
+        putFlagIfPresent(flags, FeatureFlagService.FLAG_POS_TILL_LISTEN_CHECKOUT, patch.checkout());
+        putFlagIfPresent(flags, FeatureFlagService.FLAG_POS_TILL_LISTEN_OPEN_CART, patch.openCart());
+        putFlagIfPresent(flags, FeatureFlagService.FLAG_POS_TILL_LISTEN_MPESA, patch.mpesaSelected());
+        putFlagIfPresent(flags, FeatureFlagService.FLAG_STOREFRONT_TILL_LISTEN, patch.storefront());
     }
 
     private ObjectNode copyFeatureFlags(ObjectNode root) {

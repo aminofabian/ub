@@ -125,6 +125,24 @@ public class PublicStorefrontController {
         return ResponseEntity.ok().cacheControl(CacheControl.maxAge(Duration.ofSeconds(30))).body(body);
     }
 
+    @PostMapping("/payments/till-await")
+    public ResponseEntity<zelisline.ub.storefront.api.dto.PublicTillAwaitResponse> tillAwait(
+            @PathVariable String slug,
+            @Valid @RequestBody zelisline.ub.storefront.api.dto.PublicTillAwaitRequest body
+    ) {
+        var out = publicStorefrontPaymentService.registerTillAwait(slug, body);
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(out);
+    }
+
+    @GetMapping("/payments/till-await/status")
+    public ResponseEntity<zelisline.ub.storefront.api.dto.PublicTillAwaitStatusResponse> tillAwaitStatus(
+            @PathVariable String slug,
+            @RequestParam String checkoutRequestId
+    ) {
+        var out = publicStorefrontPaymentService.tillAwaitStatus(slug, checkoutRequestId);
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(out);
+    }
+
     /** @deprecated Prefer {@link #checkoutPaymentOptions}; returns manual instructions only. */
     @Deprecated
     @GetMapping("/payments/display-instructions")

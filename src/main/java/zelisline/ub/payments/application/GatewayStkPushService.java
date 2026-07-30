@@ -64,6 +64,7 @@ public class GatewayStkPushService {
     private static final int RECONCILE_LOOKBACK_HOURS = 48;
 
     public static final String TILL_AWAIT_CHECKOUT_PREFIX = "till-await-";
+    public static final String STOREFRONT_TILL_AWAIT_PREFIX = "sf-till-await-";
 
     /** After this age, a still-pending local STK row is marked failed so cashier can retry. */
     @Value("${app.payments.stk.stale-pending-seconds:30}")
@@ -184,8 +185,64 @@ public class GatewayStkPushService {
                 phoneNumber != null ? phoneNumber : ""));
     }
 
+    /**
+     * Open a storefront Buy Goods await (cart preview / checkout). Soft-empty without ACTIVE KopoKopo.
+     */
+    @Transactional
+    public Optional<GatewayStkPush> registerStorefrontTillAwait(
+            String businessId,
+            BigDecimal amount,
+            String phoneNumber,
+            String merchantReference
+    ) {
+        if (amount == null || amount.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "amount must be positive");
+        }
+        PaymentGatewayConfig cfg = configRepository
+                .findByBusinessIdAndGatewayTypeAndStatus(businessId, GatewayType.KOPOKOPO, GatewayStatus.ACTIVE)
+                .stream()
+                .findFirst()
+                .orElse(null);
+        if (cfg == null) {
+            log.info("Storefront till await skipped — no ACTIVE KopoKopo for business={}", businessId);
+            return Optional.empty();
+        }
+
+        Instant since = Instant.now().minus(Duration.ofMinutes(15));
+        List<GatewayStkPush> open = pushRepository
+                .findByBusinessIdAndContextTypeAndStatusAndCreatedAtAfterOrderByCreatedAtDesc(
+                        businessId,
+                        StkPushContextType.STOREFRONT_CART,
+                        GatewayStkPushStatuses.PENDING,
+                        since);
+        for (GatewayStkPush prior : open) {
+            if (isStorefrontTillAwaitCheckout(prior.getGatewayCheckoutId())) {
+                markFailed(prior, "Replaced by a new storefront till payment wait");
+            }
+        }
+
+        String checkoutId = STOREFRONT_TILL_AWAIT_PREFIX + java.util.UUID.randomUUID();
+        String ref = merchantReference != null && !merchantReference.isBlank()
+                ? merchantReference.trim()
+                : checkoutId;
+        return Optional.of(registerPush(
+                businessId,
+                GatewayType.KOPOKOPO,
+                cfg.getId(),
+                checkoutId,
+                ref,
+                StkPushContextType.STOREFRONT_CART,
+                null,
+                amount.setScale(2, RoundingMode.HALF_UP),
+                phoneNumber != null ? phoneNumber : ""));
+    }
+
     public static boolean isTillAwaitCheckout(String gatewayCheckoutId) {
         return gatewayCheckoutId != null && gatewayCheckoutId.startsWith(TILL_AWAIT_CHECKOUT_PREFIX);
+    }
+
+    public static boolean isStorefrontTillAwaitCheckout(String gatewayCheckoutId) {
+        return gatewayCheckoutId != null && gatewayCheckoutId.startsWith(STOREFRONT_TILL_AWAIT_PREFIX);
     }
 
     @Transactional
@@ -568,12 +625,21 @@ public class GatewayStkPushService {
         }
 
         Instant since = Instant.now().minus(Duration.ofMinutes(5));
-        List<GatewayStkPush> pending = pushRepository
+        List<GatewayStkPush> pending = new java.util.ArrayList<>();
+        pending.addAll(pushRepository
                 .findByBusinessIdAndContextTypeAndStatusAndCreatedAtAfterOrderByCreatedAtDesc(
                         businessId,
                         StkPushContextType.POS_PAYMENT,
                         GatewayStkPushStatuses.PENDING,
-                        since);
+                        since));
+        pending.addAll(pushRepository
+                .findByBusinessIdAndContextTypeAndStatusAndCreatedAtAfterOrderByCreatedAtDesc(
+                        businessId,
+                        StkPushContextType.STOREFRONT_CART,
+                        GatewayStkPushStatuses.PENDING,
+                        since));
+        // Prefer most recent overall (both lists are DESC; merge by createdAt).
+        pending.sort((a, b) -> b.getCreatedAt().compareTo(a.getCreatedAt()));
         if (pending.isEmpty()) {
             return Optional.empty();
         }
@@ -642,6 +708,9 @@ public class GatewayStkPushService {
             case WALLET_INTENT -> confirmWalletIntent(push);
             case CREDIT_AR -> confirmCreditArIntent(push);
             case POS_PAYMENT -> publishPosConfirmation(push);
+            case STOREFRONT_CART -> log.info(
+                    "Storefront till payment confirmed push={} txn={}",
+                    push.getId(), gatewayTxnId);
             case GROCERY_INVOICE -> confirmGroceryInvoice(push);
             default -> log.warn("Unknown STK context type: {}", push.getContextType());
         }

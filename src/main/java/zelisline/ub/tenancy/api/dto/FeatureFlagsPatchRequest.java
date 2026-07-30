@@ -15,6 +15,8 @@ public record FeatureFlagsPatchRequest(
         /** Allow owners/admins to upload product photos from the cashier shelf. */
         Boolean posCashierAddPhoto,
         /** Prefill opening float denominations from the previous night's closing count. */
-        Boolean shiftsPrefillOpeningFromLastClose
+        Boolean shiftsPrefillOpeningFromLastClose,
+        /** When M-Pesa till listening starts (POS + storefront). */
+        @Valid PosTillListenFeatureFlagsPatch tillListen
 ) {
 }

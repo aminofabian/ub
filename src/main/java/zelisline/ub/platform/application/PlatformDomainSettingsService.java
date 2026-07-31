@@ -1,7 +1,9 @@
 package zelisline.ub.platform.application;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.springframework.stereotype.Service;
@@ -218,6 +220,33 @@ public class PlatformDomainSettingsService {
     public boolean resellerConfigured() {
         ResolvedResellerConfig cfg = resolveReseller();
         return cfg.configured();
+    }
+
+    /**
+     * Explains why {@link #resellerConfigured()} is false — used by SA Test connection.
+     */
+    @Transactional(readOnly = true)
+    public ResellerDiagnostic diagnoseReseller() {
+        PlatformDomainSettings row = loadSingleton();
+        List<String> missing = new ArrayList<>();
+        String email = trimToNull(row.getHostafricaResellerEmail());
+        if (email == null) {
+            missing.add("reseller login email");
+        }
+        boolean hasKeyBlob = hasEncrypted(row.getHostafricaResellerApiKeyEnc());
+        String apiKey = hasKeyBlob ? decryptOrNull(row.getHostafricaResellerApiKeyEnc()) : null;
+        if (!hasKeyBlob) {
+            missing.add("reseller API key");
+        } else if (apiKey == null || apiKey.isBlank()) {
+            missing.add("reseller API key (stored but could not decrypt — re-save the key; check APP_PAYMENTS_ENCRYPTION_KEY)");
+        }
+        Map<String, String> whois = parseWhois(row.getHostafricaResellerWhoisJson());
+        List<String> whoisMissing = missingWhoisFields(whois);
+        if (!whoisMissing.isEmpty()) {
+            missing.add("WHOIS fields: " + String.join(", ", whoisMissing));
+        }
+        boolean configured = missing.isEmpty();
+        return new ResellerDiagnostic(configured, List.copyOf(missing), email != null, hasKeyBlob, whoisMissing);
     }
 
     @Transactional(readOnly = true)
@@ -450,18 +479,24 @@ public class PlatformDomainSettingsService {
     }
 
     private static boolean whoisComplete(Map<String, String> whois) {
+        return missingWhoisFields(whois).isEmpty();
+    }
+
+    private static List<String> missingWhoisFields(Map<String, String> whois) {
+        List<String> missing = new ArrayList<>();
         if (whois == null || whois.isEmpty()) {
-            return false;
+            for (String key : WHOIS_REQUIRED) {
+                missing.add(key);
+            }
+            return missing;
         }
         for (String key : WHOIS_REQUIRED) {
             String v = whois.get(key);
             if (v == null || v.isBlank()) {
-                // Accept fullname as substitute for firstname+lastname when both missing is rare;
-                // require firstname and lastname explicitly.
-                return false;
+                missing.add(key);
             }
         }
-        return true;
+        return missing;
     }
 
     private String encryptOrClear(String raw) {
@@ -543,4 +578,12 @@ public class PlatformDomainSettingsService {
                     && whoisComplete(whois);
         }
     }
+
+    public record ResellerDiagnostic(
+            boolean configured,
+            List<String> missing,
+            boolean hasEmail,
+            boolean hasApiKeyStored,
+            List<String> missingWhoisFields
+    ) {}
 }

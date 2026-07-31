@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.platform.application.PlatformDomainSettingsService;
 import zelisline.ub.tenancy.api.dto.DomainOrderResponse;
 import zelisline.ub.tenancy.application.DomainPurchaseService;
 import zelisline.ub.tenancy.integrations.hostafrica.HostAfricaResellerClient;
@@ -29,6 +30,7 @@ public class SuperAdminDomainOrdersController {
 
     private final DomainPurchaseService domainPurchaseService;
     private final HostAfricaResellerClient hostAfricaResellerClient;
+    private final PlatformDomainSettingsService domainSettingsService;
 
     @GetMapping
     public List<DomainOrderResponse> list(@RequestParam(required = false) String status) {
@@ -38,16 +40,22 @@ public class SuperAdminDomainOrdersController {
     /** Health check for the DomainsReseller HMAC credentials (GetCredits round-trip). */
     @GetMapping("/reseller-status")
     public Map<String, Object> resellerStatus() {
-        if (!hostAfricaResellerClient.configured()) {
-            return Map.of(
-                    "configured", false,
-                    "ok", false,
-                    "error", "Reseller email, API key, or WHOIS contact is missing under Platform → Domains."
+        var diag = domainSettingsService.diagnoseReseller();
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("configured", diag.configured());
+        out.put("hasEmail", diag.hasEmail());
+        out.put("hasApiKeyStored", diag.hasApiKeyStored());
+        out.put("missing", diag.missing());
+        out.put("missingWhoisFields", diag.missingWhoisFields());
+        if (!diag.configured()) {
+            out.put("ok", false);
+            out.put(
+                    "error",
+                    "Not ready — save these under Platform → Domains first: " + String.join("; ", diag.missing())
             );
+            return out;
         }
         var credits = hostAfricaResellerClient.getCredits();
-        Map<String, Object> out = new java.util.LinkedHashMap<>();
-        out.put("configured", true);
         out.put("ok", credits.ok());
         if (credits.credit() != null) {
             out.put("credit", credits.credit());

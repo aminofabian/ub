@@ -7,7 +7,7 @@ import java.util.Map;
  * Other fields: {@code null} = leave unchanged.
  * <p>
  * Palmart STK credentials are sent as individual fields and stored as one encrypted JSON blob.
- * {@code hostafricaRegistrantDefaults}: null = leave; empty map = clear; otherwise replace.
+ * {@code hostafricaRegistrantDefaults} / {@code hostafricaResellerWhois}: null = leave; empty map = clear.
  */
 public record UpdatePlatformDomainSettingsRequest(
         String hostafricaApiKey,
@@ -16,6 +16,11 @@ public record UpdatePlatformDomainSettingsRequest(
         String hostafricaKenyanTlds,
         Boolean hostafricaBillingStubEnabled,
         Map<String, String> hostafricaRegistrantDefaults,
+        String hostafricaResellerEmail,
+        String hostafricaResellerApiKey,
+        String hostafricaResellerApiBaseUrl,
+        Map<String, String> hostafricaResellerWhois,
+        Boolean clearHostafricaResellerApiKey,
         String palmartStkClientId,
         String palmartStkClientSecret,
         String palmartStkApiKey,

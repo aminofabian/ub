@@ -37,6 +37,8 @@ import zelisline.ub.tenancy.domain.DomainOrder;
 import zelisline.ub.tenancy.domain.DomainOrderStatus;
 import zelisline.ub.tenancy.domain.DomainNsStatus;
 import zelisline.ub.tenancy.integrations.hostafrica.HostAfricaClient;
+import zelisline.ub.tenancy.integrations.hostafrica.HostAfricaResellerClient;
+import zelisline.ub.tenancy.integrations.vercel.VercelDomainZoneClient;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
 import zelisline.ub.tenancy.repository.DomainOrderRepository;
@@ -51,6 +53,8 @@ import zelisline.ub.tenancy.repository.DomainOrderRepository;
 public class DomainPurchaseService {
 
     private final HostAfricaClient hostAfricaClient;
+    private final HostAfricaResellerClient hostAfricaResellerClient;
+    private final VercelDomainZoneClient vercelZoneClient;
     private final PlatformDomainSettingsService domainSettingsService;
     private final DomainOrderRepository domainOrderRepository;
     private final DomainMappingRepository domainMappingRepository;
@@ -173,7 +177,7 @@ public class DomainPurchaseService {
         }
         DomainOrder saved = domainOrderRepository.save(order);
         if (saved.getStatus() == DomainOrderStatus.REGISTERING) {
-            refreshRegisterUrl(saved);
+            attemptResellerRegister(saved);
             saved = domainOrderRepository.save(saved);
         }
         return toResponse(saved);
@@ -213,7 +217,14 @@ public class DomainPurchaseService {
 
         try {
             if (order.getStatus() == DomainOrderStatus.REGISTERING) {
-                pollOwnership(order);
+                if (order.getHostafricaDomainId() == null || order.getHostafricaDomainId().isBlank()) {
+                    attemptResellerRegister(order);
+                    domainOrderRepository.save(order);
+                    order = requireOrder(businessId, orderId);
+                }
+                if (order.getStatus() == DomainOrderStatus.REGISTERING) {
+                    pollOwnership(order);
+                }
             }
             if (order.getStatus() == DomainOrderStatus.OWNED
                     || order.getStatus() == DomainOrderStatus.PROVISIONING) {
@@ -329,12 +340,7 @@ public class DomainPurchaseService {
         if (payerPhone != null && !payerPhone.isBlank()) {
             order.setPayerPhone(payerPhone.trim());
         }
-        refreshRegisterUrl(order);
-        if (order.getRegisterUrl() == null || order.getRegisterUrl().isBlank()) {
-            order.setLastError("Paid — open HostAfrica checkout once register_url is available (Refresh register URL).");
-        } else {
-            order.setLastError("Paid — complete HostAfrica registration via register_url, then Sync.");
-        }
+        attemptResellerRegister(order);
         DomainOrder saved = domainOrderRepository.save(order);
         return toResponse(saved);
     }
@@ -530,10 +536,82 @@ public class DomainPurchaseService {
         }
     }
 
+    /**
+     * Zero-touch register via DomainsReseller when configured; otherwise refresh {@code register_url} for ops.
+     */
+    private void attemptResellerRegister(DomainOrder order) {
+        if (order.getStatus() != DomainOrderStatus.REGISTERING) {
+            return;
+        }
+        if (order.getHostafricaDomainId() != null && !order.getHostafricaDomainId().isBlank()) {
+            return;
+        }
+        if (!domainSettingsService.resellerConfigured()) {
+            refreshRegisterUrl(order);
+            if (order.getRegisterUrl() == null || order.getRegisterUrl().isBlank()) {
+                order.setLastError(
+                        "Reseller API not configured — open HostAfrica checkout once register_url is available (Refresh register URL)."
+                );
+            } else {
+                order.setLastError(
+                        "Reseller API not configured — complete HostAfrica registration via register_url, then Sync."
+                );
+            }
+            return;
+        }
+
+        if (!vercelZoneClient.configured()) {
+            order.setLastError("Vercel is required before RegisterDomain (need intended nameservers).");
+            refreshRegisterUrl(order);
+            return;
+        }
+
+        var zone = vercelZoneClient.addZone(order.getFqdn());
+        if (!zone.ok()) {
+            order.setLastError("Vercel zone before register: " + zone.error());
+            refreshRegisterUrl(order);
+            return;
+        }
+        order.setVercelZoneReady(true);
+        List<String> intendedNs = zone.intendedNameservers() == null ? List.of() : zone.intendedNameservers();
+        if (intendedNs.size() < 2) {
+            order.setLastError("Vercel zone returned fewer than 2 intended nameservers.");
+            refreshRegisterUrl(order);
+            return;
+        }
+
+        var reseller = domainSettingsService.resolveReseller();
+        var registered = hostAfricaResellerClient.registerDomain(
+                order.getFqdn(),
+                1,
+                intendedNs,
+                reseller.whois()
+        );
+        if (registered.ok()) {
+            order.setLastError(null);
+            return;
+        }
+        if (registered.skipped()) {
+            refreshRegisterUrl(order);
+            order.setLastError("Reseller register skipped: " + registered.error());
+            return;
+        }
+        refreshRegisterUrl(order);
+        order.setLastError("DomainsReseller RegisterDomain failed: " + registered.error()
+                + (order.getRegisterUrl() != null && !order.getRegisterUrl().isBlank()
+                ? " — ops fallback: open register_url."
+                : " — refresh register_url as ops fallback."));
+    }
+
     private void pollOwnership(DomainOrder order) {
         var owned = hostAfricaClient.findOwnedByFqdn(order.getFqdn());
         if (owned.isEmpty()) {
-            if (order.getRegisterUrl() != null && !order.getRegisterUrl().isBlank()) {
+            if (domainSettingsService.resellerConfigured()) {
+                if (order.getLastError() == null || order.getLastError().isBlank()
+                        || order.getLastError().toLowerCase(Locale.ROOT).contains("waiting")) {
+                    order.setLastError("Waiting for HostAfrica ownership after RegisterDomain — Sync again shortly.");
+                }
+            } else if (order.getRegisterUrl() != null && !order.getRegisterUrl().isBlank()) {
                 order.setLastError("Waiting for HostAfrica ownership — complete register_url checkout on the platform account, then Sync.");
             } else {
                 order.setLastError("Waiting for domain to appear on HostAfrica account");

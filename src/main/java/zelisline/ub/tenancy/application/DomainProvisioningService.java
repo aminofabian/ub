@@ -23,6 +23,7 @@ import zelisline.ub.tenancy.domain.DomainSource;
 import zelisline.ub.tenancy.domain.DomainStatus;
 import zelisline.ub.tenancy.domain.DomainZoneSource;
 import zelisline.ub.tenancy.integrations.hostafrica.HostAfricaClient;
+import zelisline.ub.tenancy.integrations.hostafrica.HostAfricaResellerClient;
 import zelisline.ub.tenancy.integrations.vercel.VercelDnsClient;
 import zelisline.ub.tenancy.integrations.vercel.VercelDomainZoneClient;
 import zelisline.ub.tenancy.integrations.vercel.VercelProjectDomainClient;
@@ -42,6 +43,7 @@ public class DomainProvisioningService {
     private final VercelDnsClient dnsClient;
     private final VercelProjectDomainClient projectDomainClient;
     private final HostAfricaClient hostAfricaClient;
+    private final HostAfricaResellerClient hostAfricaResellerClient;
     private final ObjectMapper objectMapper;
 
     @Transactional
@@ -95,14 +97,36 @@ public class DomainProvisioningService {
             dnsNotes.add("www_attach: " + attachWww.error());
         }
 
-        // 5) NS cutover via HostAfrica (when domain_id known)
-        if (order.getHostafricaDomainId() != null && intendedNs.size() >= 2) {
-            var ns = hostAfricaClient.updateNameservers(order.getHostafricaDomainId(), intendedNs);
-            if (ns.ok()) {
+        // 5) NS cutover via HostAfrica (when domain_id known); reseller SaveNameServers fallback
+        if (intendedNs.size() >= 2) {
+            boolean nsOk = false;
+            String nsError = null;
+            if (order.getHostafricaDomainId() != null && !order.getHostafricaDomainId().isBlank()) {
+                var ns = hostAfricaClient.updateNameservers(order.getHostafricaDomainId(), intendedNs);
+                if (ns.ok()) {
+                    nsOk = true;
+                } else if (!ns.skipped()) {
+                    nsError = ns.error();
+                }
+            }
+            if (!nsOk && hostAfricaResellerClient.configured()) {
+                var resellerNs = hostAfricaResellerClient.saveNameServers(apex, intendedNs);
+                if (resellerNs.ok()) {
+                    nsOk = true;
+                    nsError = null;
+                } else if (!resellerNs.skipped() && nsError == null) {
+                    nsError = resellerNs.error();
+                } else if (!resellerNs.skipped() && nsError != null) {
+                    nsError = nsError + "; reseller: " + resellerNs.error();
+                }
+            }
+            if (nsOk) {
                 order.setNsStatus(DomainNsStatus.ACTIVE);
-            } else if (!ns.skipped()) {
+            } else {
                 order.setNsStatus(DomainNsStatus.PENDING_OPS);
-                order.setLastError("NS cutover: " + ns.error());
+                if (nsError != null) {
+                    order.setLastError("NS cutover: " + nsError);
+                }
                 dnsNotes.add("Set nameservers at HostAfrica to: " + String.join(", ", intendedNs));
             }
         } else {

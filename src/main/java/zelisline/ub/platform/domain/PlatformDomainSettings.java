@@ -43,6 +43,24 @@ public class PlatformDomainSettings {
     @Column(name = "hostafrica_registrant_defaults_json", columnDefinition = "TEXT")
     private String hostafricaRegistrantDefaultsJson;
 
+    /** DomainsReseller login email (username header). */
+    @Column(name = "hostafrica_reseller_email", length = 255)
+    private String hostafricaResellerEmail;
+
+    /** Encrypted DomainsReseller API key (HMAC secret). */
+    @Column(name = "hostafrica_reseller_api_key_enc", columnDefinition = "TEXT")
+    private String hostafricaResellerApiKeyEnc;
+
+    @Column(name = "hostafrica_reseller_api_base_url", length = 512)
+    private String hostafricaResellerApiBaseUrl;
+
+    /**
+     * JSON WHOIS contact used for Registrant/Admin/Tech/Billing on RegisterDomain:
+     * firstname, lastname, companyname, email, address1, address2, city, state, postcode, country, phonenumber.
+     */
+    @Column(name = "hostafrica_reseller_whois_json", columnDefinition = "TEXT")
+    private String hostafricaResellerWhoisJson;
+
     /** Encrypted JSON: clientId, clientSecret, apiKey, tillNumber, environment. */
     @Column(name = "palmart_stk_credentials_enc", columnDefinition = "TEXT")
     private String palmartStkCredentialsEnc;

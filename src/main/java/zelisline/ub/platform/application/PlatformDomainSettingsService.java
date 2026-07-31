@@ -30,6 +30,13 @@ public class PlatformDomainSettingsService {
     private static final String DEFAULT_HA_CURRENCY = "KES";
     private static final String DEFAULT_HA_TLDS = "co.ke,or.ke,me.ke,sc.ke,ac.ke,go.ke,ke";
     private static final String DEFAULT_VERCEL_BASE = "https://api.vercel.com";
+    public static final String DEFAULT_RESELLER_BASE =
+            "https://my.hostafrica.com/modules/addons/DomainsReseller/api/index.php";
+
+    private static final String[] WHOIS_REQUIRED = {
+            "firstname", "lastname", "companyname", "email",
+            "address1", "city", "state", "postcode", "country", "phonenumber"
+    };
 
     private final PlatformDomainSettingsRepository repository;
     private final CredentialEncryptionService encryptionService;
@@ -65,6 +72,21 @@ public class PlatformDomainSettingsService {
         }
         if (body.hostafricaRegistrantDefaults() != null) {
             row.setHostafricaRegistrantDefaultsJson(writeRegistrantDefaults(body.hostafricaRegistrantDefaults()));
+        }
+
+        if (body.hostafricaResellerEmail() != null) {
+            row.setHostafricaResellerEmail(blankToNull(body.hostafricaResellerEmail()));
+        }
+        if (Boolean.TRUE.equals(body.clearHostafricaResellerApiKey())) {
+            row.setHostafricaResellerApiKeyEnc(null);
+        } else if (body.hostafricaResellerApiKey() != null) {
+            row.setHostafricaResellerApiKeyEnc(encryptOrClear(body.hostafricaResellerApiKey()));
+        }
+        if (body.hostafricaResellerApiBaseUrl() != null) {
+            row.setHostafricaResellerApiBaseUrl(blankToNull(body.hostafricaResellerApiBaseUrl()));
+        }
+        if (body.hostafricaResellerWhois() != null) {
+            row.setHostafricaResellerWhoisJson(writeWhois(body.hostafricaResellerWhois()));
         }
 
         if (Boolean.TRUE.equals(body.clearPalmartStkCredentials())) {
@@ -191,6 +213,28 @@ public class PlatformDomainSettingsService {
                 && clientSecret != null && !clientSecret.isBlank();
     }
 
+    /** DomainsReseller RegisterDomain credentials + WHOIS ready. */
+    @Transactional(readOnly = true)
+    public boolean resellerConfigured() {
+        ResolvedResellerConfig cfg = resolveReseller();
+        return cfg.configured();
+    }
+
+    @Transactional(readOnly = true)
+    public ResolvedResellerConfig resolveReseller() {
+        PlatformDomainSettings row = loadSingleton();
+        String email = trimToNull(row.getHostafricaResellerEmail());
+        String apiKey = null;
+        if (hasEncrypted(row.getHostafricaResellerApiKeyEnc())) {
+            apiKey = decryptOrNull(row.getHostafricaResellerApiKeyEnc());
+        }
+        String base = firstNonBlank(
+                trimToNull(row.getHostafricaResellerApiBaseUrl()),
+                DEFAULT_RESELLER_BASE);
+        Map<String, String> whois = parseWhois(row.getHostafricaResellerWhoisJson());
+        return new ResolvedResellerConfig(email, apiKey, base, whois);
+    }
+
     private void mergePalmartStkCredentials(PlatformDomainSettings row, UpdatePlatformDomainSettingsRequest body) {
         boolean anyStkField = body.palmartStkClientId() != null
                 || body.palmartStkClientSecret() != null
@@ -252,6 +296,12 @@ public class PlatformDomainSettingsService {
     }
 
     private PlatformDomainSettingsResponse toResponse(PlatformDomainSettings row, SecretRead secrets) {
+        Map<String, String> whois = parseWhois(row.getHostafricaResellerWhoisJson());
+        boolean resellerKey = secrets.hasResellerApiKey;
+        String resellerEmail = firstNonBlank(trimToNull(row.getHostafricaResellerEmail()), "");
+        boolean resellerReady = !isBlank(resellerEmail)
+                && resellerKey
+                && whoisComplete(whois);
         return new PlatformDomainSettingsResponse(
                 secrets.hasHostafricaApiKey,
                 firstNonBlank(
@@ -268,6 +318,11 @@ public class PlatformDomainSettingsService {
                         DEFAULT_HA_TLDS),
                 row.isHostafricaBillingStubEnabled(),
                 parseRegistrantDefaults(row.getHostafricaRegistrantDefaultsJson()),
+                resellerKey,
+                resellerEmail,
+                firstNonBlank(trimToNull(row.getHostafricaResellerApiBaseUrl()), DEFAULT_RESELLER_BASE),
+                resellerReady,
+                whois,
                 secrets.hasPalmartStk,
                 firstNonBlank(trimToNull(row.getPalmartStkTillNumber()), ""),
                 secrets.hasVercelToken,
@@ -315,6 +370,7 @@ public class PlatformDomainSettingsService {
                     hasEncrypted(row.getHostafricaApiKeyEnc()),
                     hasEncrypted(row.getVercelTokenEnc()),
                     hasEncrypted(row.getPalmartStkCredentialsEnc()),
+                    hasEncrypted(row.getHostafricaResellerApiKeyEnc()),
                     decryptOrNull(row.getHostafricaApiKeyEnc()),
                     decryptOrNull(row.getVercelTokenEnc()),
                     persistenceHint);
@@ -324,6 +380,7 @@ public class PlatformDomainSettingsService {
                     hasEncrypted(row.getHostafricaApiKeyEnc()),
                     hasEncrypted(row.getVercelTokenEnc()),
                     hasEncrypted(row.getPalmartStkCredentialsEnc()),
+                    hasEncrypted(row.getHostafricaResellerApiKeyEnc()),
                     null,
                     null,
                     firstNonBlank(ex.getMessage(), persistenceHint));
@@ -356,6 +413,18 @@ public class PlatformDomainSettingsService {
     }
 
     private Map<String, String> parseRegistrantDefaults(String raw) {
+        return parseStringMap(raw);
+    }
+
+    private String writeWhois(Map<String, String> whois) {
+        return writeRegistrantDefaults(whois);
+    }
+
+    private Map<String, String> parseWhois(String raw) {
+        return parseStringMap(raw);
+    }
+
+    private Map<String, String> parseStringMap(String raw) {
         if (raw == null || raw.isBlank()) {
             return Map.of();
         }
@@ -378,6 +447,21 @@ public class PlatformDomainSettingsService {
         } catch (Exception ex) {
             return Map.of();
         }
+    }
+
+    private static boolean whoisComplete(Map<String, String> whois) {
+        if (whois == null || whois.isEmpty()) {
+            return false;
+        }
+        for (String key : WHOIS_REQUIRED) {
+            String v = whois.get(key);
+            if (v == null || v.isBlank()) {
+                // Accept fullname as substitute for firstname+lastname when both missing is rare;
+                // require firstname and lastname explicitly.
+                return false;
+            }
+        }
+        return true;
     }
 
     private String encryptOrClear(String raw) {
@@ -439,8 +523,24 @@ public class PlatformDomainSettingsService {
             boolean hasHostafricaApiKey,
             boolean hasVercelToken,
             boolean hasPalmartStk,
+            boolean hasResellerApiKey,
             String hostafricaApiKey,
             String vercelToken,
             String errorMessage
     ) {}
+
+    /** Runtime DomainsReseller config for RegisterDomain. */
+    public record ResolvedResellerConfig(
+            String email,
+            String apiKey,
+            String apiBaseUrl,
+            Map<String, String> whois
+    ) {
+        public boolean configured() {
+            return email != null && !email.isBlank()
+                    && apiKey != null && !apiKey.isBlank()
+                    && apiBaseUrl != null && !apiBaseUrl.isBlank()
+                    && whoisComplete(whois);
+        }
+    }
 }

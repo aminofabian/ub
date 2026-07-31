@@ -34,7 +34,7 @@ public class PlatformDomainSettings {
     private String hostafricaKenyanTlds;
 
     @Column(name = "hostafrica_billing_stub_enabled", nullable = false)
-    private boolean hostafricaBillingStubEnabled = true;
+    private boolean hostafricaBillingStubEnabled = false;
 
     /**
      * JSON object of HostAfrica additionalFields name → default value

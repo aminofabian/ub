@@ -157,8 +157,10 @@ public class DomainPurchaseService {
         order.setNsStatus(DomainNsStatus.PENDING_OPS);
 
         if (domainSettingsService.resolve().hostafricaBillingStubEnabled()) {
-            // Merchant confirm = paid; registration happens on platform HA account via register_url / ops.
+            // Test mode only — skips M-Pesa. Merchants must never see this as a real payment.
             order.setStatus(DomainOrderStatus.REGISTERING);
+            order.setLastStkStatus("STUB_SKIPPED");
+            order.setLastError("Test mode: billing stub skipped M-Pesa — no payment was collected.");
         } else {
             order.setStatus(DomainOrderStatus.AWAITING_PAYMENT);
         }
@@ -778,15 +780,25 @@ public class DomainPurchaseService {
                 order.getPayerPhone(),
                 order.getLastStkStatus(),
                 paymentAvailableFor(order),
+                paymentSkippedByStub(order),
                 order.getCreatedAt(),
                 order.getUpdatedAt()
         );
+    }
+
+    private static boolean paymentSkippedByStub(DomainOrder order) {
+        return "STUB_SKIPPED".equalsIgnoreCase(
+                order.getLastStkStatus() == null ? "" : order.getLastStkStatus());
     }
 
     private String merchantMessageFor(DomainOrder order) {
         DomainOrderStatus status = order.getStatus();
         if (status == null) {
             return null;
+        }
+        if (paymentSkippedByStub(order)) {
+            return "Test mode: M-Pesa was skipped (billing stub is on). No money was charged. "
+                    + "Ask Super Admin to turn billing stub off under Platform → Domains for real payments.";
         }
         return switch (status) {
             case QUOTED, AWAITING_PAYMENT -> {
@@ -797,7 +809,7 @@ public class DomainPurchaseService {
                     }
                     yield "Pay with M-Pesa to continue — we'll handle registration and DNS.";
                 }
-                yield "Payment is being confirmed. We'll start registration once it's cleared.";
+                yield "Payment isn't available yet — ask Super Admin to add Palmart M-Pesa credentials under Platform → Domains (and turn billing stub off).";
             }
             case REGISTERING -> "We're registering your domain. This usually takes a few minutes.";
             case OWNED -> "Domain registered. Setting up DNS next…";

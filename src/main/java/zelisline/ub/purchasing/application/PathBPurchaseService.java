@@ -15,6 +15,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -103,6 +104,7 @@ public class PathBPurchaseService {
     private final SupplyBatchExpenseRepository supplyBatchExpenseRepository;
     private final SaleItemRepository saleItemRepository;
     private final SupplierPortalNotifyService supplierPortalNotifyService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public static String postRoute(String sessionId) {
         return "POST /api/v1/purchasing/path-b/sessions/%s/post".formatted(sessionId);
@@ -444,6 +446,10 @@ public class PathBPurchaseService {
                 session.getSupplierId(),
                 invoiceNumber,
                 ap2);
+
+        eventPublisher.publishEvent(
+                new zelisline.ub.platform.realtime.RealtimeBridge.SupplyPostedEvent(
+                        businessId, session.getBranchId(), inv.getId(), invoiceNumber, ap2));
 
         return new PostPathBResponse(session.getId(), sessionStatus, inv.getId(), invoiceNumber, jeId, ap2, postedLines.size(), sb.getId());
     }

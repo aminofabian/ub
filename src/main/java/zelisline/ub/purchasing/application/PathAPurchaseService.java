@@ -12,6 +12,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -98,6 +99,7 @@ public class PathAPurchaseService {
     private final ObjectMapper objectMapper;
     private final SupplyBatchRepository supplyBatchRepository;
     private final PackageVariantStockResolver packageVariantStockResolver;
+    private final ApplicationEventPublisher eventPublisher;
 
     public static String postGrnRoute() {
         return "POST /api/v1/purchasing/path-a/goods-receipts";
@@ -616,6 +618,10 @@ public class PathAPurchaseService {
         }
         entry.credit(lar.resolveId(businessId, LedgerAccountCodes.ACCOUNTS_PAYABLE), ap);
         String jeId = ledgerPostingPort.post(entry);
+
+        eventPublisher.publishEvent(
+                new zelisline.ub.platform.realtime.RealtimeBridge.SupplyPostedEvent(
+                        businessId, grn.getBranchId(), inv.getId(), inv.getInvoiceNumber(), ap));
 
         return new PostGrnSupplierInvoiceResponse(inv.getId(), inv.getInvoiceNumber(), jeId, ap);
     }

@@ -28,6 +28,7 @@ public record DomainOrderResponse(
         String payerPhone,
         String lastStkStatus,
         boolean paymentAvailable,
+        boolean paymentSkippedByStub,
         Instant createdAt,
         Instant updatedAt
 ) {

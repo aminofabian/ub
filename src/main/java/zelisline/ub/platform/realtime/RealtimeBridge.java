@@ -225,6 +225,30 @@ public class RealtimeBridge {
     }
 
     /**
+     * Fan-out supply.posted when a Path B receive or Path A GRN invoice is posted.
+     * Invalidates Morning board supply tape + payables pulse.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onSupplyPosted(SupplyPostedEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        var dataMap = new LinkedHashMap<String, String>();
+        dataMap.put("supplierInvoiceId", event.supplierInvoiceId());
+        dataMap.put("invoiceNumber", event.invoiceNumber() != null ? event.invoiceNumber() : "");
+        dataMap.put("branchId", event.branchId() != null ? event.branchId() : "");
+        dataMap.put("amount", event.amount().toPlainString());
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) return;
+
+        Set<String> sessionIds = sessionRegistry.findSessionsByBranchOrBusinessWide(
+                event.businessId(), event.branchId(), "pos");
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "supply.posted", eventId, "MEDIUM", Instant.now(), payloadJson);
+        }
+        log.debug("POS event supply.posted: invoice={} branch={} sessions={}",
+                event.supplierInvoiceId(), event.branchId(), sessionIds.size());
+    }
+
+    /**
      * Fan-out approval.requested to all users with approve permission on the branch.
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -735,6 +759,11 @@ public class RealtimeBridge {
     /** Once-per-sale invalidate signal for dashboards (not cashier payment UX). */
     public record SaleCompletedEvent(
             String businessId, String branchId, String saleId, BigDecimal amount) {}
+
+    /** Once-per-supply-bill signal for dashboards (Path B receive / Path A invoice). */
+    public record SupplyPostedEvent(
+            String businessId, String branchId, String supplierInvoiceId,
+            String invoiceNumber, BigDecimal amount) {}
 
     public record StkPaymentSettledEvent(
             String businessId,

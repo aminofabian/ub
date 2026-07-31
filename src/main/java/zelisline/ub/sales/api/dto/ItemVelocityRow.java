@@ -17,6 +17,9 @@ public record ItemVelocityRow(
         BigDecimal last7Qty,
         BigDecimal last7Revenue,
         BigDecimal last30Qty,
-        BigDecimal last30Revenue
+        BigDecimal last30Revenue,
+        BigDecimal buyingPrice,
+        BigDecimal sellingPrice,
+        String imageKey
 ) {
 }

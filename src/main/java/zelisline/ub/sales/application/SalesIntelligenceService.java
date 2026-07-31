@@ -696,6 +696,9 @@ public class SalesIntelligenceService {
                     row.getItemName(),
                     row.getSku(),
                     row.getCurrentStock(),
+                    row.getBuyingPrice(),
+                    row.getSellingPrice(),
+                    row.getImageKey(),
                     row.getYesterdayQty(),
                     row.getYesterdayRevenue(),
                     row.getLast3PastQty(),
@@ -725,6 +728,9 @@ public class SalesIntelligenceService {
                     row.getItemName(),
                     row.getSku(),
                     row.getCurrentStock(),
+                    row.getBuyingPrice(),
+                    row.getSellingPrice(),
+                    row.getImageKey(),
                     row.getYesterdayQty(),
                     row.getYesterdayRevenue(),
                     row.getLast3PastQty(),
@@ -816,6 +822,9 @@ public class SalesIntelligenceService {
                 item.getName(),
                 item.getSku(),
                 qtyOrZero(item.getCurrentStock()),
+                moneyOrZero(item.getBuyingPrice()),
+                moneyOrZero(item.getBundlePrice()),
+                item.getImageKey(),
                 lastReceiptAt,
                 lastReceiptQty,
                 soldSinceLastReceipt,
@@ -987,7 +996,10 @@ public class SalesIntelligenceService {
                     item.getId(),
                     item.getName(),
                     item.getSku(),
-                    qtyOrZero(item.getCurrentStock())
+                    qtyOrZero(item.getCurrentStock()),
+                    moneyOrZero(item.getBuyingPrice()),
+                    moneyOrZero(item.getBundlePrice()),
+                    item.getImageKey()
             ));
         }
         return meta;

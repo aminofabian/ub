@@ -27,6 +27,9 @@ public final class ItemVelocityMerge {
             String itemName,
             String sku,
             BigDecimal currentStock,
+            BigDecimal buyingPrice,
+            BigDecimal sellingPrice,
+            String imageKey,
             BigDecimal yesterdayQty,
             BigDecimal yesterdayRevenue,
             BigDecimal last3PastQty,
@@ -70,6 +73,9 @@ public final class ItemVelocityMerge {
                     meta.itemName(),
                     meta.sku(),
                     meta.currentStock(),
+                    meta.buyingPrice(),
+                    meta.sellingPrice(),
+                    meta.imageKey(),
                     QTY_ZERO,
                     MONEY_ZERO,
                     QTY_ZERO,
@@ -110,11 +116,14 @@ public final class ItemVelocityMerge {
                 qty(past.last7PastQty()).add(todayQty),
                 money(past.last7PastRevenue()).add(todayRev),
                 qty(past.last30PastQty()).add(todayQty),
-                money(past.last30PastRevenue()).add(todayRev)
+                money(past.last30PastRevenue()).add(todayRev),
+                money(past.buyingPrice()),
+                money(past.sellingPrice()),
+                past.imageKey()
         );
     }
 
-    public record ItemMeta(String itemId, String itemName, String sku, BigDecimal currentStock) {
+    public record ItemMeta(String itemId, String itemName, String sku, BigDecimal currentStock, BigDecimal buyingPrice, BigDecimal sellingPrice, String imageKey) {
     }
 
     private static BigDecimal qty(BigDecimal v) {

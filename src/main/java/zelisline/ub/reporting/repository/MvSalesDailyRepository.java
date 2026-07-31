@@ -223,6 +223,12 @@ public interface MvSalesDailyRepository extends JpaRepository<MvSalesDaily, MvSa
         BigDecimal getLast30PastQty();
 
         BigDecimal getLast30PastRevenue();
+
+        BigDecimal getBuyingPrice();
+
+        BigDecimal getSellingPrice();
+
+        String getImageKey();
     }
 
     @Query(value = """
@@ -230,6 +236,9 @@ public interface MvSalesDailyRepository extends JpaRepository<MvSalesDaily, MvSa
                    i.name AS itemName,
                    i.sku AS sku,
                    i.current_stock AS currentStock,
+                   i.buying_price AS buyingPrice,
+                   i.bundle_price AS sellingPrice,
+                   i.image_key AS imageKey,
                    COALESCE(SUM(CASE WHEN m.business_day = :yesterday THEN m.qty ELSE 0 END), 0) AS yesterdayQty,
                    COALESCE(SUM(CASE WHEN m.business_day = :yesterday THEN m.revenue ELSE 0 END), 0) AS yesterdayRevenue,
                    COALESCE(SUM(CASE WHEN m.business_day >= :last3From AND m.business_day < :today THEN m.qty ELSE 0 END), 0) AS last3PastQty,
@@ -245,7 +254,7 @@ public interface MvSalesDailyRepository extends JpaRepository<MvSalesDaily, MvSa
                AND m.business_day < :today
                AND (:branchId IS NULL OR m.branch_id = :branchId)
                AND (:itemTypeId IS NULL OR i.item_type_id = :itemTypeId)
-             GROUP BY i.id, i.name, i.sku, i.current_stock
+             GROUP BY i.id, i.name, i.sku, i.current_stock, i.buying_price, i.bundle_price, i.image_key
              HAVING COALESCE(SUM(m.qty), 0) > 0
              ORDER BY last30PastQty DESC
              LIMIT :limit
@@ -302,6 +311,9 @@ public interface MvSalesDailyRepository extends JpaRepository<MvSalesDaily, MvSa
                    i.name AS itemName,
                    i.sku AS sku,
                    i.current_stock AS currentStock,
+                   i.buying_price AS buyingPrice,
+                   i.bundle_price AS sellingPrice,
+                   i.image_key AS imageKey,
                    COALESCE(SUM(CASE WHEN CAST(s.sold_at AS DATE) = :yesterday THEN si.quantity ELSE 0 END), 0) AS yesterdayQty,
                    COALESCE(SUM(CASE WHEN CAST(s.sold_at AS DATE) = :yesterday THEN si.line_total ELSE 0 END), 0) AS yesterdayRevenue,
                    COALESCE(SUM(CASE WHEN CAST(s.sold_at AS DATE) >= :last3From AND CAST(s.sold_at AS DATE) < :today THEN si.quantity ELSE 0 END), 0) AS last3PastQty,
@@ -319,7 +331,7 @@ public interface MvSalesDailyRepository extends JpaRepository<MvSalesDaily, MvSa
                AND CAST(s.sold_at AS DATE) < :today
                AND (:branchId IS NULL OR s.branch_id = :branchId)
                AND (:itemTypeId IS NULL OR i.item_type_id = :itemTypeId)
-             GROUP BY i.id, i.name, i.sku, i.current_stock
+             GROUP BY i.id, i.name, i.sku, i.current_stock, i.buying_price, i.bundle_price, i.image_key
             HAVING COALESCE(SUM(si.quantity), 0) > 0
              ORDER BY last30PastQty DESC
              LIMIT :limit

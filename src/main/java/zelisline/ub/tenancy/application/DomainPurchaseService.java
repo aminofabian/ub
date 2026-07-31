@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -126,7 +127,14 @@ public class DomainPurchaseService {
                 query,
                 result.currency(),
                 quotes,
-                suggestions.stream().distinct().limit(12).toList(),
+                suggestions.stream()
+                        .filter(Objects::nonNull)
+                        .map(s -> s.trim().toLowerCase(Locale.ROOT))
+                        .filter(s -> !s.isBlank())
+                        .filter(this::isKenyanTld)
+                        .distinct()
+                        .limit(12)
+                        .toList(),
                 null
         );
     }
@@ -163,6 +171,12 @@ public class DomainPurchaseService {
         var quote = availability.quotes().getFirst();
         if (!quote.available()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Domain is not available: " + fqdn);
+        }
+        if (quote.priceCents() == null || quote.priceCents() <= 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Domain has no register price from HostAfrica — not available for purchase: " + fqdn
+            );
         }
 
         DomainOrder order = new DomainOrder();

@@ -353,11 +353,7 @@ public class HostAfricaClient {
     private DomainQuote parseQuote(JsonNode d, String fallbackCurrency) {
         String domain = text(d, "domain");
         String status = text(d, "status");
-        boolean available = status != null && status.toLowerCase(Locale.ROOT).contains("available");
-        // HA sometimes uses "available" boolean
-        if (d.has("available") && d.get("available").isBoolean()) {
-            available = d.get("available").asBoolean();
-        }
+        boolean available = resolveAvailable(d, status);
         String registerUrl = text(d, "register_url");
         Long priceCents = null;
         Integer periodYears = 1;
@@ -373,6 +369,13 @@ public class HostAfricaClient {
         if (priceCents == null) {
             priceCents = parsePriceToCents(text(d, "price"));
         }
+        // No quote price → not buyable through Palmart (premium / reserved / taken).
+        if (available && (priceCents == null || priceCents <= 0)) {
+            available = false;
+            if (status == null || status.isBlank()) {
+                status = "unavailable";
+            }
+        }
         return new DomainQuote(
                 normalize(domain),
                 available,
@@ -384,6 +387,55 @@ public class HostAfricaClient {
                 d.path("premium").asBoolean(false),
                 d.path("requires_additional_info").asBoolean(false)
         );
+    }
+
+    /**
+     * HostAfrica status strings include {@code unavailable} — never use {@code contains("available")}
+     * because that matches the substring inside unavailable.
+     */
+    private static boolean resolveAvailable(JsonNode d, String status) {
+        if (d != null && d.has("available") && !d.get("available").isNull()) {
+            JsonNode av = d.get("available");
+            if (av.isBoolean()) {
+                return av.asBoolean();
+            }
+            if (av.isNumber()) {
+                return av.asInt() != 0;
+            }
+            String raw = av.asText("").trim().toLowerCase(Locale.ROOT);
+            if (!raw.isEmpty()) {
+                if (isUnavailableToken(raw)) {
+                    return false;
+                }
+                if ("available".equals(raw) || "true".equals(raw) || "1".equals(raw) || "yes".equals(raw)) {
+                    return true;
+                }
+            }
+        }
+        if (status == null || status.isBlank()) {
+            return false;
+        }
+        String s = status.trim().toLowerCase(Locale.ROOT);
+        if (isUnavailableToken(s)) {
+            return false;
+        }
+        // Exact / token match only — do not use contains("available").
+        return "available".equals(s)
+                || s.startsWith("available ")
+                || s.endsWith(" available")
+                || s.contains(" available ");
+    }
+
+    private static boolean isUnavailableToken(String s) {
+        return "unavailable".equals(s)
+                || "taken".equals(s)
+                || "registered".equals(s)
+                || "reserved".equals(s)
+                || "premium".equals(s)
+                || s.contains("unavail")
+                || s.contains("not available")
+                || s.contains("already registered")
+                || s.contains("taken");
     }
 
     private OwnedDomain parseOwned(JsonNode d) {

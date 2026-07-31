@@ -133,9 +133,12 @@ public class HostAfricaResellerClient {
                         response.getStatus(), truncate(response.getBody()));
                 return NameserverResult.failed(formatFailure(response.getStatus(), response.getBody()), response.getStatus());
             }
-            if (looksLikeApiError(response.getBody())) {
-                return NameserverResult.failed(formatFailure(response.getStatus(), response.getBody()), response.getStatus());
+            String apiError = extractApiError(response.getBody());
+            if (apiError != null) {
+                log.warn("DomainsReseller SaveNameServers rejected {}: {}", fqdn, apiError);
+                return NameserverResult.failed(apiError, response.getStatus());
             }
+            log.info("DomainsReseller SaveNameServers ok for {} → {}", fqdn, ns);
             return NameserverResult.ok(ns);
         } catch (Exception ex) {
             log.warn("DomainsReseller SaveNameServers failed: {}", ex.getMessage());
@@ -152,6 +155,10 @@ public class HostAfricaResellerClient {
             HttpResponse<String> response = get(cfg, "/billing/credits");
             if (response.getStatus() < 200 || response.getStatus() >= 300) {
                 return CreditsResult.failed(formatFailure(response.getStatus(), response.getBody()), response.getStatus());
+            }
+            String apiError = extractApiError(response.getBody());
+            if (apiError != null) {
+                return CreditsResult.failed(apiError, response.getStatus());
             }
             JsonNode root = objectMapper.readTree(nullToEmpty(response.getBody()));
             JsonNode data = root.has("data") ? root.get("data") : root;
@@ -207,15 +214,19 @@ public class HostAfricaResellerClient {
             addons.put("idprotection", "0");
             params.put("addons", addons);
 
+            log.info("DomainsReseller RegisterDomain → {} ({}yr, ns={})", domain, Math.max(1, years), ns);
             HttpResponse<String> response = postForm(cfg, "/order/domains/register", params);
             if (response.getStatus() < 200 || response.getStatus() >= 300) {
                 log.warn("DomainsReseller RegisterDomain HTTP {} body={}",
                         response.getStatus(), truncate(response.getBody()));
                 return RegisterResult.failed(formatFailure(response.getStatus(), response.getBody()), response.getStatus());
             }
-            if (looksLikeApiError(response.getBody())) {
-                return RegisterResult.failed(formatFailure(response.getStatus(), response.getBody()), response.getStatus());
+            String apiError = extractApiError(response.getBody());
+            if (apiError != null) {
+                log.warn("DomainsReseller RegisterDomain rejected {}: {}", domain, apiError);
+                return RegisterResult.failed(apiError, response.getStatus());
             }
+            log.info("DomainsReseller RegisterDomain ok for {} body={}", domain, truncate(response.getBody()));
             return RegisterResult.ok(truncate(response.getBody()));
         } catch (Exception ex) {
             log.warn("DomainsReseller RegisterDomain failed: {}", ex.getMessage());
@@ -369,22 +380,48 @@ public class HostAfricaResellerClient {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
-    private boolean looksLikeApiError(String body) {
+    /**
+     * DomainsReseller (WHMCS-style) reports failures inside an HTTP 200 body, e.g.
+     * {@code {"result":"error","message":"…"}} or {@code {"code":403,…}}.
+     *
+     * @return human message when the body signals an error; {@code null} when it looks successful
+     */
+    private String extractApiError(String body) {
         if (body == null || body.isBlank()) {
-            return false;
+            return "Empty response from reseller API — check the reseller API base URL.";
+        }
+        String trimmed = body.trim();
+        if (trimmed.startsWith("<")) {
+            return "Reseller API returned HTML instead of JSON — the base URL likely points at a web page, not the DomainsReseller API.";
         }
         try {
             JsonNode root = objectMapper.readTree(body);
-            if (root.has("error") && !root.get("error").isNull() && !root.get("error").asText("").isBlank()) {
-                return true;
-            }
-            if (root.has("success") && root.get("success").isBoolean() && !root.get("success").asBoolean()) {
-                return true;
+            String message = firstNonBlank(
+                    text(root, "message"),
+                    text(root, "error"),
+                    root.has("errors") ? root.get("errors").toString() : null
+            );
+            String result = text(root, "result");
+            if (result != null && !"success".equalsIgnoreCase(result)) {
+                return message != null ? message : "result=" + result;
             }
             String status = text(root, "status");
-            return status != null && ("error".equalsIgnoreCase(status) || "failed".equalsIgnoreCase(status));
+            if (status != null && ("error".equalsIgnoreCase(status) || "failed".equalsIgnoreCase(status))) {
+                return message != null ? message : "status=" + status;
+            }
+            if (root.has("success") && root.get("success").isBoolean() && !root.get("success").asBoolean()) {
+                return message != null ? message : "success=false";
+            }
+            JsonNode code = root.get("code");
+            if (code != null && code.isNumber() && code.asInt() >= 400) {
+                return message != null ? message : "code=" + code.asInt();
+            }
+            if (root.has("error") && !root.get("error").isNull() && !root.get("error").asText("").isBlank()) {
+                return root.get("error").asText();
+            }
+            return null;
         } catch (Exception ignored) {
-            return false;
+            return "Unparseable response from reseller API: " + truncate(body);
         }
     }
 

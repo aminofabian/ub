@@ -11,6 +11,8 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -51,6 +53,8 @@ import zelisline.ub.tenancy.repository.DomainOrderRepository;
 @Service
 @RequiredArgsConstructor
 public class DomainPurchaseService {
+
+    private static final Logger log = LoggerFactory.getLogger(DomainPurchaseService.class);
 
     private final HostAfricaClient hostAfricaClient;
     private final HostAfricaResellerClient hostAfricaResellerClient;
@@ -546,7 +550,13 @@ public class DomainPurchaseService {
         if (order.getHostafricaDomainId() != null && !order.getHostafricaDomainId().isBlank()) {
             return;
         }
+        if (order.getResellerRegisterRequestedAt() != null) {
+            // RegisterDomain already accepted — never send a duplicate (double-charge) order.
+            return;
+        }
         if (!domainSettingsService.resellerConfigured()) {
+            log.info("Domain order {} ({}): reseller not configured — falling back to register_url ops path",
+                    order.getId(), order.getFqdn());
             refreshRegisterUrl(order);
             if (order.getRegisterUrl() == null || order.getRegisterUrl().isBlank()) {
                 order.setLastError(
@@ -568,6 +578,8 @@ public class DomainPurchaseService {
 
         var zone = vercelZoneClient.addZone(order.getFqdn());
         if (!zone.ok()) {
+            log.warn("Domain order {} ({}): Vercel zone failed before register: {}",
+                    order.getId(), order.getFqdn(), zone.error());
             order.setLastError("Vercel zone before register: " + zone.error());
             refreshRegisterUrl(order);
             return;
@@ -588,6 +600,8 @@ public class DomainPurchaseService {
                 reseller.whois()
         );
         if (registered.ok()) {
+            log.info("Domain order {} ({}): DomainsReseller RegisterDomain accepted", order.getId(), order.getFqdn());
+            order.setResellerRegisterRequestedAt(Instant.now());
             order.setLastError(null);
             return;
         }
@@ -596,6 +610,8 @@ public class DomainPurchaseService {
             order.setLastError("Reseller register skipped: " + registered.error());
             return;
         }
+        log.warn("Domain order {} ({}): DomainsReseller RegisterDomain failed: {}",
+                order.getId(), order.getFqdn(), registered.error());
         refreshRegisterUrl(order);
         order.setLastError("DomainsReseller RegisterDomain failed: " + registered.error()
                 + (order.getRegisterUrl() != null && !order.getRegisterUrl().isBlank()

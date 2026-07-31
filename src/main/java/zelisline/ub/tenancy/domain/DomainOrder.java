@@ -42,6 +42,10 @@ public class DomainOrder {
     @Column(name = "hostafrica_domain_id", length = 64)
     private String hostafricaDomainId;
 
+    /** Set once DomainsReseller RegisterDomain was accepted — prevents duplicate register orders. */
+    @Column(name = "reseller_register_requested_at")
+    private Instant resellerRegisterRequestedAt;
+
     @Lob
     @Column(name = "register_url", columnDefinition = "TEXT")
     private String registerUrl;

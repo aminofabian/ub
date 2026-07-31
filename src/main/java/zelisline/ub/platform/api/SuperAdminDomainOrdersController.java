@@ -16,6 +16,7 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.tenancy.api.dto.DomainOrderResponse;
 import zelisline.ub.tenancy.application.DomainPurchaseService;
+import zelisline.ub.tenancy.integrations.hostafrica.HostAfricaResellerClient;
 
 /**
  * Super Admin ops queue for Kenyan TLD purchases: mark paid, attach HA id, sync, mark NS.
@@ -27,10 +28,34 @@ import zelisline.ub.tenancy.application.DomainPurchaseService;
 public class SuperAdminDomainOrdersController {
 
     private final DomainPurchaseService domainPurchaseService;
+    private final HostAfricaResellerClient hostAfricaResellerClient;
 
     @GetMapping
     public List<DomainOrderResponse> list(@RequestParam(required = false) String status) {
         return domainPurchaseService.listAllOrders(status);
+    }
+
+    /** Health check for the DomainsReseller HMAC credentials (GetCredits round-trip). */
+    @GetMapping("/reseller-status")
+    public Map<String, Object> resellerStatus() {
+        if (!hostAfricaResellerClient.configured()) {
+            return Map.of(
+                    "configured", false,
+                    "ok", false,
+                    "error", "Reseller email, API key, or WHOIS contact is missing under Platform → Domains."
+            );
+        }
+        var credits = hostAfricaResellerClient.getCredits();
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("configured", true);
+        out.put("ok", credits.ok());
+        if (credits.credit() != null) {
+            out.put("credit", credits.credit());
+        }
+        if (credits.error() != null) {
+            out.put("error", credits.error());
+        }
+        return out;
     }
 
     @GetMapping("/{orderId}")

@@ -17,6 +17,8 @@ public record FeatureFlagsPatchRequest(
         /** Prefill opening float denominations from the previous night's closing count. */
         Boolean shiftsPrefillOpeningFromLastClose,
         /** When M-Pesa till listening starts (POS + storefront). */
-        @Valid PosTillListenFeatureFlagsPatch tillListen
+        @Valid PosTillListenFeatureFlagsPatch tillListen,
+        /** Business hub live beeps on /business. */
+        @Valid HubAlertsFeatureFlagsPatch hubAlerts
 ) {
 }

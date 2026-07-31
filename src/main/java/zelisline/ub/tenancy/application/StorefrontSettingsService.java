@@ -18,6 +18,7 @@ import zelisline.ub.tenancy.api.dto.BrandingPatchRequest;
 import zelisline.ub.tenancy.api.dto.DeliveryAreaDefaults;
 import zelisline.ub.tenancy.api.dto.DeliveryAreaDto;
 import zelisline.ub.tenancy.api.dto.FeatureFlagsPatchRequest;
+import zelisline.ub.tenancy.api.dto.HubAlertsFeatureFlagsPatch;
 import zelisline.ub.tenancy.api.dto.PosDraftsFeatureFlagsPatch;
 import zelisline.ub.tenancy.api.dto.PosTillListenFeatureFlagsPatch;
 import zelisline.ub.tenancy.api.dto.StorefrontPatchRequest;
@@ -621,7 +622,8 @@ public class StorefrontSettingsService {
                         && patch.posCashierWeighedToggle() == null
                         && patch.posCashierAddPhoto() == null
                         && patch.shiftsPrefillOpeningFromLastClose() == null
-                        && patch.tillListen() == null)) {
+                        && patch.tillListen() == null
+                        && patch.hubAlerts() == null)) {
             return currentSettings;
         }
         ObjectNode root = parseRoot(currentSettings);
@@ -658,6 +660,9 @@ public class StorefrontSettingsService {
         if (patch.tillListen() != null) {
             applyTillListenFlags(flags, patch.tillListen());
         }
+        if (patch.hubAlerts() != null) {
+            applyHubAlertsFlags(flags, patch.hubAlerts());
+        }
         root.set(KEY_FEATURES, flags);
         return writeRoot(root);
     }
@@ -670,6 +675,14 @@ public class StorefrontSettingsService {
         putFlagIfPresent(flags, FeatureFlagService.FLAG_POS_TILL_LISTEN_OPEN_CART, patch.openCart());
         putFlagIfPresent(flags, FeatureFlagService.FLAG_POS_TILL_LISTEN_MPESA, patch.mpesaSelected());
         putFlagIfPresent(flags, FeatureFlagService.FLAG_STOREFRONT_TILL_LISTEN, patch.storefront());
+    }
+
+    private void applyHubAlertsFlags(
+            ObjectNode flags,
+            HubAlertsFeatureFlagsPatch patch
+    ) {
+        putFlagIfPresent(flags, FeatureFlagService.FLAG_HUB_ALERTS_BEEP_ON_SALE, patch.beepOnSale());
+        putFlagIfPresent(flags, FeatureFlagService.FLAG_HUB_ALERTS_BEEP_ON_SUPPLY, patch.beepOnSupply());
     }
 
     private ObjectNode copyFeatureFlags(ObjectNode root) {

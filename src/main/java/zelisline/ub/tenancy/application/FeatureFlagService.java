@@ -93,6 +93,18 @@ public class FeatureFlagService {
     public static final String FLAG_STOREFRONT_TILL_LISTEN = "storefront.till_listen";
 
     /**
+     * Beep on the business hub when a POS sale completes.
+     * Absent defaults to enabled.
+     */
+    public static final String FLAG_HUB_ALERTS_BEEP_ON_SALE = "hub.alerts.beep_on_sale";
+
+    /**
+     * Beep on the business hub when a supply bill is posted.
+     * Absent defaults to enabled.
+     */
+    public static final String FLAG_HUB_ALERTS_BEEP_ON_SUPPLY = "hub.alerts.beep_on_supply";
+
+    /**
      * When enabled, opening a shift prefills denomination quantities from the
      * most recently closed shift at that branch (cashier can still edit).
      */
@@ -161,6 +173,14 @@ public class FeatureFlagService {
 
     public boolean isStorefrontTillListen(String businessId) {
         return isEnabledDefaultTrue(businessId, FLAG_STOREFRONT_TILL_LISTEN);
+    }
+
+    public boolean isHubAlertsBeepOnSale(String businessId) {
+        return isEnabledDefaultTrue(businessId, FLAG_HUB_ALERTS_BEEP_ON_SALE);
+    }
+
+    public boolean isHubAlertsBeepOnSupply(String businessId) {
+        return isEnabledDefaultTrue(businessId, FLAG_HUB_ALERTS_BEEP_ON_SUPPLY);
     }
 
     /** Shortcut for Phase 9 multi-branch check. */

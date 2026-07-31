@@ -576,6 +576,24 @@ public class DomainPurchaseService {
             return;
         }
 
+        // Final availability re-check: the domain may have been taken between payment and now.
+        // If we already own it (retry race), pollOwnership attaches it on the next sync.
+        var availability = hostAfricaClient.checkAvailability(order.getFqdn());
+        if (availability.ok() && !availability.quotes().isEmpty()
+                && !availability.quotes().getFirst().available()) {
+            var maybeOwned = hostAfricaClient.findOwnedByFqdn(order.getFqdn());
+            if (maybeOwned.isPresent()) {
+                order.setHostafricaDomainId(maybeOwned.get().domainId());
+                order.setLastError(null);
+                return;
+            }
+            log.warn("Domain order {} ({}): no longer available at HostAfrica — skipping RegisterDomain",
+                    order.getId(), order.getFqdn());
+            order.setLastError("Domain is no longer available at HostAfrica — it was taken after payment. "
+                    + "Refund or pick another name; not sending RegisterDomain.");
+            return;
+        }
+
         var zone = vercelZoneClient.addZone(order.getFqdn());
         if (!zone.ok()) {
             log.warn("Domain order {} ({}): Vercel zone failed before register: {}",

@@ -68,6 +68,7 @@ public class TenancyService {
     private final CatalogBootstrapService catalogBootstrapService;
     private final StorefrontSettingsService storefrontSettingsService;
     private final BusinessInventorySettingsService businessInventorySettingsService;
+    private final BusinessHubAlertsSettingsService businessHubAlertsSettingsService;
     private final BusinessProfileSettingsService businessProfileSettingsService;
     private final BusinessOnboardingSettingsService businessOnboardingSettingsService;
     private final BusinessMobileSettingsService businessMobileSettingsService;
@@ -443,6 +444,14 @@ public class TenancyService {
                 storefrontSettingsService.mergeFeatureFlags(
                     business.getSettings(),
                     request.featureFlags()
+                )
+            );
+        }
+        if (request.hubAlerts() != null) {
+            business.setSettings(
+                businessHubAlertsSettingsService.merge(
+                    business.getSettings(),
+                    request.hubAlerts()
                 )
             );
         }
@@ -835,6 +844,10 @@ public class TenancyService {
             businessInventorySettingsService.readFromSettingsJson(
                 business.getSettings()
             );
+        var hubAlerts =
+            businessHubAlertsSettingsService.readFromSettingsJson(
+                business.getSettings()
+            );
         ProfileSettingsResponse profile =
             businessProfileSettingsService.readFromSettingsJson(
                 business.getSettings()
@@ -871,6 +884,7 @@ public class TenancyService {
             onboarding,
             bundle.branding(),
             bundle.featureFlags(),
+            hubAlerts,
             primaryDomain,
             globalCatalogResolver.readOverrideCode(business.getSettings())
         );

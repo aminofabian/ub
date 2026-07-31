@@ -678,7 +678,8 @@ public class SalesIntelligenceService {
         LocalDate last7From = today.minusDays(6);
         LocalDate last30From = today.minusDays(29);
 
-        List<PastBuckets> past = new ArrayList<>();
+        // Phase 1 — MV (fast, pre-aggregated).
+        Map<String, PastBuckets> pastByItem = new HashMap<>();
         for (ItemVelocityPast row : mvSalesDailyRepository.itemVelocityPast(
                 businessId,
                 today,
@@ -690,7 +691,7 @@ public class SalesIntelligenceService {
                 typeFilter,
                 rowLimit
         )) {
-            past.add(new PastBuckets(
+            pastByItem.put(row.getItemId(), new PastBuckets(
                     row.getItemId(),
                     row.getItemName(),
                     row.getSku(),
@@ -705,6 +706,36 @@ public class SalesIntelligenceService {
                     row.getLast30PastRevenue()
             ));
         }
+
+        // Phase 2 — OLTP fallback: fill items that are missing from the MV
+        // (e.g. when mv_sales_daily hasn't been refreshed yet).
+        for (ItemVelocityPast row : mvSalesDailyRepository.itemVelocityPastOltp(
+                businessId,
+                today,
+                yesterday,
+                last3From,
+                last7From,
+                last30From,
+                branchFilter,
+                typeFilter,
+                rowLimit
+        )) {
+            pastByItem.putIfAbsent(row.getItemId(), new PastBuckets(
+                    row.getItemId(),
+                    row.getItemName(),
+                    row.getSku(),
+                    row.getCurrentStock(),
+                    row.getYesterdayQty(),
+                    row.getYesterdayRevenue(),
+                    row.getLast3PastQty(),
+                    row.getLast3PastRevenue(),
+                    row.getLast7PastQty(),
+                    row.getLast7PastRevenue(),
+                    row.getLast30PastQty(),
+                    row.getLast30PastRevenue()
+            ));
+        }
+        List<PastBuckets> past = new ArrayList<>(pastByItem.values());
 
         Map<String, TodayTotals> todayByItem = new HashMap<>();
         for (ItemDayQtyRevenue row : mvSalesDailyRepository.sumOltpByItemForDay(

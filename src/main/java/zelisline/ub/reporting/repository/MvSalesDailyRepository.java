@@ -291,6 +291,51 @@ public interface MvSalesDailyRepository extends JpaRepository<MvSalesDaily, MvSa
             @Param("itemTypeId") String itemTypeId
     );
 
+    /**
+     * OLTP fallback for {@link #itemVelocityPast} — computes the same past-day
+     * velocity buckets directly from the live {@code sales} / {@code sale_items}
+     * tables.  Used when {@code mv_sales_daily} hasn't been refreshed yet for the
+     * tenant, so the activity page never shows zero for yesterday / 3d / 7d / 30d.
+     */
+    @Query(value = """
+            SELECT i.id AS itemId,
+                   i.name AS itemName,
+                   i.sku AS sku,
+                   i.current_stock AS currentStock,
+                   COALESCE(SUM(CASE WHEN CAST(s.sold_at AS DATE) = :yesterday THEN si.quantity ELSE 0 END), 0) AS yesterdayQty,
+                   COALESCE(SUM(CASE WHEN CAST(s.sold_at AS DATE) = :yesterday THEN si.line_total ELSE 0 END), 0) AS yesterdayRevenue,
+                   COALESCE(SUM(CASE WHEN CAST(s.sold_at AS DATE) >= :last3From AND CAST(s.sold_at AS DATE) < :today THEN si.quantity ELSE 0 END), 0) AS last3PastQty,
+                   COALESCE(SUM(CASE WHEN CAST(s.sold_at AS DATE) >= :last3From AND CAST(s.sold_at AS DATE) < :today THEN si.line_total ELSE 0 END), 0) AS last3PastRevenue,
+                   COALESCE(SUM(CASE WHEN CAST(s.sold_at AS DATE) >= :last7From AND CAST(s.sold_at AS DATE) < :today THEN si.quantity ELSE 0 END), 0) AS last7PastQty,
+                   COALESCE(SUM(CASE WHEN CAST(s.sold_at AS DATE) >= :last7From AND CAST(s.sold_at AS DATE) < :today THEN si.line_total ELSE 0 END), 0) AS last7PastRevenue,
+                   COALESCE(SUM(CASE WHEN CAST(s.sold_at AS DATE) >= :last30From AND CAST(s.sold_at AS DATE) < :today THEN si.quantity ELSE 0 END), 0) AS last30PastQty,
+                   COALESCE(SUM(CASE WHEN CAST(s.sold_at AS DATE) >= :last30From AND CAST(s.sold_at AS DATE) < :today THEN si.line_total ELSE 0 END), 0) AS last30PastRevenue
+              FROM sales s
+              JOIN sale_items si ON si.sale_id = s.id
+              JOIN items i ON i.id = si.item_id AND i.business_id = s.business_id AND i.deleted_at IS NULL
+             WHERE s.business_id = :businessId
+               AND s.status = 'completed'
+               AND CAST(s.sold_at AS DATE) >= :last30From
+               AND CAST(s.sold_at AS DATE) < :today
+               AND (:branchId IS NULL OR s.branch_id = :branchId)
+               AND (:itemTypeId IS NULL OR i.item_type_id = :itemTypeId)
+             GROUP BY i.id, i.name, i.sku, i.current_stock
+            HAVING COALESCE(SUM(si.quantity), 0) > 0
+             ORDER BY last30PastQty DESC
+             LIMIT :limit
+            """, nativeQuery = true)
+    List<ItemVelocityPast> itemVelocityPastOltp(
+            @Param("businessId") String businessId,
+            @Param("today") LocalDate today,
+            @Param("yesterday") LocalDate yesterday,
+            @Param("last3From") LocalDate last3From,
+            @Param("last7From") LocalDate last7From,
+            @Param("last30From") LocalDate last30From,
+            @Param("branchId") String branchId,
+            @Param("itemTypeId") String itemTypeId,
+            @Param("limit") int limit
+    );
+
     interface ItemDailyRollup {
         LocalDate getBusinessDay();
 

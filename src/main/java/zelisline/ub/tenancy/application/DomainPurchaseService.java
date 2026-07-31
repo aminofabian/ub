@@ -8,7 +8,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -86,7 +85,7 @@ public class DomainPurchaseService {
 
         List<DomainSearchResponse.DomainQuoteDto> quotes = new ArrayList<>(result.quotes().stream()
                 .filter(q -> q.domain() != null)
-                .filter(this::isKenyanTld)
+                .filter(this::isKenyanApexDomain)
                 .map(q -> new DomainSearchResponse.DomainQuoteDto(
                         q.domain(),
                         q.available(),
@@ -99,42 +98,12 @@ public class DomainPurchaseService {
                 ))
                 .toList());
 
-        // If bare search returned nothing useful, try suggest.
-        List<String> suggestions = new ArrayList<>(result.suggestions());
-        if (quotes.isEmpty() || suggestions.isEmpty()) {
-            var suggested = hostAfricaClient.suggest(stripTld(query));
-            if (suggested.ok()) {
-                suggestions.addAll(suggested.suggestions());
-                for (var q : suggested.quotes()) {
-                    if (q.domain() != null && isKenyanTld(q)
-                            && quotes.stream().noneMatch(x -> x.domain().equals(q.domain()))) {
-                        quotes.add(new DomainSearchResponse.DomainQuoteDto(
-                                q.domain(),
-                                q.available(),
-                                q.status(),
-                                q.priceCents(),
-                                q.currency(),
-                                q.periodYears(),
-                                q.premium(),
-                                q.requiresAdditionalInfo()
-                        ));
-                    }
-                }
-            }
-        }
-
+        // No HostAfrica "suggest" / alternate-name chips — only exact TLD options for the searched label.
         return new DomainSearchResponse(
                 query,
                 result.currency(),
                 quotes,
-                suggestions.stream()
-                        .filter(Objects::nonNull)
-                        .map(s -> s.trim().toLowerCase(Locale.ROOT))
-                        .filter(s -> !s.isBlank())
-                        .filter(this::isKenyanTld)
-                        .distinct()
-                        .limit(12)
-                        .toList(),
+                List.of(),
                 null
         );
     }
@@ -147,8 +116,8 @@ public class DomainPurchaseService {
         if (!fqdn.contains(".")) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Provide a full domain including TLD (e.g. shop.co.ke)");
         }
-        if (!isKenyanTld(fqdn)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only Kenyan TLDs (.ke / .co.ke / …) are supported");
+        if (!isKenyanApexDomain(fqdn)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only Kenyan apex TLDs (.ke / .co.ke / …) are supported");
         }
         reservedHostnameGuard.assertClaimable(fqdn);
         if (domainMappingRepository.findByDomainAndDeletedAtIsNull(fqdn).isPresent()) {
@@ -909,15 +878,39 @@ public class DomainPurchaseService {
         return kenyanTlds().stream().map(tld -> label + "." + tld).toList();
     }
 
-    private boolean isKenyanTld(HostAfricaClient.DomainQuote q) {
-        return q.domain() != null && isKenyanTld(q.domain());
-    }
-
     private boolean isKenyanTld(String fqdn) {
         String d = fqdn.toLowerCase(Locale.ROOT);
         for (String tld : kenyanTlds()) {
             if (d.equals(tld) || d.endsWith("." + tld)) {
                 return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Apex only — e.g. {@code mama-njeri.co.ke}, not {@code shop.mama-njeri.co.ke} or HA suggest fluff.
+     */
+    private boolean isKenyanApexDomain(HostAfricaClient.DomainQuote q) {
+        return q.domain() != null && isKenyanApexDomain(q.domain());
+    }
+
+    private boolean isKenyanApexDomain(String fqdn) {
+        if (fqdn == null || fqdn.isBlank() || !isKenyanTld(fqdn)) {
+            return false;
+        }
+        String d = fqdn.trim().toLowerCase(Locale.ROOT);
+        // Longest TLD match first (co.ke before ke).
+        List<String> tlds = kenyanTlds().stream()
+                .sorted((a, b) -> Integer.compare(b.length(), a.length()))
+                .toList();
+        for (String tld : tlds) {
+            if (d.endsWith("." + tld)) {
+                String label = d.substring(0, d.length() - tld.length() - 1);
+                return !label.isBlank() && !label.contains(".");
+            }
+            if (d.equals(tld)) {
+                return false;
             }
         }
         return false;
@@ -933,10 +926,5 @@ public class DomainPurchaseService {
                 .map(s -> s.toLowerCase(Locale.ROOT))
                 .filter(s -> !s.isBlank())
                 .collect(Collectors.toList());
-    }
-
-    private static String stripTld(String query) {
-        int i = query.indexOf('.');
-        return i < 0 ? query : query.substring(0, i);
     }
 }

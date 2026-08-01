@@ -164,12 +164,17 @@ public class OverdueDebtReminderService {
                         ? "https://palmart.co.ke"
                         : messaging.paymentAccountUrl().trim(),
                 phoneDigits);
+        String balanceText = formatMoney(owed, currency);
         String message = buildMessage(customer.getName(), shopName, owed, currency, paymentUrl);
+        List<String> templateParams = CustomerMessageDispatcher.paymentReminderBodyParams(
+                customer.getName(), balanceText, paymentUrl);
 
         CustomerMessageDispatcher.DeliveryResult delivery = switch (channel) {
-            case "whatsapp" -> customerMessageDispatcher.deliverDirect(messaging, phoneDigits, message);
+            case "whatsapp" -> customerMessageDispatcher.deliverPaymentReminderDirect(
+                    messaging, phoneDigits, templateParams);
             case "sms" -> customerMessageDispatcher.deliverSmsOnly(messaging, phoneDigits, message);
-            default -> customerMessageDispatcher.deliver(messaging, phoneDigits, message);
+            default -> customerMessageDispatcher.deliverPaymentReminder(
+                    messaging, phoneDigits, templateParams, message);
         };
 
         if ("sent".equals(delivery.outcome()) || "stub".equals(delivery.outcome())) {
@@ -182,6 +187,9 @@ public class OverdueDebtReminderService {
                 customerId, delivery.channel(), delivery.outcome(), delivery.detail());
 
         var lookup = delivery.lookup();
+        String preview = "whatsapp".equals(delivery.channel())
+                ? CustomerMessageDispatcher.paymentReminderPreview(templateParams)
+                : message;
         return new CreditSaleReminderTestResponse(
                 messaging.enabled(),
                 messaging.rapidApiConfigured(),
@@ -193,7 +201,7 @@ public class OverdueDebtReminderService {
                 delivery.channel(),
                 delivery.outcome(),
                 delivery.detail(),
-                message);
+                preview);
     }
 
     DispatchOutcome dispatch(CreditAccount account) {
@@ -226,14 +234,18 @@ public class OverdueDebtReminderService {
                         ? "https://palmart.co.ke"
                         : messaging.paymentAccountUrl().trim(),
                 phoneDigits);
+        String balanceText = formatMoney(account.getBalanceOwed(), currency);
         String message = buildMessage(
                 customer.getName(),
                 shopName,
                 account.getBalanceOwed(),
                 currency,
                 paymentUrl);
+        List<String> templateParams = CustomerMessageDispatcher.paymentReminderBodyParams(
+                customer.getName(), balanceText, paymentUrl);
 
-        CustomerMessageDispatcher.DeliveryResult delivery = customerMessageDispatcher.deliver(messaging, phoneDigits, message);
+        CustomerMessageDispatcher.DeliveryResult delivery = customerMessageDispatcher.deliverPaymentReminder(
+                messaging, phoneDigits, templateParams, message);
         log.info("credits.balance_reminder account={} customer={} channel={} outcome={} detail={}",
                 account.getId(), account.getCustomerId(), delivery.channel(), delivery.outcome(), delivery.detail());
         return new DispatchOutcome(delivery.channel(), delivery.outcome(), delivery.detail());

@@ -38,15 +38,43 @@ public class MetaWhatsAppMessagingClient {
      * 24-hour customer service window).
      */
     public SendResult sendTemplate(TenantMessagingConfig cfg, String toDigits, String templateName, String languageCode) {
+        return sendTemplate(cfg, toDigits, templateName, languageCode, java.util.List.of());
+    }
+
+    /**
+     * Sends a pre-approved template with body variables ({{1}}, {{2}}, …).
+     */
+    public SendResult sendTemplate(
+            TenantMessagingConfig cfg,
+            String toDigits,
+            String templateName,
+            String languageCode,
+            java.util.List<String> bodyParams
+    ) {
         if (templateName == null || templateName.isBlank()) {
             return SendResult.failed("missing_template_name");
         }
         String lang = languageCode == null || languageCode.isBlank() ? "en" : languageCode.trim();
+        var template = new java.util.LinkedHashMap<String, Object>();
+        template.put("name", templateName.trim());
+        template.put("language", java.util.Map.of("code", lang));
+        if (bodyParams != null && !bodyParams.isEmpty()) {
+            var parameters = new java.util.ArrayList<java.util.Map<String, Object>>();
+            for (String param : bodyParams) {
+                String text = param == null ? "" : param.trim();
+                // Meta rejects newlines / tabs in template parameters.
+                text = text.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ').trim();
+                if (text.isEmpty()) {
+                    text = "-";
+                }
+                parameters.add(java.util.Map.of("type", "text", "text", text));
+            }
+            template.put("components", java.util.List.of(
+                    java.util.Map.of("type", "body", "parameters", parameters)));
+        }
         return send(cfg, toDigits, java.util.Map.of(
                 "type", "template",
-                "template", java.util.Map.of(
-                        "name", templateName.trim(),
-                        "language", java.util.Map.of("code", lang))));
+                "template", template));
     }
 
     private SendResult send(TenantMessagingConfig cfg, String toDigits, Object payload) {

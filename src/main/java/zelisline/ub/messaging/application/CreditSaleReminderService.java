@@ -92,6 +92,7 @@ public class CreditSaleReminderService {
                 : "our shop";
         String paymentUrl = CustomerTabPaymentUrl.build(messaging.paymentAccountUrl(), phoneDigits);
         BigDecimal balanceOwed = event.balanceOwed() != null ? event.balanceOwed() : BigDecimal.ZERO;
+        String balanceText = formatMoney(balanceOwed, currency);
         String message = buildMessage(
                 customer.getName(),
                 shopName,
@@ -101,11 +102,15 @@ public class CreditSaleReminderService {
                 balanceOwed,
                 currency,
                 paymentUrl);
+        List<String> templateParams = CustomerMessageDispatcher.paymentReminderBodyParams(
+                customer.getName(), balanceText, paymentUrl);
 
         pushInAppNotification(event, customer, message, paymentUrl, currency, balanceOwed);
 
-        CustomerMessageDispatcher.DeliveryResult delivery = customerMessageDispatcher.deliver(messaging, phoneDigits, message);
-        saveDispatch(event, delivery.channel(), delivery.outcome(), delivery.detail(), message);
+        CustomerMessageDispatcher.DeliveryResult delivery = customerMessageDispatcher.deliverPaymentReminder(
+                messaging, phoneDigits, templateParams, message);
+        saveDispatch(event, delivery.channel(), delivery.outcome(), delivery.detail(),
+                CustomerMessageDispatcher.paymentReminderPreview(templateParams));
         log.info("credit_sale_reminder sale={} customer={} channel={} outcome={} detail={}",
                 event.saleId(), event.customerId(), delivery.channel(), delivery.outcome(), delivery.detail());
     }
@@ -126,6 +131,7 @@ public class CreditSaleReminderService {
         List<CreditSaleReminderLineItem> dummyItems = List.of(
                 new CreditSaleReminderLineItem("Sugar 2kg", new BigDecimal("2"), new BigDecimal("240.00")),
                 new CreditSaleReminderLineItem("Milk 1L", BigDecimal.ONE, new BigDecimal("65.00")));
+        String balanceText = formatMoney(new BigDecimal("1240.00"), "KES");
         String message = buildMessage(
                 "Jane",
                 "Mama's Kiosk",
@@ -135,6 +141,9 @@ public class CreditSaleReminderService {
                 new BigDecimal("1240.00"),
                 "KES",
                 paymentUrl);
+        List<String> templateParams = CustomerMessageDispatcher.paymentReminderBodyParams(
+                "Jane", balanceText, paymentUrl);
+        String preview = CustomerMessageDispatcher.paymentReminderPreview(templateParams);
 
         if (!messaging.enabled()) {
             return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
@@ -148,7 +157,7 @@ public class CreditSaleReminderService {
                     "none",
                     "skipped",
                     "Enable “Send reminders after credit (tab) sales”, save, then retry.",
-                    message);
+                    preview);
         }
 
         String phoneDigits = StkPhoneNormalizer.normalize(rawPhone);
@@ -164,10 +173,11 @@ public class CreditSaleReminderService {
                     "none",
                     "failed",
                     "Use a Kenyan number e.g. 0712345678 or 254712345678",
-                    message);
+                    preview);
         }
 
-        CustomerMessageDispatcher.DeliveryResult attempt = customerMessageDispatcher.deliver(messaging, phoneDigits, message);
+        CustomerMessageDispatcher.DeliveryResult attempt = customerMessageDispatcher.deliverPaymentReminder(
+                messaging, phoneDigits, templateParams, message);
         return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
                 true,
                 messaging.rapidApiConfigured(),
@@ -179,13 +189,12 @@ public class CreditSaleReminderService {
                 attempt.channel(),
                 attempt.outcome(),
                 attempt.detail(),
-                message);
+                preview);
     }
 
     /**
-     * Standalone admin WhatsApp/SMS test. Works regardless of the "reminders
-     * enabled" toggle so an admin can verify delivery, and sends a custom message
-     * (falling back to a friendly default) rather than the reminder template.
+     * Standalone admin WhatsApp test. Sends the approved {@code payment_reminder} template
+     * so cold numbers work outside the 24h customer-service window.
      */
     public zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse sendWhatsAppTest(
             String businessId,
@@ -193,7 +202,10 @@ public class CreditSaleReminderService {
             String customMessage
     ) {
         TenantMessagingConfig messaging = messagingSettingsService.resolveForTest(businessId);
-        String message = buildTestMessage(businessId, customMessage);
+        Business business = businessRepository.findById(businessId).orElse(null);
+        String currency = business != null && business.getCurrency() != null
+                ? business.getCurrency().trim()
+                : "KES";
 
         if (!messaging.secretsReadable()) {
             return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
@@ -209,7 +221,7 @@ public class CreditSaleReminderService {
                     messaging.secretsReadError() != null
                             ? messaging.secretsReadError()
                             : "Stored API keys could not be read on the server.",
-                    message);
+                    null);
         }
 
         if (!messaging.metaWhatsAppConfigured()) {
@@ -224,7 +236,7 @@ public class CreditSaleReminderService {
                     "whatsapp",
                     "skipped",
                     "Add a Meta WhatsApp phone number ID + access token, save, then retry. Use the SMS test for Sozuri / Africa's Talking.",
-                    message);
+                    null);
         }
 
         String phoneDigits = StkPhoneNormalizer.normalize(rawPhone);
@@ -240,10 +252,25 @@ public class CreditSaleReminderService {
                     "none",
                     "failed",
                     "Use a Kenyan number e.g. 0712345678 or 254712345678",
-                    message);
+                    null);
         }
 
-        CustomerMessageDispatcher.DeliveryResult attempt = customerMessageDispatcher.deliverDirect(messaging, phoneDigits, message);
+        String paymentUrl = CustomerTabPaymentUrl.build(
+                messaging.paymentAccountUrl().isBlank()
+                        ? "https://palmart.co.ke"
+                        : messaging.paymentAccountUrl().trim(),
+                phoneDigits);
+        String nameHint = (customMessage != null && !customMessage.isBlank() && customMessage.trim().length() <= 40)
+                ? customMessage.trim()
+                : "there";
+        List<String> templateParams = CustomerMessageDispatcher.paymentReminderBodyParams(
+                nameHint,
+                formatMoney(new BigDecimal("100.00"), currency),
+                paymentUrl);
+        String message = CustomerMessageDispatcher.paymentReminderPreview(templateParams);
+
+        CustomerMessageDispatcher.DeliveryResult attempt = customerMessageDispatcher.deliverPaymentReminderDirect(
+                messaging, phoneDigits, templateParams);
         log.info("whatsapp_test business={} channel={} outcome={} detail={}",
                 businessId, attempt.channel(), attempt.outcome(), attempt.detail());
         return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
@@ -335,17 +362,6 @@ public class CreditSaleReminderService {
                 attempt.outcome(),
                 attempt.detail(),
                 message);
-    }
-
-    private String buildTestMessage(String businessId, String customMessage) {
-        if (customMessage != null && !customMessage.isBlank()) {
-            return customMessage.trim();
-        }
-        Business business = businessRepository.findById(businessId).orElse(null);
-        String shopName = business != null && business.getName() != null && !business.getName().isBlank()
-                ? business.getName().trim()
-                : "our shop";
-        return "Test message from " + shopName + " via Palmart. If you received this, WhatsApp messaging is set up correctly.";
     }
 
     private String buildSmsTestMessage(String businessId, String customMessage) {

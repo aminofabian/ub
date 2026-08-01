@@ -92,6 +92,7 @@ public class CreditSaleReminderService {
                 : "our shop";
         String paymentUrl = CustomerTabPaymentUrl.build(messaging.paymentAccountUrl(), phoneDigits);
         BigDecimal balanceOwed = event.balanceOwed() != null ? event.balanceOwed() : BigDecimal.ZERO;
+        String saleTotalText = formatMoney(event.creditAmount(), currency);
         String balanceText = formatMoney(balanceOwed, currency);
         String message = buildMessage(
                 customer.getName(),
@@ -102,15 +103,20 @@ public class CreditSaleReminderService {
                 balanceOwed,
                 currency,
                 paymentUrl);
-        List<String> templateParams = CustomerMessageDispatcher.paymentReminderBodyParams(
-                customer.getName(), balanceText, paymentUrl);
+        List<String> receiptParams = CustomerMessageDispatcher.creditSaleReceiptBodyParams(
+                customer.getName(),
+                shopName,
+                formatItemsSummary(event.items(), event.itemCount(), currency),
+                saleTotalText,
+                balanceText,
+                paymentUrl);
 
         pushInAppNotification(event, customer, message, paymentUrl, currency, balanceOwed);
 
-        CustomerMessageDispatcher.DeliveryResult delivery = customerMessageDispatcher.deliverPaymentReminder(
-                messaging, phoneDigits, templateParams, message);
-        saveDispatch(event, delivery.channel(), delivery.outcome(), delivery.detail(),
-                CustomerMessageDispatcher.paymentReminderPreview(templateParams));
+        CustomerMessageDispatcher.DeliveryResult delivery = customerMessageDispatcher.deliverCreditSaleReceipt(
+                messaging, phoneDigits, receiptParams, message);
+        // Prefer the itemized free-form preview (matches SMS / in-window WhatsApp).
+        saveDispatch(event, delivery.channel(), delivery.outcome(), delivery.detail(), message);
         log.info("credit_sale_reminder sale={} customer={} channel={} outcome={} detail={}",
                 event.saleId(), event.customerId(), delivery.channel(), delivery.outcome(), delivery.detail());
     }
@@ -131,7 +137,6 @@ public class CreditSaleReminderService {
         List<CreditSaleReminderLineItem> dummyItems = List.of(
                 new CreditSaleReminderLineItem("Sugar 2kg", new BigDecimal("2"), new BigDecimal("240.00")),
                 new CreditSaleReminderLineItem("Milk 1L", BigDecimal.ONE, new BigDecimal("65.00")));
-        String balanceText = formatMoney(new BigDecimal("1240.00"), "KES");
         String message = buildMessage(
                 "Jane",
                 "Mama's Kiosk",
@@ -141,9 +146,13 @@ public class CreditSaleReminderService {
                 new BigDecimal("1240.00"),
                 "KES",
                 paymentUrl);
-        List<String> templateParams = CustomerMessageDispatcher.paymentReminderBodyParams(
-                "Jane", balanceText, paymentUrl);
-        String preview = CustomerMessageDispatcher.paymentReminderPreview(templateParams);
+        List<String> receiptParams = CustomerMessageDispatcher.creditSaleReceiptBodyParams(
+                "Jane",
+                "Mama's Kiosk",
+                formatItemsSummary(dummyItems, dummyItems.size(), "KES"),
+                formatMoney(new BigDecimal("305.00"), "KES"),
+                formatMoney(new BigDecimal("1240.00"), "KES"),
+                paymentUrl);
 
         if (!messaging.enabled()) {
             return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
@@ -157,7 +166,7 @@ public class CreditSaleReminderService {
                     "none",
                     "skipped",
                     "Enable “Send reminders after credit (tab) sales”, save, then retry.",
-                    preview);
+                    message);
         }
 
         String phoneDigits = StkPhoneNormalizer.normalize(rawPhone);
@@ -173,11 +182,11 @@ public class CreditSaleReminderService {
                     "none",
                     "failed",
                     "Use a Kenyan number e.g. 0712345678 or 254712345678",
-                    preview);
+                    message);
         }
 
-        CustomerMessageDispatcher.DeliveryResult attempt = customerMessageDispatcher.deliverPaymentReminder(
-                messaging, phoneDigits, templateParams, message);
+        CustomerMessageDispatcher.DeliveryResult attempt = customerMessageDispatcher.deliverCreditSaleReceipt(
+                messaging, phoneDigits, receiptParams, message);
         return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
                 true,
                 messaging.rapidApiConfigured(),
@@ -189,7 +198,7 @@ public class CreditSaleReminderService {
                 attempt.channel(),
                 attempt.outcome(),
                 attempt.detail(),
-                preview);
+                message);
     }
 
     /**
@@ -475,6 +484,34 @@ public class CreditSaleReminderService {
             sb.append("\nTotal tab: ").append(formatMoney(balanceOwed, currency));
         }
         sb.append("\n\nPay here: ").append(paymentUrl);
+        return sb.toString();
+    }
+
+    /** Single-line item summary for Meta template body params (no newlines). */
+    static String formatItemsSummary(List<CreditSaleReminderLineItem> items, int itemCount, String currency) {
+        List<CreditSaleReminderLineItem> lines = items != null ? items : List.of();
+        if (lines.isEmpty()) {
+            int count = Math.max(1, itemCount);
+            return count + (count == 1 ? " item" : " items");
+        }
+        StringBuilder sb = new StringBuilder();
+        int shown = 0;
+        for (CreditSaleReminderLineItem line : lines) {
+            if (shown >= MAX_ITEM_LINES) {
+                break;
+            }
+            if (shown > 0) {
+                sb.append(", ");
+            }
+            sb.append(line.name() != null ? line.name() : "Item")
+                    .append(" ")
+                    .append(formatMoney(line.lineTotal(), currency));
+            shown++;
+        }
+        int remaining = lines.size() - shown;
+        if (remaining > 0) {
+            sb.append(", and ").append(remaining).append(" more");
+        }
         return sb.toString();
     }
 

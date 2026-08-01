@@ -47,10 +47,12 @@ public class JwtTokenService {
 
     private final SecretKey key;
     private final long accessTtlMinutes;
+    private final long superAdminAccessTtlMinutes;
 
     public JwtTokenService(
             @Value("${app.jwt.secret}") String secret,
-            @Value("${app.jwt.access-ttl-minutes:60}") long accessTtlMinutes
+            @Value("${app.jwt.access-ttl-minutes:60}") long accessTtlMinutes,
+            @Value("${app.jwt.super-admin-access-ttl-minutes:240}") long superAdminAccessTtlMinutes
     ) {
         byte[] bytes = secret.getBytes(StandardCharsets.UTF_8);
         if (bytes.length < 32) {
@@ -58,6 +60,7 @@ public class JwtTokenService {
         }
         this.key = Keys.hmacShaKeyFor(bytes);
         this.accessTtlMinutes = accessTtlMinutes;
+        this.superAdminAccessTtlMinutes = superAdminAccessTtlMinutes;
     }
 
     public String createAccessToken(
@@ -112,10 +115,15 @@ public class JwtTokenService {
         return builder.compact();
     }
 
-    /** Stateless super-admin access token (no {@code business_id}, no refresh session row). */
+    /**
+     * Stateless super-admin access token (no {@code business_id}, no refresh session row).
+     * Uses its own longer TTL so long-running portal work (e.g. multi-batch catalog
+     * promotes with image re-hosting) is not cut off mid-run; the portal also refreshes
+     * the token proactively via {@code POST /super-admin/auth/refresh}.
+     */
     public String createSuperAdminAccessToken(String superAdminId, String jti) {
         Instant now = Instant.now();
-        Instant exp = now.plusSeconds(accessTtlMinutes * 60);
+        Instant exp = now.plusSeconds(superAdminAccessTtlMinutes * 60);
         return Jwts.builder()
                 .id(jti)
                 .subject(superAdminId)

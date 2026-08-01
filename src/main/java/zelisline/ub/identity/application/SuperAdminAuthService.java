@@ -68,6 +68,24 @@ public class SuperAdminAuthService {
         return new SuperAdminLoginResponse(access, admin.getId(), admin.getEmail(), admin.getName());
     }
 
+    /**
+     * Sliding-session refresh: swaps a still-valid super-admin token for a fresh one so
+     * long-running portal work (multi-batch promotes, imports) is not logged out mid-run.
+     * The caller is already authenticated by the JWT filter, which re-checks
+     * active/locked state on every request.
+     */
+    @Transactional(readOnly = true)
+    public SuperAdminLoginResponse refresh(String superAdminId) {
+        SuperAdmin admin = superAdminRepository.findById(superAdminId)
+                .filter(SuperAdmin::isActive)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Account is not active"));
+        if (admin.getLockedUntil() != null && admin.getLockedUntil().isAfter(Instant.now())) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Account is temporarily locked");
+        }
+        String access = jwtTokenService.createSuperAdminAccessToken(admin.getId(), UUID.randomUUID().toString());
+        return new SuperAdminLoginResponse(access, admin.getId(), admin.getEmail(), admin.getName());
+    }
+
     private void publishSuperAdminEvent(SuperAdmin admin, String eventType, String reason) {
         auditEventPublisher.publishSynchronous(auditEventBuilder.builder(AuditEventCategory.SECURITY, eventType,
                         AuditEventTypes.LOGIN_SUCCEEDED.equals(eventType) ? AuditEventSeverity.INFO : AuditEventSeverity.WARN)

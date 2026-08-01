@@ -605,7 +605,8 @@ public class GlobalCatalogService {
                                     openingQty,
                                     openingUnitCost,
                                     buyingPrice,
-                                    gp.getImageUrl()),
+                                    gp.getImageUrl(),
+                                    line.webPublished()),
                             effectiveActor);
                 } else {
                     // Orphan package rows (no resolvable parent) stay flat stockable SKUs.
@@ -647,7 +648,8 @@ public class GlobalCatalogService {
                                     sellingPrice,
                                     openingQty,
                                     openingUnitCost,
-                                    gp.getImageUrl()),
+                                    gp.getImageUrl(),
+                                    line.webPublished()),
                             effectiveActor);
                 }
                 imported = adoptLineExecutor.attachGalleryAfterCommit(

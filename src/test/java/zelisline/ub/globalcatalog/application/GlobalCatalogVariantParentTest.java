@@ -27,8 +27,8 @@ class GlobalCatalogVariantParentTest {
         Map<String, GlobalProduct> byId = Map.of("parent", parent, "child", child);
         List<AdoptLineRequest> ordered = GlobalCatalogService.orderParentsBeforeVariants(
                 List.of(
-                        new AdoptLineRequest("child", null, null, null, null, null, null, null, null, null, null),
-                        new AdoptLineRequest("parent", null, null, null, null, null, null, null, null, null, null)),
+                        new AdoptLineRequest("child", null, null, null, null, null, null, null, null, null, null, null),
+                        new AdoptLineRequest("parent", null, null, null, null, null, null, null, null, null, null, null)),
                 byId);
 
         assertEquals("parent", ordered.get(0).globalProductId());

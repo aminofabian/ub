@@ -18,6 +18,11 @@ public record AdoptLineRequest(
         BigDecimal reorderQty,
         BigDecimal minStockLevel,
         /** When SKU collides: {@code skip} (default), {@code merge} into existing row, or {@code rename} (use {@link #sku}). */
-        @Size(max = 16) String onSkuConflict
+        @Size(max = 16) String onSkuConflict,
+        /**
+         * When {@code false}, the created item is not storefront-visible.
+         * Null / omitted defaults to published (legacy adopt behaviour).
+         */
+        Boolean webPublished
 ) {
 }

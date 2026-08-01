@@ -109,6 +109,7 @@ public class GlobalCatalogReplaceService {
                     null,
                     null,
                     null,
+                    null,
                     null));
         }
         return lines;

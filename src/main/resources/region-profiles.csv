@@ -1,0 +1,251 @@
+countryCode,label,currency,timezone,dialCode,defaultVatPercent
+AF,Afghanistan,AFN,Asia/Kabul,+93,0
+AX,Åland Islands,EUR,Europe/Mariehamn,+358,0
+AL,Albania,ALL,Europe/Tirane,+355,20
+DZ,Algeria,DZD,Africa/Algiers,+213,19
+AS,American Samoa,USD,Pacific/Pago_Pago,+1684,0
+AD,Andorra,EUR,Europe/Andorra,+376,4.5
+AO,Angola,AOA,Africa/Luanda,+244,14
+AI,Anguilla,XCD,America/Anguilla,+1264,0
+AQ,Antarctica,USD,UTC,+672,0
+AG,Antigua and Barbuda,XCD,America/Antigua,+1268,15
+AR,Argentina,ARS,America/Argentina/Buenos_Aires,+54,21
+AM,Armenia,AMD,Asia/Yerevan,+374,20
+AW,Aruba,AWG,America/Aruba,+297,0
+AU,Australia,AUD,Australia/Sydney,+61,10
+AT,Austria,EUR,Europe/Vienna,+43,20
+AZ,Azerbaijan,AZN,Asia/Baku,+994,18
+BS,Bahamas,BSD,America/Nassau,+1242,12
+BH,Bahrain,BHD,Asia/Bahrain,+973,10
+BD,Bangladesh,BDT,Asia/Dhaka,+880,15
+BB,Barbados,BBD,America/Barbados,+1246,17.5
+BY,Belarus,BYN,Europe/Minsk,+375,20
+BE,Belgium,EUR,Europe/Brussels,+32,21
+BZ,Belize,BZD,America/Belize,+501,12.5
+BJ,Benin,XOF,Africa/Porto-Novo,+229,18
+BM,Bermuda,BMD,Atlantic/Bermuda,+1441,0
+BT,Bhutan,BTN,Asia/Thimphu,+975,0
+BO,Bolivia,BOB,America/La_Paz,+591,13
+BQ,"Bonaire, Sint Eustatius and Saba",USD,America/Kralendijk,+599,0
+BA,Bosnia and Herzegovina,BAM,Europe/Sarajevo,+387,17
+BW,Botswana,BWP,Africa/Gaborone,+267,14
+BV,Bouvet Island,NOK,UTC,+47,0
+BR,Brazil,BRL,America/Sao_Paulo,+55,0
+IO,British Indian Ocean Territory,USD,Indian/Chagos,+246,0
+VG,British Virgin Islands,USD,America/Tortola,+1284,0
+BN,Brunei,BND,Asia/Brunei,+673,0
+BG,Bulgaria,BGN,Europe/Sofia,+359,20
+BF,Burkina Faso,XOF,Africa/Ouagadougou,+226,18
+BI,Burundi,BIF,Africa/Bujumbura,+257,18
+CV,Cabo Verde,CVE,Atlantic/Cape_Verde,+238,15
+KH,Cambodia,KHR,Asia/Phnom_Penh,+855,10
+CM,Cameroon,XAF,Africa/Douala,+237,19.25
+CA,Canada,CAD,America/Toronto,+1,5
+KY,Cayman Islands,KYD,America/Cayman,+1345,0
+CF,Central African Republic,XAF,Africa/Bangui,+236,19
+TD,Chad,XAF,Africa/Ndjamena,+235,18
+CL,Chile,CLP,America/Santiago,+56,19
+CN,China,CNY,Asia/Shanghai,+86,13
+CX,Christmas Island,AUD,Indian/Christmas,+61,0
+CC,Cocos (Keeling) Islands,AUD,Indian/Cocos,+61,0
+CO,Colombia,COP,America/Bogota,+57,19
+KM,Comoros,KMF,Indian/Comoro,+269,0
+CG,Congo,XAF,Africa/Brazzaville,+242,18
+CD,Congo (DRC),CDF,Africa/Kinshasa,+243,16
+CK,Cook Islands,NZD,Pacific/Rarotonga,+682,0
+CR,Costa Rica,CRC,America/Costa_Rica,+506,13
+CI,Côte d'Ivoire,XOF,Africa/Abidjan,+225,18
+HR,Croatia,EUR,Europe/Zagreb,+385,25
+CU,Cuba,CUP,America/Havana,+53,0
+CW,Curaçao,ANG,America/Curacao,+599,0
+CY,Cyprus,EUR,Asia/Nicosia,+357,19
+CZ,Czechia,CZK,Europe/Prague,+420,21
+DK,Denmark,DKK,Europe/Copenhagen,+45,25
+DJ,Djibouti,DJF,Africa/Djibouti,+253,10
+DM,Dominica,XCD,America/Dominica,+1767,15
+DO,Dominican Republic,DOP,America/Santo_Domingo,+1809,18
+EC,Ecuador,USD,America/Guayaquil,+593,15
+EG,Egypt,EGP,Africa/Cairo,+20,14
+SV,El Salvador,USD,America/El_Salvador,+503,13
+GQ,Equatorial Guinea,XAF,Africa/Malabo,+240,15
+ER,Eritrea,ERN,Africa/Asmara,+291,0
+EE,Estonia,EUR,Europe/Tallinn,+372,22
+SZ,Eswatini,SZL,Africa/Mbabane,+268,15
+ET,Ethiopia,ETB,Africa/Addis_Ababa,+251,15
+FK,Falkland Islands,FKP,Atlantic/Stanley,+500,0
+FO,Faroe Islands,DKK,Atlantic/Faroe,+298,0
+FJ,Fiji,FJD,Pacific/Fiji,+679,9
+FI,Finland,EUR,Europe/Helsinki,+358,24
+FR,France,EUR,Europe/Paris,+33,20
+GF,French Guiana,EUR,America/Cayenne,+594,0
+PF,French Polynesia,XPF,Pacific/Tahiti,+689,0
+TF,French Southern Territories,EUR,Indian/Kerguelen,+262,0
+GA,Gabon,XAF,Africa/Libreville,+241,18
+GM,Gambia,GMD,Africa/Banjul,+220,15
+GE,Georgia,GEL,Asia/Tbilisi,+995,18
+DE,Germany,EUR,Europe/Berlin,+49,19
+GH,Ghana,GHS,Africa/Accra,+233,15
+GI,Gibraltar,GIP,Europe/Gibraltar,+350,0
+GR,Greece,EUR,Europe/Athens,+30,24
+GL,Greenland,DKK,America/Godthab,+299,0
+GD,Grenada,XCD,America/Grenada,+1473,15
+GP,Guadeloupe,EUR,America/Guadeloupe,+590,0
+GU,Guam,USD,Pacific/Guam,+1671,0
+GT,Guatemala,GTQ,America/Guatemala,+502,12
+GG,Guernsey,GBP,Europe/Guernsey,+44,0
+GN,Guinea,GNF,Africa/Conakry,+224,18
+GW,Guinea-Bissau,XOF,Africa/Bissau,+245,15
+GY,Guyana,GYD,America/Guyana,+592,14
+HT,Haiti,HTG,America/Port-au-Prince,+509,10
+HM,Heard Island and McDonald Islands,AUD,UTC,+672,0
+HN,Honduras,HNL,America/Tegucigalpa,+504,15
+HK,Hong Kong,HKD,Asia/Hong_Kong,+852,0
+HU,Hungary,HUF,Europe/Budapest,+36,27
+IS,Iceland,ISK,Atlantic/Reykjavik,+354,24
+IN,India,INR,Asia/Kolkata,+91,18
+ID,Indonesia,IDR,Asia/Jakarta,+62,11
+IR,Iran,IRR,Asia/Tehran,+98,9
+IQ,Iraq,IQD,Asia/Baghdad,+964,0
+IE,Ireland,EUR,Europe/Dublin,+353,23
+IM,Isle of Man,GBP,Europe/Isle_of_Man,+44,0
+IL,Israel,ILS,Asia/Jerusalem,+972,17
+IT,Italy,EUR,Europe/Rome,+39,22
+JM,Jamaica,JMD,America/Jamaica,+1876,15
+JP,Japan,JPY,Asia/Tokyo,+81,10
+JE,Jersey,GBP,Europe/Jersey,+44,0
+JO,Jordan,JOD,Asia/Amman,+962,16
+KZ,Kazakhstan,KZT,Asia/Almaty,+7,12
+KE,Kenya,KES,Africa/Nairobi,+254,16
+KI,Kiribati,AUD,Pacific/Tarawa,+686,0
+XK,Kosovo,EUR,Europe/Belgrade,+383,18
+KW,Kuwait,KWD,Asia/Kuwait,+965,0
+KG,Kyrgyzstan,KGS,Asia/Bishkek,+996,12
+LA,Laos,LAK,Asia/Vientiane,+856,10
+LV,Latvia,EUR,Europe/Riga,+371,21
+LB,Lebanon,LBP,Asia/Beirut,+961,11
+LS,Lesotho,LSL,Africa/Maseru,+266,15
+LR,Liberia,LRD,Africa/Monrovia,+231,0
+LY,Libya,LYD,Africa/Tripoli,+218,0
+LI,Liechtenstein,CHF,Europe/Vaduz,+423,8.1
+LT,Lithuania,EUR,Europe/Vilnius,+370,21
+LU,Luxembourg,EUR,Europe/Luxembourg,+352,17
+MO,Macao,MOP,Asia/Macau,+853,0
+MG,Madagascar,MGA,Indian/Antananarivo,+261,20
+MW,Malawi,MWK,Africa/Blantyre,+265,16.5
+MY,Malaysia,MYR,Asia/Kuala_Lumpur,+60,8
+MV,Maldives,MVR,Indian/Maldives,+960,8
+ML,Mali,XOF,Africa/Bamako,+223,18
+MT,Malta,EUR,Europe/Malta,+356,18
+MH,Marshall Islands,USD,Pacific/Majuro,+692,0
+MQ,Martinique,EUR,America/Martinique,+596,0
+MR,Mauritania,MRU,Africa/Nouakchott,+222,16
+MU,Mauritius,MUR,Indian/Mauritius,+230,15
+YT,Mayotte,EUR,Indian/Mayotte,+262,0
+MX,Mexico,MXN,America/Mexico_City,+52,16
+FM,Micronesia,USD,Pacific/Chuuk,+691,0
+MD,Moldova,MDL,Europe/Chisinau,+373,20
+MC,Monaco,EUR,Europe/Monaco,+377,20
+MN,Mongolia,MNT,Asia/Ulaanbaatar,+976,10
+ME,Montenegro,EUR,Europe/Podgorica,+382,21
+MS,Montserrat,XCD,America/Montserrat,+1664,0
+MA,Morocco,MAD,Africa/Casablanca,+212,20
+MZ,Mozambique,MZN,Africa/Maputo,+258,17
+MM,Myanmar,MMK,Asia/Yangon,+95,5
+NA,Namibia,NAD,Africa/Windhoek,+264,15
+NR,Nauru,AUD,Pacific/Nauru,+674,0
+NP,Nepal,NPR,Asia/Kathmandu,+977,13
+NL,Netherlands,EUR,Europe/Amsterdam,+31,21
+NC,New Caledonia,XPF,Pacific/Noumea,+687,0
+NZ,New Zealand,NZD,Pacific/Auckland,+64,15
+NI,Nicaragua,NIO,America/Managua,+505,15
+NE,Niger,XOF,Africa/Niamey,+227,19
+NG,Nigeria,NGN,Africa/Lagos,+234,7.5
+NU,Niue,NZD,Pacific/Niue,+683,0
+NF,Norfolk Island,AUD,Pacific/Norfolk,+672,0
+KP,North Korea,KPW,Asia/Pyongyang,+850,0
+MK,North Macedonia,MKD,Europe/Skopje,+389,18
+MP,Northern Mariana Islands,USD,Pacific/Saipan,+1670,0
+NO,Norway,NOK,Europe/Oslo,+47,25
+OM,Oman,OMR,Asia/Muscat,+968,5
+PK,Pakistan,PKR,Asia/Karachi,+92,18
+PW,Palau,USD,Pacific/Palau,+680,0
+PS,Palestine,ILS,Asia/Gaza,+970,16
+PA,Panama,PAB,America/Panama,+507,7
+PG,Papua New Guinea,PGK,Pacific/Port_Moresby,+675,10
+PY,Paraguay,PYG,America/Asuncion,+595,10
+PE,Peru,PEN,America/Lima,+51,18
+PH,Philippines,PHP,Asia/Manila,+63,12
+PN,Pitcairn Islands,NZD,Pacific/Pitcairn,+64,0
+PL,Poland,PLN,Europe/Warsaw,+48,23
+PT,Portugal,EUR,Europe/Lisbon,+351,23
+PR,Puerto Rico,USD,America/Puerto_Rico,+1787,0
+QA,Qatar,QAR,Asia/Qatar,+974,0
+RE,Réunion,EUR,Indian/Reunion,+262,0
+RO,Romania,RON,Europe/Bucharest,+40,19
+RU,Russia,RUB,Europe/Moscow,+7,20
+RW,Rwanda,RWF,Africa/Kigali,+250,18
+BL,Saint Barthélemy,EUR,America/St_Barthelemy,+590,0
+SH,Saint Helena,SHP,Atlantic/St_Helena,+290,0
+KN,Saint Kitts and Nevis,XCD,America/St_Kitts,+1869,17
+LC,Saint Lucia,XCD,America/St_Lucia,+1758,15
+MF,Saint Martin,EUR,America/Marigot,+590,0
+PM,Saint Pierre and Miquelon,EUR,America/Miquelon,+508,0
+VC,Saint Vincent and the Grenadines,XCD,America/St_Vincent,+1784,15
+WS,Samoa,WST,Pacific/Apia,+685,15
+SM,San Marino,EUR,Europe/San_Marino,+378,0
+ST,São Tomé and Príncipe,STN,Africa/Sao_Tome,+239,15
+SA,Saudi Arabia,SAR,Asia/Riyadh,+966,15
+SN,Senegal,XOF,Africa/Dakar,+221,18
+RS,Serbia,RSD,Europe/Belgrade,+381,20
+SC,Seychelles,SCR,Indian/Mahe,+248,15
+SL,Sierra Leone,SLE,Africa/Freetown,+232,15
+SG,Singapore,SGD,Asia/Singapore,+65,9
+SX,Sint Maarten,ANG,America/Lower_Princes,+1721,0
+SK,Slovakia,EUR,Europe/Bratislava,+421,20
+SI,Slovenia,EUR,Europe/Ljubljana,+386,22
+SB,Solomon Islands,SBD,Pacific/Guadalcanal,+677,10
+SO,Somalia,SOS,Africa/Mogadishu,+252,0
+ZA,South Africa,ZAR,Africa/Johannesburg,+27,15
+GS,South Georgia and the South Sandwich Islands,GBP,Atlantic/South_Georgia,+500,0
+KR,South Korea,KRW,Asia/Seoul,+82,10
+SS,South Sudan,SSP,Africa/Juba,+211,18
+ES,Spain,EUR,Europe/Madrid,+34,21
+LK,Sri Lanka,LKR,Asia/Colombo,+94,18
+SD,Sudan,SDG,Africa/Khartoum,+249,17
+SR,Suriname,SRD,America/Paramaribo,+597,10
+SJ,Svalbard and Jan Mayen,NOK,Arctic/Longyearbyen,+47,0
+SE,Sweden,SEK,Europe/Stockholm,+46,25
+CH,Switzerland,CHF,Europe/Zurich,+41,8.1
+SY,Syria,SYP,Asia/Damascus,+963,0
+TW,Taiwan,TWD,Asia/Taipei,+886,5
+TJ,Tajikistan,TJS,Asia/Dushanbe,+992,18
+TZ,Tanzania,TZS,Africa/Dar_es_Salaam,+255,18
+TH,Thailand,THB,Asia/Bangkok,+66,7
+TL,Timor-Leste,USD,Asia/Dili,+670,0
+TG,Togo,XOF,Africa/Lome,+228,18
+TK,Tokelau,NZD,Pacific/Fakaofo,+690,0
+TO,Tonga,TOP,Pacific/Tongatapu,+676,15
+TT,Trinidad and Tobago,TTD,America/Port_of_Spain,+1868,12.5
+TN,Tunisia,TND,Africa/Tunis,+216,19
+TR,Türkiye,TRY,Europe/Istanbul,+90,20
+TM,Turkmenistan,TMT,Asia/Ashgabat,+993,15
+TC,Turks and Caicos Islands,USD,America/Grand_Turk,+1649,0
+TV,Tuvalu,AUD,Pacific/Funafuti,+688,0
+UM,U.S. Minor Outlying Islands,USD,Pacific/Wake,+1,0
+VI,U.S. Virgin Islands,USD,America/St_Thomas,+1340,0
+UG,Uganda,UGX,Africa/Kampala,+256,18
+UA,Ukraine,UAH,Europe/Kyiv,+380,20
+AE,United Arab Emirates,AED,Asia/Dubai,+971,5
+GB,United Kingdom,GBP,Europe/London,+44,20
+US,United States,USD,America/New_York,+1,0
+UY,Uruguay,UYU,America/Montevideo,+598,22
+UZ,Uzbekistan,UZS,Asia/Tashkent,+998,12
+VU,Vanuatu,VUV,Pacific/Efate,+678,15
+VA,Vatican City,EUR,Europe/Vatican,+379,0
+VE,Venezuela,VES,America/Caracas,+58,16
+VN,Vietnam,VND,Asia/Ho_Chi_Minh,+84,10
+WF,Wallis and Futuna,XPF,Pacific/Wallis,+681,0
+EH,Western Sahara,MAD,Africa/El_Aaiun,+212,0
+YE,Yemen,YER,Asia/Aden,+967,0
+ZM,Zambia,ZMW,Africa/Lusaka,+260,16
+ZW,Zimbabwe,ZWG,Africa/Harare,+263,15

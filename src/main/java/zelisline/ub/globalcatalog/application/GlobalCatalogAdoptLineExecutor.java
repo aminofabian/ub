@@ -46,7 +46,9 @@ public class GlobalCatalogAdoptLineExecutor {
             BigDecimal sellingPrice,
             BigDecimal openingQty,
             BigDecimal openingUnitCost,
-            String globalImageUrl
+            String globalImageUrl,
+            /** Null means keep create default (published). */
+            Boolean webPublished
     ) {
     }
 
@@ -59,7 +61,9 @@ public class GlobalCatalogAdoptLineExecutor {
             BigDecimal openingQty,
             BigDecimal openingUnitCost,
             BigDecimal buyingPriceFallback,
-            String globalImageUrl
+            String globalImageUrl,
+            /** Null means keep create default (published). */
+            Boolean webPublished
     ) {
     }
 
@@ -78,6 +82,7 @@ public class GlobalCatalogAdoptLineExecutor {
         Item item = itemRepository.findById(created.body().id())
                 .orElseThrow(() -> new IllegalStateException("Created item not found"));
         item.setGlobalProductSourceId(cmd.globalProductId());
+        applyWebPublished(item, cmd.webPublished());
         itemRepository.saveAndFlush(item);
 
         applySellingPrice(businessId, item.getId(), cmd.branchId(), cmd.sellingPrice(), actorUserId, "Global catalog adopt");
@@ -111,6 +116,7 @@ public class GlobalCatalogAdoptLineExecutor {
         Item item = itemRepository.findById(created.id())
                 .orElseThrow(() -> new IllegalStateException("Created variant not found"));
         item.setGlobalProductSourceId(cmd.globalProductId());
+        applyWebPublished(item, cmd.webPublished());
         itemRepository.saveAndFlush(item);
 
         applySellingPrice(
@@ -215,6 +221,12 @@ public class GlobalCatalogAdoptLineExecutor {
                 line.itemId(),
                 line.sku(),
                 appendMessage(line.message(), result.warning()));
+    }
+
+    private static void applyWebPublished(Item item, Boolean webPublished) {
+        if (webPublished != null) {
+            item.setWebPublished(webPublished);
+        }
     }
 
     private static String appendMessage(String base, String extra) {

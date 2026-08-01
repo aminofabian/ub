@@ -58,6 +58,35 @@ class RegionDefaultsTest {
     }
 
     @Test
+    void wildcardEnablesAllPublishedCountries() {
+        RegionDefaults world = new RegionDefaults(new SelfServeRegionProperties("*", "UG"));
+        RegionProfile us = world.requireSelfServe("US");
+        assertEquals("USD", us.currency());
+        assertEquals("America/New_York", us.timezone());
+
+        SelfServeCountryResponse usDto = world.toSelfServeCountry(us);
+        assertFalse(usDto.cashCreditOnly());
+        assertTrue(usDto.paymentHint().toLowerCase().contains("cash"));
+
+        SelfServeCountryResponse ug = world.toSelfServeCountry(world.require("UG"));
+        assertTrue(ug.cashCreditOnly());
+
+        SelfServeCountryResponse ke = world.toSelfServeCountry(world.require("KE"));
+        assertFalse(ke.cashCreditOnly());
+        assertTrue(ke.paymentHint().contains("M-Pesa"));
+
+        assertTrue(world.selfServeProfiles().size() > 100);
+        assertEquals("KE", world.selfServeProfiles().get(0).countryCode());
+    }
+
+    @Test
+    void cashCreditWildcardMeansAllExceptKenya() {
+        RegionDefaults world = new RegionDefaults(new SelfServeRegionProperties("*", "*"));
+        assertTrue(world.toSelfServeCountry(world.require("US")).cashCreditOnly());
+        assertFalse(world.toSelfServeCountry(world.require("KE")).cashCreditOnly());
+    }
+
+    @Test
     void unknownCountryRejected() {
         assertThrows(ResponseStatusException.class, () -> regionDefaults.require("XX"));
     }
@@ -66,11 +95,19 @@ class RegionDefaultsTest {
     void currencyMatchesCountry() {
         assertTrue(regionDefaults.currencyMatchesCountry("UG", "ugx"));
         assertFalse(regionDefaults.currencyMatchesCountry("UG", "KES"));
+        assertTrue(regionDefaults.currencyMatchesCountry("JP", "JPY"));
     }
 
     @Test
     void selfServeProfilesRespectAllowList() {
         assertEquals(1, regionDefaults.selfServeProfiles().size());
         assertEquals("KE", regionDefaults.selfServeProfiles().get(0).countryCode());
+    }
+
+    @Test
+    void loadsWorldProfilesFromClasspath() {
+        assertTrue(regionDefaults.allProfiles().size() >= 200);
+        assertEquals("EUR", regionDefaults.require("DE").currency());
+        assertEquals("INR", regionDefaults.require("IN").currency());
     }
 }

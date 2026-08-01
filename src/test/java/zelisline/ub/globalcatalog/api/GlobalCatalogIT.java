@@ -52,7 +52,10 @@ import zelisline.ub.identity.repository.PermissionRepository;
 import zelisline.ub.identity.repository.RolePermissionRepository;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.inventory.repository.SupplyBatchRepository;
 import zelisline.ub.platform.security.TestAuthenticationFilter;
+import zelisline.ub.purchasing.repository.InventoryBatchRepository;
+import zelisline.ub.purchasing.repository.StockMovementRepository;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.suppliers.SupplierCodes;
@@ -152,6 +155,15 @@ class GlobalCatalogIT {
     private LedgerAccountRepository ledgerAccountRepository;
 
     @Autowired
+    private InventoryBatchRepository inventoryBatchRepository;
+
+    @Autowired
+    private StockMovementRepository stockMovementRepository;
+
+    @Autowired
+    private SupplyBatchRepository supplyBatchRepository;
+
+    @Autowired
     private LedgerBootstrapService ledgerBootstrapService;
 
     private User ownerA;
@@ -169,6 +181,11 @@ class GlobalCatalogIT {
         globalCatalogRepository.deleteAll();
         itemImageRepository.deleteAll();
         supplierProductRepository.deleteAll();
+        // Opening-balance tests leave inventory batches behind; wipe them before
+        // items/suppliers so the replace-eligibility check starts clean each test.
+        stockMovementRepository.deleteAll();
+        inventoryBatchRepository.deleteAll();
+        supplyBatchRepository.deleteAll();
         supplierRepository.deleteAll();
         itemRepository.deleteAll();
         categoryRepository.deleteAll();
@@ -311,6 +328,110 @@ class GlobalCatalogIT {
         var items = itemRepository.findByBusinessIdAndDeletedAtIsNull(TENANT_A);
         org.assertj.core.api.Assertions.assertThat(items).hasSize(1);
         org.assertj.core.api.Assertions.assertThat(items.get(0).getGlobalProductSourceId()).isEqualTo(globalProductId);
+    }
+
+    @Test
+    void adoptWebPublishedFalseKeepsItemOffStorefront() throws Exception {
+        String body = String.format(
+                "{\"openingBranchId\":\"%s\",\"lines\":[{\"globalProductId\":\"%s\",\"webPublished\":false}]}",
+                branchId, globalProductId
+        );
+
+        mockMvc.perform(post("/api/v1/global-catalog/adopt")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.importedCount").value(1))
+                .andExpect(jsonPath("$.lines[0].status").value("imported"));
+
+        Item item = itemRepository.findByBusinessIdAndDeletedAtIsNull(TENANT_A).get(0);
+        org.assertj.core.api.Assertions.assertThat(item.isWebPublished()).isFalse();
+    }
+
+    @Test
+    void adoptWithoutWebPublishedDefaultsToPublished() throws Exception {
+        String body = String.format(
+                "{\"openingBranchId\":\"%s\",\"lines\":[{\"globalProductId\":\"%s\"}]}",
+                branchId, globalProductId
+        );
+
+        mockMvc.perform(post("/api/v1/global-catalog/adopt")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.importedCount").value(1))
+                .andExpect(jsonPath("$.lines[0].status").value("imported"));
+
+        Item item = itemRepository.findByBusinessIdAndDeletedAtIsNull(TENANT_A).get(0);
+        org.assertj.core.api.Assertions.assertThat(item.isWebPublished()).isTrue();
+    }
+
+    @Test
+    void adoptWebPublishedFalseAppliesToVariantAndParent() throws Exception {
+        GlobalProduct parent = globalProductRepository.findById(globalProductId).orElseThrow();
+        parent.setName("Eggs");
+        parent.setSkuTemplate("EGG-BASE");
+        parent.setBarcode("9998887776661");
+        parent.setPackageVariant(false);
+        parent.setStocked(true);
+        globalProductRepository.save(parent);
+
+        GlobalProduct tray = new GlobalProduct();
+        tray.setCatalogId(parent.getCatalogId());
+        tray.setGlobalCategoryId(parent.getGlobalCategoryId());
+        tray.setName("Eggs Tray of 30");
+        tray.setBrand("Farm");
+        tray.setVariantName("Tray of 30");
+        tray.setSkuTemplate("EGG-TRAY");
+        tray.setBarcode("9998887776662");
+        tray.setUnitType("each");
+        tray.setPackageVariant(true);
+        tray.setPackagingUnitName("Tray");
+        tray.setPackagingUnitQty(new BigDecimal("30"));
+        tray.setStocked(false);
+        tray.setVariantOfGlobalProductId(parent.getId());
+        tray.setRecommendedBuyingPrice(new BigDecimal("120.00"));
+        tray.setRecommendedSellingPrice(new BigDecimal("150.00"));
+        tray.setStatus("published");
+        tray.setSortOrder(1);
+        tray = globalProductRepository.save(tray);
+        final String trayId = tray.getId();
+        final String parentId = parent.getId();
+
+        String body = String.format(
+                "{\"openingBranchId\":\"%s\",\"lines\":["
+                        + "{\"globalProductId\":\"%s\",\"webPublished\":false},"
+                        + "{\"globalProductId\":\"%s\",\"webPublished\":false}"
+                        + "]}",
+                branchId, trayId, parentId
+        );
+
+        mockMvc.perform(post("/api/v1/global-catalog/adopt")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.importedCount").value(2));
+
+        Item parentItem = itemRepository.findByBusinessIdAndDeletedAtIsNull(TENANT_A).stream()
+                .filter(i -> parentId.equals(i.getGlobalProductSourceId()))
+                .findFirst()
+                .orElseThrow();
+        Item trayItem = itemRepository.findByBusinessIdAndDeletedAtIsNull(TENANT_A).stream()
+                .filter(i -> trayId.equals(i.getGlobalProductSourceId()))
+                .findFirst()
+                .orElseThrow();
+
+        org.assertj.core.api.Assertions.assertThat(parentItem.isWebPublished()).isFalse();
+        org.assertj.core.api.Assertions.assertThat(trayItem.isWebPublished()).isFalse();
     }
 
     @Test

@@ -7,6 +7,7 @@ import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -51,6 +52,7 @@ public class PublicWebCheckoutService {
     private final NotificationService notificationService;
     private final StorefrontSettingsService storefrontSettingsService;
     private final zelisline.ub.notifications.application.NotificationOutboxService notificationOutboxService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public PublicWebCheckoutService(
             PublicWebCartService publicWebCartService,
@@ -64,7 +66,8 @@ public class PublicWebCheckoutService {
             OrderConfirmationEmailRenderer orderConfirmationEmailRenderer,
             NotificationService notificationService,
             StorefrontSettingsService storefrontSettingsService,
-            zelisline.ub.notifications.application.NotificationOutboxService notificationOutboxService
+            zelisline.ub.notifications.application.NotificationOutboxService notificationOutboxService,
+            ApplicationEventPublisher eventPublisher
     ) {
         this.publicWebCartService = publicWebCartService;
         this.inventoryBatchPickerService = inventoryBatchPickerService;
@@ -78,6 +81,7 @@ public class PublicWebCheckoutService {
         this.notificationService = notificationService;
         this.storefrontSettingsService = storefrontSettingsService;
         this.notificationOutboxService = notificationOutboxService;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional
@@ -170,6 +174,9 @@ public class PublicWebCheckoutService {
         } catch (Exception e) {
             log.warn("Failed to create notifications for order {}: {}", order.getId(), e.getMessage());
         }
+
+        eventPublisher.publishEvent(
+                new zelisline.ub.opsalerts.application.TenantOpsAlertListener.WebOrderPlacedOpsAlertEvent(order));
 
         webCartRepository.deleteById(elig.cart().getId());
 

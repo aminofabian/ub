@@ -14,12 +14,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
-
-import org.springframework.beans.factory.ObjectProvider;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.CreditClaimChannels;
@@ -37,6 +37,7 @@ import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.credits.repository.PublicPaymentClaimRepository;
+import zelisline.ub.opsalerts.application.TenantOpsAlertListener;
 import zelisline.ub.payments.application.InboundTillPaymentService;
 
 @Service
@@ -54,6 +55,7 @@ public class PublicPaymentClaimService {
     private final CreditsJournalService creditsJournalService;
     private final CashierTabClearanceAccess cashierTabClearanceAccess;
     private final ObjectProvider<InboundTillPaymentService> inboundTillPaymentService;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional(readOnly = true)
     public List<PublicPaymentClaim> listSubmitted(String businessId) {
@@ -209,6 +211,20 @@ public class PublicPaymentClaimService {
         BigDecimal remaining = refreshed.getBalanceOwed() == null
                 ? BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP)
                 : refreshed.getBalanceOwed().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+
+        String customerName = customerRepository
+                .findByIdAndBusinessIdAndDeletedAtIsNull(req.customerId(), businessId)
+                .map(Customer::getName)
+                .orElse(null);
+        String via = CreditClaimChannels.CASH.equals(req.channel()) ? "Cash (admin)" : "M-Pesa (admin)";
+        eventPublisher.publishEvent(new TenantOpsAlertListener.CreditPaymentOpsAlertEvent(
+                businessId,
+                req.customerId(),
+                customerName,
+                amount,
+                remaining,
+                via));
+
         return new RecordTabPaymentResponse(row.getId(), remaining.toPlainString());
     }
 
@@ -346,6 +362,21 @@ public class PublicPaymentClaimService {
         row.setApprovedJournalId(je);
         row.setUpdatedAt(Instant.now());
         publicPaymentClaimRepository.save(row);
+
+        CreditAccount refreshed = creditAccountRepository.findById(row.getCreditAccountId()).orElse(null);
+        BigDecimal remaining = refreshed != null && refreshed.getBalanceOwed() != null
+                ? refreshed.getBalanceOwed().setScale(MONEY_SCALE, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        String customerId = refreshed != null ? refreshed.getCustomerId() : null;
+        String customerName = customerId == null
+                ? null
+                : customerRepository
+                        .findByIdAndBusinessIdAndDeletedAtIsNull(customerId, businessId)
+                        .map(Customer::getName)
+                        .orElse(null);
+        String via = CreditClaimChannels.CASH.equals(channel) ? "Cash (claim)" : "M-Pesa (claim)";
+        eventPublisher.publishEvent(new TenantOpsAlertListener.CreditPaymentOpsAlertEvent(
+                businessId, customerId, customerName, pay, remaining, via));
     }
 
     /** Idempotent: second reject is a silent no-op. */

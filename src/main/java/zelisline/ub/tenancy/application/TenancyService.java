@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.finance.application.LedgerBootstrapService;
 import zelisline.ub.globalcatalog.application.GlobalCatalogResolver;
 import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.domain.User;
@@ -66,6 +67,7 @@ public class TenancyService {
     private final DomainMappingRepository domainMappingRepository;
     private final BranchRepository branchRepository;
     private final CatalogBootstrapService catalogBootstrapService;
+    private final LedgerBootstrapService ledgerBootstrapService;
     private final StorefrontSettingsService storefrontSettingsService;
     private final BusinessInventorySettingsService businessInventorySettingsService;
     private final BusinessHubAlertsSettingsService businessHubAlertsSettingsService;
@@ -121,6 +123,7 @@ public class TenancyService {
         );
         saved = businessRepository.save(saved);
         catalogBootstrapService.seedDefaultItemTypesIfMissing(saved.getId());
+        ledgerBootstrapService.ensureStandardAccounts(saved.getId());
 
         String hostname = resolvePrimaryHostname(
             request.primaryDomain(),

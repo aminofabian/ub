@@ -13,9 +13,16 @@ import zelisline.ub.finance.repository.LedgerAccountRepository;
 public class LedgerAccountResolver {
 
     private final LedgerAccountRepository ledgerAccountRepository;
+    private final LedgerBootstrapService ledgerBootstrapService;
 
     public LedgerAccount resolve(String businessId, String code) {
         return ledgerAccountRepository.findByBusinessIdAndCode(businessId, code)
+                .or(() -> {
+                    // Stock / sales journal lines resolve accounts *before* LedgerPostingService
+                    // bootstraps — fresh shops that only imported a catalogue hit this path first.
+                    ledgerBootstrapService.ensureStandardAccounts(businessId);
+                    return ledgerAccountRepository.findByBusinessIdAndCode(businessId, code);
+                })
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.BAD_REQUEST, "Missing ledger account " + code));
     }

@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.desktop.api.dto.DesktopSetupRequest;
+import zelisline.ub.finance.application.LedgerBootstrapService;
 import zelisline.ub.desktop.api.dto.DesktopSetupResponse;
 import zelisline.ub.identity.application.IdentityService;
 import zelisline.ub.identity.domain.Role;
@@ -73,6 +74,7 @@ public class DesktopSetupService {
     private final PasswordEncoder passwordEncoder;
     private final BusinessOnboardingSettingsService businessOnboardingSettingsService;
     private final CatalogBootstrapService catalogBootstrapService;
+    private final LedgerBootstrapService ledgerBootstrapService;
     private final ShiftService shiftService;
     private final DesktopInitializationService initializationService;
 
@@ -147,6 +149,7 @@ public class DesktopSetupService {
         );
         saved = businessRepository.save(saved);
         catalogBootstrapService.seedDefaultItemTypesIfMissing(saved.getId());
+        ledgerBootstrapService.ensureStandardAccounts(saved.getId());
 
         // ── Default branch ─────────────────────────────────────────────
 

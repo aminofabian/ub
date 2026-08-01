@@ -24,6 +24,7 @@ import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
+import zelisline.ub.finance.application.LedgerBootstrapService;
 import zelisline.ub.identity.repository.UserRepository;
 
 /**
@@ -44,6 +45,7 @@ public class PublicHostResolverService {
     private final BranchRepository branchRepository;
     private final StorefrontSettingsService storefrontSettingsService;
     private final CatalogBootstrapService catalogBootstrapService;
+    private final LedgerBootstrapService ledgerBootstrapService;
     private final BusinessOnboardingSettingsService businessOnboardingSettingsService;
     private final BusinessMobileSettingsService businessMobileSettingsService;
     private final UserRepository userRepository;
@@ -56,6 +58,7 @@ public class PublicHostResolverService {
             BranchRepository branchRepository,
             StorefrontSettingsService storefrontSettingsService,
             CatalogBootstrapService catalogBootstrapService,
+            LedgerBootstrapService ledgerBootstrapService,
             BusinessOnboardingSettingsService businessOnboardingSettingsService,
             BusinessMobileSettingsService businessMobileSettingsService,
             UserRepository userRepository,
@@ -66,6 +69,7 @@ public class PublicHostResolverService {
         this.branchRepository = branchRepository;
         this.storefrontSettingsService = storefrontSettingsService;
         this.catalogBootstrapService = catalogBootstrapService;
+        this.ledgerBootstrapService = ledgerBootstrapService;
         this.businessOnboardingSettingsService = businessOnboardingSettingsService;
         this.businessMobileSettingsService = businessMobileSettingsService;
         this.userRepository = userRepository;
@@ -216,6 +220,7 @@ public class PublicHostResolverService {
         );
         saved = businessRepository.save(saved);
         catalogBootstrapService.seedDefaultItemTypesIfMissing(saved.getId());
+        ledgerBootstrapService.ensureStandardAccounts(saved.getId());
 
         regionCatalogAuditService.countrySelected(
                 saved.getId(),

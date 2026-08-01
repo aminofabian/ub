@@ -95,7 +95,7 @@ public class GroceryInvoiceController {
         if (resolvedBranch == null) {
             throw new org.springframework.web.server.ResponseStatusException(
                     org.springframework.http.HttpStatus.BAD_REQUEST,
-                    "Branch is required. Use the branch filter or contact your administrator.");
+                    "Choose a shop location first — pick a branch in the filter, then try again.");
         }
         // Grocery clerks only see invoices they themselves created.
         String createdByFilter = branchResolutionService.isGroceryClerkRole(principal.roleId())

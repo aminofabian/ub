@@ -86,7 +86,7 @@ public class BranchResolutionService {
             if (defaultBranch == null) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_REQUEST,
-                        "Branch is required. Contact your administrator to assign you a branch."
+                        "Your account needs a shop location. Ask an owner to assign you a branch, then try again."
                 );
             }
             return defaultBranch;
@@ -144,7 +144,7 @@ public class BranchResolutionService {
             if (defaultBranch == null) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_REQUEST,
-                        "Branch is required. Contact your administrator to assign you a branch."
+                        "Your account needs a shop location. Ask an owner to assign you a branch, then try again."
                 );
             }
             return defaultBranch;
@@ -170,7 +170,7 @@ public class BranchResolutionService {
         if (resolved == null || resolved.isBlank()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "Branch is required. Select a branch or contact your administrator."
+                    "Choose a shop location first — pick a branch in the top bar, then try again."
             );
         }
         return resolved;

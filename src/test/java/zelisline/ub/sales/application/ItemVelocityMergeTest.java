@@ -22,6 +22,9 @@ class ItemVelocityMergeTest {
                 "Eggs",
                 "EGG-1",
                 new BigDecimal("48.0000"),
+                null,
+                null,
+                null,
                 new BigDecimal("10.0000"),
                 new BigDecimal("500.00"),
                 new BigDecimal("20.0000"),
@@ -58,7 +61,10 @@ class ItemVelocityMergeTest {
                 "item-milk",
                 "Milk",
                 "MLK-1",
-                new BigDecimal("12.0000")
+                new BigDecimal("12.0000"),
+                null,
+                null,
+                null
         );
 
         List<ItemVelocityRow> rows = ItemVelocityMerge.merge(
@@ -101,6 +107,9 @@ class ItemVelocityMergeTest {
                 name,
                 id,
                 BigDecimal.ZERO,
+                null,
+                null,
+                null,
                 BigDecimal.ZERO,
                 BigDecimal.ZERO,
                 BigDecimal.ZERO,

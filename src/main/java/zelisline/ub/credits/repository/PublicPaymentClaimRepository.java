@@ -12,4 +12,10 @@ public interface PublicPaymentClaimRepository extends JpaRepository<PublicPaymen
     Optional<PublicPaymentClaim> findByTokenHash(String tokenHash);
 
     List<PublicPaymentClaim> findByBusinessIdAndStatusOrderByCreatedAtAsc(String businessId, String status);
+
+    List<PublicPaymentClaim> findByBusinessIdAndStatusAndSubmittedReferenceIgnoreCase(
+            String businessId,
+            String status,
+            String submittedReference
+    );
 }

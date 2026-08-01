@@ -27,6 +27,7 @@ import zelisline.ub.credits.application.CreditSaleDebtService;
 import zelisline.ub.finance.application.LedgerAccountResolver;
 import zelisline.ub.finance.application.LedgerPostingPort;
 import zelisline.ub.finance.domain.JournalEntry;
+import zelisline.ub.payments.application.InboundTillPaymentService;
 import zelisline.ub.payments.domain.GatewayStkPushStatuses;
 import zelisline.ub.payments.repository.GatewayStkPushRepository;
 import zelisline.ub.sales.SalePaymentLedger;
@@ -65,6 +66,7 @@ public class SalePaymentAdjustService {
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
     private final GatewayStkPushRepository gatewayStkPushRepository;
+    private final InboundTillPaymentService inboundTillPaymentService;
 
     @Transactional
     public SaleResponse adjustPayments(
@@ -211,12 +213,19 @@ public class SalePaymentAdjustService {
             if (SalesConstants.PAYMENT_METHOD_MPESA_MANUAL.equals(p.method())
                     && p.reference() != null
                     && !p.reference().isBlank()) {
+                String ref = p.reference().trim();
                 gatewayStkPushRepository
                         .findFirstByBusinessIdAndGatewayTransactionIdIgnoreCaseAndStatus(
                                 businessId,
-                                p.reference().trim(),
+                                ref,
                                 GatewayStkPushStatuses.SUCCESS)
                         .ifPresent(push -> row.setGatewayTxnId(push.getGatewayTransactionId()));
+                inboundTillPaymentService.linkToSaleByReceipt(businessId, saleId, ref, p.amount())
+                        .ifPresent(txn -> {
+                            if (row.getGatewayTxnId() == null || row.getGatewayTxnId().isBlank()) {
+                                row.setGatewayTxnId(txn);
+                            }
+                        });
             }
             row.setSortOrder(order++);
             salePaymentRepository.save(row);

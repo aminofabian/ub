@@ -49,6 +49,7 @@ import zelisline.ub.integrations.webhook.application.WebhookEnqueueService;
 import zelisline.ub.messaging.application.CreditSaleReminderEvent;
 import zelisline.ub.messaging.application.CreditSaleReminderLineItem;
 import zelisline.ub.messaging.application.WalletCreditNotificationEvent;
+import zelisline.ub.payments.application.InboundTillPaymentService;
 import zelisline.ub.payments.domain.GatewayStkPushStatuses;
 import zelisline.ub.payments.repository.GatewayStkPushRepository;
 import zelisline.ub.sales.SalePaymentLedger;
@@ -91,6 +92,7 @@ public class SaleService {
     private final InventoryBatchPickerService inventoryBatchPickerService;
     private final LedgerPostingPort ledgerPostingPort;
     private final GatewayStkPushRepository gatewayStkPushRepository;
+    private final InboundTillPaymentService inboundTillPaymentService;
     private final LedgerAccountResolver ledgerAccountResolver;
     private final CreditSaleDebtService creditSaleDebtService;
     private final WalletLedgerService walletLedgerService;
@@ -310,12 +312,19 @@ public class SaleService {
             if (SalesConstants.PAYMENT_METHOD_MPESA_MANUAL.equals(p.method())
                     && p.reference() != null
                     && !p.reference().isBlank()) {
+                String ref = p.reference().trim();
                 gatewayStkPushRepository
                         .findFirstByBusinessIdAndGatewayTransactionIdIgnoreCaseAndStatus(
                                 businessId,
-                                p.reference().trim(),
+                                ref,
                                 GatewayStkPushStatuses.SUCCESS)
                         .ifPresent(push -> row.setGatewayTxnId(push.getGatewayTransactionId()));
+                inboundTillPaymentService.linkToSaleByReceipt(businessId, saleId, ref, p.amount())
+                        .ifPresent(txn -> {
+                            if (row.getGatewayTxnId() == null || row.getGatewayTxnId().isBlank()) {
+                                row.setGatewayTxnId(txn);
+                            }
+                        });
             }
             row.setSortOrder(order++);
             salePaymentRepository.save(row);

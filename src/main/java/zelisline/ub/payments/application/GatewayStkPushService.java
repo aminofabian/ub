@@ -90,6 +90,7 @@ public class GatewayStkPushService {
     private final ObjectProvider<GroceryInvoiceService> groceryInvoiceService;
     private final ObjectProvider<zelisline.ub.tenancy.application.DomainPurchaseService> domainPurchaseService;
     private final ObjectProvider<zelisline.ub.platform.application.PlatformDomainSettingsService> platformDomainSettingsService;
+    private final InboundTillPaymentService inboundTillPaymentService;
 
     @Transactional
     public GatewayStkPush registerPush(
@@ -175,7 +176,7 @@ public class GatewayStkPushService {
         String ref = merchantReference != null && !merchantReference.isBlank()
                 ? merchantReference.trim()
                 : checkoutId;
-        return Optional.of(registerPush(
+        GatewayStkPush push = registerPush(
                 businessId,
                 GatewayType.KOPOKOPO,
                 cfg.getId(),
@@ -184,7 +185,9 @@ public class GatewayStkPushService {
                 StkPushContextType.POS_PAYMENT,
                 null,
                 amount.setScale(2, RoundingMode.HALF_UP),
-                phoneNumber != null ? phoneNumber : ""));
+                phoneNumber != null ? phoneNumber : "");
+        settleFromPendingInboundIfPresent(push);
+        return Optional.of(push);
     }
 
     /**
@@ -227,7 +230,7 @@ public class GatewayStkPushService {
         String ref = merchantReference != null && !merchantReference.isBlank()
                 ? merchantReference.trim()
                 : checkoutId;
-        return Optional.of(registerPush(
+        GatewayStkPush push = registerPush(
                 businessId,
                 GatewayType.KOPOKOPO,
                 cfg.getId(),
@@ -236,7 +239,9 @@ public class GatewayStkPushService {
                 StkPushContextType.STOREFRONT_CART,
                 null,
                 amount.setScale(2, RoundingMode.HALF_UP),
-                phoneNumber != null ? phoneNumber : ""));
+                phoneNumber != null ? phoneNumber : "");
+        settleFromPendingInboundIfPresent(push);
+        return Optional.of(push);
     }
 
     public static boolean isTillAwaitCheckout(String gatewayCheckoutId) {
@@ -267,11 +272,23 @@ public class GatewayStkPushService {
 
         Optional<GatewayStkPush> push = resolvePush(businessId, parsed);
         if (push.isEmpty()) {
-            // Intentionally do not record unmatched events — buygoods may arrive before the
-            // POS STK row exists, and KopoKopo retries should still be able to confirm.
+            // Persist successful buygoods for late-bind (till-await race, sale, or exact claim).
+            // Do not write payment_webhook_events yet — retries can still match a later await.
             log.warn("KopoKopo webhook: no matching STK push business={} checkout={} ref={} topic={} amount={}",
                     businessId, parsed.gatewayCheckoutId(), parsed.reference(),
                     parsed.topic(), parsed.amount());
+            if (parsed.success()
+                    && parsed.topic() != null
+                    && parsed.topic().equalsIgnoreCase("buygoods_transaction_received")) {
+                inboundTillPaymentService.persistUnmatchedBuygoods(businessId, parsed)
+                        .ifPresent(inbound -> {
+                            String receipt = inbound.getMpesaReceipt() != null
+                                    ? inbound.getMpesaReceipt()
+                                    : parsed.gatewayTransactionId();
+                            inboundTillPaymentService.tryAutoApproveClaimByReceipt(
+                                    businessId, receipt, inbound);
+                        });
+            }
             return true;
         }
 
@@ -340,6 +357,15 @@ public class GatewayStkPushService {
 
         if (parsed.success()) {
             confirmPush(push, parsed.gatewayTransactionId(), parsed.amount());
+            String receipt = parsed.gatewayTransactionId() != null
+                    ? parsed.gatewayTransactionId()
+                    : parsed.reference();
+            inboundTillPaymentService.linkPendingByReceiptToPush(
+                    businessId, receipt, push.getId());
+            if (parsed.topic() != null
+                    && parsed.topic().equalsIgnoreCase("buygoods_transaction_received")) {
+                inboundTillPaymentService.tryAutoApproveClaimByReceipt(businessId, receipt, null);
+            }
             return true;
         }
         if (parsed.terminalFailure()) {
@@ -347,6 +373,29 @@ public class GatewayStkPushService {
             return true;
         }
         return true;
+    }
+
+    /**
+     * Race fix: buygoods arrived before the till-await row existed.
+     */
+    private void settleFromPendingInboundIfPresent(GatewayStkPush push) {
+        if (push == null || !GatewayStkPushStatuses.PENDING.equals(push.getStatus())) {
+            return;
+        }
+        inboundTillPaymentService
+                .findClearPendingMatch(push.getBusinessId(), push.getAmount(), push.getPhoneNumber())
+                .ifPresent(inbound -> {
+                    String receipt = inbound.getMpesaReceipt();
+                    if (receipt == null || receipt.isBlank()) {
+                        return;
+                    }
+                    log.info("Late-binding till-await push={} to inbound={} receipt={}",
+                            push.getId(), inbound.getId(), receipt);
+                    confirmPush(push, receipt, inbound.getAmount());
+                    inboundTillPaymentService.markLinkedToPush(inbound, push.getId());
+                    inboundTillPaymentService.tryAutoApproveClaimByReceipt(
+                            push.getBusinessId(), receipt, inbound);
+                });
     }
 
     @Transactional

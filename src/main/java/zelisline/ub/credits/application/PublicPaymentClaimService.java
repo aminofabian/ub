@@ -19,6 +19,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import org.springframework.beans.factory.ObjectProvider;
+
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.CreditClaimChannels;
 import zelisline.ub.credits.CreditClaimSources;
@@ -35,6 +37,7 @@ import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.credits.repository.PublicPaymentClaimRepository;
+import zelisline.ub.payments.application.InboundTillPaymentService;
 
 @Service
 @RequiredArgsConstructor
@@ -50,6 +53,7 @@ public class PublicPaymentClaimService {
     private final CreditSaleDebtService creditSaleDebtService;
     private final CreditsJournalService creditsJournalService;
     private final CashierTabClearanceAccess cashierTabClearanceAccess;
+    private final ObjectProvider<InboundTillPaymentService> inboundTillPaymentService;
 
     @Transactional(readOnly = true)
     public List<PublicPaymentClaim> listSubmitted(String businessId) {
@@ -144,6 +148,7 @@ public class PublicPaymentClaimService {
         row.setSubmittedReference(trimOrNull(req.reference()));
         row.setCreditNote("Till clearance — " + req.channel());
         publicPaymentClaimRepository.save(row);
+        tryReconcileSubmittedClaimWithInbound(businessId, row);
         return row.getId();
     }
 
@@ -243,6 +248,7 @@ public class PublicPaymentClaimService {
         row.setSubmittedReference(trimOrNull(referenceRaw));
         row.setCreditNote("Tab portal — reported payment");
         publicPaymentClaimRepository.save(row);
+        tryReconcileSubmittedClaimWithInbound(businessId, row);
         return row.getId();
     }
 
@@ -288,6 +294,25 @@ public class PublicPaymentClaimService {
         row.setStatus(CreditClaimStatuses.SUBMITTED);
         row.setUpdatedAt(Instant.now());
         publicPaymentClaimRepository.save(row);
+        tryReconcileSubmittedClaimWithInbound(row.getBusinessId(), row);
+    }
+
+    /**
+     * When a claim is submitted after a buygoods webhook was already persisted, auto-approve
+     * on exact M-Pesa receipt match.
+     */
+    private void tryReconcileSubmittedClaimWithInbound(String businessId, PublicPaymentClaim row) {
+        if (row.getSubmittedReference() == null || row.getSubmittedReference().isBlank()) {
+            return;
+        }
+        if (!CreditClaimStatuses.SUBMITTED.equals(row.getStatus())) {
+            return;
+        }
+        InboundTillPaymentService inbound = inboundTillPaymentService.getIfAvailable();
+        if (inbound == null) {
+            return;
+        }
+        inbound.tryAutoApproveClaimByReceipt(businessId, row.getSubmittedReference(), null);
     }
 
     /** Idempotent: second approve with the same channel is a silent no-op (§14.8). */

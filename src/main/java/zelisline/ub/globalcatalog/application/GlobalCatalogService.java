@@ -363,6 +363,7 @@ public class GlobalCatalogService {
                         .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "No default item type found for business")))
                 .getId();
 
+        lines = expandLinesWithMissingParents(lines, catalog.getId());
         List<String> requestedIds = lines.stream().map(AdoptLineRequest::globalProductId).distinct().toList();
         List<String> publishedIds = globalProductRepository.findPublishedIdsByCatalogAndIdIn(
                 catalog.getId(), STATUS_PUBLISHED, requestedIds);
@@ -966,6 +967,49 @@ public class GlobalCatalogService {
                 alreadyImported,
                 adoptedItemId
         );
+    }
+
+    /**
+     * A selected variant must never arrive without its parent, or the adopt loop
+     * flattens it into a standalone SKU. Synthesizes an adopt line for every missing
+     * published parent (walking up multi-level chains); parents already in the shop
+     * are matched and skipped by the normal loop, so this is safe to do eagerly.
+     */
+    private List<AdoptLineRequest> expandLinesWithMissingParents(
+            List<AdoptLineRequest> lines,
+            String catalogId
+    ) {
+        LinkedHashMap<String, AdoptLineRequest> byId = new LinkedHashMap<>();
+        for (AdoptLineRequest line : lines) {
+            byId.putIfAbsent(line.globalProductId(), line);
+        }
+        Collection<String> frontier = new ArrayList<>(byId.keySet());
+        while (!frontier.isEmpty()) {
+            // parent id → one of its children in the batch (for webPublished inheritance)
+            Map<String, String> parentToChild = new LinkedHashMap<>();
+            for (GlobalProduct gp : globalProductRepository.findAllById(frontier)) {
+                String parentId = blankToNull(gp.getVariantOfGlobalProductId());
+                if (parentId != null && !byId.containsKey(parentId)) {
+                    parentToChild.putIfAbsent(parentId, gp.getId());
+                }
+            }
+            if (parentToChild.isEmpty()) {
+                break;
+            }
+            List<String> publishedParentIds = globalProductRepository.findPublishedIdsByCatalogAndIdIn(
+                    catalogId, STATUS_PUBLISHED, List.copyOf(parentToChild.keySet()));
+            List<String> next = new ArrayList<>();
+            for (String parentId : publishedParentIds) {
+                AdoptLineRequest childLine = byId.get(parentToChild.get(parentId));
+                byId.put(parentId, new AdoptLineRequest(
+                        parentId,
+                        null, null, null, null, null, null, null, null, null, null,
+                        childLine != null ? childLine.webPublished() : null));
+                next.add(parentId);
+            }
+            frontier = next;
+        }
+        return new ArrayList<>(byId.values());
     }
 
     /**

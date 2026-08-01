@@ -201,6 +201,15 @@ public class SuperAdminGlobalCatalogPromoteService {
             byId.put(item.getId(), item);
         }
 
+        // Pull in variant parents (and package-group roots) missing from the selection so
+        // the parent/variant relationship is promoted intact instead of leaving the child
+        // unlinked when pass-2 cannot resolve its parent in global.
+        List<String> autoIncludedParentIds = collectMissingVariantParents(businessId, items, byId);
+        List<String> orderedItemIds = new ArrayList<>(
+                autoIncludedParentIds.size() + request.itemIds().size());
+        orderedItemIds.addAll(autoIncludedParentIds);
+        orderedItemIds.addAll(request.itemIds());
+
         Map<String, BigDecimal> sellingByItem = loadSellingPrices(businessId, byId.keySet());
         Map<String, ItemType> itemTypes = loadItemTypes(businessId);
         Map<String, Category> categories = loadCategories(businessId, byId.values());
@@ -230,9 +239,9 @@ public class SuperAdminGlobalCatalogPromoteService {
         // Source item id → global product id for successful create/update rows (pass-2 parent link).
         Map<String, String> sourceItemIdToGlobalId = new LinkedHashMap<>();
 
-        // Preserve request order
+        // Auto-included parents first, then the request order
         int reachedCount = 0;
-        for (String itemId : request.itemIds()) {
+        for (String itemId : orderedItemIds) {
             Item item = byId.get(itemId);
             if (progressListener != null) {
                 progressListener.onItemProcessed(reachedCount, item != null ? item.getName() : null);
@@ -389,6 +398,44 @@ public class SuperAdminGlobalCatalogPromoteService {
         }
 
         return new PromoteResponse(created, updated, skipped, imageRehosts, lines);
+    }
+
+    /**
+     * Walks {@code variant_of_item_id} chains upward from the selected items and loads
+     * every ancestor that is not already in the batch. Loaded parents are added to
+     * {@code byId}; their ids are returned in parent-before-child order.
+     */
+    private List<String> collectMissingVariantParents(
+            String businessId,
+            List<Item> selectedItems,
+            Map<String, Item> byId
+    ) {
+        List<String> included = new ArrayList<>();
+        Set<String> frontier = new HashSet<>();
+        for (Item item : selectedItems) {
+            String parentId = blankToNull(item.getVariantOfItemId());
+            if (parentId != null && !byId.containsKey(parentId)) {
+                frontier.add(parentId);
+            }
+        }
+        while (!frontier.isEmpty()) {
+            List<Item> parents = itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(
+                    frontier, businessId);
+            Set<String> next = new HashSet<>();
+            for (Item parent : parents) {
+                if (byId.putIfAbsent(parent.getId(), parent) != null) {
+                    continue;
+                }
+                // Prepend so grandparents run before parents before children.
+                included.add(0, parent.getId());
+                String grandParentId = blankToNull(parent.getVariantOfItemId());
+                if (grandParentId != null && !byId.containsKey(grandParentId)) {
+                    next.add(grandParentId);
+                }
+            }
+            frontier = next;
+        }
+        return included;
     }
 
     /**

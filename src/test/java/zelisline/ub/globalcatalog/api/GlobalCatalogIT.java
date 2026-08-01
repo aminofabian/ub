@@ -501,6 +501,70 @@ class GlobalCatalogIT {
     }
 
     @Test
+    void adoptAutoImportsMissingParentWhenOnlyChildIsSelected() throws Exception {
+        GlobalProduct parent = globalProductRepository.findById(globalProductId).orElseThrow();
+        parent.setName("Eggs");
+        parent.setSkuTemplate("EGG-BASE");
+        parent.setBarcode("9998887776663");
+        parent.setPackageVariant(false);
+        parent.setStocked(true);
+        globalProductRepository.save(parent);
+
+        GlobalProduct tray = new GlobalProduct();
+        tray.setCatalogId(parent.getCatalogId());
+        tray.setGlobalCategoryId(parent.getGlobalCategoryId());
+        tray.setName("Eggs Tray of 12");
+        tray.setBrand("Farm");
+        tray.setVariantName("Tray of 12");
+        tray.setSkuTemplate("EGG-TRAY-12");
+        tray.setBarcode("9998887776664");
+        tray.setUnitType("each");
+        tray.setPackageVariant(true);
+        tray.setPackagingUnitName("Tray");
+        tray.setPackagingUnitQty(new BigDecimal("12"));
+        tray.setStocked(false);
+        tray.setVariantOfGlobalProductId(parent.getId());
+        tray.setRecommendedBuyingPrice(new BigDecimal("48.00"));
+        tray.setRecommendedSellingPrice(new BigDecimal("60.00"));
+        tray.setStatus("published");
+        tray.setSortOrder(1);
+        tray = globalProductRepository.save(tray);
+        final String trayId = tray.getId();
+        final String parentId = parent.getId();
+
+        // Only the child is in the request — parent must be pulled in automatically.
+        String body = String.format(
+                "{\"openingBranchId\":\"%s\",\"lines\":["
+                        + "{\"globalProductId\":\"%s\",\"sellingPrice\":60,\"buyingPrice\":48}"
+                        + "]}",
+                branchId, trayId
+        );
+
+        mockMvc.perform(post("/api/v1/global-catalog/adopt")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.importedCount").value(2));
+
+        Item parentItem = itemRepository.findByBusinessIdAndDeletedAtIsNull(TENANT_A).stream()
+                .filter(i -> parentId.equals(i.getGlobalProductSourceId()))
+                .findFirst()
+                .orElseThrow();
+        Item trayItem = itemRepository.findByBusinessIdAndDeletedAtIsNull(TENANT_A).stream()
+                .filter(i -> trayId.equals(i.getGlobalProductSourceId()))
+                .findFirst()
+                .orElseThrow();
+
+        org.assertj.core.api.Assertions.assertThat(parentItem.getVariantOfItemId()).isNull();
+        org.assertj.core.api.Assertions.assertThat(trayItem.getVariantOfItemId()).isEqualTo(parentItem.getId());
+        org.assertj.core.api.Assertions.assertThat(trayItem.isPackageVariant()).isTrue();
+        org.assertj.core.api.Assertions.assertThat(trayItem.isStocked()).isFalse();
+    }
+
+    @Test
     void adoptCreateMissingCategoriesCreatesTenantCategoryFromHint() throws Exception {
         org.assertj.core.api.Assertions.assertThat(
                 categoryRepository.findByBusinessIdAndSlugAndActiveTrue(TENANT_A, "beverages")

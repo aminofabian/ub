@@ -518,6 +518,70 @@ class SuperAdminGlobalCatalogPromoteIT {
     }
 
     @Test
+    void promoteAutoIncludesMissingParentWhenOnlyChildIsSelected() throws Exception {
+        String goodsTypeId = itemTypeRepository.findByBusinessIdAndTypeKey(SOURCE_BUSINESS, "goods")
+                .orElseThrow()
+                .getId();
+
+        Item parent = new Item();
+        parent.setBusinessId(SOURCE_BUSINESS);
+        parent.setSku("MILK-BASE");
+        parent.setName("Milk");
+        parent.setBrand("Dairy");
+        parent.setSize("500ml");
+        parent.setBarcode("1112223334447");
+        parent.setItemTypeId(goodsTypeId);
+        parent.setUnitType("each");
+        parent.setStocked(true);
+        parent.setBuyingPrice(new BigDecimal("40.00"));
+        parent = itemRepository.save(parent);
+
+        Item crate = new Item();
+        crate.setBusinessId(SOURCE_BUSINESS);
+        crate.setSku("MILK-CRATE");
+        crate.setName("Milk Crate of 12");
+        crate.setBrand("Dairy");
+        crate.setVariantName("Crate of 12");
+        crate.setVariantOfItemId(parent.getId());
+        crate.setBarcode("1112223334448");
+        crate.setItemTypeId(goodsTypeId);
+        crate.setUnitType("each");
+        crate.setPackageVariant(true);
+        crate.setPackagingUnitName("Crate");
+        crate.setPackagingUnitQty(new BigDecimal("12"));
+        crate.setStocked(false);
+        crate.setBuyingPrice(new BigDecimal("480.00"));
+        crate = itemRepository.save(crate);
+
+        // Only the child is selected — the parent must be promoted automatically.
+        String body = """
+                {"sourceBusinessId":"%s","itemIds":["%s"],"onConflict":"update","publish":true}
+                """.formatted(SOURCE_BUSINESS, crate.getId());
+
+        mockMvc.perform(post("/api/v1/super-admin/global-catalog/promote")
+                        .header("Authorization", "Bearer " + saToken)
+                        .contentType(APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.createdCount").value(2));
+
+        GlobalProduct globalParent = globalProductRepository.findAll().stream()
+                .filter(p -> "MILK-BASE".equals(p.getSkuTemplate()))
+                .findFirst()
+                .orElseThrow();
+        GlobalProduct globalCrate = globalProductRepository.findAll().stream()
+                .filter(p -> "MILK-CRATE".equals(p.getSkuTemplate()))
+                .findFirst()
+                .orElseThrow();
+
+        org.assertj.core.api.Assertions.assertThat(globalParent.getVariantOfGlobalProductId()).isNull();
+        org.assertj.core.api.Assertions.assertThat(globalCrate.getVariantOfGlobalProductId())
+                .isEqualTo(globalParent.getId());
+        org.assertj.core.api.Assertions.assertThat(globalCrate.isPackageVariant()).isTrue();
+        org.assertj.core.api.Assertions.assertThat(globalCrate.isStocked()).isFalse();
+    }
+
+    @Test
     void promoteWithCatalogIdTargetsUgCatalog() throws Exception {
         GlobalCatalog ug = new GlobalCatalog();
         ug.setCode("ug-retail");

@@ -98,6 +98,18 @@ public class Supplier {
     @Column(name = "marketplace_supplier_id", length = 36)
     private String marketplaceSupplierId;
 
+    @Column(name = "page_sealed", nullable = false)
+    private boolean pageSealed;
+
+    @Column(name = "page_pin_hash", length = 255)
+    private String pagePinHash;
+
+    @Column(name = "page_seal_verified_at")
+    private Instant pageSealVerifiedAt;
+
+    @Column(name = "page_seal_updated_at")
+    private Instant pageSealUpdatedAt;
+
     @PrePersist
     void onCreate() {
         Instant now = Instant.now();

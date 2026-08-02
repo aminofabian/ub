@@ -41,6 +41,11 @@ import zelisline.ub.platform.pageseal.domain.PageSealScopes;
 import zelisline.ub.platform.pageseal.domain.PageSealUnlock;
 import zelisline.ub.platform.pageseal.repository.PageSealChallengeRepository;
 import zelisline.ub.platform.pageseal.repository.PageSealUnlockRepository;
+import zelisline.ub.suppliers.domain.Supplier;
+import zelisline.ub.suppliers.domain.SupplierContact;
+import zelisline.ub.suppliers.domain.SupplierSlug;
+import zelisline.ub.suppliers.repository.SupplierContactRepository;
+import zelisline.ub.suppliers.repository.SupplierRepository;
 
 /**
  * Phone-OTP seal + 4-digit PIN for public supplier passports and customer tabs.
@@ -63,6 +68,8 @@ public class PageSealService {
     private final PageSealUnlockRepository unlockRepository;
     private final MarketplaceSupplierRepository marketplaceSupplierRepository;
     private final SupplierUserRepository supplierUserRepository;
+    private final SupplierRepository supplierRepository;
+    private final SupplierContactRepository supplierContactRepository;
     private final CustomerRepository customerRepository;
     private final CreditAccountRepository creditAccountRepository;
     private final PasswordEncoder passwordEncoder;
@@ -129,6 +136,87 @@ public class PageSealService {
             return true;
         }
         return isUnlockValid(PageSealScopes.CUSTOMER_TAB, account.getId(), unlockToken);
+    }
+
+    public boolean isShopSupplierUnlocked(Supplier supplier, String unlockToken) {
+        if (supplier == null || !supplier.isPageSealed()) {
+            return true;
+        }
+        return isUnlockValid(PageSealScopes.SHOP_SUPPLIER, supplier.getId(), unlockToken);
+    }
+
+    @Transactional(readOnly = true)
+    public PageSealStatusResponse shopSupplierStatus(
+            String businessId,
+            String slugRaw,
+            String unlockToken
+    ) {
+        Supplier supplier = requireShopSupplier(businessId, slugRaw);
+        boolean unlockValid = isUnlockValid(PageSealScopes.SHOP_SUPPLIER, supplier.getId(), unlockToken);
+        String slug = SupplierSlug.canonical(supplier.getName(), supplier.getCode());
+        return new PageSealStatusResponse(
+                supplier.isPageSealed(),
+                PageSealScopes.SHOP_SUPPLIER,
+                slug,
+                supplier.getName(),
+                maskPhone(resolveShopSupplierPhone(supplier)),
+                unlockValid);
+    }
+
+    @Transactional
+    public PageSealSendCodeResponse sendShopSupplierSealCode(String businessId, String slugRaw) {
+        Supplier supplier = requireShopSupplier(businessId, slugRaw);
+        String phone = resolveShopSupplierPhone(supplier);
+        if (phone == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "This supplier has no phone on file. Ask the shop to add a contact phone first");
+        }
+        return sendCode(PageSealScopes.SHOP_SUPPLIER, supplier.getId(), phone);
+    }
+
+    @Transactional
+    public PageSealOkResponse verifyAndSealShopSupplier(
+            String businessId,
+            String slugRaw,
+            String code,
+            String pin,
+            String confirmPin
+    ) {
+        Supplier supplier = requireShopSupplier(businessId, slugRaw);
+        verifyCodeAndConsume(PageSealScopes.SHOP_SUPPLIER, supplier.getId(), code);
+        String normalizedPin = normalizePin(pin, confirmPin);
+        Instant now = Instant.now();
+        supplier.setPagePinHash(encodePin(PageSealScopes.SHOP_SUPPLIER, supplier.getId(), normalizedPin));
+        supplier.setPageSealed(true);
+        supplier.setPageSealVerifiedAt(now);
+        supplier.setPageSealUpdatedAt(now);
+        supplierRepository.save(supplier);
+        return new PageSealOkResponse(true, true);
+    }
+
+    @Transactional
+    public PageSealOkResponse unsealShopSupplier(String businessId, String slugRaw, String pin) {
+        Supplier supplier = requireShopSupplier(businessId, slugRaw);
+        if (!supplier.isPageSealed()) {
+            return new PageSealOkResponse(true, false);
+        }
+        assertPin(PageSealScopes.SHOP_SUPPLIER, supplier.getId(), supplier.getPagePinHash(), pin);
+        supplier.setPageSealed(false);
+        supplier.setPagePinHash(null);
+        supplier.setPageSealUpdatedAt(Instant.now());
+        supplierRepository.save(supplier);
+        return new PageSealOkResponse(true, false);
+    }
+
+    @Transactional
+    public PageSealUnlockResponse unlockShopSupplier(String businessId, String slugRaw, String pin) {
+        Supplier supplier = requireShopSupplier(businessId, slugRaw);
+        if (!supplier.isPageSealed()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "This page is not sealed");
+        }
+        assertPin(PageSealScopes.SHOP_SUPPLIER, supplier.getId(), supplier.getPagePinHash(), pin);
+        return mintUnlock(PageSealScopes.SHOP_SUPPLIER, supplier.getId());
     }
 
     @Transactional
@@ -408,6 +496,61 @@ public class PageSealService {
                 if (normalized != null) {
                     return normalized;
                 }
+            }
+        }
+        return null;
+    }
+
+    private Supplier requireShopSupplier(String businessId, String slugRaw) {
+        String needle = slugRaw == null ? "" : slugRaw.trim();
+        if (needle.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found");
+        }
+        List<Supplier> pool = supplierRepository.findAllByBusinessIdNotDeleted(businessId);
+        List<Supplier> exact = pool.stream()
+                .filter(s -> SupplierSlug.matches(s.getId(), s.getName(), s.getCode(), needle))
+                .toList();
+        if (exact.size() == 1) {
+            return exact.getFirst();
+        }
+        List<Supplier> loose = pool.stream()
+                .filter(s -> SupplierSlug.matchesLoose(s.getId(), s.getName(), s.getCode(), needle))
+                .toList();
+        if (loose.size() == 1) {
+            return loose.getFirst();
+        }
+        String hint = SupplierSlug.searchHint(needle);
+        if (!hint.isBlank()) {
+            List<Supplier> searched = supplierRepository.searchByNameOrCode(businessId, hint);
+            if (searched.size() == 1) {
+                return searched.getFirst();
+            }
+            List<Supplier> searchedLoose = searched.stream()
+                    .filter(s -> SupplierSlug.matchesLoose(s.getId(), s.getName(), s.getCode(), needle))
+                    .toList();
+            if (searchedLoose.size() == 1) {
+                return searchedLoose.getFirst();
+            }
+        }
+        throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found");
+    }
+
+    private String resolveShopSupplierPhone(Supplier supplier) {
+        if (supplier.getPayoutPhone() != null && !supplier.getPayoutPhone().isBlank()) {
+            String normalized = StkPhoneNormalizer.normalize(supplier.getPayoutPhone());
+            if (normalized != null) {
+                return normalized;
+            }
+        }
+        List<SupplierContact> contacts =
+                supplierContactRepository.findBySupplierIdOrderByPrimaryContactDescNameAsc(supplier.getId());
+        for (SupplierContact contact : contacts) {
+            if (contact.getPhone() == null || contact.getPhone().isBlank()) {
+                continue;
+            }
+            String normalized = StkPhoneNormalizer.normalize(contact.getPhone());
+            if (normalized != null) {
+                return normalized;
             }
         }
         return null;

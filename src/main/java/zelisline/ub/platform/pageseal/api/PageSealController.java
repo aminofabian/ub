@@ -105,6 +105,61 @@ public class PageSealController {
                 publicHostBusinessResolver.resolveOrThrow(request), phone, body.pin());
     }
 
+    // —— Public shop supplier portal seal (/s/{slug} on tenant hosts) ——
+
+    @GetMapping("/api/v1/public/page-seals/shop-supplier/{slug}")
+    public PageSealStatusResponse shopSupplierStatus(
+            @PathVariable String slug,
+            @RequestHeader(value = UNLOCK_HEADER, required = false) String unlockToken,
+            HttpServletRequest request
+    ) {
+        return pageSealService.shopSupplierStatus(
+                publicHostBusinessResolver.resolveOrThrow(request), slug, unlockToken);
+    }
+
+    @PostMapping("/api/v1/public/page-seals/shop-supplier/{slug}/unlock")
+    public PageSealUnlockResponse unlockShopSupplier(
+            @PathVariable String slug,
+            @Valid @RequestBody PageSealUnlockRequest body,
+            HttpServletRequest request
+    ) {
+        return pageSealService.unlockShopSupplier(
+                publicHostBusinessResolver.resolveOrThrow(request), slug, body.pin());
+    }
+
+    @PostMapping("/api/v1/public/page-seals/shop-supplier/{slug}/send-code")
+    public PageSealSendCodeResponse sendShopSupplierCode(
+            @PathVariable String slug,
+            HttpServletRequest request
+    ) {
+        return pageSealService.sendShopSupplierSealCode(
+                publicHostBusinessResolver.resolveOrThrow(request), slug);
+    }
+
+    @PostMapping("/api/v1/public/page-seals/shop-supplier/{slug}/seal")
+    public PageSealOkResponse sealShopSupplier(
+            @PathVariable String slug,
+            @Valid @RequestBody PageSealVerifySetRequest body,
+            HttpServletRequest request
+    ) {
+        return pageSealService.verifyAndSealShopSupplier(
+                publicHostBusinessResolver.resolveOrThrow(request),
+                slug,
+                body.code(),
+                body.pin(),
+                body.confirmPin());
+    }
+
+    @PostMapping("/api/v1/public/page-seals/shop-supplier/{slug}/unseal")
+    public PageSealOkResponse unsealShopSupplier(
+            @PathVariable String slug,
+            @Valid @RequestBody PageSealUnlockRequest body,
+            HttpServletRequest request
+    ) {
+        return pageSealService.unsealShopSupplier(
+                publicHostBusinessResolver.resolveOrThrow(request), slug, body.pin());
+    }
+
     // —— Authenticated supplier seal management ——
 
     @PostMapping("/api/v1/supplier-portal/page-seal/send-code")

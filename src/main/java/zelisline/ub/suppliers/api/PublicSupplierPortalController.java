@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
@@ -13,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.platform.pageseal.api.PageSealController;
 import zelisline.ub.suppliers.api.dto.PublicSupplierComplaintRequest;
 import zelisline.ub.suppliers.api.dto.PublicSupplierComplaintResponse;
 import zelisline.ub.suppliers.api.dto.PublicSupplierPortalResponse;
@@ -35,10 +37,11 @@ public class PublicSupplierPortalController {
     @GetMapping("/{slug}")
     public PublicSupplierPortalResponse overview(
             @PathVariable String slug,
+            @RequestHeader(value = PageSealController.UNLOCK_HEADER, required = false) String unlockToken,
             HttpServletRequest request
     ) {
         return publicSupplierPortalService.overview(
-                publicHostBusinessResolver.resolveOrThrow(request), slug);
+                publicHostBusinessResolver.resolveOrThrow(request), slug, unlockToken);
     }
 
     @PostMapping("/{slug}/complaints")

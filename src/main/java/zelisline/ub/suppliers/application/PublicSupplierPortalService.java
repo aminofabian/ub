@@ -1,5 +1,6 @@
 package zelisline.ub.suppliers.application;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -15,6 +16,7 @@ import org.springframework.web.server.ResponseStatusException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.platform.pageseal.application.PageSealService;
 import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
@@ -58,9 +60,10 @@ public class PublicSupplierPortalService {
     private final BusinessRepository businessRepository;
     private final ContactMessageRepository contactMessageRepository;
     private final zelisline.ub.marketplace.application.SupplierPortalMessagesService messagesService;
+    private final PageSealService pageSealService;
 
     @Transactional(readOnly = true)
-    public PublicSupplierPortalResponse overview(String businessId, String slugRaw) {
+    public PublicSupplierPortalResponse overview(String businessId, String slugRaw, String unlockToken) {
         Supplier supplier = resolveSupplierOrThrow(businessId, slugRaw);
         Business business = businessRepository.findById(businessId).orElse(null);
         String shopName = business != null && business.getName() != null
@@ -69,6 +72,22 @@ public class PublicSupplierPortalService {
         String currency = business != null && business.getCurrency() != null
                 ? business.getCurrency().trim()
                 : "KES";
+        String slug = SupplierSlug.canonical(supplier.getName(), supplier.getCode());
+
+        if (supplier.isPageSealed() && !pageSealService.isShopSupplierUnlocked(supplier, unlockToken)) {
+            return new PublicSupplierPortalResponse(
+                    supplier.getName(),
+                    slug,
+                    shopName,
+                    currency,
+                    BigDecimal.ZERO,
+                    BigDecimal.ZERO,
+                    BigDecimal.ZERO,
+                    0,
+                    List.of(),
+                    List.of(),
+                    List.of());
+        }
 
         var history = purchaseHistoryService.purchaseHistory(businessId, supplier.getId(), SUPPLY_LIMIT);
         List<PublicSupplierSupplyRow> supplies = history.orders().stream()
@@ -85,7 +104,6 @@ public class PublicSupplierPortalService {
 
         List<PublicSupplierMovementRow> movements = recentMovements(businessId, supplier.getId());
         List<String> linked = linkedProductNames(supplier.getId(), businessId);
-        String slug = SupplierSlug.canonical(supplier.getName(), supplier.getCode());
 
         return new PublicSupplierPortalResponse(
                 supplier.getName(),
@@ -164,7 +182,7 @@ public class PublicSupplierPortalService {
         return new PublicSupplierComplaintResponse(true, saved.getId());
     }
 
-    Supplier resolveSupplierOrThrow(String businessId, String slugRaw) {
+    public Supplier resolveSupplierOrThrow(String businessId, String slugRaw) {
         String needle = slugRaw == null ? "" : slugRaw.trim();
         if (needle.isBlank()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found");

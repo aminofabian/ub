@@ -151,10 +151,10 @@ class CustomerPhoneVerificationApiIT {
 
         when(messagingSettingsService.resolveForTest(TENANT)).thenReturn(testMessagingConfig());
         messageCaptor = ArgumentCaptor.forClass(String.class);
-        when(customerMessageDispatcher.deliver(any(), anyString(), messageCaptor.capture()))
+        when(customerMessageDispatcher.deliverBothChannels(any(), anyString(), messageCaptor.capture()))
                 .thenReturn(new CustomerMessageDispatcher.DeliveryResult(
                         RapidApiWhatsAppLookupClient.LookupResult.lookupSkipped("test"),
-                        "sms",
+                        "whatsapp+sms",
                         "sent",
                         "test"));
     }
@@ -188,7 +188,7 @@ class CustomerPhoneVerificationApiIT {
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.phone").value("0711999888"))
-                .andExpect(jsonPath("$.channel").value("sms"));
+                .andExpect(jsonPath("$.channel").value("whatsapp+sms"));
 
         String code = extractOtp(messageCaptor.getValue());
 

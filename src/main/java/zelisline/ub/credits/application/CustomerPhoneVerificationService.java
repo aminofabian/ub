@@ -90,7 +90,7 @@ public class CustomerPhoneVerificationService {
 
         String message = "Your Palmart verification code is " + code + ". Valid for 10 minutes.";
         CustomerMessageDispatcher.DeliveryResult delivery =
-                customerMessageDispatcher.deliver(messaging, phone, message);
+                customerMessageDispatcher.deliverBothChannels(messaging, phone, message);
         if (!"sent".equals(delivery.outcome()) && !"stub".equals(delivery.outcome())) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_GATEWAY,

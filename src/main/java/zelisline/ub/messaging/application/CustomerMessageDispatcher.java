@@ -222,6 +222,85 @@ public class CustomerMessageDispatcher {
         return new DeliveryResult(lookup, channel, outcome, sms.detail());
     }
 
+    /**
+     * Sends the same free-form message on every configured channel (WhatsApp and/or SMS).
+     * Used for OTP verification so the customer can read the code from either inbox.
+     * Succeeds when at least one channel sends (or stubs); fails only if all attempts fail.
+     */
+    public DeliveryResult deliverBothChannels(
+            TenantMessagingConfig messaging,
+            String phoneDigits,
+            String message
+    ) {
+        String e164 = "+" + phoneDigits;
+        boolean waConfigured = messaging.metaWhatsAppConfigured();
+        boolean smsConfigured = messaging.smsConfigured();
+        if (!waConfigured && !smsConfigured) {
+            var lookup = RapidApiWhatsAppLookupClient.LookupResult.lookupSkipped("no_channels");
+            return new DeliveryResult(
+                    lookup,
+                    "none",
+                    "failed",
+                    "WhatsApp and SMS are not configured");
+        }
+
+        var lookup = RapidApiWhatsAppLookupClient.LookupResult.lookupSkipped("otp_both_channels");
+        boolean waOk = false;
+        boolean smsOk = false;
+        StringBuilder detail = new StringBuilder();
+
+        if (waConfigured) {
+            var send = metaWhatsAppClient.sendText(messaging, phoneDigits, message);
+            waOk = send.sent();
+            if (detail.length() > 0) {
+                detail.append("; ");
+            }
+            if (waOk) {
+                detail.append("whatsapp:sent");
+            } else {
+                String prefix = send.skipped() ? "whatsapp_skipped:" : "whatsapp_failed:";
+                detail.append(prefix).append(send.detail());
+            }
+        }
+
+        if (smsConfigured) {
+            var sms = smsMessagingClient.sendText(messaging, e164, message);
+            smsOk = sms.sent() || sms.stub();
+            if (detail.length() > 0) {
+                detail.append("; ");
+            }
+            if (smsOk) {
+                detail.append(sms.channel()).append(':').append(sms.sent() ? "sent" : "stub");
+            } else {
+                detail.append("sms_failed:").append(sms.detail());
+            }
+        }
+
+        if (!waOk && !smsOk) {
+            return new DeliveryResult(
+                    lookup, channelLabel(waConfigured, smsConfigured), "failed", detail.toString());
+        }
+
+        return new DeliveryResult(
+                lookup,
+                channelLabel(waOk, smsOk),
+                "sent",
+                detail.toString());
+    }
+
+    private static String channelLabel(boolean whatsapp, boolean sms) {
+        if (whatsapp && sms) {
+            return "whatsapp+sms";
+        }
+        if (whatsapp) {
+            return "whatsapp";
+        }
+        if (sms) {
+            return "sms";
+        }
+        return "none";
+    }
+
     private DeliveryResult attemptCreditSaleWhatsAppThenSms(
             TenantMessagingConfig messaging,
             String phoneDigits,

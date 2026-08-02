@@ -15,6 +15,13 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.pageseal.api.PageSealController;
+import zelisline.ub.platform.pageseal.api.dto.PageSealOkResponse;
+import zelisline.ub.platform.pageseal.api.dto.PageSealSendCodeResponse;
+import zelisline.ub.platform.pageseal.api.dto.PageSealStatusResponse;
+import zelisline.ub.platform.pageseal.api.dto.PageSealUnlockRequest;
+import zelisline.ub.platform.pageseal.api.dto.PageSealUnlockResponse;
+import zelisline.ub.platform.pageseal.api.dto.PageSealVerifySetRequest;
+import zelisline.ub.platform.pageseal.application.PageSealService;
 import zelisline.ub.suppliers.api.dto.PublicSupplierComplaintRequest;
 import zelisline.ub.suppliers.api.dto.PublicSupplierComplaintResponse;
 import zelisline.ub.suppliers.api.dto.PublicSupplierPortalResponse;
@@ -33,6 +40,7 @@ public class PublicSupplierPortalController {
 
     private final PublicSupplierPortalService publicSupplierPortalService;
     private final PublicHostBusinessResolver publicHostBusinessResolver;
+    private final PageSealService pageSealService;
 
     @GetMapping("/{slug}")
     public PublicSupplierPortalResponse overview(
@@ -42,6 +50,60 @@ public class PublicSupplierPortalController {
     ) {
         return publicSupplierPortalService.overview(
                 publicHostBusinessResolver.resolveOrThrow(request), slug, unlockToken);
+    }
+
+    /** Page-seal status for this shop supplier portal (preferred path). */
+    @GetMapping("/{slug}/page-seal")
+    public PageSealStatusResponse pageSealStatus(
+            @PathVariable String slug,
+            @RequestHeader(value = PageSealController.UNLOCK_HEADER, required = false) String unlockToken,
+            HttpServletRequest request
+    ) {
+        return pageSealService.shopSupplierStatus(
+                publicHostBusinessResolver.resolveOrThrow(request), slug, unlockToken);
+    }
+
+    @PostMapping("/{slug}/page-seal/send-code")
+    public PageSealSendCodeResponse pageSealSendCode(
+            @PathVariable String slug,
+            HttpServletRequest request
+    ) {
+        return pageSealService.sendShopSupplierSealCode(
+                publicHostBusinessResolver.resolveOrThrow(request), slug);
+    }
+
+    @PostMapping("/{slug}/page-seal/seal")
+    public PageSealOkResponse pageSealSeal(
+            @PathVariable String slug,
+            @Valid @RequestBody PageSealVerifySetRequest body,
+            HttpServletRequest request
+    ) {
+        return pageSealService.verifyAndSealShopSupplier(
+                publicHostBusinessResolver.resolveOrThrow(request),
+                slug,
+                body.code(),
+                body.pin(),
+                body.confirmPin());
+    }
+
+    @PostMapping("/{slug}/page-seal/unseal")
+    public PageSealOkResponse pageSealUnseal(
+            @PathVariable String slug,
+            @Valid @RequestBody PageSealUnlockRequest body,
+            HttpServletRequest request
+    ) {
+        return pageSealService.unsealShopSupplier(
+                publicHostBusinessResolver.resolveOrThrow(request), slug, body.pin());
+    }
+
+    @PostMapping("/{slug}/page-seal/unlock")
+    public PageSealUnlockResponse pageSealUnlock(
+            @PathVariable String slug,
+            @Valid @RequestBody PageSealUnlockRequest body,
+            HttpServletRequest request
+    ) {
+        return pageSealService.unlockShopSupplier(
+                publicHostBusinessResolver.resolveOrThrow(request), slug, body.pin());
     }
 
     @PostMapping("/{slug}/complaints")

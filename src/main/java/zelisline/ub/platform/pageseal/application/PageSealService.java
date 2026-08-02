@@ -151,28 +151,52 @@ public class PageSealService {
             String slugRaw,
             String unlockToken
     ) {
-        Supplier supplier = requireShopSupplier(businessId, slugRaw);
-        boolean unlockValid = isUnlockValid(PageSealScopes.SHOP_SUPPLIER, supplier.getId(), unlockToken);
-        String slug = SupplierSlug.canonical(supplier.getName(), supplier.getCode());
-        return new PageSealStatusResponse(
-                supplier.isPageSealed(),
-                PageSealScopes.SHOP_SUPPLIER,
-                slug,
-                supplier.getName(),
-                maskPhone(resolveShopSupplierPhone(supplier)),
-                unlockValid);
+        try {
+            Supplier supplier = requireShopSupplier(businessId, slugRaw);
+            boolean unlockValid = isUnlockValid(PageSealScopes.SHOP_SUPPLIER, supplier.getId(), unlockToken);
+            String slug = SupplierSlug.canonical(supplier.getName(), supplier.getCode());
+            String phoneHint = null;
+            try {
+                phoneHint = maskPhone(resolveShopSupplierPhone(supplier));
+            } catch (RuntimeException ex) {
+                log.warn("Shop supplier phone hint failed for {}: {}", slugRaw, ex.toString());
+            }
+            return new PageSealStatusResponse(
+                    supplier.isPageSealed(),
+                    PageSealScopes.SHOP_SUPPLIER,
+                    slug,
+                    supplier.getName(),
+                    phoneHint,
+                    unlockValid);
+        } catch (ResponseStatusException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            log.error("shopSupplierStatus failed businessId={} slug={}", businessId, slugRaw, ex);
+            throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Could not load seal status (" + ex.getClass().getSimpleName() + ")");
+        }
     }
 
     @Transactional
     public PageSealSendCodeResponse sendShopSupplierSealCode(String businessId, String slugRaw) {
-        Supplier supplier = requireShopSupplier(businessId, slugRaw);
-        String phone = resolveShopSupplierPhone(supplier);
-        if (phone == null) {
+        try {
+            Supplier supplier = requireShopSupplier(businessId, slugRaw);
+            String phone = resolveShopSupplierPhone(supplier);
+            if (phone == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "This supplier has no phone on file. Ask the shop to add a contact phone first");
+            }
+            return sendCode(PageSealScopes.SHOP_SUPPLIER, supplier.getId(), phone);
+        } catch (ResponseStatusException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            log.error("sendShopSupplierSealCode failed businessId={} slug={}", businessId, slugRaw, ex);
             throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "This supplier has no phone on file. Ask the shop to add a contact phone first");
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Could not send seal code (" + ex.getClass().getSimpleName() + ")");
         }
-        return sendCode(PageSealScopes.SHOP_SUPPLIER, supplier.getId(), phone);
     }
 
     @Transactional
@@ -363,25 +387,50 @@ public class PageSealService {
         challengeRepository.save(challenge);
 
         TenantMessagingConfig messaging = messagingSettingsService.resolvePlatformForContactReply();
-        boolean messagingReady = messaging.enabled()
-                && (messaging.smsConfigured() || messaging.metaWhatsAppConfigured());
+        boolean smsReady = messaging.enabled() && messaging.smsConfigured();
+        boolean waReady = messaging.enabled() && messaging.metaWhatsAppConfigured();
         String channel;
         String outcome;
         String message = "Your Kiosk seal code is " + code + ". Valid for "
                 + CODE_TTL.toMinutes() + " minutes. Do not share it.";
-        if (!messagingReady) {
+        if (!smsReady && !waReady) {
             log.info("Page seal OTP stub: scope={} subject={} code={}", scope, subjectId, code);
             channel = "sms_stub";
             outcome = "stub";
-        } else {
-            var delivery = customerMessageDispatcher.deliver(messaging, phone, message);
+        } else if (smsReady && waReady) {
+            var delivery = customerMessageDispatcher.deliverBothChannels(messaging, phone, message);
             channel = delivery.channel();
             outcome = delivery.outcome();
             if (!"sent".equals(outcome) && !"stub".equals(outcome)) {
-                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Could not send verification code");
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_GATEWAY,
+                        "Could not send verification code"
+                                + (delivery.detail() != null ? " (" + delivery.detail() + ")" : ""));
+            }
+        } else if (smsReady) {
+            var delivery = customerMessageDispatcher.deliverSmsOnly(messaging, phone, message);
+            channel = delivery.channel();
+            outcome = delivery.outcome();
+            if (!"sent".equals(outcome) && !"stub".equals(outcome)) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_GATEWAY,
+                        "Could not send SMS verification code"
+                                + (delivery.detail() != null ? " (" + delivery.detail() + ")" : ""));
+            }
+        } else {
+            var delivery = customerMessageDispatcher.deliverBothChannels(messaging, phone, message);
+            channel = delivery.channel();
+            outcome = delivery.outcome();
+            if (!"sent".equals(outcome) && !"stub".equals(outcome)) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_GATEWAY,
+                        "Could not send verification code. Configure SMS for reliable OTP delivery.");
             }
         }
-        String devCode = returnOtpWhenStubbed && "stub".equals(outcome) ? code : null;
+        // Always surface the code when the provider stubbed — otherwise the UI says "sent" with nothing to enter.
+        String devCode = ("stub".equals(outcome) || (channel != null && channel.contains("stub")))
+                ? code
+                : null;
         return new PageSealSendCodeResponse(maskPhone(phone), challenge.getExpiresAt(), channel, devCode);
     }
 

@@ -30,6 +30,18 @@ public class CreditAccount {
     @Column(name = "customer_id", nullable = false, length = 36)
     private String customerId;
 
+    @Column(name = "page_sealed", nullable = false)
+    private boolean pageSealed;
+
+    @Column(name = "page_pin_hash", length = 255)
+    private String pagePinHash;
+
+    @Column(name = "page_seal_verified_at")
+    private Instant pageSealVerifiedAt;
+
+    @Column(name = "page_seal_updated_at")
+    private Instant pageSealUpdatedAt;
+
     @Column(name = "balance_owed", nullable = false, precision = 14, scale = 2)
     private BigDecimal balanceOwed = BigDecimal.ZERO;
 

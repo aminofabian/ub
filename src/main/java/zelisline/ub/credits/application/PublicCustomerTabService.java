@@ -22,6 +22,7 @@ import zelisline.ub.credits.domain.MpesaStkIntent;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.credits.repository.MpesaStkIntentRepository;
+import zelisline.ub.platform.pageseal.application.PageSealService;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
@@ -36,13 +37,37 @@ public class PublicCustomerTabService {
     private final MpesaStkIntentRepository mpesaStkIntentRepository;
     private final BusinessRepository businessRepository;
     private final PublicPaymentClaimService publicPaymentClaimService;
+    private final PageSealService pageSealService;
 
     @Transactional(readOnly = true)
     public PublicCustomerTabResponse overview(String businessId, String phoneRaw) {
+        return overview(businessId, phoneRaw, null);
+    }
+
+    @Transactional(readOnly = true)
+    public PublicCustomerTabResponse overview(String businessId, String phoneRaw, String unlockToken) {
         ResolvedCustomer resolved = resolveCustomerOrThrow(businessId, phoneRaw);
         Business business = businessRepository.findById(businessId).orElse(null);
         String shopName = business != null && business.getName() != null ? business.getName().trim() : "Shop";
         String currency = business != null && business.getCurrency() != null ? business.getCurrency().trim() : "KES";
+        String display = KenyanPhoneForms.toLocal07(phoneRaw);
+        if (display == null) {
+            display = phoneRaw != null ? phoneRaw.trim() : "";
+        }
+        boolean sealed = resolved.account().isPageSealed();
+        boolean unlocked = pageSealService.isCustomerTabUnlocked(resolved.account(), unlockToken);
+        if (sealed && !unlocked) {
+            return new PublicCustomerTabResponse(
+                    resolved.customer().getName(),
+                    display,
+                    shopName,
+                    currency,
+                    null,
+                    null,
+                    List.of(),
+                    true,
+                    false);
+        }
         BigDecimal owed = resolved.account().getBalanceOwed() != null
                 ? resolved.account().getBalanceOwed()
                 : BigDecimal.ZERO;
@@ -51,10 +76,6 @@ public class PublicCustomerTabService {
                 : BigDecimal.ZERO;
         List<TabPurchaseRowResponse> purchases =
                 customerTabPurchasesService.list(businessId, resolved.customer().getId());
-        String display = KenyanPhoneForms.toLocal07(phoneRaw);
-        if (display == null) {
-            display = phoneRaw != null ? phoneRaw.trim() : "";
-        }
         return new PublicCustomerTabResponse(
                 resolved.customer().getName(),
                 display,
@@ -62,7 +83,9 @@ public class PublicCustomerTabService {
                 currency,
                 owed,
                 wallet,
-                purchases);
+                purchases,
+                sealed,
+                unlocked);
     }
 
     @Transactional

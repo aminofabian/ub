@@ -20,6 +20,7 @@ import zelisline.ub.credits.api.dto.PublicTabStkRequest;
 import zelisline.ub.credits.api.dto.PublicTabStkResponse;
 import zelisline.ub.credits.api.dto.SubmitPublicClaimRequest;
 import zelisline.ub.credits.application.PublicCustomerTabService;
+import zelisline.ub.platform.pageseal.api.PageSealController;
 import zelisline.ub.tenancy.application.PublicHostBusinessResolver;
 
 /**
@@ -39,9 +40,11 @@ public class PublicCustomerTabController {
     @GetMapping("/{phone}")
     public PublicCustomerTabResponse overview(
             @PathVariable String phone,
+            @RequestHeader(value = PageSealController.UNLOCK_HEADER, required = false) String unlockToken,
             HttpServletRequest request
     ) {
-        return publicCustomerTabService.overview(publicHostBusinessResolver.resolveOrThrow(request), phone);
+        return publicCustomerTabService.overview(
+                publicHostBusinessResolver.resolveOrThrow(request), phone, unlockToken);
     }
 
     @PostMapping("/{phone}/stk")

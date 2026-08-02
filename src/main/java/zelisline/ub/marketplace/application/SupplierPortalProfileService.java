@@ -273,7 +273,7 @@ public class SupplierPortalProfileService {
                 List.copyOf(linked));
     }
 
-    static String normalizeUsername(String raw) {
+    public static String normalizeUsername(String raw) {
         String slug = SupplierSlug.slugify(raw == null ? "" : raw.trim());
         if (slug.startsWith("@")) {
             slug = SupplierSlug.slugify(slug.substring(1));

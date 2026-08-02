@@ -10,6 +10,8 @@ public record PublicCustomerTabResponse(
         String currency,
         BigDecimal balanceOwed,
         BigDecimal walletBalance,
-        List<TabPurchaseRowResponse> purchases
+        List<TabPurchaseRowResponse> purchases,
+        boolean pageSealed,
+        boolean pageUnlocked
 ) {
 }

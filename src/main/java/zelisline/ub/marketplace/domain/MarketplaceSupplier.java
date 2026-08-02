@@ -35,6 +35,18 @@ public class MarketplaceSupplier {
     @Column(name = "username", length = 64, unique = true)
     private String username;
 
+    @Column(name = "page_sealed", nullable = false)
+    private boolean pageSealed;
+
+    @Column(name = "page_pin_hash", length = 255)
+    private String pagePinHash;
+
+    @Column(name = "page_seal_verified_at")
+    private Instant pageSealVerifiedAt;
+
+    @Column(name = "page_seal_updated_at")
+    private Instant pageSealUpdatedAt;
+
     @Column(name = "description", columnDefinition = "TEXT")
     private String description;
 

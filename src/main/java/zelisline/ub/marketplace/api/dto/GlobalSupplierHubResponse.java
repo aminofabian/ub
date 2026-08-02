@@ -8,6 +8,8 @@ public record GlobalSupplierHubResponse(
         int shopCount,
         String currency,
         GlobalSupplierHubTotals totals,
-        List<GlobalSupplierHubShopCard> shops
+        List<GlobalSupplierHubShopCard> shops,
+        boolean pageSealed,
+        boolean pageUnlocked
 ) {
 }

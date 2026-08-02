@@ -30,6 +30,7 @@ import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.domain.DomainMapping;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
+import zelisline.ub.platform.pageseal.application.PageSealService;
 
 @Service
 @RequiredArgsConstructor
@@ -44,16 +45,22 @@ public class GlobalSupplierHubService {
     private final DomainMappingRepository domainMappingRepository;
     private final SupplierPurchaseHistoryService purchaseHistoryService;
     private final SupplierPortalShopLinkService shopLinkService;
+    private final PageSealService pageSealService;
 
     @Transactional(readOnly = true)
     public GlobalSupplierHubResponse byUsername(String usernameRaw) {
+        return byUsername(usernameRaw, null);
+    }
+
+    @Transactional(readOnly = true)
+    public GlobalSupplierHubResponse byUsername(String usernameRaw, String unlockToken) {
         String username = SupplierPortalProfileService.normalizeUsername(usernameRaw);
         if (username.isBlank()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found");
         }
         MarketplaceSupplier marketplace = marketplaceSupplierRepository.findByUsernameIgnoreCase(username)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
-        return forMarketplaceSupplier(marketplace);
+        return forMarketplaceSupplier(marketplace, unlockToken);
     }
 
     @Transactional
@@ -66,10 +73,30 @@ public class GlobalSupplierHubService {
         }
         MarketplaceSupplier marketplace = marketplaceSupplierRepository.findById(marketplaceSupplierId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
-        return forMarketplaceSupplier(marketplace);
+        return forMarketplaceSupplier(marketplace, null);
     }
 
     private GlobalSupplierHubResponse forMarketplaceSupplier(MarketplaceSupplier marketplace) {
+        return forMarketplaceSupplier(marketplace, null);
+    }
+
+    private GlobalSupplierHubResponse forMarketplaceSupplier(
+            MarketplaceSupplier marketplace,
+            String unlockToken
+    ) {
+        boolean sealed = marketplace.isPageSealed();
+        boolean unlocked = pageSealService.isSupplierUnlocked(marketplace, unlockToken);
+        if (sealed && !unlocked) {
+            return new GlobalSupplierHubResponse(
+                    marketplace.getUsername(),
+                    marketplace.getName(),
+                    0,
+                    "KES",
+                    new GlobalSupplierHubTotals(ZERO, ZERO, ZERO),
+                    List.of(),
+                    true,
+                    false);
+        }
         List<BusinessSupplierConnection> links = connectionRepository.findByMarketplaceSupplierIdAndStatus(
                 marketplace.getId(), BusinessSupplierConnectionStatuses.ACTIVE);
 
@@ -130,7 +157,9 @@ public class GlobalSupplierHubService {
                 shops.size(),
                 currency,
                 new GlobalSupplierHubTotals(money(totalOwed), money(totalPaid), money(totalPending)),
-                List.copyOf(shops));
+                List.copyOf(shops),
+                sealed,
+                unlocked);
     }
 
     private String resolveSlugHost(String businessId) {

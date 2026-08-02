@@ -6,6 +6,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -17,6 +18,7 @@ import zelisline.ub.marketplace.api.dto.PublicMarketplaceProductSearchRow;
 import zelisline.ub.marketplace.api.dto.PublicMarketplaceSupplierSearchRow;
 import zelisline.ub.marketplace.application.GlobalSupplierHubService;
 import zelisline.ub.marketplace.application.PublicMarketplaceSearchService;
+import zelisline.ub.platform.pageseal.api.PageSealController;
 
 @RestController
 @RequestMapping("/api/v1/public/marketplace")
@@ -36,8 +38,11 @@ public class PublicMarketplaceController {
 
     /** Global supplier passport at kiosk.ke/s/{username} — linked shops only. */
     @GetMapping("/suppliers/by-username/{username}")
-    public GlobalSupplierHubResponse byUsername(@PathVariable String username) {
-        return globalSupplierHubService.byUsername(username);
+    public GlobalSupplierHubResponse byUsername(
+            @PathVariable String username,
+            @RequestHeader(value = PageSealController.UNLOCK_HEADER, required = false) String unlockToken
+    ) {
+        return globalSupplierHubService.byUsername(username, unlockToken);
     }
 
     @GetMapping("/products/search")

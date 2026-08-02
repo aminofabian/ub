@@ -176,7 +176,13 @@ public class PublicWebCheckoutService {
         }
 
         eventPublisher.publishEvent(
-                new zelisline.ub.opsalerts.application.TenantOpsAlertListener.WebOrderPlacedOpsAlertEvent(order));
+                new zelisline.ub.opsalerts.application.WebOrderPlacedOpsAlertEvent(
+                        order.getBusinessId(),
+                        order.getId(),
+                        order.getCustomerName(),
+                        order.getCustomerPhone(),
+                        order.getGrandTotal(),
+                        order.getCurrency()));
 
         webCartRepository.deleteById(elig.cart().getId());
 

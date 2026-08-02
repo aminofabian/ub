@@ -1,7 +1,5 @@
 package zelisline.ub.opsalerts.application;
 
-import java.math.BigDecimal;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
@@ -15,7 +13,6 @@ import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.messaging.application.CreditTabPaymentConfirmationEvent;
 import zelisline.ub.opsalerts.domain.OpsAlertType;
 import zelisline.ub.platform.realtime.RealtimeBridge;
-import zelisline.ub.storefront.domain.WebOrder;
 
 @Component
 @RequiredArgsConstructor
@@ -27,30 +24,33 @@ public class TenantOpsAlertListener {
     private final CustomerRepository customerRepository;
 
     @Async
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onWebOrderPlaced(WebOrderPlacedOpsAlertEvent event) {
         try {
-            WebOrder order = event.order();
-            if (order == null) {
+            if (event == null || event.businessId() == null) {
                 return;
             }
-            String shop = dispatcher.shopName(order.getBusinessId());
-            String currency = order.getCurrency() != null ? order.getCurrency() : dispatcher.currency(order.getBusinessId());
+            log.info("Ops alert event web_order business={} order={}", event.businessId(), event.orderId());
+            String shop = dispatcher.shopName(event.businessId());
+            String currency = event.currency() != null && !event.currency().isBlank()
+                    ? event.currency()
+                    : dispatcher.currency(event.businessId());
             String message = shop + " — new web order\n"
-                    + "Customer: " + safe(order.getCustomerName()) + "\n"
-                    + "Phone: " + safe(order.getCustomerPhone()) + "\n"
-                    + "Total: " + TenantOpsAlertDispatcher.formatMoney(order.getGrandTotal(), currency) + "\n"
-                    + "Order: " + shortId(order.getId());
-            dispatcher.dispatch(order.getBusinessId(), OpsAlertType.WEB_ORDER, message);
+                    + "Customer: " + safe(event.customerName()) + "\n"
+                    + "Phone: " + safe(event.customerPhone()) + "\n"
+                    + "Total: " + TenantOpsAlertDispatcher.formatMoney(event.grandTotal(), currency) + "\n"
+                    + "Order: " + shortId(event.orderId());
+            dispatcher.dispatch(event.businessId(), OpsAlertType.WEB_ORDER, message);
         } catch (Exception ex) {
-            log.warn("Ops alert web order failed", ex);
+            log.warn("Ops alert web order failed order={}", event != null ? event.orderId() : null, ex);
         }
     }
 
     @Async
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onShiftOpened(RealtimeBridge.ShiftOpenedEvent event) {
         try {
+            log.info("Ops alert event shift_opened business={} shift={}", event.businessId(), event.shiftId());
             String shop = dispatcher.shopName(event.businessId());
             String branch = dispatcher.branchName(event.businessId(), event.branchId());
             String currency = dispatcher.currency(event.businessId());
@@ -65,9 +65,10 @@ public class TenantOpsAlertListener {
     }
 
     @Async
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onShiftClosed(RealtimeBridge.ShiftClosedEvent event) {
         try {
+            log.info("Ops alert event shift_closed business={} shift={}", event.businessId(), event.shiftId());
             String shop = dispatcher.shopName(event.businessId());
             String branch = dispatcher.branchName(event.businessId(), event.branchId());
             String currency = dispatcher.currency(event.businessId());
@@ -84,9 +85,13 @@ public class TenantOpsAlertListener {
     }
 
     @Async
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onSupplyPosted(RealtimeBridge.SupplyPostedEvent event) {
         try {
+            log.info(
+                    "Ops alert event supply_posted business={} invoice={}",
+                    event.businessId(),
+                    event.supplierInvoiceId());
             String shop = dispatcher.shopName(event.businessId());
             String branch = dispatcher.branchName(event.businessId(), event.branchId());
             String currency = dispatcher.currency(event.businessId());
@@ -104,9 +109,10 @@ public class TenantOpsAlertListener {
     }
 
     @Async
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onCreditTabPaymentConfirmed(CreditTabPaymentConfirmationEvent event) {
         try {
+            log.info("Ops alert event credit_stk business={} intent={}", event.businessId(), event.intentId());
             String shop = dispatcher.shopName(event.businessId());
             String currency = dispatcher.currency(event.businessId());
             String customerName = resolveCustomerName(event.customerId(), event.businessId());
@@ -122,9 +128,10 @@ public class TenantOpsAlertListener {
     }
 
     @Async
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onCreditPaymentRecorded(CreditPaymentOpsAlertEvent event) {
         try {
+            log.info("Ops alert event credit_payment business={} via={}", event.businessId(), event.channel());
             String shop = dispatcher.shopName(event.businessId());
             String currency = dispatcher.currency(event.businessId());
             String customerName = event.customerName() != null && !event.customerName().isBlank()
@@ -161,20 +168,5 @@ public class TenantOpsAlertListener {
             return "—";
         }
         return id.substring(0, Math.min(8, id.length()));
-    }
-
-    /** Published after storefront checkout creates a web order. */
-    public record WebOrderPlacedOpsAlertEvent(WebOrder order) {
-    }
-
-    /** Published after admin/claim credit payment (non-STK paths). */
-    public record CreditPaymentOpsAlertEvent(
-            String businessId,
-            String customerId,
-            String customerName,
-            BigDecimal amountPaid,
-            BigDecimal balanceRemaining,
-            String channel
-    ) {
     }
 }

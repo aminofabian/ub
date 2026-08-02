@@ -134,7 +134,9 @@ class BusinessInventorySettingsIT {
                 .andExpect(jsonPath("$.inventory.receiveStock.allowReceiveForStockManager")
                         .value(true))
                 .andExpect(jsonPath("$.inventory.creditTabs.allowCashierTabClearance")
-                        .value(false));
+                        .value(false))
+                .andExpect(jsonPath("$.inventory.creditTabs.requirePhoneVerificationForNewTabCustomers")
+                        .value(true));
     }
 
     @Test

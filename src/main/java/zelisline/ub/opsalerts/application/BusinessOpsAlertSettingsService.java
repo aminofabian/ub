@@ -60,6 +60,8 @@ public class BusinessOpsAlertSettingsService {
         BusinessOpsAlertSettings s = resolveForBusiness(businessId);
         s.setPhone(phone);
         s.setPhoneVerifiedAt(Instant.now());
+        // Verifying a number means the owner wants alerts — turn the master switch on.
+        s.setEnabled(true);
         return settingsRepository.save(s);
     }
 
@@ -74,7 +76,13 @@ public class BusinessOpsAlertSettingsService {
     @Transactional(readOnly = true)
     public boolean shouldAlert(String businessId, OpsAlertType type) {
         BusinessOpsAlertSettings s = settingsRepository.findById(businessId).orElse(null);
-        if (s == null || !s.isEnabled() || !s.hasVerifiedPhone()) {
+        if (s == null) {
+            return false;
+        }
+        if (!s.hasVerifiedPhone()) {
+            return false;
+        }
+        if (!s.isEnabled()) {
             return false;
         }
         return switch (type) {
@@ -83,6 +91,31 @@ public class BusinessOpsAlertSettingsService {
             case SUPPLY_POSTED -> s.isAlertSupply();
             case CREDIT_PAYMENT -> s.isAlertCreditPayment();
         };
+    }
+
+    /** Diagnostic reason when {@link #shouldAlert} is false (for logs). */
+    @Transactional(readOnly = true)
+    public String skipReason(String businessId, OpsAlertType type) {
+        BusinessOpsAlertSettings s = settingsRepository.findById(businessId).orElse(null);
+        if (s == null) {
+            return "no_settings_row";
+        }
+        if (!s.hasVerifiedPhone()) {
+            return "phone_not_verified";
+        }
+        if (!s.isEnabled()) {
+            return "alerts_disabled";
+        }
+        boolean typeOn = switch (type) {
+            case WEB_ORDER -> s.isAlertWebOrder();
+            case SHIFT_OPENED, SHIFT_CLOSED -> s.isAlertShift();
+            case SUPPLY_POSTED -> s.isAlertSupply();
+            case CREDIT_PAYMENT -> s.isAlertCreditPayment();
+        };
+        if (!typeOn) {
+            return "event_type_disabled:" + type;
+        }
+        return null;
     }
 
     private BusinessOpsAlertSettings insertDefaults(String businessId) {

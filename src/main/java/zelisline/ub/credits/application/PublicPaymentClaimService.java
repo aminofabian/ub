@@ -37,7 +37,7 @@ import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.credits.repository.PublicPaymentClaimRepository;
-import zelisline.ub.opsalerts.application.TenantOpsAlertListener;
+import zelisline.ub.opsalerts.application.CreditPaymentOpsAlertEvent;
 import zelisline.ub.payments.application.InboundTillPaymentService;
 
 @Service
@@ -217,7 +217,7 @@ public class PublicPaymentClaimService {
                 .map(Customer::getName)
                 .orElse(null);
         String via = CreditClaimChannels.CASH.equals(req.channel()) ? "Cash (admin)" : "M-Pesa (admin)";
-        eventPublisher.publishEvent(new TenantOpsAlertListener.CreditPaymentOpsAlertEvent(
+        eventPublisher.publishEvent(new CreditPaymentOpsAlertEvent(
                 businessId,
                 req.customerId(),
                 customerName,
@@ -375,7 +375,7 @@ public class PublicPaymentClaimService {
                         .map(Customer::getName)
                         .orElse(null);
         String via = CreditClaimChannels.CASH.equals(channel) ? "Cash (claim)" : "M-Pesa (claim)";
-        eventPublisher.publishEvent(new TenantOpsAlertListener.CreditPaymentOpsAlertEvent(
+        eventPublisher.publishEvent(new CreditPaymentOpsAlertEvent(
                 businessId, customerId, customerName, pay, remaining, via));
     }
 

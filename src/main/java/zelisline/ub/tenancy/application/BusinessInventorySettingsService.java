@@ -44,6 +44,8 @@ public class BusinessInventorySettingsService {
     private static final String KEY_COUNTING_ENDS_AT = "countingEndsAt";
     private static final String KEY_ALLOW_CASHIER_TAB_CLEARANCE =
             "allowCashierTabClearance";
+    private static final String KEY_REQUIRE_PHONE_VERIFICATION_FOR_NEW_TAB_CUSTOMERS =
+            "requirePhoneVerificationForNewTabCustomers";
     private static final String KEY_ALLOW_EDIT_STOCK_MANAGER =
             "allowStockEditForStockManager";
     private static final String KEY_ALLOW_EDIT_GROCERY_CLERK =
@@ -264,7 +266,9 @@ public class BusinessInventorySettingsService {
             return CreditTabsSettingsResponse.defaults();
         }
         return new CreditTabsSettingsResponse(
-                creditTabs.path(KEY_ALLOW_CASHIER_TAB_CLEARANCE).asBoolean(false)
+                creditTabs.path(KEY_ALLOW_CASHIER_TAB_CLEARANCE).asBoolean(false),
+                creditTabs.path(KEY_REQUIRE_PHONE_VERIFICATION_FOR_NEW_TAB_CUSTOMERS)
+                        .asBoolean(true)
         );
     }
 
@@ -340,6 +344,12 @@ public class BusinessInventorySettingsService {
     ) {
         if (patch.allowCashierTabClearance() != null) {
             creditTabs.put(KEY_ALLOW_CASHIER_TAB_CLEARANCE, patch.allowCashierTabClearance());
+        }
+        if (patch.requirePhoneVerificationForNewTabCustomers() != null) {
+            creditTabs.put(
+                    KEY_REQUIRE_PHONE_VERIFICATION_FOR_NEW_TAB_CUSTOMERS,
+                    patch.requirePhoneVerificationForNewTabCustomers()
+            );
         }
     }
 

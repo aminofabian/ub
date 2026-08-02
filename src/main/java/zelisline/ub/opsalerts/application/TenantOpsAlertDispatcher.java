@@ -40,11 +40,17 @@ public class TenantOpsAlertDispatcher {
             return;
         }
         if (!settingsService.shouldAlert(businessId, type)) {
+            log.info(
+                    "Skip ops alert {} business={} reason={}",
+                    type,
+                    businessId,
+                    settingsService.skipReason(businessId, type));
             return;
         }
         BusinessOpsAlertSettings settings = settingsService.resolveForBusiness(businessId);
         String phone = settings.getPhone();
         if (phone == null || phone.isBlank()) {
+            log.info("Skip ops alert {} — blank phone business={}", type, businessId);
             return;
         }
 
@@ -61,9 +67,10 @@ public class TenantOpsAlertDispatcher {
         CustomerMessageDispatcher.DeliveryResult delivery =
                 customerMessageDispatcher.deliver(messaging, phone, message);
         log.info(
-                "ops_alert type={} business={} channel={} outcome={} detail={}",
+                "ops_alert type={} business={} phone={} channel={} outcome={} detail={}",
                 type,
                 businessId,
+                BusinessOpsAlertSettingsService.maskPhone(phone),
                 delivery.channel(),
                 delivery.outcome(),
                 delivery.detail());

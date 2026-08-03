@@ -11,6 +11,8 @@ public record PublicSupplierPortalResponse(
         BigDecimal openBalance,
         BigDecimal totalSpent,
         BigDecimal totalPaid,
+        /** Unapplied advance / overpayment credit held for this supplier. */
+        BigDecimal advanceCredit,
         int invoiceCount,
         List<PublicSupplierSupplyRow> supplies,
         List<PublicSupplierMovementRow> movements,

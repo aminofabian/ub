@@ -84,12 +84,17 @@ public class PublicSupplierPortalService {
                 : "KES";
         String slug = SupplierSlug.canonical(supplier.getName(), supplier.getCode());
 
+        BigDecimal advanceCredit = supplier.getPrepaymentBalance() != null
+                ? supplier.getPrepaymentBalance()
+                : BigDecimal.ZERO;
+
         if (supplier.isPageSealed() && !pageSealService.isShopSupplierUnlocked(supplier, unlockToken)) {
             return new PublicSupplierPortalResponse(
                     supplier.getName(),
                     slug,
                     shopName,
                     currency,
+                    BigDecimal.ZERO,
                     BigDecimal.ZERO,
                     BigDecimal.ZERO,
                     BigDecimal.ZERO,
@@ -123,6 +128,7 @@ public class PublicSupplierPortalService {
                 history.summary().openBalance(),
                 history.summary().totalSpent(),
                 history.summary().totalPaid(),
+                advanceCredit,
                 history.summary().invoiceCount(),
                 supplies,
                 movements,

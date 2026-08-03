@@ -7,12 +7,14 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -22,11 +24,13 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.domain.StockMovement;
+import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.purchasing.repository.StockMovementRepository;
 import zelisline.ub.reporting.repository.MvSalesDailyRepository;
 import zelisline.ub.reporting.repository.MvSalesDailyRepository.ItemDailyRollup;
@@ -70,6 +74,8 @@ public class SalesIntelligenceService {
     private final MvSalesDailyRepository mvSalesDailyRepository;
     private final ItemRepository itemRepository;
     private final StockMovementRepository stockMovementRepository;
+    private final InventoryBatchRepository inventoryBatchRepository;
+    private final PackageVariantStockResolver packageVariantStockResolver;
 
     private static final String Q_GROSS = """
             SELECT COALESCE(i.category_id, '_none') AS category_id,
@@ -753,7 +759,10 @@ public class SalesIntelligenceService {
         }
 
         Map<String, ItemMeta> todayOnlyMeta = loadItemMeta(businessId, todayByItem.keySet(), past);
-        return ItemVelocityMerge.merge(past, todayByItem, todayOnlyMeta, rowLimit);
+        List<ItemVelocityRow> rows = ItemVelocityMerge.merge(past, todayByItem, todayOnlyMeta, rowLimit);
+        // Match Products page: when a branch is selected, Stock is branch on-hand
+        // (active batch sum / package display qty), not denormalized items.current_stock.
+        return overlayBranchStock(businessId, branchFilter, rows);
     }
 
     @Transactional(readOnly = true)
@@ -821,7 +830,7 @@ public class SalesIntelligenceService {
                 item.getId(),
                 item.getName(),
                 item.getSku(),
-                qtyOrZero(item.getCurrentStock()),
+                resolveItemDisplayStock(businessId, branchFilter, item),
                 moneyOrZero(item.getBuyingPrice()),
                 moneyOrZero(item.getBundlePrice()),
                 item.getImageKey(),
@@ -1003,6 +1012,98 @@ public class SalesIntelligenceService {
             ));
         }
         return meta;
+    }
+
+    /**
+     * Replace denormalized {@code items.current_stock} with branch on-hand so Activity
+     * matches the Products catalog {@code stockQty} column.
+     */
+    private List<ItemVelocityRow> overlayBranchStock(
+            String businessId,
+            String branchId,
+            List<ItemVelocityRow> rows
+    ) {
+        if (branchId == null || rows.isEmpty()) {
+            return rows;
+        }
+        Set<String> itemIds = rows.stream().map(ItemVelocityRow::itemId).collect(Collectors.toSet());
+        Map<String, Item> itemsById = loadItemsById(businessId, itemIds);
+        Map<String, BigDecimal> displayByItemId = resolveDisplayStockByItemId(businessId, branchId, itemsById);
+        List<ItemVelocityRow> out = new ArrayList<>(rows.size());
+        for (ItemVelocityRow row : rows) {
+            BigDecimal stock = displayByItemId.getOrDefault(row.itemId(), QTY_ZERO);
+            out.add(new ItemVelocityRow(
+                    row.itemId(),
+                    row.itemName(),
+                    row.sku(),
+                    stock,
+                    row.todayQty(),
+                    row.todayRevenue(),
+                    row.yesterdayQty(),
+                    row.yesterdayRevenue(),
+                    row.last3Qty(),
+                    row.last3Revenue(),
+                    row.last7Qty(),
+                    row.last7Revenue(),
+                    row.last30Qty(),
+                    row.last30Revenue(),
+                    row.buyingPrice(),
+                    row.sellingPrice(),
+                    row.imageKey()
+            ));
+        }
+        return out;
+    }
+
+    private BigDecimal resolveItemDisplayStock(String businessId, String branchId, Item item) {
+        if (branchId == null) {
+            return qtyOrZero(item.getCurrentStock());
+        }
+        Map<String, BigDecimal> byId = resolveDisplayStockByItemId(
+                businessId, branchId, Map.of(item.getId(), item));
+        return byId.getOrDefault(item.getId(), QTY_ZERO);
+    }
+
+    private Map<String, BigDecimal> resolveDisplayStockByItemId(
+            String businessId,
+            String branchId,
+            Map<String, Item> itemsById
+    ) {
+        if (itemsById.isEmpty()) {
+            return Map.of();
+        }
+        Set<String> poolIds = new HashSet<>();
+        for (Item item : itemsById.values()) {
+            poolIds.addAll(packageVariantStockResolver.branchStockPoolItemIds(businessId, item));
+        }
+        Map<String, BigDecimal> rawByItemId = Map.of();
+        if (!poolIds.isEmpty()) {
+            Map<String, BigDecimal> raw = new HashMap<>();
+            for (Object[] row : inventoryBatchRepository.sumQuantityRemainingForItemsAtBranch(
+                    businessId, branchId, InventoryConstants.BATCH_STATUS_ACTIVE, poolIds)) {
+                raw.put((String) row[0], (BigDecimal) row[1]);
+            }
+            rawByItemId = raw;
+        }
+        Map<String, BigDecimal> display = new HashMap<>();
+        for (Item item : itemsById.values()) {
+            BigDecimal holderStock = packageVariantStockResolver.sumPoolStock(item, rawByItemId);
+            display.put(item.getId(), qtyOrZero(packageVariantStockResolver.displayStockQty(item, holderStock)));
+        }
+        return display;
+    }
+
+    private Map<String, Item> loadItemsById(String businessId, Collection<String> itemIds) {
+        if (itemIds == null || itemIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Item> out = new HashMap<>();
+        for (Item item : itemRepository.findAllById(itemIds)) {
+            if (businessId.equals(item.getBusinessId()) && item.getDeletedAt() == null) {
+                out.put(item.getId(), item);
+            }
+        }
+        return out;
     }
 
     private static BigDecimal dayQty(Map<LocalDate, ItemDailyRollup> byDay, LocalDate day) {

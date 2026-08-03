@@ -23,14 +23,15 @@ public class CustomerMessageDispatcher {
 
     /** Approved Meta utility template: Hello {{1}} … balance {{2}} … link {{3}}. */
     public static final String PAYMENT_REMINDER_TEMPLATE = "payment_reminder";
-    public static final String PAYMENT_REMINDER_LANGUAGE = "en";
+    /** Prefer en_US — Meta Business Manager registers most EN utility templates this way. */
+    public static final String PAYMENT_REMINDER_LANGUAGE = "en_US";
 
     /**
      * Meta utility template for new credit purchases:
      * Hello {{1}} … at {{2}}. Items: {{3}}. Sale {{4}}, tab {{5}}. Link {{6}}.
      */
     public static final String CREDIT_SALE_RECEIPT_TEMPLATE = "credit_sale_receipt";
-    public static final String CREDIT_SALE_RECEIPT_LANGUAGE = "en";
+    public static final String CREDIT_SALE_RECEIPT_LANGUAGE = "en_US";
 
     private final RapidApiWhatsAppLookupClient whatsAppLookupClient;
     private final MetaWhatsAppMessagingClient metaWhatsAppClient;

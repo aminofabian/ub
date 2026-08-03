@@ -285,20 +285,45 @@ public class CreditSaleReminderService {
                 paymentUrl);
         String message = CustomerMessageDispatcher.paymentReminderPreview(templateParams);
 
+        // Always try the cold-safe template first.
         CustomerMessageDispatcher.DeliveryResult attempt =
                 customerMessageDispatcher.deliverPaymentReminderDirect(
                         messaging, phoneDigits, templateParams);
+
+        // If the template is misconfigured in Meta, free-form can still prove credentials
+        // for numbers that messaged the business within 24h (diagnostic fallback only).
         if (!"sent".equals(attempt.outcome())) {
-            String enriched = (attempt.detail() != null ? attempt.detail() : "whatsapp_failed")
-                    + " [tokenSource=" + nullToNone(messaging.metaAccessTokenSource())
-                    + " token=" + messaging.metaAccessTokenFingerprint()
-                    + " phoneId=" + nullToNone(messaging.metaPhoneNumberId())
-                    + "]. Uses the payment_reminder template so cold numbers work.";
-            attempt = new CustomerMessageDispatcher.DeliveryResult(
-                    attempt.lookup(),
-                    attempt.channel(),
-                    attempt.outcome(),
-                    enriched);
+            String shopName = business != null && business.getName() != null && !business.getName().isBlank()
+                    ? business.getName().trim()
+                    : "your shop";
+            String freeForm = "Kiosk Meta WhatsApp test from " + shopName
+                    + ". If you received this, credentials work — but payment_reminder template failed.";
+            CustomerMessageDispatcher.DeliveryResult freeFormAttempt =
+                    customerMessageDispatcher.deliverDirect(messaging, phoneDigits, freeForm);
+            if ("sent".equals(freeFormAttempt.outcome())) {
+                attempt = new CustomerMessageDispatcher.DeliveryResult(
+                        freeFormAttempt.lookup(),
+                        freeFormAttempt.channel(),
+                        "sent",
+                        "text:session_fallback; template_failed:"
+                                + (attempt.detail() != null ? attempt.detail() : "unknown")
+                                + " [tokenSource=" + nullToNone(messaging.metaAccessTokenSource())
+                                + " phoneId=" + nullToNone(messaging.metaPhoneNumberId())
+                                + "]. Cold numbers still need a working payment_reminder template.");
+                message = freeForm;
+            } else {
+                String enriched = (attempt.detail() != null ? attempt.detail() : "whatsapp_failed")
+                        + "; freeform:" + (freeFormAttempt.detail() != null ? freeFormAttempt.detail() : "failed")
+                        + " [tokenSource=" + nullToNone(messaging.metaAccessTokenSource())
+                        + " token=" + messaging.metaAccessTokenFingerprint()
+                        + " phoneId=" + nullToNone(messaging.metaPhoneNumberId())
+                        + "]. Template must succeed for cold numbers (check language en_US + body vars).";
+                attempt = new CustomerMessageDispatcher.DeliveryResult(
+                        attempt.lookup(),
+                        attempt.channel(),
+                        attempt.outcome(),
+                        enriched);
+            }
         }
 
         log.info("whatsapp_test business={} channel={} outcome={} detail={} tokenSource={}",

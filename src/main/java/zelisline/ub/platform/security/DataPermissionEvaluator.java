@@ -82,6 +82,12 @@ public class DataPermissionEvaluator implements PermissionEvaluator {
                     tenant.roleId()
             );
         }
+        if ("sales.intelligence.read".equals(perm)) {
+            return inventoryAccess.grantsDelegatedSalesIntelligenceRead(
+                    tenant.businessId(),
+                    tenant.roleId()
+            );
+        }
         return false;
     }
 

@@ -84,6 +84,17 @@ public class InventoryRoleAccessService {
     }
 
     /**
+     * Stock managers may open Activity (sold-by-period / item story) when the
+     * admin toggle is on — grants {@code sales.intelligence.read} for those APIs.
+     */
+    public boolean grantsDelegatedSalesIntelligenceRead(String businessId, String roleId) {
+        if (!STOCK_MANAGER.equals(resolveRoleKey(roleId))) {
+            return false;
+        }
+        return readStockLevels(businessId).allowActivityForStockManager();
+    }
+
+    /**
      * Whether counters may see on-hand system quantity during stock take / daily audit.
      * Owners and admins always see it. Stock managers follow
      * {@code showSystemStockToStockManager} even when they also have

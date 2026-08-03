@@ -51,6 +51,10 @@ public class BusinessInventorySettingsService {
     private static final String KEY_ALLOW_EDIT_GROCERY_CLERK =
             "allowStockEditForGroceryClerk";
     private static final String KEY_ALLOW_NEGATIVE_STOCK = "allowNegativeStock";
+    private static final String KEY_ALLOW_ACTIVITY_STOCK_MANAGER =
+            "allowActivityForStockManager";
+    private static final String KEY_ALLOW_STOCK_PAGE_STOCK_MANAGER =
+            "allowStockPageForStockManager";
     private static final String KEY_ALLOW_SUPPLIER_WRITE_STOCK_MANAGER =
             "allowSupplierWriteForStockManager";
     private static final String KEY_ALLOW_SUPPLIER_WRITE_CASHIER =
@@ -222,7 +226,10 @@ public class BusinessInventorySettingsService {
         return new StockLevelsSettingsResponse(
                 stockLevels.path(KEY_ALLOW_EDIT_STOCK_MANAGER).asBoolean(false),
                 stockLevels.path(KEY_ALLOW_EDIT_GROCERY_CLERK).asBoolean(false),
-                stockLevels.path(KEY_ALLOW_NEGATIVE_STOCK).asBoolean(false)
+                stockLevels.path(KEY_ALLOW_NEGATIVE_STOCK).asBoolean(false),
+                // Absent keys default on — stock managers historically saw these pages.
+                stockLevels.path(KEY_ALLOW_ACTIVITY_STOCK_MANAGER).asBoolean(true),
+                stockLevels.path(KEY_ALLOW_STOCK_PAGE_STOCK_MANAGER).asBoolean(true)
         );
     }
 
@@ -290,6 +297,18 @@ public class BusinessInventorySettingsService {
         }
         if (patch.allowNegativeStock() != null) {
             stockLevels.put(KEY_ALLOW_NEGATIVE_STOCK, patch.allowNegativeStock());
+        }
+        if (patch.allowActivityForStockManager() != null) {
+            stockLevels.put(
+                    KEY_ALLOW_ACTIVITY_STOCK_MANAGER,
+                    patch.allowActivityForStockManager()
+            );
+        }
+        if (patch.allowStockPageForStockManager() != null) {
+            stockLevels.put(
+                    KEY_ALLOW_STOCK_PAGE_STOCK_MANAGER,
+                    patch.allowStockPageForStockManager()
+            );
         }
     }
 

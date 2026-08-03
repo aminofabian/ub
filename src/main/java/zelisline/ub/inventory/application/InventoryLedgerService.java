@@ -102,14 +102,17 @@ public class InventoryLedgerService {
                 userId
         );
         applyStockDelta(item, inbound.stockQuantity());
-        String jeId = saveJournal(
-                businessId,
-                InventoryConstants.JOURNAL_OPENING,
-                opId,
-                "Opening balance",
-                value,
-                true
-        );
+        String jeId = null;
+        if (value.signum() > 0) {
+            jeId = saveJournal(
+                    businessId,
+                    InventoryConstants.JOURNAL_OPENING,
+                    opId,
+                    "Opening balance",
+                    value,
+                    true
+            );
+        }
         return new InventoryMutationResponse(jeId, mv.getId(), batch.getId());
     }
 
@@ -212,14 +215,19 @@ public class InventoryLedgerService {
         // below branch on-hand (oversell / multi-branch drift).
         applyStockDelta(item, req.quantity().negate(), true);
         BigDecimal value = extensionMoney(req.quantity(), batch.getUnitCost());
-        String jeId = saveJournal(
-                businessId,
-                InventoryConstants.JOURNAL_ADJUSTMENT_DOWN,
-                opId,
-                "Inventory adjustment (decrease)",
-                value,
-                false
-        );
+        // Zero-cost batches (stock gains / count corrections) still move qty;
+        // skip GL — journals cannot be posted at $0.
+        String jeId = null;
+        if (value.signum() > 0) {
+            jeId = saveJournal(
+                    businessId,
+                    InventoryConstants.JOURNAL_ADJUSTMENT_DOWN,
+                    opId,
+                    "Inventory adjustment (decrease)",
+                    value,
+                    false
+            );
+        }
         return new InventoryMutationResponse(jeId, mv.getId(), batch.getId());
     }
 
@@ -322,14 +330,17 @@ public class InventoryLedgerService {
         applyStockDelta(item, qty.negate(), true);
 
         BigDecimal value = extensionMoney(qty, batch.getUnitCost());
-        String jeId = saveJournal(
-                businessId,
-                InventoryConstants.JOURNAL_STANDALONE_WASTAGE,
-                opId,
-                "Inventory wastage — batch " + batch.getBatchNumber(),
-                value,
-                false
-        );
+        String jeId = null;
+        if (value.signum() > 0) {
+            jeId = saveJournal(
+                    businessId,
+                    InventoryConstants.JOURNAL_STANDALONE_WASTAGE,
+                    opId,
+                    "Inventory wastage — batch " + batch.getBatchNumber(),
+                    value,
+                    false
+            );
+        }
         String itemName = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(req.itemId(), businessId)
                 .map(zelisline.ub.catalog.domain.Item::getName).orElse(req.itemId());
         eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.StockAdjustedEvent(
@@ -536,6 +547,9 @@ public class InventoryLedgerService {
     }
 
     private static BigDecimal extensionMoney(BigDecimal qty, BigDecimal unitCost) {
+        if (qty == null || unitCost == null) {
+            return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        }
         return qty.multiply(unitCost).setScale(2, RoundingMode.HALF_UP);
     }
 }

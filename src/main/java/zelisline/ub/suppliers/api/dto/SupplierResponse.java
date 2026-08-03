@@ -12,6 +12,7 @@ public record SupplierResponse(
         boolean taxExempt,
         Integer creditTermsDays,
         BigDecimal creditLimit,
+        BigDecimal prepaymentBalance,
         BigDecimal rating,
         String status,
         String notes,

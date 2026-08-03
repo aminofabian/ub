@@ -115,6 +115,8 @@ class SupplierPaymentIT {
     @Autowired
     private SupplierPaymentRepository supplierPaymentRepository;
     @Autowired
+    private zelisline.ub.purchasing.application.SupplierPaymentService supplierPaymentService;
+    @Autowired
     private SupplierPaymentAllocationRepository supplierPaymentAllocationRepository;
     @Autowired
     private IdempotencyKeyRepository idempotencyKeyRepository;
@@ -240,6 +242,27 @@ class SupplierPaymentIT {
         assertThat(supplierRepository.findById(supplierId).orElseThrow().getPrepaymentBalance())
                 .isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(openOn(invD)).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    void pureAdvanceDepositThenAutoAppliesOnNewInvoice() throws Exception {
+        supplierInvoiceRepository.deleteAll();
+        postPayment(paymentJson(250, BigDecimal.ZERO, List.of())).andExpect(status().isCreated());
+        assertThat(supplierRepository.findById(supplierId).orElseThrow().getPrepaymentBalance())
+                .isEqualByComparingTo(new BigDecimal("250.00"));
+        assertThat(supplierPaymentAllocationRepository.count()).isZero();
+
+        String inv = newInvoice("INV-ADV", "180.00", LocalDate.of(2026, 8, 1));
+        supplierPaymentService.applyAvailablePrepaymentToInvoice(TENANT, inv);
+
+        assertThat(openOn(inv)).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(supplierRepository.findById(supplierId).orElseThrow().getPrepaymentBalance())
+                .isEqualByComparingTo(new BigDecimal("70.00"));
+    }
+
+    @Test
+    void pureAdvanceDepositRejectsZeroCash() throws Exception {
+        postPayment(paymentJson(0, BigDecimal.ZERO, List.of())).andExpect(status().isBadRequest());
     }
 
     @Test

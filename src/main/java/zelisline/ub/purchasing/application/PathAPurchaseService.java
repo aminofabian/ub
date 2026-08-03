@@ -100,6 +100,7 @@ public class PathAPurchaseService {
     private final SupplyBatchRepository supplyBatchRepository;
     private final PackageVariantStockResolver packageVariantStockResolver;
     private final ApplicationEventPublisher eventPublisher;
+    private final SupplierPaymentService supplierPaymentService;
 
     public static String postGrnRoute() {
         return "POST /api/v1/purchasing/path-a/goods-receipts";
@@ -618,6 +619,8 @@ public class PathAPurchaseService {
         }
         entry.credit(lar.resolveId(businessId, LedgerAccountCodes.ACCOUNTS_PAYABLE), ap);
         String jeId = ledgerPostingPort.post(entry);
+
+        supplierPaymentService.applyAvailablePrepaymentToInvoice(businessId, inv.getId());
 
         eventPublisher.publishEvent(
                 new zelisline.ub.platform.realtime.RealtimeBridge.SupplyPostedEvent(

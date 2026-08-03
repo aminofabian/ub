@@ -245,6 +245,52 @@ public class SupplierPaymentService {
         }
     }
 
+    /**
+     * When a new supplier invoice is posted, consume available advance credit against its open balance.
+     * No-op when there is no prepayment or nothing open.
+     */
+    @Transactional
+    public void applyAvailablePrepaymentToInvoice(String businessId, String supplierInvoiceId) {
+        if (supplierInvoiceId == null || supplierInvoiceId.isBlank()) {
+            return;
+        }
+        SupplierInvoice inv = supplierInvoiceRepository.findByIdAndBusinessId(supplierInvoiceId, businessId)
+                .orElse(null);
+        if (inv == null || !PurchasingConstants.INVOICE_POSTED.equals(inv.getStatus())) {
+            return;
+        }
+        Supplier supplier = supplierRepository.findByIdAndBusinessId(inv.getSupplierId(), businessId).orElse(null);
+        if (supplier == null) {
+            return;
+        }
+        BigDecimal prepay = nz(supplier.getPrepaymentBalance());
+        if (prepay.compareTo(MONEY) <= 0) {
+            return;
+        }
+        BigDecimal open = openBalance(
+                inv.getId(),
+                pathBAssociatedCostService.payableGrandTotal(businessId, inv));
+        if (open.compareTo(MONEY) <= 0) {
+            return;
+        }
+        BigDecimal apply = prepay.min(open).setScale(2, RoundingMode.HALF_UP);
+        if (apply.compareTo(MONEY) <= 0) {
+            return;
+        }
+        executePayment(
+                businessId,
+                new PostSupplierPaymentRequest(
+                        inv.getSupplierId(),
+                        Instant.now(),
+                        PurchasingConstants.PAY_METHOD_CASH,
+                        BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP),
+                        apply,
+                        "ADVANCE",
+                        "Auto-applied supplier advance",
+                        List.of(new PostSupplierPaymentAllocationLine(inv.getId(), apply)),
+                        false));
+    }
+
     private PostSupplierPaymentResponse executePayment(String businessId, PostSupplierPaymentRequest req) {
         synchronized ((businessId + "|" + req.supplierId()).intern()) {
             assertPayMethod(req.paymentMethod());
@@ -259,8 +305,10 @@ public class SupplierPaymentService {
             if (credit.compareTo(prepayStart) > 0) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "creditApplied exceeds supplier prepayment balance");
             }
-            assertUniqueInvoiceLines(req);
-            BigDecimal allocSum = req.allocations().stream()
+            List<PostSupplierPaymentAllocationLine> allocations =
+                    req.allocations() == null ? List.of() : req.allocations();
+            assertUniqueInvoiceLines(allocations);
+            BigDecimal allocSum = allocations.stream()
                     .map(PostSupplierPaymentAllocationLine::amount)
                     .map(a -> a.setScale(2, RoundingMode.HALF_UP))
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -268,12 +316,21 @@ public class SupplierPaymentService {
             if (cash.signum() < 0) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "paymentAmount must be >= 0");
             }
+            boolean pureDeposit = allocations.isEmpty();
+            if (pureDeposit) {
+                if (cash.compareTo(MONEY) <= 0) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Advance deposit amount must be greater than zero");
+                }
+                if (credit.compareTo(MONEY) > 0) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Advance deposit cannot apply existing credit");
+                }
+            }
             BigDecimal totalIn = cash.add(credit);
             if (totalIn.compareTo(allocSum) < 0) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Payment and credit must cover total allocations");
             }
             List<String> invoiceNumbers = new ArrayList<>();
-            for (PostSupplierPaymentAllocationLine line : req.allocations()) {
+            for (PostSupplierPaymentAllocationLine line : allocations) {
                 if (line.amount().signum() <= 0) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Allocation amounts must be positive");
                 }
@@ -312,7 +369,11 @@ public class SupplierPaymentService {
                 reference = shortPaymentRef(payment.getId());
             }
             payment.setReference(reference);
-            payment.setNotes(blankToNull(req.notes()));
+            String notes = blankToNull(req.notes());
+            if (notes == null && pureDeposit) {
+                notes = "Supplier advance deposit";
+            }
+            payment.setNotes(notes);
             payment.setStatus(PurchasingConstants.PAYMENT_POSTED);
             supplierPaymentRepository.save(payment);
 
@@ -321,12 +382,18 @@ public class SupplierPaymentService {
             entry.setEntryDate(entryDate);
             entry.setSourceType(PurchasingConstants.JOURNAL_SOURCE_SUPPLIER_PAYMENT);
             entry.setSourceId(payment.getId());
-            entry.setMemo("Supplier payment " + payment.getId());
-            entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.ACCOUNTS_PAYABLE), allocSum);
+            entry.setMemo(pureDeposit
+                    ? "Supplier advance deposit " + payment.getId()
+                    : "Supplier payment " + payment.getId());
+            if (allocSum.compareTo(MONEY) > 0) {
+                entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.ACCOUNTS_PAYABLE), allocSum);
+            }
             if (surplus.compareTo(MONEY) > 0) {
                 entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SUPPLIER_ADVANCES), surplus);
             }
-            entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.OPERATING_CASH), cash);
+            if (cash.compareTo(MONEY) > 0) {
+                entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.OPERATING_CASH), cash);
+            }
             if (credit.compareTo(MONEY) > 0) {
                 entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SUPPLIER_ADVANCES), credit);
             }
@@ -336,10 +403,13 @@ public class SupplierPaymentService {
             if (prepayAfter.signum() < 0 && prepayAfter.abs().compareTo(MONEY) > 0) {
                 throw new IllegalStateException("Prepayment balance would go negative");
             }
+            if (prepayAfter.signum() < 0) {
+                prepayAfter = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+            }
             supplier.setPrepaymentBalance(prepayAfter);
             supplierRepository.save(supplier);
 
-            for (PostSupplierPaymentAllocationLine line : req.allocations()) {
+            for (PostSupplierPaymentAllocationLine line : allocations) {
                 SupplierPaymentAllocation a = new SupplierPaymentAllocation();
                 a.setSupplierPaymentId(payment.getId());
                 a.setSupplierInvoiceId(line.supplierInvoiceId());
@@ -348,7 +418,7 @@ public class SupplierPaymentService {
             }
 
             // Default (null/true): notify supplier. Explicit false skips SMS + portal payment alerts.
-            if (!Boolean.FALSE.equals(req.notifySupplier())) {
+            if (!Boolean.FALSE.equals(req.notifySupplier()) && allocSum.compareTo(MONEY) > 0) {
                 supplierPortalNotifyService.notifySupplyPaidAfterCommit(
                         businessId,
                         req.supplierId(),
@@ -376,9 +446,9 @@ public class SupplierPaymentService {
         return grandTotal.subtract(paid).setScale(2, RoundingMode.HALF_UP);
     }
 
-    private static void assertUniqueInvoiceLines(PostSupplierPaymentRequest req) {
+    private static void assertUniqueInvoiceLines(List<PostSupplierPaymentAllocationLine> allocations) {
         Set<String> seen = new HashSet<>();
-        for (PostSupplierPaymentAllocationLine line : req.allocations()) {
+        for (PostSupplierPaymentAllocationLine line : allocations) {
             if (!seen.add(line.supplierInvoiceId())) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Duplicate invoice in allocations");
             }

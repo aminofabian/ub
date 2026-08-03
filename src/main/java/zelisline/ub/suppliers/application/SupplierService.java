@@ -1,5 +1,6 @@
 package zelisline.ub.suppliers.application;
 
+import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -486,6 +487,7 @@ public class SupplierService {
                 s.isTaxExempt(),
                 s.getCreditTermsDays(),
                 s.getCreditLimit(),
+                s.getPrepaymentBalance() != null ? s.getPrepaymentBalance() : BigDecimal.ZERO,
                 s.getRating(),
                 s.getStatus(),
                 s.getNotes(),

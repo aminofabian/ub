@@ -73,7 +73,34 @@ public class PackageVariantStockResolver {
     public Item requireSellableItem(String businessId, String itemId) {
         Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found: " + itemId));
-        ItemSellability.requireSellable(item);
+        String violation = ItemSellability.sellabilityViolation(item);
+        if (violation != null) {
+            if (!item.isSellable() && blankToNull(item.getVariantOfItemId()) == null) {
+                var children = itemRepository
+                        .findByBusinessIdAndVariantOfItemIdAndDeletedAtIsNullOrderBySkuAsc(
+                                businessId, item.getId());
+                if (!children.isEmpty()) {
+                    String options = children.stream()
+                            .limit(6)
+                            .map(child -> {
+                                String name = blankToNull(child.getVariantName());
+                                if (name == null) {
+                                    name = blankToNull(child.getName());
+                                }
+                                return name != null ? name : child.getSku();
+                            })
+                            .filter(n -> n != null && !n.isBlank())
+                            .reduce((a, b) -> a + ", " + b)
+                            .orElse("its variants");
+                    throw new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST,
+                            ItemSellability.itemLabel(item)
+                                    + " is a product group. Edit or sell one of its options instead: "
+                                    + options);
+                }
+            }
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, violation);
+        }
         return item;
     }
 

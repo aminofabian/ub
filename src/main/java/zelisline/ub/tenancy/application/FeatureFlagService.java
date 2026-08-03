@@ -68,6 +68,12 @@ public class FeatureFlagService {
     /** Allow owners/admins to upload product photos from the cashier shelf. */
     public static final String FLAG_POS_CASHIER_ADD_PHOTO = "pos.cashier_add_photo";
 
+    /** Auto-add scanned barcodes straight to cart when the barcode resolves to
+     * exactly one sellable product. When off, scanned barcodes fill the search
+     * box (cashier must tap the hit). Independent of pos_drafts.enabled so
+     * admins can allow scan-to-cart even without live draft monitoring. */
+    public static final String FLAG_POS_SCAN_TO_CART = "pos.scan_to_cart";
+
     /**
      * Listen for Buy Goods till payments when the cashier opens checkout / pay.
      * Absent defaults to enabled.

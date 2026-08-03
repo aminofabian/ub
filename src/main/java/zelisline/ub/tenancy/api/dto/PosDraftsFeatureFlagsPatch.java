@@ -8,6 +8,7 @@ public record PosDraftsFeatureFlagsPatch(
         Boolean enabled,
         Boolean uiVisible,
         Boolean shadowWrites,
-        Boolean offlineMirror
+        Boolean offlineMirror,
+        Boolean scanToCart
 ) {
 }

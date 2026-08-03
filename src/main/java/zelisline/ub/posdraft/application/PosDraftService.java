@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,6 +17,12 @@ import org.springframework.web.server.ResponseStatusException;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.platform.realtime.RealtimeBridge;
+import zelisline.ub.platform.realtime.RealtimeBridge.PosDraftCancelledEvent;
+import zelisline.ub.platform.realtime.RealtimeBridge.PosDraftCompletedEvent;
+import zelisline.ub.platform.realtime.RealtimeBridge.PosDraftCreatedEvent;
+import zelisline.ub.platform.realtime.RealtimeBridge.PosDraftUpdatedEvent;
+
 import zelisline.ub.posdraft.PosDraftConstants;
 import zelisline.ub.posdraft.api.dto.CancelPosDraftRequest;
 import zelisline.ub.posdraft.api.dto.CompletePosDraftRequest;
@@ -26,6 +33,7 @@ import zelisline.ub.posdraft.api.dto.PosDraftLineInput;
 import zelisline.ub.posdraft.api.dto.PosDraftLineResponse;
 import zelisline.ub.posdraft.api.dto.PosDraftListResponse;
 import zelisline.ub.posdraft.api.dto.PosDraftResponse;
+import zelisline.ub.posdraft.api.dto.PosDraftAuditEntryResponse;
 import zelisline.ub.posdraft.api.dto.PosDraftSummaryResponse;
 import zelisline.ub.posdraft.api.dto.PutPosDraftLineRequest;
 import zelisline.ub.posdraft.domain.PosDraft;
@@ -64,6 +72,7 @@ public class PosDraftService {
     private final FeatureFlagService featureFlagService;
     private final SaleService saleService;
     private final ShiftRepository shiftRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public PosDraftResponse createDraft(String businessId, CreatePosDraftRequest request, String userId) {
@@ -112,12 +121,48 @@ public class PosDraftService {
             }
         }
 
+        publishDraftCreated(draft);
         return toResponse(draft, activeLines(lines));
+    }
+
+    private void publishDraftCreated(PosDraft draft) {
+        String cashierName = saleActorNameService.resolveSoldByName(
+                draft.getBusinessId(), draft.getCreatedBy());
+        int lineCount = lineRepository.countByDraftIdAndDeletedFalse(draft.getId());
+        eventPublisher.publishEvent(new PosDraftCreatedEvent(
+                draft.getBusinessId(), draft.getBranchId(), draft.getId(),
+                draft.getTicketNumber(), draft.getCreatedBy(), cashierName,
+                lineCount, draft.getGrandTotal(), draft.getUpdatedAt(),
+                draft.getVersion()));
+    }
+
+    private void publishDraftUpdated(PosDraft draft) {
+        String cashierName = saleActorNameService.resolveSoldByName(
+                draft.getBusinessId(), draft.getCreatedBy());
+        int lineCount = lineRepository.countByDraftIdAndDeletedFalse(draft.getId());
+        eventPublisher.publishEvent(new PosDraftUpdatedEvent(
+                draft.getBusinessId(), draft.getBranchId(), draft.getId(),
+                draft.getTicketNumber(), draft.getCreatedBy(), cashierName,
+                lineCount, draft.getGrandTotal(), draft.getUpdatedAt(),
+                draft.getVersion()));
+    }
+
+    private void publishDraftCompleted(PosDraft draft) {
+        eventPublisher.publishEvent(new PosDraftCompletedEvent(
+                draft.getBusinessId(), draft.getBranchId(), draft.getId(),
+                draft.getTicketNumber(),
+                draft.getSaleId() != null ? draft.getSaleId() : ""));
+    }
+
+    private void publishDraftCancelled(PosDraft draft) {
+        eventPublisher.publishEvent(new PosDraftCancelledEvent(
+                draft.getBusinessId(), draft.getBranchId(), draft.getId(),
+                draft.getTicketNumber()));
     }
 
     @Transactional(readOnly = true)
     public PosDraftResponse getDraft(String businessId, String draftId, boolean includeDeleted) {
-        requireFeatureEnabled(businessId);
+        // Ungated — admins/cashiers must still see existing drafts when feature is OFF.
         PosDraft draft = loadDraftOrThrow(businessId, draftId);
         List<PosDraftLine> lines = includeDeleted
                 ? lineRepository.findByDraftIdOrderByLineIndexAsc(draftId)
@@ -133,7 +178,7 @@ public class PosDraftService {
             String createdBy,
             Integer hoursBack
     ) {
-        requireFeatureEnabled(businessId);
+        // Ungated — admins must still see existing drafts when feature is OFF.
         String resolvedStatus = status == null || status.isBlank()
                 ? PosDraftConstants.STATUS_PENDING
                 : status.trim();
@@ -164,7 +209,7 @@ public class PosDraftService {
             PatchPosDraftLinesRequest request,
             String userId
     ) {
-        requireFeatureEnabled(businessId);
+        // Ungated — allow editing existing drafts even when feature is OFF.
         PosDraft draft = loadPendingDraftForUpdate(businessId, draftId, request.expectedVersion());
         List<PosDraftLine> existing = new ArrayList<>(lineRepository.findByDraftIdOrderByLineIndexAsc(draftId));
 
@@ -175,6 +220,7 @@ public class PosDraftService {
         lineRepository.saveAll(existing);
         recomputeTotals(draft, existing);
         draft = draftRepository.save(draft);
+        publishDraftUpdated(draft);
         return toResponse(draft, activeLines(existing));
     }
 
@@ -186,7 +232,7 @@ public class PosDraftService {
             PutPosDraftLineRequest request,
             String userId
     ) {
-        requireFeatureEnabled(businessId);
+        // Ungated — allow editing existing drafts even when feature is OFF.
         PosDraft draft = loadPendingDraftForUpdate(businessId, draftId, request.expectedVersion());
         List<PosDraftLine> existing = new ArrayList<>(lineRepository.findByDraftIdOrderByLineIndexAsc(draftId));
 
@@ -207,6 +253,7 @@ public class PosDraftService {
         lineRepository.saveAll(existing);
         recomputeTotals(draft, existing);
         draft = draftRepository.save(draft);
+        publishDraftUpdated(draft);
         return toResponse(draft, activeLines(existing));
     }
 
@@ -218,7 +265,7 @@ public class PosDraftService {
             Long expectedVersion,
             String userId
     ) {
-        requireFeatureEnabled(businessId);
+        // Ungated — allow editing existing drafts even when feature is OFF.
         PosDraft draft = loadPendingDraftForUpdate(businessId, draftId, expectedVersion);
         List<PosDraftLine> existing = new ArrayList<>(lineRepository.findByDraftIdOrderByLineIndexAsc(draftId));
 
@@ -234,6 +281,7 @@ public class PosDraftService {
         lineRepository.saveAll(existing);
         recomputeTotals(draft, existing);
         draft = draftRepository.save(draft);
+        publishDraftUpdated(draft);
         return toResponse(draft, activeLines(existing));
     }
 
@@ -246,7 +294,7 @@ public class PosDraftService {
             String userId,
             String roleId
     ) {
-        requireFeatureEnabled(businessId);
+        // Ungated — allow completing existing drafts even when feature is OFF.
         PosDraft draft = loadDraftOrThrow(businessId, draftId);
 
         if (PosDraftConstants.STATUS_COMPLETED.equals(draft.getStatus())) {
@@ -321,6 +369,7 @@ public class PosDraftService {
 
         writeAudit(draft.getId(), userId, PosDraftConstants.AUDIT_COMPLETE, null, null,
                 "{\"saleId\":\"" + outcome.response().id() + "\"}");
+        publishDraftCompleted(draft);
 
         return new CompletePosDraftResponse(
                 draft.getId(),
@@ -339,7 +388,7 @@ public class PosDraftService {
             CancelPosDraftRequest request,
             String userId
     ) {
-        requireFeatureEnabled(businessId);
+        // Ungated — allow cancelling existing drafts even when feature is OFF.
         PosDraft draft = loadDraftOrThrow(businessId, draftId);
         if (!draft.isPending()) {
             throw new ResponseStatusException(HttpStatus.LOCKED, "Draft is not pending");
@@ -352,7 +401,26 @@ public class PosDraftService {
         }
         draft = draftRepository.save(draft);
         writeAudit(draft.getId(), userId, PosDraftConstants.AUDIT_CANCEL, null, null, null);
+        publishDraftCancelled(draft);
         return toResponse(draft, loadActiveLines(draftId));
+    }
+
+    @Transactional(readOnly = true)
+    public List<PosDraftAuditEntryResponse> getAuditLog(String businessId, String draftId) {
+        // Ungated — admins must still view audit log when feature is OFF.
+        loadDraftOrThrow(businessId, draftId); // 404 if not found or wrong business
+        return auditLogRepository.findByDraftIdOrderByCreatedAtAsc(draftId).stream()
+                .map(entry -> new PosDraftAuditEntryResponse(
+                        entry.getId(),
+                        entry.getDraftId(),
+                        entry.getUserId(),
+                        saleActorNameService.resolveSoldByName(businessId, entry.getUserId()),
+                        entry.getAction(),
+                        entry.getLineId(),
+                        entry.getOldValue(),
+                        entry.getNewValue(),
+                        entry.getCreatedAt()))
+                .toList();
     }
 
     private void upsertLineInput(
@@ -573,6 +641,10 @@ public class PosDraftService {
                 draft.getCreatedBy(),
                 createdByName,
                 draft.getSaleId(),
+                draft.getCancelledBy(),
+                draft.getCancelledAt(),
+                draft.getCancelledReason(),
+                draft.getCompletedAt(),
                 draft.getCreatedAt(),
                 draft.getUpdatedAt(),
                 lineResponses

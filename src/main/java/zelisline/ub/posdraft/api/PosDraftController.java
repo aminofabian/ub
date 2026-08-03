@@ -1,5 +1,7 @@
 package zelisline.ub.posdraft.api;
 
+import java.util.List;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -27,6 +29,7 @@ import zelisline.ub.posdraft.api.dto.CompletePosDraftRequest;
 import zelisline.ub.posdraft.api.dto.CompletePosDraftResponse;
 import zelisline.ub.posdraft.api.dto.CreatePosDraftRequest;
 import zelisline.ub.posdraft.api.dto.PatchPosDraftLinesRequest;
+import zelisline.ub.posdraft.api.dto.PosDraftAuditEntryResponse;
 import zelisline.ub.posdraft.api.dto.PosDraftListResponse;
 import zelisline.ub.posdraft.api.dto.PosDraftResponse;
 import zelisline.ub.posdraft.api.dto.PutPosDraftLineRequest;
@@ -180,6 +183,15 @@ public class PosDraftController {
                 body == null ? new CancelPosDraftRequest(null) : body,
                 principal.userId()
         );
+    }
+
+    @GetMapping("/{id}/audit")
+    @PreAuthorize("hasPermission(null, 'pos.drafts.read')")
+    public List<PosDraftAuditEntryResponse> getAuditLog(
+            @PathVariable String id,
+            HttpServletRequest request
+    ) {
+        return service.getAuditLog(TenantRequestIds.resolveBusinessId(request), id);
     }
 
     private void enforceCancelAccess(TenantPrincipal principal, PosDraftResponse draft) {

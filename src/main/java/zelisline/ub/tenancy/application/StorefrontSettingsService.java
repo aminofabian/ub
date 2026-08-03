@@ -708,6 +708,11 @@ public class StorefrontSettingsService {
             FeatureFlagService.FLAG_POS_DRAFTS_OFFLINE_MIRROR,
             patch.offlineMirror()
         );
+        putFlagIfPresent(
+            flags,
+            FeatureFlagService.FLAG_POS_SCAN_TO_CART,
+            patch.scanToCart()
+        );
     }
 
     private static void putFlagIfPresent(ObjectNode flags, String key, Boolean value) {

@@ -19,6 +19,10 @@ public record PosDraftResponse(
         String createdBy,
         String createdByName,
         String saleId,
+        String cancelledBy,
+        Instant cancelledAt,
+        String cancelledReason,
+        Instant completedAt,
         Instant createdAt,
         Instant updatedAt,
         List<PosDraftLineResponse> lines

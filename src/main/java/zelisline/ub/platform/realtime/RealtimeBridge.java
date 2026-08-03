@@ -865,4 +865,113 @@ public class RealtimeBridge {
             String customerPhone,
             java.math.BigDecimal grandTotal) {}
 
+    // ═══════════════════════════════════════════════════════════════
+    // POS Draft Events (Live Pending Carts)
+    // ═══════════════════════════════════════════════════════════════
+
+    public record PosDraftCreatedEvent(
+            String businessId, String branchId, String draftId,
+            long ticketNumber, String cashierId, String cashierName,
+            int lineCount, java.math.BigDecimal grandTotal,
+            Instant updatedAt, long version) {}
+
+    public record PosDraftUpdatedEvent(
+            String businessId, String branchId, String draftId,
+            long ticketNumber, String cashierId, String cashierName,
+            int lineCount, java.math.BigDecimal grandTotal,
+            Instant updatedAt, long version) {}
+
+    public record PosDraftCancelledEvent(
+            String businessId, String branchId, String draftId,
+            long ticketNumber) {}
+
+    public record PosDraftCompletedEvent(
+            String businessId, String branchId, String draftId,
+            long ticketNumber, String saleId) {}
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onPosDraftCreated(PosDraftCreatedEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        var dataMap = new LinkedHashMap<String, Object>();
+        dataMap.put("draftId", event.draftId());
+        dataMap.put("ticketNumber", event.ticketNumber());
+        dataMap.put("branchId", event.branchId());
+        dataMap.put("cashierId", event.cashierId());
+        dataMap.put("cashierName", event.cashierName() != null ? event.cashierName() : "");
+        dataMap.put("lineCount", event.lineCount());
+        dataMap.put("grandTotal", event.grandTotal().toPlainString());
+        dataMap.put("updatedAt", event.updatedAt().toString());
+        dataMap.put("version", event.version());
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) return;
+        Set<String> sessionIds = sessionRegistry.findSessionsByBranchOrBusinessWide(
+                event.businessId(), event.branchId(), "pos_drafts");
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "pos_draft.created", eventId, "HIGH", Instant.now(), payloadJson);
+        }
+        log.debug("POS draft created: draft={} ticket={} branch={} sessions={}",
+                event.draftId(), event.ticketNumber(), event.branchId(), sessionIds.size());
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onPosDraftUpdated(PosDraftUpdatedEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        var dataMap = new LinkedHashMap<String, Object>();
+        dataMap.put("draftId", event.draftId());
+        dataMap.put("ticketNumber", event.ticketNumber());
+        dataMap.put("branchId", event.branchId());
+        dataMap.put("cashierId", event.cashierId());
+        dataMap.put("cashierName", event.cashierName() != null ? event.cashierName() : "");
+        dataMap.put("lineCount", event.lineCount());
+        dataMap.put("grandTotal", event.grandTotal().toPlainString());
+        dataMap.put("updatedAt", event.updatedAt().toString());
+        dataMap.put("version", event.version());
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) return;
+        Set<String> sessionIds = sessionRegistry.findSessionsByBranchOrBusinessWide(
+                event.businessId(), event.branchId(), "pos_drafts");
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "pos_draft.updated", eventId, "MEDIUM", Instant.now(), payloadJson);
+        }
+        log.debug("POS draft updated: draft={} ticket={} branch={} sessions={}",
+                event.draftId(), event.ticketNumber(), event.branchId(), sessionIds.size());
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onPosDraftCancelled(PosDraftCancelledEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        var dataMap = new LinkedHashMap<String, Object>();
+        dataMap.put("draftId", event.draftId());
+        dataMap.put("ticketNumber", event.ticketNumber());
+        dataMap.put("branchId", event.branchId());
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) return;
+        Set<String> sessionIds = sessionRegistry.findSessionsByBranchOrBusinessWide(
+                event.businessId(), event.branchId(), "pos_drafts");
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "pos_draft.cancelled", eventId, "HIGH", Instant.now(), payloadJson);
+        }
+        log.debug("POS draft cancelled: draft={} ticket={} branch={} sessions={}",
+                event.draftId(), event.ticketNumber(), event.branchId(), sessionIds.size());
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onPosDraftCompleted(PosDraftCompletedEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        var dataMap = new LinkedHashMap<String, Object>();
+        dataMap.put("draftId", event.draftId());
+        dataMap.put("ticketNumber", event.ticketNumber());
+        dataMap.put("branchId", event.branchId());
+        dataMap.put("saleId", event.saleId());
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) return;
+        Set<String> sessionIds = sessionRegistry.findSessionsByBranchOrBusinessWide(
+                event.businessId(), event.branchId(), "pos_drafts");
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "pos_draft.completed", eventId, "HIGH", Instant.now(), payloadJson);
+        }
+        log.debug("POS draft completed: draft={} ticket={} sale={} branch={} sessions={}",
+                event.draftId(), event.ticketNumber(), event.saleId(), event.branchId(), sessionIds.size());
+    }
+
 }

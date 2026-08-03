@@ -39,20 +39,12 @@ public class CustomerMessageDispatcher {
 
     /**
      * Free-form WhatsApp text (24h window only) with SMS fallback.
+     * Always attempts WhatsApp first; RapidAPI "not on WhatsApp" does not skip Meta.
      */
     public DeliveryResult deliver(TenantMessagingConfig messaging, String phoneDigits, String message) {
         String e164 = "+" + phoneDigits;
         var lookup = whatsAppLookupClient.lookup(messaging, e164);
-
-        if (lookup.onWhatsApp() || lookup.skipped()) {
-            return attemptWhatsAppTextThenSms(messaging, phoneDigits, e164, message, lookup);
-        }
-
-        var sms = smsMessagingClient.sendText(messaging, e164, message);
-        String channel = sms.channel();
-        String outcome = sms.sent() ? "sent" : (sms.stub() ? "stub" : "failed");
-        String detail = "not_on_whatsapp:" + lookup.detail() + ";" + sms.detail();
-        return new DeliveryResult(lookup, channel, outcome, detail);
+        return attemptWhatsAppTextThenSms(messaging, phoneDigits, e164, message, lookup);
     }
 
     /**
@@ -107,16 +99,19 @@ public class CustomerMessageDispatcher {
     }
 
     /**
-     * Attempts Meta WhatsApp template directly (no RapidAPI lookup, no SMS fallback).
-     * Used for WhatsApp-only admin tests and staff "WhatsApp" channel preference.
+     * Meta WhatsApp {@code payment_reminder} template, then SMS fallback when WhatsApp fails.
      */
     public DeliveryResult deliverPaymentReminderDirect(
             TenantMessagingConfig messaging,
             String phoneDigits,
             List<String> bodyParams
     ) {
-        return deliverTemplateDirect(
+        DeliveryResult wa = deliverTemplateDirect(
                 messaging, phoneDigits, PAYMENT_REMINDER_TEMPLATE, PAYMENT_REMINDER_LANGUAGE, bodyParams);
+        if ("sent".equals(wa.outcome())) {
+            return wa;
+        }
+        return withSmsFallback(messaging, phoneDigits, paymentReminderPreview(bodyParams), wa);
     }
 
     public DeliveryResult deliverTemplateDirect(
@@ -158,24 +153,25 @@ public class CustomerMessageDispatcher {
     }
 
     /**
-     * Attempts Meta WhatsApp free-form text directly (no RapidAPI lookup, no SMS fallback).
-     * Only works inside the 24h customer-service window.
+     * Free-form Meta WhatsApp text (24h window), then SMS fallback when WhatsApp fails.
      */
     public DeliveryResult deliverDirect(TenantMessagingConfig messaging, String phoneDigits, String message) {
         var lookup = RapidApiWhatsAppLookupClient.LookupResult.lookupSkipped("whatsapp_only_test");
         if (!messaging.metaWhatsAppConfigured()) {
-            return new DeliveryResult(
+            DeliveryResult skipped = new DeliveryResult(
                     lookup,
                     "whatsapp",
                     "skipped",
                     "Meta WhatsApp is not configured (phone number ID + access token).");
+            return withSmsFallback(messaging, phoneDigits, message, skipped);
         }
         var send = metaWhatsAppClient.sendText(messaging, phoneDigits, message);
         if (send.sent()) {
             return new DeliveryResult(lookup, send.channel(), "sent", send.detail());
         }
+        DeliveryResult failed;
         if (send.authFailure()) {
-            return new DeliveryResult(
+            failed = new DeliveryResult(
                     lookup,
                     "whatsapp",
                     "failed",
@@ -187,9 +183,40 @@ public class CustomerMessageDispatcher {
                             + " If source=env, remove WHATSAPP_META_ACCESS_TOKEN from the server."
                             + " If source=platform, paste a fresh permanent System User token in"
                             + " Super Admin → Platform integrations (must match this phone number ID).");
+        } else {
+            String prefix = send.skipped() ? "whatsapp_skipped:" : "whatsapp_failed:";
+            failed = new DeliveryResult(lookup, "whatsapp", "failed", prefix + send.detail());
         }
-        String prefix = send.skipped() ? "whatsapp_skipped:" : "whatsapp_failed:";
-        return new DeliveryResult(lookup, "whatsapp", "failed", prefix + send.detail());
+        return withSmsFallback(messaging, phoneDigits, message, failed);
+    }
+
+    /**
+     * After a WhatsApp miss, try SMS with the same (or preview) body.
+     */
+    private DeliveryResult withSmsFallback(
+            TenantMessagingConfig messaging,
+            String phoneDigits,
+            String smsMessage,
+            DeliveryResult prior
+    ) {
+        if (!messaging.smsConfigured()) {
+            return prior;
+        }
+        String e164 = "+" + phoneDigits;
+        var sms = smsMessagingClient.sendText(messaging, e164, smsMessage);
+        String waDetail = prior.detail() != null ? prior.detail() : "whatsapp_failed";
+        if (sms.sent() || sms.stub()) {
+            return new DeliveryResult(
+                    prior.lookup(),
+                    sms.channel(),
+                    sms.sent() ? "sent" : "stub",
+                    waDetail + "; sms:" + sms.detail());
+        }
+        return new DeliveryResult(
+                prior.lookup(),
+                prior.channel() != null ? prior.channel() : "whatsapp",
+                "failed",
+                waDetail + "; sms_failed:" + sms.detail());
     }
 
     /**

@@ -203,8 +203,7 @@ public class SupplierPortalClaimService {
         verificationRepository.save(challenge);
 
         TenantMessagingConfig messaging = messagingSettingsService.resolvePlatformForContactReply();
-        // OTPs must be SMS-first. Free-form WhatsApp often "succeeds" in the API outside the
-        // 24h window without the customer ever seeing a message.
+        // Send WhatsApp + SMS together when both are configured so the code arrives in either inbox.
         boolean smsReady = messaging.enabled() && messaging.smsConfigured();
         boolean waReady = messaging.enabled() && messaging.metaWhatsAppConfigured();
         if (!smsReady && !waReady && !returnOtpWhenStubbed) {
@@ -221,7 +220,7 @@ public class SupplierPortalClaimService {
             log.info("Supplier claim OTP stub (SMS not configured): phone={} code={}", phone, code);
             channel = "sms_stub";
             outcome = "stub";
-        } else if (smsReady && waReady) {
+        } else {
             var delivery = customerMessageDispatcher.deliverBothChannels(messaging, phone, message);
             channel = delivery.channel();
             outcome = delivery.outcome();
@@ -229,30 +228,11 @@ public class SupplierPortalClaimService {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_GATEWAY,
                         "Could not send verification code"
-                                + (delivery.detail() != null ? " (" + delivery.detail() + ")" : ""));
-            }
-        } else if (smsReady) {
-            var delivery = customerMessageDispatcher.deliverSmsOnly(messaging, phone, message);
-            channel = delivery.channel();
-            outcome = delivery.outcome();
-            if (!"sent".equals(outcome) && !"stub".equals(outcome)) {
-                throw new ResponseStatusException(
-                        HttpStatus.BAD_GATEWAY,
-                        "Could not send SMS verification code"
-                                + (delivery.detail() != null ? " (" + delivery.detail() + ")" : ""));
+                                + (delivery.detail() != null ? " (" + delivery.detail() + ")" : "")
+                                + ". Configure SMS (Sozuri/TextSMS) for reliable OTP delivery.");
             }
             if ("stub".equals(outcome)) {
-                log.info("Supplier claim OTP stubbed by SMS provider: phone={} code={}", phone, code);
-            }
-        } else {
-            // WhatsApp-only fallback (less reliable for OTP).
-            var delivery = customerMessageDispatcher.deliverBothChannels(messaging, phone, message);
-            channel = delivery.channel();
-            outcome = delivery.outcome();
-            if (!"sent".equals(outcome) && !"stub".equals(outcome)) {
-                throw new ResponseStatusException(
-                        HttpStatus.BAD_GATEWAY,
-                        "Could not send verification code. Configure SMS (Sozuri/TextSMS) for reliable OTP delivery.");
+                log.info("Supplier claim OTP stubbed: phone={} code={} channel={}", phone, code, channel);
             }
         }
 

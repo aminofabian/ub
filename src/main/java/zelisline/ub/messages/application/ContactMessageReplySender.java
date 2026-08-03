@@ -50,10 +50,11 @@ public class ContactMessageReplySender {
             case WHATSAPP -> {
                 String phone = requirePhone(message);
                 TenantMessagingConfig messaging = resolveMessaging(message, platform);
-                if (!messaging.metaWhatsAppConfigured()) {
+                if (!messaging.metaWhatsAppConfigured() && !messaging.smsConfigured()) {
                     throw new ResponseStatusException(
-                            HttpStatus.BAD_REQUEST, "WhatsApp is not configured for this inbox");
+                            HttpStatus.BAD_REQUEST, "WhatsApp or SMS is not configured for this inbox");
                 }
+                // Prefer WhatsApp; fall back to SMS automatically when Meta rejects the send.
                 CustomerMessageDispatcher.DeliveryResult result =
                         customerMessageDispatcher.deliverDirect(messaging, phone, body);
                 outcome = result.outcome();
@@ -61,7 +62,7 @@ public class ContactMessageReplySender {
                 if (!"sent".equals(outcome) && !"stub".equals(outcome)) {
                     persistFailed(message, channel, body, actorUserId, outcome, detail);
                     throw new ResponseStatusException(
-                            HttpStatus.BAD_GATEWAY, "WhatsApp send failed: " + result.detail());
+                            HttpStatus.BAD_GATEWAY, "WhatsApp/SMS send failed: " + result.detail());
                 }
             }
             case SMS -> {

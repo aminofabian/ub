@@ -389,34 +389,15 @@ public class PageSealService {
         TenantMessagingConfig messaging = messagingSettingsService.resolvePlatformForContactReply();
         boolean smsReady = messaging.enabled() && messaging.smsConfigured();
         boolean waReady = messaging.enabled() && messaging.metaWhatsAppConfigured();
-        String channel;
-        String outcome;
         String message = "Your Kiosk seal code is " + code + ". Valid for "
                 + CODE_TTL.toMinutes() + " minutes. Do not share it.";
+        // Always try WhatsApp and SMS together when available so the code lands in either inbox.
+        String channel;
+        String outcome;
         if (!smsReady && !waReady) {
             log.info("Page seal OTP stub: scope={} subject={} code={}", scope, subjectId, code);
             channel = "sms_stub";
             outcome = "stub";
-        } else if (smsReady && waReady) {
-            var delivery = customerMessageDispatcher.deliverBothChannels(messaging, phone, message);
-            channel = delivery.channel();
-            outcome = delivery.outcome();
-            if (!"sent".equals(outcome) && !"stub".equals(outcome)) {
-                throw new ResponseStatusException(
-                        HttpStatus.BAD_GATEWAY,
-                        "Could not send verification code"
-                                + (delivery.detail() != null ? " (" + delivery.detail() + ")" : ""));
-            }
-        } else if (smsReady) {
-            var delivery = customerMessageDispatcher.deliverSmsOnly(messaging, phone, message);
-            channel = delivery.channel();
-            outcome = delivery.outcome();
-            if (!"sent".equals(outcome) && !"stub".equals(outcome)) {
-                throw new ResponseStatusException(
-                        HttpStatus.BAD_GATEWAY,
-                        "Could not send SMS verification code"
-                                + (delivery.detail() != null ? " (" + delivery.detail() + ")" : ""));
-            }
         } else {
             var delivery = customerMessageDispatcher.deliverBothChannels(messaging, phone, message);
             channel = delivery.channel();
@@ -424,7 +405,10 @@ public class PageSealService {
             if (!"sent".equals(outcome) && !"stub".equals(outcome)) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_GATEWAY,
-                        "Could not send verification code. Configure SMS for reliable OTP delivery.");
+                        "Could not send verification code"
+                                + (delivery.detail() != null ? " (" + delivery.detail() + ")" : "")
+                                + ". Configure SMS (Sozuri/TextSMS) and Meta WhatsApp under"
+                                + " Super Admin → Platform integrations.");
             }
         }
         // Always surface the code when the provider stubbed — otherwise the UI says "sent" with nothing to enter.
@@ -438,12 +422,12 @@ public class PageSealService {
         String code = rawCode == null ? "" : rawCode.trim();
         if (!code.matches("\\d{" + CODE_DIGITS + "}")) {
             throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST, "Enter the " + CODE_DIGITS + "-digit code from SMS");
+                    HttpStatus.BAD_REQUEST, "Enter the " + CODE_DIGITS + "-digit code we sent");
         }
         PageSealChallenge challenge = challengeRepository
                 .findFirstByScopeAndSubjectIdAndConsumedAtIsNullOrderByCreatedAtDesc(scope, subjectId)
                 .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.BAD_REQUEST, "No active code — request a new SMS first"));
+                        HttpStatus.BAD_REQUEST, "No active code — request a new code first"));
         Instant now = Instant.now();
         if (challenge.getLockedUntil() != null && challenge.getLockedUntil().isAfter(now)) {
             throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Too many attempts. Try again later");

@@ -90,8 +90,9 @@ public class OpsAlertPhoneVerificationService {
         String shopName = resolveShopName(businessId);
         String message = "Your " + shopName + " alert verification code is " + code
                 + ". Valid for 10 minutes. Do not share this code.";
+        // OTP: fire WhatsApp and SMS together when both are configured.
         CustomerMessageDispatcher.DeliveryResult delivery =
-                customerMessageDispatcher.deliver(messaging, phone, message);
+                customerMessageDispatcher.deliverBothChannels(messaging, phone, message);
         if (!"sent".equals(delivery.outcome()) && !"stub".equals(delivery.outcome())) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_GATEWAY,

@@ -239,6 +239,23 @@ public class NotificationDeliveryTxnService {
             markSent(delivery, result.channel());
             return true;
         }
+        // WhatsApp miss → SMS fallback before scheduling a retry.
+        if (messaging.smsConfigured()) {
+            SmsMessagingClient.SendResult smsFallback =
+                    smsMessagingClient.sendText(messaging, "+" + digits, body);
+            if (smsFallback.sent()) {
+                markSent(delivery, smsFallback.channel());
+                return true;
+            }
+            if (smsFallback.stub()) {
+                markSkipped(delivery, "sms_stub_after_whatsapp:" + result.detail());
+                return true;
+            }
+            delivery.setLastError(
+                    (result.detail() != null ? result.detail() : "whatsapp_failed")
+                            + "; sms_failed:" + smsFallback.detail());
+            return false;
+        }
         if (result.skipped()) {
             markSkipped(delivery, result.detail());
             return true;

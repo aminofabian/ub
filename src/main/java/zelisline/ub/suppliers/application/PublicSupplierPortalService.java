@@ -8,9 +8,11 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.springframework.http.HttpStatus;
@@ -23,6 +25,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.pageseal.application.PageSealService;
+import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
@@ -33,6 +36,7 @@ import zelisline.ub.messages.repository.ContactMessageRepository;
 import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.domain.SupplierInvoice;
 import zelisline.ub.purchasing.domain.SupplierInvoiceLine;
+import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
 import zelisline.ub.suppliers.api.dto.PublicSupplierComplaintRequest;
@@ -48,6 +52,7 @@ import zelisline.ub.suppliers.domain.SupplierProduct;
 import zelisline.ub.suppliers.domain.SupplierSlug;
 import zelisline.ub.suppliers.repository.SupplierProductRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
+import zelisline.ub.tenancy.application.BranchResolutionService;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
@@ -71,6 +76,9 @@ public class PublicSupplierPortalService {
     private final zelisline.ub.marketplace.application.SupplierPortalMessagesService messagesService;
     private final PageSealService pageSealService;
     private final JdbcTemplate jdbc;
+    private final PackageVariantStockResolver packageVariantStockResolver;
+    private final InventoryBatchRepository inventoryBatchRepository;
+    private final BranchResolutionService branchResolutionService;
 
     @Transactional(readOnly = true)
     public PublicSupplierPortalResponse overview(String businessId, String slugRaw, String unlockToken) {
@@ -160,13 +168,11 @@ public class PublicSupplierPortalService {
         }
 
         Instant since = periodStart.atStartOfDay(NAIROBI).toInstant();
-        List<PublicSupplierProductSellingRow> products = jdbc.query(
+        record SoldHit(String itemId, BigDecimal unitsSold, BigDecimal revenue, Instant lastSoldAt) {
+        }
+        List<SoldHit> soldHits = jdbc.query(
                 """
                         SELECT i.id AS item_id,
-                               COALESCE(NULLIF(TRIM(i.name), ''), 'Product') AS product_name,
-                               NULLIF(TRIM(i.variant_name), '') AS variant_name,
-                               i.sku AS sku,
-                               COALESCE(i.current_stock, 0) AS current_stock,
                                COALESCE(sold.units_sold, 0) AS units_sold,
                                COALESCE(sold.revenue, 0) AS revenue,
                                sold.last_sold_at AS last_sold_at
@@ -192,25 +198,50 @@ public class PublicSupplierPortalService {
                            AND sp.deleted_at IS NULL
                         """,
                 (rs, rowNum) -> {
-                    String name = rs.getString("product_name");
-                    String variant = rs.getString("variant_name");
-                    if (variant != null && !variant.isBlank()) {
-                        name = ProductDisplayName.join(name, variant);
-                    }
                     Timestamp lastTs = rs.getTimestamp("last_sold_at");
-                    return new PublicSupplierProductSellingRow(
+                    return new SoldHit(
                             rs.getString("item_id"),
-                            name,
-                            rs.getString("sku"),
                             nullSafe(rs.getBigDecimal("units_sold")),
                             nullSafe(rs.getBigDecimal("revenue")),
-                            nullSafe(rs.getBigDecimal("current_stock")),
                             lastTs != null ? lastTs.toInstant() : null);
                 },
                 businessId,
                 businessId,
                 Timestamp.from(since),
                 supplier.getId());
+
+        List<String> itemIds = soldHits.stream().map(SoldHit::itemId).distinct().toList();
+        Map<String, Item> itemsById = itemIds.isEmpty()
+                ? Map.of()
+                : itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId).stream()
+                        .collect(Collectors.toMap(Item::getId, i -> i, (a, b) -> a, HashMap::new));
+
+        Map<String, BigDecimal> batchStockByItemId = loadBranchBatchStock(businessId, itemsById);
+
+        List<PublicSupplierProductSellingRow> products = new ArrayList<>();
+        for (SoldHit hit : soldHits) {
+            Item item = itemsById.get(hit.itemId());
+            if (item == null) {
+                continue;
+            }
+            String name = item.getName() != null ? item.getName().trim() : "Product";
+            if (name.isBlank()) {
+                name = "Product";
+            }
+            if (item.getVariantName() != null && !item.getVariantName().isBlank()) {
+                name = ProductDisplayName.join(name, item.getVariantName());
+            }
+            BigDecimal holderStock = packageVariantStockResolver.sumPoolStock(item, batchStockByItemId);
+            BigDecimal displayStock = packageVariantStockResolver.displayStockQty(item, holderStock);
+            products.add(new PublicSupplierProductSellingRow(
+                    item.getId(),
+                    name,
+                    item.getSku(),
+                    hit.unitsSold(),
+                    hit.revenue(),
+                    nullSafe(displayStock),
+                    hit.lastSoldAt()));
+        }
 
         Comparator<PublicSupplierProductSellingRow> bySpeed = "revenue".equals(sort)
                 ? Comparator.comparing(
@@ -230,14 +261,64 @@ public class PublicSupplierPortalService {
                 period, periodStart, periodEnd, currency, sort, products);
     }
 
+    /** Active-batch on-hand at the shop default branch, keyed by item id (raw units). */
+    private Map<String, BigDecimal> loadBranchBatchStock(String businessId, Map<String, Item> itemsById) {
+        if (itemsById.isEmpty()) {
+            return Map.of();
+        }
+        Set<String> poolIds = new HashSet<>();
+        for (Item item : itemsById.values()) {
+            poolIds.addAll(packageVariantStockResolver.branchStockPoolItemIds(businessId, item));
+        }
+        if (poolIds.isEmpty()) {
+            return Map.of();
+        }
+        String branchId = branchResolutionService.resolveDefaultBranch(businessId);
+        if (branchId == null || branchId.isBlank()) {
+            return loadBusinessBatchStock(businessId, poolIds);
+        }
+        Map<String, BigDecimal> stockByItemId = new HashMap<>();
+        for (Object[] row : inventoryBatchRepository.sumQuantityRemainingForItemsAtBranch(
+                businessId, branchId, "active", poolIds)) {
+            stockByItemId.put((String) row[0], nullSafe((BigDecimal) row[1]));
+        }
+        return stockByItemId;
+    }
+
+    private Map<String, BigDecimal> loadBusinessBatchStock(String businessId, Set<String> itemIds) {
+        if (itemIds.isEmpty()) {
+            return Map.of();
+        }
+        String placeholders = itemIds.stream().map(id -> "?").collect(Collectors.joining(","));
+        List<Object> args = new ArrayList<>();
+        args.add(businessId);
+        args.addAll(itemIds);
+        Map<String, BigDecimal> stockByItemId = new HashMap<>();
+        jdbc.query(
+                """
+                        SELECT item_id AS item_id,
+                               COALESCE(SUM(quantity_remaining), 0) AS on_hand
+                          FROM inventory_batches
+                         WHERE business_id = ?
+                           AND status = 'active'
+                           AND item_id IN (%s)
+                      GROUP BY item_id
+                        """.formatted(placeholders),
+                rs -> {
+                    stockByItemId.put(rs.getString("item_id"), nullSafe(rs.getBigDecimal("on_hand")));
+                },
+                args.toArray());
+        return stockByItemId;
+    }
+
     private static String normalizePeriod(String raw) {
         if (raw == null || raw.isBlank()) {
-            return "week";
+            return "today";
         }
         return switch (raw.trim().toLowerCase(Locale.ROOT)) {
-            case "day", "today", "1d" -> "today";
+            case "week", "7d" -> "week";
             case "month", "30d", "thismonth" -> "month";
-            default -> "week";
+            default -> "today";
         };
     }
 

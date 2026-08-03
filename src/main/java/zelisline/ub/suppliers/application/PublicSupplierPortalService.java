@@ -1,14 +1,20 @@
 package zelisline.ub.suppliers.application;
 
 import java.math.BigDecimal;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -33,6 +39,8 @@ import zelisline.ub.suppliers.api.dto.PublicSupplierComplaintRequest;
 import zelisline.ub.suppliers.api.dto.PublicSupplierComplaintResponse;
 import zelisline.ub.suppliers.api.dto.PublicSupplierMovementRow;
 import zelisline.ub.suppliers.api.dto.PublicSupplierPortalResponse;
+import zelisline.ub.suppliers.api.dto.PublicSupplierProductsSellingResponse;
+import zelisline.ub.suppliers.api.dto.PublicSupplierProductsSellingResponse.PublicSupplierProductSellingRow;
 import zelisline.ub.suppliers.api.dto.PublicSupplierSupplyLine;
 import zelisline.ub.suppliers.api.dto.PublicSupplierSupplyRow;
 import zelisline.ub.suppliers.domain.Supplier;
@@ -50,6 +58,7 @@ public class PublicSupplierPortalService {
     private static final int SUPPLY_LIMIT = 40;
     private static final int MOVEMENT_LIMIT = 50;
     private static final int PRODUCT_LIMIT = 60;
+    private static final ZoneId NAIROBI = ZoneId.of("Africa/Nairobi");
 
     private final SupplierRepository supplierRepository;
     private final SupplierPurchaseHistoryService purchaseHistoryService;
@@ -61,6 +70,7 @@ public class PublicSupplierPortalService {
     private final ContactMessageRepository contactMessageRepository;
     private final zelisline.ub.marketplace.application.SupplierPortalMessagesService messagesService;
     private final PageSealService pageSealService;
+    private final JdbcTemplate jdbc;
 
     @Transactional(readOnly = true)
     public PublicSupplierPortalResponse overview(String businessId, String slugRaw, String unlockToken) {
@@ -117,6 +127,131 @@ public class PublicSupplierPortalService {
                 supplies,
                 movements,
                 linked);
+    }
+
+    @Transactional(readOnly = true)
+    public PublicSupplierProductsSellingResponse productsSelling(
+            String businessId,
+            String slugRaw,
+            String periodRaw,
+            String sortRaw,
+            String unlockToken
+    ) {
+        Supplier supplier = resolveSupplierOrThrow(businessId, slugRaw);
+        Business business = businessRepository.findById(businessId).orElse(null);
+        String currency = business != null && business.getCurrency() != null
+                ? business.getCurrency().trim()
+                : "KES";
+        String period = normalizePeriod(periodRaw);
+        String sort = normalizeSort(sortRaw);
+        LocalDate today = LocalDate.now(NAIROBI);
+        LocalDate periodStart = periodStart(today, period);
+        LocalDate periodEnd = today;
+
+        if (supplier.isPageSealed() && !pageSealService.isShopSupplierUnlocked(supplier, unlockToken)) {
+            return new PublicSupplierProductsSellingResponse(
+                    period, periodStart, periodEnd, currency, sort, List.of());
+        }
+
+        Instant since = periodStart.atStartOfDay(NAIROBI).toInstant();
+        List<PublicSupplierProductSellingRow> products = jdbc.query(
+                """
+                        SELECT i.id AS item_id,
+                               COALESCE(NULLIF(TRIM(i.name), ''), 'Product') AS product_name,
+                               NULLIF(TRIM(i.variant_name), '') AS variant_name,
+                               i.sku AS sku,
+                               COALESCE(i.current_stock, 0) AS current_stock,
+                               COALESCE(sold.units_sold, 0) AS units_sold,
+                               COALESCE(sold.revenue, 0) AS revenue,
+                               sold.last_sold_at AS last_sold_at
+                          FROM supplier_products sp
+                          JOIN items i ON i.id = sp.item_id
+                           AND i.business_id = ?
+                           AND i.deleted_at IS NULL
+                     LEFT JOIN (
+                                SELECT si.item_id AS item_id,
+                                       SUM(si.quantity) AS units_sold,
+                                       SUM(si.line_total) AS revenue,
+                                       MAX(s.sold_at) AS last_sold_at
+                                  FROM sale_items si
+                                  JOIN sales s ON s.id = si.sale_id
+                                 WHERE s.business_id = ?
+                                   AND s.status = 'completed'
+                                   AND s.voided_at IS NULL
+                                   AND s.sold_at >= ?
+                              GROUP BY si.item_id
+                              ) sold ON sold.item_id = i.id
+                         WHERE sp.supplier_id = ?
+                           AND sp.active = TRUE
+                           AND sp.deleted_at IS NULL
+                        """,
+                (rs, rowNum) -> {
+                    String name = rs.getString("product_name");
+                    String variant = rs.getString("variant_name");
+                    if (variant != null && !variant.isBlank()) {
+                        name = ProductDisplayName.join(name, variant);
+                    }
+                    Timestamp lastTs = rs.getTimestamp("last_sold_at");
+                    return new PublicSupplierProductSellingRow(
+                            rs.getString("item_id"),
+                            name,
+                            rs.getString("sku"),
+                            nullSafe(rs.getBigDecimal("units_sold")),
+                            nullSafe(rs.getBigDecimal("revenue")),
+                            nullSafe(rs.getBigDecimal("current_stock")),
+                            lastTs != null ? lastTs.toInstant() : null);
+                },
+                businessId,
+                businessId,
+                Timestamp.from(since),
+                supplier.getId());
+
+        Comparator<PublicSupplierProductSellingRow> bySpeed = "revenue".equals(sort)
+                ? Comparator.comparing(
+                        PublicSupplierProductSellingRow::revenue,
+                        Comparator.nullsLast(Comparator.reverseOrder()))
+                : Comparator.comparing(
+                        PublicSupplierProductSellingRow::unitsSold,
+                        Comparator.nullsLast(Comparator.reverseOrder()));
+        products = products.stream()
+                .sorted(bySpeed.thenComparing(
+                        PublicSupplierProductSellingRow::name,
+                        Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER)))
+                .limit(PRODUCT_LIMIT)
+                .toList();
+
+        return new PublicSupplierProductsSellingResponse(
+                period, periodStart, periodEnd, currency, sort, products);
+    }
+
+    private static String normalizePeriod(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "week";
+        }
+        return switch (raw.trim().toLowerCase(Locale.ROOT)) {
+            case "day", "today", "1d" -> "today";
+            case "month", "30d", "thismonth" -> "month";
+            default -> "week";
+        };
+    }
+
+    private static String normalizeSort(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "units";
+        }
+        return "revenue".equalsIgnoreCase(raw.trim()) ? "revenue" : "units";
+    }
+
+    private static LocalDate periodStart(LocalDate today, String period) {
+        return switch (period) {
+            case "today" -> today;
+            case "month" -> today.minusDays(29);
+            default -> today.minusDays(6);
+        };
+    }
+
+    private static BigDecimal nullSafe(BigDecimal value) {
+        return value != null ? value : BigDecimal.ZERO;
     }
 
     private List<PublicSupplierSupplyLine> supplyLines(String invoiceId) {

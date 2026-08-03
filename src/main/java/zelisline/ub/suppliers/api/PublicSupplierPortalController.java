@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -25,6 +26,7 @@ import zelisline.ub.platform.pageseal.application.PageSealService;
 import zelisline.ub.suppliers.api.dto.PublicSupplierComplaintRequest;
 import zelisline.ub.suppliers.api.dto.PublicSupplierComplaintResponse;
 import zelisline.ub.suppliers.api.dto.PublicSupplierPortalResponse;
+import zelisline.ub.suppliers.api.dto.PublicSupplierProductsSellingResponse;
 import zelisline.ub.suppliers.application.PublicSupplierPortalService;
 import zelisline.ub.tenancy.application.PublicHostBusinessResolver;
 
@@ -50,6 +52,26 @@ public class PublicSupplierPortalController {
     ) {
         return publicSupplierPortalService.overview(
                 publicHostBusinessResolver.resolveOrThrow(request), slug, unlockToken);
+    }
+
+    /**
+     * Linked catalogue ranked by till sell-through for the period.
+     * {@code period}: today | week | month (default week). {@code sort}: units | revenue (default units).
+     */
+    @GetMapping("/{slug}/products-selling")
+    public PublicSupplierProductsSellingResponse productsSelling(
+            @PathVariable String slug,
+            @RequestParam(value = "period", required = false) String period,
+            @RequestParam(value = "sort", required = false) String sort,
+            @RequestHeader(value = PageSealController.UNLOCK_HEADER, required = false) String unlockToken,
+            HttpServletRequest request
+    ) {
+        return publicSupplierPortalService.productsSelling(
+                publicHostBusinessResolver.resolveOrThrow(request),
+                slug,
+                period,
+                sort,
+                unlockToken);
     }
 
     /** Page-seal status for this shop supplier portal (preferred path). */

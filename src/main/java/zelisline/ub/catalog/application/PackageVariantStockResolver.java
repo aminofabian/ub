@@ -137,6 +137,77 @@ public class PackageVariantStockResolver {
     }
 
     /**
+     * Resolves quantity for admin stock set / stock-take write-downs.
+     * Unlike {@link #resolvePick}, this allows non-sellable stocked bases (e.g. Eggs) whose
+     * package options sell from the parent's on-hand.
+     */
+    public StockPickResolution resolveStockAdjustment(
+            String businessId,
+            String catalogItemId,
+            BigDecimal catalogQuantity
+    ) {
+        Item catalog = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(catalogItemId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
+        BigDecimal qty = catalogQuantity == null
+                ? BigDecimal.ZERO
+                : catalogQuantity.setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        if (qty.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quantity must be positive");
+        }
+
+        // Package / selling-unit SKUs still convert into base units on the parent.
+        BigDecimal units = unitsPerSale(catalog);
+        if (units != null) {
+            String parentId = blankToNull(catalog.getVariantOfItemId());
+            if (parentId == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "This unit must be linked to a base product");
+            }
+            Item parent = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(parentId, businessId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Base product not found"));
+            if (!parent.isStocked()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Base product is not stocked");
+            }
+            return new StockPickResolution(
+                    parentId,
+                    qty.multiply(units).setScale(QTY_SCALE, RoundingMode.HALF_UP),
+                    true);
+        }
+
+        if (catalog.isStocked()) {
+            return new StockPickResolution(catalog.getId(), qty, false);
+        }
+
+        // Unstocked label-only group — point at options instead of a dead-end error.
+        if (blankToNull(catalog.getVariantOfItemId()) == null) {
+            var children = itemRepository
+                    .findByBusinessIdAndVariantOfItemIdAndDeletedAtIsNullOrderBySkuAsc(
+                            businessId, catalog.getId());
+            if (!children.isEmpty()) {
+                String options = children.stream()
+                        .limit(6)
+                        .map(child -> {
+                            String name = blankToNull(child.getVariantName());
+                            if (name == null) {
+                                name = blankToNull(child.getName());
+                            }
+                            return name != null ? name : child.getSku();
+                        })
+                        .filter(n -> n != null && !n.isBlank())
+                        .reduce((a, b) -> a + ", " + b)
+                        .orElse("its variants");
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        ItemSellability.itemLabel(catalog)
+                                + " is a product group with no base stock. Edit one of its options: "
+                                + options);
+            }
+        }
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item is not stocked");
+    }
+
+    /**
      * Converts inbound catalog quantity to holder stock (parent base units when applicable).
      * Does not require the catalog row to be sellable (e.g. opening balance on base product).
      */

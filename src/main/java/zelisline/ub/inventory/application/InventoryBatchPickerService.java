@@ -75,8 +75,11 @@ public class InventoryBatchPickerService {
             BigDecimal quantity
     ) {
         requireBranch(businessId, branchId);
-        Item catalogItem = packageVariantStockResolver.requireSellableItem(businessId, itemId);
-        StockPickResolution pick = packageVariantStockResolver.resolvePick(businessId, itemId, quantity);
+        // Admin stock set must allow non-sellable stocked bases (Eggs) — sales still use requireSellable.
+        StockPickResolution pick =
+                packageVariantStockResolver.resolveStockAdjustment(businessId, itemId, quantity);
+        Item catalogItem = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found: " + itemId));
         Item item = requireStockedItem(businessId, pick.stockItemId());
         List<InventoryBatch> batches = loadActiveBatchesReadOnly(businessId, catalogItem, branchId);
         List<InventoryBatch> working = new ArrayList<>(batches);

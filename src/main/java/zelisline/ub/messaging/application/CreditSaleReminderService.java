@@ -202,8 +202,11 @@ public class CreditSaleReminderService {
     }
 
     /**
-     * Standalone admin WhatsApp test. Sends the approved {@code payment_reminder} template
-     * so cold numbers work outside the 24h customer-service window.
+     * Standalone admin WhatsApp test.
+     *
+     * <p>With a custom message: sends free-form Meta text (needs an open 24h customer-care
+     * window). With a blank message: tries a short free-form ping, then the approved
+     * {@code payment_reminder} template so cold numbers still verify credentials.
      */
     public zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse sendWhatsAppTest(
             String businessId,
@@ -215,6 +218,9 @@ public class CreditSaleReminderService {
         String currency = business != null && business.getCurrency() != null
                 ? business.getCurrency().trim()
                 : "KES";
+        String shopName = business != null && business.getName() != null && !business.getName().isBlank()
+                ? business.getName().trim()
+                : "your shop";
 
         if (!messaging.secretsReadable()) {
             return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
@@ -264,24 +270,62 @@ public class CreditSaleReminderService {
                     null);
         }
 
-        String paymentUrl = CustomerTabPaymentUrl.build(
-                messaging.paymentAccountUrl().isBlank()
-                        ? "https://palmart.co.ke"
-                        : messaging.paymentAccountUrl().trim(),
-                phoneDigits);
-        String nameHint = (customMessage != null && !customMessage.isBlank() && customMessage.trim().length() <= 40)
+        boolean hasCustom = customMessage != null && !customMessage.isBlank();
+        String freeForm = hasCustom
                 ? customMessage.trim()
-                : "there";
-        List<String> templateParams = CustomerMessageDispatcher.paymentReminderBodyParams(
-                nameHint,
-                formatMoney(new BigDecimal("100.00"), currency),
-                paymentUrl);
-        String message = CustomerMessageDispatcher.paymentReminderPreview(templateParams);
+                : ("Kiosk Meta WhatsApp test from " + shopName + ". If you received this, credentials are working.");
 
-        CustomerMessageDispatcher.DeliveryResult attempt = customerMessageDispatcher.deliverPaymentReminderDirect(
-                messaging, phoneDigits, templateParams);
-        log.info("whatsapp_test business={} channel={} outcome={} detail={}",
-                businessId, attempt.channel(), attempt.outcome(), attempt.detail());
+        CustomerMessageDispatcher.DeliveryResult attempt =
+                customerMessageDispatcher.deliverDirect(messaging, phoneDigits, freeForm);
+        String message = freeForm;
+
+        // Cold numbers reject free-form text — fall back to the approved template so the
+        // admin test still proves token + phone-number-id when the session window is closed.
+        if (!"sent".equals(attempt.outcome()) && !hasCustom) {
+            String paymentUrl = CustomerTabPaymentUrl.build(
+                    messaging.paymentAccountUrl().isBlank()
+                            ? "https://palmart.co.ke"
+                            : messaging.paymentAccountUrl().trim(),
+                    phoneDigits);
+            List<String> templateParams = CustomerMessageDispatcher.paymentReminderBodyParams(
+                    "there",
+                    formatMoney(new BigDecimal("100.00"), currency),
+                    paymentUrl);
+            CustomerMessageDispatcher.DeliveryResult templateAttempt =
+                    customerMessageDispatcher.deliverPaymentReminderDirect(
+                            messaging, phoneDigits, templateParams);
+            if ("sent".equals(templateAttempt.outcome())) {
+                attempt = templateAttempt;
+                message = CustomerMessageDispatcher.paymentReminderPreview(templateParams);
+            } else {
+                // Keep the richer free-form error, append template failure for debugging.
+                String combined = (attempt.detail() != null ? attempt.detail() : "whatsapp_failed")
+                        + "; template:" + (templateAttempt.detail() != null ? templateAttempt.detail() : "failed")
+                        + " [tokenSource=" + nullToNone(messaging.metaAccessTokenSource())
+                        + " token=" + messaging.metaAccessTokenFingerprint()
+                        + " phoneId=" + nullToNone(messaging.metaPhoneNumberId()) + "]";
+                attempt = new CustomerMessageDispatcher.DeliveryResult(
+                        attempt.lookup(),
+                        attempt.channel(),
+                        attempt.outcome(),
+                        combined);
+            }
+        } else if (!"sent".equals(attempt.outcome())) {
+            String enriched = (attempt.detail() != null ? attempt.detail() : "whatsapp_failed")
+                    + " [tokenSource=" + nullToNone(messaging.metaAccessTokenSource())
+                    + " token=" + messaging.metaAccessTokenFingerprint()
+                    + " phoneId=" + nullToNone(messaging.metaPhoneNumberId())
+                    + "]. Free-form text only works inside Meta's 24h window — leave Message blank to also try the payment_reminder template.";
+            attempt = new CustomerMessageDispatcher.DeliveryResult(
+                    attempt.lookup(),
+                    attempt.channel(),
+                    attempt.outcome(),
+                    enriched);
+        }
+
+        log.info("whatsapp_test business={} channel={} outcome={} detail={} tokenSource={}",
+                businessId, attempt.channel(), attempt.outcome(), attempt.detail(),
+                messaging.metaAccessTokenSource());
         return new zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse(
                 true,
                 messaging.rapidApiConfigured(),
@@ -294,6 +338,10 @@ public class CreditSaleReminderService {
                 attempt.outcome(),
                 attempt.detail(),
                 message);
+    }
+
+    private static String nullToNone(String value) {
+        return value == null || value.isBlank() ? "none" : value.trim();
     }
 
     /**

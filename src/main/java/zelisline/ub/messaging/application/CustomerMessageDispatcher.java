@@ -333,8 +333,47 @@ public class CustomerMessageDispatcher {
                     lookup, templateSend.channel(), "sent", "template:" + CREDIT_SALE_RECEIPT_TEMPLATE);
         }
         appendWaFailure(waTrail, templateSend, "template");
+        if (templateSend.authFailure()) {
+            return failWhatsAppOrSms(messaging, e164, itemizedMessage, lookup, waTrail.toString(), true);
+        }
+
+        // 3) Fall back to the older approved payment_reminder template so shops that have
+        // not yet synced credit_sale_receipt still get cold WhatsApp delivery.
+        List<String> paymentReminderParams = paymentReminderParamsFromReceipt(receiptParams);
+        var paymentReminderSend = metaWhatsAppClient.sendTemplate(
+                messaging,
+                phoneDigits,
+                PAYMENT_REMINDER_TEMPLATE,
+                PAYMENT_REMINDER_LANGUAGE,
+                paymentReminderParams);
+        if (paymentReminderSend.sent()) {
+            return new DeliveryResult(
+                    lookup, paymentReminderSend.channel(), "sent", "template:" + PAYMENT_REMINDER_TEMPLATE);
+        }
+        appendWaFailure(waTrail, paymentReminderSend, "payment_reminder");
         return failWhatsAppOrSms(
-                messaging, e164, itemizedMessage, lookup, waTrail.toString(), templateSend.authFailure());
+                messaging,
+                e164,
+                itemizedMessage,
+                lookup,
+                waTrail.toString(),
+                paymentReminderSend.authFailure());
+    }
+
+    /** Map receipt params → payment_reminder {{name}}, {{balance}}, {{link}}. */
+    private static List<String> paymentReminderParamsFromReceipt(List<String> receiptParams) {
+        String name = paramAt(receiptParams, 0, "there");
+        String balance = paramAt(receiptParams, 4, "-");
+        String link = paramAt(receiptParams, 5, "-");
+        return paymentReminderBodyParams(name, balance, link);
+    }
+
+    private static String paramAt(List<String> params, int index, String fallback) {
+        if (params == null || index < 0 || index >= params.size()) {
+            return fallback;
+        }
+        String value = params.get(index);
+        return value == null || value.isBlank() ? fallback : value.trim();
     }
 
     private DeliveryResult attemptWhatsAppTemplateThenSms(

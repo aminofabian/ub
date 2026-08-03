@@ -55,12 +55,15 @@ public class CustomerMessageDispatcher {
     }
 
     /**
-     * New credit-sale receipt: itemized free-form WhatsApp first (inside 24h window),
-     * then {@code credit_sale_receipt} template for cold numbers, then SMS with the same
-     * itemized text.
+     * Credit-sale receipt delivery.
+     *
+     * <p>Order is deliberately cold-safe: approved {@code payment_reminder} template first
+     * (reaches every WhatsApp number), then optional {@code credit_sale_receipt}, then
+     * free-form text (24h session only), then SMS. Free-form-first was dropping cold
+     * numbers when the newer receipt template was missing/unapproved.
      *
      * @param receiptParams template body vars: name, shop, items, sale total, tab total, pay URL
-     * @param itemizedMessage free-form body used for in-window WhatsApp and SMS fallback
+     * @param itemizedMessage free-form / SMS body
      */
     public DeliveryResult deliverCreditSaleReceipt(
             TenantMessagingConfig messaging,
@@ -70,17 +73,10 @@ public class CustomerMessageDispatcher {
     ) {
         String e164 = "+" + phoneDigits;
         var lookup = whatsAppLookupClient.lookup(messaging, e164);
-
-        if (lookup.onWhatsApp() || lookup.skipped()) {
-            return attemptCreditSaleWhatsAppThenSms(
-                    messaging, phoneDigits, e164, receiptParams, itemizedMessage, lookup);
-        }
-
-        var sms = smsMessagingClient.sendText(messaging, e164, itemizedMessage);
-        String channel = sms.channel();
-        String outcome = sms.sent() ? "sent" : (sms.stub() ? "stub" : "failed");
-        String detail = "not_on_whatsapp:" + lookup.detail() + ";" + sms.detail();
-        return new DeliveryResult(lookup, channel, outcome, detail);
+        // Always try WhatsApp (templates reach cold numbers). Do not skip on RapidAPI
+        // "not on WhatsApp" — that false-negative was silencing cold sends.
+        return attemptCreditSaleWhatsAppThenSms(
+                messaging, phoneDigits, e164, receiptParams, itemizedMessage, lookup);
     }
 
     /**
@@ -97,24 +93,16 @@ public class CustomerMessageDispatcher {
     ) {
         String e164 = "+" + phoneDigits;
         var lookup = whatsAppLookupClient.lookup(messaging, e164);
-
-        if (lookup.onWhatsApp() || lookup.skipped()) {
-            return attemptWhatsAppTemplateThenSms(
-                    messaging,
-                    phoneDigits,
-                    e164,
-                    PAYMENT_REMINDER_TEMPLATE,
-                    PAYMENT_REMINDER_LANGUAGE,
-                    bodyParams,
-                    smsMessage,
-                    lookup);
-        }
-
-        var sms = smsMessagingClient.sendText(messaging, e164, smsMessage);
-        String channel = sms.channel();
-        String outcome = sms.sent() ? "sent" : (sms.stub() ? "stub" : "failed");
-        String detail = "not_on_whatsapp:" + lookup.detail() + ";" + sms.detail();
-        return new DeliveryResult(lookup, channel, outcome, detail);
+        // Template works cold — do not skip WhatsApp when RapidAPI says offline.
+        return attemptWhatsAppTemplateThenSms(
+                messaging,
+                phoneDigits,
+                e164,
+                PAYMENT_REMINDER_TEMPLATE,
+                PAYMENT_REMINDER_LANGUAGE,
+                bodyParams,
+                smsMessage,
+                lookup);
     }
 
     /**
@@ -311,34 +299,7 @@ public class CustomerMessageDispatcher {
     ) {
         StringBuilder waTrail = new StringBuilder();
 
-        // 1) Itemized free-form text (works inside the 24h customer-care window).
-        var textSend = metaWhatsAppClient.sendText(messaging, phoneDigits, itemizedMessage);
-        if (textSend.sent()) {
-            return new DeliveryResult(lookup, textSend.channel(), "sent", "text:itemized");
-        }
-        appendWaFailure(waTrail, textSend, "text");
-        if (textSend.authFailure()) {
-            return failWhatsAppOrSms(messaging, e164, itemizedMessage, lookup, waTrail.toString(), true);
-        }
-
-        // 2) Itemized cold-outreach template (works outside the window once Meta-approved).
-        var templateSend = metaWhatsAppClient.sendTemplate(
-                messaging,
-                phoneDigits,
-                CREDIT_SALE_RECEIPT_TEMPLATE,
-                CREDIT_SALE_RECEIPT_LANGUAGE,
-                receiptParams);
-        if (templateSend.sent()) {
-            return new DeliveryResult(
-                    lookup, templateSend.channel(), "sent", "template:" + CREDIT_SALE_RECEIPT_TEMPLATE);
-        }
-        appendWaFailure(waTrail, templateSend, "template");
-        if (templateSend.authFailure()) {
-            return failWhatsAppOrSms(messaging, e164, itemizedMessage, lookup, waTrail.toString(), true);
-        }
-
-        // 3) Fall back to the older approved payment_reminder template so shops that have
-        // not yet synced credit_sale_receipt still get cold WhatsApp delivery.
+        // 1) Known-good cold template first — reaches numbers that have never messaged the biz.
         List<String> paymentReminderParams = paymentReminderParamsFromReceipt(receiptParams);
         var paymentReminderSend = metaWhatsAppClient.sendTemplate(
                 messaging,
@@ -351,13 +312,40 @@ public class CustomerMessageDispatcher {
                     lookup, paymentReminderSend.channel(), "sent", "template:" + PAYMENT_REMINDER_TEMPLATE);
         }
         appendWaFailure(waTrail, paymentReminderSend, "payment_reminder");
+        if (paymentReminderSend.authFailure()) {
+            return failWhatsAppOrSms(messaging, e164, itemizedMessage, lookup, waTrail.toString(), true);
+        }
+
+        // 2) Richer receipt template when approved in Meta.
+        var receiptSend = metaWhatsAppClient.sendTemplate(
+                messaging,
+                phoneDigits,
+                CREDIT_SALE_RECEIPT_TEMPLATE,
+                CREDIT_SALE_RECEIPT_LANGUAGE,
+                receiptParams);
+        if (receiptSend.sent()) {
+            return new DeliveryResult(
+                    lookup, receiptSend.channel(), "sent", "template:" + CREDIT_SALE_RECEIPT_TEMPLATE);
+        }
+        appendWaFailure(waTrail, receiptSend, "credit_sale_receipt");
+        if (receiptSend.authFailure()) {
+            return failWhatsAppOrSms(messaging, e164, itemizedMessage, lookup, waTrail.toString(), true);
+        }
+
+        // 3) Free-form only helps inside the 24h session window.
+        var textSend = metaWhatsAppClient.sendText(messaging, phoneDigits, itemizedMessage);
+        if (textSend.sent()) {
+            return new DeliveryResult(lookup, textSend.channel(), "sent", "text:itemized");
+        }
+        appendWaFailure(waTrail, textSend, "text");
+
         return failWhatsAppOrSms(
                 messaging,
                 e164,
                 itemizedMessage,
                 lookup,
                 waTrail.toString(),
-                paymentReminderSend.authFailure());
+                textSend.authFailure());
     }
 
     /** Map receipt params → payment_reminder {{name}}, {{balance}}, {{link}}. */

@@ -188,7 +188,7 @@ public class PageSealService {
                         HttpStatus.BAD_REQUEST,
                         "This supplier has no phone on file. Ask the shop to add a contact phone first");
             }
-            return sendCode(PageSealScopes.SHOP_SUPPLIER, supplier.getId(), phone);
+            return sendCode(PageSealScopes.SHOP_SUPPLIER, supplier.getId(), phone, businessId);
         } catch (ResponseStatusException ex) {
             throw ex;
         } catch (RuntimeException ex) {
@@ -253,7 +253,7 @@ public class PageSealService {
                     HttpStatus.BAD_REQUEST,
                     "Add a phone number on your supplier profile before sealing this page");
         }
-        return sendCode(PageSealScopes.SUPPLIER_SLUG, supplier.getId(), phone);
+        return sendCode(PageSealScopes.SUPPLIER_SLUG, supplier.getId(), phone, null);
     }
 
     @Transactional
@@ -304,7 +304,8 @@ public class PageSealService {
     @Transactional
     public PageSealSendCodeResponse sendCustomerTabSealCode(String businessId, String phoneRaw) {
         ResolvedTab tab = resolveTab(businessId, phoneRaw);
-        return sendCode(PageSealScopes.CUSTOMER_TAB, tab.account().getId(), tab.phoneNormalized());
+        return sendCode(
+                PageSealScopes.CUSTOMER_TAB, tab.account().getId(), tab.phoneNormalized(), businessId);
     }
 
     @Transactional
@@ -354,7 +355,12 @@ public class PageSealService {
         return mintUnlock(PageSealScopes.CUSTOMER_TAB, account.getId());
     }
 
-    private PageSealSendCodeResponse sendCode(String scope, String subjectId, String phone) {
+    private PageSealSendCodeResponse sendCode(
+            String scope,
+            String subjectId,
+            String phone,
+            String businessId
+    ) {
         Instant now = Instant.now();
         challengeRepository.findFirstByScopeAndSubjectIdAndConsumedAtIsNullOrderByCreatedAtDesc(scope, subjectId)
                 .ifPresent(open -> {
@@ -386,12 +392,13 @@ public class PageSealService {
         challenge.setLastSentAt(now);
         challengeRepository.save(challenge);
 
-        TenantMessagingConfig messaging = messagingSettingsService.resolvePlatformForContactReply();
+        // Prefer tenant messaging (shop TextSMS/Sozuri + platform Meta). Platform-only missed
+        // tenant SMS and reported WhatsApp "sent" while the OTP never arrived.
+        TenantMessagingConfig messaging = resolveSealMessaging(businessId);
         boolean smsReady = messaging.enabled() && messaging.smsConfigured();
         boolean waReady = messaging.enabled() && messaging.metaWhatsAppConfigured();
         String message = "Your Kiosk seal code is " + code + ". Valid for "
                 + CODE_TTL.toMinutes() + " minutes. Do not share it.";
-        // Always try WhatsApp and SMS together when available so the code lands in either inbox.
         String channel;
         String outcome;
         if (!smsReady && !waReady) {
@@ -407,7 +414,7 @@ public class PageSealService {
                         HttpStatus.BAD_GATEWAY,
                         "Could not send verification code"
                                 + (delivery.detail() != null ? " (" + delivery.detail() + ")" : "")
-                                + ". Configure SMS (Sozuri/TextSMS) and Meta WhatsApp under"
+                                + ". Configure SMS (Sozuri/TextSMS) on this shop or under"
                                 + " Super Admin → Platform integrations.");
             }
         }
@@ -416,6 +423,18 @@ public class PageSealService {
                 ? code
                 : null;
         return new PageSealSendCodeResponse(maskPhone(phone), challenge.getExpiresAt(), channel, devCode);
+    }
+
+    private TenantMessagingConfig resolveSealMessaging(String businessId) {
+        if (businessId != null && !businessId.isBlank()) {
+            TenantMessagingConfig tenant = messagingSettingsService.resolveForTest(businessId);
+            if (tenant.secretsReadable()) {
+                return tenant;
+            }
+            log.warn("Seal OTP: tenant messaging secrets unreadable businessId={} — using platform",
+                    businessId);
+        }
+        return messagingSettingsService.resolvePlatformForContactReply();
     }
 
     private void verifyCodeAndConsume(String scope, String subjectId, String rawCode) {

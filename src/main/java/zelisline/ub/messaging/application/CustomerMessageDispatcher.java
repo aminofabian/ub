@@ -239,9 +239,12 @@ public class CustomerMessageDispatcher {
     }
 
     /**
-     * Sends the same free-form message on every configured channel (WhatsApp and/or SMS).
-     * Used for OTP verification so the customer can read the code from either inbox.
-     * Succeeds when at least one channel sends (or stubs); fails only if all attempts fail.
+     * OTP delivery: SMS first (reliable), then WhatsApp as a bonus.
+     *
+     * <p>Free-form WhatsApp alone must not count as success — Meta often accepts the API call
+     * outside the 24h window without the customer ever seeing the code. When SMS is configured,
+     * SMS must succeed (or stub). When SMS is not configured, the send fails with a clear error
+     * instead of returning a false WhatsApp "sent".
      */
     public DeliveryResult deliverBothChannels(
             TenantMessagingConfig messaging,
@@ -251,26 +254,41 @@ public class CustomerMessageDispatcher {
         String e164 = "+" + phoneDigits;
         boolean waConfigured = messaging.metaWhatsAppConfigured();
         boolean smsConfigured = messaging.smsConfigured();
+        var lookup = RapidApiWhatsAppLookupClient.LookupResult.lookupSkipped("otp_both_channels");
         if (!waConfigured && !smsConfigured) {
-            var lookup = RapidApiWhatsAppLookupClient.LookupResult.lookupSkipped("no_channels");
             return new DeliveryResult(
                     lookup,
                     "none",
                     "failed",
                     "WhatsApp and SMS are not configured");
         }
+        if (!smsConfigured) {
+            return new DeliveryResult(
+                    lookup,
+                    "none",
+                    "failed",
+                    "SMS is required for verification codes. Configure Sozuri or TextSMS under"
+                            + " Super Admin → Platform integrations. Free-form WhatsApp alone is"
+                            + " unreliable outside Meta's 24h window.");
+        }
 
-        var lookup = RapidApiWhatsAppLookupClient.LookupResult.lookupSkipped("otp_both_channels");
         boolean waOk = false;
         boolean smsOk = false;
         StringBuilder detail = new StringBuilder();
 
+        // SMS first — this is what the customer can actually read for OTPs.
+        var sms = smsMessagingClient.sendText(messaging, e164, message);
+        smsOk = sms.sent() || sms.stub();
+        if (smsOk) {
+            detail.append(sms.channel()).append(':').append(sms.sent() ? "sent" : "stub");
+        } else {
+            detail.append("sms_failed:").append(sms.detail());
+        }
+
         if (waConfigured) {
             var send = metaWhatsAppClient.sendText(messaging, phoneDigits, message);
             waOk = send.sent();
-            if (detail.length() > 0) {
-                detail.append("; ");
-            }
+            detail.append("; ");
             if (waOk) {
                 detail.append("whatsapp:sent");
             } else {
@@ -279,28 +297,19 @@ public class CustomerMessageDispatcher {
             }
         }
 
-        if (smsConfigured) {
-            var sms = smsMessagingClient.sendText(messaging, e164, message);
-            smsOk = sms.sent() || sms.stub();
-            if (detail.length() > 0) {
-                detail.append("; ");
-            }
-            if (smsOk) {
-                detail.append(sms.channel()).append(':').append(sms.sent() ? "sent" : "stub");
-            } else {
-                detail.append("sms_failed:").append(sms.detail());
-            }
-        }
-
-        if (!waOk && !smsOk) {
+        if (!smsOk) {
+            // Do not report WhatsApp-only success for OTPs.
             return new DeliveryResult(
-                    lookup, channelLabel(waConfigured, smsConfigured), "failed", detail.toString());
+                    lookup,
+                    channelLabel(waOk, false),
+                    "failed",
+                    detail.toString());
         }
 
         return new DeliveryResult(
                 lookup,
-                channelLabel(waOk, smsOk),
-                "sent",
+                channelLabel(waOk, true),
+                sms.sent() ? "sent" : "stub",
                 detail.toString());
     }
 

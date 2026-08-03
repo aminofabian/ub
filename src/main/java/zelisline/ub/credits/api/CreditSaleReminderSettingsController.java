@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -17,9 +18,11 @@ import zelisline.ub.credits.api.dto.CreditSaleReminderTestRequest;
 import zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse;
 import zelisline.ub.credits.api.dto.SmsTestSendRequest;
 import zelisline.ub.credits.api.dto.UpdateCreditSaleReminderSettingsRequest;
+import zelisline.ub.credits.api.dto.WhatsAppDiagnosticsResponse;
 import zelisline.ub.credits.api.dto.WhatsAppTestSendRequest;
 import zelisline.ub.credits.application.BusinessCreditMessagingSettingsService;
 import zelisline.ub.messaging.application.CreditSaleReminderService;
+import zelisline.ub.messaging.application.WhatsAppDiagnosticsService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
@@ -31,6 +34,7 @@ public class CreditSaleReminderSettingsController {
 
     private final BusinessCreditMessagingSettingsService messagingSettingsService;
     private final CreditSaleReminderService creditSaleReminderService;
+    private final WhatsAppDiagnosticsService whatsAppDiagnosticsService;
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'credits.customers.read')")
@@ -72,6 +76,20 @@ public class CreditSaleReminderSettingsController {
                 TenantRequestIds.resolveBusinessId(request),
                 body.phone(),
                 body.message());
+    }
+
+    /**
+     * Reads template + account health straight from Meta to explain cold-send failures.
+     */
+    @GetMapping("/whatsapp-diagnostics")
+    @PreAuthorize("hasPermission(null, 'credits.settings.write')")
+    public WhatsAppDiagnosticsResponse whatsAppDiagnostics(
+            @RequestParam(value = "wabaId", required = false) String wabaId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return whatsAppDiagnosticsService.diagnose(
+                TenantRequestIds.resolveBusinessId(request), wabaId);
     }
 
     @PostMapping("/test-sms")

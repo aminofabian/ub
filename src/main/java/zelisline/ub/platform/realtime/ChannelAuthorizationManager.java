@@ -56,6 +56,7 @@ public class ChannelAuthorizationManager {
     public static String requiredPermission(String channel) {
         return switch (channel) {
             case "pos" -> "sales.read";
+            case "pos_drafts" -> "pos.drafts.read";
             case "stock" -> "inventory.read";
             case "approvals" -> "approvals.approve";
             case "transfers" -> "inventory.read";

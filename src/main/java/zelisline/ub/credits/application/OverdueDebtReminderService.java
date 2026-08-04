@@ -76,14 +76,16 @@ public class OverdueDebtReminderService {
         int skipped = 0;
         for (CreditAccount account : eligible) {
             DispatchOutcome outcome = dispatch(account);
-            if ("skipped".equals(outcome.status())) {
-                skipped++;
-            } else {
+            boolean delivered = "sent".equals(outcome.status()) || "stub".equals(outcome.status());
+            if (delivered) {
                 sent++;
+                // Only advance the cooldown clock when Meta/SMS actually accepted the send.
+                account.setLastBalanceReminderAt(clock.instant());
+                account.setBalanceReminderCount(account.getBalanceReminderCount() + 1);
+                creditAccountRepository.save(account);
+            } else {
+                skipped++;
             }
-            account.setLastBalanceReminderAt(clock.instant());
-            account.setBalanceReminderCount(account.getBalanceReminderCount() + 1);
-            creditAccountRepository.save(account);
 
             CreditReminderRecord row = new CreditReminderRecord();
             row.setBusinessId(account.getBusinessId());
@@ -126,6 +128,18 @@ public class OverdueDebtReminderService {
         }
         if (account.isRemindersOptOut()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Customer opted out of reminders");
+        }
+
+        int cooldownDays = Math.max(1, intervalDays);
+        Instant last = account.getLastBalanceReminderAt();
+        if (last != null && last.isAfter(clock.instant().minus(Duration.ofDays(cooldownDays)))) {
+            long hoursLeft = Duration.between(clock.instant(), last.plus(Duration.ofDays(cooldownDays)))
+                    .toHours();
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Already reminded within the last " + cooldownDays + " days. "
+                            + "Try again in about " + Math.max(1, hoursLeft) + " hour(s) "
+                            + "(keeps WhatsApp quality from getting paused).");
         }
 
         Customer customer = customerRepository

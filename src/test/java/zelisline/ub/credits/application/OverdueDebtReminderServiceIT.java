@@ -99,6 +99,27 @@ class OverdueDebtReminderServiceIT {
         settings.setSmsProvider("none");
         businessCreditSettingsRepository.save(settings);
 
+        when(customerMessageDispatcher.deliverPaymentReminder(any(), anyString(), any(), anyString()))
+                .thenReturn(new CustomerMessageDispatcher.DeliveryResult(
+                        new zelisline.ub.messaging.infrastructure.RapidApiWhatsAppLookupClient.LookupResult(
+                                true, false, "test"),
+                        "sms_stub",
+                        "sent",
+                        "test"));
+        when(customerMessageDispatcher.deliverPaymentReminderDirect(any(), anyString(), any()))
+                .thenReturn(new CustomerMessageDispatcher.DeliveryResult(
+                        new zelisline.ub.messaging.infrastructure.RapidApiWhatsAppLookupClient.LookupResult(
+                                true, false, "test"),
+                        "sms_stub",
+                        "sent",
+                        "test"));
+        when(customerMessageDispatcher.deliverSmsOnly(any(), anyString(), anyString()))
+                .thenReturn(new CustomerMessageDispatcher.DeliveryResult(
+                        new zelisline.ub.messaging.infrastructure.RapidApiWhatsAppLookupClient.LookupResult(
+                                true, false, "test"),
+                        "sms_stub",
+                        "sent",
+                        "test"));
         when(customerMessageDispatcher.deliver(any(), anyString(), anyString()))
                 .thenReturn(new CustomerMessageDispatcher.DeliveryResult(
                         new zelisline.ub.messaging.infrastructure.RapidApiWhatsAppLookupClient.LookupResult(

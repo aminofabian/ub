@@ -615,9 +615,22 @@ public class PosDraftService {
     }
 
     private String lineSummary(PosDraftLine line) {
-        return "{\"itemId\":\"" + line.getItemId() + "\",\"qty\":"
-                + line.getQuantity().stripTrailingZeros().toPlainString()
+        return "{\"itemId\":\"" + escapeJson(line.getItemId())
+                + "\",\"itemName\":\"" + escapeJson(line.getItemName())
+                + "\",\"qty\":" + line.getQuantity().stripTrailingZeros().toPlainString()
                 + ",\"unitPrice\":" + line.getUnitPrice().stripTrailingZeros().toPlainString() + "}";
+    }
+
+    private static String escapeJson(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\t", "\\t");
     }
 
     private PosDraftResponse toResponse(PosDraft draft, List<PosDraftLine> lines) {

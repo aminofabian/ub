@@ -3,6 +3,7 @@ package zelisline.ub.messaging.application;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.text.NumberFormat;
+import java.time.Clock;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -51,6 +52,7 @@ public class CreditSaleReminderService {
     private final NotificationService notificationService;
     private final CustomerMessageDispatcher customerMessageDispatcher;
     private final ObjectMapper objectMapper;
+    private final Clock clock;
 
     @Transactional
     public void dispatch(CreditSaleReminderEvent event) {
@@ -117,8 +119,19 @@ public class CreditSaleReminderService {
                 messaging, phoneDigits, receiptParams, message);
         // Prefer the itemized free-form preview (matches SMS / in-window WhatsApp).
         saveDispatch(event, delivery.channel(), delivery.outcome(), delivery.detail(), message);
+        // Stamp the shared cooldown so overdue/manual balance reminders don't re-blast
+        // the same customer for interval-days after this sale receipt.
+        if ("sent".equals(delivery.outcome()) || "stub".equals(delivery.outcome())) {
+            creditAccount.ifPresent(this::markReminderSent);
+        }
         log.info("credit_sale_reminder sale={} customer={} channel={} outcome={} detail={}",
                 event.saleId(), event.customerId(), delivery.channel(), delivery.outcome(), delivery.detail());
+    }
+
+    private void markReminderSent(CreditAccount account) {
+        account.setLastBalanceReminderAt(clock.instant());
+        account.setBalanceReminderCount(account.getBalanceReminderCount() + 1);
+        creditAccountRepository.save(account);
     }
 
     /**

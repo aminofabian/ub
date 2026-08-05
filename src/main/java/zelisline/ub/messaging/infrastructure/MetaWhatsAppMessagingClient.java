@@ -79,7 +79,7 @@ public class MetaWhatsAppMessagingClient {
                             name, lang, shapeLabel(template));
                     return last;
                 }
-                if (last.authFailure()) {
+                if (last.authFailure() || last.templatePaused()) {
                     return last;
                 }
                 if (!looksLikeRetryableTemplateError(last.detail())) {
@@ -268,6 +268,10 @@ public class MetaWhatsAppMessagingClient {
         if (detail == null || detail.isBlank()) {
             return false;
         }
+        // Paused / pacing / quality holds are not fixed by language/shape retries.
+        if (looksLikeTemplatePaused(detail)) {
+            return false;
+        }
         String d = detail.toLowerCase(Locale.ROOT);
         return d.contains("template")
                 || d.contains("language")
@@ -284,6 +288,19 @@ public class MetaWhatsAppMessagingClient {
                 || d.contains("132012")
                 || d.contains("131008")
                 || d.contains("131009");
+    }
+
+    /** Meta paused the template (low quality) or paced it — typically 3h / 6h. */
+    static boolean looksLikeTemplatePaused(String detail) {
+        if (detail == null || detail.isBlank()) {
+            return false;
+        }
+        String d = detail.toLowerCase(Locale.ROOT);
+        return d.contains("paused")
+                || d.contains("temporarily unavailable")
+                || d.contains("template pacing")
+                || d.contains("message template is paused")
+                || d.contains("133016");
     }
 
     private static String shapeLabel(Map<String, Object> template) {
@@ -389,6 +406,10 @@ public class MetaWhatsAppMessagingClient {
 
         public boolean authFailure() {
             return httpStatus != null && (httpStatus == 401 || httpStatus == 403);
+        }
+
+        public boolean templatePaused() {
+            return looksLikeTemplatePaused(detail);
         }
     }
 }

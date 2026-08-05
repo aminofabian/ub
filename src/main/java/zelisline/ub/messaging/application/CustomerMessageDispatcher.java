@@ -352,6 +352,15 @@ public class CustomerMessageDispatcher {
         if (paymentReminderSend.authFailure()) {
             return failWhatsAppOrSms(messaging, e164, itemizedMessage, lookup, waTrail.toString(), true);
         }
+        if (paymentReminderSend.templatePaused()) {
+            return failWhatsAppOrSms(
+                    messaging,
+                    e164,
+                    itemizedMessage,
+                    lookup,
+                    waTrail + " (template paused by Meta — usually 3h/6h; use SMS until Active)",
+                    false);
+        }
 
         // 2) Richer receipt template when approved in Meta.
         var receiptSend = metaWhatsAppClient.sendTemplate(
@@ -367,6 +376,15 @@ public class CustomerMessageDispatcher {
         appendWaFailure(waTrail, receiptSend, "credit_sale_receipt");
         if (receiptSend.authFailure()) {
             return failWhatsAppOrSms(messaging, e164, itemizedMessage, lookup, waTrail.toString(), true);
+        }
+        if (receiptSend.templatePaused()) {
+            return failWhatsAppOrSms(
+                    messaging,
+                    e164,
+                    itemizedMessage,
+                    lookup,
+                    waTrail + " (template paused by Meta — usually 3h/6h; use SMS until Active)",
+                    false);
         }
 
         // 3) Free-form only helps inside the 24h session window.

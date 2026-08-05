@@ -64,8 +64,7 @@ public class TenantOpsAlertDispatcher {
             return;
         }
 
-        CustomerMessageDispatcher.DeliveryResult delivery =
-                customerMessageDispatcher.deliver(messaging, phone, message);
+        CustomerMessageDispatcher.DeliveryResult delivery = deliverOpsAlert(messaging, phone, message);
         log.info(
                 "ops_alert type={} business={} phone={} channel={} outcome={} detail={}",
                 type,
@@ -101,14 +100,36 @@ public class TenantOpsAlertDispatcher {
 
         String body = message != null && !message.isBlank()
                 ? message.trim()
-                : "Palmart ops alert test — if you received this, WhatsApp alerts are working.";
-        CustomerMessageDispatcher.DeliveryResult delivery =
-                customerMessageDispatcher.deliver(messaging, phone, body);
+                : "Palmart ops alert test — if you received this, WhatsApp/SMS alerts are working.";
+        CustomerMessageDispatcher.DeliveryResult delivery = deliverOpsAlert(messaging, phone, body);
+        if ("failed".equals(delivery.outcome()) || "skipped".equals(delivery.outcome())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    delivery.detail() != null && !delivery.detail().isBlank()
+                            ? delivery.detail()
+                            : "Ops alert test failed");
+        }
         return new OpsAlertTestSendResponse(
                 delivery.channel(),
                 delivery.outcome(),
                 delivery.detail(),
                 BusinessOpsAlertSettingsService.maskPhone(phone));
+    }
+
+    /**
+     * Owner alerts must arrive even when Meta's 24h free-form window is closed.
+     *
+     * <p>SMS-first when configured (same reliability model as OTP). Free-form WhatsApp alone
+     * often returns HTTP 200 outside the session window without the owner ever seeing it —
+     * which looked like "shift open/close messages aren't coming" while tests/templates still
+     * worked (or failed for a separate Meta-token reason).
+     */
+    private CustomerMessageDispatcher.DeliveryResult deliverOpsAlert(
+            TenantMessagingConfig messaging, String phone, String message) {
+        if (messaging.smsConfigured()) {
+            return customerMessageDispatcher.deliverBothChannels(messaging, phone, message);
+        }
+        return customerMessageDispatcher.deliver(messaging, phone, message);
     }
 
     public String shopName(String businessId) {

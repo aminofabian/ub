@@ -13,9 +13,9 @@ import zelisline.ub.messaging.infrastructure.SmsMessagingClient;
  * Shared WhatsApp/SMS delivery helper used by credit sale receipts and balance reminders.
  * Performs RapidAPI WhatsApp lookup, then Meta WhatsApp, then SMS fallback.
  *
- * <p>Credit sale receipts prefer free-form itemized text (24h window), then the approved
- * {@code credit_sale_receipt} template for cold outreach. Balance reminders use
- * {@code payment_reminder}. Free-form text is also used for SMS fallback.
+ * <p>Credit sale receipts try cold-safe templates first, then always send SMS when SMS is
+ * configured (so Meta pauses / 24h free-form gaps do not leave the customer with nothing).
+ * Balance reminders use {@code payment_reminder} with SMS fallback on failure.
  */
 @Component
 @RequiredArgsConstructor
@@ -335,6 +335,8 @@ public class CustomerMessageDispatcher {
             RapidApiWhatsAppLookupClient.LookupResult lookup
     ) {
         StringBuilder waTrail = new StringBuilder();
+        boolean templateDelivered = false;
+        String waSuccessDetail = null;
 
         // 1) Known-good cold template first — reaches numbers that have never messaged the biz.
         List<String> paymentReminderParams = paymentReminderParamsFromReceipt(receiptParams);
@@ -345,62 +347,95 @@ public class CustomerMessageDispatcher {
                 PAYMENT_REMINDER_LANGUAGE,
                 paymentReminderParams);
         if (paymentReminderSend.sent()) {
-            return new DeliveryResult(
-                    lookup, paymentReminderSend.channel(), "sent", "template:" + PAYMENT_REMINDER_TEMPLATE);
+            templateDelivered = true;
+            waSuccessDetail = "template:" + PAYMENT_REMINDER_TEMPLATE;
+        } else {
+            appendWaFailure(waTrail, paymentReminderSend, "payment_reminder");
+            if (paymentReminderSend.templatePaused()) {
+                waTrail.append(" (template paused by Meta — usually 3h/6h)");
+            }
         }
-        appendWaFailure(waTrail, paymentReminderSend, "payment_reminder");
-        if (paymentReminderSend.authFailure()) {
-            return failWhatsAppOrSms(messaging, e164, itemizedMessage, lookup, waTrail.toString(), true);
-        }
-        if (paymentReminderSend.templatePaused()) {
-            return failWhatsAppOrSms(
+
+        // 2) Richer receipt template when the first template missed (or was paused).
+        if (!templateDelivered) {
+            var receiptSend = metaWhatsAppClient.sendTemplate(
                     messaging,
-                    e164,
-                    itemizedMessage,
-                    lookup,
-                    waTrail + " (template paused by Meta — usually 3h/6h; use SMS until Active)",
-                    false);
+                    phoneDigits,
+                    CREDIT_SALE_RECEIPT_TEMPLATE,
+                    CREDIT_SALE_RECEIPT_LANGUAGE,
+                    receiptParams);
+            if (receiptSend.sent()) {
+                templateDelivered = true;
+                waSuccessDetail = "template:" + CREDIT_SALE_RECEIPT_TEMPLATE;
+            } else {
+                appendWaFailure(waTrail, receiptSend, "credit_sale_receipt");
+                if (receiptSend.templatePaused()) {
+                    waTrail.append(" (template paused by Meta — usually 3h/6h)");
+                }
+            }
         }
 
-        // 2) Richer receipt template when approved in Meta.
-        var receiptSend = metaWhatsAppClient.sendTemplate(
-                messaging,
-                phoneDigits,
-                CREDIT_SALE_RECEIPT_TEMPLATE,
-                CREDIT_SALE_RECEIPT_LANGUAGE,
-                receiptParams);
-        if (receiptSend.sent()) {
+        // 3) Free-form only helps inside the 24h session window — never treat as sole success
+        // when SMS is available (Meta often returns HTTP 200 without the customer seeing it).
+        boolean freeFormAccepted = false;
+        if (!templateDelivered) {
+            var textSend = metaWhatsAppClient.sendText(messaging, phoneDigits, itemizedMessage);
+            if (textSend.sent()) {
+                freeFormAccepted = true;
+                waSuccessDetail = "text:itemized";
+            } else {
+                appendWaFailure(waTrail, textSend, "text");
+            }
+        }
+
+        // Credit-sale exception: always send SMS when configured so the customer gets a
+        // receipt even during Meta pauses / outside the 24h window.
+        if (messaging.smsConfigured()) {
+            var sms = smsMessagingClient.sendText(messaging, e164, itemizedMessage);
+            boolean smsOk = sms.sent() || sms.stub();
+            StringBuilder detail = new StringBuilder();
+            if (templateDelivered || freeFormAccepted) {
+                detail.append(waSuccessDetail);
+            } else if (!waTrail.isEmpty()) {
+                detail.append(waTrail);
+            } else {
+                detail.append("whatsapp_failed");
+            }
+            if (smsOk) {
+                detail.append("; sms:").append(sms.detail());
+                String channel = (templateDelivered || freeFormAccepted)
+                        ? channelLabel(true, true)
+                        : sms.channel();
+                return new DeliveryResult(
+                        lookup,
+                        channel,
+                        sms.sent() ? "sent" : "stub",
+                        detail.toString());
+            }
+            detail.append("; sms_failed:").append(sms.detail());
+            if (templateDelivered) {
+                // Template API accept is still the best WhatsApp signal we have.
+                return new DeliveryResult(lookup, "whatsapp", "sent", detail.toString());
+            }
+            // Free-form-only accept without SMS is unreliable — report failed so ops notice.
             return new DeliveryResult(
-                    lookup, receiptSend.channel(), "sent", "template:" + CREDIT_SALE_RECEIPT_TEMPLATE);
-        }
-        appendWaFailure(waTrail, receiptSend, "credit_sale_receipt");
-        if (receiptSend.authFailure()) {
-            return failWhatsAppOrSms(messaging, e164, itemizedMessage, lookup, waTrail.toString(), true);
-        }
-        if (receiptSend.templatePaused()) {
-            return failWhatsAppOrSms(
-                    messaging,
-                    e164,
-                    itemizedMessage,
                     lookup,
-                    waTrail + " (template paused by Meta — usually 3h/6h; use SMS until Active)",
-                    false);
+                    freeFormAccepted ? "whatsapp" : "whatsapp",
+                    "failed",
+                    detail.toString());
         }
 
-        // 3) Free-form only helps inside the 24h session window.
-        var textSend = metaWhatsAppClient.sendText(messaging, phoneDigits, itemizedMessage);
-        if (textSend.sent()) {
-            return new DeliveryResult(lookup, textSend.channel(), "sent", "text:itemized");
+        if (templateDelivered) {
+            return new DeliveryResult(lookup, "whatsapp", "sent", waSuccessDetail);
         }
-        appendWaFailure(waTrail, textSend, "text");
-
-        return failWhatsAppOrSms(
-                messaging,
-                e164,
-                itemizedMessage,
+        if (freeFormAccepted) {
+            return new DeliveryResult(lookup, "whatsapp", "sent", waSuccessDetail);
+        }
+        return new DeliveryResult(
                 lookup,
-                waTrail.toString(),
-                textSend.authFailure());
+                "whatsapp",
+                "failed",
+                waTrail.isEmpty() ? "whatsapp_failed" : waTrail.toString());
     }
 
     /** Map receipt params → payment_reminder {{name}}, {{balance}}, {{link}}. */

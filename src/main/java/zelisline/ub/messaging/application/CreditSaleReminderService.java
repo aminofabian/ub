@@ -58,6 +58,17 @@ public class CreditSaleReminderService {
     public void dispatch(CreditSaleReminderEvent event) {
         TenantMessagingConfig messaging = messagingSettingsService.resolveForDispatch(event.businessId());
         if (!messaging.enabled()) {
+            String skipReason = messaging.secretsReadError() != null && !messaging.secretsReadError().isBlank()
+                    ? "secrets_unreadable"
+                    : "reminders_disabled";
+            if (!dispatchRepository.existsBySaleId(event.saleId())) {
+                saveDispatch(event, "none", "skipped", skipReason, null);
+            }
+            log.info(
+                    "credit_sale_reminder skipped sale={} reason={} secretsError={}",
+                    event.saleId(),
+                    skipReason,
+                    messaging.secretsReadError());
             return;
         }
         if (dispatchRepository.existsBySaleId(event.saleId())) {

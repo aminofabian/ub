@@ -11,6 +11,9 @@ public record StorefrontPatchRequest(
         @Size(max = 64) String label,
         @Size(max = 500) String announcement,
         @Size(max = 12) List<@Size(max = 36) String> featuredItemIds,
-        @Size(max = 100) List<@Valid DeliveryAreaDto> deliveryAreas
+        @Size(max = 100) List<@Valid DeliveryAreaDto> deliveryAreas,
+        @Size(max = 64) String storeThemeId,
+        @Size(max = 64) String landingTemplateId,
+        @Valid LandingContentDto landingContent
 ) {
 }

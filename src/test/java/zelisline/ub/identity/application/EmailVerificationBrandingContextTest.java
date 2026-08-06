@@ -46,6 +46,9 @@ class EmailVerificationBrandingContextTest {
                         new TenantPasswordPolicyDto(8, false, false)),
                 java.util.Map.of(),
                 true,
+                "mart",
+                "coming-soon-editorial",
+                null,
                 java.time.Instant.now(),
                 "KE",
                 java.util.List.of());

@@ -27,6 +27,9 @@ public record PublicHostResolveResponse(
         TenantAuthConfigDto authConfig,
         Map<String, Boolean> featureFlags,
         boolean storefrontEnabled,
+        String storeThemeId,
+        String landingTemplateId,
+        LandingContentDto landingContent,
         Instant resolvedAt,
         /** ISO-3166 alpha-2 when known (e.g. {@code KE}). */
         String countryCode,

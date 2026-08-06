@@ -8,7 +8,10 @@ public record StorefrontSettingsResponse(
         String label,
         String announcement,
         List<String> featuredItemIds,
-        List<DeliveryAreaDto> deliveryAreas
+        List<DeliveryAreaDto> deliveryAreas,
+        String storeThemeId,
+        String landingTemplateId,
+        LandingContentDto landingContent
 ) {
     public static StorefrontSettingsResponse defaults() {
         return new StorefrontSettingsResponse(
@@ -17,7 +20,10 @@ public record StorefrontSettingsResponse(
                 null,
                 null,
                 List.of(),
-                DeliveryAreaDefaults.seed()
+                DeliveryAreaDefaults.seed(),
+                StorefrontTemplateIds.DEFAULT_STORE_THEME,
+                StorefrontTemplateIds.DEFAULT_LANDING_TEMPLATE,
+                null
         );
     }
 }

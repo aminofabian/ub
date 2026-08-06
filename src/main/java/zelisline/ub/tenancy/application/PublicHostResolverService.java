@@ -288,6 +288,9 @@ public class PublicHostResolverService {
                 config.authConfig(),
                 config.featureFlags(),
                 storefront.enabled(),
+                storefront.storeThemeId(),
+                storefront.landingTemplateId(),
+                storefront.landingContent(),
                 Instant.now(),
                 countryCode,
                 localities.isEmpty() ? List.of() : localities

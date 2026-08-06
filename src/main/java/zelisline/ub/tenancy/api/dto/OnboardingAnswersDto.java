@@ -18,6 +18,8 @@ public record OnboardingAnswersDto(
         List<@Pattern(regexp = StoreTypeCodes.PATTERN) String> storeTypes,
         List<@Size(max = 120) String> selectedDepartments,
         @Pattern(regexp = "yes|no") String onlineStore,
+        @Size(max = 64) String storeThemeId,
+        @Size(max = 64) String landingTemplateId,
         @Size(max = 255) String displayName,
         @Size(max = 32) String primaryColor,
         @Size(max = 32) String accentColor

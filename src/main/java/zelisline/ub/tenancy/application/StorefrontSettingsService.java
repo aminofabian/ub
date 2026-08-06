@@ -19,10 +19,12 @@ import zelisline.ub.tenancy.api.dto.DeliveryAreaDefaults;
 import zelisline.ub.tenancy.api.dto.DeliveryAreaDto;
 import zelisline.ub.tenancy.api.dto.FeatureFlagsPatchRequest;
 import zelisline.ub.tenancy.api.dto.HubAlertsFeatureFlagsPatch;
+import zelisline.ub.tenancy.api.dto.LandingContentDto;
 import zelisline.ub.tenancy.api.dto.PosDraftsFeatureFlagsPatch;
 import zelisline.ub.tenancy.api.dto.PosTillListenFeatureFlagsPatch;
 import zelisline.ub.tenancy.api.dto.StorefrontPatchRequest;
 import zelisline.ub.tenancy.api.dto.StorefrontSettingsResponse;
+import zelisline.ub.tenancy.api.dto.StorefrontTemplateIds;
 import zelisline.ub.tenancy.api.dto.TenantAuthConfigDto;
 import zelisline.ub.tenancy.api.dto.TenantBrandingDto;
 import zelisline.ub.tenancy.api.dto.TenantConfigBundle;
@@ -70,7 +72,14 @@ public class StorefrontSettingsService {
                 textOrNull(sf.get("label")),
                 textOrNull(sf.get("announcement")),
                 readFeaturedIds(sf.get("featuredItemIds")),
-                readDeliveryAreas(sf.get("deliveryAreas"))
+                readDeliveryAreas(sf.get("deliveryAreas")),
+                StorefrontTemplateIds.normalizeStoreThemeId(
+                    textOrNull(sf.get("storeThemeId"))
+                ),
+                StorefrontTemplateIds.normalizeLandingTemplateId(
+                    textOrNull(sf.get("landingTemplateId"))
+                ),
+                readLandingContent(sf.get("landingContent"))
             );
         } catch (Exception e) {
             return StorefrontSettingsResponse.defaults();
@@ -821,6 +830,46 @@ public class StorefrontSettingsService {
             // Explicit empty list = no served areas (does not fall back to seed).
             storefront.set("deliveryAreas", arr);
         }
+        if (patch.storeThemeId() != null) {
+            String themeId = patch.storeThemeId().trim();
+            if (themeId.isEmpty()) {
+                storefront.remove("storeThemeId");
+            } else {
+                storefront.put("storeThemeId", themeId);
+            }
+        }
+        if (patch.landingTemplateId() != null) {
+            String landingId = patch.landingTemplateId().trim();
+            if (landingId.isEmpty()) {
+                storefront.remove("landingTemplateId");
+            } else {
+                storefront.put("landingTemplateId", landingId);
+            }
+        }
+        if (patch.landingContent() != null) {
+            LandingContentDto content = patch.landingContent();
+            boolean allEmpty =
+                isBlank(content.headline())
+                    && isBlank(content.subheadline())
+                    && isBlank(content.phone())
+                    && isBlank(content.whatsapp())
+                    && isBlank(content.hours())
+                    && isBlank(content.address())
+                    && isBlank(content.ctaLabel());
+            if (allEmpty) {
+                storefront.remove("landingContent");
+            } else {
+                ObjectNode node = objectMapper.createObjectNode();
+                putTextIfPresent(node, "headline", content.headline());
+                putTextIfPresent(node, "subheadline", content.subheadline());
+                putTextIfPresent(node, "phone", content.phone());
+                putTextIfPresent(node, "whatsapp", content.whatsapp());
+                putTextIfPresent(node, "hours", content.hours());
+                putTextIfPresent(node, "address", content.address());
+                putTextIfPresent(node, "ctaLabel", content.ctaLabel());
+                storefront.set("landingContent", node);
+            }
+        }
     }
 
     private void validateStorefrontForBusiness(
@@ -843,6 +892,18 @@ public class StorefrontSettingsService {
                 throw badRequest("Catalog branch must be active");
             }
         }
+        String storeThemeId = textOrNull(storefront.get("storeThemeId"));
+        if (storeThemeId != null && !StorefrontTemplateIds.isValidStoreThemeId(storeThemeId)) {
+            throw badRequest("Unknown storeThemeId: " + storeThemeId);
+        }
+        String landingTemplateId = textOrNull(storefront.get("landingTemplateId"));
+        if (
+            landingTemplateId != null
+                && !StorefrontTemplateIds.isValidLandingTemplateId(landingTemplateId)
+        ) {
+            throw badRequest("Unknown landingTemplateId: " + landingTemplateId);
+        }
+
         JsonNode featured = storefront.get("featuredItemIds");
         if (featured != null && !featured.isNull()) {
             if (!featured.isArray()) {
@@ -948,6 +1009,49 @@ public class StorefrontSettingsService {
         }
         String s = node.asText().trim();
         return s.isEmpty() ? null : s;
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private static void putTextIfPresent(ObjectNode node, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            node.put(key, value.trim());
+        }
+    }
+
+    private static LandingContentDto readLandingContent(JsonNode node) {
+        if (node == null || node.isNull() || !node.isObject()) {
+            return null;
+        }
+        String headline = textOrNull(node.get("headline"));
+        String subheadline = textOrNull(node.get("subheadline"));
+        String phone = textOrNull(node.get("phone"));
+        String whatsapp = textOrNull(node.get("whatsapp"));
+        String hours = textOrNull(node.get("hours"));
+        String address = textOrNull(node.get("address"));
+        String ctaLabel = textOrNull(node.get("ctaLabel"));
+        if (
+            headline == null
+                && subheadline == null
+                && phone == null
+                && whatsapp == null
+                && hours == null
+                && address == null
+                && ctaLabel == null
+        ) {
+            return null;
+        }
+        return new LandingContentDto(
+            headline,
+            subheadline,
+            phone,
+            whatsapp,
+            hours,
+            address,
+            ctaLabel
+        );
     }
 
     private static List<String> readFeaturedIds(JsonNode arrayNode) {

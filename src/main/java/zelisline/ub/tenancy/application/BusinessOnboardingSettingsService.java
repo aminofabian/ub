@@ -37,6 +37,8 @@ public class BusinessOnboardingSettingsService {
     private static final String KEY_STORE_TYPES = "storeTypes";
     private static final String KEY_SELECTED_DEPARTMENTS = "selectedDepartments";
     private static final String KEY_ONLINE_STORE = "onlineStore";
+    private static final String KEY_STORE_THEME_ID = "storeThemeId";
+    private static final String KEY_LANDING_TEMPLATE_ID = "landingTemplateId";
     private static final String KEY_DISPLAY_NAME = "displayName";
     private static final String KEY_PRIMARY_COLOR = "primaryColor";
     private static final String KEY_ACCENT_COLOR = "accentColor";
@@ -140,6 +142,8 @@ public class BusinessOnboardingSettingsService {
                         && storeTypes.isEmpty()
                         && departments.isEmpty()
                         && answers.path(KEY_ONLINE_STORE).isMissingNode()
+                        && answers.path(KEY_STORE_THEME_ID).isMissingNode()
+                        && answers.path(KEY_LANDING_TEMPLATE_ID).isMissingNode()
                         && answers.path(KEY_DISPLAY_NAME).isMissingNode()
                         && answers.path(KEY_PRIMARY_COLOR).isMissingNode()
                         && answers.path(KEY_ACCENT_COLOR).isMissingNode()
@@ -153,6 +157,8 @@ public class BusinessOnboardingSettingsService {
                 storeTypes.isEmpty() ? null : storeTypes,
                 departments.isEmpty() ? null : departments,
                 textOrNull(answers.path(KEY_ONLINE_STORE)),
+                textOrNull(answers.path(KEY_STORE_THEME_ID)),
+                textOrNull(answers.path(KEY_LANDING_TEMPLATE_ID)),
                 textOrNull(answers.path(KEY_DISPLAY_NAME)),
                 textOrNull(answers.path(KEY_PRIMARY_COLOR)),
                 textOrNull(answers.path(KEY_ACCENT_COLOR))
@@ -209,6 +215,12 @@ public class BusinessOnboardingSettingsService {
         }
         if (patch.onlineStore() != null) {
             answers.put(KEY_ONLINE_STORE, patch.onlineStore().trim());
+        }
+        if (patch.storeThemeId() != null) {
+            answers.put(KEY_STORE_THEME_ID, patch.storeThemeId().trim());
+        }
+        if (patch.landingTemplateId() != null) {
+            answers.put(KEY_LANDING_TEMPLATE_ID, patch.landingTemplateId().trim());
         }
         if (patch.displayName() != null) {
             answers.put(KEY_DISPLAY_NAME, patch.displayName().trim());

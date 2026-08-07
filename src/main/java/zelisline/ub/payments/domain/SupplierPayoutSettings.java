@@ -28,6 +28,10 @@ public class SupplierPayoutSettings {
     @Column(name = "payment_gateway_config_id", length = 36)
     private String paymentGatewayConfigId;
 
+    /** When true (and {@link #enabled}), unpaid supply bills are auto-paid via Send Money on schedule. */
+    @Column(name = "auto_pay_enabled", nullable = false)
+    private boolean autoPayEnabled;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -52,6 +56,7 @@ public class SupplierPayoutSettings {
         SupplierPayoutSettings row = new SupplierPayoutSettings();
         row.setBusinessId(businessId);
         row.setEnabled(false);
+        row.setAutoPayEnabled(false);
         return row;
     }
 }

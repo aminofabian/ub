@@ -68,6 +68,23 @@ public class SupplierPayoutSettingsService {
             }
         } else {
             settings.setPaymentGatewayConfigId(null);
+            settings.setAutoPayEnabled(false);
+        }
+
+        if (request.autoPayEnabled() != null) {
+            if (request.autoPayEnabled()) {
+                if (!settings.isEnabled()) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "Enable supplier payouts before turning on auto-pay");
+                }
+                if (resolveActivePayoutConfig(businessId, settings).isEmpty()) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "Choose an active payout gateway before turning on auto-pay");
+                }
+                settings.setAutoPayEnabled(true);
+            } else {
+                settings.setAutoPayEnabled(false);
+            }
         }
 
         settingsRepository.save(settings);
@@ -90,6 +107,11 @@ public class SupplierPayoutSettingsService {
         return settingsRepository.findById(businessId)
                 .map(SupplierPayoutSettings::isEnabled)
                 .orElse(false);
+    }
+
+    @Transactional(readOnly = true)
+    public List<SupplierPayoutSettings> listAutoPayEnabledSettings() {
+        return settingsRepository.findByEnabledTrueAndAutoPayEnabledTrue();
     }
 
     private Optional<PaymentGatewayConfig> resolveActivePayoutConfig(
@@ -172,6 +194,7 @@ public class SupplierPayoutSettingsService {
                 resolved.map(c -> c.getGatewayType().name()).orElse(null),
                 resolved.map(PaymentGatewayConfig::getLabel).orElse(null),
                 resolved.isPresent(),
+                settings.isAutoPayEnabled(),
                 selectable);
     }
 }

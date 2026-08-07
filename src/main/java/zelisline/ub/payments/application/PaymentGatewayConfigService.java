@@ -30,6 +30,7 @@ import zelisline.ub.payments.domain.PlatformPaymentGateway;
 import zelisline.ub.payments.domain.spi.PaymentGateway;
 import zelisline.ub.payments.domain.spi.ValidationResult;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
+import zelisline.ub.payments.infrastructure.PaystackPaymentGateway;
 import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
 
 /**
@@ -140,6 +141,7 @@ public class PaymentGatewayConfigService {
         cfg.setStatus(type == GatewayType.MANUAL ? GatewayStatus.ACTIVE : GatewayStatus.DRAFT);
 
         if (request.credentialsJson() != null && !request.credentialsJson().isBlank()) {
+            validatePaystackCredentialsIfNeeded(type, request.credentialsJson());
             cfg.setCredentialsJson(encryptionService.encrypt(request.credentialsJson()));
         }
         if (request.displayInstructionsJson() != null && !request.displayInstructionsJson().isBlank()) {
@@ -193,6 +195,8 @@ public class PaymentGatewayConfigService {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "Invalid credentials JSON: " + e.getMessage());
             }
+
+            validatePaystackCredentialsIfNeeded(cfg.getGatewayType(), after);
 
             boolean sameAsBefore = before != null && before.equals(after);
             if (!sameAsBefore) {
@@ -452,6 +456,30 @@ public class PaymentGatewayConfigService {
             v = v.substring(1, v.length() - 1).strip();
         }
         return v;
+    }
+
+    /** Enforce Paystack key prefixes match the selected environment on save. */
+    private void validatePaystackCredentialsIfNeeded(GatewayType type, String credentialsJson) {
+        if (type != GatewayType.PAYSTACK || credentialsJson == null || credentialsJson.isBlank()) {
+            return;
+        }
+        try {
+            validatePaystackCredentialsIfNeeded(type, parseCredentialsMap(credentialsJson));
+        } catch (JsonProcessingException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Invalid credentials JSON: " + e.getMessage());
+        }
+    }
+
+    private void validatePaystackCredentialsIfNeeded(GatewayType type, Map<String, String> creds) {
+        if (type != GatewayType.PAYSTACK || creds == null || creds.isEmpty()) {
+            return;
+        }
+        ValidationResult mismatch = PaystackPaymentGateway.validateKeyEnvironment(creds);
+        if (mismatch != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    mismatch.errorMessage() != null ? mismatch.errorMessage() : "Paystack key/environment mismatch");
+        }
     }
 
     /**

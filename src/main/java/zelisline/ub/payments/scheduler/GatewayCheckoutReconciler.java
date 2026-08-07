@@ -39,7 +39,7 @@ public class GatewayCheckoutReconciler {
     public void reconcilePending() {
         Instant cutoff = Instant.now().minus(maxAgeMinutes, ChronoUnit.MINUTES);
         try {
-            checkoutService.reconcileStalePending(cutoff, maxAttempts);
+            checkoutService.reconcileStalePending(cutoff, cutoff, maxAttempts);
         } catch (Exception e) {
             log.warn("Paystack checkout reconcile run failed: {}", e.getMessage());
         }

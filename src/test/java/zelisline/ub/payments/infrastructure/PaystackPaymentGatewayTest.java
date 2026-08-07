@@ -114,6 +114,16 @@ class PaystackPaymentGatewayTest {
     }
 
     @Test
+    void keyEnvironmentRejectsMalformedPrefixes() {
+        ValidationResult result = PaystackPaymentGateway.validateKeyEnvironment(Map.of(
+                "environment", "sandbox",
+                "publicKey", "pk_test_abc",
+                "secretKey", "not_a_paystack_key"));
+        assertThat(result).isNotNull();
+        assertThat(result.errorCode()).isEqualTo("KEY_PREFIX");
+    }
+
+    @Test
     void keyEnvironmentAcceptsSandboxTestKeys() {
         ValidationResult result = PaystackPaymentGateway.validateKeyEnvironment(Map.of(
                 "environment", "sandbox",

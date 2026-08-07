@@ -1,9 +1,12 @@
 package zelisline.ub.payments.application;
 
 import java.math.BigDecimal;
+import java.net.URI;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -44,6 +47,8 @@ import zelisline.ub.storefront.WebOrderStatuses;
 import zelisline.ub.storefront.application.WebOrderFulfillmentService;
 import zelisline.ub.storefront.domain.WebOrder;
 import zelisline.ub.storefront.repository.WebOrderRepository;
+import zelisline.ub.tenancy.domain.DomainMapping;
+import zelisline.ub.tenancy.repository.DomainMappingRepository;
 
 /**
  * Orchestrates provider-hosted checkout attempts ({@code gateway_checkouts}).
@@ -59,7 +64,7 @@ public class GatewayCheckoutService {
 
     private static final Logger log = LoggerFactory.getLogger(GatewayCheckoutService.class);
 
-    /** Max |webhook amount − stored amount| before we warn (mirrors STK tolerance). */
+    /** Max |provider amount − stored amount| before we refuse to confirm. */
     private static final BigDecimal AMOUNT_TOLERANCE = new BigDecimal("1.00");
 
     private final GatewayCheckoutRepository checkoutRepository;
@@ -71,10 +76,14 @@ public class GatewayCheckoutService {
     private final WebOrderRepository webOrderRepository;
     private final WebOrderFulfillmentService webOrderFulfillmentService;
     private final NotificationOutboxService notificationOutboxService;
+    private final DomainMappingRepository domainMappingRepository;
     private final ObjectMapper objectMapper;
 
     @Value("${app.public.frontend-base-url:http://localhost:3000}")
     private String frontendBaseUrl;
+
+    @Value("${app.tenancy.platform-hosts:kiosk.ke,www.kiosk.ke}")
+    private String platformHostsCsv;
 
     // ── Initiation ───────────────────────────────────────────────────
 
@@ -82,17 +91,26 @@ public class GatewayCheckoutService {
      * Initialize a hosted checkout for a web order against the business's
      * ACTIVE Paystack config. Persists the PENDING row first so an immediate
      * webhook can still resolve it.
+     *
+     * @param returnOrigin optional browser origin ({@code window.location.origin})
+     *                     so custom-domain shoppers return to the same host
      */
     @Transactional
     public CheckoutInitiation initiateWebOrderCheckout(
             String businessId,
+            String businessSlug,
             String orderId,
             String preferredConfigId,
-            String email
+            String email,
+            String returnOrigin
     ) {
         WebOrder order = webOrderRepository.findById(orderId).orElse(null);
         if (order == null || !businessId.equals(order.getBusinessId())) {
             return CheckoutInitiation.rejected(null, null, "Order not found");
+        }
+        if (!WebOrderStatuses.PENDING_PAYMENT.equals(order.getStatus())
+                && !WebOrderStatuses.PAYMENT_FAILED.equals(order.getStatus())) {
+            return CheckoutInitiation.rejected(null, null, "Order is not awaiting payment");
         }
 
         PaymentGatewayConfig cfg = resolvePaystackConfig(businessId, preferredConfigId);
@@ -101,8 +119,7 @@ public class GatewayCheckoutService {
         }
 
         String reference = buildReference(cfg.getId(), order.getId());
-        String callbackUrl = frontendBaseUrl.replaceAll("/$", "")
-                + "/shop/checkout?order=" + order.getId();
+        String callbackUrl = buildCallbackUrl(businessId, businessSlug, returnOrigin, order.getId());
         String customerEmail = resolveEmail(email, order);
 
         GatewayCheckout row = new GatewayCheckout();
@@ -175,6 +192,9 @@ public class GatewayCheckoutService {
     /**
      * Settle a signature-verified webhook. Idempotent via
      * {@code payment_webhook_events} (gateway event id = Paystack data.id).
+     *
+     * <p>On success events we always re-verify with the Paystack API before
+     * confirming — the signed payload alone is not enough to mark paid.
      */
     @Transactional
     public boolean handleWebhook(String businessId, String configId, WebhookResult parsed) {
@@ -214,7 +234,8 @@ public class GatewayCheckoutService {
         }
 
         if (parsed.success()) {
-            confirmCheckout(checkout, parsed.gatewayTransactionId(), parsed.amount());
+            // Scope §4.3: signature → ingest → verify → mark paid
+            verifyAndUpdate(checkout);
         } else if (parsed.terminalFailure()) {
             markFailed(checkout, parsed.failureMessage() != null
                     ? parsed.failureMessage()
@@ -265,10 +286,14 @@ public class GatewayCheckoutService {
 
     // ── Reconciliation (scheduler) ───────────────────────────────────
 
-    public void reconcileStalePending(Instant createdAfter, int maxAttempts) {
-        var pending = checkoutRepository.findByStatusAndCreatedAtAfterOrderByCreatedAtAsc(
+    /**
+     * Verify recent PENDING checkouts; abandon anything older than
+     * {@code abandonBefore} or that has exhausted {@code maxAttempts}.
+     */
+    public void reconcileStalePending(Instant createdAfter, Instant abandonBefore, int maxAttempts) {
+        var recent = checkoutRepository.findByStatusAndCreatedAtAfterOrderByCreatedAtAsc(
                 GatewayCheckoutStatuses.PENDING, createdAfter);
-        for (GatewayCheckout checkout : pending) {
+        for (GatewayCheckout checkout : recent) {
             try {
                 if (checkout.getVerifyCount() >= maxAttempts) {
                     markCancelled(checkout, "Checkout abandoned — no payment after " + maxAttempts + " verify attempts");
@@ -277,6 +302,22 @@ public class GatewayCheckoutService {
                 }
             } catch (Exception e) {
                 log.warn("Paystack reconcile failed for checkout={}: {}", checkout.getId(), e.getMessage());
+            }
+        }
+
+        var abandoned = checkoutRepository.findByStatusAndCreatedAtBeforeOrderByCreatedAtAsc(
+                GatewayCheckoutStatuses.PENDING, abandonBefore, PageRequest.of(0, 100));
+        for (GatewayCheckout checkout : abandoned) {
+            try {
+                // One last verify in case payment completed just outside the window
+                if (checkout.getVerifyCount() < maxAttempts) {
+                    verifyAndUpdate(checkout);
+                }
+                if (GatewayCheckoutStatuses.PENDING.equals(checkout.getStatus())) {
+                    markCancelled(checkout, "Checkout abandoned — older than reconcile window");
+                }
+            } catch (Exception e) {
+                log.warn("Paystack abandon failed for checkout={}: {}", checkout.getId(), e.getMessage());
             }
         }
     }
@@ -312,8 +353,11 @@ public class GatewayCheckoutService {
         }
         if (providerAmount != null
                 && providerAmount.subtract(checkout.getAmount()).abs().compareTo(AMOUNT_TOLERANCE) > 0) {
-            log.warn("Paystack amount mismatch checkout={} expected={} got={}",
+            log.error("Paystack amount mismatch checkout={} expected={} got={} — refusing to confirm",
                     checkout.getId(), checkout.getAmount(), providerAmount);
+            markFailed(checkout, "Amount mismatch: expected " + checkout.getAmount()
+                    + " got " + providerAmount);
+            return;
         }
         checkout.setStatus(GatewayCheckoutStatuses.SUCCESS);
         checkout.setProviderTransactionId(providerTxnId != null ? providerTxnId : checkout.getProviderTransactionId());
@@ -416,6 +460,107 @@ public class GatewayCheckoutService {
             return creds;
         } catch (Exception e) {
             throw new RuntimeException("Failed to read gateway credentials", e);
+        }
+    }
+
+    /**
+     * Build Paystack callback URL, preferring the shopper's browser origin when
+     * it matches this business (platform subdomain, custom domain, or the
+     * configured public frontend base). Unknown origins fall back to
+     * {@code app.public.frontend-base-url} (open-redirect safe).
+     */
+    private String buildCallbackUrl(
+            String businessId,
+            String businessSlug,
+            String returnOrigin,
+            String orderId
+    ) {
+        String base = resolveAllowedReturnOrigin(businessId, businessSlug, returnOrigin);
+        return base.replaceAll("/$", "") + "/shop/checkout?order=" + orderId;
+    }
+
+    private String resolveAllowedReturnOrigin(String businessId, String businessSlug, String returnOrigin) {
+        String fallback = frontendBaseUrl == null || frontendBaseUrl.isBlank()
+                ? "http://localhost:3000"
+                : frontendBaseUrl.trim();
+        if (returnOrigin == null || returnOrigin.isBlank()) {
+            return fallback;
+        }
+        try {
+            URI uri = URI.create(returnOrigin.trim());
+            String scheme = uri.getScheme();
+            String host = uri.getHost();
+            if (host == null || host.isBlank()
+                    || (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme))) {
+                return fallback;
+            }
+            int port = uri.getPort();
+            String candidate = scheme.toLowerCase(Locale.ROOT) + "://" + host.toLowerCase(Locale.ROOT);
+            if (port > 0 && port != 80 && port != 443) {
+                candidate = candidate + ":" + port;
+            }
+
+            if (originsMatch(candidate, fallback)) {
+                return candidate;
+            }
+
+            Optional<DomainMapping> mapping = domainMappingRepository.findByDomainAndDeletedAtIsNull(host);
+            if (mapping.isPresent()
+                    && businessId.equals(mapping.get().getBusinessId())
+                    && mapping.get().isActive()
+                    && mapping.get().getDeletedAt() == null) {
+                return candidate;
+            }
+
+            if (businessSlug != null && !businessSlug.isBlank()) {
+                String slug = businessSlug.trim().toLowerCase(Locale.ROOT);
+                for (String platformHost : platformHosts()) {
+                    String apex = platformHost.toLowerCase(Locale.ROOT).replaceFirst("^www\\.", "");
+                    if (host.equalsIgnoreCase(slug + "." + apex)) {
+                        return candidate;
+                    }
+                }
+            }
+
+            log.warn("Paystack callback: rejecting untrusted returnOrigin={} for business={}",
+                    returnOrigin, businessId);
+            return fallback;
+        } catch (Exception e) {
+            log.warn("Paystack callback: invalid returnOrigin={}: {}", returnOrigin, e.getMessage());
+            return fallback;
+        }
+    }
+
+    private List<String> platformHosts() {
+        if (platformHostsCsv == null || platformHostsCsv.isBlank()) {
+            return List.of("kiosk.ke");
+        }
+        return Arrays.stream(platformHostsCsv.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList();
+    }
+
+    private static boolean originsMatch(String a, String b) {
+        try {
+            URI ua = URI.create(a.trim());
+            URI ub = URI.create(b.trim());
+            if (ua.getHost() == null || ub.getHost() == null) {
+                return false;
+            }
+            if (!ua.getHost().equalsIgnoreCase(ub.getHost())) {
+                return false;
+            }
+            String sa = ua.getScheme() != null ? ua.getScheme() : "https";
+            String sb = ub.getScheme() != null ? ub.getScheme() : "https";
+            if (!sa.equalsIgnoreCase(sb)) {
+                return false;
+            }
+            int pa = ua.getPort() > 0 ? ua.getPort() : ("https".equalsIgnoreCase(sa) ? 443 : 80);
+            int pb = ub.getPort() > 0 ? ub.getPort() : ("https".equalsIgnoreCase(sb) ? 443 : 80);
+            return pa == pb;
+        } catch (Exception e) {
+            return false;
         }
     }
 

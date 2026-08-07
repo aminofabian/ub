@@ -24,5 +24,11 @@ public interface GatewayCheckoutRepository extends JpaRepository<GatewayCheckout
             Instant createdAfter
     );
 
+    List<GatewayCheckout> findByStatusAndCreatedAtBeforeOrderByCreatedAtAsc(
+            String status,
+            Instant createdBefore,
+            Pageable pageable
+    );
+
     List<GatewayCheckout> findByConfigIdOrderByCreatedAtDesc(String configId, Pageable pageable);
 }

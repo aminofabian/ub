@@ -49,12 +49,13 @@ public class PublicWebOrderPaymentController {
     ) {
         PublicPaystackCheckoutRequest req = body != null
                 ? body
-                : new PublicPaystackCheckoutRequest(null, null);
+                : new PublicPaystackCheckoutRequest(null, null, null);
         PublicPaystackCheckoutResponse out = publicStorefrontPaymentService.initiateOrderPaystackCheckout(
                 slug,
                 orderId,
                 req.configId(),
-                req.email()
+                req.email(),
+                req.returnOrigin()
         );
         return ResponseEntity.status(HttpStatus.OK).cacheControl(CacheControl.noStore()).body(out);
     }

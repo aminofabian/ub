@@ -33,7 +33,6 @@ public class PaymentGatewayStkService {
     private static final GatewayType[] STK_GATEWAY_PRIORITY = {
             GatewayType.KOPOKOPO,
             GatewayType.DARAJA,
-            GatewayType.PAYSTACK,
             GatewayType.PESAPAL,
     };
 

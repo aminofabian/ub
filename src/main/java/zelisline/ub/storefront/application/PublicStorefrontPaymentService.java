@@ -232,13 +232,17 @@ public class PublicStorefrontPaymentService {
     /**
      * Initialize a Paystack hosted checkout for a web order and return the
      * authorization URL the shopper is redirected to.
+     *
+     * @param returnOrigin browser {@code window.location.origin} so custom-domain
+     *                     shoppers return to the same host after Paystack
      */
     @Transactional
     public PublicPaystackCheckoutResponse initiateOrderPaystackCheckout(
             String slug,
             String orderId,
             String configId,
-            String email
+            String email,
+            String returnOrigin
     ) {
         Business business = requireBusiness(slug);
         WebOrder order = webOrderRepository.findById(orderId.trim())
@@ -248,7 +252,13 @@ public class PublicStorefrontPaymentService {
         }
 
         GatewayCheckoutService.CheckoutInitiation result = gatewayCheckoutService
-                .initiateWebOrderCheckout(business.getId(), order.getId(), configId, email);
+                .initiateWebOrderCheckout(
+                        business.getId(),
+                        business.getSlug(),
+                        order.getId(),
+                        configId,
+                        email,
+                        returnOrigin);
         return new PublicPaystackCheckoutResponse(
                 result.checkoutId(),
                 result.reference(),
@@ -266,6 +276,7 @@ public class PublicStorefrontPaymentService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
         }
 
+        // Re-read after possible STK/checkout verify side-effects
         boolean paid = WebOrderStatuses.PAID.equals(order.getStatus());
         boolean failed = WebOrderStatuses.PAYMENT_FAILED.equals(order.getStatus());
         String checkoutId = order.getPaymentCheckoutId();
@@ -283,22 +294,51 @@ public class PublicStorefrontPaymentService {
             failureReason = push.getFailureReason();
         }
 
-        // Hosted-checkout attempts (Paystack) for the same order — the return
-        // page after the Paystack redirect polls this endpoint.
+        // Hosted-checkout attempts (Paystack) — return page polls this endpoint.
+        // An in-flight Paystack attempt must not surface as failed because of an
+        // earlier STK decline on the same order.
         var checkoutOpt = gatewayCheckoutService.findLatestForWebOrder(order.getId());
         if (checkoutOpt.isPresent()) {
             GatewayCheckout checkout = checkoutOpt.get();
+            if (GatewayCheckoutStatuses.PENDING.equals(checkout.getStatus())) {
+                gatewayCheckoutService.verifyAndUpdate(checkout);
+                checkout = gatewayCheckoutService.findLatestForWebOrder(order.getId()).orElse(checkout);
+            }
             boolean checkoutSuccess = GatewayCheckoutStatuses.SUCCESS.equals(checkout.getStatus());
-            boolean checkoutTerminal = GatewayCheckoutStatuses.FAILED.equals(checkout.getStatus())
-                    || GatewayCheckoutStatuses.CANCELLED.equals(checkout.getStatus());
-            if (checkoutId == null) {
-                checkoutId = checkout.getReference();
-            }
+            boolean checkoutFailed = GatewayCheckoutStatuses.FAILED.equals(checkout.getStatus());
+            boolean checkoutPending = GatewayCheckoutStatuses.PENDING.equals(checkout.getStatus());
+            checkoutId = checkout.getReference();
             paid = paid || checkoutSuccess;
-            failed = failed || checkoutTerminal;
-            if (failureReason == null) {
-                failureReason = checkout.getFailureReason();
+            if (checkoutPending) {
+                // In-flight hosted checkout wins over older STK / order failure flags
+                failed = false;
+                failureReason = null;
+            } else if (checkoutFailed) {
+                failed = true;
+                failureReason = checkout.getFailureReason() != null
+                        ? checkout.getFailureReason()
+                        : failureReason;
+            } else if (checkoutSuccess) {
+                failed = false;
+                failureReason = null;
             }
+            // CANCELLED: order stays payable — do not force failed=true
+        }
+
+        // Refresh order status in case verify marked it paid
+        if (!paid) {
+            WebOrder refreshed = webOrderRepository.findById(order.getId()).orElse(order);
+            paid = WebOrderStatuses.PAID.equals(refreshed.getStatus());
+            if (paid) {
+                failed = false;
+                failureReason = null;
+            }
+            return new PublicWebOrderPaymentStatusResponse(
+                    refreshed.getStatus(),
+                    paid,
+                    failed,
+                    checkoutId,
+                    failureReason);
         }
 
         return new PublicWebOrderPaymentStatusResponse(

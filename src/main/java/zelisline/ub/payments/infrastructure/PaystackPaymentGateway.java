@@ -351,12 +351,23 @@ public class PaystackPaymentGateway implements CheckoutPaymentGateway {
      * Enforces the "no mixing keys" rule: key prefixes must match the stored
      * environment. Returns {@code null} when the pair is consistent.
      */
-    static ValidationResult validateKeyEnvironment(Map<String, String> creds) {
+    public static ValidationResult validateKeyEnvironment(Map<String, String> creds) {
         String env = creds.getOrDefault("environment", "sandbox");
-        boolean production = "production".equals(env);
+        boolean production = "production".equalsIgnoreCase(env);
         String envLabel = production ? "Production" : "Sandbox";
         String secretKey = creds.get("secretKey");
         String publicKey = creds.get("publicKey");
+
+        if (secretKey != null && !secretKey.isBlank()
+                && !secretKey.startsWith("sk_test_") && !secretKey.startsWith("sk_live_")) {
+            return ValidationResult.failure("KEY_PREFIX",
+                    "Secret key must start with sk_test_ or sk_live_", null);
+        }
+        if (publicKey != null && !publicKey.isBlank()
+                && !publicKey.startsWith("pk_test_") && !publicKey.startsWith("pk_live_")) {
+            return ValidationResult.failure("KEY_PREFIX",
+                    "Public key must start with pk_test_ or pk_live_", null);
+        }
 
         if (production && ((secretKey != null && secretKey.startsWith("sk_test_"))
                 || (publicKey != null && publicKey.startsWith("pk_test_")))) {

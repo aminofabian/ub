@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -19,6 +20,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.api.dto.AvailableGatewayResponse;
+import zelisline.ub.payments.api.dto.GatewayCheckoutResponse;
 import zelisline.ub.payments.api.dto.GatewayConfigRequest;
 import zelisline.ub.payments.api.dto.GatewayConfigResponse;
 import zelisline.ub.payments.api.dto.GatewayCredentialSettingsResponse;
@@ -26,6 +28,7 @@ import zelisline.ub.payments.api.dto.SubscribeWebhookTillsRequest;
 import zelisline.ub.payments.api.dto.SubscribeWebhookTillsResponse;
 import zelisline.ub.payments.api.dto.TestConnectionResponse;
 import zelisline.ub.payments.application.KopokopoWebhookSubscriptionService;
+import zelisline.ub.payments.application.GatewayCheckoutService;
 import zelisline.ub.payments.application.PaymentGatewayConfigService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.TenantRequestIds;
@@ -44,6 +47,7 @@ public class PaymentGatewaySettingsController {
 
     private final PaymentGatewayConfigService configService;
     private final KopokopoWebhookSubscriptionService webhookSubscriptionService;
+    private final GatewayCheckoutService gatewayCheckoutService;
 
     // ── Available gateways ──────────────────────────────────────────
 
@@ -89,6 +93,21 @@ public class PaymentGatewaySettingsController {
     ) {
         CurrentTenantUser.require(request);
         return configService.getCredentialSettings(TenantRequestIds.resolveBusinessId(request), id);
+    }
+
+    /**
+     * Recent hosted-checkout attempts (e.g. Paystack) for one gateway config —
+     * admin visibility, no credentials or raw payloads.
+     */
+    @GetMapping("/{id}/checkouts")
+    @PreAuthorize("hasPermission(null, 'payments.gateways.read')")
+    public List<GatewayCheckoutResponse> checkouts(
+            @PathVariable String id,
+            @RequestParam(defaultValue = "10") int limit,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return gatewayCheckoutService.listForConfig(TenantRequestIds.resolveBusinessId(request), id, limit);
     }
 
     @PatchMapping("/{id}")

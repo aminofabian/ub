@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import zelisline.ub.payments.domain.GatewayCheckout;
@@ -22,4 +23,6 @@ public interface GatewayCheckoutRepository extends JpaRepository<GatewayCheckout
             String status,
             Instant createdAfter
     );
+
+    List<GatewayCheckout> findByConfigIdOrderByCreatedAtDesc(String configId, Pageable pageable);
 }

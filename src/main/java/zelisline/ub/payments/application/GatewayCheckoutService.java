@@ -3,6 +3,7 @@ package zelisline.ub.payments.application;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -11,13 +12,17 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.notifications.application.NotificationOutboxService;
+import zelisline.ub.payments.api.dto.GatewayCheckoutResponse;
 import zelisline.ub.payments.domain.GatewayCheckout;
 import zelisline.ub.payments.domain.GatewayCheckoutContextType;
 import zelisline.ub.payments.domain.GatewayCheckoutStatuses;
@@ -281,6 +286,24 @@ public class GatewayCheckoutService {
                 GatewayCheckoutContextType.WEB_ORDER, orderId);
     }
 
+    /**
+     * Admin visibility: recent checkout attempts for one tenant gateway config
+     * (used by the Payments Settings UI). The config must belong to the business.
+     */
+    @Transactional(readOnly = true)
+    public List<GatewayCheckoutResponse> listForConfig(String businessId, String configId, int limit) {
+        PaymentGatewayConfig cfg = configRepository.findById(configId).orElse(null);
+        if (cfg == null || !businessId.equals(cfg.getBusinessId())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Gateway config not found");
+        }
+        int capped = Math.min(Math.max(limit, 1), 50);
+        return checkoutRepository
+                .findByConfigIdOrderByCreatedAtDesc(configId, PageRequest.of(0, capped))
+                .stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
     // ── Confirmation / failure ───────────────────────────────────────
 
     private void confirmCheckout(GatewayCheckout checkout, String providerTxnId, BigDecimal providerAmount) {
@@ -432,6 +455,23 @@ public class GatewayCheckoutService {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private GatewayCheckoutResponse toResponse(GatewayCheckout checkout) {
+        return new GatewayCheckoutResponse(
+                checkout.getId(),
+                checkout.getGatewayType().name(),
+                checkout.getReference(),
+                checkout.getContextType(),
+                checkout.getContextId(),
+                checkout.getAmount(),
+                checkout.getCurrency(),
+                checkout.getCustomerEmail(),
+                checkout.getStatus(),
+                checkout.getProviderTransactionId(),
+                checkout.getFailureReason(),
+                checkout.getCreatedAt(),
+                checkout.getConfirmedAt());
     }
 
     public record CheckoutInitiation(

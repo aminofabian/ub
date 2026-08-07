@@ -1,6 +1,7 @@
 package zelisline.ub.payments.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -19,6 +20,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -189,6 +191,27 @@ class InboundTillPaymentServiceTest {
         assertThat(txn).isEmpty();
         assertThat(row.getStatus()).isEqualTo(InboundTillPaymentStatuses.PENDING);
         verify(inboundRepository, never()).save(any());
+    }
+
+    @Test
+    void requireAmountMatchesIfKnown_throwsWhenSaleExceedsTillPayment() {
+        InboundTillPayment row = pending("in-1", "OJL7OW3J59", "254714282874", "150.00");
+        when(inboundRepository.findFirstByBusinessIdAndMpesaReceiptIgnoreCase("biz-1", "OJL7OW3J59"))
+                .thenReturn(Optional.of(row));
+
+        assertThatThrownBy(() ->
+                        service.requireAmountMatchesIfKnown(
+                                "biz-1", "OJL7OW3J59", new BigDecimal("300.00")))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("150");
+    }
+
+    @Test
+    void requireAmountMatchesIfKnown_noopWhenNoInbound() {
+        when(inboundRepository.findFirstByBusinessIdAndMpesaReceiptIgnoreCase("biz-1", "MISSING"))
+                .thenReturn(Optional.empty());
+
+        service.requireAmountMatchesIfKnown("biz-1", "MISSING", new BigDecimal("300.00"));
     }
 
     @Test

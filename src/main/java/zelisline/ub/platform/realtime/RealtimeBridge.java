@@ -182,6 +182,34 @@ public class RealtimeBridge {
                 event.checkoutRequestId(), event.success(), sessionIds.size());
     }
 
+    /**
+     * Fan-out Kiosk Pay wallet balances to all sessions for the business (owner header).
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onKioskPayBalanceUpdated(KioskPayBalanceUpdatedEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        var dataMap = new LinkedHashMap<String, Object>();
+        dataMap.put("businessId", event.businessId() != null ? event.businessId() : "");
+        dataMap.put("availableBalance",
+                event.availableBalance() != null ? event.availableBalance().toPlainString() : "0");
+        dataMap.put("pendingBalance",
+                event.pendingBalance() != null ? event.pendingBalance().toPlainString() : "0");
+        dataMap.put("currency", event.currency() != null ? event.currency() : "KES");
+        dataMap.put("status", event.status() != null ? event.status() : "");
+        dataMap.put("reason", event.reason() != null ? event.reason() : "");
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) {
+            return;
+        }
+
+        Set<String> sessionIds = sessionRegistry.findAllSessionsForBusiness(event.businessId());
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "kiosk_pay.balance.updated", eventId, "MEDIUM", Instant.now(), payloadJson);
+        }
+        log.debug("Kiosk Pay balance updated: business={} reason={} sessions={}",
+                event.businessId(), event.reason(), sessionIds.size());
+    }
+
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPaymentConfirmed(PaymentConfirmedEvent event) {
         String eventId = UUID.randomUUID().toString();
@@ -778,6 +806,15 @@ public class RealtimeBridge {
             String message,
             String gatewayTransactionId,
             BigDecimal amount) {}
+
+    /** Merchant Kiosk Pay wallet balance changed (capture / withdraw). */
+    public record KioskPayBalanceUpdatedEvent(
+            String businessId,
+            BigDecimal availableBalance,
+            BigDecimal pendingBalance,
+            String currency,
+            String status,
+            String reason) {}
 
     public record ApprovalRequestedEvent(
             String businessId, String branchId, String approvalId, String adjustmentType,

@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -22,6 +23,7 @@ import zelisline.ub.payments.domain.KioskPayLedgerEntryTypes;
 import zelisline.ub.payments.domain.PlatformKioskPaySettings;
 import zelisline.ub.payments.repository.KioskPayAccountRepository;
 import zelisline.ub.payments.repository.KioskPayLedgerEntryRepository;
+import zelisline.ub.platform.realtime.RealtimeBridge;
 
 /**
  * Tenant Kiosk Pay account + immutable ledger.
@@ -33,6 +35,7 @@ public class KioskPayWalletService {
     private final KioskPayAccountRepository accountRepository;
     private final KioskPayLedgerEntryRepository ledgerRepository;
     private final PlatformKioskPaySettingsService platformSettings;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional(readOnly = true)
     public KioskPayAccountResponse getAccount(String businessId) {
@@ -210,6 +213,7 @@ public class KioskPayWalletService {
                     gatewayCheckoutId,
                     "Platform fee " + feePercent + "%");
         }
+        publishBalance(account, cur, "PAYMENT_CAPTURE");
     }
 
     @Transactional
@@ -233,6 +237,7 @@ public class KioskPayWalletService {
                 withdrawalId,
                 null,
                 "Withdraw hold");
+        publishBalance(account, "KES", "WITHDRAW_HOLD");
     }
 
     @Transactional
@@ -254,6 +259,7 @@ public class KioskPayWalletService {
                 withdrawalId,
                 null,
                 "Withdraw settled");
+        publishBalance(account, "KES", "WITHDRAW_SETTLE");
     }
 
     @Transactional
@@ -274,6 +280,7 @@ public class KioskPayWalletService {
                 withdrawalId,
                 null,
                 "Withdraw failed — hold released");
+        publishBalance(account, "KES", "WITHDRAW_RELEASE");
     }
 
     @Transactional
@@ -289,6 +296,19 @@ public class KioskPayWalletService {
                         .orElseThrow(() -> e);
             }
         });
+    }
+
+    private void publishBalance(KioskPayAccount account, String currency, String reason) {
+        if (account == null || account.getBusinessId() == null) {
+            return;
+        }
+        eventPublisher.publishEvent(new RealtimeBridge.KioskPayBalanceUpdatedEvent(
+                account.getBusinessId(),
+                account.getAvailableBalance(),
+                account.getPendingBalance(),
+                currency != null && !currency.isBlank() ? currency : "KES",
+                account.getStatus(),
+                reason));
     }
 
     private static void applyDelta(KioskPayAccount account, BigDecimal availableDelta, BigDecimal pendingDelta) {

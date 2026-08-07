@@ -20,9 +20,41 @@ public record WebhookResult(
         /** Gateway webhook event id for idempotency. */
         String webhookEventId,
         String topic,
-        String rawPayload
+        String rawPayload,
+        /** Human-readable decline reason from the gateway when {@link #terminalFailure} is true. */
+        String failureMessage
 ) {
     public static WebhookResult empty(String rawPayload) {
-        return new WebhookResult(null, null, null, null, null, false, false, null, null, null, rawPayload);
+        return new WebhookResult(
+                null, null, null, null, null, false, false, null, null, null, rawPayload, null);
+    }
+
+    /** Convenience constructor for callers that do not supply a failure message. */
+    public WebhookResult(
+            String businessId,
+            String gatewayTransactionId,
+            String phoneNumber,
+            BigDecimal amount,
+            String reference,
+            boolean success,
+            boolean terminalFailure,
+            String gatewayCheckoutId,
+            String webhookEventId,
+            String topic,
+            String rawPayload
+    ) {
+        this(
+                businessId,
+                gatewayTransactionId,
+                phoneNumber,
+                amount,
+                reference,
+                success,
+                terminalFailure,
+                gatewayCheckoutId,
+                webhookEventId,
+                topic,
+                rawPayload,
+                null);
     }
 }

@@ -145,6 +145,23 @@ class KopokopoSendMoneyWebhookTest {
         assertThat(result.terminalFailure()).isTrue();
         assertThat(result.gatewayCheckoutId()).isEqualTo("sm-failed-1");
         assertThat(result.reference()).isEqualTo("inv-fail");
+        assertThat(result.failureMessage()).containsIgnoringCase("Invalid phone");
+    }
+
+    @Test
+    void emptyErrorsObject_doesNotFailProcessedPendingBatches() throws Exception {
+        var attrs = mapper.readTree("""
+                {
+                  "status": "Pending",
+                  "transfer_batches": [],
+                  "errors": {}
+                }
+                """);
+
+        var outcome = KopokopoPaymentGateway.evaluateSendMoneyAttributes(attrs);
+
+        assertThat(outcome.completed()).isFalse();
+        assertThat(outcome.failed()).isFalse();
     }
 
     @Test

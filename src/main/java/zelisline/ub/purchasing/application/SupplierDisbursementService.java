@@ -269,8 +269,7 @@ public class SupplierDisbursementService {
             return true;
         }
         if (parsed.terminalFailure() && SupplierDisbursementStatuses.PENDING.equals(disbursement.getStatus())) {
-            String reason = "Payment declined by KopoKopo";
-            markFailed(disbursement, reason);
+            markFailed(disbursement, kopokopoDeclineMessage(parsed));
             return true;
         }
         return true;
@@ -304,12 +303,35 @@ public class SupplierDisbursementService {
             if (status.success()) {
                 confirmDisbursement(disbursement, status);
             } else if (status.terminalFailure()) {
-                markFailed(disbursement, "Payment declined by KopoKopo");
+                log.warn("KopoKopo Send Money declined: disbursement={} sendMoneyId={} reason={} payload={}",
+                        disbursement.getId(),
+                        sendMoneyId,
+                        status.failureMessage(),
+                        truncate(status.rawPayload(), 800));
+                markFailed(disbursement, kopokopoDeclineMessage(status));
             }
         } catch (Exception e) {
             log.warn("KopoKopo Send Money poll failed for disbursement {}: {}",
                     disbursement.getId(), e.getMessage());
         }
+    }
+
+    private static String kopokopoDeclineMessage(WebhookResult parsed) {
+        String detail = parsed.failureMessage();
+        if (detail != null && !detail.isBlank()
+                && !"Failed".equalsIgnoreCase(detail)
+                && !"Error".equalsIgnoreCase(detail)) {
+            return "KopoKopo declined: " + detail.trim();
+        }
+        return "Payment declined by KopoKopo. Check till balance, Send Money permissions, and the payout phone in your KopoKopo dashboard.";
+    }
+
+    private static String truncate(String raw, int max) {
+        if (raw == null) {
+            return null;
+        }
+        String t = raw.trim();
+        return t.length() <= max ? t : t.substring(0, max) + "…";
     }
 
     private void confirmDisbursement(SupplierDisbursement disbursement, WebhookResult parsed) {

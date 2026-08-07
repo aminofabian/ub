@@ -526,6 +526,11 @@ public class KopokopoPaymentGateway implements PaymentGateway {
         String mpesaRef = outcome.transactionReference();
         String eventId = sendMoneyId != null ? sendMoneyId
                 : (root.has("id") ? root.get("id").asText() : null);
+        String failureMessage = outcome.failed()
+                ? (outcome.description() != null && !outcome.description().isBlank()
+                ? outcome.description()
+                : outcome.status())
+                : null;
 
         return new WebhookResult(
                 null,
@@ -538,7 +543,8 @@ public class KopokopoPaymentGateway implements PaymentGateway {
                 sendMoneyId,
                 eventId,
                 "send_money",
-                rawBody);
+                rawBody,
+                failureMessage);
     }
 
     /**
@@ -645,7 +651,8 @@ public class KopokopoPaymentGateway implements PaymentGateway {
             if (errors.isTextual() && !errors.asText().isBlank()) {
                 return true;
             }
-            if (errors.isObject()) {
+            // Ignore empty `{}` — some payloads include a placeholder object.
+            if (errors.isObject() && errors.size() > 0) {
                 return true;
             }
         }
@@ -675,6 +682,9 @@ public class KopokopoPaymentGateway implements PaymentGateway {
                         return true;
                     }
                     if (err.isTextual() && !err.asText().isBlank()) {
+                        return true;
+                    }
+                    if (err.isObject() && err.size() > 0) {
                         return true;
                     }
                 }

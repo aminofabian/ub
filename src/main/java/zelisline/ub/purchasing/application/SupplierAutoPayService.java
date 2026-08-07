@@ -6,6 +6,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import org.slf4j.Logger;
@@ -56,10 +57,12 @@ public class SupplierAutoPayService {
     }
 
     /**
-     * Scans all opted-in tenants and initiates Send Money for eligible unpaid supplies.
+     * Scans opted-in tenants whose custom auto-pay clock time matches the current minute
+     * and initiates Send Money for eligible unpaid supplies.
      */
     public AutoPayRunSummary runScheduledAutoPay() {
         List<SupplierPayoutSettings> optedIn = supplierPayoutSettingsService.listAutoPayEnabledSettings();
+        int businessesDue = 0;
         int initiated = 0;
         int skipped = 0;
         int failed = 0;
@@ -67,6 +70,12 @@ public class SupplierAutoPayService {
         for (SupplierPayoutSettings settings : optedIn) {
             String businessId = settings.getBusinessId();
             try {
+                Optional<String> slot = supplierPayoutSettingsService.claimAutoPaySlotIfDue(businessId);
+                if (slot.isEmpty()) {
+                    continue;
+                }
+                businessesDue++;
+                log.info("Supplier auto-pay slot claimed: business={} slot={}", businessId, slot.get());
                 AutoPayRunSummary one = autoPayBusiness(businessId);
                 initiated += one.initiated();
                 skipped += one.skipped();
@@ -77,13 +86,15 @@ public class SupplierAutoPayService {
             }
         }
 
-        AutoPayRunSummary summary = new AutoPayRunSummary(optedIn.size(), initiated, skipped, failed);
-        log.info(
-                "Supplier auto-pay finished: businesses={} initiated={} skipped={} failed={}",
-                summary.businesses(),
-                summary.initiated(),
-                summary.skipped(),
-                summary.failed());
+        AutoPayRunSummary summary = new AutoPayRunSummary(businessesDue, initiated, skipped, failed);
+        if (businessesDue > 0) {
+            log.info(
+                    "Supplier auto-pay finished: businessesDue={} initiated={} skipped={} failed={}",
+                    summary.businesses(),
+                    summary.initiated(),
+                    summary.skipped(),
+                    summary.failed());
+        }
         return summary;
     }
 

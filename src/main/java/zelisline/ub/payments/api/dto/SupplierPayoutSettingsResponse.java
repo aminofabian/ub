@@ -9,6 +9,7 @@ public record SupplierPayoutSettingsResponse(
         String gatewayLabel,
         boolean gatewayReady,
         boolean autoPayEnabled,
+        List<String> autoPayTimes,
         List<SupplierPayoutGatewayOption> selectableGateways
 ) {
 }

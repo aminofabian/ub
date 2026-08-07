@@ -10,11 +10,9 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.purchasing.application.SupplierAutoPayService;
 
 /**
- * Twice-daily auto-pay for unpaid supply bills (midnight and 18:00 Africa/Nairobi by default).
- *
- * <p>Per-tenant opt-in via Payments → Supplier payouts → Auto-pay. No distributed lock
- * (same as other schedulers in this codebase); avoid running multiple API replicas that
- * both enable this cron if double-initiate risk is unacceptable.
+ * Minute tick for supplier auto-pay. Each tenant configures their own HH:mm times
+ * (default 00:00 and 18:00 Africa/Nairobi). The tick claims a slot per business so
+ * each configured minute runs at most once.
  */
 @Component
 @RequiredArgsConstructor
@@ -26,16 +24,17 @@ public class SupplierAutoPayScheduler {
     private final SupplierAutoPayService supplierAutoPayService;
 
     @Scheduled(
-            cron = "${app.purchasing.supplier-auto-pay.cron:0 0 0,18 * * *}",
+            cron = "${app.purchasing.supplier-auto-pay.tick-cron:0 * * * * *}",
             zone = "${app.purchasing.supplier-auto-pay.zone:Africa/Nairobi}")
-    public void runTwiceDaily() {
-        log.info("Supplier auto-pay scheduler starting");
+    public void tick() {
         var summary = supplierAutoPayService.runScheduledAutoPay();
-        log.info(
-                "Supplier auto-pay scheduler finished: businesses={} initiated={} skipped={} failed={}",
-                summary.businesses(),
-                summary.initiated(),
-                summary.skipped(),
-                summary.failed());
+        if (summary.businesses() > 0) {
+            log.info(
+                    "Supplier auto-pay tick: businessesDue={} initiated={} skipped={} failed={}",
+                    summary.businesses(),
+                    summary.initiated(),
+                    summary.skipped(),
+                    summary.failed());
+        }
     }
 }

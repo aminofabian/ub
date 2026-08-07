@@ -32,6 +32,14 @@ public class SupplierPayoutSettings {
     @Column(name = "auto_pay_enabled", nullable = false)
     private boolean autoPayEnabled;
 
+    /** JSON array of {@code HH:mm} local times, e.g. {@code ["00:00","18:00"]}. */
+    @Column(name = "auto_pay_times_json", length = 512)
+    private String autoPayTimesJson;
+
+    /** Last auto-pay slot claimed, e.g. {@code 2026-08-07T18:00}, to avoid double runs. */
+    @Column(name = "auto_pay_last_run_slot", length = 32)
+    private String autoPayLastRunSlot;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

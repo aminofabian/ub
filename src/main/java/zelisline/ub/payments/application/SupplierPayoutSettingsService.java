@@ -1,13 +1,19 @@
 package zelisline.ub.payments.application;
 
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.api.dto.SupplierPayoutGatewayOption;
@@ -26,9 +32,15 @@ import zelisline.ub.payments.repository.SupplierPayoutSettingsRepository;
 @RequiredArgsConstructor
 public class SupplierPayoutSettingsService {
 
+    private static final DateTimeFormatter SLOT = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm");
+
     private final SupplierPayoutSettingsRepository settingsRepository;
     private final PaymentGatewayConfigRepository configRepository;
     private final PlatformPaymentGatewayRepository platformGatewayRepository;
+    private final ObjectMapper objectMapper;
+
+    @Value("${app.purchasing.supplier-auto-pay.zone:Africa/Nairobi}")
+    private String autoPayZone;
 
     @Transactional(readOnly = true)
     public SupplierPayoutSettingsResponse getSettings(String businessId) {
@@ -71,6 +83,14 @@ public class SupplierPayoutSettingsService {
             settings.setAutoPayEnabled(false);
         }
 
+        if (request.autoPayTimes() != null) {
+            List<String> times = SupplierAutoPayTimes.requireValid(request.autoPayTimes());
+            settings.setAutoPayTimesJson(SupplierAutoPayTimes.toJson(times, objectMapper));
+        } else if (settings.getAutoPayTimesJson() == null || settings.getAutoPayTimesJson().isBlank()) {
+            settings.setAutoPayTimesJson(
+                    SupplierAutoPayTimes.toJson(SupplierAutoPayTimes.defaults(), objectMapper));
+        }
+
         if (request.autoPayEnabled() != null) {
             if (request.autoPayEnabled()) {
                 if (!settings.isEnabled()) {
@@ -80,6 +100,10 @@ public class SupplierPayoutSettingsService {
                 if (resolveActivePayoutConfig(businessId, settings).isEmpty()) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                             "Choose an active payout gateway before turning on auto-pay");
+                }
+                if (settings.getAutoPayTimesJson() == null || settings.getAutoPayTimesJson().isBlank()) {
+                    settings.setAutoPayTimesJson(
+                            SupplierAutoPayTimes.toJson(SupplierAutoPayTimes.defaults(), objectMapper));
                 }
                 settings.setAutoPayEnabled(true);
             } else {
@@ -112,6 +136,31 @@ public class SupplierPayoutSettingsService {
     @Transactional(readOnly = true)
     public List<SupplierPayoutSettings> listAutoPayEnabledSettings() {
         return settingsRepository.findByEnabledTrueAndAutoPayEnabledTrue();
+    }
+
+    /**
+     * If the current minute matches a configured auto-pay time and this slot was not yet claimed,
+     * persist the slot and return it. Otherwise empty (not due / already ran).
+     */
+    @Transactional
+    public Optional<String> claimAutoPaySlotIfDue(String businessId) {
+        SupplierPayoutSettings settings = settingsRepository.findById(businessId).orElse(null);
+        if (settings == null || !settings.isEnabled() || !settings.isAutoPayEnabled()) {
+            return Optional.empty();
+        }
+        ZoneId zone = ZoneId.of(autoPayZone);
+        LocalDateTime now = LocalDateTime.now(zone).withSecond(0).withNano(0);
+        List<String> times = SupplierAutoPayTimes.parseOrDefault(settings.getAutoPayTimesJson(), objectMapper);
+        if (!SupplierAutoPayTimes.matchesMinute(times, now.toLocalTime())) {
+            return Optional.empty();
+        }
+        String slot = now.format(SLOT);
+        if (slot.equals(settings.getAutoPayLastRunSlot())) {
+            return Optional.empty();
+        }
+        settings.setAutoPayLastRunSlot(slot);
+        settingsRepository.save(settings);
+        return Optional.of(slot);
     }
 
     private Optional<PaymentGatewayConfig> resolveActivePayoutConfig(
@@ -195,6 +244,7 @@ public class SupplierPayoutSettingsService {
                 resolved.map(PaymentGatewayConfig::getLabel).orElse(null),
                 resolved.isPresent(),
                 settings.isAutoPayEnabled(),
+                SupplierAutoPayTimes.parseOrDefault(settings.getAutoPayTimesJson(), objectMapper),
                 selectable);
     }
 }

@@ -36,6 +36,7 @@ import zelisline.ub.posdraft.api.dto.PutPosDraftLineRequest;
 import zelisline.ub.posdraft.application.PosDraftService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 import zelisline.ub.tenancy.application.BranchResolutionService;
+import zelisline.ub.till.application.TillDeviceService;
 
 @Validated
 @RestController
@@ -160,7 +161,8 @@ public class PosDraftController {
                 body,
                 idempotencyKey,
                 principal.userId(),
-                principal.roleId()
+                principal.roleId(),
+                request.getHeader(TillDeviceService.TILL_DEVICE_HEADER)
         );
         HttpStatus status = response.createdNew() ? HttpStatus.CREATED : HttpStatus.OK;
         return ResponseEntity.status(status).body(response);

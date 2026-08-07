@@ -292,6 +292,104 @@ class ShiftSlice1IT {
                 .andExpect(status().isConflict());
     }
 
+    @Test
+    void differentTills_canOpenConcurrentShifts() throws Exception {
+        mockMvc.perform(post("/api/v1/shifts/open")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"branchId\":\"%s\",\"openingCash\":10}".formatted(branchId))
+                        .header("X-Tenant-Id", TENANT)
+                        .header("X-Till-Device-Id", "till-front-counter-01")
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/v1/shifts/open")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"branchId\":\"%s\",\"openingCash\":20}".formatted(branchId))
+                        .header("X-Tenant-Id", TENANT)
+                        .header("X-Till-Device-Id", "till-back-counter-02")
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, admin.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ADMIN))
+                .andExpect(status().isCreated());
+
+        MvcResult front = mockMvc.perform(get("/api/v1/shifts/current")
+                        .param("branchId", branchId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header("X-Till-Device-Id", "till-front-counter-01")
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode frontJson = objectMapper.readTree(front.getResponse().getContentAsString());
+        assertThat(frontJson.get("tillDeviceKey").asText()).isEqualTo("till-front-counter-01");
+        assertThat(frontJson.get("openedBy").asText()).isEqualTo(cashier.getId());
+
+        MvcResult back = mockMvc.perform(get("/api/v1/shifts/current")
+                        .param("branchId", branchId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header("X-Till-Device-Id", "till-back-counter-02")
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, admin.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ADMIN))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode backJson = objectMapper.readTree(back.getResponse().getContentAsString());
+        assertThat(backJson.get("tillDeviceKey").asText()).isEqualTo("till-back-counter-02");
+        assertThat(frontJson.get("id").asText()).isNotEqualTo(backJson.get("id").asText());
+    }
+
+    @Test
+    void branchLockedNonOpener_cannotCloseOthersShift() throws Exception {
+        Role cashierRole = new Role();
+        cashierRole.setId("22222222-0000-0000-0000-0000000000ac");
+        cashierRole.setBusinessId(null);
+        cashierRole.setRoleKey("cashier");
+        cashierRole.setName("Cashier Locked");
+        cashierRole.setSystem(true);
+        roleRepository.save(cashierRole);
+        for (String pid : List.of(P_SO, P_SC, P_SR)) {
+            RolePermission rp = new RolePermission();
+            rp.setId(new RolePermission.Id(cashierRole.getId(), pid));
+            rolePermissionRepository.save(rp);
+        }
+
+        User other = new User();
+        other.setBusinessId(TENANT);
+        other.setEmail("other-cashier-shift@test");
+        other.setName("Other Cashier");
+        other.setRoleId(cashierRole.getId());
+        other.setBranchId(branchId);
+        other.setStatus(UserStatus.ACTIVE);
+        other.setPasswordHash("$2a$10$stubstubstubstubstubstubstubstubst");
+        userRepository.save(other);
+
+        MvcResult opened = mockMvc.perform(post("/api/v1/shifts/open")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"branchId\":\"%s\",\"openingCash\":50}".formatted(branchId))
+                        .header("X-Tenant-Id", TENANT)
+                        .header("X-Till-Device-Id", "till-shared-register-1")
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String shiftId = objectMapper.readTree(opened.getResponse().getContentAsString()).get("id").asText();
+
+        mockMvc.perform(post("/api/v1/shifts/%s/close".formatted(shiftId))
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"countedClosingCash\":50}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, other.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, cashierRole.getId()))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(post("/api/v1/shifts/%s/close".formatted(shiftId))
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"countedClosingCash\":50}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, admin.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ADMIN))
+                .andExpect(status().isOk());
+    }
+
     private static Permission perm(String id, String key, String desc) {
         Permission p = new Permission();
         p.setId(id);

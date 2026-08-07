@@ -32,8 +32,8 @@ import zelisline.ub.finance.domain.LedgerAccount;
 import zelisline.ub.finance.repository.ExpenseRepository;
 import zelisline.ub.identity.application.TokenHasher;
 import zelisline.ub.sales.SalesConstants;
+import zelisline.ub.sales.application.OpenShiftResolver;
 import zelisline.ub.sales.domain.Shift;
-import zelisline.ub.sales.repository.ShiftRepository;
 import zelisline.ub.tenancy.repository.BranchRepository;
 
 @Service
@@ -43,7 +43,7 @@ public class ExpenseService {
     private final LedgerPostingPort ledgerPostingPort;
     private final LedgerAccountResolver ledgerAccountResolver;
     private final ExpenseRepository expenseRepository;
-    private final ShiftRepository shiftRepository;
+    private final OpenShiftResolver openShiftResolver;
     private final BranchRepository branchRepository;
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final ObjectMapper objectMapper;
@@ -53,11 +53,27 @@ public class ExpenseService {
     }
 
     @Transactional
-    public ExpenseResponse recordExpense(String businessId, PostExpenseRequest req, String userId, String idemKeyRaw) {
+    public ExpenseResponse recordExpense(
+            String businessId,
+            PostExpenseRequest req,
+            String userId,
+            String idemKeyRaw
+    ) {
+        return recordExpense(businessId, req, userId, idemKeyRaw, null);
+    }
+
+    @Transactional
+    public ExpenseResponse recordExpense(
+            String businessId,
+            PostExpenseRequest req,
+            String userId,
+            String idemKeyRaw,
+            String tillDeviceKey
+    ) {
         if (idemKeyRaw != null && !idemKeyRaw.isBlank()) {
-            return recordExpenseIdempotent(businessId, req, userId, idemKeyRaw.trim());
+            return recordExpenseIdempotent(businessId, req, userId, idemKeyRaw.trim(), tillDeviceKey);
         }
-        Expense e = executeRecordExpense(businessId, req, userId);
+        Expense e = executeRecordExpense(businessId, req, userId, tillDeviceKey);
         return toDto(e);
     }
 
@@ -79,14 +95,15 @@ public class ExpenseService {
 
     @Transactional
     public Expense createRecurringExpense(String businessId, PostExpenseRequest req, String systemUserId) {
-        return executeRecordExpense(businessId, req, systemUserId);
+        return executeRecordExpense(businessId, req, systemUserId, null);
     }
 
     private ExpenseResponse recordExpenseIdempotent(
             String businessId,
             PostExpenseRequest req,
             String userId,
-            String idemKey
+            String idemKey,
+            String tillDeviceKey
     ) {
         String route = recordExpenseRoute();
         String keyHash = TokenHasher.sha256Hex(idemKey);
@@ -112,7 +129,7 @@ public class ExpenseService {
                     throw new IllegalStateException(e);
                 }
             }
-            Expense created = executeRecordExpense(businessId, req, userId);
+            Expense created = executeRecordExpense(businessId, req, userId, tillDeviceKey);
             ExpenseResponse response = toDto(created);
             persistIdempotency(businessId, keyHash, bodyHash, route, response);
             return response;
@@ -152,7 +169,12 @@ public class ExpenseService {
         }
     }
 
-    private Expense executeRecordExpense(String businessId, PostExpenseRequest req, String userId) {
+    private Expense executeRecordExpense(
+            String businessId,
+            PostExpenseRequest req,
+            String userId,
+            String tillDeviceKey
+    ) {
         LocalDate expenseDate = req.expenseDate();
         if (expenseDate == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "expenseDate is required");
@@ -199,15 +221,13 @@ public class ExpenseService {
         String jeId = ledgerPostingPort.post(entry);
 
         if (includeInDrawer && FinanceConstants.EXPENSE_PAY_METHOD_CASH.equals(payMethod) && branchId != null) {
-            Optional<Shift> open = shiftRepository.findByBusinessIdAndBranchIdAndStatusForUpdate(
-                    businessId, branchId, SalesConstants.SHIFT_STATUS_OPEN);
+            Optional<Shift> open = openShiftResolver.findOpenForUpdate(businessId, branchId, tillDeviceKey);
             if (open.isPresent()) {
                 Shift s = open.get();
                 BigDecimal expected = s.getExpectedClosingCash() == null
                         ? BigDecimal.ZERO
                         : s.getExpectedClosingCash().setScale(2, RoundingMode.HALF_UP);
                 s.setExpectedClosingCash(expected.subtract(amount).setScale(2, RoundingMode.HALF_UP));
-                shiftRepository.save(s);
             }
         }
 

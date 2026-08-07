@@ -58,8 +58,10 @@ import zelisline.ub.sales.repository.ShiftAuditLogRepository;
 import zelisline.ub.sales.repository.ShiftDenominationRepository;
 import zelisline.ub.sales.repository.ShiftExpenseRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
+import zelisline.ub.tenancy.application.BranchResolutionService;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.repository.BranchRepository;
+import zelisline.ub.till.repository.TillDeviceRepository;
 
 @Service
 @RequiredArgsConstructor
@@ -73,6 +75,9 @@ public class ShiftService {
     private final ShiftExpenseRepository shiftExpenseRepository;
     private final BranchRepository branchRepository;
     private final UserRepository userRepository;
+    private final TillDeviceRepository tillDeviceRepository;
+    private final OpenShiftResolver openShiftResolver;
+    private final BranchResolutionService branchResolutionService;
     private final CashDrawerSummaryService cashDrawerSummaryService;
     private final LedgerPostingPort ledgerPostingPort;
     private final LedgerAccountResolver ledgerAccountResolver;
@@ -86,12 +91,23 @@ public class ShiftService {
 
     @Transactional
     public ShiftResponse openShift(String businessId, PostOpenShiftRequest req, String userId) {
+        return openShift(businessId, req, userId, null);
+    }
+
+    @Transactional
+    public ShiftResponse openShift(
+            String businessId,
+            PostOpenShiftRequest req,
+            String userId,
+            String tillDeviceHeader
+    ) {
         String branchId = req.branchId();
         Branch branch = requireBranch(businessId, branchId);
+        String tillKey = openShiftResolver.resolveTillKeyForOpen(businessId, branchId, tillDeviceHeader);
 
-        if (shiftRepository.findByBusinessIdAndBranchIdAndStatus(
-                businessId, branchId, SalesConstants.SHIFT_STATUS_OPEN).isPresent()) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Shift already open for branch");
+        if (openShiftResolver.hasOpenConflict(businessId, branchId, tillKey)) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT, OpenShiftResolver.conflictMessage(tillKey));
         }
 
         BigDecimal opening = req.openingCash().setScale(2, RoundingMode.HALF_UP);
@@ -100,6 +116,7 @@ public class ShiftService {
         s.setBusinessId(businessId);
         s.setBranchId(branchId);
         s.setOpenedBy(userId);
+        s.setTillDeviceKey(tillKey);
         s.setStatus(SalesConstants.SHIFT_STATUS_OPEN);
         s.setOpeningCash(opening);
         s.setExpectedClosingCash(opening);
@@ -155,9 +172,14 @@ public class ShiftService {
 
     @Transactional(readOnly = true)
     public ShiftResponse getCurrentOpenShift(String businessId, String branchId) {
+        return getCurrentOpenShift(businessId, branchId, null);
+    }
+
+    @Transactional(readOnly = true)
+    public ShiftResponse getCurrentOpenShift(String businessId, String branchId, String tillDeviceHeader) {
         Branch branch = requireBranch(businessId, branchId);
-        Shift s = shiftRepository
-                .findByBusinessIdAndBranchIdAndStatus(businessId, branchId, SalesConstants.SHIFT_STATUS_OPEN)
+        Shift s = openShiftResolver
+                .findOpen(businessId, branchId, tillDeviceHeader)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No open shift"));
 
         List<DenominationResponse> openingDenoms = shiftDenominationRepository
@@ -179,17 +201,35 @@ public class ShiftService {
     // ========================================================================
 
     @Transactional(readOnly = true)
+    public LastClosedShiftFloatResponse getLastClosedShiftFloat(String businessId, String branchId) {
+        return getLastClosedShiftFloat(businessId, branchId, null);
+    }
+
+    @Transactional(readOnly = true)
     public LastClosedShiftFloatResponse getLastClosedShiftFloat(
             String businessId,
-            String branchId
+            String branchId,
+            String tillDeviceHeader
     ) {
         requireBranch(businessId, branchId);
-        List<Shift> closed = shiftRepository.findClosedByBusinessIdAndBranchId(
+        String tillKey = openShiftResolver.normalizeTillDeviceKey(tillDeviceHeader);
+        List<Shift> closed = shiftRepository.findClosedByBusinessIdAndBranchIdAndTillDeviceKey(
                 businessId,
                 branchId,
+                tillKey,
                 SalesConstants.SHIFT_STATUS_CLOSED,
                 PageRequest.of(0, 1)
         );
+        if (closed.isEmpty() && tillKey != null) {
+            // Prefill from shared branch float when this till has no prior close.
+            closed = shiftRepository.findClosedByBusinessIdAndBranchIdAndTillDeviceKey(
+                    businessId,
+                    branchId,
+                    null,
+                    SalesConstants.SHIFT_STATUS_CLOSED,
+                    PageRequest.of(0, 1)
+            );
+        }
         if (closed.isEmpty()) {
             return LastClosedShiftFloatResponse.empty(branchId);
         }
@@ -216,12 +256,29 @@ public class ShiftService {
     // ========================================================================
 
     @Transactional
-    public ShiftResponse closeShift(String businessId, String shiftId, PostCloseShiftRequest req, String userId) {
+    public ShiftResponse closeShift(
+            String businessId,
+            String shiftId,
+            PostCloseShiftRequest req,
+            String userId
+    ) {
+        return closeShift(businessId, shiftId, req, userId, null);
+    }
+
+    @Transactional
+    public ShiftResponse closeShift(
+            String businessId,
+            String shiftId,
+            PostCloseShiftRequest req,
+            String userId,
+            String roleId
+    ) {
         Shift s = shiftRepository.findByIdAndBusinessIdForUpdate(shiftId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shift not found"));
         if (!SalesConstants.SHIFT_STATUS_OPEN.equals(s.getStatus())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Shift is not open");
         }
+        assertCanCloseShift(s, userId, roleId);
 
         String branchName = getBranchName(businessId, s.getBranchId());
 
@@ -631,6 +688,33 @@ public class ShiftService {
     // DTO CONVERSION
     // ========================================================================
 
+    private void assertCanCloseShift(Shift s, String userId, String roleId) {
+        if (s.getOpenedBy().equals(userId)) {
+            return;
+        }
+        // Branch-locked cashiers may only close shifts they opened; managers/admins may close any.
+        if (branchResolutionService.isBranchLockedRole(roleId)) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Only the cashier who opened this shift can close it. Ask a manager to close it.");
+        }
+    }
+
+    private String resolveTillLabel(Shift s) {
+        String key = s.getTillDeviceKey();
+        if (key == null || key.isBlank()) {
+            return null;
+        }
+        return tillDeviceRepository
+                .findByBusinessIdAndBranchIdAndDeviceKey(s.getBusinessId(), s.getBranchId(), key)
+                .map(t -> t.getLabel())
+                .orElseGet(() -> {
+                    String compact = key.replace("-", "");
+                    String shortId = compact.length() > 8 ? compact.substring(0, 8) : compact;
+                    return "Till " + shortId;
+                });
+    }
+
     private ShiftResponse toDto(Shift s, String branchName, String currentUserId,
                                  List<DenominationResponse> openingDenoms,
                                  List<DenominationResponse> closingDenoms) {
@@ -649,6 +733,8 @@ public class ShiftService {
                 s.getClosedBy(), closedByName,
                 s.getOpenedAt(), s.getClosedAt(),
                 s.getCloseJournalEntryId(),
+                s.getTillDeviceKey(),
+                resolveTillLabel(s),
                 openingDenoms, closingDenoms
         );
     }
@@ -667,7 +753,7 @@ public class ShiftService {
                 s.getOpeningCash(), s.getCountedClosingCash(),
                 s.getExpectedClosingCash(), s.getClosingVariance(),
                 0, BigDecimal.ZERO,
-                null, null
+                resolveTillLabel(s), null
         );
     }
 

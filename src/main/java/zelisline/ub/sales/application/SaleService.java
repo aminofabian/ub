@@ -88,6 +88,7 @@ public class SaleService {
     private final SaleItemRepository saleItemRepository;
     private final SalePaymentRepository salePaymentRepository;
     private final ShiftRepository shiftRepository;
+    private final OpenShiftResolver openShiftResolver;
     private final BranchRepository branchRepository;
     private final InventoryBatchPickerService inventoryBatchPickerService;
     private final LedgerPostingPort ledgerPostingPort;
@@ -111,17 +112,28 @@ public class SaleService {
 
     @Transactional
     public SaleCreationOutcome createSale(String businessId, String rawIdempotencyKey, PostSaleRequest req, String userId) {
-        return createSale(businessId, rawIdempotencyKey, req, userId, null);
+        return createSale(businessId, rawIdempotencyKey, req, userId, null, null);
+    }
+
+    public SaleCreationOutcome createSale(String businessId, String rawIdempotencyKey, PostSaleRequest req, String userId, String roleId) {
+        return createSale(businessId, rawIdempotencyKey, req, userId, roleId, null);
     }
 
     @Transactional
-    public SaleCreationOutcome createSale(String businessId, String rawIdempotencyKey, PostSaleRequest req, String userId, String roleId) {
+    public SaleCreationOutcome createSale(
+            String businessId,
+            String rawIdempotencyKey,
+            PostSaleRequest req,
+            String userId,
+            String roleId,
+            String tillDeviceKey
+    ) {
         String idempotencyKey = normalizeIdempotencyKey(rawIdempotencyKey);
         var existing = saleRepository.findByBusinessIdAndIdempotencyKey(businessId, idempotencyKey);
         if (existing.isPresent()) {
             return new SaleCreationOutcome(toResponse(existing.get()), false);
         }
-        return new SaleCreationOutcome(completeNewSale(businessId, idempotencyKey, req, userId, roleId), true);
+        return new SaleCreationOutcome(completeNewSale(businessId, idempotencyKey, req, userId, roleId, tillDeviceKey), true);
     }
 
     @Transactional(readOnly = true)
@@ -131,11 +143,14 @@ public class SaleService {
         return toResponse(sale);
     }
 
-    private SaleResponse completeNewSale(String businessId, String idempotencyKey, PostSaleRequest req, String userId) {
-        return completeNewSale(businessId, idempotencyKey, req, userId, null);
-    }
-
-    private SaleResponse completeNewSale(String businessId, String idempotencyKey, PostSaleRequest req, String userId, String roleId) {
+    private SaleResponse completeNewSale(
+            String businessId,
+            String idempotencyKey,
+            PostSaleRequest req,
+            String userId,
+            String roleId,
+            String tillDeviceKey
+    ) {
         var creditSettingsResolved = businessCreditSettingsService.resolveForBusiness(businessId);
         requireBranch(businessId, req.branchId());
         validateSaleLines(businessId, req.branchId(), req.lines(), roleId);
@@ -156,15 +171,15 @@ public class SaleService {
         loyaltyPointsService.validateRedeemTender(businessId, customerId, grandTotal, redeemTenderTotal,
                 creditSettingsResolved);
 
-        shiftRepository
-                .findByBusinessIdAndBranchIdAndStatus(businessId, req.branchId(), SalesConstants.SHIFT_STATUS_OPEN)
+        openShiftResolver
+                .findOpen(businessId, req.branchId(), tillDeviceKey)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "No open shift"));
 
         String saleId = UUID.randomUUID().toString();
         List<SaleItem> saleItems = pickAndBuildSaleItems(businessId, req, saleId, userId);
 
-        Shift shift = shiftRepository
-                .findByBusinessIdAndBranchIdAndStatusForUpdate(businessId, req.branchId(), SalesConstants.SHIFT_STATUS_OPEN)
+        Shift shift = openShiftResolver
+                .findOpenForUpdate(businessId, req.branchId(), tillDeviceKey)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Shift closed before sale completed"));
 
         BigDecimal cogsTotal = sumCost(saleItems);

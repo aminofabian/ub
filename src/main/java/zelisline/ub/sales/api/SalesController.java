@@ -42,6 +42,7 @@ import zelisline.ub.sales.api.dto.VariableWeightBarcodeLookupResponse;
 import zelisline.ub.sales.receipt.SaleReceiptService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 import zelisline.ub.tenancy.application.BranchResolutionService;
+import zelisline.ub.till.application.TillDeviceService;
 
 @Validated
 @RestController
@@ -128,7 +129,8 @@ public class SalesController {
                 idempotencyKey,
                 safe,
                 principal.userId(),
-                principal.roleId()
+                principal.roleId(),
+                request.getHeader(TillDeviceService.TILL_DEVICE_HEADER)
         );
         HttpStatus status = out.createdNew() ? HttpStatus.CREATED : HttpStatus.OK;
         return ResponseEntity.status(status).body(out.response());

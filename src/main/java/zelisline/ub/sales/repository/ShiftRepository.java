@@ -40,6 +40,82 @@ public interface ShiftRepository extends JpaRepository<Shift, String> {
             @Param("status") String status
     );
 
+    @Query("""
+            select s from Shift s
+             where s.businessId = :businessId
+               and s.branchId = :branchId
+               and s.tillDeviceKey = :tillDeviceKey
+               and s.status = :status
+            """)
+    Optional<Shift> findByBusinessIdAndBranchIdAndTillDeviceKeyAndStatus(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("tillDeviceKey") String tillDeviceKey,
+            @Param("status") String status
+    );
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select s from Shift s
+             where s.businessId = :businessId
+               and s.branchId = :branchId
+               and s.tillDeviceKey = :tillDeviceKey
+               and s.status = :status
+            """)
+    Optional<Shift> findByBusinessIdAndBranchIdAndTillDeviceKeyAndStatusForUpdate(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("tillDeviceKey") String tillDeviceKey,
+            @Param("status") String status
+    );
+
+    @Query("""
+            select s from Shift s
+             where s.businessId = :businessId
+               and s.branchId = :branchId
+               and s.tillDeviceKey is null
+               and s.status = :status
+            """)
+    Optional<Shift> findByBusinessIdAndBranchIdAndTillDeviceKeyIsNullAndStatus(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("status") String status
+    );
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select s from Shift s
+             where s.businessId = :businessId
+               and s.branchId = :branchId
+               and s.tillDeviceKey is null
+               and s.status = :status
+            """)
+    Optional<Shift> findByBusinessIdAndBranchIdAndTillDeviceKeyIsNullAndStatusForUpdate(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("status") String status
+    );
+
+    /** Recently closed shifts for a till (or shared branch when tillDeviceKey is null). */
+    @Query("""
+            select s from Shift s
+             where s.businessId = :businessId
+               and s.branchId = :branchId
+               and s.status = :status
+               and (
+                    (:tillDeviceKey is null and s.tillDeviceKey is null)
+                    or s.tillDeviceKey = :tillDeviceKey
+               )
+             order by s.closedAt desc nulls last, s.openedAt desc
+            """)
+    List<Shift> findClosedByBusinessIdAndBranchIdAndTillDeviceKey(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("tillDeviceKey") String tillDeviceKey,
+            @Param("status") String status,
+            Pageable pageable
+    );
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
             select s from Shift s

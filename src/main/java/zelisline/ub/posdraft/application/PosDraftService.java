@@ -43,15 +43,14 @@ import zelisline.ub.posdraft.infrastructure.BranchPosSequenceAllocator;
 import zelisline.ub.posdraft.repository.PosDraftAuditLogRepository;
 import zelisline.ub.posdraft.repository.PosDraftLineRepository;
 import zelisline.ub.posdraft.repository.PosDraftRepository;
-import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.PostSaleLineRequest;
 import zelisline.ub.sales.api.dto.PostSaleRequest;
 import zelisline.ub.sales.api.dto.SaleResponse;
+import zelisline.ub.sales.application.OpenShiftResolver;
 import zelisline.ub.sales.application.SaleCreationOutcome;
 import zelisline.ub.sales.application.SaleActorNameService;
 import zelisline.ub.sales.application.SaleService;
 import zelisline.ub.sales.domain.Shift;
-import zelisline.ub.sales.repository.ShiftRepository;
 import zelisline.ub.tenancy.application.FeatureFlagService;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BranchRepository;
@@ -71,7 +70,7 @@ public class PosDraftService {
     private final SaleActorNameService saleActorNameService;
     private final FeatureFlagService featureFlagService;
     private final SaleService saleService;
-    private final ShiftRepository shiftRepository;
+    private final OpenShiftResolver openShiftResolver;
     private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
@@ -294,6 +293,19 @@ public class PosDraftService {
             String userId,
             String roleId
     ) {
+        return completeDraft(businessId, draftId, request, idempotencyKey, userId, roleId, null);
+    }
+
+    @Transactional
+    public CompletePosDraftResponse completeDraft(
+            String businessId,
+            String draftId,
+            CompletePosDraftRequest request,
+            String idempotencyKey,
+            String userId,
+            String roleId,
+            String tillDeviceKey
+    ) {
         // Ungated — allow completing existing drafts even when feature is OFF.
         PosDraft draft = loadDraftOrThrow(businessId, draftId);
 
@@ -326,9 +338,8 @@ public class PosDraftService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Draft total must be positive");
         }
 
-        Shift shift = shiftRepository
-                .findByBusinessIdAndBranchIdAndStatus(
-                        businessId, draft.getBranchId(), SalesConstants.SHIFT_STATUS_OPEN)
+        Shift shift = openShiftResolver
+                .findOpen(businessId, draft.getBranchId(), tillDeviceKey)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "No open shift"));
 
         List<PostSaleLineRequest> saleLines = new ArrayList<>();
@@ -355,7 +366,8 @@ public class PosDraftService {
                 idempotencyKey,
                 saleRequest,
                 userId,
-                roleId
+                roleId,
+                tillDeviceKey
         );
 
         draft.setStatus(PosDraftConstants.STATUS_COMPLETED);

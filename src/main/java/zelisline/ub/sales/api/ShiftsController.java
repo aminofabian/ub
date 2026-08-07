@@ -30,6 +30,7 @@ import zelisline.ub.sales.api.dto.ShiftResponse;
 import zelisline.ub.sales.application.ShiftService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 import zelisline.ub.tenancy.application.BranchResolutionService;
+import zelisline.ub.till.application.TillDeviceService;
 
 @Validated
 @RestController
@@ -50,7 +51,12 @@ public class ShiftsController {
         // Replace the request branch with the validated one, using a wrapper
         PostOpenShiftRequest safe = new PostOpenShiftRequest(
                 validatedBranch, body.openingCash(), body.notes(), body.denominations());
-        return shiftService.openShift(TenantRequestIds.resolveBusinessId(request), safe, principal.userId());
+        return shiftService.openShift(
+                TenantRequestIds.resolveBusinessId(request),
+                safe,
+                principal.userId(),
+                request.getHeader(TillDeviceService.TILL_DEVICE_HEADER)
+        );
     }
 
     @GetMapping("/current")
@@ -61,7 +67,8 @@ public class ShiftsController {
                 principal.roleId(), principal.branchId(), branchId);
         return shiftService.getCurrentOpenShift(
                 TenantRequestIds.resolveBusinessId(request),
-                validatedBranch
+                validatedBranch,
+                request.getHeader(TillDeviceService.TILL_DEVICE_HEADER)
         );
     }
 
@@ -76,7 +83,8 @@ public class ShiftsController {
                 principal.roleId(), principal.branchId(), branchId);
         return shiftService.getLastClosedShiftFloat(
                 TenantRequestIds.resolveBusinessId(request),
-                validatedBranch
+                validatedBranch,
+                request.getHeader(TillDeviceService.TILL_DEVICE_HEADER)
         );
     }
 
@@ -92,7 +100,8 @@ public class ShiftsController {
                 TenantRequestIds.resolveBusinessId(request),
                 shiftId,
                 body,
-                user.userId()
+                user.userId(),
+                user.roleId()
         );
     }
 

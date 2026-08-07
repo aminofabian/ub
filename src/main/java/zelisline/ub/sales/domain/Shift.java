@@ -33,6 +33,10 @@ public class Shift {
     @Column(name = "opened_by", nullable = false, length = 36)
     private String openedBy;
 
+    /** Client till id ({@code X-Till-Device-Id}); null = legacy shared branch drawer. */
+    @Column(name = "till_device_key", length = 64)
+    private String tillDeviceKey;
+
     @Column(name = "status", nullable = false, length = 16)
     private String status;
 

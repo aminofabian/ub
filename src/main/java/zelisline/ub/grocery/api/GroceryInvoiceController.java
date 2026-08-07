@@ -30,6 +30,7 @@ import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 import zelisline.ub.tenancy.application.BranchResolutionService;
+import zelisline.ub.till.application.TillDeviceService;
 
 @Validated
 @RestController
@@ -173,7 +174,8 @@ public class GroceryInvoiceController {
                 id,
                 body,
                 principal.userId(),
-                principal.roleId()
+                principal.roleId(),
+                request.getHeader(TillDeviceService.TILL_DEVICE_HEADER)
         );
     }
 

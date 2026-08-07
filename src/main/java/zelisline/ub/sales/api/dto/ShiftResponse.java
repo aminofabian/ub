@@ -23,6 +23,8 @@ public record ShiftResponse(
         Instant openedAt,
         Instant closedAt,
         String closeJournalEntryId,
+        String tillDeviceKey,
+        String tillLabel,
         List<DenominationResponse> openingDenominations,
         List<DenominationResponse> closingDenominations
 ) {

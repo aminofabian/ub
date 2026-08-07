@@ -24,6 +24,7 @@ import zelisline.ub.finance.api.dto.PostExpenseRequest;
 import zelisline.ub.finance.application.ExpenseService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.TenantRequestIds;
+import zelisline.ub.till.application.TillDeviceService;
 
 @Validated
 @RestController
@@ -46,7 +47,8 @@ public class FinanceExpensesController {
                 TenantRequestIds.resolveBusinessId(request),
                 body,
                 user.userId(),
-                idempotencyKey
+                idempotencyKey,
+                request.getHeader(TillDeviceService.TILL_DEVICE_HEADER)
         );
     }
 

@@ -56,10 +56,10 @@ import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.PostSaleLineRequest;
 import zelisline.ub.sales.api.dto.PostSalePaymentRequest;
 import zelisline.ub.sales.api.dto.PostSaleRequest;
+import zelisline.ub.sales.application.OpenShiftResolver;
 import zelisline.ub.sales.application.SaleActorNameService;
 import zelisline.ub.sales.application.SaleCreationOutcome;
 import zelisline.ub.sales.application.SaleService;
-import zelisline.ub.sales.repository.ShiftRepository;
 import zelisline.ub.tenancy.repository.BranchRepository;
 
 @Service
@@ -79,7 +79,7 @@ public class GroceryInvoiceService {
     private final ItemCatalogService itemCatalogService;
     private final BranchRepository branchRepository;
     private final SaleService saleService;
-    private final ShiftRepository shiftRepository;
+    private final OpenShiftResolver openShiftResolver;
     private final SaleActorNameService saleActorNameService;
     private final ApplicationEventPublisher eventPublisher;
     private final StkPushRetryHelper stkPushRetryHelper;
@@ -393,6 +393,18 @@ public class GroceryInvoiceService {
             String userId,
             String roleId
     ) {
+        return payInvoice(businessId, invoiceId, request, userId, roleId, null);
+    }
+
+    @Transactional
+    public PayGroceryInvoiceResponse payInvoice(
+            String businessId,
+            String invoiceId,
+            PayGroceryInvoiceRequest request,
+            String userId,
+            String roleId,
+            String tillDeviceKey
+    ) {
         GroceryInvoice invoice = loadInvoiceOrThrow(businessId, invoiceId);
 
         if (!invoice.isPending()) {
@@ -415,9 +427,8 @@ public class GroceryInvoiceService {
             throw new ResponseStatusException(HttpStatus.GONE, "Invoice has expired");
         }
 
-        shiftRepository
-                .findByBusinessIdAndBranchIdAndStatus(businessId, invoice.getBranchId(),
-                        SalesConstants.SHIFT_STATUS_OPEN)
+        openShiftResolver
+                .findOpen(businessId, invoice.getBranchId(), tillDeviceKey)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "No open shift for this branch"));
 
         List<GroceryInvoiceLine> invoiceLines = lineRepository.findByInvoiceIdOrderByLineIndex(invoiceId);
@@ -451,7 +462,8 @@ public class GroceryInvoiceService {
         );
 
         String idempotencyKey = "grocery:" + invoice.getId() + ":" + UUID.randomUUID().toString().substring(0, 8);
-        SaleCreationOutcome outcome = saleService.createSale(businessId, idempotencyKey, saleRequest, userId, roleId);
+        SaleCreationOutcome outcome = saleService.createSale(
+                businessId, idempotencyKey, saleRequest, userId, roleId, tillDeviceKey);
 
         invoice.setStatus(GroceryConstants.STATUS_PAID);
         invoice.setPaidBy(userId);

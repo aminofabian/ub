@@ -110,12 +110,12 @@ public class SaleVoidService {
         assertCanVoid(sale, userId, roleId);
 
         Shift shift = shiftRepository
-                .findByBusinessIdAndBranchIdAndStatusForUpdate(businessId, sale.getBranchId(), SalesConstants.SHIFT_STATUS_OPEN)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "No open shift for this branch"));
-        if (!shift.getId().equals(sale.getShiftId())) {
+                .findByIdAndBusinessIdForUpdate(sale.getShiftId(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Sale shift not found"));
+        if (!SalesConstants.SHIFT_STATUS_OPEN.equals(shift.getStatus())) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "Sale can only be voided on the same open shift that recorded it"
+                    "Sale can only be voided while its shift is still open"
             );
         }
 

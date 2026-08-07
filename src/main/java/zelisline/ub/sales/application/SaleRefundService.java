@@ -146,9 +146,14 @@ public class SaleRefundService {
         assertCreditRefundAllowed(sale, pays);
 
         Shift shift = shiftRepository
-                .findByBusinessIdAndBranchIdAndStatusForUpdate(
-                        businessId, sale.getBranchId(), SalesConstants.SHIFT_STATUS_OPEN)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "No open shift for this branch"));
+                .findByIdAndBusinessIdForUpdate(sale.getShiftId(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Sale shift not found"));
+        if (!SalesConstants.SHIFT_STATUS_OPEN.equals(shift.getStatus())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "No open shift for this sale — open the register that recorded it"
+            );
+        }
 
         String refundId = UUID.randomUUID().toString();
         applyRefundStock(businessId, sale, refundId, comp.rows(), userId);

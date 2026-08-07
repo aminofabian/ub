@@ -7,20 +7,22 @@ import org.springframework.context.annotation.Configuration;
 /**
  * Flyway migration strategy.
  *
- * Do not call {@code flyway.repair()} on every startup. Repair records DELETE
- * markers in flyway_schema_history that unmark prior successful applies of the
- * same version. If a migration then fails because objects already exist
- * (e.g. V1 CREATE TABLE), the next boot repairs again and re-attempts forever.
+ * Aligns with {@code spring.flyway.repair-on-migrate=true}: clear failed history
+ * rows / checksum drift, then migrate. Without {@code repair()}, a single failed
+ * migration (e.g. V204) blocks every subsequent boot forever.
  *
- * Clear a stuck failed row manually when needed:
- * {@code DELETE FROM flyway_schema_history WHERE success = 0;}
- * then fix checksums with a one-off {@code flyway repair} if required.
+ * Repair only removes failed entries and realigns checksums; it does not drop
+ * schema objects. Migrations that are not idempotent can still fail on retry —
+ * fix the SQL in that case, then redeploy.
  */
 @Configuration
 public class FlywayConfig {
 
     @Bean
-    public FlywayMigrationStrategy migrateOnly() {
-        return flyway -> flyway.migrate();
+    public FlywayMigrationStrategy repairThenMigrate() {
+        return flyway -> {
+            flyway.repair();
+            flyway.migrate();
+        };
     }
 }

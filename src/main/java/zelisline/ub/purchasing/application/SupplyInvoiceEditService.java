@@ -12,14 +12,21 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.inventory.domain.SupplyBatch;
+import zelisline.ub.inventory.domain.SupplyBatchExpense;
+import zelisline.ub.inventory.repository.SupplyBatchExpenseRepository;
+import zelisline.ub.inventory.repository.SupplyBatchRepository;
 import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.api.dto.PatchPathBSupplyInvoiceRequest;
+import zelisline.ub.purchasing.api.dto.PathBSupplyExpenseDto;
 import zelisline.ub.purchasing.api.dto.PathBSupplyInvoiceDetailDto;
 import zelisline.ub.purchasing.api.dto.PathBSupplyInvoiceLineDto;
 import zelisline.ub.purchasing.domain.RawPurchaseLine;
+import zelisline.ub.purchasing.domain.RawPurchaseSession;
 import zelisline.ub.purchasing.domain.SupplierInvoice;
 import zelisline.ub.purchasing.domain.SupplierInvoiceLine;
 import zelisline.ub.purchasing.repository.RawPurchaseLineRepository;
+import zelisline.ub.purchasing.repository.RawPurchaseSessionRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
 import zelisline.ub.purchasing.repository.SupplierPaymentAllocationRepository;
@@ -38,6 +45,9 @@ public class SupplyInvoiceEditService {
     private final SupplierRepository supplierRepository;
     private final PathBPurchaseService pathBPurchaseService;
     private final RawPurchaseLineRepository rawPurchaseLineRepository;
+    private final RawPurchaseSessionRepository rawPurchaseSessionRepository;
+    private final SupplyBatchRepository supplyBatchRepository;
+    private final SupplyBatchExpenseRepository supplyBatchExpenseRepository;
     private final PathBAssociatedCostService pathBAssociatedCostService;
 
     @Transactional(readOnly = true)
@@ -119,6 +129,37 @@ public class SupplyInvoiceEditService {
         BigDecimal open = grand.subtract(paid).setScale(2, RoundingMode.HALF_UP);
         String status = paymentStatus(open, paid);
 
+        String sessionId = inv.getRawPurchaseSessionId();
+        String branchId = null;
+        String supplyBatchId = null;
+        List<PathBSupplyExpenseDto> expenses = List.of();
+        if (sessionId != null && !sessionId.isBlank()) {
+            RawPurchaseSession session = rawPurchaseSessionRepository
+                    .findByIdAndBusinessId(sessionId, businessId)
+                    .orElse(null);
+            if (session != null) {
+                branchId = session.getBranchId();
+            }
+            List<SupplyBatch> batches = supplyBatchRepository
+                    .findAllByBusinessIdAndSourceTypeAndSourceIdOrderByCreatedAtAscIdAsc(
+                            businessId, PurchasingConstants.BATCH_SOURCE_PATH_B, sessionId);
+            if (!batches.isEmpty()) {
+                // Prefer the oldest batch as the canonical header for extras (Path B creates one).
+                SupplyBatch sb = batches.getFirst();
+                supplyBatchId = sb.getId();
+                List<SupplyBatchExpense> expenseRows =
+                        supplyBatchExpenseRepository.findBySupplyBatchIdOrderByCreatedAtAsc(sb.getId());
+                expenses = new ArrayList<>(expenseRows.size());
+                for (SupplyBatchExpense e : expenseRows) {
+                    expenses.add(new PathBSupplyExpenseDto(
+                            e.getId(),
+                            e.getCategory(),
+                            e.getAmount().setScale(2, RoundingMode.HALF_UP),
+                            e.getDescription()));
+                }
+            }
+        }
+
         List<SupplierInvoiceLine> dbLines = supplierInvoiceLineRepository.findByInvoiceIdOrderBySortOrderAsc(inv.getId());
         List<PathBSupplyInvoiceLineDto> lines = new ArrayList<>(dbLines.size());
         for (SupplierInvoiceLine sil : dbLines) {
@@ -158,6 +199,9 @@ public class SupplyInvoiceEditService {
                 paid,
                 open,
                 status,
+                branchId,
+                supplyBatchId,
+                expenses,
                 lines);
     }
 

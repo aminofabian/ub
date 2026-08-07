@@ -18,6 +18,11 @@ public record PathBSupplyInvoiceDetailDto(
         BigDecimal amountPaid,
         BigDecimal balanceOpen,
         String paymentStatus,
+        /** Branch the Path B session was received into (for shelf-price updates). */
+        String branchId,
+        /** Linked supply batch header when present (for extra costs). */
+        String supplyBatchId,
+        List<PathBSupplyExpenseDto> expenses,
         List<PathBSupplyInvoiceLineDto> lines
 ) {
 }

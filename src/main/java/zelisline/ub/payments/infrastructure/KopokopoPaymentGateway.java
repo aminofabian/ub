@@ -292,6 +292,38 @@ public class KopokopoPaymentGateway implements PaymentGateway {
         }
     }
 
+    /**
+     * Query Send Money status with credentials ({@code GET /api/v2/send_money/{id}}).
+     * Used when the callback is delayed or never arrives.
+     */
+    public WebhookResult querySendMoneyStatus(String sendMoneyId, Map<String, String> creds) {
+        if (sendMoneyId == null || sendMoneyId.isBlank()) {
+            return WebhookResult.empty(null);
+        }
+        String authBase = resolveAuthBaseUrl(creds);
+        String apiBase = resolveApiBaseUrl(creds);
+        String accessToken = obtainAccessToken(creds, authBase);
+        String url = apiBase + SEND_MONEY_PATH + "/" + sendMoneyId.trim();
+
+        try {
+            HttpResponse<String> response = Unirest.get(url)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("Accept", "application/json")
+                    .header("User-Agent", USER_AGENT)
+                    .asString();
+
+            if (response.getStatus() != 200) {
+                log.warn("KopoKopo Send Money status query HTTP {}: id={}", response.getStatus(), sendMoneyId);
+                return WebhookResult.empty(response.getBody());
+            }
+
+            return processWebhook(Map.of(), response.getBody());
+        } catch (Exception e) {
+            log.error("KopoKopo Send Money status query failed: id={}", sendMoneyId, e);
+            return WebhookResult.empty(null);
+        }
+    }
+
     // ── Webhook subscriptions (buygoods / till scope) ────────────────
 
     /**
@@ -388,7 +420,9 @@ public class KopokopoPaymentGateway implements PaymentGateway {
         try {
             var root = objectMapper.readTree(rawBody);
 
-            if (root.has("type") && "send_money".equalsIgnoreCase(root.get("type").asText())) {
+            // Callback / status payloads use { "data": { "type": "send_money", ... } }.
+            // Older samples put type on the root — accept both.
+            if (isSendMoneyPayload(root)) {
                 return parseSendMoneyWebhook(root, rawBody);
             }
 
@@ -441,46 +475,256 @@ public class KopokopoPaymentGateway implements PaymentGateway {
         }
     }
 
+    static boolean isSendMoneyPayload(com.fasterxml.jackson.databind.JsonNode root) {
+        if (root == null || root.isNull()) {
+            return false;
+        }
+        if (root.has("type") && "send_money".equalsIgnoreCase(root.get("type").asText())) {
+            return true;
+        }
+        if (root.has("data") && root.get("data").isObject()) {
+            var data = root.get("data");
+            return data.has("type") && "send_money".equalsIgnoreCase(data.get("type").asText());
+        }
+        return false;
+    }
+
     private WebhookResult parseSendMoneyWebhook(
             com.fasterxml.jackson.databind.JsonNode root,
             String rawBody
     ) {
         String sendMoneyId = null;
-        String status = null;
         String reference = null;
         BigDecimal amount = null;
+        com.fasterxml.jackson.databind.JsonNode attrs = null;
 
         if (root.has("data") && root.get("data").isObject()) {
             var data = root.get("data");
             sendMoneyId = data.has("id") ? data.get("id").asText() : null;
-            var attrs = data.get("attributes");
-            if (attrs != null && !attrs.isNull()) {
-                status = textOrNull(attrs, "status");
-                if (attrs.has("metadata") && attrs.get("metadata").isObject()) {
-                    reference = textOrNull(attrs.get("metadata"), "supplierInvoiceId");
-                    if (reference == null) {
-                        reference = textOrNull(attrs.get("metadata"), "reference");
-                    }
+            attrs = data.get("attributes");
+        } else {
+            // Rare root-shaped payload (type + attributes on root).
+            sendMoneyId = root.has("id") ? root.get("id").asText() : null;
+            attrs = root.get("attributes");
+        }
+
+        if (attrs != null && !attrs.isNull()) {
+            if (attrs.has("metadata") && attrs.get("metadata").isObject()) {
+                reference = textOrNull(attrs.get("metadata"), "supplierInvoiceId");
+                if (reference == null) {
+                    reference = textOrNull(attrs.get("metadata"), "reference");
                 }
-                amount = parseAmount(textOrNull(attrs, "amount"));
+            }
+            amount = parseAmount(textOrNull(attrs, "amount"));
+            if (amount == null && attrs.has("transfer_batches") && attrs.get("transfer_batches").isArray()
+                    && !attrs.get("transfer_batches").isEmpty()) {
+                amount = parseAmount(textOrNull(attrs.get("transfer_batches").get(0), "amount"));
             }
         }
 
-        boolean success = "Success".equalsIgnoreCase(status) || "Received".equalsIgnoreCase(status);
-        boolean failed = "Failed".equalsIgnoreCase(status) || "Error".equalsIgnoreCase(status);
+        SendMoneyOutcome outcome = evaluateSendMoneyAttributes(attrs);
+        String mpesaRef = outcome.transactionReference();
+        String eventId = sendMoneyId != null ? sendMoneyId
+                : (root.has("id") ? root.get("id").asText() : null);
 
         return new WebhookResult(
                 null,
-                sendMoneyId,
+                mpesaRef != null ? mpesaRef : sendMoneyId,
                 null,
                 amount,
                 reference,
-                success,
-                failed,
+                outcome.completed(),
+                outcome.failed(),
                 sendMoneyId,
-                root.has("id") ? root.get("id").asText() : null,
+                eventId,
                 "send_money",
                 rawBody);
+    }
+
+    /**
+     * KopoKopo Send Money callbacks use top-level {@code Processed} and per-disbursement
+     * {@code Transferred} (not STK's {@code Success}/{@code Received}).
+     */
+    static SendMoneyOutcome evaluateSendMoneyAttributes(com.fasterxml.jackson.databind.JsonNode attrs) {
+        if (attrs == null || attrs.isNull()) {
+            return SendMoneyOutcome.pending("Pending");
+        }
+
+        String status = textOrNull(attrs, "status");
+        if (status == null) {
+            status = "Pending";
+        }
+
+        String txnRef = firstTransferredTransactionReference(attrs);
+        String failureDetail = firstSendMoneyError(attrs);
+        boolean hasTransferred = txnRef != null;
+        boolean topFailed = isTerminalSendMoneyFailureStatus(status);
+        boolean batchFailed = hasFailedDisbursement(attrs);
+
+        if (topFailed || (batchFailed && !hasTransferred)) {
+            String description = failureDetail != null ? failureDetail : status;
+            return new SendMoneyOutcome(status, description, false, true, null);
+        }
+
+        // Docs: attributes.status = Processed once done; disbursements show Transferred + M-Pesa ref.
+        boolean topProcessed = "Processed".equalsIgnoreCase(status)
+                || "Success".equalsIgnoreCase(status)
+                || "Transferred".equalsIgnoreCase(status);
+        if (topProcessed && hasTransferred) {
+            return new SendMoneyOutcome(status, status, true, false, txnRef);
+        }
+        // Processed without a receipt yet — keep pending rather than confirming blindly.
+        if (topProcessed && !hasTransferred) {
+            log.warn("KopoKopo send_money status={} without Transferred disbursement — treating as pending",
+                    status);
+            return new SendMoneyOutcome(status, status, false, false, null);
+        }
+
+        return SendMoneyOutcome.pending(status);
+    }
+
+    record SendMoneyOutcome(
+            String status,
+            String description,
+            boolean completed,
+            boolean failed,
+            String transactionReference
+    ) {
+        static SendMoneyOutcome pending(String status) {
+            return new SendMoneyOutcome(status, status, false, false, null);
+        }
+    }
+
+    static boolean isTerminalSendMoneyFailureStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return false;
+        }
+        String s = status.trim();
+        return "Failed".equalsIgnoreCase(s)
+                || "Error".equalsIgnoreCase(s)
+                || "Cancelled".equalsIgnoreCase(s)
+                || "Canceled".equalsIgnoreCase(s)
+                || "Rejected".equalsIgnoreCase(s);
+    }
+
+    static String firstTransferredTransactionReference(com.fasterxml.jackson.databind.JsonNode attrs) {
+        if (attrs == null || !attrs.has("transfer_batches") || !attrs.get("transfer_batches").isArray()) {
+            return null;
+        }
+        for (var batch : attrs.get("transfer_batches")) {
+            if (batch == null || batch.isNull() || !batch.has("disbursements")
+                    || !batch.get("disbursements").isArray()) {
+                continue;
+            }
+            for (var d : batch.get("disbursements")) {
+                if (d == null || d.isNull()) {
+                    continue;
+                }
+                String dStatus = textOrNull(d, "status");
+                if (!"Transferred".equalsIgnoreCase(dStatus) && !"Success".equalsIgnoreCase(dStatus)) {
+                    continue;
+                }
+                String ref = textOrNull(d, "transaction_reference");
+                if (ref != null) {
+                    return ref;
+                }
+            }
+        }
+        return null;
+    }
+
+    static boolean hasFailedDisbursement(com.fasterxml.jackson.databind.JsonNode attrs) {
+        if (attrs == null) {
+            return false;
+        }
+        if (attrs.has("errors") && !attrs.get("errors").isNull()) {
+            var errors = attrs.get("errors");
+            if (errors.isArray() && !errors.isEmpty()) {
+                return true;
+            }
+            if (errors.isTextual() && !errors.asText().isBlank()) {
+                return true;
+            }
+            if (errors.isObject()) {
+                return true;
+            }
+        }
+        if (!attrs.has("transfer_batches") || !attrs.get("transfer_batches").isArray()) {
+            return false;
+        }
+        for (var batch : attrs.get("transfer_batches")) {
+            if (batch == null || batch.isNull()) {
+                continue;
+            }
+            if (isTerminalSendMoneyFailureStatus(textOrNull(batch, "status"))) {
+                return true;
+            }
+            if (!batch.has("disbursements") || !batch.get("disbursements").isArray()) {
+                continue;
+            }
+            for (var d : batch.get("disbursements")) {
+                if (d == null || d.isNull()) {
+                    continue;
+                }
+                if (isTerminalSendMoneyFailureStatus(textOrNull(d, "status"))) {
+                    return true;
+                }
+                if (d.has("errors") && !d.get("errors").isNull()) {
+                    var err = d.get("errors");
+                    if (err.isArray() && !err.isEmpty()) {
+                        return true;
+                    }
+                    if (err.isTextual() && !err.asText().isBlank()) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    static String firstSendMoneyError(com.fasterxml.jackson.databind.JsonNode attrs) {
+        if (attrs == null) {
+            return null;
+        }
+        if (attrs.has("errors") && !attrs.get("errors").isNull()) {
+            var errors = attrs.get("errors");
+            if (errors.isArray() && !errors.isEmpty()) {
+                var first = errors.get(0);
+                if (first != null && first.isTextual()) {
+                    return first.asText();
+                }
+                if (first != null && first.has("detail")) {
+                    return first.get("detail").asText();
+                }
+                if (first != null && first.has("message")) {
+                    return first.get("message").asText();
+                }
+            } else if (errors.isTextual() && !errors.asText().isBlank()) {
+                return errors.asText();
+            }
+        }
+        if (!attrs.has("transfer_batches") || !attrs.get("transfer_batches").isArray()) {
+            return null;
+        }
+        for (var batch : attrs.get("transfer_batches")) {
+            if (batch == null || !batch.has("disbursements") || !batch.get("disbursements").isArray()) {
+                continue;
+            }
+            for (var d : batch.get("disbursements")) {
+                if (d == null || !d.has("errors") || d.get("errors").isNull()) {
+                    continue;
+                }
+                var err = d.get("errors");
+                if (err.isArray() && !err.isEmpty() && err.get(0).isTextual()) {
+                    return err.get(0).asText();
+                }
+                if (err.isTextual() && !err.asText().isBlank()) {
+                    return err.asText();
+                }
+            }
+        }
+        return null;
     }
 
     private WebhookResult parseIncomingPaymentData(

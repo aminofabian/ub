@@ -11,6 +11,7 @@ import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,6 +23,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.application.SupplierPayoutSettingsService;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
+import zelisline.ub.payments.domain.PaymentWebhookEvent;
 import zelisline.ub.payments.domain.spi.SendMoneyRequest;
 import zelisline.ub.payments.domain.spi.SendMoneyResult;
 import zelisline.ub.payments.domain.spi.WebhookResult;
@@ -197,6 +199,10 @@ public class SupplierDisbursementService {
                 .stream()
                 .findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No disbursement found"));
+        // Prefer live KopoKopo status over waiting for the callback (or timing out locally).
+        if (SupplierDisbursementStatuses.PENDING.equals(d.getStatus())) {
+            pollSendMoneyStatus(d);
+        }
         reconcileStalePending(d);
 
         return new SupplyKopokopoPayResponse(
@@ -234,7 +240,27 @@ public class SupplierDisbursementService {
             return true;
         }
 
-        if (!SupplierDisbursementStatuses.PENDING.equals(disbursement.getStatus())) {
+        if (eventId != null && !eventId.isBlank()) {
+            try {
+                PaymentWebhookEvent audit = new PaymentWebhookEvent();
+                audit.setBusinessId(businessId);
+                audit.setGatewayType(GatewayType.KOPOKOPO);
+                audit.setGatewayEventId(eventId);
+                audit.setTopic(parsed.topic());
+                audit.setRawPayload(parsed.rawPayload());
+                webhookEventRepository.save(audit);
+            } catch (DataIntegrityViolationException e) {
+                log.info("KopoKopo send_money webhook duplicate on save ignored: eventId={}", eventId);
+                return true;
+            }
+        }
+
+        // Allow late success after a local timeout as long as the ledger was never posted.
+        boolean openForConfirm = SupplierDisbursementStatuses.PENDING.equals(disbursement.getStatus())
+                || (SupplierDisbursementStatuses.FAILED.equals(disbursement.getStatus())
+                && disbursement.getSupplierPaymentId() == null);
+
+        if (!openForConfirm) {
             return true;
         }
 
@@ -242,11 +268,48 @@ public class SupplierDisbursementService {
             confirmDisbursement(disbursement, parsed);
             return true;
         }
-        if (parsed.terminalFailure()) {
-            markFailed(disbursement, "Payment declined by KopoKopo");
+        if (parsed.terminalFailure() && SupplierDisbursementStatuses.PENDING.equals(disbursement.getStatus())) {
+            String reason = "Payment declined by KopoKopo";
+            markFailed(disbursement, reason);
             return true;
         }
         return true;
+    }
+
+    /**
+     * Asks KopoKopo for the current Send Money status and settles the disbursement when terminal.
+     */
+    private void pollSendMoneyStatus(SupplierDisbursement disbursement) {
+        if (!SupplierDisbursementStatuses.PENDING.equals(disbursement.getStatus())) {
+            return;
+        }
+        String sendMoneyId = disbursement.getKopokopoSendMoneyId();
+        if (sendMoneyId == null || sendMoneyId.isBlank()) {
+            return;
+        }
+        String configId = disbursement.getPaymentGatewayConfigId();
+        if (configId == null || configId.isBlank()) {
+            return;
+        }
+        Optional<PaymentGatewayConfig> cfg = configRepository.findById(configId);
+        if (cfg.isEmpty() || cfg.get().getGatewayType() != GatewayType.KOPOKOPO) {
+            return;
+        }
+        try {
+            Map<String, String> creds = decryptCredentials(cfg.get());
+            WebhookResult status = kopokopoGateway.querySendMoneyStatus(sendMoneyId, creds);
+            if (status == null || !"send_money".equalsIgnoreCase(status.topic())) {
+                return;
+            }
+            if (status.success()) {
+                confirmDisbursement(disbursement, status);
+            } else if (status.terminalFailure()) {
+                markFailed(disbursement, "Payment declined by KopoKopo");
+            }
+        } catch (Exception e) {
+            log.warn("KopoKopo Send Money poll failed for disbursement {}: {}",
+                    disbursement.getId(), e.getMessage());
+        }
     }
 
     private void confirmDisbursement(SupplierDisbursement disbursement, WebhookResult parsed) {

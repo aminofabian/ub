@@ -5,6 +5,7 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -116,6 +117,28 @@ public class SupplierDisbursementService {
                     "A KopoKopo payment is already pending for this supply");
         });
 
+        // Recover a timed-out row that actually transferred — avoid double Send Money.
+        Optional<SupplierDisbursement> latest = disbursementRepository
+                .findByBusinessIdAndSupplierInvoiceIdOrderByCreatedAtDesc(businessId, invoiceId)
+                .stream()
+                .findFirst();
+        if (latest.isPresent() && isOpenForConfirm(latest.get())) {
+            SupplierDisbursement prior = latest.get();
+            pollSendMoneyStatus(prior);
+            if (SupplierDisbursementStatuses.SUCCESS.equals(prior.getStatus())) {
+                return new SupplyKopokopoPayResponse(
+                        true,
+                        prior.getId(),
+                        prior.getKopokopoSendMoneyId(),
+                        prior.getStatus(),
+                        "Payment already confirmed with KopoKopo");
+            }
+            if (SupplierDisbursementStatuses.PENDING.equals(prior.getStatus())) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "A KopoKopo payment is already pending for this supply");
+            }
+        }
         Supplier supplier = supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(inv.getSupplierId(), businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
 
@@ -200,7 +223,7 @@ public class SupplierDisbursementService {
                 .findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No disbursement found"));
         // Prefer live KopoKopo status over waiting for the callback (or timing out locally).
-        if (SupplierDisbursementStatuses.PENDING.equals(d.getStatus())) {
+        if (isOpenForConfirm(d)) {
             pollSendMoneyStatus(d);
         }
         reconcileStalePending(d);
@@ -223,24 +246,43 @@ public class SupplierDisbursementService {
             return false;
         }
 
+        // KopoKopo reuses the same send_money resource id across Pending → Processed → Transferred.
+        // Only terminal callbacks may consume that id for idempotency; intermediate ones must not.
+        boolean terminal = parsed.success() || parsed.terminalFailure();
         String eventId = parsed.webhookEventId() != null && !parsed.webhookEventId().isBlank()
                 ? parsed.webhookEventId()
                 : parsed.gatewayCheckoutId();
-        if (eventId != null && !eventId.isBlank()) {
-            if (webhookEventRepository.existsByGatewayTypeAndGatewayEventId(GatewayType.KOPOKOPO, eventId)) {
-                log.info("KopoKopo send_money webhook duplicate ignored: eventId={}", eventId);
-                return true;
-            }
-        }
 
         SupplierDisbursement disbursement = resolveDisbursement(businessId, parsed);
         if (disbursement == null) {
             log.warn("KopoKopo send_money: no matching disbursement business={} ref={} id={}",
                     businessId, parsed.reference(), parsed.gatewayCheckoutId());
+            // Do not burn the event id — a later retry may arrive after the disbursement row exists.
+            return true;
+        }
+
+        if (!isOpenForConfirm(disbursement)) {
+            return true;
+        }
+
+        if (!terminal) {
+            log.info("KopoKopo send_money intermediate webhook (not yet Transferred): eventId={} status pending for disbursement={}",
+                    eventId, disbursement.getId());
             return true;
         }
 
         if (eventId != null && !eventId.isBlank()) {
+            if (webhookEventRepository.existsByGatewayTypeAndGatewayEventId(GatewayType.KOPOKOPO, eventId)) {
+                // Historical bug burned the id on intermediate callbacks; still settle on success.
+                if (parsed.success()) {
+                    log.info("KopoKopo send_money webhook id already seen; settling open disbursement on success: eventId={} disbursement={}",
+                            eventId, disbursement.getId());
+                    confirmDisbursement(disbursement, parsed);
+                } else {
+                    log.info("KopoKopo send_money webhook duplicate ignored: eventId={}", eventId);
+                }
+                return true;
+            }
             try {
                 PaymentWebhookEvent audit = new PaymentWebhookEvent();
                 audit.setBusinessId(businessId);
@@ -250,18 +292,15 @@ public class SupplierDisbursementService {
                 audit.setRawPayload(parsed.rawPayload());
                 webhookEventRepository.save(audit);
             } catch (DataIntegrityViolationException e) {
-                log.info("KopoKopo send_money webhook duplicate on save ignored: eventId={}", eventId);
+                if (parsed.success() && isOpenForConfirm(disbursement)) {
+                    log.info("KopoKopo send_money webhook duplicate on save; settling open disbursement: eventId={}",
+                            eventId);
+                    confirmDisbursement(disbursement, parsed);
+                } else {
+                    log.info("KopoKopo send_money webhook duplicate on save ignored: eventId={}", eventId);
+                }
                 return true;
             }
-        }
-
-        // Allow late success after a local timeout as long as the ledger was never posted.
-        boolean openForConfirm = SupplierDisbursementStatuses.PENDING.equals(disbursement.getStatus())
-                || (SupplierDisbursementStatuses.FAILED.equals(disbursement.getStatus())
-                && disbursement.getSupplierPaymentId() == null);
-
-        if (!openForConfirm) {
-            return true;
         }
 
         if (parsed.success()) {
@@ -276,10 +315,35 @@ public class SupplierDisbursementService {
     }
 
     /**
+     * Background recovery for autopay / missed webhooks: poll open Send Money rows against KopoKopo.
+     */
+    @Transactional
+    public int pollOpenDisbursements(Instant createdAfter) {
+        List<SupplierDisbursement> candidates = disbursementRepository
+                .findByStatusInAndCreatedAtAfterOrderByCreatedAtAsc(
+                        List.of(SupplierDisbursementStatuses.PENDING, SupplierDisbursementStatuses.FAILED),
+                        createdAfter);
+        int settled = 0;
+        for (SupplierDisbursement d : candidates) {
+            if (!isOpenForConfirm(d)) {
+                continue;
+            }
+            String before = d.getStatus();
+            pollSendMoneyStatus(d);
+            if (SupplierDisbursementStatuses.SUCCESS.equals(d.getStatus())
+                    || (SupplierDisbursementStatuses.FAILED.equals(d.getStatus())
+                    && !before.equals(d.getStatus()))) {
+                settled++;
+            }
+        }
+        return settled;
+    }
+
+    /**
      * Asks KopoKopo for the current Send Money status and settles the disbursement when terminal.
      */
     private void pollSendMoneyStatus(SupplierDisbursement disbursement) {
-        if (!SupplierDisbursementStatuses.PENDING.equals(disbursement.getStatus())) {
+        if (!isOpenForConfirm(disbursement)) {
             return;
         }
         String sendMoneyId = disbursement.getKopokopoSendMoneyId();
@@ -302,7 +366,8 @@ public class SupplierDisbursementService {
             }
             if (status.success()) {
                 confirmDisbursement(disbursement, status);
-            } else if (status.terminalFailure()) {
+            } else if (status.terminalFailure()
+                    && SupplierDisbursementStatuses.PENDING.equals(disbursement.getStatus())) {
                 log.warn("KopoKopo Send Money declined: disbursement={} sendMoneyId={} reason={} payload={}",
                         disbursement.getId(),
                         sendMoneyId,
@@ -314,6 +379,13 @@ public class SupplierDisbursementService {
             log.warn("KopoKopo Send Money poll failed for disbursement {}: {}",
                     disbursement.getId(), e.getMessage());
         }
+    }
+
+    /** Pending, or timed-out/failed locally without a ledger payment yet. */
+    private static boolean isOpenForConfirm(SupplierDisbursement disbursement) {
+        return SupplierDisbursementStatuses.PENDING.equals(disbursement.getStatus())
+                || (SupplierDisbursementStatuses.FAILED.equals(disbursement.getStatus())
+                && disbursement.getSupplierPaymentId() == null);
     }
 
     private static String kopokopoDeclineMessage(WebhookResult parsed) {
@@ -403,6 +475,11 @@ public class SupplierDisbursementService {
         }
         Instant staleBefore = Instant.now().minus(Math.max(stalePendingSeconds, 60), ChronoUnit.SECONDS);
         if (disbursement.getCreatedAt() != null && disbursement.getCreatedAt().isBefore(staleBefore)) {
+            // Ask KopoKopo once more before giving up — money may already have left the till.
+            pollSendMoneyStatus(disbursement);
+            if (!SupplierDisbursementStatuses.PENDING.equals(disbursement.getStatus())) {
+                return;
+            }
             markFailed(
                     disbursement,
                     "Timed out waiting for KopoKopo confirmation. Check KopoKopo or retry Send Money.");

@@ -1,5 +1,7 @@
 package zelisline.ub.purchasing.repository;
 
+import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -20,5 +22,10 @@ public interface SupplierDisbursementRepository extends JpaRepository<SupplierDi
     List<SupplierDisbursement> findByBusinessIdAndSupplierInvoiceIdOrderByCreatedAtDesc(
             String businessId,
             String supplierInvoiceId
+    );
+
+    List<SupplierDisbursement> findByStatusInAndCreatedAtAfterOrderByCreatedAtAsc(
+            Collection<String> statuses,
+            Instant createdAfter
     );
 }

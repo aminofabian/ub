@@ -27,7 +27,7 @@ public class PlatformKioskPaySettings {
     /** Synthetic config id used on {@code gateway_checkouts} for platform Paystack. */
     public static final String PLATFORM_PAYSTACK_CONFIG_ID = "platform-kiosk-pay-paystack";
 
-    /** Synthetic config id for platform KopoKopo (withdraw / future STK). */
+    /** Synthetic config id for platform KopoKopo (POS STK + withdraw). */
     public static final String PLATFORM_KOPOKOPO_CONFIG_ID = "platform-kiosk-pay-kopokopo";
 
     @Id

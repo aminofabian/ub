@@ -2,24 +2,32 @@ package zelisline.ub.payments.api;
 
 import java.util.List;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.api.dto.KioskPayAccountResponse;
 import zelisline.ub.payments.api.dto.KioskPayLedgerEntryResponse;
+import zelisline.ub.payments.api.dto.KioskPayPosAvailabilityResponse;
 import zelisline.ub.payments.api.dto.KioskPayWithdrawRequest;
 import zelisline.ub.payments.api.dto.KioskPayWithdrawalResponse;
+import zelisline.ub.payments.api.dto.PosStkPushRequest;
+import zelisline.ub.payments.api.dto.PosStkPushResponse;
 import zelisline.ub.payments.api.dto.UpdateKioskPayAccountRequest;
+import zelisline.ub.payments.application.KioskPayPosStkService;
 import zelisline.ub.payments.application.KioskPayWalletService;
 import zelisline.ub.payments.application.KioskPayWithdrawService;
 import zelisline.ub.platform.security.CurrentTenantUser;
@@ -33,6 +41,7 @@ public class KioskPayTenantController {
 
     private final KioskPayWalletService walletService;
     private final KioskPayWithdrawService withdrawService;
+    private final KioskPayPosStkService posStkService;
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'payments.gateways.read')")
@@ -79,5 +88,34 @@ public class KioskPayTenantController {
     ) {
         CurrentTenantUser.require(request);
         return withdrawService.requestWithdraw(TenantRequestIds.resolveBusinessId(request), body);
+    }
+
+    /** Cashier: whether Kiosk Pay STK should show as a tender. */
+    @GetMapping("/pos")
+    @PreAuthorize("hasPermission(null, 'payments.stk.initiate')")
+    public KioskPayPosAvailabilityResponse posAvailability(HttpServletRequest request) {
+        CurrentTenantUser.require(request);
+        return walletService.posAvailability(TenantRequestIds.resolveBusinessId(request));
+    }
+
+    /** Cashier POS STK via platform Kiosk Pay (credits merchant wallet on confirm). */
+    @PostMapping("/stk/push")
+    @PreAuthorize("hasPermission(null, 'payments.stk.initiate')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public PosStkPushResponse posStkPush(
+            @Valid @RequestBody PosStkPushRequest body,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Idempotency-Key is required");
+        }
+        return posStkService.push(
+                TenantRequestIds.resolveBusinessId(request),
+                body.phoneNumber(),
+                body.amount(),
+                idempotencyKey.trim(),
+                body.description());
     }
 }

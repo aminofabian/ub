@@ -42,14 +42,53 @@ public class StkPushRetryHelper {
             String reference,
             String description
     ) {
+        return initiateAfterClearingPhone(
+                businessId,
+                phone,
+                reference,
+                (ref) -> paymentGatewayStkService.initiate(
+                        businessId, preferredConfigId, phone, amount, ref, description));
+    }
+
+    /**
+     * Same retry loop as {@link #initiateAfterClearingPhone}, but for platform / explicit credentials.
+     */
+    public PaymentGatewayStkService.StkPushOutcome initiateWithCredentialsAfterClearingPhone(
+            String businessId,
+            String gatewayType,
+            String configId,
+            java.util.Map<String, String> credentials,
+            String phone,
+            BigDecimal amount,
+            String reference,
+            String description
+    ) {
+        return initiateAfterClearingPhone(
+                businessId,
+                phone,
+                reference,
+                (ref) -> paymentGatewayStkService.initiateWithCredentials(
+                        gatewayType, configId, businessId, credentials, phone, amount, ref, description));
+    }
+
+    @FunctionalInterface
+    private interface StkInitiator {
+        PaymentGatewayStkService.StkPushOutcome initiate(String reference);
+    }
+
+    private PaymentGatewayStkService.StkPushOutcome initiateAfterClearingPhone(
+            String businessId,
+            String phone,
+            String reference,
+            StkInitiator initiator
+    ) {
         awaitPhoneClear(businessId, phone, PRE_CLEAR_ATTEMPTS, PRE_CLEAR_DELAY_MS);
         gatewayStkPushService.cancelPendingForPhone(
                 businessId,
                 phone,
                 "Replaced by a new M-Pesa prompt");
 
-        PaymentGatewayStkService.StkPushOutcome outcome = paymentGatewayStkService.initiate(
-                businessId, preferredConfigId, phone, amount, reference, description);
+        PaymentGatewayStkService.StkPushOutcome outcome = initiator.initiate(reference);
 
         if (outcome.accepted() || !GatewayStkPushService.isKopokopoPendingPhoneError(outcome.message())) {
             return maybeRewritePendingMessage(outcome);
@@ -76,8 +115,7 @@ public class StkPushRetryHelper {
                     "Cleared after gateway rejected duplicate pending prompt");
 
             String retryRef = reference + "-r" + (attempt + 1);
-            outcome = paymentGatewayStkService.initiate(
-                    businessId, preferredConfigId, phone, amount, retryRef, description);
+            outcome = initiator.initiate(retryRef);
             if (outcome.accepted()) {
                 return outcome;
             }

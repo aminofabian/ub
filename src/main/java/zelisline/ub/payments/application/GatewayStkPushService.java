@@ -41,6 +41,7 @@ import zelisline.ub.payments.domain.GatewayStatus;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
 import zelisline.ub.payments.domain.PaymentWebhookEvent;
+import zelisline.ub.payments.domain.PlatformKioskPaySettings;
 import zelisline.ub.payments.domain.StkPushContextType;
 import zelisline.ub.payments.domain.spi.WebhookResult;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
@@ -90,6 +91,8 @@ public class GatewayStkPushService {
     private final ObjectProvider<GroceryInvoiceService> groceryInvoiceService;
     private final ObjectProvider<zelisline.ub.tenancy.application.DomainPurchaseService> domainPurchaseService;
     private final ObjectProvider<zelisline.ub.platform.application.PlatformDomainSettingsService> platformDomainSettingsService;
+    private final ObjectProvider<PlatformKioskPaySettingsService> platformKioskPaySettingsService;
+    private final ObjectProvider<KioskPayWalletService> kioskPayWalletService;
     private final InboundTillPaymentService inboundTillPaymentService;
 
     @Transactional
@@ -331,6 +334,35 @@ public class GatewayStkPushService {
             return true;
         }
 
+        return settleMatchedWebhook(push.get(), push.get().getBusinessId(), eventId, parsed);
+    }
+
+    /**
+     * Webhook authenticated with platform Kiosk Pay KopoKopo credentials (POS STK + withdraw).
+     */
+    @Transactional
+    public boolean processKioskPayKopokopoWebhook(WebhookResult parsed) {
+        if (parsed == null) {
+            return false;
+        }
+        String eventId = parsed.webhookEventId() != null && !parsed.webhookEventId().isBlank()
+                ? parsed.webhookEventId()
+                : parsed.gatewayTransactionId();
+        if (eventId != null && !eventId.isBlank()
+                && webhookEventRepository.existsByGatewayTypeAndGatewayEventId(GatewayType.KOPOKOPO, eventId)) {
+            log.info("KopoKopo Kiosk Pay webhook duplicate ignored: eventId={}", eventId);
+            return true;
+        }
+
+        Optional<GatewayStkPush> push = Optional.empty();
+        if (parsed.gatewayCheckoutId() != null && !parsed.gatewayCheckoutId().isBlank()) {
+            push = pushRepository.findByGatewayTypeAndGatewayCheckoutId(
+                    GatewayType.KOPOKOPO, parsed.gatewayCheckoutId().trim());
+        }
+        if (push.isEmpty() || !PlatformKioskPaySettings.PLATFORM_KOPOKOPO_CONFIG_ID.equals(push.get().getConfigId())) {
+            log.warn("KopoKopo Kiosk Pay webhook: no platform push checkout={}", parsed.gatewayCheckoutId());
+            return true;
+        }
         return settleMatchedWebhook(push.get(), push.get().getBusinessId(), eventId, parsed);
     }
 
@@ -802,13 +834,38 @@ public class GatewayStkPushService {
             case WEB_ORDER -> confirmWebOrder(push);
             case WALLET_INTENT -> confirmWalletIntent(push);
             case CREDIT_AR -> confirmCreditArIntent(push);
-            case POS_PAYMENT -> publishPosConfirmation(push);
+            case POS_PAYMENT -> {
+                creditKioskPayIfPlatformStk(push);
+                publishPosConfirmation(push);
+            }
             case STOREFRONT_CART -> log.info(
                     "Storefront till payment confirmed push={} txn={}",
                     push.getId(), gatewayTxnId);
             case GROCERY_INVOICE -> confirmGroceryInvoice(push);
             case DOMAIN_ORDER -> confirmDomainOrder(push);
             default -> log.warn("Unknown STK context type: {}", push.getContextType());
+        }
+    }
+
+    private void creditKioskPayIfPlatformStk(GatewayStkPush push) {
+        if (!PlatformKioskPaySettings.PLATFORM_KOPOKOPO_CONFIG_ID.equals(push.getConfigId())) {
+            return;
+        }
+        KioskPayWalletService wallet = kioskPayWalletService.getIfAvailable();
+        if (wallet == null) {
+            return;
+        }
+        try {
+            wallet.creditPaymentCapture(
+                    push.getBusinessId(),
+                    push.getAmount(),
+                    "KES",
+                    "kp-stk-" + push.getGatewayCheckoutId(),
+                    push.getContextType().name(),
+                    push.getContextId(),
+                    push.getGatewayCheckoutId());
+        } catch (Exception e) {
+            log.error("Kiosk Pay wallet credit failed for STK push={}", push.getId(), e);
         }
     }
 
@@ -1054,7 +1111,8 @@ public class GatewayStkPushService {
     private PaymentGatewayConfig resolveConfig(GatewayStkPush push) {
         if (push.getConfigId() != null && !push.getConfigId().isBlank()) {
             if (zelisline.ub.platform.application.PlatformDomainSettingsService.PLATFORM_DOMAIN_STK_CONFIG_ID
-                    .equals(push.getConfigId())) {
+                    .equals(push.getConfigId())
+                    || PlatformKioskPaySettings.PLATFORM_KOPOKOPO_CONFIG_ID.equals(push.getConfigId())) {
                 return null;
             }
             PaymentGatewayConfig cfg = configRepository.findById(push.getConfigId()).orElse(null);
@@ -1079,6 +1137,14 @@ public class GatewayStkPushService {
             }
             Map<String, String> creds = settings.resolvePalmartStkCredentials();
             return creds.isEmpty() ? null : creds;
+        }
+        if (push.getConfigId() != null
+                && PlatformKioskPaySettings.PLATFORM_KOPOKOPO_CONFIG_ID.equals(push.getConfigId())) {
+            PlatformKioskPaySettingsService kiosk = platformKioskPaySettingsService.getIfAvailable();
+            if (kiosk == null) {
+                return null;
+            }
+            return kiosk.kopokopoCredentials().orElse(null);
         }
         PaymentGatewayConfig cfg = resolveConfig(push);
         if (cfg == null) {

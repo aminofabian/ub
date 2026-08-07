@@ -102,12 +102,16 @@ public class KopokopoWebhookController {
             }
             PlatformKioskPaySettingsService kioskPaySettings = kioskPaySettingsService.getIfAvailable();
             KioskPayWithdrawService withdrawService = kioskPayWithdrawService.getIfAvailable();
-            if (kioskPaySettings != null && withdrawService != null) {
+            if (kioskPaySettings != null) {
                 Map<String, String> kioskCreds = kioskPaySettings.kopokopoCredentials().orElse(Map.of());
                 if (!kioskCreds.isEmpty() && signatureMatches(kioskCreds, rawBody, signature)) {
                     log.info("KopoKopo webhook: signature matched platform Kiosk Pay credentials");
                     if ("send_money".equalsIgnoreCase(result.topic())) {
-                        withdrawService.handleSendMoneyWebhook(result);
+                        if (withdrawService != null) {
+                            withdrawService.handleSendMoneyWebhook(result);
+                        }
+                    } else {
+                        gatewayStkPushService.processKioskPayKopokopoWebhook(result);
                     }
                     return ResponseEntity.ok("Received");
                 }

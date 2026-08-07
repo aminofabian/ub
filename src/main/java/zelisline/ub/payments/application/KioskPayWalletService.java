@@ -95,6 +95,31 @@ public class KioskPayWalletService {
     }
 
     /**
+     * POS can collect via platform KopoKopo STK when the product is on, the tenant account is
+     * active, and platform KopoKopo credentials exist.
+     */
+    @Transactional(readOnly = true)
+    public boolean isPosCollectEnabled(String businessId) {
+        if (!platformSettings.isProductEnabled()) {
+            return false;
+        }
+        if (platformSettings.kopokopoCredentials().isEmpty()) {
+            return false;
+        }
+        return accountRepository.findByBusinessId(businessId)
+                .filter(KioskPayAccount::isActive)
+                .isPresent();
+    }
+
+    @Transactional(readOnly = true)
+    public zelisline.ub.payments.api.dto.KioskPayPosAvailabilityResponse posAvailability(String businessId) {
+        PlatformKioskPaySettings settings = platformSettings.loadSingleton();
+        return new zelisline.ub.payments.api.dto.KioskPayPosAvailabilityResponse(
+                isPosCollectEnabled(businessId),
+                settings.getCurrency());
+    }
+
+    /**
      * Credit available balance for a verified Kiosk Pay collection (gross − fee).
      * Idempotent on {@code reference}.
      */

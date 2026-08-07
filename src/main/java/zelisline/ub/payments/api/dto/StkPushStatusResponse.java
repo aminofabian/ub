@@ -1,5 +1,7 @@
 package zelisline.ub.payments.api.dto;
 
+import java.math.BigDecimal;
+
 public record StkPushStatusResponse(
         String status,
         String checkoutRequestId,
@@ -10,6 +12,7 @@ public record StkPushStatusResponse(
         String failureReason,
         boolean success,
         boolean failed,
-        boolean pending
+        boolean pending,
+        BigDecimal amount
 ) {
 }

@@ -119,6 +119,10 @@ public class KioskPayWithdrawService {
 
         walletService.holdForWithdraw(account, amount, row.getId(), "wd-hold-" + row.getId());
 
+        // KopoKopo source_identifier must be a till number, or null for available balance —
+        // never an internal UUID (that yields "Source identifier is invalid").
+        String till = firstNonBlank(kopokopoCreds, "tillNumber", "shortcode");
+
         String callbackBase = publicApiBaseUrl == null ? "" : publicApiBaseUrl.replaceAll("/$", "");
         SendMoneyResult result = kopokopoPaymentGateway.sendMoney(new SendMoneyRequest(
                 kopokopoCreds,
@@ -127,7 +131,7 @@ public class KioskPayWithdrawService {
                 amount,
                 settings.getCurrency(),
                 "Kiosk Pay withdraw " + row.getId(),
-                row.getId(),
+                till,
                 Map.of(
                         "kioskPayWithdrawalId", row.getId(),
                         "businessId", businessId,
@@ -210,5 +214,18 @@ public class KioskPayWithdrawService {
                 w.getFailureReason(),
                 w.getRequestedAt(),
                 w.getCompletedAt());
+    }
+
+    private static String firstNonBlank(Map<String, String> creds, String... keys) {
+        if (creds == null || keys == null) {
+            return null;
+        }
+        for (String key : keys) {
+            String v = creds.get(key);
+            if (v != null && !v.isBlank()) {
+                return v.trim();
+            }
+        }
+        return null;
     }
 }

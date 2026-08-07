@@ -180,6 +180,7 @@ public class MpesaStkIntentApiController {
                 push.getFailureReason(),
                 success,
                 failed,
-                pending);
+                pending,
+                push.getAmount());
     }
 }

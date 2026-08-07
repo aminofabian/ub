@@ -820,8 +820,11 @@ public class GatewayStkPushService {
         }
         if (webhookAmount != null
                 && webhookAmount.subtract(push.getAmount()).abs().compareTo(new BigDecimal("1.00")) > 0) {
-            log.warn("STK amount mismatch push={} expected={} got={}",
+            log.error("STK amount mismatch push={} expected={} got={} — refusing to confirm",
                     push.getId(), push.getAmount(), webhookAmount);
+            markFailed(push, "Amount mismatch: expected " + push.getAmount()
+                    + " got " + webhookAmount);
+            return;
         }
 
         push.setStatus(GatewayStkPushStatuses.SUCCESS);
@@ -1105,7 +1108,8 @@ public class GatewayStkPushService {
                 push.getContextId(),
                 success,
                 message,
-                push.getGatewayTransactionId()));
+                push.getGatewayTransactionId(),
+                push.getAmount()));
     }
 
     private PaymentGatewayConfig resolveConfig(GatewayStkPush push) {

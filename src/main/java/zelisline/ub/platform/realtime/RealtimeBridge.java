@@ -166,6 +166,9 @@ public class RealtimeBridge {
         dataMap.put("message", event.message() != null ? event.message() : "");
         dataMap.put("gatewayTransactionId",
                 event.gatewayTransactionId() != null ? event.gatewayTransactionId() : "");
+        if (event.amount() != null) {
+            dataMap.put("amount", event.amount().toPlainString());
+        }
         String payloadJson = toJson(dataMap);
         if (payloadJson == null) {
             return;
@@ -773,7 +776,8 @@ public class RealtimeBridge {
             String contextId,
             boolean success,
             String message,
-            String gatewayTransactionId) {}
+            String gatewayTransactionId,
+            BigDecimal amount) {}
 
     public record ApprovalRequestedEvent(
             String businessId, String branchId, String approvalId, String adjustmentType,

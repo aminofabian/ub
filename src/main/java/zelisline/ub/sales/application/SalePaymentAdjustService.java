@@ -53,6 +53,7 @@ import zelisline.ub.sales.repository.ShiftRepository;
 public class SalePaymentAdjustService {
 
     private static final BigDecimal TOLERANCE = new BigDecimal("0.01");
+    private static final BigDecimal MPESA_AMOUNT_TOLERANCE = new BigDecimal("1.00");
     private static final int MONEY_SCALE = 2;
 
     private final SaleRepository saleRepository;
@@ -214,6 +215,7 @@ public class SalePaymentAdjustService {
                     && p.reference() != null
                     && !p.reference().isBlank()) {
                 String ref = p.reference().trim();
+                assertMpesaReceiptAmountMatches(businessId, ref, p.amount());
                 gatewayStkPushRepository
                         .findFirstByBusinessIdAndGatewayTransactionIdIgnoreCaseAndStatus(
                                 businessId,
@@ -256,6 +258,28 @@ public class SalePaymentAdjustService {
         }
         shift.setExpectedClosingCash(next);
         shiftRepository.save(shift);
+    }
+
+    private void assertMpesaReceiptAmountMatches(String businessId, String receipt, BigDecimal paymentAmount) {
+        if (paymentAmount == null) {
+            return;
+        }
+        gatewayStkPushRepository
+                .findFirstByBusinessIdAndGatewayTransactionIdIgnoreCaseAndStatus(
+                        businessId,
+                        receipt,
+                        GatewayStkPushStatuses.SUCCESS)
+                .ifPresent(push -> {
+                    if (push.getAmount() != null
+                            && push.getAmount().subtract(paymentAmount).abs()
+                                    .compareTo(MPESA_AMOUNT_TOLERANCE) > 0) {
+                        throw new ResponseStatusException(
+                                HttpStatus.BAD_REQUEST,
+                                "Sale total does not match verified M-Pesa amount of "
+                                        + push.getAmount().toPlainString());
+                    }
+                });
+        inboundTillPaymentService.requireAmountMatchesIfKnown(businessId, receipt, paymentAmount);
     }
 
     private void postReclassJournal(

@@ -186,6 +186,14 @@ public class KopokopoPaymentGateway implements PaymentGateway {
         if (till == null || till.isBlank()) {
             till = creds.getOrDefault("tillNumber", creds.get("shortcode"));
         }
+        // Guard: never send an internal UUID/ref as source_identifier.
+        if (till != null && looksLikeUuid(till)) {
+            log.warn("Ignoring UUID-like Send Money source_identifier; falling back to till credentials");
+            till = creds.getOrDefault("tillNumber", creds.get("shortcode"));
+            if (till != null && looksLikeUuid(till)) {
+                till = null;
+            }
+        }
 
         Map<String, Object> destination = new java.util.LinkedHashMap<>();
         destination.put("type", "mobile_wallet");
@@ -909,6 +917,18 @@ public class KopokopoPaymentGateway implements PaymentGateway {
         }
         String v = node.get(field).asText();
         return v == null || v.isBlank() ? null : v.trim();
+    }
+
+    private static boolean looksLikeUuid(String value) {
+        if (value == null) {
+            return false;
+        }
+        String v = value.trim();
+        return v.length() == 36
+                && v.charAt(8) == '-'
+                && v.charAt(13) == '-'
+                && v.charAt(18) == '-'
+                && v.charAt(23) == '-';
     }
 
     private static BigDecimal parseAmount(String amountStr) {

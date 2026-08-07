@@ -11,8 +11,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -179,6 +181,34 @@ public class InboundTillPaymentService {
                 .findFirstByBusinessIdAndMpesaReceiptIgnoreCaseAndStatus(
                         businessId, mpesaReceipt.trim(), InboundTillPaymentStatuses.PENDING)
                 .ifPresent(row -> markLinkedToPush(row, pushId));
+    }
+
+    /**
+     * When an inbound till row exists for {@code receipt}, require {@code paymentAmount} to match
+     * (±1.00). Used by sale create/adjust so inflated cart totals cannot settle against a smaller
+     * verified M-Pesa payment.
+     */
+    public void requireAmountMatchesIfKnown(
+            String businessId,
+            String receiptRaw,
+            BigDecimal paymentAmount
+    ) {
+        if (receiptRaw == null || receiptRaw.isBlank() || paymentAmount == null) {
+            return;
+        }
+        String receipt = receiptRaw.trim();
+        Optional<InboundTillPayment> row = inboundRepository
+                .findFirstByBusinessIdAndMpesaReceiptIgnoreCase(businessId, receipt);
+        if (row.isEmpty()) {
+            return;
+        }
+        InboundTillPayment inbound = row.get();
+        if (!amountsClose(paymentAmount, inbound.getAmount())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Sale total does not match M-Pesa till payment of "
+                            + inbound.getAmount().toPlainString());
+        }
     }
 
     /**

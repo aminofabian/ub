@@ -74,6 +74,7 @@ import zelisline.ub.tenancy.repository.BranchRepository;
 public class SaleService {
 
     private static final BigDecimal TOLERANCE = new BigDecimal("0.01");
+    private static final BigDecimal MPESA_AMOUNT_TOLERANCE = new BigDecimal("1.00");
     private static final int MONEY_SCALE = 2;
     private static final int QTY_SCALE = 4;
     private static final long MAX_CLIENT_SOLD_AT_SKEW_SECONDS = 3600;
@@ -328,6 +329,7 @@ public class SaleService {
                     && p.reference() != null
                     && !p.reference().isBlank()) {
                 String ref = p.reference().trim();
+                assertMpesaReceiptAmountMatches(businessId, ref, p.amount());
                 gatewayStkPushRepository
                         .findFirstByBusinessIdAndGatewayTransactionIdIgnoreCaseAndStatus(
                                 businessId,
@@ -344,6 +346,28 @@ public class SaleService {
             row.setSortOrder(order++);
             salePaymentRepository.save(row);
         }
+    }
+
+    private void assertMpesaReceiptAmountMatches(String businessId, String receipt, BigDecimal paymentAmount) {
+        if (paymentAmount == null) {
+            return;
+        }
+        gatewayStkPushRepository
+                .findFirstByBusinessIdAndGatewayTransactionIdIgnoreCaseAndStatus(
+                        businessId,
+                        receipt,
+                        GatewayStkPushStatuses.SUCCESS)
+                .ifPresent(push -> {
+                    if (push.getAmount() != null
+                            && push.getAmount().subtract(paymentAmount).abs()
+                                    .compareTo(MPESA_AMOUNT_TOLERANCE) > 0) {
+                        throw new ResponseStatusException(
+                                HttpStatus.BAD_REQUEST,
+                                "Sale total does not match verified M-Pesa amount of "
+                                        + push.getAmount().toPlainString());
+                    }
+                });
+        inboundTillPaymentService.requireAmountMatchesIfKnown(businessId, receipt, paymentAmount);
     }
 
     /**

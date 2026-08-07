@@ -16,6 +16,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.application.GatewayCheckoutService;
 import zelisline.ub.payments.application.GatewayStkPushService;
+import zelisline.ub.payments.application.KioskPayWalletService;
 import zelisline.ub.payments.application.PaymentGatewayStkService;
 import zelisline.ub.payments.application.PlatformPaymentGatewayService;
 import zelisline.ub.payments.application.StkPushRetryHelper;
@@ -64,6 +65,7 @@ public class PublicStorefrontPaymentService {
     private final StkPushRetryHelper stkPushRetryHelper;
     private final ObjectMapper objectMapper;
     private final FeatureFlagService featureFlagService;
+    private final KioskPayWalletService kioskPayWalletService;
 
     @Transactional(readOnly = true)
     public PublicCheckoutPaymentOptions checkoutOptions(String slug) {
@@ -106,7 +108,25 @@ public class PublicStorefrontPaymentService {
             }
         }
 
-        online.sort((a, b) -> a.displayName().compareToIgnoreCase(b.displayName()));
+        if (kioskPayWalletService.isStorefrontCollectEnabled(businessId)) {
+            online.add(0, new PublicOnlinePaymentMethod(
+                    "kiosk-pay",
+                    "KIOSK_PAY",
+                    "Kiosk Pay",
+                    "Pay securely (card / mobile money)",
+                    "redirect"
+            ));
+        }
+
+        online.sort((a, b) -> {
+            if ("KIOSK_PAY".equals(a.gatewayType()) && !"KIOSK_PAY".equals(b.gatewayType())) {
+                return -1;
+            }
+            if (!"KIOSK_PAY".equals(a.gatewayType()) && "KIOSK_PAY".equals(b.gatewayType())) {
+                return 1;
+            }
+            return a.displayName().compareToIgnoreCase(b.displayName());
+        });
         return new PublicCheckoutPaymentOptions(manual, online, tillListenEnabled);
     }
 
@@ -251,14 +271,23 @@ public class PublicStorefrontPaymentService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
         }
 
-        GatewayCheckoutService.CheckoutInitiation result = gatewayCheckoutService
-                .initiateWebOrderCheckout(
-                        business.getId(),
-                        business.getSlug(),
-                        order.getId(),
-                        configId,
-                        email,
-                        returnOrigin);
+        GatewayCheckoutService.CheckoutInitiation result;
+        if (configId != null && ("kiosk-pay".equalsIgnoreCase(configId) || "KIOSK_PAY".equalsIgnoreCase(configId))) {
+            result = gatewayCheckoutService.initiateKioskPayWebOrderCheckout(
+                    business.getId(),
+                    business.getSlug(),
+                    order.getId(),
+                    email,
+                    returnOrigin);
+        } else {
+            result = gatewayCheckoutService.initiateWebOrderCheckout(
+                    business.getId(),
+                    business.getSlug(),
+                    order.getId(),
+                    configId,
+                    email,
+                    returnOrigin);
+        }
         return new PublicPaystackCheckoutResponse(
                 result.checkoutId(),
                 result.reference(),

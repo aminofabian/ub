@@ -16,6 +16,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.application.GatewayStkPushService;
+import zelisline.ub.payments.application.KioskPayWithdrawService;
+import zelisline.ub.payments.application.PlatformKioskPaySettingsService;
 import zelisline.ub.payments.domain.GatewayStatus;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
@@ -46,6 +48,8 @@ public class KopokopoWebhookController {
     private final GatewayStkPushService gatewayStkPushService;
     private final SupplierDisbursementService supplierDisbursementService;
     private final ObjectProvider<PlatformDomainSettingsService> platformDomainSettingsService;
+    private final ObjectProvider<PlatformKioskPaySettingsService> kioskPaySettingsService;
+    private final ObjectProvider<KioskPayWithdrawService> kioskPayWithdrawService;
     private final ObjectMapper objectMapper;
 
     @PostMapping("/payment")
@@ -93,6 +97,18 @@ public class KopokopoWebhookController {
                 if (!platformCreds.isEmpty() && signatureMatches(platformCreds, rawBody, signature)) {
                     log.info("KopoKopo webhook: signature matched Palmart platform domain STK");
                     gatewayStkPushService.processPlatformKopokopoWebhook(result);
+                    return ResponseEntity.ok("Received");
+                }
+            }
+            PlatformKioskPaySettingsService kioskPaySettings = kioskPaySettingsService.getIfAvailable();
+            KioskPayWithdrawService withdrawService = kioskPayWithdrawService.getIfAvailable();
+            if (kioskPaySettings != null && withdrawService != null) {
+                Map<String, String> kioskCreds = kioskPaySettings.kopokopoCredentials().orElse(Map.of());
+                if (!kioskCreds.isEmpty() && signatureMatches(kioskCreds, rawBody, signature)) {
+                    log.info("KopoKopo webhook: signature matched platform Kiosk Pay credentials");
+                    if ("send_money".equalsIgnoreCase(result.topic())) {
+                        withdrawService.handleSendMoneyWebhook(result);
+                    }
                     return ResponseEntity.ok("Received");
                 }
             }

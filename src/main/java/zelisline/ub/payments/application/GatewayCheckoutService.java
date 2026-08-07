@@ -33,6 +33,7 @@ import zelisline.ub.payments.domain.GatewayStatus;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
 import zelisline.ub.payments.domain.PaymentWebhookEvent;
+import zelisline.ub.payments.domain.PlatformKioskPaySettings;
 import zelisline.ub.payments.domain.spi.CheckoutPaymentGateway;
 import zelisline.ub.payments.domain.spi.CheckoutRequest;
 import zelisline.ub.payments.domain.spi.CheckoutResponse;
@@ -49,6 +50,8 @@ import zelisline.ub.storefront.domain.WebOrder;
 import zelisline.ub.storefront.repository.WebOrderRepository;
 import zelisline.ub.tenancy.domain.DomainMapping;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
+
+import org.springframework.beans.factory.ObjectProvider;
 
 /**
  * Orchestrates provider-hosted checkout attempts ({@code gateway_checkouts}).
@@ -77,6 +80,8 @@ public class GatewayCheckoutService {
     private final WebOrderFulfillmentService webOrderFulfillmentService;
     private final NotificationOutboxService notificationOutboxService;
     private final DomainMappingRepository domainMappingRepository;
+    private final ObjectProvider<KioskPayWalletService> kioskPayWalletService;
+    private final ObjectProvider<PlatformKioskPaySettingsService> platformKioskPaySettingsService;
     private final ObjectMapper objectMapper;
 
     @Value("${app.public.frontend-base-url:http://localhost:3000}")
@@ -187,6 +192,101 @@ public class GatewayCheckoutService {
                 row.getId(), reference, GatewayCheckoutStatuses.PENDING, response.authorizationUrl(), null);
     }
 
+    /**
+     * Initialize hosted checkout using <strong>platform</strong> Paystack credentials
+     * (Kiosk Pay custody). Credits the tenant wallet on verified success.
+     */
+    @Transactional
+    public CheckoutInitiation initiateKioskPayWebOrderCheckout(
+            String businessId,
+            String businessSlug,
+            String orderId,
+            String email,
+            String returnOrigin
+    ) {
+        KioskPayWalletService wallet = kioskPayWalletService.getIfAvailable();
+        PlatformKioskPaySettingsService kioskSettings = platformKioskPaySettingsService.getIfAvailable();
+        if (wallet == null || kioskSettings == null || !wallet.isStorefrontCollectEnabled(businessId)) {
+            return CheckoutInitiation.rejected(null, null, "Kiosk Pay is not available for this store.");
+        }
+        Map<String, String> creds = kioskSettings.paystackCredentials().orElse(null);
+        if (creds == null || creds.isEmpty()) {
+            return CheckoutInitiation.rejected(null, null, "Kiosk Pay is temporarily unavailable.");
+        }
+        if (!(gatewayRegistry.get(GatewayType.PAYSTACK.name()) instanceof CheckoutPaymentGateway gateway)) {
+            return CheckoutInitiation.rejected(null, null, "Paystack is not available.");
+        }
+
+        WebOrder order = webOrderRepository.findById(orderId).orElse(null);
+        if (order == null || !businessId.equals(order.getBusinessId())) {
+            return CheckoutInitiation.rejected(null, null, "Order not found");
+        }
+        if (!WebOrderStatuses.PENDING_PAYMENT.equals(order.getStatus())
+                && !WebOrderStatuses.PAYMENT_FAILED.equals(order.getStatus())) {
+            return CheckoutInitiation.rejected(null, null, "Order is not awaiting payment");
+        }
+
+        String configId = PlatformKioskPaySettings.PLATFORM_PAYSTACK_CONFIG_ID;
+        String reference = buildReference(configId, order.getId());
+        String callbackUrl = buildCallbackUrl(businessId, businessSlug, returnOrigin, order.getId());
+        String customerEmail = resolveEmail(email, order);
+
+        GatewayCheckout row = new GatewayCheckout();
+        row.setBusinessId(businessId);
+        row.setGatewayType(GatewayType.PAYSTACK);
+        row.setConfigId(configId);
+        row.setReference(reference);
+        row.setContextType(GatewayCheckoutContextType.WEB_ORDER);
+        row.setContextId(order.getId());
+        row.setAmount(order.getGrandTotal());
+        row.setCurrency(order.getCurrency() != null && !order.getCurrency().isBlank()
+                ? order.getCurrency()
+                : "KES");
+        row.setCustomerEmail(customerEmail);
+        row.setStatus(GatewayCheckoutStatuses.PENDING);
+        Map<String, String> meta = routingMetadata(businessId, configId, order.getId());
+        meta.put("kioskPay", "true");
+        row.setMetadataJson(toJson(meta));
+        checkoutRepository.save(row);
+
+        CheckoutResponse response;
+        try {
+            response = gateway.initializeCheckout(new CheckoutRequest(
+                    businessId,
+                    configId,
+                    order.getGrandTotal(),
+                    row.getCurrency(),
+                    customerEmail,
+                    reference,
+                    "Web order " + order.getId() + " (Kiosk Pay)",
+                    callbackUrl,
+                    meta,
+                    creds));
+        } catch (Exception e) {
+            log.error("Kiosk Pay checkout init threw for order={}", order.getId(), e);
+            markFailed(row, "Checkout initialization failed");
+            return CheckoutInitiation.rejected(row.getId(), reference,
+                    "Could not start Kiosk Pay checkout. Please try again.");
+        }
+
+        if (!response.accepted()) {
+            markFailed(row, response.responseDescription() != null
+                    ? response.responseDescription()
+                    : "Checkout initialization rejected");
+            return CheckoutInitiation.rejected(row.getId(), reference,
+                    "Could not start Kiosk Pay checkout. Please try again.");
+        }
+
+        row.setAuthorizationUrl(response.authorizationUrl());
+        row.setAccessCode(response.accessCode());
+        row.setProviderTransactionId(response.providerTransactionId());
+        row.setFailureReason(null);
+        checkoutRepository.save(row);
+        log.info("Kiosk Pay checkout initialized: order={} ref={}", order.getId(), reference);
+        return CheckoutInitiation.accepted(
+                row.getId(), reference, GatewayCheckoutStatuses.PENDING, response.authorizationUrl(), null);
+    }
+
     // ── Webhook settlement ───────────────────────────────────────────
 
     /**
@@ -252,17 +352,10 @@ public class GatewayCheckoutService {
         if (!GatewayCheckoutStatuses.PENDING.equals(checkout.getStatus())) {
             return;
         }
-        PaymentGatewayConfig cfg = configRepository.findById(checkout.getConfigId()).orElse(null);
-        if (cfg == null
+        Map<String, String> creds = resolvePaystackCredentialsForCheckout(checkout);
+        if (creds == null
                 || !(gatewayRegistry.get(checkout.getGatewayType().name()) instanceof CheckoutPaymentGateway gateway)) {
             markCancelled(checkout, "Gateway configuration no longer available");
-            return;
-        }
-        Map<String, String> creds;
-        try {
-            creds = decryptCredentials(cfg);
-        } catch (Exception e) {
-            log.warn("Paystack verify: cannot decrypt credentials for checkout={}", checkout.getId());
             return;
         }
         try {
@@ -387,6 +480,24 @@ public class GatewayCheckoutService {
         order.setPaidAt(Instant.now());
         webOrderRepository.save(order);
 
+        if (PlatformKioskPaySettings.PLATFORM_PAYSTACK_CONFIG_ID.equals(checkout.getConfigId())) {
+            KioskPayWalletService wallet = kioskPayWalletService.getIfAvailable();
+            if (wallet != null) {
+                try {
+                    wallet.creditPaymentCapture(
+                            checkout.getBusinessId(),
+                            checkout.getAmount(),
+                            checkout.getCurrency(),
+                            "kp-capture-" + checkout.getReference(),
+                            checkout.getContextType().name(),
+                            checkout.getContextId(),
+                            checkout.getId());
+                } catch (Exception e) {
+                    log.error("Kiosk Pay wallet credit failed for checkout={}", checkout.getId(), e);
+                }
+            }
+        }
+
         try {
             webOrderFulfillmentService.onOrderPaid(order);
             notificationOutboxService.enqueueWebOrderPaid(order);
@@ -460,6 +571,32 @@ public class GatewayCheckoutService {
             return creds;
         } catch (Exception e) {
             throw new RuntimeException("Failed to read gateway credentials", e);
+        }
+    }
+
+    /**
+     * Resolve Paystack secret credentials for BYO tenant config or platform Kiosk Pay.
+     */
+    public Map<String, String> resolvePaystackCredentialsForCheckout(GatewayCheckout checkout) {
+        if (checkout == null) {
+            return null;
+        }
+        if (PlatformKioskPaySettings.PLATFORM_PAYSTACK_CONFIG_ID.equals(checkout.getConfigId())) {
+            PlatformKioskPaySettingsService kioskSettings = platformKioskPaySettingsService.getIfAvailable();
+            if (kioskSettings == null) {
+                return null;
+            }
+            return kioskSettings.paystackCredentials().orElse(null);
+        }
+        PaymentGatewayConfig cfg = configRepository.findById(checkout.getConfigId()).orElse(null);
+        if (cfg == null || !checkout.getBusinessId().equals(cfg.getBusinessId())) {
+            return null;
+        }
+        try {
+            return decryptCredentials(cfg);
+        } catch (Exception e) {
+            log.warn("Paystack: cannot decrypt credentials for config={}", cfg.getId());
+            return null;
         }
     }
 

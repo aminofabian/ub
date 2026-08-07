@@ -1,0 +1,454 @@
+package zelisline.ub.payments.application;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import lombok.RequiredArgsConstructor;
+import zelisline.ub.notifications.application.NotificationOutboxService;
+import zelisline.ub.payments.domain.GatewayCheckout;
+import zelisline.ub.payments.domain.GatewayCheckoutContextType;
+import zelisline.ub.payments.domain.GatewayCheckoutStatuses;
+import zelisline.ub.payments.domain.GatewayStatus;
+import zelisline.ub.payments.domain.GatewayType;
+import zelisline.ub.payments.domain.PaymentGatewayConfig;
+import zelisline.ub.payments.domain.PaymentWebhookEvent;
+import zelisline.ub.payments.domain.spi.CheckoutPaymentGateway;
+import zelisline.ub.payments.domain.spi.CheckoutRequest;
+import zelisline.ub.payments.domain.spi.CheckoutResponse;
+import zelisline.ub.payments.domain.spi.VerifyTransactionRequest;
+import zelisline.ub.payments.domain.spi.VerifyTransactionResponse;
+import zelisline.ub.payments.domain.spi.WebhookResult;
+import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
+import zelisline.ub.payments.repository.GatewayCheckoutRepository;
+import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
+import zelisline.ub.payments.repository.PaymentWebhookEventRepository;
+import zelisline.ub.storefront.WebOrderStatuses;
+import zelisline.ub.storefront.application.WebOrderFulfillmentService;
+import zelisline.ub.storefront.domain.WebOrder;
+import zelisline.ub.storefront.repository.WebOrderRepository;
+
+/**
+ * Orchestrates provider-hosted checkout attempts ({@code gateway_checkouts}).
+ *
+ * <p>Responsible for: initializing a checkout against the tenant's ACTIVE
+ * Paystack config, settling webhooks (resolve-by-reference → verify → dedupe),
+ * server-side verification, and fanning success into domain entities
+ * (Phase 1: {@link WebOrder}).
+ */
+@Service
+@RequiredArgsConstructor
+public class GatewayCheckoutService {
+
+    private static final Logger log = LoggerFactory.getLogger(GatewayCheckoutService.class);
+
+    /** Max |webhook amount − stored amount| before we warn (mirrors STK tolerance). */
+    private static final BigDecimal AMOUNT_TOLERANCE = new BigDecimal("1.00");
+
+    private final GatewayCheckoutRepository checkoutRepository;
+    private final PaymentGatewayConfigRepository configRepository;
+    private final PlatformPaymentGatewayService platformPaymentGatewayService;
+    private final PaymentGatewayRegistry gatewayRegistry;
+    private final CredentialEncryptionService encryptionService;
+    private final PaymentWebhookEventRepository webhookEventRepository;
+    private final WebOrderRepository webOrderRepository;
+    private final WebOrderFulfillmentService webOrderFulfillmentService;
+    private final NotificationOutboxService notificationOutboxService;
+    private final ObjectMapper objectMapper;
+
+    @Value("${app.public.frontend-base-url:http://localhost:3000}")
+    private String frontendBaseUrl;
+
+    // ── Initiation ───────────────────────────────────────────────────
+
+    /**
+     * Initialize a hosted checkout for a web order against the business's
+     * ACTIVE Paystack config. Persists the PENDING row first so an immediate
+     * webhook can still resolve it.
+     */
+    @Transactional
+    public CheckoutInitiation initiateWebOrderCheckout(
+            String businessId,
+            String orderId,
+            String preferredConfigId,
+            String email
+    ) {
+        WebOrder order = webOrderRepository.findById(orderId).orElse(null);
+        if (order == null || !businessId.equals(order.getBusinessId())) {
+            return CheckoutInitiation.rejected(null, null, "Order not found");
+        }
+
+        PaymentGatewayConfig cfg = resolvePaystackConfig(businessId, preferredConfigId);
+        if (cfg == null || !(gatewayRegistry.get(cfg.getGatewayType().name()) instanceof CheckoutPaymentGateway gateway)) {
+            return CheckoutInitiation.rejected(null, null, "Paystack is not available for this store right now.");
+        }
+
+        String reference = buildReference(cfg.getId(), order.getId());
+        String callbackUrl = frontendBaseUrl.replaceAll("/$", "")
+                + "/shop/checkout?order=" + order.getId();
+        String customerEmail = resolveEmail(email, order);
+
+        GatewayCheckout row = new GatewayCheckout();
+        row.setBusinessId(businessId);
+        row.setGatewayType(cfg.getGatewayType());
+        row.setConfigId(cfg.getId());
+        row.setReference(reference);
+        row.setContextType(GatewayCheckoutContextType.WEB_ORDER);
+        row.setContextId(order.getId());
+        row.setAmount(order.getGrandTotal());
+        row.setCurrency(order.getCurrency() != null && !order.getCurrency().isBlank()
+                ? order.getCurrency()
+                : "KES");
+        row.setCustomerEmail(customerEmail);
+        row.setStatus(GatewayCheckoutStatuses.PENDING);
+        row.setMetadataJson(toJson(routingMetadata(businessId, cfg.getId(), order.getId())));
+        checkoutRepository.save(row);
+
+        Map<String, String> creds;
+        try {
+            creds = decryptCredentials(cfg);
+        } catch (Exception e) {
+            log.warn("Paystack checkout: cannot read credentials for config={}", cfg.getId(), e);
+            markFailed(row, "Credentials could not be read");
+            return CheckoutInitiation.rejected(row.getId(), reference,
+                    "Paystack credentials are invalid. Ask the store to re-save them.");
+        }
+        CheckoutResponse response;
+        try {
+            response = gateway.initializeCheckout(new CheckoutRequest(
+                    businessId,
+                    cfg.getId(),
+                    order.getGrandTotal(),
+                    row.getCurrency(),
+                    customerEmail,
+                    reference,
+                    "Web order " + order.getId(),
+                    callbackUrl,
+                    routingMetadata(businessId, cfg.getId(), order.getId()),
+                    creds));
+        } catch (Exception e) {
+            log.error("Paystack checkout init threw for order={}", order.getId(), e);
+            markFailed(row, "Checkout initialization failed");
+            return CheckoutInitiation.rejected(row.getId(), reference,
+                    "Could not start Paystack checkout. Please try again.");
+        }
+
+        if (!response.accepted()) {
+            log.warn("Paystack checkout rejected for order={}: {} {}",
+                    order.getId(), response.responseCode(), response.responseDescription());
+            markFailed(row, response.responseDescription() != null
+                    ? response.responseDescription()
+                    : "Checkout initialization rejected");
+            return CheckoutInitiation.rejected(row.getId(), reference,
+                    "Could not start Paystack checkout. Please try again.");
+        }
+
+        row.setAuthorizationUrl(response.authorizationUrl());
+        row.setAccessCode(response.accessCode());
+        row.setProviderTransactionId(response.providerTransactionId());
+        row.setFailureReason(null);
+        checkoutRepository.save(row);
+        log.info("Paystack checkout initialized: order={} ref={}", order.getId(), reference);
+        return CheckoutInitiation.accepted(
+                row.getId(), reference, GatewayCheckoutStatuses.PENDING, response.authorizationUrl(), null);
+    }
+
+    // ── Webhook settlement ───────────────────────────────────────────
+
+    /**
+     * Settle a signature-verified webhook. Idempotent via
+     * {@code payment_webhook_events} (gateway event id = Paystack data.id).
+     */
+    @Transactional
+    public boolean handleWebhook(String businessId, String configId, WebhookResult parsed) {
+        if (parsed == null) {
+            return false;
+        }
+        String eventId = parsed.webhookEventId() != null && !parsed.webhookEventId().isBlank()
+                ? parsed.webhookEventId()
+                : parsed.gatewayTransactionId();
+        if (eventId != null && !eventId.isBlank()
+                && webhookEventRepository.existsByGatewayTypeAndGatewayEventId(GatewayType.PAYSTACK, eventId)) {
+            log.info("Paystack webhook duplicate ignored: eventId={}", eventId);
+            return true;
+        }
+
+        Optional<GatewayCheckout> checkoutOpt = checkoutRepository.findByReference(parsed.reference());
+        if (checkoutOpt.isEmpty()) {
+            log.warn("Paystack webhook: no matching checkout ref={} topic={}",
+                    parsed.reference(), parsed.topic());
+            return true;
+        }
+        GatewayCheckout checkout = checkoutOpt.get();
+
+        if (eventId != null && !eventId.isBlank()) {
+            try {
+                PaymentWebhookEvent audit = new PaymentWebhookEvent();
+                audit.setBusinessId(businessId);
+                audit.setGatewayType(GatewayType.PAYSTACK);
+                audit.setGatewayEventId(eventId);
+                audit.setTopic(parsed.topic());
+                audit.setRawPayload(parsed.rawPayload());
+                webhookEventRepository.save(audit);
+            } catch (DataIntegrityViolationException e) {
+                log.info("Paystack webhook duplicate on save ignored: eventId={}", eventId);
+                return true;
+            }
+        }
+
+        if (parsed.success()) {
+            confirmCheckout(checkout, parsed.gatewayTransactionId(), parsed.amount());
+        } else if (parsed.terminalFailure()) {
+            markFailed(checkout, parsed.failureMessage() != null
+                    ? parsed.failureMessage()
+                    : "Payment declined by Paystack");
+        }
+        return true;
+    }
+
+    /**
+     * Server-side verify of one pending checkout (webhook fallback + reconciliation).
+     */
+    @Transactional
+    public void verifyAndUpdate(GatewayCheckout checkout) {
+        if (!GatewayCheckoutStatuses.PENDING.equals(checkout.getStatus())) {
+            return;
+        }
+        PaymentGatewayConfig cfg = configRepository.findById(checkout.getConfigId()).orElse(null);
+        if (cfg == null
+                || !(gatewayRegistry.get(checkout.getGatewayType().name()) instanceof CheckoutPaymentGateway gateway)) {
+            markCancelled(checkout, "Gateway configuration no longer available");
+            return;
+        }
+        Map<String, String> creds;
+        try {
+            creds = decryptCredentials(cfg);
+        } catch (Exception e) {
+            log.warn("Paystack verify: cannot decrypt credentials for checkout={}", checkout.getId());
+            return;
+        }
+        try {
+            VerifyTransactionResponse result = gateway.verifyTransaction(
+                    new VerifyTransactionRequest(checkout.getReference(), creds));
+            checkout.setLastVerifiedAt(Instant.now());
+            checkout.setVerifyCount(checkout.getVerifyCount() + 1);
+            if (result.completed()) {
+                confirmCheckout(checkout, result.providerTransactionId(), result.amount());
+            } else if (result.failed()) {
+                markFailed(checkout, result.failureMessage() != null
+                        ? result.failureMessage()
+                        : "Payment not completed");
+            } else {
+                checkoutRepository.save(checkout); // persist lastVerifiedAt / verifyCount
+            }
+        } catch (Exception e) {
+            log.error("Paystack verify threw for checkout={}", checkout.getId(), e);
+        }
+    }
+
+    // ── Reconciliation (scheduler) ───────────────────────────────────
+
+    public void reconcileStalePending(Instant createdAfter, int maxAttempts) {
+        var pending = checkoutRepository.findByStatusAndCreatedAtAfterOrderByCreatedAtAsc(
+                GatewayCheckoutStatuses.PENDING, createdAfter);
+        for (GatewayCheckout checkout : pending) {
+            try {
+                if (checkout.getVerifyCount() >= maxAttempts) {
+                    markCancelled(checkout, "Checkout abandoned — no payment after " + maxAttempts + " verify attempts");
+                } else {
+                    verifyAndUpdate(checkout);
+                }
+            } catch (Exception e) {
+                log.warn("Paystack reconcile failed for checkout={}: {}", checkout.getId(), e.getMessage());
+            }
+        }
+    }
+
+    public Optional<GatewayCheckout> findLatestForWebOrder(String orderId) {
+        return checkoutRepository.findFirstByContextTypeAndContextIdOrderByCreatedAtDesc(
+                GatewayCheckoutContextType.WEB_ORDER, orderId);
+    }
+
+    // ── Confirmation / failure ───────────────────────────────────────
+
+    private void confirmCheckout(GatewayCheckout checkout, String providerTxnId, BigDecimal providerAmount) {
+        if (!GatewayCheckoutStatuses.PENDING.equals(checkout.getStatus())) {
+            return;
+        }
+        if (providerAmount != null
+                && providerAmount.subtract(checkout.getAmount()).abs().compareTo(AMOUNT_TOLERANCE) > 0) {
+            log.warn("Paystack amount mismatch checkout={} expected={} got={}",
+                    checkout.getId(), checkout.getAmount(), providerAmount);
+        }
+        checkout.setStatus(GatewayCheckoutStatuses.SUCCESS);
+        checkout.setProviderTransactionId(providerTxnId != null ? providerTxnId : checkout.getProviderTransactionId());
+        checkout.setConfirmedAt(Instant.now());
+        checkout.setFailureReason(null);
+        checkoutRepository.save(checkout);
+
+        if (checkout.getContextType() == GatewayCheckoutContextType.WEB_ORDER) {
+            confirmWebOrder(checkout);
+        }
+    }
+
+    private void confirmWebOrder(GatewayCheckout checkout) {
+        if (checkout.getContextId() == null) {
+            return;
+        }
+        WebOrder order = webOrderRepository.findById(checkout.getContextId()).orElse(null);
+        if (order == null || !checkout.getBusinessId().equals(order.getBusinessId())) {
+            return;
+        }
+        if (!WebOrderStatuses.PENDING_PAYMENT.equals(order.getStatus())
+                && !WebOrderStatuses.PAYMENT_FAILED.equals(order.getStatus())) {
+            return;
+        }
+        order.setStatus(WebOrderStatuses.PAID);
+        order.setPaymentCheckoutId(checkout.getReference());
+        order.setPaidAt(Instant.now());
+        webOrderRepository.save(order);
+
+        try {
+            webOrderFulfillmentService.onOrderPaid(order);
+            notificationOutboxService.enqueueWebOrderPaid(order);
+        } catch (Exception e) {
+            log.warn("Failed notifications for paid web order {} (Paystack)", order.getId(), e);
+        }
+        log.info("Web order marked paid via Paystack: orderId={} ref={}", order.getId(), checkout.getReference());
+    }
+
+    private void markFailed(GatewayCheckout checkout, String reason) {
+        if (!GatewayCheckoutStatuses.PENDING.equals(checkout.getStatus())) {
+            return;
+        }
+        checkout.setStatus(GatewayCheckoutStatuses.FAILED);
+        checkout.setFailureReason(reason);
+        checkoutRepository.save(checkout);
+        if (checkout.getContextType() == GatewayCheckoutContextType.WEB_ORDER
+                && checkout.getContextId() != null) {
+            webOrderRepository.findById(checkout.getContextId()).ifPresent(order -> {
+                if (WebOrderStatuses.PENDING_PAYMENT.equals(order.getStatus())) {
+                    order.setStatus(WebOrderStatuses.PAYMENT_FAILED);
+                    webOrderRepository.save(order);
+                }
+            });
+        }
+    }
+
+    private void markCancelled(GatewayCheckout checkout, String reason) {
+        if (!GatewayCheckoutStatuses.PENDING.equals(checkout.getStatus())) {
+            return;
+        }
+        checkout.setStatus(GatewayCheckoutStatuses.CANCELLED);
+        checkout.setFailureReason(reason);
+        checkoutRepository.save(checkout);
+        // Order stays PENDING_PAYMENT — the customer may retry with another method.
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    private PaymentGatewayConfig resolvePaystackConfig(String businessId, String preferredConfigId) {
+        PaymentGatewayConfig cfg = null;
+        if (preferredConfigId != null && !preferredConfigId.isBlank()) {
+            cfg = configRepository.findById(preferredConfigId).orElse(null);
+            if (cfg == null
+                    || !businessId.equals(cfg.getBusinessId())
+                    || cfg.getGatewayType() != GatewayType.PAYSTACK
+                    || cfg.getStatus() != GatewayStatus.ACTIVE) {
+                cfg = null;
+            }
+        }
+        if (cfg == null) {
+            cfg = configRepository.findByBusinessIdAndGatewayTypeAndStatus(
+                            businessId, GatewayType.PAYSTACK, GatewayStatus.ACTIVE)
+                    .stream()
+                    .findFirst()
+                    .orElse(null);
+        }
+        if (cfg == null || !gatewayRegistry.has(GatewayType.PAYSTACK.name())) {
+            return null;
+        }
+        boolean platformEnabled = platformPaymentGatewayService.listEnabled().stream()
+                .anyMatch(pg -> pg.getGatewayType() == GatewayType.PAYSTACK);
+        return platformEnabled ? cfg : null;
+    }
+
+    private Map<String, String> decryptCredentials(PaymentGatewayConfig cfg) {
+        try {
+            String decrypted = encryptionService.decrypt(cfg.getCredentialsJson());
+            @SuppressWarnings("unchecked")
+            Map<String, String> creds = objectMapper.readValue(decrypted, Map.class);
+            return creds;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to read gateway credentials", e);
+        }
+    }
+
+    private static String buildReference(String configId, String contextId) {
+        String configTag = configId != null ? configId.replace("-", "") : "";
+        if (configTag.length() > 8) {
+            configTag = configTag.substring(0, 8);
+        }
+        String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 6);
+        return "pay_" + configTag + "_" + contextId + "_" + suffix;
+    }
+
+    private static String resolveEmail(String requested, WebOrder order) {
+        if (requested != null && !requested.isBlank()) {
+            return requested.trim();
+        }
+        if (order.getCustomerEmail() != null && !order.getCustomerEmail().isBlank()) {
+            return order.getCustomerEmail().trim();
+        }
+        // Paystack requires a syntactically valid email; phones-first orders
+        // may not have one. Documented placeholder (scope doc open question #2).
+        return "orders+" + order.getId() + "@kiosk.ke";
+    }
+
+    private static Map<String, String> routingMetadata(String businessId, String configId, String contextId) {
+        Map<String, String> metadata = new LinkedHashMap<>();
+        metadata.put("businessId", businessId);
+        metadata.put("configId", configId);
+        metadata.put("contextType", GatewayCheckoutContextType.WEB_ORDER.name());
+        metadata.put("contextId", contextId);
+        return metadata;
+    }
+
+    private String toJson(Map<String, String> map) {
+        try {
+            return objectMapper.writeValueAsString(map);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public record CheckoutInitiation(
+            boolean accepted,
+            String checkoutId,
+            String reference,
+            String status,
+            String authorizationUrl,
+            String message
+    ) {
+        public static CheckoutInitiation accepted(
+                String checkoutId, String reference, String status, String authorizationUrl, String message) {
+            return new CheckoutInitiation(true, checkoutId, reference, status, authorizationUrl, message);
+        }
+
+        public static CheckoutInitiation rejected(String checkoutId, String reference, String message) {
+            return new CheckoutInitiation(false, checkoutId, reference, "FAILED", null, message);
+        }
+    }
+}

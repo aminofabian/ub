@@ -14,10 +14,13 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.payments.application.GatewayCheckoutService;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.PaymentGatewayStkService;
 import zelisline.ub.payments.application.PlatformPaymentGatewayService;
 import zelisline.ub.payments.application.StkPushRetryHelper;
+import zelisline.ub.payments.domain.GatewayCheckout;
+import zelisline.ub.payments.domain.GatewayCheckoutStatuses;
 import zelisline.ub.payments.domain.GatewayStkPush;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.StkPushContextType;
@@ -29,6 +32,7 @@ import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
 import zelisline.ub.storefront.WebOrderStatuses;
 import zelisline.ub.storefront.api.dto.PublicCheckoutPaymentOptions;
 import zelisline.ub.storefront.api.dto.PublicOnlinePaymentMethod;
+import zelisline.ub.storefront.api.dto.PublicPaystackCheckoutResponse;
 import zelisline.ub.storefront.api.dto.PublicTillAwaitRequest;
 import zelisline.ub.storefront.api.dto.PublicTillAwaitResponse;
 import zelisline.ub.storefront.api.dto.PublicTillAwaitStatusResponse;
@@ -56,6 +60,7 @@ public class PublicStorefrontPaymentService {
     private final PlatformPaymentGatewayService platformPaymentGatewayService;
     private final WebOrderRepository webOrderRepository;
     private final GatewayStkPushService gatewayStkPushService;
+    private final GatewayCheckoutService gatewayCheckoutService;
     private final StkPushRetryHelper stkPushRetryHelper;
     private final ObjectMapper objectMapper;
     private final FeatureFlagService featureFlagService;
@@ -90,11 +95,13 @@ public class PublicStorefrontPaymentService {
                 String label = cfg.getLabel() != null && !cfg.getLabel().isBlank()
                         ? cfg.getLabel()
                         : displayName;
+                String kind = type == GatewayType.PAYSTACK ? "redirect" : "stk";
                 online.add(new PublicOnlinePaymentMethod(
                         cfg.getId(),
                         type.name(),
                         label,
-                        displayName
+                        displayName,
+                        kind
                 ));
             }
         }
@@ -222,6 +229,34 @@ public class PublicStorefrontPaymentService {
         );
     }
 
+    /**
+     * Initialize a Paystack hosted checkout for a web order and return the
+     * authorization URL the shopper is redirected to.
+     */
+    @Transactional
+    public PublicPaystackCheckoutResponse initiateOrderPaystackCheckout(
+            String slug,
+            String orderId,
+            String configId,
+            String email
+    ) {
+        Business business = requireBusiness(slug);
+        WebOrder order = webOrderRepository.findById(orderId.trim())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found"));
+        if (!business.getId().equals(order.getBusinessId())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+        }
+
+        GatewayCheckoutService.CheckoutInitiation result = gatewayCheckoutService
+                .initiateWebOrderCheckout(business.getId(), order.getId(), configId, email);
+        return new PublicPaystackCheckoutResponse(
+                result.checkoutId(),
+                result.reference(),
+                result.status(),
+                result.authorizationUrl(),
+                result.message());
+    }
+
     @Transactional
     public PublicWebOrderPaymentStatusResponse orderPaymentStatus(String slug, String orderId) {
         Business business = requireBusiness(slug);
@@ -246,6 +281,24 @@ public class PublicStorefrontPaymentService {
             failed = failed || zelisline.ub.payments.domain.GatewayStkPushStatuses.FAILED.equals(push.getStatus());
             paid = paid || zelisline.ub.payments.domain.GatewayStkPushStatuses.SUCCESS.equals(push.getStatus());
             failureReason = push.getFailureReason();
+        }
+
+        // Hosted-checkout attempts (Paystack) for the same order — the return
+        // page after the Paystack redirect polls this endpoint.
+        var checkoutOpt = gatewayCheckoutService.findLatestForWebOrder(order.getId());
+        if (checkoutOpt.isPresent()) {
+            GatewayCheckout checkout = checkoutOpt.get();
+            boolean checkoutSuccess = GatewayCheckoutStatuses.SUCCESS.equals(checkout.getStatus());
+            boolean checkoutTerminal = GatewayCheckoutStatuses.FAILED.equals(checkout.getStatus())
+                    || GatewayCheckoutStatuses.CANCELLED.equals(checkout.getStatus());
+            if (checkoutId == null) {
+                checkoutId = checkout.getReference();
+            }
+            paid = paid || checkoutSuccess;
+            failed = failed || checkoutTerminal;
+            if (failureReason == null) {
+                failureReason = checkout.getFailureReason();
+            }
         }
 
         return new PublicWebOrderPaymentStatusResponse(

@@ -12,6 +12,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.storefront.api.dto.PublicPaystackCheckoutRequest;
+import zelisline.ub.storefront.api.dto.PublicPaystackCheckoutResponse;
 import zelisline.ub.storefront.api.dto.PublicWebOrderPaymentStatusResponse;
 import zelisline.ub.storefront.api.dto.PublicWebStkPushRequest;
 import zelisline.ub.storefront.api.dto.PublicWebStkPushResponse;
@@ -35,6 +37,24 @@ public class PublicWebOrderPaymentController {
                 orderId,
                 body.configId(),
                 body.phoneNumber()
+        );
+        return ResponseEntity.status(HttpStatus.OK).cacheControl(CacheControl.noStore()).body(out);
+    }
+
+    @PostMapping("/{orderId}/paystack-checkout")
+    public ResponseEntity<PublicPaystackCheckoutResponse> paystackCheckout(
+            @PathVariable String slug,
+            @PathVariable String orderId,
+            @RequestBody(required = false) PublicPaystackCheckoutRequest body
+    ) {
+        PublicPaystackCheckoutRequest req = body != null
+                ? body
+                : new PublicPaystackCheckoutRequest(null, null);
+        PublicPaystackCheckoutResponse out = publicStorefrontPaymentService.initiateOrderPaystackCheckout(
+                slug,
+                orderId,
+                req.configId(),
+                req.email()
         );
         return ResponseEntity.status(HttpStatus.OK).cacheControl(CacheControl.noStore()).body(out);
     }

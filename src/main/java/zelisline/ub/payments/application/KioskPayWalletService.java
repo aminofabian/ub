@@ -140,8 +140,9 @@ public class KioskPayWalletService {
     }
 
     /**
-     * Credit available balance for a verified Kiosk Pay collection (gross − fee).
-     * Idempotent on {@code reference}.
+     * Credit available balance for a verified Kiosk Pay collection.
+     * Credits gross, then deducts any provider processing fee (Paystack/KopoKopo).
+     * There is no platform markup.
      */
     @Transactional
     public void creditPaymentCapture(
@@ -152,6 +153,21 @@ public class KioskPayWalletService {
             String contextType,
             String contextId,
             String gatewayCheckoutId
+    ) {
+        creditPaymentCapture(
+                businessId, grossAmount, currency, reference, contextType, contextId, gatewayCheckoutId, null);
+    }
+
+    @Transactional
+    public void creditPaymentCapture(
+            String businessId,
+            BigDecimal grossAmount,
+            String currency,
+            String reference,
+            String contextType,
+            String contextId,
+            String gatewayCheckoutId,
+            BigDecimal providerFee
     ) {
         if (grossAmount == null || grossAmount.compareTo(BigDecimal.ZERO) <= 0) {
             return;
@@ -166,11 +182,8 @@ public class KioskPayWalletService {
             account.setStatus(KioskPayAccountStatuses.ACTIVE);
         }
 
-        BigDecimal feePercent = account.getFeePercentOverride() != null
-                ? account.getFeePercentOverride()
-                : settings.getFeePercent();
-        BigDecimal fee = grossAmount.multiply(feePercent)
-                .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+        BigDecimal fee = providerFee != null ? providerFee.max(BigDecimal.ZERO) : BigDecimal.ZERO;
+        fee = fee.setScale(2, RoundingMode.HALF_UP);
         if (fee.compareTo(grossAmount) > 0) {
             fee = grossAmount;
         }
@@ -200,18 +213,18 @@ public class KioskPayWalletService {
         if (fee.compareTo(BigDecimal.ZERO) > 0) {
             writeEntry(
                     account,
-                    KioskPayLedgerEntryTypes.PLATFORM_FEE,
+                    KioskPayLedgerEntryTypes.PROVIDER_FEE,
                     KioskPayLedgerEntryTypes.DEBIT,
                     fee,
                     cur,
                     BigDecimal.ZERO,
                     BigDecimal.ZERO,
-                    reference != null ? reference + ":fee" : null,
+                    reference != null ? reference + ":provider-fee" : null,
                     contextType,
                     contextId,
                     null,
                     gatewayCheckoutId,
-                    "Platform fee " + feePercent + "%");
+                    "Provider processing fee");
         }
         publishBalance(account, cur, "PAYMENT_CAPTURE");
     }
@@ -367,10 +380,8 @@ public class KioskPayWalletService {
             PlatformKioskPaySettings settings,
             String businessId
     ) {
-        BigDecimal fee = settings.getFeePercent();
-        if (account != null && account.getFeePercentOverride() != null) {
-            fee = account.getFeePercentOverride();
-        }
+        // Platform markup removed — tenants only pay provider fees pass-through.
+        BigDecimal fee = BigDecimal.ZERO;
         if (account == null) {
             return new KioskPayAccountResponse(
                     null,
@@ -382,7 +393,7 @@ public class KioskPayWalletService {
                     BigDecimal.ZERO,
                     BigDecimal.ZERO,
                     fee,
-                    settings.getFeePercent(),
+                    fee,
                     true,
                     settings.isEnabled(),
                     null);
@@ -397,7 +408,7 @@ public class KioskPayWalletService {
                 account.getLifetimeIn(),
                 account.getLifetimeOut(),
                 fee,
-                settings.getFeePercent(),
+                fee,
                 account.isStorefrontEnabled(),
                 settings.isEnabled(),
                 account.getUpdatedAt());

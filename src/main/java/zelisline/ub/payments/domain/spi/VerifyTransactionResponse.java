@@ -17,17 +17,48 @@ public record VerifyTransactionResponse(
         BigDecimal amount,
         String currency,
         String failureMessage,
-        String rawPayload
+        String rawPayload,
+        /**
+         * Provider processing fee in major currency units (e.g. Paystack {@code fees}),
+         * when reported. Null when unknown.
+         */
+        BigDecimal providerFee
 ) {
+
+    public VerifyTransactionResponse(
+            boolean completed,
+            boolean failed,
+            boolean pending,
+            String providerStatus,
+            String providerTransactionId,
+            String reference,
+            BigDecimal amount,
+            String currency,
+            String failureMessage,
+            String rawPayload
+    ) {
+        this(
+                completed,
+                failed,
+                pending,
+                providerStatus,
+                providerTransactionId,
+                reference,
+                amount,
+                currency,
+                failureMessage,
+                rawPayload,
+                null);
+    }
 
     public static VerifyTransactionResponse pending(String providerStatus, String rawPayload) {
         return new VerifyTransactionResponse(
-                false, false, true, providerStatus, null, null, null, null, null, rawPayload);
+                false, false, true, providerStatus, null, null, null, null, null, rawPayload, null);
     }
 
     public static VerifyTransactionResponse failed(
             String providerStatus, String failureMessage, String rawPayload) {
         return new VerifyTransactionResponse(
-                false, true, false, providerStatus, null, null, null, null, failureMessage, rawPayload);
+                false, true, false, providerStatus, null, null, null, null, failureMessage, rawPayload, null);
     }
 }

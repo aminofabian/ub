@@ -38,7 +38,7 @@ public class PlatformKioskPaySettings {
     private boolean enabled;
 
     @Column(name = "fee_percent", nullable = false, precision = 6, scale = 3)
-    private BigDecimal feePercent = new BigDecimal("1.000");
+    private BigDecimal feePercent = BigDecimal.ZERO;
 
     @Column(name = "min_withdraw_amount", nullable = false, precision = 14, scale = 2)
     private BigDecimal minWithdrawAmount = new BigDecimal("100.00");

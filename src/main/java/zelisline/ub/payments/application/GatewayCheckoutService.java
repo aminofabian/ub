@@ -364,7 +364,11 @@ public class GatewayCheckoutService {
             checkout.setLastVerifiedAt(Instant.now());
             checkout.setVerifyCount(checkout.getVerifyCount() + 1);
             if (result.completed()) {
-                confirmCheckout(checkout, result.providerTransactionId(), result.amount());
+                confirmCheckout(
+                        checkout,
+                        result.providerTransactionId(),
+                        result.amount(),
+                        result.providerFee());
             } else if (result.failed()) {
                 markFailed(checkout, result.failureMessage() != null
                         ? result.failureMessage()
@@ -440,7 +444,12 @@ public class GatewayCheckoutService {
 
     // ── Confirmation / failure ───────────────────────────────────────
 
-    private void confirmCheckout(GatewayCheckout checkout, String providerTxnId, BigDecimal providerAmount) {
+    private void confirmCheckout(
+            GatewayCheckout checkout,
+            String providerTxnId,
+            BigDecimal providerAmount,
+            BigDecimal providerFee
+    ) {
         if (!GatewayCheckoutStatuses.PENDING.equals(checkout.getStatus())) {
             return;
         }
@@ -459,11 +468,11 @@ public class GatewayCheckoutService {
         checkoutRepository.save(checkout);
 
         if (checkout.getContextType() == GatewayCheckoutContextType.WEB_ORDER) {
-            confirmWebOrder(checkout);
+            confirmWebOrder(checkout, providerFee);
         }
     }
 
-    private void confirmWebOrder(GatewayCheckout checkout) {
+    private void confirmWebOrder(GatewayCheckout checkout, BigDecimal providerFee) {
         if (checkout.getContextId() == null) {
             return;
         }
@@ -491,7 +500,8 @@ public class GatewayCheckoutService {
                             "kp-capture-" + checkout.getReference(),
                             checkout.getContextType().name(),
                             checkout.getContextId(),
-                            checkout.getId());
+                            checkout.getId(),
+                            providerFee);
                 } catch (Exception e) {
                     log.error("Kiosk Pay wallet credit failed for checkout={}", checkout.getId(), e);
                 }

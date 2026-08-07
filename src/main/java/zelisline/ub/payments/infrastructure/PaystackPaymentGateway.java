@@ -190,11 +190,15 @@ public class PaystackPaymentGateway implements CheckoutPaymentGateway {
                 amount = BigDecimal.valueOf(data.get("amount").asLong(), 2);
             }
             String currency = textOrNull(data, "currency");
+            BigDecimal providerFee = null;
+            if (data.has("fees") && data.get("fees").isNumber()) {
+                providerFee = BigDecimal.valueOf(data.get("fees").asLong(), 2);
+            }
 
             if ("success".equals(providerStatus)) {
                 return new VerifyTransactionResponse(
                         true, false, false, providerStatus, providerTxnId,
-                        request.reference(), amount, currency, null, response.getBody());
+                        request.reference(), amount, currency, null, response.getBody(), providerFee);
             }
             if ("failed".equals(providerStatus) || "abandoned".equals(providerStatus)) {
                 String failure = firstNonBlank(
@@ -203,7 +207,7 @@ public class PaystackPaymentGateway implements CheckoutPaymentGateway {
                         "Payment " + providerStatus);
                 return new VerifyTransactionResponse(
                         false, true, false, providerStatus, providerTxnId,
-                        request.reference(), amount, currency, failure, response.getBody());
+                        request.reference(), amount, currency, failure, response.getBody(), providerFee);
             }
             return VerifyTransactionResponse.pending(providerStatus, response.getBody());
         } catch (Exception e) {

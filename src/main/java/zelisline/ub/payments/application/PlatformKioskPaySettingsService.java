@@ -1,7 +1,6 @@
 package zelisline.ub.payments.application;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -42,9 +41,8 @@ public class PlatformKioskPaySettingsService {
         if (body.enabled() != null) {
             row.setEnabled(body.enabled());
         }
-        if (body.feePercent() != null) {
-            row.setFeePercent(clampFee(body.feePercent()));
-        }
+        // Platform markup removed — always keep fee at 0; provider fees pass through at capture.
+        row.setFeePercent(BigDecimal.ZERO);
         if (body.minWithdrawAmount() != null) {
             row.setMinWithdrawAmount(body.minWithdrawAmount().max(BigDecimal.ZERO));
         }
@@ -193,16 +191,6 @@ public class PlatformKioskPaySettingsService {
         } catch (Exception e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Could not serialize credentials");
         }
-    }
-
-    private static BigDecimal clampFee(BigDecimal fee) {
-        if (fee.compareTo(BigDecimal.ZERO) < 0) {
-            return BigDecimal.ZERO.setScale(3, RoundingMode.HALF_UP);
-        }
-        if (fee.compareTo(new BigDecimal("50")) > 0) {
-            return new BigDecimal("50.000");
-        }
-        return fee.setScale(3, RoundingMode.HALF_UP);
     }
 
     private static String normalizeEnv(String env) {

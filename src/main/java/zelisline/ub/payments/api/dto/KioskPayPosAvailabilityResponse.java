@@ -5,6 +5,10 @@ package zelisline.ub.payments.api.dto;
  */
 public record KioskPayPosAvailabilityResponse(
         boolean available,
-        String currency
+        boolean platformEnabled,
+        boolean accountActive,
+        boolean stkConfigured,
+        String currency,
+        String reason
 ) {
 }

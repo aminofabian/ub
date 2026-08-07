@@ -95,15 +95,12 @@ public class KioskPayWalletService {
     }
 
     /**
-     * POS can collect via platform KopoKopo STK when the product is on, the tenant account is
-     * active, and platform KopoKopo credentials exist.
+     * POS can collect via platform KopoKopo STK when the product is on and the tenant
+     * account is active. Platform KopoKopo credentials are checked at push time.
      */
     @Transactional(readOnly = true)
     public boolean isPosCollectEnabled(String businessId) {
         if (!platformSettings.isProductEnabled()) {
-            return false;
-        }
-        if (platformSettings.kopokopoCredentials().isEmpty()) {
             return false;
         }
         return accountRepository.findByBusinessId(businessId)
@@ -114,9 +111,29 @@ public class KioskPayWalletService {
     @Transactional(readOnly = true)
     public zelisline.ub.payments.api.dto.KioskPayPosAvailabilityResponse posAvailability(String businessId) {
         PlatformKioskPaySettings settings = platformSettings.loadSingleton();
+        boolean platformEnabled = settings.isEnabled();
+        boolean accountActive = accountRepository.findByBusinessId(businessId)
+                .filter(KioskPayAccount::isActive)
+                .isPresent();
+        boolean stkConfigured = platformSettings.kopokopoCredentials().isPresent();
+        boolean available = platformEnabled && accountActive;
+        String reason;
+        if (!platformEnabled) {
+            reason = "Kiosk Pay is not enabled on this platform";
+        } else if (!accountActive) {
+            reason = "Activate Kiosk Pay under Payments → Kiosk Pay";
+        } else if (!stkConfigured) {
+            reason = "Platform KopoKopo credentials are not configured yet";
+        } else {
+            reason = null;
+        }
         return new zelisline.ub.payments.api.dto.KioskPayPosAvailabilityResponse(
-                isPosCollectEnabled(businessId),
-                settings.getCurrency());
+                available,
+                platformEnabled,
+                accountActive,
+                stkConfigured,
+                settings.getCurrency(),
+                reason);
     }
 
     /**

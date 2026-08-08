@@ -45,6 +45,13 @@ public class KioskPayWithdrawService {
     /** KopoKopo Send Money rejection when the platform till lacks liquid funds. */
     private static final String FLOAT_INSUFFICIENT_MARKER = "exceeds amount available to move";
 
+    /** Tenant-facing copy — never expose platform float / provider ops detail. */
+    private static final String PUBLIC_FLOAT_FAILURE =
+            "Withdrawal couldn't go through right now. Your balance was restored — try again in a few minutes.";
+
+    private static final String PUBLIC_FLOAT_PAUSED =
+            "Withdrawals are temporarily unavailable. Try again shortly — your balance was not affected.";
+
     private final KioskPayWithdrawalRepository withdrawalRepository;
     private final KioskPayWalletService walletService;
     private final PlatformKioskPaySettingsService platformSettings;
@@ -61,7 +68,7 @@ public class KioskPayWithdrawService {
         int capped = Math.min(Math.max(limit, 1), 50);
         return withdrawalRepository.findByBusinessIdOrderByCreatedAtDesc(businessId, PageRequest.of(0, capped))
                 .stream()
-                .map(this::toResponse)
+                .map(this::toTenantResponse)
                 .toList();
     }
 
@@ -76,7 +83,7 @@ public class KioskPayWithdrawService {
 
         var existing = withdrawalRepository.findByBusinessIdAndIdempotencyKey(businessId, idem);
         if (existing.isPresent()) {
-            return toResponse(existing.get());
+            return toTenantResponse(existing.get());
         }
 
         PlatformKioskPaySettings settings = platformSettings.requireEnabledSettings();
@@ -85,9 +92,7 @@ public class KioskPayWithdrawService {
                         "Platform KopoKopo credentials are not configured for withdrawals"));
 
         if (settings.isSendMoneyFloatConstrained(Instant.now())) {
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                    "Withdrawals are temporarily paused because the platform's payment float is low. "
-                            + "Try again shortly — your balance was not affected.");
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, PUBLIC_FLOAT_PAUSED);
         }
 
         KioskPayAccount account = walletService.getOrCreateForUpdate(businessId);
@@ -138,7 +143,7 @@ public class KioskPayWithdrawService {
         try {
             row = withdrawalRepository.save(row);
         } catch (DataIntegrityViolationException e) {
-            return toResponse(withdrawalRepository.findByBusinessIdAndIdempotencyKey(businessId, idem)
+            return toTenantResponse(withdrawalRepository.findByBusinessIdAndIdempotencyKey(businessId, idem)
                     .orElseThrow(() -> e));
         }
 
@@ -165,13 +170,9 @@ public class KioskPayWithdrawService {
         if (!result.accepted() || result.sendMoneyId() == null || result.sendMoneyId().isBlank()) {
             // Do not throw — ResponseStatusException would roll back FAILED + hold release.
             String raw = result.message() != null ? result.message() : "Send Money rejected";
-            if (isFloatInsufficient(raw)) {
-                platformSettings.markSendMoneyFloatConstrained(Duration.ofMinutes(floatPauseMinutes));
-                log.warn("Kiosk Pay Send Money float insufficient — withdrawals paused for {} min: {}",
-                        floatPauseMinutes, raw);
-            }
-            markFailed(row, account, amount, classifySendMoneyFailure(raw));
-            return toResponse(row);
+            noteProviderFailure(row, raw, result.responseCode());
+            markFailed(row, account, amount, raw);
+            return toTenantResponse(row);
         }
 
         row.setKopokopoSendMoneyId(result.sendMoneyId());
@@ -180,7 +181,7 @@ public class KioskPayWithdrawService {
         withdrawalRepository.save(row);
         log.info("Kiosk Pay withdraw started: id={} sendMoneyId={} business={}",
                 row.getId(), result.sendMoneyId(), businessId);
-        return toResponse(row);
+        return toTenantResponse(row);
     }
 
     /**
@@ -225,8 +226,9 @@ public class KioskPayWithdrawService {
             return true;
         }
         if (parsed.terminalFailure()) {
-            markFailed(row, account, row.getAmount(),
-                    parsed.failureMessage() != null ? parsed.failureMessage() : "Send Money failed");
+            String raw = parsed.failureMessage() != null ? parsed.failureMessage() : "Send Money failed";
+            noteProviderFailure(row, raw, null);
+            markFailed(row, account, row.getAmount(), raw);
             return true;
         }
         return true;
@@ -298,10 +300,11 @@ public class KioskPayWithdrawService {
                         continue;
                     }
                     if (status != null && status.terminalFailure()) {
-                        markFailed(row, account, row.getAmount(),
-                                status.failureMessage() != null
-                                        ? status.failureMessage()
-                                        : "Send Money failed");
+                        String raw = status.failureMessage() != null
+                                ? status.failureMessage()
+                                : "Send Money failed";
+                        noteProviderFailure(row, raw, null);
+                        markFailed(row, account, row.getAmount(), raw);
                         changed++;
                         continue;
                     }
@@ -343,10 +346,12 @@ public class KioskPayWithdrawService {
             }
         }
         row.setStatus(KioskPayWithdrawalStatuses.FAILED);
+        // Persist provider/ops text for super-admin; tenant APIs sanitize on read.
         row.setFailureReason(reason != null && reason.length() > 500 ? reason.substring(0, 500) : reason);
         row.setCompletedAt(Instant.now());
         withdrawalRepository.save(row);
-        log.info("Kiosk Pay withdraw failed: id={} reason={}", row.getId(), reason);
+        log.info("Kiosk Pay withdraw failed: id={} business={} amount={} phone={} reason={}",
+                row.getId(), row.getBusinessId(), row.getAmount(), row.getPhoneNumber(), reason);
     }
 
     @Transactional(readOnly = true)
@@ -357,11 +362,26 @@ public class KioskPayWithdrawService {
                         org.springframework.data.domain.Sort.by(
                                 org.springframework.data.domain.Sort.Direction.DESC, "createdAt")))
                 .stream()
-                .map(this::toResponse)
+                .map(this::toOpsResponse)
                 .toList();
     }
 
-    private KioskPayWithdrawalResponse toResponse(KioskPayWithdrawal w) {
+    /** Tenant list / withdraw responses — hide platform float / ops provider text. */
+    private KioskPayWithdrawalResponse toTenantResponse(KioskPayWithdrawal w) {
+        return new KioskPayWithdrawalResponse(
+                w.getBusinessId(),
+                w.getId(),
+                w.getAmount(),
+                w.getCurrency(),
+                w.getPhoneNumber(),
+                w.getStatus(),
+                publicFailureReason(w.getFailureReason()),
+                w.getRequestedAt(),
+                w.getCompletedAt());
+    }
+
+    /** Super-admin / ops — full provider failure text. */
+    private KioskPayWithdrawalResponse toOpsResponse(KioskPayWithdrawal w) {
         return new KioskPayWithdrawalResponse(
                 w.getBusinessId(),
                 w.getId(),
@@ -374,21 +394,59 @@ public class KioskPayWithdrawService {
                 w.getCompletedAt());
     }
 
+    private void noteProviderFailure(KioskPayWithdrawal row, String raw, String code) {
+        if (isFloatInsufficient(raw)) {
+            platformSettings.markSendMoneyFloatConstrained(Duration.ofMinutes(floatPauseMinutes));
+            log.warn(
+                    "Kiosk Pay Send Money FLOAT — paused {} min | withdrawalId={} business={} amount={} {} phone={} code={} provider=\"{}\"",
+                    floatPauseMinutes,
+                    row.getId(),
+                    row.getBusinessId(),
+                    row.getAmount(),
+                    row.getCurrency(),
+                    row.getPhoneNumber(),
+                    code,
+                    raw);
+            return;
+        }
+        log.warn(
+                "Kiosk Pay Send Money rejected | withdrawalId={} business={} amount={} {} phone={} code={} provider=\"{}\"",
+                row.getId(),
+                row.getBusinessId(),
+                row.getAmount(),
+                row.getCurrency(),
+                row.getPhoneNumber(),
+                code,
+                raw);
+    }
+
     private static boolean isFloatInsufficient(String raw) {
         if (raw == null || raw.isBlank()) {
             return false;
         }
         String lower = raw.toLowerCase(java.util.Locale.ROOT);
-        return lower.contains(FLOAT_INSUFFICIENT_MARKER) || lower.contains("insufficient");
+        return lower.contains(FLOAT_INSUFFICIENT_MARKER)
+                || lower.contains("amount available to move")
+                || lower.contains("platform payment float")
+                || lower.contains("insufficient_funds")
+                || lower.contains("insufficient funds");
     }
 
-    private static String classifySendMoneyFailure(String raw) {
-        if (isFloatInsufficient(raw)) {
-            return "Platform payment float is low — KopoKopo rejected the transfer (\""
-                    + raw + "\"). Your Kiosk Pay balance was restored; withdrawals resume after "
-                    + "the platform tops up its payment float.";
+    static String publicFailureReason(String stored) {
+        if (stored == null || stored.isBlank()) {
+            return stored;
         }
-        return raw == null || raw.isBlank() ? "Send Money rejected" : raw;
+        if (isFloatInsufficient(stored) || looksLikeInternalOpsFailure(stored)) {
+            return PUBLIC_FLOAT_FAILURE;
+        }
+        return stored;
+    }
+
+    private static boolean looksLikeInternalOpsFailure(String stored) {
+        String lower = stored.toLowerCase(java.util.Locale.ROOT);
+        return lower.contains("source identifier is invalid")
+                || lower.contains("platform's payment float")
+                || lower.contains("tops up its payment float");
     }
 
     private static String firstNonBlank(Map<String, String> creds, String... keys) {

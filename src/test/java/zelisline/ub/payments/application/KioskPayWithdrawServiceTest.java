@@ -121,7 +121,8 @@ class KioskPayWithdrawServiceTest {
         KioskPayWithdrawalResponse response = service.requestWithdraw(BUSINESS, request("100", "0712345678", "idem-2"));
 
         assertThat(response.status()).isEqualTo(KioskPayWithdrawalStatuses.FAILED);
-        assertThat(response.failureReason()).isEqualTo("Source identifier is invalid");
+        assertThat(response.failureReason())
+                .isEqualTo("Withdrawal couldn't go through right now. Your balance was restored — try again in a few minutes.");
         verify(walletService).releaseWithdrawHold(
                 any(KioskPayAccount.class), eq(new BigDecimal("100.00")), eq("KES"), anyString(), anyString());
     }
@@ -206,8 +207,8 @@ class KioskPayWithdrawServiceTest {
 
         assertThat(response.status()).isEqualTo(KioskPayWithdrawalStatuses.FAILED);
         assertThat(response.failureReason())
-                .startsWith("Platform payment float is low")
-                .contains("balance was restored");
+                .isEqualTo("Withdrawal couldn't go through right now. Your balance was restored — try again in a few minutes.");
+        assertThat(response.failureReason()).doesNotContain("amount available to move");
         verify(platformSettings).markSendMoneyFloatConstrained(any());
         verify(walletService).releaseWithdrawHold(
                 any(KioskPayAccount.class), eq(new BigDecimal("190.00")), eq("KES"), anyString(), anyString());
@@ -245,6 +246,19 @@ class KioskPayWithdrawServiceTest {
         assertThat(row.getFailureReason()).isEqualTo("Recipient not registered");
         verify(walletService).releaseWithdrawHold(
                 any(KioskPayAccount.class), eq(new BigDecimal("100.00")), eq("KES"), eq(row.getId()), anyString());
+    }
+
+    @Test
+    void publicFailureReason_hidesFloatAndKeepsRealRecipientErrors() {
+        assertThat(KioskPayWithdrawService.publicFailureReason(
+                "Transfer amount exceeds amount available to move"))
+                .doesNotContain("amount available to move")
+                .contains("try again");
+        assertThat(KioskPayWithdrawService.publicFailureReason(
+                "Transfer amount together with the transfer fees exceeds amount available to move"))
+                .doesNotContain("transfer fees");
+        assertThat(KioskPayWithdrawService.publicFailureReason("Recipient not registered"))
+                .isEqualTo("Recipient not registered");
     }
 
     @Test

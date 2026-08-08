@@ -18,9 +18,11 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.api.dto.AdjustKioskPayAccountRequest;
 import zelisline.ub.payments.api.dto.KioskPayAccountResponse;
 import zelisline.ub.payments.api.dto.KioskPayAccountSummary;
+import zelisline.ub.payments.api.dto.KioskPayWithdrawalResponse;
 import zelisline.ub.payments.api.dto.PlatformKioskPaySettingsResponse;
 import zelisline.ub.payments.api.dto.UpdatePlatformKioskPaySettingsRequest;
 import zelisline.ub.payments.application.KioskPayWalletService;
+import zelisline.ub.payments.application.KioskPayWithdrawService;
 import zelisline.ub.payments.application.PlatformKioskPaySettingsService;
 
 @RestController
@@ -30,6 +32,7 @@ public class SuperAdminKioskPayController {
 
     private final PlatformKioskPaySettingsService settingsService;
     private final KioskPayWalletService walletService;
+    private final KioskPayWithdrawService withdrawService;
 
     @GetMapping
     public PlatformKioskPaySettingsResponse get() {
@@ -53,6 +56,14 @@ public class SuperAdminKioskPayController {
     @GetMapping("/accounts/summary")
     public KioskPayAccountSummary summary() {
         return walletService.accountSummaryForSuperAdmin();
+    }
+
+    /** Recent withdrawals across all tenants (ops visibility into failures). */
+    @GetMapping("/withdrawals")
+    public List<KioskPayWithdrawalResponse> withdrawals(
+            @RequestParam(defaultValue = "50") int limit
+    ) {
+        return withdrawService.listForSuperAdmin(limit);
     }
 
     /** Manual wallet adjustment (refund reversal / correction). Delta is signed. */

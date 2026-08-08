@@ -81,8 +81,30 @@ public class PlatformKioskPaySettingsService {
         } else {
             mergeKopokopo(row, body);
         }
+        if (Boolean.TRUE.equals(body.clearSendMoneyFloatConstraint())) {
+            row.setSendMoneyFloatConstrainedUntil(null);
+        }
 
         return toResponse(repository.save(row));
+    }
+
+    /**
+     * KopoKopo rejected a Send Money transfer because the platform till is dry.
+     * Pause withdrawals so retries fail fast with a clear message instead of
+     * hammering the provider. Expires automatically.
+     */
+    @Transactional
+    public void markSendMoneyFloatConstrained(java.time.Duration cooldown) {
+        PlatformKioskPaySettings row = loadSingleton();
+        row.setSendMoneyFloatConstrainedUntil(Instant.now().plus(cooldown));
+        repository.save(row);
+    }
+
+    @Transactional
+    public void clearSendMoneyFloatConstrained() {
+        PlatformKioskPaySettings row = loadSingleton();
+        row.setSendMoneyFloatConstrainedUntil(null);
+        repository.save(row);
     }
 
     @Transactional(readOnly = true)
@@ -180,6 +202,7 @@ public class PlatformKioskPaySettingsService {
                 hint,
                 row.getKopokopoEnvironment(),
                 row.getKopokopoCredentialsEnc() != null && !row.getKopokopoCredentialsEnc().isBlank(),
+                row.getSendMoneyFloatConstrainedUntil(),
                 row.getUpdatedAt() != null ? row.getUpdatedAt() : Instant.now());
     }
 

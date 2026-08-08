@@ -61,6 +61,10 @@ public class PlatformKioskPaySettings {
     @Column(name = "kopokopo_credentials_enc", columnDefinition = "TEXT")
     private String kopokopoCredentialsEnc;
 
+    /** While set (future timestamp), Send Money withdrawals fail fast — the platform till is dry. */
+    @Column(name = "send_money_float_constrained_until")
+    private Instant sendMoneyFloatConstrainedUntil;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
@@ -71,5 +75,10 @@ public class PlatformKioskPaySettings {
             id = SINGLETON_ID;
         }
         updatedAt = Instant.now();
+    }
+
+    public boolean isSendMoneyFloatConstrained(Instant now) {
+        return sendMoneyFloatConstrainedUntil != null
+                && sendMoneyFloatConstrainedUntil.isAfter(now);
     }
 }

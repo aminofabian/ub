@@ -21,6 +21,7 @@ public record UpdatePlatformKioskPaySettingsRequest(
         String kopokopoClientSecret,
         String kopokopoApiKey,
         String kopokopoTillNumber,
-        Boolean clearKopokopoCredentials
+        Boolean clearKopokopoCredentials,
+        Boolean clearSendMoneyFloatConstraint
 ) {
 }

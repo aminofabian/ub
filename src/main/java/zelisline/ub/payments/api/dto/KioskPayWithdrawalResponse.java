@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 public record KioskPayWithdrawalResponse(
+        String businessId,
         String id,
         BigDecimal amount,
         String currency,

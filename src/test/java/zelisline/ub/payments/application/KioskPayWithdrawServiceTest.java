@@ -182,6 +182,38 @@ class KioskPayWithdrawServiceTest {
     }
 
     @Test
+    void requestWithdraw_floatPausedFailsFast() {
+        PlatformKioskPaySettings constrained = settings();
+        constrained.setSendMoneyFloatConstrainedUntil(Instant.now().plusSeconds(300));
+        when(platformSettings.requireEnabledSettings()).thenReturn(constrained);
+
+        assertThatThrownBy(() -> service.requestWithdraw(BUSINESS, request("100", "0712345678", "idem-8")))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        verify(kopokopoGateway, never()).sendMoney(any());
+        verify(walletService, never()).holdForWithdraw(
+                any(KioskPayAccount.class), any(), any(), anyString(), anyString());
+    }
+
+    @Test
+    void requestWithdraw_floatInsufficientRejectionPausesAndClassifies() {
+        when(kopokopoGateway.sendMoney(any()))
+                .thenReturn(SendMoneyResult.rejected(
+                        "INSUFFICIENT_FUNDS", "Transfer amount exceeds amount available to move"));
+
+        KioskPayWithdrawalResponse response = service.requestWithdraw(BUSINESS, request("190", "0712345678", "idem-9"));
+
+        assertThat(response.status()).isEqualTo(KioskPayWithdrawalStatuses.FAILED);
+        assertThat(response.failureReason())
+                .startsWith("Platform payment float is low")
+                .contains("balance was restored");
+        verify(platformSettings).markSendMoneyFloatConstrained(any());
+        verify(walletService).releaseWithdrawHold(
+                any(KioskPayAccount.class), eq(new BigDecimal("190.00")), eq("KES"), anyString(), anyString());
+    }
+
+    @Test
     void handleSendMoneyWebhook_successSettles() {
         KioskPayWithdrawal row = processingRow("sm-1");
         when(withdrawalRepository.findByKopokopoSendMoneyId("sm-1")).thenReturn(Optional.of(row));

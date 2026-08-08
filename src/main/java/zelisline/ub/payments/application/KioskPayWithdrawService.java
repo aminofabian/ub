@@ -42,6 +42,9 @@ public class KioskPayWithdrawService {
     /** PROCESSING without terminal webhook — poll, then expire. */
     private static final Duration STALE_PROCESSING = Duration.ofMinutes(10);
 
+    /** KopoKopo Send Money rejection when the platform till lacks liquid funds. */
+    private static final String FLOAT_INSUFFICIENT_MARKER = "exceeds amount available to move";
+
     private final KioskPayWithdrawalRepository withdrawalRepository;
     private final KioskPayWalletService walletService;
     private final PlatformKioskPaySettingsService platformSettings;
@@ -49,6 +52,9 @@ public class KioskPayWithdrawService {
 
     @Value("${app.public.api-base-url:http://localhost:5050}")
     private String publicApiBaseUrl;
+
+    @Value("${app.payments.kiosk-pay.withdraw.float-pause-minutes:10}")
+    private long floatPauseMinutes;
 
     @Transactional(readOnly = true)
     public List<KioskPayWithdrawalResponse> list(String businessId, int limit) {
@@ -77,6 +83,12 @@ public class KioskPayWithdrawService {
         Map<String, String> kopokopoCreds = platformSettings.kopokopoCredentials()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "Platform KopoKopo credentials are not configured for withdrawals"));
+
+        if (settings.isSendMoneyFloatConstrained(Instant.now())) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Withdrawals are temporarily paused because the platform's payment float is low. "
+                            + "Try again shortly — your balance was not affected.");
+        }
 
         KioskPayAccount account = walletService.getOrCreateForUpdate(businessId);
         if (!account.isActive()) {
@@ -152,8 +164,13 @@ public class KioskPayWithdrawService {
 
         if (!result.accepted() || result.sendMoneyId() == null || result.sendMoneyId().isBlank()) {
             // Do not throw — ResponseStatusException would roll back FAILED + hold release.
-            markFailed(row, account, amount,
-                    result.message() != null ? result.message() : "Send Money rejected");
+            String raw = result.message() != null ? result.message() : "Send Money rejected";
+            if (isFloatInsufficient(raw)) {
+                platformSettings.markSendMoneyFloatConstrained(Duration.ofMinutes(floatPauseMinutes));
+                log.warn("Kiosk Pay Send Money float insufficient — withdrawals paused for {} min: {}",
+                        floatPauseMinutes, raw);
+            }
+            markFailed(row, account, amount, classifySendMoneyFailure(raw));
             return toResponse(row);
         }
 
@@ -332,8 +349,21 @@ public class KioskPayWithdrawService {
         log.info("Kiosk Pay withdraw failed: id={} reason={}", row.getId(), reason);
     }
 
+    @Transactional(readOnly = true)
+    public List<KioskPayWithdrawalResponse> listForSuperAdmin(int limit) {
+        int capped = Math.min(Math.max(limit, 1), 100);
+        return withdrawalRepository
+                .findAll(org.springframework.data.domain.PageRequest.of(0, capped,
+                        org.springframework.data.domain.Sort.by(
+                                org.springframework.data.domain.Sort.Direction.DESC, "createdAt")))
+                .stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
     private KioskPayWithdrawalResponse toResponse(KioskPayWithdrawal w) {
         return new KioskPayWithdrawalResponse(
+                w.getBusinessId(),
                 w.getId(),
                 w.getAmount(),
                 w.getCurrency(),
@@ -342,6 +372,23 @@ public class KioskPayWithdrawService {
                 w.getFailureReason(),
                 w.getRequestedAt(),
                 w.getCompletedAt());
+    }
+
+    private static boolean isFloatInsufficient(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return false;
+        }
+        String lower = raw.toLowerCase(java.util.Locale.ROOT);
+        return lower.contains(FLOAT_INSUFFICIENT_MARKER) || lower.contains("insufficient");
+    }
+
+    private static String classifySendMoneyFailure(String raw) {
+        if (isFloatInsufficient(raw)) {
+            return "Platform payment float is low — KopoKopo rejected the transfer (\""
+                    + raw + "\"). Your Kiosk Pay balance was restored; withdrawals resume after "
+                    + "the platform tops up its payment float.";
+        }
+        return raw == null || raw.isBlank() ? "Send Money rejected" : raw;
     }
 
     private static String firstNonBlank(Map<String, String> creds, String... keys) {

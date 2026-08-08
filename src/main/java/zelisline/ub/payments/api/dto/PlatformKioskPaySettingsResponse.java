@@ -14,6 +14,7 @@ public record PlatformKioskPaySettingsResponse(
         String paystackPublicKeyHint,
         String kopokopoEnvironment,
         boolean hasKopokopoCredentials,
+        Instant sendMoneyFloatConstrainedUntil,
         Instant updatedAt
 ) {
 }

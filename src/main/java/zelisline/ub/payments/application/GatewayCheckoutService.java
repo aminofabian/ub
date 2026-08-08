@@ -358,26 +358,33 @@ public class GatewayCheckoutService {
             markCancelled(checkout, "Gateway configuration no longer available");
             return;
         }
+        VerifyTransactionResponse result;
         try {
-            VerifyTransactionResponse result = gateway.verifyTransaction(
+            result = gateway.verifyTransaction(
                     new VerifyTransactionRequest(checkout.getReference(), creds));
-            checkout.setLastVerifiedAt(Instant.now());
-            checkout.setVerifyCount(checkout.getVerifyCount() + 1);
-            if (result.completed()) {
-                confirmCheckout(
-                        checkout,
-                        result.providerTransactionId(),
-                        result.amount(),
-                        result.providerFee());
-            } else if (result.failed()) {
-                markFailed(checkout, result.failureMessage() != null
-                        ? result.failureMessage()
-                        : "Payment not completed");
-            } else {
-                checkoutRepository.save(checkout); // persist lastVerifiedAt / verifyCount
-            }
         } catch (Exception e) {
+            // Transient provider/network error — leave the checkout PENDING so the
+            // reconciler / provider webhook retries later.
             log.error("Paystack verify threw for checkout={}", checkout.getId(), e);
+            return;
+        }
+        checkout.setLastVerifiedAt(Instant.now());
+        checkout.setVerifyCount(checkout.getVerifyCount() + 1);
+        if (result.completed()) {
+            // Confirmation (order paid + Kiosk Pay wallet credit) is all-or-nothing:
+            // a credit failure rolls the transaction back so the checkout stays
+            // PENDING and the provider webhook / reconciler retries.
+            confirmCheckout(
+                    checkout,
+                    result.providerTransactionId(),
+                    result.amount(),
+                    result.providerFee());
+        } else if (result.failed()) {
+            markFailed(checkout, result.failureMessage() != null
+                    ? result.failureMessage()
+                    : "Payment not completed");
+        } else {
+            checkoutRepository.save(checkout); // persist lastVerifiedAt / verifyCount
         }
     }
 
@@ -492,19 +499,19 @@ public class GatewayCheckoutService {
         if (PlatformKioskPaySettings.PLATFORM_PAYSTACK_CONFIG_ID.equals(checkout.getConfigId())) {
             KioskPayWalletService wallet = kioskPayWalletService.getIfAvailable();
             if (wallet != null) {
-                try {
-                    wallet.creditPaymentCapture(
-                            checkout.getBusinessId(),
-                            checkout.getAmount(),
-                            checkout.getCurrency(),
-                            "kp-capture-" + checkout.getReference(),
-                            checkout.getContextType().name(),
-                            checkout.getContextId(),
-                            checkout.getId(),
-                            providerFee);
-                } catch (Exception e) {
-                    log.error("Kiosk Pay wallet credit failed for checkout={}", checkout.getId(), e);
-                }
+                // All-or-nothing: if the wallet credit fails, the whole confirm rolls
+                // back (order stays unpaid, checkout stays PENDING) so we never mark
+                // an order paid without crediting the merchant wallet. Webhook
+                // re-delivery / the checkout reconciler retries.
+                wallet.creditPaymentCapture(
+                        checkout.getBusinessId(),
+                        checkout.getAmount(),
+                        checkout.getCurrency(),
+                        "kp-capture-" + checkout.getReference(),
+                        checkout.getContextType().name(),
+                        checkout.getContextId(),
+                        checkout.getId(),
+                        providerFee);
             }
         }
 

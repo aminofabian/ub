@@ -43,11 +43,23 @@ public class PlatformKioskPaySettingsService {
         }
         // Platform markup removed — always keep fee at 0; provider fees pass through at capture.
         row.setFeePercent(BigDecimal.ZERO);
-        if (body.minWithdrawAmount() != null) {
-            row.setMinWithdrawAmount(body.minWithdrawAmount().max(BigDecimal.ZERO));
+        BigDecimal min = body.minWithdrawAmount();
+        BigDecimal daily = body.dailyWithdrawLimit();
+        if (min != null && min.compareTo(BigDecimal.ZERO) < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Min withdraw cannot be negative");
         }
-        if (body.dailyWithdrawLimit() != null) {
-            row.setDailyWithdrawLimit(body.dailyWithdrawLimit().max(BigDecimal.ZERO));
+        if (daily != null && daily.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Daily withdraw limit must be positive");
+        }
+        if (min != null && daily != null && min.compareTo(daily) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Min withdraw cannot exceed the daily withdraw limit");
+        }
+        if (min != null) {
+            row.setMinWithdrawAmount(min);
+        }
+        if (daily != null) {
+            row.setDailyWithdrawLimit(daily);
         }
         if (body.currency() != null && !body.currency().isBlank()) {
             row.setCurrency(body.currency().trim().toUpperCase());

@@ -858,18 +858,17 @@ public class GatewayStkPushService {
         if (wallet == null) {
             return;
         }
-        try {
-            wallet.creditPaymentCapture(
-                    push.getBusinessId(),
-                    push.getAmount(),
-                    "KES",
-                    "kp-stk-" + push.getGatewayCheckoutId(),
-                    push.getContextType().name(),
-                    push.getContextId(),
-                    push.getGatewayCheckoutId());
-        } catch (Exception e) {
-            log.error("Kiosk Pay wallet credit failed for STK push={}", push.getId(), e);
-        }
+        // All-or-nothing with the push confirmation — a credit failure rolls the
+        // transaction back so the push stays PENDING and the poller / webhook retry.
+        // Never confirm a sale without crediting the merchant wallet.
+        wallet.creditPaymentCapture(
+                push.getBusinessId(),
+                push.getAmount(),
+                "KES",
+                "kp-stk-" + push.getGatewayCheckoutId(),
+                push.getContextType().name(),
+                push.getContextId(),
+                push.getGatewayCheckoutId());
     }
 
     private void markFailed(GatewayStkPush push, String reason) {

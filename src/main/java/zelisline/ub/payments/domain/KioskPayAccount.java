@@ -56,6 +56,10 @@ public class KioskPayAccount {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    @jakarta.persistence.Version
+    @Column(name = "version", nullable = false)
+    private long version;
+
     @PrePersist
     void onCreate() {
         if (id == null || id.isBlank()) {

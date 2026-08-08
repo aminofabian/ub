@@ -78,7 +78,7 @@ public class KioskPayWithdrawService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "Platform KopoKopo credentials are not configured for withdrawals"));
 
-        KioskPayAccount account = walletService.getOrCreate(businessId);
+        KioskPayAccount account = walletService.getOrCreateForUpdate(businessId);
         if (!account.isActive()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Activate Kiosk Pay before withdrawing");
         }
@@ -86,8 +86,10 @@ public class KioskPayWithdrawService {
         String phone = body.phoneNumber() != null && !body.phoneNumber().isBlank()
                 ? body.phoneNumber().trim()
                 : account.getPayoutPhone();
-        if (phone == null || phone.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "payout phone is required");
+        String normalizedPhone = StkPhoneNormalizer.normalize(phone);
+        if (normalizedPhone == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "A valid M-Pesa phone number is required (e.g. 2547XXXXXXXX)");
         }
 
         BigDecimal amount = body.amount().setScale(2, java.math.RoundingMode.HALF_UP);
@@ -118,7 +120,7 @@ public class KioskPayWithdrawService {
         row.setAccountId(account.getId());
         row.setAmount(amount);
         row.setCurrency(settings.getCurrency());
-        row.setPhoneNumber(phone);
+        row.setPhoneNumber(normalizedPhone);
         row.setStatus(KioskPayWithdrawalStatuses.REQUESTED);
         row.setIdempotencyKey(idem);
         try {
@@ -128,7 +130,7 @@ public class KioskPayWithdrawService {
                     .orElseThrow(() -> e));
         }
 
-        walletService.holdForWithdraw(account, amount, row.getId(), "wd-hold-" + row.getId());
+        walletService.holdForWithdraw(account, amount, settings.getCurrency(), row.getId(), "wd-hold-" + row.getId());
 
         // KopoKopo source_identifier must be a till number, or null for available balance —
         // never an internal UUID (that yields "Source identifier is invalid").
@@ -138,7 +140,7 @@ public class KioskPayWithdrawService {
         SendMoneyResult result = kopokopoPaymentGateway.sendMoney(new SendMoneyRequest(
                 kopokopoCreds,
                 callbackBase,
-                phone,
+                normalizedPhone,
                 amount,
                 settings.getCurrency(),
                 "Kiosk Pay withdraw " + row.getId(),
@@ -198,7 +200,7 @@ public class KioskPayWithdrawService {
 
         KioskPayAccount account = walletService.getOrCreate(row.getBusinessId());
         if (parsed.success()) {
-            walletService.settleWithdraw(account, row.getAmount(), row.getId(), "wd-settle-" + row.getId());
+            walletService.settleWithdraw(account, row.getAmount(), row.getCurrency(), row.getId(), "wd-settle-" + row.getId());
             row.setStatus(KioskPayWithdrawalStatuses.SUCCESS);
             row.setCompletedAt(Instant.now());
             row.setFailureReason(null);
@@ -214,14 +216,36 @@ public class KioskPayWithdrawService {
     }
 
     /**
-     * Poll / expire in-flight withdrawals so a stuck row cannot block the merchant forever.
+     * Scheduled sweep: resolve stuck REQUESTED / PROCESSING withdrawals for every
+     * business so a missed webhook cannot block the merchant's next withdraw forever.
      */
-    private void reconcileInFlight(
+    @Transactional
+    public int reconcileAllInFlight() {
+        List<KioskPayWithdrawal> inflight = withdrawalRepository.findByStatusInOrderByCreatedAtAsc(
+                List.of(KioskPayWithdrawalStatuses.REQUESTED, KioskPayWithdrawalStatuses.PROCESSING));
+        Map<String, List<KioskPayWithdrawal>> byBusiness = inflight.stream()
+                .collect(java.util.stream.Collectors.groupingBy(KioskPayWithdrawal::getBusinessId));
+        int changed = 0;
+        for (Map.Entry<String, List<KioskPayWithdrawal>> entry : byBusiness.entrySet()) {
+            KioskPayAccount account = walletService.getOrCreateForUpdate(entry.getKey());
+            Map<String, String> creds = platformSettings.kopokopoCredentials().orElse(Map.of());
+            changed += reconcileInFlight(entry.getKey(), account, creds);
+        }
+        return changed;
+    }
+
+    /**
+     * Poll / expire in-flight withdrawals so a stuck row cannot block the merchant forever.
+     * Returns the number of rows finalized by this run.
+     */
+    private int reconcileInFlight(
             String businessId,
             KioskPayAccount account,
             Map<String, String> kopokopoCreds
     ) {
+        int changed = 0;
         Instant now = Instant.now();
+        boolean credsAvailable = kopokopoCreds != null && !kopokopoCreds.isEmpty();
         List<KioskPayWithdrawal> inflight = withdrawalRepository
                 .findByBusinessIdAndStatusInOrderByCreatedAtAsc(
                         businessId,
@@ -236,22 +260,24 @@ public class KioskPayWithdrawService {
                 if (noProviderId || (started != null && started.isBefore(now.minus(STALE_REQUESTED)))) {
                     markFailed(row, account, row.getAmount(),
                             "Withdraw abandoned before provider accepted — funds released");
+                    changed++;
                 }
                 continue;
             }
 
             // PROCESSING
             String sendMoneyId = row.getKopokopoSendMoneyId();
-            if (sendMoneyId != null && !sendMoneyId.isBlank()) {
+            if (sendMoneyId != null && !sendMoneyId.isBlank() && credsAvailable) {
                 try {
                     WebhookResult status = kopokopoPaymentGateway.querySendMoneyStatus(sendMoneyId, kopokopoCreds);
                     if (status != null && status.success()) {
                         walletService.settleWithdraw(
-                                account, row.getAmount(), row.getId(), "wd-settle-" + row.getId());
+                                account, row.getAmount(), row.getCurrency(), row.getId(), "wd-settle-" + row.getId());
                         row.setStatus(KioskPayWithdrawalStatuses.SUCCESS);
                         row.setCompletedAt(Instant.now());
                         row.setFailureReason(null);
                         withdrawalRepository.save(row);
+                        changed++;
                         continue;
                     }
                     if (status != null && status.terminalFailure()) {
@@ -259,6 +285,7 @@ public class KioskPayWithdrawService {
                                 status.failureMessage() != null
                                         ? status.failureMessage()
                                         : "Send Money failed");
+                        changed++;
                         continue;
                     }
                 } catch (Exception e) {
@@ -272,8 +299,10 @@ public class KioskPayWithdrawService {
             if (processingStarted != null && processingStarted.isBefore(now.minus(STALE_PROCESSING))) {
                 markFailed(row, account, row.getAmount(),
                         "Withdraw timed out waiting for M-Pesa — funds released; try again");
+                changed++;
             }
         }
+        return changed;
     }
 
     private void markFailed(
@@ -291,7 +320,7 @@ public class KioskPayWithdrawService {
         if (held) {
             try {
                 walletService.releaseWithdrawHold(
-                        account, amount, row.getId(), "wd-release-" + row.getId());
+                        account, amount, row.getCurrency(), row.getId(), "wd-release-" + row.getId());
             } catch (Exception e) {
                 log.error("Kiosk Pay release hold failed for withdrawal={}", row.getId(), e);
             }

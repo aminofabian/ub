@@ -14,6 +14,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.api.dto.KioskPayAccountResponse;
+import zelisline.ub.payments.api.dto.KioskPayAccountSummary;
 import zelisline.ub.payments.api.dto.KioskPayLedgerEntryResponse;
 import zelisline.ub.payments.api.dto.UpdateKioskPayAccountRequest;
 import zelisline.ub.payments.domain.KioskPayAccount;
@@ -51,7 +52,16 @@ public class KioskPayWalletService {
 
         if (body.payoutPhone() != null) {
             String phone = body.payoutPhone().trim();
-            account.setPayoutPhone(phone.isBlank() ? null : phone);
+            if (phone.isBlank()) {
+                account.setPayoutPhone(null);
+            } else {
+                String normalized = StkPhoneNormalizer.normalize(phone);
+                if (normalized == null) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "A valid M-Pesa phone number is required (e.g. 2547XXXXXXXX)");
+                }
+                account.setPayoutPhone(normalized);
+            }
         }
         if (body.storefrontEnabled() != null) {
             account.setStorefrontEnabled(body.storefrontEnabled());
@@ -119,7 +129,7 @@ public class KioskPayWalletService {
                 .filter(KioskPayAccount::isActive)
                 .isPresent();
         boolean stkConfigured = platformSettings.kopokopoCredentials().isPresent();
-        boolean available = platformEnabled && accountActive;
+        boolean available = platformEnabled && accountActive && stkConfigured;
         String reason;
         if (!platformEnabled) {
             reason = "Kiosk Pay is not enabled on this platform";
@@ -176,11 +186,12 @@ public class KioskPayWalletService {
             return;
         }
 
-        PlatformKioskPaySettings settings = platformSettings.requireEnabledSettings();
+        // Settlement is bookkeeping for funds already collected — it must not be
+        // blocked by the platform product switch. An order initiated while Kiosk Pay
+        // was enabled still has to credit the merchant wallet even if the product
+        // was toggled off in between.
+        PlatformKioskPaySettings settings = platformSettings.loadSingleton();
         KioskPayAccount account = getOrCreate(businessId);
-        if (!account.isActive()) {
-            account.setStatus(KioskPayAccountStatuses.ACTIVE);
-        }
 
         BigDecimal fee = providerFee != null ? providerFee.max(BigDecimal.ZERO) : BigDecimal.ZERO;
         fee = fee.setScale(2, RoundingMode.HALF_UP);
@@ -230,7 +241,13 @@ public class KioskPayWalletService {
     }
 
     @Transactional
-    public void holdForWithdraw(KioskPayAccount account, BigDecimal amount, String withdrawalId, String reference) {
+    public void holdForWithdraw(
+            KioskPayAccount account,
+            BigDecimal amount,
+            String currency,
+            String withdrawalId,
+            String reference
+    ) {
         if (account.getAvailableBalance().compareTo(amount) < 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Insufficient Kiosk Pay balance");
         }
@@ -241,7 +258,7 @@ public class KioskPayWalletService {
                 KioskPayLedgerEntryTypes.WITHDRAW_HOLD,
                 KioskPayLedgerEntryTypes.DEBIT,
                 amount,
-                "KES",
+                currency == null || currency.isBlank() ? "KES" : currency,
                 amount.negate(),
                 amount,
                 reference,
@@ -250,11 +267,17 @@ public class KioskPayWalletService {
                 withdrawalId,
                 null,
                 "Withdraw hold");
-        publishBalance(account, "KES", "WITHDRAW_HOLD");
+        publishBalance(account, currency == null || currency.isBlank() ? "KES" : currency, "WITHDRAW_HOLD");
     }
 
     @Transactional
-    public void settleWithdraw(KioskPayAccount account, BigDecimal amount, String withdrawalId, String reference) {
+    public void settleWithdraw(
+            KioskPayAccount account,
+            BigDecimal amount,
+            String currency,
+            String withdrawalId,
+            String reference
+    ) {
         applyDelta(account, BigDecimal.ZERO, amount.negate());
         account.setLifetimeOut(account.getLifetimeOut().add(amount));
         accountRepository.save(account);
@@ -263,7 +286,7 @@ public class KioskPayWalletService {
                 KioskPayLedgerEntryTypes.WITHDRAW_SETTLE,
                 KioskPayLedgerEntryTypes.DEBIT,
                 amount,
-                "KES",
+                currency == null || currency.isBlank() ? "KES" : currency,
                 BigDecimal.ZERO,
                 amount.negate(),
                 reference,
@@ -272,11 +295,17 @@ public class KioskPayWalletService {
                 withdrawalId,
                 null,
                 "Withdraw settled");
-        publishBalance(account, "KES", "WITHDRAW_SETTLE");
+        publishBalance(account, currency == null || currency.isBlank() ? "KES" : currency, "WITHDRAW_SETTLE");
     }
 
     @Transactional
-    public void releaseWithdrawHold(KioskPayAccount account, BigDecimal amount, String withdrawalId, String reference) {
+    public void releaseWithdrawHold(
+            KioskPayAccount account,
+            BigDecimal amount,
+            String currency,
+            String withdrawalId,
+            String reference
+    ) {
         applyDelta(account, amount, amount.negate());
         accountRepository.save(account);
         writeEntry(
@@ -284,7 +313,7 @@ public class KioskPayWalletService {
                 KioskPayLedgerEntryTypes.WITHDRAW_RELEASE,
                 KioskPayLedgerEntryTypes.CREDIT,
                 amount,
-                "KES",
+                currency == null || currency.isBlank() ? "KES" : currency,
                 amount,
                 amount.negate(),
                 reference,
@@ -293,7 +322,73 @@ public class KioskPayWalletService {
                 withdrawalId,
                 null,
                 "Withdraw failed — hold released");
-        publishBalance(account, "KES", "WITHDRAW_RELEASE");
+        publishBalance(account, currency == null || currency.isBlank() ? "KES" : currency, "WITHDRAW_RELEASE");
+    }
+
+    /**
+     * Super-admin manual wallet adjustment (reversal / correction). Positive delta
+     * credits available balance; negative debits it (must not go below zero).
+     */
+    @Transactional
+    public KioskPayAccountResponse adjustBalance(String businessId, BigDecimal delta, String note) {
+        if (delta == null || delta.signum() == 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "delta must be a non-zero amount");
+        }
+        if (delta.abs().compareTo(new BigDecimal("100000000")) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "adjustment amount is too large");
+        }
+        PlatformKioskPaySettings settings = platformSettings.loadSingleton();
+        KioskPayAccount account = getOrCreate(businessId);
+        String currency = settings.getCurrency() != null && !settings.getCurrency().isBlank()
+                ? settings.getCurrency()
+                : "KES";
+        applyDelta(account, delta, BigDecimal.ZERO);
+        accountRepository.save(account);
+        writeEntry(
+                account,
+                KioskPayLedgerEntryTypes.ADJUSTMENT,
+                delta.signum() > 0 ? KioskPayLedgerEntryTypes.CREDIT : KioskPayLedgerEntryTypes.DEBIT,
+                delta.abs(),
+                currency,
+                delta,
+                BigDecimal.ZERO,
+                "sa-adjust-" + java.util.UUID.randomUUID(),
+                "SUPER_ADMIN",
+                null,
+                null,
+                null,
+                note != null && note.length() > 512 ? note.substring(0, 512) : note);
+        publishBalance(account, currency, "ADJUSTMENT");
+        return toResponse(account, settings, businessId);
+    }
+
+    /**
+     * Withdraw request path: ensure the row exists, then take a pessimistic lock so
+     * the daily-limit and one-in-flight checks are atomic per business.
+     */
+    @Transactional
+    public KioskPayAccount getOrCreateForUpdate(String businessId) {
+        getOrCreate(businessId);
+        return accountRepository.findByBusinessIdForUpdate(businessId)
+                .orElseGet(() -> getOrCreate(businessId));
+    }
+
+    @Transactional(readOnly = true)
+    public List<KioskPayAccountResponse> listAccountsForSuperAdmin(int limit) {
+        int capped = Math.min(Math.max(limit, 1), 200);
+        PlatformKioskPaySettings settings = platformSettings.loadSingleton();
+        return accountRepository
+                .findAll(org.springframework.data.domain.PageRequest.of(0, capped,
+                        org.springframework.data.domain.Sort.by(
+                                org.springframework.data.domain.Sort.Direction.DESC, "updatedAt")))
+                .stream()
+                .map(a -> toResponse(a, settings, a.getBusinessId()))
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public KioskPayAccountSummary accountSummaryForSuperAdmin() {
+        return accountRepository.summarize();
     }
 
     @Transactional
@@ -371,7 +466,11 @@ public class KioskPayWalletService {
         try {
             ledgerRepository.save(entry);
         } catch (DataIntegrityViolationException e) {
-            // concurrent idempotent write
+            // A duplicate ledger reference means a concurrent duplicate operation
+            // (double credit / settle / release). Let it roll the transaction back so
+            // the balance change above is never persisted without its ledger entry;
+            // callers retry (webhook re-delivery, poller, withdraw reconciler).
+            throw e;
         }
     }
 
@@ -396,6 +495,8 @@ public class KioskPayWalletService {
                     fee,
                     true,
                     settings.isEnabled(),
+                    settings.getMinWithdrawAmount(),
+                    settings.getDailyWithdrawLimit(),
                     null);
         }
         return new KioskPayAccountResponse(
@@ -411,6 +512,8 @@ public class KioskPayWalletService {
                 fee,
                 account.isStorefrontEnabled(),
                 settings.isEnabled(),
+                settings.getMinWithdrawAmount(),
+                settings.getDailyWithdrawLimit(),
                 account.getUpdatedAt());
     }
 

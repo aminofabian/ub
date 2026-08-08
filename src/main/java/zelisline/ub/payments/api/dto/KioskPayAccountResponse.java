@@ -16,6 +16,8 @@ public record KioskPayAccountResponse(
         BigDecimal platformFeePercent,
         boolean storefrontEnabled,
         boolean platformEnabled,
+        BigDecimal minWithdrawAmount,
+        BigDecimal dailyWithdrawLimit,
         Instant updatedAt
 ) {
 }

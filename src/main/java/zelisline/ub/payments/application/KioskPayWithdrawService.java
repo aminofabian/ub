@@ -1,6 +1,7 @@
 package zelisline.ub.payments.application;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -35,6 +36,11 @@ import zelisline.ub.payments.repository.KioskPayWithdrawalRepository;
 public class KioskPayWithdrawService {
 
     private static final Logger log = LoggerFactory.getLogger(KioskPayWithdrawService.class);
+
+    /** REQUESTED with no provider id — fail so a new withdraw can start. */
+    private static final Duration STALE_REQUESTED = Duration.ofSeconds(30);
+    /** PROCESSING without terminal webhook — poll, then expire. */
+    private static final Duration STALE_PROCESSING = Duration.ofMinutes(10);
 
     private final KioskPayWithdrawalRepository withdrawalRepository;
     private final KioskPayWalletService walletService;
@@ -89,10 +95,15 @@ public class KioskPayWithdrawService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Minimum withdraw is " + settings.getMinWithdrawAmount());
         }
+
+        // Clear stuck REQUESTED / abandoned PROCESSING before enforcing one-in-flight.
+        reconcileInFlight(businessId, account, kopokopoCreds);
+
         if (withdrawalRepository.existsByBusinessIdAndStatusIn(
                 businessId,
                 List.of(KioskPayWithdrawalStatuses.REQUESTED, KioskPayWithdrawalStatuses.PROCESSING))) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "A withdrawal is already in progress");
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "A withdrawal is already in progress — wait for M-Pesa to finish, or try again shortly");
         }
 
         Instant dayStart = Instant.now().truncatedTo(ChronoUnit.DAYS);
@@ -138,15 +149,10 @@ public class KioskPayWithdrawService {
                         "purpose", "KIOSK_PAY_WITHDRAW")));
 
         if (!result.accepted() || result.sendMoneyId() == null || result.sendMoneyId().isBlank()) {
-            walletService.releaseWithdrawHold(account, amount, row.getId(), "wd-release-" + row.getId());
-            row.setStatus(KioskPayWithdrawalStatuses.FAILED);
-            row.setFailureReason(result.message() != null
-                    ? result.message()
-                    : "Send Money rejected");
-            row.setCompletedAt(Instant.now());
-            withdrawalRepository.save(row);
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
-                    row.getFailureReason());
+            // Do not throw — ResponseStatusException would roll back FAILED + hold release.
+            markFailed(row, account, amount,
+                    result.message() != null ? result.message() : "Send Money rejected");
+            return toResponse(row);
         }
 
         row.setKopokopoSendMoneyId(result.sendMoneyId());
@@ -174,6 +180,14 @@ public class KioskPayWithdrawService {
         }
         var opt = withdrawalRepository.findByKopokopoSendMoneyId(sendMoneyId);
         if (opt.isEmpty()) {
+            // Also try bare UUID if Location path was stored with a prefix mismatch.
+            String trimmed = sendMoneyId.trim();
+            int slash = trimmed.lastIndexOf('/');
+            if (slash >= 0 && slash < trimmed.length() - 1) {
+                opt = withdrawalRepository.findByKopokopoSendMoneyId(trimmed.substring(slash + 1));
+            }
+        }
+        if (opt.isEmpty()) {
             return false;
         }
         KioskPayWithdrawal row = opt.get();
@@ -192,16 +206,101 @@ public class KioskPayWithdrawService {
             return true;
         }
         if (parsed.terminalFailure()) {
-            walletService.releaseWithdrawHold(account, row.getAmount(), row.getId(), "wd-release-" + row.getId());
-            row.setStatus(KioskPayWithdrawalStatuses.FAILED);
-            row.setFailureReason(parsed.failureMessage() != null
-                    ? parsed.failureMessage()
-                    : "Send Money failed");
-            row.setCompletedAt(Instant.now());
-            withdrawalRepository.save(row);
+            markFailed(row, account, row.getAmount(),
+                    parsed.failureMessage() != null ? parsed.failureMessage() : "Send Money failed");
             return true;
         }
         return true;
+    }
+
+    /**
+     * Poll / expire in-flight withdrawals so a stuck row cannot block the merchant forever.
+     */
+    private void reconcileInFlight(
+            String businessId,
+            KioskPayAccount account,
+            Map<String, String> kopokopoCreds
+    ) {
+        Instant now = Instant.now();
+        List<KioskPayWithdrawal> inflight = withdrawalRepository
+                .findByBusinessIdAndStatusInOrderByCreatedAtAsc(
+                        businessId,
+                        List.of(KioskPayWithdrawalStatuses.REQUESTED, KioskPayWithdrawalStatuses.PROCESSING));
+
+        for (KioskPayWithdrawal row : inflight) {
+            if (KioskPayWithdrawalStatuses.REQUESTED.equals(row.getStatus())) {
+                // Never accepted by provider — safe to release immediately (or after a short grace).
+                Instant started = row.getRequestedAt() != null ? row.getRequestedAt() : row.getCreatedAt();
+                boolean noProviderId = row.getKopokopoSendMoneyId() == null
+                        || row.getKopokopoSendMoneyId().isBlank();
+                if (noProviderId || (started != null && started.isBefore(now.minus(STALE_REQUESTED)))) {
+                    markFailed(row, account, row.getAmount(),
+                            "Withdraw abandoned before provider accepted — funds released");
+                }
+                continue;
+            }
+
+            // PROCESSING
+            String sendMoneyId = row.getKopokopoSendMoneyId();
+            if (sendMoneyId != null && !sendMoneyId.isBlank()) {
+                try {
+                    WebhookResult status = kopokopoPaymentGateway.querySendMoneyStatus(sendMoneyId, kopokopoCreds);
+                    if (status != null && status.success()) {
+                        walletService.settleWithdraw(
+                                account, row.getAmount(), row.getId(), "wd-settle-" + row.getId());
+                        row.setStatus(KioskPayWithdrawalStatuses.SUCCESS);
+                        row.setCompletedAt(Instant.now());
+                        row.setFailureReason(null);
+                        withdrawalRepository.save(row);
+                        continue;
+                    }
+                    if (status != null && status.terminalFailure()) {
+                        markFailed(row, account, row.getAmount(),
+                                status.failureMessage() != null
+                                        ? status.failureMessage()
+                                        : "Send Money failed");
+                        continue;
+                    }
+                } catch (Exception e) {
+                    log.warn("Kiosk Pay Send Money status poll failed id={}: {}", row.getId(), e.getMessage());
+                }
+            }
+
+            Instant processingStarted = row.getProcessingAt() != null
+                    ? row.getProcessingAt()
+                    : row.getRequestedAt();
+            if (processingStarted != null && processingStarted.isBefore(now.minus(STALE_PROCESSING))) {
+                markFailed(row, account, row.getAmount(),
+                        "Withdraw timed out waiting for M-Pesa — funds released; try again");
+            }
+        }
+    }
+
+    private void markFailed(
+            KioskPayWithdrawal row,
+            KioskPayAccount account,
+            BigDecimal amount,
+            String reason
+    ) {
+        if (KioskPayWithdrawalStatuses.SUCCESS.equals(row.getStatus())
+                || KioskPayWithdrawalStatuses.FAILED.equals(row.getStatus())) {
+            return;
+        }
+        boolean held = KioskPayWithdrawalStatuses.REQUESTED.equals(row.getStatus())
+                || KioskPayWithdrawalStatuses.PROCESSING.equals(row.getStatus());
+        if (held) {
+            try {
+                walletService.releaseWithdrawHold(
+                        account, amount, row.getId(), "wd-release-" + row.getId());
+            } catch (Exception e) {
+                log.error("Kiosk Pay release hold failed for withdrawal={}", row.getId(), e);
+            }
+        }
+        row.setStatus(KioskPayWithdrawalStatuses.FAILED);
+        row.setFailureReason(reason != null && reason.length() > 500 ? reason.substring(0, 500) : reason);
+        row.setCompletedAt(Instant.now());
+        withdrawalRepository.save(row);
+        log.info("Kiosk Pay withdraw failed: id={} reason={}", row.getId(), reason);
     }
 
     private KioskPayWithdrawalResponse toResponse(KioskPayWithdrawal w) {

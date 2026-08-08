@@ -22,6 +22,9 @@ public interface KioskPayWithdrawalRepository extends JpaRepository<KioskPayWith
 
     List<KioskPayWithdrawal> findByStatusOrderByCreatedAtAsc(String status, Pageable pageable);
 
+    List<KioskPayWithdrawal> findByBusinessIdAndStatusInOrderByCreatedAtAsc(
+            String businessId, List<String> statuses);
+
     boolean existsByBusinessIdAndStatusIn(String businessId, List<String> statuses);
 
     @Query("""

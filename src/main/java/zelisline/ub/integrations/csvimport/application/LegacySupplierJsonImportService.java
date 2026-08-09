@@ -90,6 +90,9 @@ public class LegacySupplierJsonImportService {
                 r.paymentMethodPreferred(),
                 r.paymentDetails(),
                 null,
+                null,
+                null,
+                null,
                 null);
     }
 

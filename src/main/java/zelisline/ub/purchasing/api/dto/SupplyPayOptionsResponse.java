@@ -9,8 +9,16 @@ public record SupplyPayOptionsResponse(
         /** Selected gateway is active and allowed for supplier payouts. */
         boolean supplierPayoutGatewayReady,
         String supplierPayoutGatewayLabel,
+        /**
+         * Supplier has an automated KopoKopo destination configured
+         * (mobile_wallet, till, or paybill).
+         */
         boolean supplierMobilePayoutConfigured,
+        String payoutType,
         String payoutPhone,
+        String payoutTillNumber,
+        String payoutPaybillNumber,
+        String payoutPaybillAccount,
         boolean kopokopoPayEligible,
         boolean pendingDisbursement,
         String pendingDisbursementId

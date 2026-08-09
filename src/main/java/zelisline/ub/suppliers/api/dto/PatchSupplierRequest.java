@@ -18,6 +18,9 @@ public record PatchSupplierRequest(
         @Size(max = 2000) String paymentDetails,
         @Size(max = 32) String payoutType,
         @Size(max = 32) String payoutPhone,
+        @Size(max = 32) String payoutTillNumber,
+        @Size(max = 32) String payoutPaybillNumber,
+        @Size(max = 64) String payoutPaybillAccount,
         @Size(max = 512) String kopokopoExternalRecipientUrl
 ) {
 }

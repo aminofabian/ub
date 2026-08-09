@@ -82,12 +82,10 @@ public class SupplierDisbursementService {
         Optional<PaymentGatewayConfig> payoutGateway = supplierPayoutSettingsService.resolveActivePayoutConfig(businessId);
         boolean supplierPayoutEnabled = supplierPayoutSettingsService.isSupplierPayoutToggleEnabled(businessId);
         boolean gatewayReady = payoutGateway.isPresent();
-        boolean mobilePayout = supplier != null
-                && SupplierPayoutTypes.MOBILE_WALLET.equals(supplier.getPayoutType())
-                && supplier.getPayoutPhone() != null
-                && !supplier.getPayoutPhone().isBlank()
-                && supplier.getDeletedAt() == null;
-        boolean kopokopoEligible = gatewayReady && mobilePayout && open.compareTo(MONEY) > 0;
+        boolean destinationConfigured = supplier != null
+                && supplier.getDeletedAt() == null
+                && hasAutomatedPayoutDestination(supplier);
+        boolean kopokopoEligible = gatewayReady && destinationConfigured && open.compareTo(MONEY) > 0;
 
         Optional<SupplierDisbursement> pending = findPendingDisbursement(businessId, invoiceId);
 
@@ -96,8 +94,12 @@ public class SupplierDisbursementService {
                 supplierPayoutEnabled,
                 gatewayReady,
                 payoutGateway.map(PaymentGatewayConfig::getLabel).orElse(null),
-                mobilePayout,
-                mobilePayout ? supplier.getPayoutPhone() : null,
+                destinationConfigured,
+                destinationConfigured && supplier != null ? supplier.getPayoutType() : null,
+                destinationConfigured && supplier != null ? supplier.getPayoutPhone() : null,
+                destinationConfigured && supplier != null ? supplier.getPayoutTillNumber() : null,
+                destinationConfigured && supplier != null ? supplier.getPayoutPaybillNumber() : null,
+                destinationConfigured && supplier != null ? supplier.getPayoutPaybillAccount() : null,
                 kopokopoEligible,
                 pending.isPresent(),
                 pending.map(SupplierDisbursement::getId).orElse(null));
@@ -142,14 +144,10 @@ public class SupplierDisbursementService {
         Supplier supplier = supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(inv.getSupplierId(), businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
 
-        if (!SupplierPayoutTypes.MOBILE_WALLET.equals(supplier.getPayoutType())) {
+        if (!hasAutomatedPayoutDestination(supplier)) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "Supplier payout type must be mobile_wallet for KopoKopo Send Money");
-        }
-        String phone = supplier.getPayoutPhone();
-        if (phone == null || phone.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Supplier payout phone is required");
+                    "Supplier needs a KopoKopo payout destination (M-Pesa phone, till, or paybill)");
         }
 
         PaymentGatewayConfig cfg = supplierPayoutSettingsService.resolveActivePayoutConfig(businessId)
@@ -169,13 +167,13 @@ public class SupplierDisbursementService {
         metadata.put("supplierId", inv.getSupplierId());
         metadata.put("businessId", businessId);
         metadata.put("reference", inv.getInvoiceNumber());
+        metadata.put("payoutType", supplier.getPayoutType());
 
-        SendMoneyRequest request = new SendMoneyRequest(
+        SendMoneyRequest request = buildSendMoneyRequest(
+                supplier,
                 creds,
                 publicApiBaseUrl.replaceAll("/+$", ""),
-                phone,
                 open,
-                "KES",
                 "Supply " + inv.getInvoiceNumber(),
                 till,
                 metadata);
@@ -204,15 +202,15 @@ public class SupplierDisbursementService {
         }
         disbursementRepository.save(row);
 
-        log.info("Supplier disbursement pending: id={} invoice={} kopokopoId={}",
-                row.getId(), invoiceId, result.sendMoneyId());
+        log.info("Supplier disbursement pending: id={} invoice={} kopokopoId={} payoutType={}",
+                row.getId(), invoiceId, result.sendMoneyId(), supplier.getPayoutType());
 
         return new SupplyKopokopoPayResponse(
                 true,
                 row.getId(),
                 result.sendMoneyId(),
                 SupplierDisbursementStatuses.PENDING,
-                "M-Pesa payment sent — waiting for KopoKopo confirmation");
+                "Payment sent — waiting for KopoKopo confirmation");
     }
 
     @Transactional
@@ -395,7 +393,85 @@ public class SupplierDisbursementService {
                 && !"Error".equalsIgnoreCase(detail)) {
             return "KopoKopo declined: " + detail.trim();
         }
-        return "Payment declined by KopoKopo. Check till balance, Send Money permissions, and the payout phone in your KopoKopo dashboard.";
+        return "Payment declined by KopoKopo. Check till balance, Send Money permissions, and the payout destination in your KopoKopo dashboard.";
+    }
+
+    static boolean hasAutomatedPayoutDestination(Supplier supplier) {
+        if (supplier == null || !SupplierPayoutTypes.isAutomated(supplier.getPayoutType())) {
+            return false;
+        }
+        String type = supplier.getPayoutType();
+        if (SupplierPayoutTypes.MOBILE_WALLET.equals(type)) {
+            return supplier.getPayoutPhone() != null && !supplier.getPayoutPhone().isBlank();
+        }
+        if (SupplierPayoutTypes.TILL.equals(type)) {
+            return supplier.getPayoutTillNumber() != null && !supplier.getPayoutTillNumber().isBlank();
+        }
+        if (SupplierPayoutTypes.PAYBILL.equals(type)) {
+            return supplier.getPayoutPaybillNumber() != null && !supplier.getPayoutPaybillNumber().isBlank()
+                    && supplier.getPayoutPaybillAccount() != null && !supplier.getPayoutPaybillAccount().isBlank();
+        }
+        return false;
+    }
+
+    private static SendMoneyRequest buildSendMoneyRequest(
+            Supplier supplier,
+            Map<String, String> creds,
+            String callbackBase,
+            BigDecimal amount,
+            String description,
+            String sourceIdentifier,
+            Map<String, String> metadata
+    ) {
+        String type = supplier.getPayoutType();
+        if (SupplierPayoutTypes.MOBILE_WALLET.equals(type)) {
+            return new SendMoneyRequest(
+                    creds,
+                    callbackBase,
+                    SendMoneyRequest.DEST_MOBILE_WALLET,
+                    supplier.getPayoutPhone(),
+                    null,
+                    null,
+                    null,
+                    amount,
+                    "KES",
+                    description,
+                    sourceIdentifier,
+                    metadata);
+        }
+        if (SupplierPayoutTypes.TILL.equals(type)) {
+            return new SendMoneyRequest(
+                    creds,
+                    callbackBase,
+                    SendMoneyRequest.DEST_TILL,
+                    null,
+                    supplier.getPayoutTillNumber(),
+                    null,
+                    null,
+                    amount,
+                    "KES",
+                    description,
+                    sourceIdentifier,
+                    metadata);
+        }
+        if (SupplierPayoutTypes.PAYBILL.equals(type)) {
+            return new SendMoneyRequest(
+                    creds,
+                    callbackBase,
+                    SendMoneyRequest.DEST_PAYBILL,
+                    null,
+                    null,
+                    supplier.getPayoutPaybillNumber(),
+                    supplier.getPayoutPaybillAccount(),
+                    amount,
+                    "KES",
+                    description,
+                    sourceIdentifier,
+                    metadata);
+        }
+        throw new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Unsupported supplier payout type: " + type);
     }
 
     private static String truncate(String raw, int max) {

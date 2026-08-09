@@ -157,7 +157,8 @@ public class KopokopoPaymentGateway implements PaymentGateway {
     // ── Send Money (supplier disbursement) ───────────────────────────
 
     /**
-     * Disburse funds to a supplier M-Pesa wallet via KopoKopo Send Money API.
+     * Disburse funds via KopoKopo Send Money to an external recipient
+     * (mobile wallet, till, or paybill).
      */
     public SendMoneyResult sendMoney(SendMoneyRequest request) {
         Map<String, String> creds = request.credentials();
@@ -165,21 +166,20 @@ public class KopokopoPaymentGateway implements PaymentGateway {
         String apiBase = resolveApiBaseUrl(creds);
         String accessToken = obtainAccessToken(creds, authBase);
 
-        String phone = request.phoneNumber();
-        if (phone == null || phone.isBlank()) {
-            return SendMoneyResult.rejected("MISSING_PHONE", "phoneNumber is required");
-        }
-        phone = phone.replaceAll("[^0-9]", "");
-        if (phone.startsWith("0")) {
-            phone = "254" + phone.substring(1);
-        }
-        if (!phone.startsWith("254")) {
-            phone = "254" + phone;
-        }
-
         BigDecimal amount = request.amount().setScale(0, RoundingMode.HALF_UP);
         if (amount.signum() <= 0) {
             return SendMoneyResult.rejected("INVALID_AMOUNT", "amount must be positive");
+        }
+
+        String destType = request.destinationType() != null && !request.destinationType().isBlank()
+                ? request.destinationType().trim().toLowerCase()
+                : SendMoneyRequest.DEST_MOBILE_WALLET;
+
+        Map<String, Object> destination;
+        try {
+            destination = buildSendMoneyDestination(destType, request, amount);
+        } catch (IllegalArgumentException e) {
+            return SendMoneyResult.rejected("INVALID_DESTINATION", e.getMessage());
         }
 
         String till = request.sourceIdentifier();
@@ -194,13 +194,6 @@ public class KopokopoPaymentGateway implements PaymentGateway {
                 till = null;
             }
         }
-
-        Map<String, Object> destination = new java.util.LinkedHashMap<>();
-        destination.put("type", "mobile_wallet");
-        destination.put("phone_number", phone);
-        destination.put("network", "Safaricom");
-        destination.put("amount", amount.intValue());
-        destination.put("description", request.description() != null ? request.description() : "Supplier payment");
 
         Map<String, Object> body = new java.util.LinkedHashMap<>();
         body.put("destinations", List.of(destination));
@@ -227,7 +220,7 @@ public class KopokopoPaymentGateway implements PaymentGateway {
             if (response.getStatus() == 201) {
                 String location = response.getHeaders().getFirst("Location");
                 String paymentId = extractIdFromLocation(location);
-                log.info("KopoKopo Send Money initiated: id={}", paymentId);
+                log.info("KopoKopo Send Money initiated: id={} destType={}", paymentId, destType);
                 return SendMoneyResult.accepted(paymentId);
             }
 
@@ -238,6 +231,73 @@ public class KopokopoPaymentGateway implements PaymentGateway {
             log.error("KopoKopo Send Money failed", e);
             return SendMoneyResult.rejected("NETWORK_ERROR", e.getMessage());
         }
+    }
+
+    private static Map<String, Object> buildSendMoneyDestination(
+            String destType,
+            SendMoneyRequest request,
+            BigDecimal amount
+    ) {
+        Map<String, Object> destination = new java.util.LinkedHashMap<>();
+        destination.put("amount", amount.intValue());
+        destination.put(
+                "description",
+                request.description() != null ? request.description() : "Supplier payment");
+
+        if (SendMoneyRequest.DEST_MOBILE_WALLET.equals(destType)) {
+            String phone = request.phoneNumber();
+            if (phone == null || phone.isBlank()) {
+                throw new IllegalArgumentException("phoneNumber is required for mobile_wallet");
+            }
+            phone = phone.replaceAll("[^0-9]", "");
+            if (phone.startsWith("0")) {
+                phone = "254" + phone.substring(1);
+            }
+            if (!phone.startsWith("254")) {
+                phone = "254" + phone;
+            }
+            destination.put("type", SendMoneyRequest.DEST_MOBILE_WALLET);
+            destination.put("phone_number", phone);
+            destination.put("network", "Safaricom");
+            return destination;
+        }
+
+        if (SendMoneyRequest.DEST_TILL.equals(destType)) {
+            String tillNumber = digitsOnly(request.tillNumber());
+            if (tillNumber == null) {
+                throw new IllegalArgumentException("tillNumber is required for till destination");
+            }
+            destination.put("type", SendMoneyRequest.DEST_TILL);
+            destination.put("till_number", tillNumber);
+            return destination;
+        }
+
+        if (SendMoneyRequest.DEST_PAYBILL.equals(destType)) {
+            String paybill = digitsOnly(request.paybillNumber());
+            String account = request.paybillAccountNumber() != null
+                    ? request.paybillAccountNumber().trim()
+                    : null;
+            if (paybill == null) {
+                throw new IllegalArgumentException("paybillNumber is required for paybill destination");
+            }
+            if (account == null || account.isBlank()) {
+                throw new IllegalArgumentException("paybillAccountNumber is required for paybill destination");
+            }
+            destination.put("type", SendMoneyRequest.DEST_PAYBILL);
+            destination.put("paybill_number", paybill);
+            destination.put("paybill_account_number", account);
+            return destination;
+        }
+
+        throw new IllegalArgumentException("Unsupported Send Money destination type: " + destType);
+    }
+
+    private static String digitsOnly(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String digits = raw.replaceAll("[^0-9]", "");
+        return digits.isBlank() ? null : digits;
     }
 
     // ── Status Query ─────────────────────────────────────────────────

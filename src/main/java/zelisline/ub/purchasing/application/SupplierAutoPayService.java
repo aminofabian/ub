@@ -26,7 +26,6 @@ import zelisline.ub.purchasing.repository.SupplierDisbursementRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
 import zelisline.ub.purchasing.repository.SupplierPaymentAllocationRepository;
 import zelisline.ub.suppliers.domain.Supplier;
-import zelisline.ub.suppliers.domain.SupplierPayoutTypes;
 import zelisline.ub.suppliers.repository.SupplierRepository;
 
 /**
@@ -150,9 +149,7 @@ public class SupplierAutoPayService {
             Supplier supplier = suppliersById.get(inv.getSupplierId());
             if (supplier == null
                     || supplier.getDeletedAt() != null
-                    || !SupplierPayoutTypes.MOBILE_WALLET.equals(supplier.getPayoutType())
-                    || supplier.getPayoutPhone() == null
-                    || supplier.getPayoutPhone().isBlank()) {
+                    || !SupplierDisbursementService.hasAutomatedPayoutDestination(supplier)) {
                 skipped++;
                 continue;
             }

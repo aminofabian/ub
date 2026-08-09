@@ -154,7 +154,7 @@ public class KioskPayWithdrawService {
         String till = firstNonBlank(kopokopoCreds, "tillNumber", "shortcode");
 
         String callbackBase = publicApiBaseUrl == null ? "" : publicApiBaseUrl.replaceAll("/$", "");
-        SendMoneyResult result = kopokopoPaymentGateway.sendMoney(new SendMoneyRequest(
+        SendMoneyResult result = kopokopoPaymentGateway.sendMoney(SendMoneyRequest.toMobileWallet(
                 kopokopoCreds,
                 callbackBase,
                 normalizedPhone,

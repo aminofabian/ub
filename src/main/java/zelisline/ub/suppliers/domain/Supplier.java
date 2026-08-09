@@ -63,13 +63,25 @@ public class Supplier {
     @Column(name = "payment_details", columnDefinition = "TEXT")
     private String paymentDetails;
 
-    /** {@link SupplierPayoutTypes}: manual, mobile_wallet, … */
+    /** {@link SupplierPayoutTypes}: manual, mobile_wallet, till, paybill. */
     @Column(name = "payout_type", nullable = false, length = 32)
     private String payoutType = SupplierPayoutTypes.MANUAL;
 
     /** Normalized MSISDN (254…) for KopoKopo Send Money mobile_wallet. */
     @Column(name = "payout_phone", length = 32)
     private String payoutPhone;
+
+    /** Buy Goods till for KopoKopo Send Money {@code type: till}. */
+    @Column(name = "payout_till_number", length = 32)
+    private String payoutTillNumber;
+
+    /** Paybill shortcode for KopoKopo Send Money {@code type: paybill}. */
+    @Column(name = "payout_paybill_number", length = 32)
+    private String payoutPaybillNumber;
+
+    /** Paybill account / reference for KopoKopo Send Money {@code type: paybill}. */
+    @Column(name = "payout_paybill_account", length = 64)
+    private String payoutPaybillAccount;
 
     @Column(name = "kopokopo_external_recipient_url", length = 512)
     private String kopokopoExternalRecipientUrl;

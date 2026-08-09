@@ -106,7 +106,14 @@ public class SupplierService {
         s.setNotes(blankToNull(request.notes()));
         s.setPaymentMethodPreferred(blankToNull(request.paymentMethodPreferred()));
         s.setPaymentDetails(blankToNull(request.paymentDetails()));
-        applyPayoutFields(s, request.payoutType(), request.payoutPhone(), null);
+        applyPayoutFields(
+                s,
+                request.payoutType(),
+                request.payoutPhone(),
+                request.payoutTillNumber(),
+                request.payoutPaybillNumber(),
+                request.payoutPaybillAccount(),
+                null);
         if (s.getPayoutPhone() != null) {
             contactUniquenessService.assertPhoneAvailable(businessId, s.getPayoutPhone(), null);
         }
@@ -196,11 +203,19 @@ public class SupplierService {
         if (patch.paymentDetails() != null) {
             s.setPaymentDetails(blankToNull(patch.paymentDetails()));
         }
-        if (patch.payoutType() != null || patch.payoutPhone() != null || patch.kopokopoExternalRecipientUrl() != null) {
+        if (patch.payoutType() != null
+                || patch.payoutPhone() != null
+                || patch.payoutTillNumber() != null
+                || patch.payoutPaybillNumber() != null
+                || patch.payoutPaybillAccount() != null
+                || patch.kopokopoExternalRecipientUrl() != null) {
             applyPayoutFields(
                     s,
                     patch.payoutType(),
                     patch.payoutPhone(),
+                    patch.payoutTillNumber(),
+                    patch.payoutPaybillNumber(),
+                    patch.payoutPaybillAccount(),
                     patch.kopokopoExternalRecipientUrl());
             if (patch.payoutPhone() != null && s.getPayoutPhone() != null) {
                 contactUniquenessService.assertPhoneAvailable(businessId, s.getPayoutPhone(), supplierId);
@@ -438,6 +453,9 @@ public class SupplierService {
             Supplier s,
             String payoutType,
             String payoutPhone,
+            String payoutTillNumber,
+            String payoutPaybillNumber,
+            String payoutPaybillAccount,
             String kopokopoRecipientUrl
     ) {
         if (payoutType != null) {
@@ -446,10 +464,10 @@ public class SupplierService {
                 s.setPayoutType(SupplierPayoutTypes.MANUAL);
             } else {
                 String norm = t.toLowerCase();
-                if (!SupplierPayoutTypes.MANUAL.equals(norm) && !SupplierPayoutTypes.MOBILE_WALLET.equals(norm)) {
+                if (!SupplierPayoutTypes.isValid(norm)) {
                     throw new ResponseStatusException(
                             HttpStatus.BAD_REQUEST,
-                            "payoutType must be manual or mobile_wallet");
+                            "payoutType must be manual, mobile_wallet, till, or paybill");
                 }
                 s.setPayoutType(norm);
             }
@@ -466,9 +484,66 @@ public class SupplierService {
                 s.setPayoutPhone(normalized);
             }
         }
+        if (payoutTillNumber != null) {
+            s.setPayoutTillNumber(normalizeShortcode(payoutTillNumber, "payoutTillNumber"));
+        }
+        if (payoutPaybillNumber != null) {
+            s.setPayoutPaybillNumber(normalizeShortcode(payoutPaybillNumber, "payoutPaybillNumber"));
+        }
+        if (payoutPaybillAccount != null) {
+            String account = blankToNull(payoutPaybillAccount);
+            s.setPayoutPaybillAccount(account);
+        }
         if (kopokopoRecipientUrl != null) {
             s.setKopokopoExternalRecipientUrl(blankToNull(kopokopoRecipientUrl));
         }
+
+        // Clear destination fields that don't apply to the active type.
+        String type = s.getPayoutType() != null ? s.getPayoutType() : SupplierPayoutTypes.MANUAL;
+        if (SupplierPayoutTypes.MANUAL.equals(type)) {
+            s.setPayoutPhone(null);
+            s.setPayoutTillNumber(null);
+            s.setPayoutPaybillNumber(null);
+            s.setPayoutPaybillAccount(null);
+        } else if (SupplierPayoutTypes.MOBILE_WALLET.equals(type)) {
+            s.setPayoutTillNumber(null);
+            s.setPayoutPaybillNumber(null);
+            s.setPayoutPaybillAccount(null);
+            if (s.getPayoutPhone() == null || s.getPayoutPhone().isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "payoutPhone is required for mobile_wallet");
+            }
+        } else if (SupplierPayoutTypes.TILL.equals(type)) {
+            s.setPayoutPhone(null);
+            s.setPayoutPaybillNumber(null);
+            s.setPayoutPaybillAccount(null);
+            if (s.getPayoutTillNumber() == null || s.getPayoutTillNumber().isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "payoutTillNumber is required for till");
+            }
+        } else if (SupplierPayoutTypes.PAYBILL.equals(type)) {
+            s.setPayoutPhone(null);
+            s.setPayoutTillNumber(null);
+            if (s.getPayoutPaybillNumber() == null || s.getPayoutPaybillNumber().isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "payoutPaybillNumber is required for paybill");
+            }
+            if (s.getPayoutPaybillAccount() == null || s.getPayoutPaybillAccount().isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "payoutPaybillAccount is required for paybill");
+            }
+        }
+    }
+
+    /** Digits-only shortcode (till / paybill). Accepts common spaces and dashes. */
+    private static String normalizeShortcode(String raw, String fieldLabel) {
+        String trimmed = blankToNull(raw);
+        if (trimmed == null) {
+            return null;
+        }
+        String digits = trimmed.replaceAll("[^0-9]", "");
+        if (digits.isBlank() || digits.length() < 5 || digits.length() > 12) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    fieldLabel + " must be a 5–12 digit shortcode");
+        }
+        return digits;
     }
 
     private SupplierResponse toResponse(Supplier s) {
@@ -495,6 +570,9 @@ public class SupplierService {
                 s.getPaymentDetails(),
                 s.getPayoutType(),
                 s.getPayoutPhone(),
+                s.getPayoutTillNumber(),
+                s.getPayoutPaybillNumber(),
+                s.getPayoutPaybillAccount(),
                 s.getKopokopoExternalRecipientUrl(),
                 s.getMarketplaceSupplierId(),
                 supplierNumber,
@@ -545,6 +623,9 @@ public class SupplierService {
         snapshot.put("paymentDetails", s.getPaymentDetails());
         snapshot.put("payoutType", s.getPayoutType());
         snapshot.put("payoutPhone", s.getPayoutPhone());
+        snapshot.put("payoutTillNumber", s.getPayoutTillNumber());
+        snapshot.put("payoutPaybillNumber", s.getPayoutPaybillNumber());
+        snapshot.put("payoutPaybillAccount", s.getPayoutPaybillAccount());
         snapshot.put("kopokopoExternalRecipientUrl", s.getKopokopoExternalRecipientUrl());
         return snapshot;
     }

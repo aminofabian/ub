@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,8 +37,10 @@ import zelisline.ub.sales.repository.ShiftRepository;
  * records {@link #CONFIDENCE_INFERRED} mixes (fewest-notes decomposition); Phase 2 replaces
  * them with confirmed note mixes sent from the POS.
  *
- * <p>All records are idempotent per (shift, reference, event, denomination) so lazy backfill
- * and offline replay can never double-count.
+ * <p>Entity-linked movements ({@code OPENING}, {@code SALE_RECEIVED}, {@code DRAWOUT}, …) are
+ * idempotent per (shift, reference, event, denomination) so lazy backfill and offline replay
+ * cannot double-count. Repeatable mutations ({@code OPENING_ADJUSTMENT}, {@code SALE_ADJUST})
+ * mint a fresh {@code reference_id} per call so a second edit is never silently dropped.
  */
 @Service
 @RequiredArgsConstructor
@@ -214,33 +217,51 @@ public class CashDrawerLedgerService {
 
     /**
      * Adjusts the ledger for an opening-float edit ({@code PATCH /shifts/{id}/opening}).
-     * When new denomination counts were provided, per-denomination deltas against the
-     * current projection are recorded (CONFIRMED); otherwise the money delta is
-     * decomposed (INFERRED). Skipped entirely for pre-ledger shifts — the backfill seed
-     * reads the already-corrected opening.
+     * When new denomination counts were provided, per-denomination deltas are against the
+     * <em>opening float projection only</em> ({@code OPENING} + prior {@code OPENING_ADJUSTMENT}),
+     * never the live drawer (which includes sales/drawouts). Otherwise the money delta is
+     * decomposed (INFERRED). Each call mints a fresh adjustment id so repeat edits apply.
+     * Skipped entirely for pre-ledger shifts — the backfill seed reads the already-corrected opening.
      */
     public void recordOpeningAdjustment(String shiftId, List<DenominationEntry> newOpeningDenoms,
                                         BigDecimal openingDelta, String performedBy, String metadata) {
         if (!movementRepository.existsByShiftIdAndEventType(shiftId, EVENT_OPENING)) {
             return;
         }
+        // Unique per mutation — do not reuse shiftId (uq_cdm_replay would drop a second edit).
+        String adjustmentId = UUID.randomUUID().toString();
         if (newOpeningDenoms != null) {
-            Map<Integer, Integer> current = expectedQuantities(shiftId);
+            Map<Integer, Integer> openingFloat = openingFloatQuantities(shiftId);
             Map<Integer, Integer> next = new HashMap<>();
             for (DenominationEntry e : newOpeningDenoms) {
                 next.put(e.denomination(), e.quantity());
             }
             for (int denom : SalesConstants.KES_DENOMINATIONS) {
-                int delta = next.getOrDefault(denom, 0) - current.getOrDefault(denom, 0);
+                int delta = next.getOrDefault(denom, 0) - openingFloat.getOrDefault(denom, 0);
                 if (delta != 0) {
-                    record(shiftId, EVENT_OPENING_ADJUSTMENT, REF_SHIFT, shiftId, denom,
+                    record(shiftId, EVENT_OPENING_ADJUSTMENT, REF_ADJUSTMENT, adjustmentId, denom,
                             ShiftService.determineDenominationType(denom), delta, CONFIDENCE_CONFIRMED, performedBy, metadata);
                 }
             }
         } else if (openingDelta != null && openingDelta.abs().compareTo(MONEY_TOLERANCE) >= 0) {
-            recordAmount(shiftId, EVENT_OPENING_ADJUSTMENT, REF_SHIFT, shiftId,
+            recordAmount(shiftId, EVENT_OPENING_ADJUSTMENT, REF_ADJUSTMENT, adjustmentId,
                     openingDelta, CONFIDENCE_INFERRED, performedBy, metadata);
         }
+    }
+
+    /**
+     * Opening float only: sums {@code OPENING} + {@code OPENING_ADJUSTMENT} movements.
+     * Used when correcting the opening count so mid-shift sales/drawouts are not cancelled.
+     */
+    public Map<Integer, Integer> openingFloatQuantities(String shiftId) {
+        Map<Integer, Integer> qty = new HashMap<>();
+        for (CashDrawerMovement m : movementRepository.findByShiftIdOrderByCreatedAtAsc(shiftId)) {
+            String event = m.getEventType();
+            if (EVENT_OPENING.equals(event) || EVENT_OPENING_ADJUSTMENT.equals(event)) {
+                qty.merge(m.getDenomination(), m.getQuantityDelta(), Integer::sum);
+            }
+        }
+        return qty;
     }
 
     // ========================================================================

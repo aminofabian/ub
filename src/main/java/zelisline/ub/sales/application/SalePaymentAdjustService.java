@@ -261,10 +261,13 @@ public class SalePaymentAdjustService {
         shiftRepository.save(shift);
 
         // Keep the per-denomination ledger aligned with the cash delta of the tender change.
+        // Fresh reference_id per adjust — reusing saleId would make a second SALE_ADJUST a no-op
+        // under uq_cdm_replay while expected_closing_cash still moves.
         cashDrawerLedgerService.recordAmount(
                 shift.getId(), CashDrawerLedgerService.EVENT_SALE_ADJUST,
-                CashDrawerLedgerService.REF_SALE, sale.getId(),
-                cashDelta, CashDrawerLedgerService.CONFIDENCE_INFERRED, userId, null);
+                CashDrawerLedgerService.REF_ADJUSTMENT, java.util.UUID.randomUUID().toString(),
+                cashDelta, CashDrawerLedgerService.CONFIDENCE_INFERRED, userId,
+                "{\"saleId\":\"" + sale.getId() + "\"}");
     }
 
     private void assertMpesaReceiptAmountMatches(String businessId, String receipt, BigDecimal paymentAmount) {

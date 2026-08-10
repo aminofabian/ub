@@ -34,6 +34,7 @@ import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.platform.security.TestAuthenticationFilter;
 import zelisline.ub.sales.SalesConstants;
+import zelisline.ub.sales.api.dto.DenominationEntry;
 import zelisline.ub.sales.application.CashDrawerLedgerService;
 import zelisline.ub.sales.domain.CashDrawout;
 import zelisline.ub.sales.domain.Sale;
@@ -389,5 +390,104 @@ class CashDrawerLedgerIT {
         assertThat(balances.get("consistent").asBoolean()).isTrue();
         assertThat(balances.get("expectedClosingCash").decimalValue()).isEqualByComparingTo("8000.00");
         assertThat(qty(balances, 1000)).isEqualTo(5);
+    }
+
+    @Test
+    void openingAdjustment_afterSale_doesNotCancelSaleMix() throws Exception {
+        String shiftId = openShiftWithDenominations();
+
+        // Cash sale: 700 total, customer hands 1,000 → +1×1000, change −1×200 −1×100
+        String saleId = java.util.UUID.randomUUID().toString();
+        ledgerService.recordSale(shiftId, saleId, new BigDecimal("1000.00"), new BigDecimal("700.00"),
+                new BigDecimal("700.00"), cashier.getId());
+        Shift afterSale = shiftRepository.findById(shiftId).orElseThrow();
+        afterSale.setExpectedClosingCash(new BigDecimal("8700.00"));
+        shiftRepository.save(afterSale);
+
+        // Correct opening from 8,000 → 9,000 (+1 × 1000). Must not erase the sale movements.
+        ledgerService.recordOpeningAdjustment(shiftId, List.of(
+                new DenominationEntry(1000, "NOTE", 6),
+                new DenominationEntry(500, "NOTE", 2),
+                new DenominationEntry(200, "NOTE", 5),
+                new DenominationEntry(100, "NOTE", 10)
+        ), new BigDecimal("1000.00"), cashier.getId(), "{\"reason\":\"missed note\"}");
+        Shift afterOpen = shiftRepository.findById(shiftId).orElseThrow();
+        afterOpen.setOpeningCash(new BigDecimal("9000.00"));
+        afterOpen.setExpectedClosingCash(new BigDecimal("9700.00"));
+        shiftRepository.save(afterOpen);
+
+        JsonNode balances = fetchBalances(shiftId);
+        assertThat(balances.get("consistent").asBoolean()).isTrue();
+        assertThat(balances.get("ledgerTotal").decimalValue()).isEqualByComparingTo("9700.00");
+        // Opening now 6×1000; sale still +1×1000 → 7; change still −1×200 −1×100
+        assertThat(qty(balances, 1000)).isEqualTo(7);
+        assertThat(qty(balances, 500)).isEqualTo(2);
+        assertThat(qty(balances, 200)).isEqualTo(4);
+        assertThat(qty(balances, 100)).isEqualTo(9);
+    }
+
+    @Test
+    void openingAdjustment_twice_bothApply() throws Exception {
+        String shiftId = openShiftWithDenominations();
+
+        ledgerService.recordOpeningAdjustment(shiftId, List.of(
+                new DenominationEntry(1000, "NOTE", 6),
+                new DenominationEntry(500, "NOTE", 2),
+                new DenominationEntry(200, "NOTE", 5),
+                new DenominationEntry(100, "NOTE", 10)
+        ), new BigDecimal("1000.00"), cashier.getId(), null);
+        Shift s1 = shiftRepository.findById(shiftId).orElseThrow();
+        s1.setOpeningCash(new BigDecimal("9000.00"));
+        s1.setExpectedClosingCash(new BigDecimal("9000.00"));
+        shiftRepository.save(s1);
+
+        ledgerService.recordOpeningAdjustment(shiftId, List.of(
+                new DenominationEntry(1000, "NOTE", 7),
+                new DenominationEntry(500, "NOTE", 2),
+                new DenominationEntry(200, "NOTE", 5),
+                new DenominationEntry(100, "NOTE", 10)
+        ), new BigDecimal("1000.00"), cashier.getId(), null);
+        Shift s2 = shiftRepository.findById(shiftId).orElseThrow();
+        s2.setOpeningCash(new BigDecimal("10000.00"));
+        s2.setExpectedClosingCash(new BigDecimal("10000.00"));
+        shiftRepository.save(s2);
+
+        JsonNode balances = fetchBalances(shiftId);
+        assertThat(balances.get("consistent").asBoolean()).isTrue();
+        assertThat(qty(balances, 1000)).isEqualTo(7);
+        assertThat(movementRepository.findByShiftIdOrderByCreatedAtAsc(shiftId).stream()
+                .filter(m -> CashDrawerLedgerService.EVENT_OPENING_ADJUSTMENT.equals(m.getEventType()))
+                .count()).isEqualTo(2);
+    }
+
+    @Test
+    void saleAdjust_twiceOnSameSale_bothApply() throws Exception {
+        String shiftId = openShiftWithDenominations();
+        String saleId = java.util.UUID.randomUUID().toString();
+
+        // First adjust: cash portion +500
+        ledgerService.recordAmount(shiftId, CashDrawerLedgerService.EVENT_SALE_ADJUST,
+                CashDrawerLedgerService.REF_ADJUSTMENT, java.util.UUID.randomUUID().toString(),
+                new BigDecimal("500.00"), CashDrawerLedgerService.CONFIDENCE_INFERRED, cashier.getId(),
+                "{\"saleId\":\"" + saleId + "\"}");
+        // Second adjust on the same sale: cash portion −200
+        ledgerService.recordAmount(shiftId, CashDrawerLedgerService.EVENT_SALE_ADJUST,
+                CashDrawerLedgerService.REF_ADJUSTMENT, java.util.UUID.randomUUID().toString(),
+                new BigDecimal("-200.00"), CashDrawerLedgerService.CONFIDENCE_INFERRED, cashier.getId(),
+                "{\"saleId\":\"" + saleId + "\"}");
+
+        Shift shift = shiftRepository.findById(shiftId).orElseThrow();
+        shift.setExpectedClosingCash(new BigDecimal("8300.00"));
+        shiftRepository.save(shift);
+
+        JsonNode balances = fetchBalances(shiftId);
+        assertThat(balances.get("consistent").asBoolean()).isTrue();
+        assertThat(balances.get("ledgerTotal").decimalValue()).isEqualByComparingTo("8300.00");
+        // +500 → +1×500; −200 → −1×200
+        assertThat(qty(balances, 500)).isEqualTo(3);
+        assertThat(qty(balances, 200)).isEqualTo(4);
+        assertThat(movementRepository.findByShiftIdOrderByCreatedAtAsc(shiftId).stream()
+                .filter(m -> CashDrawerLedgerService.EVENT_SALE_ADJUST.equals(m.getEventType()))
+                .count()).isEqualTo(2);
     }
 }

@@ -14,7 +14,9 @@ WORKDIR /app
 # Tiny client via GRADLE_OPTS; real budget only on the daemon (javac shares it).
 ENV UB_LOW_MEM_BUILD=1
 ENV GRADLE_USER_HOME=/home/gradle/.gradle
-ENV GRADLE_OPTS="-Xmx64m -XX:MaxMetaspaceSize=64m -XX:+UseSerialGC -Xss256k -XX:MaxDirectMemorySize=8m -Dorg.gradle.daemon=false -Dorg.gradle.parallel=false -Dorg.gradle.workers.max=1"
+# Client JVM only launches Gradle (config runs in the forked single-use daemon),
+# so keep it tiny: every MB counts on ~2GB Coolify builders. Daemon budget below.
+ENV GRADLE_OPTS="-Xmx48m -XX:MaxMetaspaceSize=48m -XX:+UseSerialGC -Xss256k -XX:MaxDirectMemorySize=8m -Dorg.gradle.daemon=false -Dorg.gradle.parallel=false -Dorg.gradle.workers.max=1"
 ENV JAVA_TOOL_OPTIONS="-XX:+UseSerialGC -Xss256k"
 
 COPY gradle ./gradle
@@ -23,8 +25,10 @@ RUN chmod +x gradlew
 
 # Override local/desktop gradle.properties for the constrained builder.
 # No HeapDumpOnOutOfMemoryError — dumps on a 2GB VM often tip the process into SIGKILL.
+# ExitOnOutOfMemoryError: if javac really exhausts the heap, fail fast + visibly instead
+# of thrashing until the kernel SIGKILLs the container mid-task (exit 255, logs cut).
 # configureondemand=false: on-demand config has spiked RSS during compile on small VMs.
-# Daemon ~384m is the only large heap; client stays at GRADLE_OPTS 64m.
+# Daemon ~384m is the only large heap; client stays at GRADLE_OPTS 48m.
 RUN printf '%s\n' \
 	'org.gradle.daemon=false' \
 	'org.gradle.parallel=false' \
@@ -32,7 +36,7 @@ RUN printf '%s\n' \
 	'org.gradle.configureondemand=false' \
 	'org.gradle.workers.max=1' \
 	'org.gradle.vfs.watch=false' \
-	'org.gradle.jvmargs=-Xmx384m -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -Xss256k -XX:MaxDirectMemorySize=16m' \
+	'org.gradle.jvmargs=-Xmx384m -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -Xss256k -XX:MaxDirectMemorySize=16m -XX:+ExitOnOutOfMemoryError' \
 	> gradle.properties
 
 # Prime the exact configurations bootJar needs. Must succeed (no || true): a soft
@@ -65,8 +69,9 @@ RUN rm -rf /tmp/* \
 # Do NOT use --offline with a || online fallback: Coolify scrapes build logs for
 # "BUILD FAILED" / "FAILURE" and aborts the deploy even when Docker exit code is 0.
 # After a successful deps prime, online resolve is a no-op (cache hit).
+# Note: no standalone `classes` step — bootJar pulls in compileJava + processResources
+# itself, so a separate daemon fork there only added another memory spike on 2GB builders.
 RUN ./gradlew compileJava --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace
-RUN ./gradlew classes --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace
 RUN ./gradlew bootJar --no-daemon -x test --no-parallel --max-workers=1 --no-build-cache --stacktrace \
 	&& JAR="$(ls -1 build/libs/*.jar | grep -v -- '-plain.jar$' | head -n1)" \
 	&& test -n "$JAR" && test -s "$JAR" \

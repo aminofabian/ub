@@ -16,7 +16,9 @@ ENV UB_LOW_MEM_BUILD=1
 ENV GRADLE_USER_HOME=/home/gradle/.gradle
 # Client JVM only launches Gradle (config runs in the forked single-use daemon),
 # so keep it tiny: every MB counts on ~2GB Coolify builders. Daemon budget below.
-ENV GRADLE_OPTS="-Xmx48m -XX:MaxMetaspaceSize=48m -XX:+UseSerialGC -Xss256k -XX:MaxDirectMemorySize=8m -Dorg.gradle.daemon=false -Dorg.gradle.parallel=false -Dorg.gradle.workers.max=1"
+# Must set -Xms <= -Xmx here: gradlew ships DEFAULT_JVM_OPTS=-Xms64m -Xmx64m and merges
+# GRADLE_OPTS after it — without -Xms, client JVM gets Xms64m + Xmx48m → instant VM init failure.
+ENV GRADLE_OPTS="-Xms32m -Xmx48m -XX:MaxMetaspaceSize=48m -XX:+UseSerialGC -Xss256k -XX:MaxDirectMemorySize=8m -Dorg.gradle.daemon=false -Dorg.gradle.parallel=false -Dorg.gradle.workers.max=1"
 ENV JAVA_TOOL_OPTIONS="-XX:+UseSerialGC -Xss256k"
 
 COPY gradle ./gradle
@@ -36,14 +38,14 @@ RUN printf '%s\n' \
 	'org.gradle.configureondemand=false' \
 	'org.gradle.workers.max=1' \
 	'org.gradle.vfs.watch=false' \
-	'org.gradle.jvmargs=-Xmx384m -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -Xss256k -XX:MaxDirectMemorySize=16m -XX:+ExitOnOutOfMemoryError' \
+	'org.gradle.jvmargs=-Xms128m -Xmx384m -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -Xss256k -XX:MaxDirectMemorySize=16m -XX:+ExitOnOutOfMemoryError' \
 	> gradle.properties
 
 # Prime the exact configurations bootJar needs. Must succeed (no || true): a soft
 # failure here used to cache an empty deps layer, then offline compile blew up.
 # Resolve runtimeClasspath last so compile + runtime jars are all on disk.
 # Bump the echo below when you need to bust a bad Coolify BuildKit cache layer.
-RUN echo "deps-prime-v2" \
+RUN echo "deps-prime-v3" \
 	&& ./gradlew --no-daemon -x test --no-parallel --max-workers=1 \
 		dependencies --configuration compileClasspath \
 	&& ./gradlew --no-daemon -x test --no-parallel --max-workers=1 \

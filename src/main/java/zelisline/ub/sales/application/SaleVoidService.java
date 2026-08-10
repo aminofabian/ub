@@ -84,6 +84,7 @@ public class SaleVoidService {
     private final SaleActorNameService saleActorNameService;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
+    private final CashDrawerLedgerService cashDrawerLedgerService;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -136,6 +137,12 @@ public class SaleVoidService {
             }
             shift.setExpectedClosingCash(next);
             shiftRepository.save(shift);
+
+            // Cash handed back to the customer on void — negative ledger movement.
+            cashDrawerLedgerService.recordAmount(
+                    shift.getId(), CashDrawerLedgerService.EVENT_VOID_REVERSAL,
+                    CashDrawerLedgerService.REF_VOID, saleId,
+                    cashBack.negate(), CashDrawerLedgerService.CONFIDENCE_INFERRED, userId, null);
         }
 
         BigDecimal grandTotal = sale.getGrandTotal().setScale(MONEY_SCALE, RoundingMode.HALF_UP);

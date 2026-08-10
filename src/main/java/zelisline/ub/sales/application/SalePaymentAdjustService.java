@@ -68,6 +68,7 @@ public class SalePaymentAdjustService {
     private final AuditEventBuilder auditEventBuilder;
     private final GatewayStkPushRepository gatewayStkPushRepository;
     private final InboundTillPaymentService inboundTillPaymentService;
+    private final CashDrawerLedgerService cashDrawerLedgerService;
 
     @Transactional
     public SaleResponse adjustPayments(
@@ -100,7 +101,7 @@ public class SalePaymentAdjustService {
         saleRepository.save(sale);
 
         if (cashDelta.signum() != 0) {
-            applyOpenShiftCashDelta(businessId, sale, cashDelta);
+            applyOpenShiftCashDelta(businessId, sale, cashDelta, userId);
         }
 
         publishAudit(businessId, sale, userId, oldPayments, newPayments, cashDelta, blankToNull(req.reason()));
@@ -242,7 +243,7 @@ public class SalePaymentAdjustService {
         }
     }
 
-    private void applyOpenShiftCashDelta(String businessId, Sale sale, BigDecimal cashDelta) {
+    private void applyOpenShiftCashDelta(String businessId, Sale sale, BigDecimal cashDelta, String userId) {
         Shift shift = shiftRepository.findByIdAndBusinessIdForUpdate(sale.getShiftId(), businessId)
                 .orElse(null);
         if (shift == null || !SalesConstants.SHIFT_STATUS_OPEN.equals(shift.getStatus())) {
@@ -258,6 +259,12 @@ public class SalePaymentAdjustService {
         }
         shift.setExpectedClosingCash(next);
         shiftRepository.save(shift);
+
+        // Keep the per-denomination ledger aligned with the cash delta of the tender change.
+        cashDrawerLedgerService.recordAmount(
+                shift.getId(), CashDrawerLedgerService.EVENT_SALE_ADJUST,
+                CashDrawerLedgerService.REF_SALE, sale.getId(),
+                cashDelta, CashDrawerLedgerService.CONFIDENCE_INFERRED, userId, null);
     }
 
     private void assertMpesaReceiptAmountMatches(String businessId, String receipt, BigDecimal paymentAmount) {

@@ -110,6 +110,7 @@ public class SaleService {
     private final PricingService pricingService;
     private final RequestPermissionService requestPermissionService;
     private final FeatureFlagService featureFlagService;
+    private final CashDrawerLedgerService cashDrawerLedgerService;
 
     @Transactional
     public SaleCreationOutcome createSale(String businessId, String rawIdempotencyKey, PostSaleRequest req, String userId) {
@@ -186,6 +187,7 @@ public class SaleService {
         BigDecimal cogsTotal = sumCost(saleItems);
         Instant effectiveSoldAt = resolveEffectiveSoldAt(req.clientSoldAt());
 
+        BigDecimal cashReceived = resolveCashReceived(req.cashReceived(), grandTotal, resolved.normalized());
         saveNewSaleAndPayments(
                 businessId,
                 req.branchId(),
@@ -197,7 +199,7 @@ public class SaleService {
                 resolved.normalized(),
                 effectiveSoldAt,
                 customerId,
-                resolveCashReceived(req.cashReceived(), grandTotal, resolved.normalized())
+                cashReceived
         );
         saleItemRepository.saveAll(saleItems);
 
@@ -231,6 +233,9 @@ public class SaleService {
             applyDrawerCash(shift, cashIn);
         }
         shiftRepository.save(shift);
+
+        // Record the per-denomination ledger movement for this cash sale.
+        cashDrawerLedgerService.recordSale(shift.getId(), saleId, cashReceived, grandTotal, cashIn, userId);
 
         SaleResponse completed = toResponse(loadSaleOrThrow(saleId, businessId));
         publishSaleEvents(businessId, req.branchId(), shift.getId(), saleId, userId, grandTotal, resolved.normalized(), cashIn);

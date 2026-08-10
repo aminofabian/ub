@@ -105,6 +105,7 @@ public class SaleRefundService {
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
     private final RequestPermissionService requestPermissionService;
+    private final CashDrawerLedgerService cashDrawerLedgerService;
     @PersistenceContext
     private EntityManager entityManager;
 
@@ -159,6 +160,15 @@ public class SaleRefundService {
         applyRefundStock(businessId, sale, refundId, comp.rows(), userId);
 
         applyDrawerRefund(shift, pays);
+
+        // Cash handed back to the customer on refund — negative ledger movement.
+        BigDecimal refundCashOut = sumCash(pays);
+        if (refundCashOut.signum() > 0) {
+            cashDrawerLedgerService.recordAmount(
+                    shift.getId(), CashDrawerLedgerService.EVENT_REFUND,
+                    CashDrawerLedgerService.REF_REFUND, refundId,
+                    refundCashOut.negate(), CashDrawerLedgerService.CONFIDENCE_INFERRED, userId, null);
+        }
 
         String jeId = postRefundJournal(businessId, refundId, comp, pays);
         creditSaleDebtService.reduceDebtForCreditRefund(

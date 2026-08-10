@@ -24,6 +24,8 @@ public interface SaleRepository extends JpaRepository<Sale, String> {
 
     List<Sale> findByBusinessIdAndSoldByOrderBySoldAtDesc(String businessId, String soldBy);
 
+    List<Sale> findByShiftIdAndStatus(String shiftId, String status);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select s from Sale s where s.id = :id and s.businessId = :businessId")
     Optional<Sale> findByIdAndBusinessIdForUpdate(@Param("id") String id, @Param("businessId") String businessId);

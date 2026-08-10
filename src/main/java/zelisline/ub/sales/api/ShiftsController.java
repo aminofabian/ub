@@ -20,6 +20,7 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
+import zelisline.ub.sales.api.dto.DrawerBalanceResponse;
 import zelisline.ub.sales.api.dto.LastClosedShiftFloatResponse;
 import zelisline.ub.sales.api.dto.PatchUpdateShiftOpeningRequest;
 import zelisline.ub.sales.api.dto.PostCloseShiftRequest;
@@ -177,6 +178,33 @@ public class ShiftsController {
         }
 
         return detail;
+    }
+
+    @GetMapping("/{shiftId}/drawer-balances")
+    @PreAuthorize("hasPermission(null, 'shifts.read')")
+    public DrawerBalanceResponse drawerBalances(
+            @PathVariable String shiftId,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+
+        DrawerBalanceResponse balances = shiftService.getDrawerBalances(businessId, shiftId);
+
+        // Cashiers / stock managers: own shifts only, and only on their assigned branch when set.
+        if (branchResolutionService.isBranchLockedRole(principal.roleId())) {
+            if (!principal.userId().equals(balances.openedBy())) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                        "You can only view your own shifts.");
+            }
+            String assigned = principal.branchId() != null ? principal.branchId().trim() : "";
+            if (!assigned.isEmpty() && !assigned.equals(balances.branchId())) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                        "You can only view shifts for your assigned branch.");
+            }
+        }
+
+        return balances;
     }
 
     /**

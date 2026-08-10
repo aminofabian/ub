@@ -32,6 +32,7 @@ import zelisline.ub.finance.domain.LedgerAccount;
 import zelisline.ub.finance.repository.ExpenseRepository;
 import zelisline.ub.identity.application.TokenHasher;
 import zelisline.ub.sales.SalesConstants;
+import zelisline.ub.sales.application.CashDrawerLedgerService;
 import zelisline.ub.sales.application.OpenShiftResolver;
 import zelisline.ub.sales.domain.Shift;
 import zelisline.ub.tenancy.repository.BranchRepository;
@@ -47,6 +48,7 @@ public class ExpenseService {
     private final BranchRepository branchRepository;
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final ObjectMapper objectMapper;
+    private final CashDrawerLedgerService cashDrawerLedgerService;
 
     public static String recordExpenseRoute() {
         return "POST /api/v1/finance/expenses";
@@ -228,6 +230,12 @@ public class ExpenseService {
                         ? BigDecimal.ZERO
                         : s.getExpectedClosingCash().setScale(2, RoundingMode.HALF_UP);
                 s.setExpectedClosingCash(expected.subtract(amount).setScale(2, RoundingMode.HALF_UP));
+
+                // Money leaves the drawer — per-denomination ledger movement.
+                cashDrawerLedgerService.recordAmount(
+                        s.getId(), CashDrawerLedgerService.EVENT_PAID_OUT,
+                        CashDrawerLedgerService.REF_EXPENSE, expenseId,
+                        amount.negate(), CashDrawerLedgerService.CONFIDENCE_INFERRED, userId, null);
             }
         }
 

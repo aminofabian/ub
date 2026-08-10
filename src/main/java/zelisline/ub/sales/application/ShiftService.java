@@ -40,6 +40,7 @@ import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.DenominationEntry;
 import zelisline.ub.sales.api.dto.DenominationResponse;
+import zelisline.ub.sales.api.dto.DrawerBalanceResponse;
 import zelisline.ub.sales.api.dto.LastClosedShiftFloatResponse;
 import zelisline.ub.sales.api.dto.PatchUpdateShiftOpeningRequest;
 import zelisline.ub.sales.api.dto.PostCloseShiftRequest;
@@ -79,6 +80,7 @@ public class ShiftService {
     private final OpenShiftResolver openShiftResolver;
     private final BranchResolutionService branchResolutionService;
     private final CashDrawerSummaryService cashDrawerSummaryService;
+    private final CashDrawerLedgerService cashDrawerLedgerService;
     private final LedgerPostingPort ledgerPostingPort;
     private final LedgerAccountResolver ledgerAccountResolver;
     private final ApplicationEventPublisher eventPublisher;
@@ -138,6 +140,9 @@ public class ShiftService {
             s.setOpeningCash(denomTotal);
             s.setExpectedClosingCash(denomTotal);
         }
+
+        // Seed the per-denomination ledger from the opening float.
+        cashDrawerLedgerService.recordOpening(s.getId(), req.denominations(), s.getOpeningCash(), userId);
 
         // Record legacy audit log
         recordAudit(s.getId(), SalesConstants.AUDIT_SHIFT_OPENED, userId,
@@ -311,6 +316,10 @@ public class ShiftService {
         }
         shiftRepository.save(s);
 
+        // Backfill the ledger for in-flight pre-deploy shifts so the expected
+        // denominations at close reconcile to expectedClosingCash.
+        cashDrawerLedgerService.ensureLedgerInitialized(s.getId());
+
         eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.ShiftClosedEvent(
                 businessId, s.getBranchId(), shiftId, userId, expected, counted, variance));
 
@@ -407,6 +416,11 @@ public class ShiftService {
         }
         shiftRepository.save(s);
 
+        // Keep the per-denomination ledger aligned with the corrected opening.
+        cashDrawerLedgerService.recordOpeningAdjustment(
+                s.getId(), req.denominations(), delta, userId,
+                "{\"oldOpening\":\"" + oldOpening.toPlainString() + "\",\"newOpening\":\"" + newOpening.toPlainString() + "\"}");
+
         String meta = String.format(
                 "{\"oldOpening\":\"%s\",\"newOpening\":\"%s\",\"delta\":\"%s\",\"reason\":\"%s\"}",
                 oldOpening.toPlainString(),
@@ -459,6 +473,21 @@ public class ShiftService {
             }
         }
         return out.toString();
+    }
+
+    // ========================================================================
+    // GET DRAWER BALANCES (per-denomination ledger projection)
+    // ========================================================================
+
+    /**
+     * Projected per-denomination balances for a shift. Not read-only: the ledger
+     * may lazily backfill movements for pre-deploy in-flight shifts.
+     */
+    @Transactional
+    public DrawerBalanceResponse getDrawerBalances(String businessId, String shiftId) {
+        Shift s = shiftRepository.findByIdAndBusinessId(shiftId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shift not found"));
+        return cashDrawerLedgerService.drawerBalances(s);
     }
 
     // ========================================================================

@@ -59,6 +59,7 @@ public class DrawoutService {
     private final UserRepository userRepository;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
+    private final CashDrawerLedgerService cashDrawerLedgerService;
 
     // ========================================================================
     // INITIATE DRAWOUT
@@ -138,6 +139,14 @@ public class DrawoutService {
 
         cashDrawoutRepository.save(drawout);
 
+        if (tier == SalesConstants.APPROVAL_TIER_1) {
+            // Ledger movement for the self-approved drawout (money leaves the drawer).
+            cashDrawerLedgerService.recordAmount(
+                    shiftId, CashDrawerLedgerService.EVENT_DRAWOUT,
+                    CashDrawerLedgerService.REF_DRAWOUT, drawout.getId(),
+                    request.amount().negate(), CashDrawerLedgerService.CONFIDENCE_INFERRED, userId, null);
+        }
+
         // Record audit log
         String auditMeta = String.format(
                 "{\"category\":\"%s\",\"amount\":\"%s\",\"recipient\":\"%s\",\"tier\":%d,\"status\":\"%s\"}",
@@ -185,6 +194,12 @@ public class DrawoutService {
                 .subtract(drawout.getAmount())
                 .setScale(2, RoundingMode.HALF_UP));
         shiftRepository.save(shift);
+
+        // Ledger movement for the approved drawout (money leaves the drawer).
+        cashDrawerLedgerService.recordAmount(
+                drawout.getShiftId(), CashDrawerLedgerService.EVENT_DRAWOUT,
+                CashDrawerLedgerService.REF_DRAWOUT, drawout.getId(),
+                drawout.getAmount().negate(), CashDrawerLedgerService.CONFIDENCE_INFERRED, userId, null);
 
         // Record expense
         recordDrawoutExpense(drawout.getShiftId(), drawout.getAmount(), drawout.getDescription(), userId);
@@ -258,6 +273,12 @@ public class DrawoutService {
                 .add(drawout.getAmount())
                 .setScale(2, RoundingMode.HALF_UP));
         shiftRepository.save(shift);
+
+        // Ledger reversal for the voided drawout (money returns to the drawer).
+        cashDrawerLedgerService.recordAmount(
+                drawout.getShiftId(), CashDrawerLedgerService.EVENT_DRAWOUT_REVERSAL,
+                CashDrawerLedgerService.REF_DRAWOUT, drawout.getId(),
+                drawout.getAmount(), CashDrawerLedgerService.CONFIDENCE_INFERRED, userId, null);
 
         // Record audit log
         String auditMeta = String.format(

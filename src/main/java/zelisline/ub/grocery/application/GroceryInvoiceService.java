@@ -432,9 +432,21 @@ public class GroceryInvoiceService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "No open shift for this branch"));
 
         List<GroceryInvoiceLine> invoiceLines = lineRepository.findByInvoiceIdOrderByLineIndex(invoiceId);
-        List<String> itemIds = invoiceLines.stream().map(GroceryInvoiceLine::getItemId).distinct().toList();
+        List<PostSaleLineRequest> additionalLines = request.additionalLines() == null
+                ? List.of()
+                : request.additionalLines();
+
+        List<String> itemIds = new ArrayList<>();
+        for (GroceryInvoiceLine line : invoiceLines) {
+            itemIds.add(line.getItemId());
+        }
+        for (PostSaleLineRequest extra : additionalLines) {
+            if (extra.itemId() != null && !extra.itemId().isBlank()) {
+                itemIds.add(extra.itemId());
+            }
+        }
         Map<String, Item> itemsById = itemRepository
-                .findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)
+                .findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds.stream().distinct().toList(), businessId)
                 .stream()
                 .collect(java.util.stream.Collectors.toMap(Item::getId, item -> item, (a, b) -> a));
         List<PostSaleLineRequest> saleLines = new ArrayList<>();
@@ -449,6 +461,24 @@ public class GroceryInvoiceService {
                     line.getItemId(),
                     saleQty,
                     line.getUnitPrice()
+            ));
+        }
+        int extraIndex = 0;
+        for (PostSaleLineRequest extra : additionalLines) {
+            extraIndex++;
+            Item item = itemsById.get(extra.itemId());
+            if (item == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Additional line item not found: " + extra.itemId());
+            }
+            BigDecimal saleQty = normalizeInvoiceQuantity(item, extra.quantity(), invoiceLines.size() + extraIndex);
+            BigDecimal unitPrice = extra.unitPrice() == null
+                    ? BigDecimal.ZERO
+                    : extra.unitPrice().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+            saleLines.add(new PostSaleLineRequest(
+                    extra.itemId(),
+                    saleQty,
+                    unitPrice
             ));
         }
 
@@ -491,11 +521,14 @@ public class GroceryInvoiceService {
         }
 
         try {
+            BigDecimal confirmedTotal = outcome.response().grandTotal() != null
+                    ? outcome.response().grandTotal()
+                    : invoice.getGrandTotal();
             eventPublisher.publishEvent(new RealtimeBridge.PaymentConfirmedEvent(
                     businessId,
                     invoice.getBranchId(),
                     outcome.response().id(),
-                    invoice.getGrandTotal(),
+                    confirmedTotal,
                     "grocery_invoice",
                     userId));
         } catch (Exception e) {
@@ -799,7 +832,7 @@ public class GroceryInvoiceService {
                 new PostSalePaymentRequest(
                         SalesConstants.PAYMENT_METHOD_MPESA_MANUAL,
                         invoice.getGrandTotal(),
-                        reference)), null);
+                        reference)), null, null);
         try {
             payInvoice(businessId, invoiceId, payReq, userId, roleId);
             return true;

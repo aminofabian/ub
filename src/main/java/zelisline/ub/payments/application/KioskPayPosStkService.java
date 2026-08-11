@@ -50,6 +50,13 @@ public class KioskPayPosStkService {
                 ? description.trim()
                 : "Kiosk Pay POS";
 
+        java.math.BigDecimal chargedAmount = amount == null
+                ? null
+                : amount.setScale(0, java.math.RoundingMode.HALF_UP);
+        if (chargedAmount == null || chargedAmount.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "amount must be at least 1");
+        }
+
         PaymentGatewayStkService.StkPushOutcome outcome =
                 stkPushRetryHelper.initiateWithCredentialsAfterClearingPhone(
                         businessId,
@@ -57,7 +64,7 @@ public class KioskPayPosStkService {
                         PlatformKioskPaySettings.PLATFORM_KOPOKOPO_CONFIG_ID,
                         creds,
                         phone,
-                        amount,
+                        chargedAmount,
                         reference,
                         desc);
 
@@ -70,7 +77,7 @@ public class KioskPayPosStkService {
                     reference,
                     StkPushContextType.POS_PAYMENT,
                     null,
-                    amount,
+                    chargedAmount,
                     phone);
         }
 

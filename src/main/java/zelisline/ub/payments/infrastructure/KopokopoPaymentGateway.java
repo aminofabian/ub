@@ -103,7 +103,12 @@ public class KopokopoPaymentGateway implements PaymentGateway {
             phone = "254" + phone;
         }
 
-        BigDecimal amount = request.amount().setScale(2, RoundingMode.HALF_UP);
+        // Safaricom / KopoKopo STK amounts are whole shillings — round half-up so
+        // the charged amount matches what we store on gateway_stk_pushes.
+        BigDecimal amount = request.amount().setScale(0, RoundingMode.HALF_UP);
+        if (amount.signum() <= 0) {
+            return StkPushResponse.rejected("INVALID_AMOUNT", "amount must be at least 1");
+        }
 
         Map<String, Object> body = Map.of(
                 "payment_channel", "M-PESA STK Push",
@@ -116,7 +121,7 @@ public class KopokopoPaymentGateway implements PaymentGateway {
                 ),
                 "amount", Map.of(
                         "currency", "KES",
-                        "value", amount.intValue()
+                        "value", amount.intValueExact()
                 ),
                 "metadata", Map.of(
                         "reference", request.reference() != null ? request.reference() : "",

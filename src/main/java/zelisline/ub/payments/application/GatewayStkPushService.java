@@ -187,7 +187,7 @@ public class GatewayStkPushService {
                 ref,
                 StkPushContextType.POS_PAYMENT,
                 null,
-                amount.setScale(2, RoundingMode.HALF_UP),
+                amount.setScale(0, RoundingMode.HALF_UP),
                 phoneNumber != null ? phoneNumber : "");
         settleFromPendingInboundIfPresent(push);
         return Optional.of(push);

@@ -352,6 +352,9 @@ public class PosDraftService {
         }
 
         String customerId = blankToNull(request.customerId());
+        if (customerId == null) {
+            customerId = blankToNull(draft.getCustomerId());
+        }
         PostSaleRequest saleRequest = new PostSaleRequest(
                 draft.getBranchId(),
                 saleLines,

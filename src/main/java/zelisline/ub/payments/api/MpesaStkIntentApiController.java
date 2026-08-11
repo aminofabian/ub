@@ -89,11 +89,14 @@ public class MpesaStkIntentApiController {
                 ? body.description().trim()
                 : "POS payment";
 
+        // Match KopoKopo whole-shilling STK charge so sale verification stays aligned.
+        java.math.BigDecimal chargedAmount = body.amount()
+                .setScale(0, java.math.RoundingMode.HALF_UP);
         PaymentGatewayStkService.StkPushOutcome outcome = stkPushRetryHelper.initiateAfterClearingPhone(
                 businessId,
                 null,
                 phone,
-                body.amount(),
+                chargedAmount,
                 reference,
                 description);
 
@@ -107,7 +110,7 @@ public class MpesaStkIntentApiController {
                     reference,
                     StkPushContextType.POS_PAYMENT,
                     null,
-                    body.amount(),
+                    chargedAmount,
                     phone);
         }
         return new PosStkPushResponse(

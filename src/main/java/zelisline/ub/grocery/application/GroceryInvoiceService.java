@@ -452,12 +452,19 @@ public class GroceryInvoiceService {
             ));
         }
 
+        String customerId = blankToNull(request.customerId());
+        if (customerId == null) {
+            customerId = blankToNull(invoice.getCustomerId());
+        } else if (blankToNull(invoice.getCustomerId()) == null) {
+            invoice.setCustomerId(customerId);
+        }
+
         PostSaleRequest saleRequest = new PostSaleRequest(
                 invoice.getBranchId(),
                 saleLines,
                 request.payments(),
                 null,
-                invoice.getCustomerId(),
+                customerId,
                 null
         );
 
@@ -640,6 +647,14 @@ public class GroceryInvoiceService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Invoice not found"));
     }
 
+    private static String blankToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
     private String generateUniqueBarcode(String businessId) {
         String barcode;
         do {
@@ -784,7 +799,7 @@ public class GroceryInvoiceService {
                 new PostSalePaymentRequest(
                         SalesConstants.PAYMENT_METHOD_MPESA_MANUAL,
                         invoice.getGrandTotal(),
-                        reference)));
+                        reference)), null);
         try {
             payInvoice(businessId, invoiceId, payReq, userId, roleId);
             return true;

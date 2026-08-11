@@ -27,7 +27,7 @@ public class PosSetItemWeighedController {
     private final PosSetItemWeighedService posSetItemWeighedService;
 
     @PutMapping("/items/{itemId}/weighed")
-    @PreAuthorize("hasPermission(null, 'sales.sell')")
+    @PreAuthorize("hasPermission(null, 'sales.sell') or hasPermission(null, 'grocery.invoices.create')")
     public ItemResponse setWeighed(
             @PathVariable String itemId,
             @Valid @RequestBody PosSetItemWeighedRequest body,

@@ -159,12 +159,20 @@ public class SaleService {
         BigDecimal grandTotal = computeCartTotal(req.lines());
         validatePositiveMoney(grandTotal);
         ResolvedPayments resolved = normalizeAndResolvePayments(req.payments(), grandTotal);
+        String customerId = blankToNull(req.customerId());
+        // Anonymous overpay is physical change, not wallet credit — do not require a customer.
+        BigDecimal anonymousOverpayCash = null;
+        if (customerId == null && resolved.overpay().signum() > 0) {
+            BigDecimal cashBeforeClamp = sumCashTender(resolved.normalized());
+            if (cashBeforeClamp.signum() > 0) {
+                anonymousOverpayCash = cashBeforeClamp;
+            }
+            resolved = clampPaymentsToGrandTotal(resolved.normalized(), grandTotal);
+        }
         BigDecimal creditTenderTotal = sumPaymentMethod(resolved.normalized(), SalesConstants.PAYMENT_METHOD_CUSTOMER_CREDIT);
         BigDecimal walletTenderTotal = sumPaymentMethod(resolved.normalized(), SalesConstants.PAYMENT_METHOD_CUSTOMER_WALLET);
         BigDecimal redeemTenderTotal = sumPaymentMethod(resolved.normalized(), SalesConstants.PAYMENT_METHOD_LOYALTY_REDEEM);
 
-        String customerId = blankToNull(req.customerId());
-        enforceCustomerLinkage(customerId, creditTenderTotal, walletTenderTotal, redeemTenderTotal, resolved.overpay());
         validateCustomerForCreditSale(businessId, customerId, creditTenderTotal);
         if (customerId != null) {
             // Optional linkage (e.g. M-Pesa STK) still requires a live customer + credit account.
@@ -187,7 +195,10 @@ public class SaleService {
         BigDecimal cogsTotal = sumCost(saleItems);
         Instant effectiveSoldAt = resolveEffectiveSoldAt(req.clientSoldAt());
 
-        BigDecimal cashReceived = resolveCashReceived(req.cashReceived(), grandTotal, resolved.normalized());
+        BigDecimal cashReceivedHint = req.cashReceived() != null
+                ? req.cashReceived()
+                : anonymousOverpayCash;
+        BigDecimal cashReceived = resolveCashReceived(cashReceivedHint, grandTotal, resolved.normalized());
         saveNewSaleAndPayments(
                 businessId,
                 req.branchId(),
@@ -272,24 +283,65 @@ public class SaleService {
                 "sale.completed:" + sale.id());
     }
 
-    private void enforceCustomerLinkage(
-            String customerId,
-            BigDecimal creditTenderTotal,
-            BigDecimal walletTenderTotal,
-            BigDecimal redeemTenderTotal,
-            BigDecimal overpay
-    ) {
-        boolean walletNeed = walletTenderTotal.signum() > 0 || overpay.signum() > 0;
-        boolean need = creditTenderTotal.signum() > 0 || walletNeed || redeemTenderTotal.signum() > 0;
-        if (!need) {
-            return;
-        }
-        if (customerId == null || customerId.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customer required for this tender mix");
-        }
+    private record ResolvedPayments(List<NormalizedPayment> normalized, BigDecimal overpay) {
     }
 
-    private record ResolvedPayments(List<NormalizedPayment> normalized, BigDecimal overpay) {
+    /**
+     * Drop excess tender when there is no customer to credit. Prefer reducing cash so the
+     * remainder can be shown as physical change via {@code cashReceived}.
+     */
+    private static ResolvedPayments clampPaymentsToGrandTotal(
+            List<NormalizedPayment> payments,
+            BigDecimal grandTotal
+    ) {
+        BigDecimal gp = grandTotal.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal sum = BigDecimal.ZERO;
+        for (NormalizedPayment p : payments) {
+            sum = sum.add(p.amount());
+        }
+        sum = sum.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal excess = sum.subtract(gp);
+        if (excess.signum() <= 0) {
+            return new ResolvedPayments(payments, BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+        }
+
+        List<NormalizedPayment> out = new ArrayList<>(payments.size());
+        BigDecimal remaining = excess;
+        for (NormalizedPayment p : payments) {
+            if (remaining.signum() <= 0) {
+                out.add(p);
+                continue;
+            }
+            if (!SalesConstants.PAYMENT_METHOD_CASH.equals(p.method())) {
+                out.add(p);
+                continue;
+            }
+            BigDecimal amt = p.amount().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+            BigDecimal cut = amt.min(remaining);
+            BigDecimal next = amt.subtract(cut).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+            remaining = remaining.subtract(cut).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+            if (next.signum() > 0) {
+                out.add(new NormalizedPayment(p.method(), next, p.reference()));
+            }
+        }
+        if (remaining.signum() > 0) {
+            List<NormalizedPayment> trimmed = new ArrayList<>(out.size());
+            for (NormalizedPayment p : out) {
+                if (remaining.signum() <= 0) {
+                    trimmed.add(p);
+                    continue;
+                }
+                BigDecimal amt = p.amount().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+                BigDecimal cut = amt.min(remaining);
+                BigDecimal next = amt.subtract(cut).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+                remaining = remaining.subtract(cut).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+                if (next.signum() > 0) {
+                    trimmed.add(new NormalizedPayment(p.method(), next, p.reference()));
+                }
+            }
+            out = trimmed;
+        }
+        return new ResolvedPayments(out, BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
     }
 
     private void saveNewSaleAndPayments(

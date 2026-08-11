@@ -7,9 +7,14 @@ public record StockLevelsSettingsResponse(
         /** Activity page (`/analytics/activity`) for stock managers. Default on. */
         boolean allowActivityForStockManager,
         /** Stock / restock / missing-barcode pages for stock managers. Default on. */
-        boolean allowStockPageForStockManager
+        boolean allowStockPageForStockManager,
+        /**
+         * Grocery counter Spoils mode for {@code grocery_clerk}. Default on —
+         * admin can turn off in business settings.
+         */
+        boolean allowSpoilsForGroceryClerk
 ) {
     public static StockLevelsSettingsResponse defaults() {
-        return new StockLevelsSettingsResponse(false, false, false, true, true);
+        return new StockLevelsSettingsResponse(false, false, false, true, true, true);
     }
 }

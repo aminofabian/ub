@@ -66,6 +66,10 @@ public class BusinessInventorySettingsService {
     private static final String KEY_ALLOW_RECEIVE_CASHIER = "allowReceiveForCashier";
     private static final String KEY_ALLOW_RECEIVE_STOCK_MANAGER =
             "allowReceiveForStockManager";
+    private static final String KEY_ALLOW_RECEIVE_GROCERY_CLERK =
+            "allowReceiveForGroceryClerk";
+    private static final String KEY_ALLOW_SPOILS_GROCERY_CLERK =
+            "allowSpoilsForGroceryClerk";
 
     private final ObjectMapper objectMapper;
 
@@ -229,7 +233,9 @@ public class BusinessInventorySettingsService {
                 stockLevels.path(KEY_ALLOW_NEGATIVE_STOCK).asBoolean(false),
                 // Absent keys default on — stock managers historically saw these pages.
                 stockLevels.path(KEY_ALLOW_ACTIVITY_STOCK_MANAGER).asBoolean(true),
-                stockLevels.path(KEY_ALLOW_STOCK_PAGE_STOCK_MANAGER).asBoolean(true)
+                stockLevels.path(KEY_ALLOW_STOCK_PAGE_STOCK_MANAGER).asBoolean(true),
+                // Spoils on grocery counter — default on until admin turns off.
+                stockLevels.path(KEY_ALLOW_SPOILS_GROCERY_CLERK).asBoolean(true)
         );
     }
 
@@ -260,7 +266,8 @@ public class BusinessInventorySettingsService {
         // Absent keys default to true (preserve prior always-on receive behaviour).
         return new ReceiveStockSettingsResponse(
                 receiveStock.path(KEY_ALLOW_RECEIVE_CASHIER).asBoolean(true),
-                receiveStock.path(KEY_ALLOW_RECEIVE_STOCK_MANAGER).asBoolean(true)
+                receiveStock.path(KEY_ALLOW_RECEIVE_STOCK_MANAGER).asBoolean(true),
+                receiveStock.path(KEY_ALLOW_RECEIVE_GROCERY_CLERK).asBoolean(true)
         );
     }
 
@@ -310,6 +317,12 @@ public class BusinessInventorySettingsService {
                     patch.allowStockPageForStockManager()
             );
         }
+        if (patch.allowSpoilsForGroceryClerk() != null) {
+            stockLevels.put(
+                    KEY_ALLOW_SPOILS_GROCERY_CLERK,
+                    patch.allowSpoilsForGroceryClerk()
+            );
+        }
     }
 
     private static void applySuppliersPatch(
@@ -353,6 +366,12 @@ public class BusinessInventorySettingsService {
             receiveStock.put(
                     KEY_ALLOW_RECEIVE_STOCK_MANAGER,
                     patch.allowReceiveForStockManager()
+            );
+        }
+        if (patch.allowReceiveForGroceryClerk() != null) {
+            receiveStock.put(
+                    KEY_ALLOW_RECEIVE_GROCERY_CLERK,
+                    patch.allowReceiveForGroceryClerk()
             );
         }
     }

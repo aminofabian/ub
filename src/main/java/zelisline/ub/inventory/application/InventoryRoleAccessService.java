@@ -34,7 +34,9 @@ public class InventoryRoleAccessService {
         StockLevelsSettingsResponse settings = readStockLevels(businessId);
         return switch (resolveRoleKey(roleId)) {
             case STOCK_MANAGER -> settings.allowStockEditForStockManager();
-            case GROCERY_CLERK -> settings.allowStockEditForGroceryClerk();
+            case GROCERY_CLERK ->
+                    settings.allowStockEditForGroceryClerk()
+                            || settings.allowSpoilsForGroceryClerk();
             default -> false;
         };
     }
@@ -68,19 +70,22 @@ public class InventoryRoleAccessService {
         return switch (resolveRoleKey(roleId)) {
             case STOCK_MANAGER -> settings.allowReceiveForStockManager();
             case CASHIER, BUTCHER_CASHIER -> settings.allowReceiveForCashier();
+            case GROCERY_CLERK -> settings.allowReceiveForGroceryClerk();
             default -> false;
         };
     }
 
     /**
-     * Grocery clerks normally have no inventory access; when stock editing is
-     * enabled they also need read access for the Stock page and allocation preview.
+     * Grocery clerks normally have no inventory access; when stock editing or
+     * counter spoils is enabled they also need read access (cost / on-hand).
      */
     public boolean grantsDelegatedInventoryRead(String businessId, String roleId) {
         if (!GROCERY_CLERK.equals(resolveRoleKey(roleId))) {
             return false;
         }
-        return readStockLevels(businessId).allowStockEditForGroceryClerk();
+        StockLevelsSettingsResponse settings = readStockLevels(businessId);
+        return settings.allowStockEditForGroceryClerk()
+                || settings.allowSpoilsForGroceryClerk();
     }
 
     /**

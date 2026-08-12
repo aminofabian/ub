@@ -489,6 +489,35 @@ public class GroceryInvoiceService {
             invoice.setCustomerId(customerId);
         }
 
+        BigDecimal expectedTotal = BigDecimal.ZERO;
+        for (PostSaleLineRequest saleLine : saleLines) {
+            expectedTotal = expectedTotal.add(
+                    saleLine.quantity()
+                            .multiply(saleLine.unitPrice())
+                            .setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+        }
+        expectedTotal = expectedTotal.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+
+        BigDecimal paymentSum = BigDecimal.ZERO;
+        if (request.payments() != null) {
+            for (var payment : request.payments()) {
+                if (payment.amount() != null) {
+                    paymentSum = paymentSum.add(
+                            payment.amount().setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+                }
+            }
+        }
+        paymentSum = paymentSum.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        if (paymentSum.compareTo(expectedTotal) < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Payments must cover line totals (paid "
+                            + paymentSum.toPlainString()
+                            + ", invoice needs "
+                            + expectedTotal.toPlainString()
+                            + ")");
+        }
+
         PostSaleRequest saleRequest = new PostSaleRequest(
                 invoice.getBranchId(),
                 saleLines,

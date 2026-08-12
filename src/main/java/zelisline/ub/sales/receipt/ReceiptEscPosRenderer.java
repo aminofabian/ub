@@ -16,6 +16,11 @@ public final class ReceiptEscPosRenderer {
      * cut dialects that some clones mishandle.
      */
     private static final byte[] CUT = new byte[]{0x1D, 0x56, 0x01};
+    /** ESC/POS drawer pulse — pin 2 then pin 5 (covers both RJ12 wirings). */
+    private static final byte[] DRAWER_KICK = new byte[]{
+        0x1B, 0x70, 0x00, 0x19, (byte) 0xFA,
+        0x1B, 0x70, 0x01, 0x19, (byte) 0xFA
+    };
 
     private ReceiptEscPosRenderer() {
     }
@@ -88,10 +93,27 @@ public final class ReceiptEscPosRenderer {
             }
             baos.write(FEED_LINES);
             baos.write(CUT);
+            if (s.cashReceivedDisplay() != null && !s.cashReceivedDisplay().isBlank()) {
+                baos.write(DRAWER_KICK);
+            } else if (paymentsIncludeCash(s)) {
+                baos.write(DRAWER_KICK);
+            }
             return baos.toByteArray();
         } catch (IOException e) {
             throw new IllegalStateException("Failed to render ESC/POS receipt", e);
         }
+    }
+
+    private static boolean paymentsIncludeCash(ReceiptSnapshot s) {
+        if (s.payments() == null) {
+            return false;
+        }
+        for (ReceiptPaymentRow p : s.payments()) {
+            if (p.method() != null && p.method().toLowerCase().contains("cash")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     static int charWidth(int widthMm) {

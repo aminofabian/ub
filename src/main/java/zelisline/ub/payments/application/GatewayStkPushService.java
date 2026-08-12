@@ -43,6 +43,7 @@ import zelisline.ub.payments.domain.PaymentGatewayConfig;
 import zelisline.ub.payments.domain.PaymentWebhookEvent;
 import zelisline.ub.payments.domain.PlatformKioskPaySettings;
 import zelisline.ub.payments.domain.StkPushContextType;
+import zelisline.ub.payments.domain.spi.StkStatusResponse;
 import zelisline.ub.payments.domain.spi.WebhookResult;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
 import zelisline.ub.payments.infrastructure.KopokopoPaymentGateway;
@@ -66,6 +67,13 @@ public class GatewayStkPushService {
 
     public static final String TILL_AWAIT_CHECKOUT_PREFIX = "till-await-";
     public static final String STOREFRONT_TILL_AWAIT_PREFIX = "sf-till-await-";
+
+    /**
+     * Failure reason for an await superseded by a newer one on the same till. Clients treat
+     * it as "listen again", not as a payment failure — keep the wording in sync with
+     * {@code isTillAwaitReplaced} in the web client.
+     */
+    public static final String TILL_AWAIT_REPLACED_REASON = "Replaced by a new till payment wait";
 
     /** After this age, a still-pending local STK row is marked failed so cashier can retry. */
     @Value("${app.payments.stk.stale-pending-seconds:30}")
@@ -94,6 +102,8 @@ public class GatewayStkPushService {
     private final ObjectProvider<PlatformKioskPaySettingsService> platformKioskPaySettingsService;
     private final ObjectProvider<KioskPayWalletService> kioskPayWalletService;
     private final InboundTillPaymentService inboundTillPaymentService;
+    /** Own proxy, so gateway polling can open a transaction only to write the result. */
+    private final ObjectProvider<GatewayStkPushService> self;
 
     @Transactional
     public GatewayStkPush registerPush(
@@ -146,7 +156,8 @@ public class GatewayStkPushService {
             String businessId,
             BigDecimal amount,
             String phoneNumber,
-            String merchantReference
+            String merchantReference,
+            String awaitOwnerId
     ) {
         if (amount == null || amount.signum() <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "amount must be positive");
@@ -161,7 +172,8 @@ public class GatewayStkPushService {
             return Optional.empty();
         }
 
-        // Replace prior open till-awaits for this business so amount collisions stay rare.
+        // Replace only this till's own open await, so amount collisions stay rare without
+        // silencing the other tills (a shop with two registers must keep both listening).
         Instant since = Instant.now().minus(Duration.ofMinutes(15));
         List<GatewayStkPush> open = pushRepository
                 .findByBusinessIdAndContextTypeAndStatusAndCreatedAtAfterOrderByCreatedAtDesc(
@@ -169,9 +181,11 @@ public class GatewayStkPushService {
                         StkPushContextType.POS_PAYMENT,
                         GatewayStkPushStatuses.PENDING,
                         since);
+        String owner = awaitOwnerId != null && !awaitOwnerId.isBlank() ? awaitOwnerId.trim() : null;
         for (GatewayStkPush prior : open) {
-            if (isTillAwaitCheckout(prior.getGatewayCheckoutId())) {
-                markFailed(prior, "Replaced by a new till payment wait");
+            if (isTillAwaitCheckout(prior.getGatewayCheckoutId())
+                    && isSameAwaitOwner(prior, owner)) {
+                markFailed(prior, TILL_AWAIT_REPLACED_REASON);
             }
         }
 
@@ -189,8 +203,25 @@ public class GatewayStkPushService {
                 null,
                 amount.setScale(0, RoundingMode.HALF_UP),
                 phoneNumber != null ? phoneNumber : "");
+        if (owner != null) {
+            push.setAwaitOwnerId(owner);
+            pushRepository.save(push);
+        }
         settleFromPendingInboundIfPresent(push);
         return Optional.of(push);
+    }
+
+    /**
+     * Replacement is per till so registers stay independent. An unowned await (older row,
+     * or a client that sends no till id) is still replaced by anyone, preserving the
+     * previous single-till behaviour.
+     */
+    private static boolean isSameAwaitOwner(GatewayStkPush prior, String owner) {
+        String priorOwner = prior.getAwaitOwnerId();
+        if (priorOwner == null || priorOwner.isBlank() || owner == null) {
+            return true;
+        }
+        return priorOwner.equals(owner);
     }
 
     /**
@@ -201,7 +232,8 @@ public class GatewayStkPushService {
             String businessId,
             BigDecimal amount,
             String phoneNumber,
-            String merchantReference
+            String merchantReference,
+            String awaitOwnerId
     ) {
         if (amount == null || amount.signum() <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "amount must be positive");
@@ -223,9 +255,11 @@ public class GatewayStkPushService {
                         StkPushContextType.STOREFRONT_CART,
                         GatewayStkPushStatuses.PENDING,
                         since);
+        String owner = awaitOwnerId != null && !awaitOwnerId.isBlank() ? awaitOwnerId.trim() : null;
         for (GatewayStkPush prior : open) {
-            if (isStorefrontTillAwaitCheckout(prior.getGatewayCheckoutId())) {
-                markFailed(prior, "Replaced by a new storefront till payment wait");
+            if (isStorefrontTillAwaitCheckout(prior.getGatewayCheckoutId())
+                    && isSameAwaitOwner(prior, owner)) {
+                markFailed(prior, TILL_AWAIT_REPLACED_REASON);
             }
         }
 
@@ -430,16 +464,15 @@ public class GatewayStkPushService {
                 });
     }
 
-    @Transactional
+    /**
+     * Ask KopoKopo for the current state of one pending push.
+     *
+     * <p>Deliberately NOT transactional: the till polls this every few seconds, and the
+     * gateway call must not hold a DB connection while it waits on the network. The
+     * result is applied in its own short transaction via {@link #applyPollResult}.
+     */
     public Optional<GatewayStkPush> pollAndUpdate(GatewayStkPush push) {
-        if (!GatewayStkPushStatuses.PENDING.equals(push.getStatus())) {
-            return Optional.of(push);
-        }
-        if (push.getGatewayType() != GatewayType.KOPOKOPO) {
-            return Optional.of(push);
-        }
-        // Till-awaits have no KopoKopo incoming_payment id — only buygoods webhooks settle them.
-        if (isTillAwaitCheckout(push.getGatewayCheckoutId())) {
+        if (!isPollableAtGateway(push)) {
             return Optional.of(push);
         }
         Map<String, String> creds = resolveCredentialsForPush(push);
@@ -448,6 +481,32 @@ public class GatewayStkPushService {
         }
 
         var status = kopokopoGateway.queryStkStatus(push.getGatewayCheckoutId(), creds);
+        return Optional.of(self.getObject().applyPollResult(push.getId(), status));
+    }
+
+    /**
+     * True when this row can be resolved by asking KopoKopo. Till-awaits (cashier and
+     * storefront) have no {@code incoming_payment} id — only buygoods webhooks settle
+     * them, so polling would just 404 on every run.
+     */
+    public static boolean isPollableAtGateway(GatewayStkPush push) {
+        return push != null
+                && GatewayStkPushStatuses.PENDING.equals(push.getStatus())
+                && push.getGatewayType() == GatewayType.KOPOKOPO
+                && !isTillAwaitCheckout(push.getGatewayCheckoutId())
+                && !isStorefrontTillAwaitCheckout(push.getGatewayCheckoutId());
+    }
+
+    /** Write half of {@link #pollAndUpdate} — public only so the transaction proxy applies. */
+    @Transactional
+    public GatewayStkPush applyPollResult(String pushId, StkStatusResponse status) {
+        GatewayStkPush push = pushRepository.findById(pushId).orElse(null);
+        if (push == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "STK push not found");
+        }
+        if (!GatewayStkPushStatuses.PENDING.equals(push.getStatus())) {
+            return push;
+        }
         push.setLastPolledAt(Instant.now());
         push.setPollCount(push.getPollCount() + 1);
         pushRepository.save(push);
@@ -457,16 +516,16 @@ public class GatewayStkPushService {
             if (receipt == null || receipt.isBlank()) {
                 log.warn("STK poll completed without M-Pesa receipt — leaving pending pushId={}",
                         push.getId());
-                return Optional.of(push);
+                return push;
             }
             confirmPush(push, receipt.trim(), push.getAmount());
-            return Optional.of(pushRepository.findById(push.getId()).orElse(push));
+            return pushRepository.findById(push.getId()).orElse(push);
         }
         if (status.failed()) {
             markFailed(push, status.resultDescription() != null ? status.resultDescription() : "STK payment failed");
-            return Optional.of(pushRepository.findById(push.getId()).orElse(push));
+            return pushRepository.findById(push.getId()).orElse(push);
         }
-        return Optional.of(push);
+        return push;
     }
 
     /**
@@ -686,6 +745,28 @@ public class GatewayStkPushService {
     public record PhoneClearResult(boolean hasGatewayPending, int terminalUpdates, boolean gatewayJustFailed) {
         public PhoneClearResult(boolean hasGatewayPending, int terminalUpdates) {
             this(hasGatewayPending, terminalUpdates, false);
+        }
+    }
+
+    /**
+     * Close a Buy Goods await that outlived the webhook match window. Nothing can settle it
+     * any more, and leaving it pending would keep it in "is a prompt still open for this
+     * phone" checks. The client stops listening at 10 minutes, so this never cuts a live
+     * listen short.
+     */
+    @Transactional
+    public void expireStaleTillAwait(GatewayStkPush push, Duration olderThan) {
+        if (push == null
+                || !GatewayStkPushStatuses.PENDING.equals(push.getStatus())
+                || push.getCreatedAt() == null) {
+            return;
+        }
+        if (!isTillAwaitCheckout(push.getGatewayCheckoutId())
+                && !isStorefrontTillAwaitCheckout(push.getGatewayCheckoutId())) {
+            return;
+        }
+        if (push.getCreatedAt().isBefore(Instant.now().minus(olderThan))) {
+            markFailed(push, "Till listen window closed");
         }
     }
 

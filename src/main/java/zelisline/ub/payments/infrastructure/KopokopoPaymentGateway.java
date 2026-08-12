@@ -66,6 +66,14 @@ public class KopokopoPaymentGateway implements PaymentGateway {
     private static final String WEBHOOK_SUBSCRIPTIONS_PATH = "/api/v2/webhook_subscriptions";
     private static final String USER_AGENT = "PalMart/1.0 KopoKopo";
 
+    /**
+     * Cashier-path calls must fail fast: the till polls status every 4s, so a stalled
+     * KopoKopo response would otherwise hold a request thread (and its DB connection)
+     * for the Unirest default socket timeout and slow the whole POS down.
+     */
+    private static final int HTTP_CONNECT_TIMEOUT_MS = 5_000;
+    private static final int HTTP_SOCKET_TIMEOUT_MS = 12_000;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /** Simple in-memory token cache: key = clientId, value = cached token with expiry. */
@@ -135,6 +143,8 @@ public class KopokopoPaymentGateway implements PaymentGateway {
         try {
             String json = objectMapper.writeValueAsString(body);
             HttpResponse<String> response = Unirest.post(apiBase + INCOMING_PAYMENTS_PATH)
+                    .connectTimeout(HTTP_CONNECT_TIMEOUT_MS)
+                    .socketTimeout(HTTP_SOCKET_TIMEOUT_MS)
                     .header("Authorization", "Bearer " + accessToken)
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
@@ -328,6 +338,8 @@ public class KopokopoPaymentGateway implements PaymentGateway {
 
         try {
             HttpResponse<String> response = Unirest.get(url)
+                    .connectTimeout(HTTP_CONNECT_TIMEOUT_MS)
+                    .socketTimeout(HTTP_SOCKET_TIMEOUT_MS)
                     .header("Authorization", "Bearer " + accessToken)
                     .header("Accept", "application/json")
                     .header("User-Agent", USER_AGENT)
@@ -1123,6 +1135,8 @@ public class KopokopoPaymentGateway implements PaymentGateway {
 
         try {
             HttpResponse<String> response = Unirest.post(baseUrl + OAUTH_PATH)
+                    .connectTimeout(HTTP_CONNECT_TIMEOUT_MS)
+                    .socketTimeout(HTTP_SOCKET_TIMEOUT_MS)
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .header("User-Agent", USER_AGENT)
                     .field("client_id", clientId)

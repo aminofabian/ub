@@ -48,6 +48,13 @@ public class GatewayStkPush {
     @Column(name = "context_id", length = 36)
     private String contextId;
 
+    /**
+     * Till device (or storefront session) that opened a Buy Goods await. Scopes await
+     * replacement so tills do not cancel each other's listen. Null for STK pushes.
+     */
+    @Column(name = "await_owner_id", length = 64)
+    private String awaitOwnerId;
+
     @Column(name = "amount", nullable = false, precision = 14, scale = 2)
     private BigDecimal amount;
 

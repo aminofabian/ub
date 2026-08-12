@@ -1,5 +1,6 @@
 package zelisline.ub.payments.scheduler;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -22,6 +23,9 @@ import zelisline.ub.payments.repository.GatewayStkPushRepository;
 public class GatewayStkPushPoller {
 
     private static final Logger log = LoggerFactory.getLogger(GatewayStkPushPoller.class);
+
+    /** Past this age a Buy Goods await can no longer be matched to a webhook. */
+    private static final Duration TILL_AWAIT_MAX_AGE = Duration.ofMinutes(15);
 
     private final GatewayStkPushRepository pushRepository;
     private final GatewayStkPushService pushService;
@@ -47,6 +51,18 @@ public class GatewayStkPushPoller {
         }
         int polled = 0;
         for (GatewayStkPush push : pending) {
+            // Till-awaits are settled by buygoods webhooks only — checking them at the
+            // gateway would open a transaction per row on every run for nothing.
+            if (!GatewayStkPushService.isPollableAtGateway(push)) {
+                if (isPastTillAwaitWindow(push)) {
+                    try {
+                        pushService.expireStaleTillAwait(push, TILL_AWAIT_MAX_AGE);
+                    } catch (Exception e) {
+                        log.warn("Till await expiry failed for push={}: {}", push.getId(), e.getMessage());
+                    }
+                }
+                continue;
+            }
             if (push.getPollCount() >= maxAttempts) {
                 try {
                     pushService.markTimedOutIfPollsExhausted(push, maxAttempts);
@@ -65,5 +81,10 @@ public class GatewayStkPushPoller {
         if (polled > 0) {
             log.debug("STK poll run: checked={} pending={}", polled, pending.size());
         }
+    }
+
+    private static boolean isPastTillAwaitWindow(GatewayStkPush push) {
+        return push.getCreatedAt() != null
+                && push.getCreatedAt().isBefore(Instant.now().minus(TILL_AWAIT_MAX_AGE));
     }
 }

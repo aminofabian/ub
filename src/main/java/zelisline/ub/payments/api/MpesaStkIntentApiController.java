@@ -34,6 +34,7 @@ import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.StkPushContextType;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.TenantRequestIds;
+import zelisline.ub.till.application.TillDeviceService;
 
 @RestController
 @RequestMapping("/api/v1/payments/mpesa/stk")
@@ -158,7 +159,8 @@ public class MpesaStkIntentApiController {
                         businessId,
                         body.amount(),
                         body.phoneNumber(),
-                        idempotencyKey != null ? idempotencyKey.trim() : null)
+                        idempotencyKey != null ? idempotencyKey.trim() : null,
+                        request.getHeader(TillDeviceService.TILL_DEVICE_HEADER))
                 .map(push -> new PosTillAwaitResponse(
                         true,
                         push.getGatewayCheckoutId(),

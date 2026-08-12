@@ -156,9 +156,7 @@ public class AuthService {
         if (user.getPinHash() == null) {
             throw invalidCredentials();
         }
-        if (user.getBranchId() == null || !user.getBranchId().equals(request.branchId())) {
-            throw invalidCredentials();
-        }
+        String branchId = resolvePinBranchId(user, request.branchId());
         assertCanAuthenticate(user);
         String pinPayload = businessId + ":" + request.pin();
         if (!passwordEncoder.matches(pinPayload, user.getPinHash())) {
@@ -166,7 +164,7 @@ public class AuthService {
             throw invalidCredentials();
         }
         try {
-            tillDeviceService.assertPinLoginAllowed(businessId, request.branchId(), tillDeviceKey);
+            tillDeviceService.assertPinLoginAllowed(businessId, branchId, tillDeviceKey);
         } catch (ResponseStatusException ex) {
             publishPinLoginDenied(user, http, tillDeviceKey, ex.getReason());
             throw ex;
@@ -213,9 +211,7 @@ public class AuthService {
         if (user.getPinHash() == null) {
             throw invalidCredentials();
         }
-        if (user.getBranchId() == null || !user.getBranchId().equals(request.branchId())) {
-            throw invalidCredentials();
-        }
+        String branchId = resolvePinBranchId(user, request.branchId());
         assertCanAuthenticate(user);
 
         String pinPayload = businessId + ":" + request.pin();
@@ -224,7 +220,7 @@ public class AuthService {
             throw invalidCredentials();
         }
         try {
-            tillDeviceService.assertPinLoginAllowed(businessId, request.branchId(), tillDeviceKey);
+            tillDeviceService.assertPinLoginAllowed(businessId, branchId, tillDeviceKey);
         } catch (ResponseStatusException ex) {
             publishPinLoginDenied(user, http, tillDeviceKey, ex.getReason());
             throw ex;
@@ -681,6 +677,22 @@ public class AuthService {
             return null;
         }
         return value.trim();
+    }
+
+    /**
+     * PIN login is tied to the staff member's home branch. Callers may omit
+     * {@code requestedBranchId}; when provided it must match the assigned branch.
+     */
+    private String resolvePinBranchId(User user, String requestedBranchId) {
+        String assigned = trimToNull(user.getBranchId());
+        if (assigned == null) {
+            throw invalidCredentials();
+        }
+        String requested = trimToNull(requestedBranchId);
+        if (requested != null && !assigned.equals(requested)) {
+            throw invalidCredentials();
+        }
+        return assigned;
     }
 
     private ResponseStatusException invalidCredentials() {

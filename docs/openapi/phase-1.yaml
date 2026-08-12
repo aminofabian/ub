@@ -4699,7 +4699,6 @@ components:
           minLength: 1
           pattern: \d{4,6}
       required:
-      - branchId
       - email
       - pin
     CreateApiKeyRequest:

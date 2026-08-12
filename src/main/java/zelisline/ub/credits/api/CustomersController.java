@@ -75,6 +75,7 @@ public class CustomersController {
     public Page<CustomerResponse> list(
             Pageable pageable,
             @RequestParam(required = false) String phone,
+            @RequestParam(required = false) String q,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdFrom,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdTo,
             HttpServletRequest request
@@ -89,6 +90,7 @@ public class CustomersController {
         return customerDirectoryService.list(
                 TenantRequestIds.resolveBusinessId(request),
                 phone,
+                q,
                 fromInstant,
                 toExclusive,
                 pageable);

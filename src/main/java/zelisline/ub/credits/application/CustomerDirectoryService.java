@@ -65,18 +65,21 @@ public class CustomerDirectoryService {
     public Page<CustomerResponse> list(
             String businessId,
             String phoneQuery,
+            String q,
             Instant createdFrom,
             Instant createdToExclusive,
             Pageable pageable
     ) {
-        if (phoneQuery != null && !phoneQuery.isBlank()) {
-            String normalized = CustomerPhoneNormalizer.normalize(phoneQuery);
+        String flexible = q != null && !q.isBlank() ? q.trim() : null;
+        String phoneOnly = phoneQuery != null && !phoneQuery.isBlank() ? phoneQuery.trim() : null;
+        if (flexible == null && phoneOnly != null) {
+            String normalized = CustomerPhoneNormalizer.normalize(phoneOnly);
             if (normalized.isEmpty()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Phone search requires digits");
             }
         }
         Page<Customer> page = resolveListPage(
-                businessId, phoneQuery, createdFrom, createdToExclusive, pageable);
+                businessId, phoneOnly, flexible, createdFrom, createdToExclusive, pageable);
         List<Customer> rows = page.getContent();
         Map<String, List<CustomerPhone>> phonesByCustomer = phonesGroupedByCustomer(rows);
         Map<String, CreditAccount> creditByCustomer = creditByCustomer(rows);
@@ -327,10 +330,29 @@ public class CustomerDirectoryService {
     private Page<Customer> resolveListPage(
             String businessId,
             String phoneRaw,
+            String flexibleQuery,
             Instant createdFrom,
             Instant createdToExclusive,
             Pageable pageable
     ) {
+        if (flexibleQuery != null && !flexibleQuery.isBlank()) {
+            String trimmed = flexibleQuery.trim();
+            String digits = CustomerPhoneNormalizer.normalize(trimmed);
+            // Name part only when the query has letters (avoid matching every name on "07").
+            boolean hasLetters = trimmed.chars().anyMatch(Character::isLetter);
+            String namePart = hasLetters ? trimmed.toLowerCase() : null;
+            String phoneDigits = digits.isEmpty() ? null : digits;
+            if (namePart == null && phoneDigits == null) {
+                return Page.empty(pageable);
+            }
+            return customerRepository.findByBusinessIdAndNameOrPhoneContains(
+                    businessId,
+                    namePart,
+                    phoneDigits,
+                    createdFrom,
+                    createdToExclusive,
+                    pageable);
+        }
         boolean hasRange = createdFrom != null || createdToExclusive != null;
         if (phoneRaw == null || phoneRaw.isBlank()) {
             if (!hasRange) {

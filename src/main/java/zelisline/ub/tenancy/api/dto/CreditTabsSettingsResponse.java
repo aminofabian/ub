@@ -2,10 +2,14 @@ package zelisline.ub.tenancy.api.dto;
 
 public record CreditTabsSettingsResponse(
         boolean allowCashierTabClearance,
-        boolean requirePhoneVerificationForNewTabCustomers
+        boolean requirePhoneVerificationForNewTabCustomers,
+        boolean allowCashierSearchCustomersByName
 ) {
-    /** Defaults off — admin must enable cashier tab clearance. */
+    /**
+     * Defaults: clearance off, phone verification on, name search off
+     * (admin must opt in to name lookup on Tab checkout).
+     */
     public static CreditTabsSettingsResponse defaults() {
-        return new CreditTabsSettingsResponse(false, true);
+        return new CreditTabsSettingsResponse(false, true, false);
     }
 }

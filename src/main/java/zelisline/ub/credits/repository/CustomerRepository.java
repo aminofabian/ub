@@ -101,4 +101,51 @@ public interface CustomerRepository extends JpaRepository<Customer, String> {
             @Param("createdToExclusive") Instant createdToExclusive,
             Pageable pageable
     );
+
+    /**
+     * Name contains (case-insensitive) and/or phone digit contains.
+     * Used for Tab checkout when admin enables name search.
+     */
+    @Query(
+            value = """
+                    SELECT DISTINCT c FROM Customer c
+                    WHERE c.businessId = :businessId
+                      AND c.deletedAt IS NULL
+                      AND (
+                            (:namePart IS NOT NULL AND lower(c.name) LIKE concat('%', :namePart, '%'))
+                         OR (:phoneDigits IS NOT NULL AND EXISTS (
+                                SELECT 1 FROM CustomerPhone p
+                                 WHERE p.customerId = c.id
+                                   AND p.businessId = :businessId
+                                   AND p.phone LIKE concat('%', :phoneDigits, '%')
+                            ))
+                      )
+                      AND (:createdFrom IS NULL OR c.createdAt >= :createdFrom)
+                      AND (:createdToExclusive IS NULL OR c.createdAt < :createdToExclusive)
+                    """,
+            countQuery = """
+                    SELECT COUNT(DISTINCT c) FROM Customer c
+                    WHERE c.businessId = :businessId
+                      AND c.deletedAt IS NULL
+                      AND (
+                            (:namePart IS NOT NULL AND lower(c.name) LIKE concat('%', :namePart, '%'))
+                         OR (:phoneDigits IS NOT NULL AND EXISTS (
+                                SELECT 1 FROM CustomerPhone p
+                                 WHERE p.customerId = c.id
+                                   AND p.businessId = :businessId
+                                   AND p.phone LIKE concat('%', :phoneDigits, '%')
+                            ))
+                      )
+                      AND (:createdFrom IS NULL OR c.createdAt >= :createdFrom)
+                      AND (:createdToExclusive IS NULL OR c.createdAt < :createdToExclusive)
+                    """
+    )
+    Page<Customer> findByBusinessIdAndNameOrPhoneContains(
+            @Param("businessId") String businessId,
+            @Param("namePart") String namePartLower,
+            @Param("phoneDigits") String phoneDigits,
+            @Param("createdFrom") Instant createdFrom,
+            @Param("createdToExclusive") Instant createdToExclusive,
+            Pageable pageable
+    );
 }

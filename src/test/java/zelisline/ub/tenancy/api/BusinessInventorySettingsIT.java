@@ -140,7 +140,9 @@ class BusinessInventorySettingsIT {
                 .andExpect(jsonPath("$.inventory.creditTabs.allowCashierTabClearance")
                         .value(false))
                 .andExpect(jsonPath("$.inventory.creditTabs.requirePhoneVerificationForNewTabCustomers")
-                        .value(true));
+                        .value(true))
+                .andExpect(jsonPath("$.inventory.creditTabs.allowCashierSearchCustomersByName")
+                        .value(false));
     }
 
     @Test
@@ -151,10 +153,12 @@ class BusinessInventorySettingsIT {
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
                         .contentType(APPLICATION_JSON)
                         .content("""
-                                {"inventory":{"creditTabs":{"allowCashierTabClearance":true}}}
+                                {"inventory":{"creditTabs":{"allowCashierTabClearance":true,"allowCashierSearchCustomersByName":true}}}
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.inventory.creditTabs.allowCashierTabClearance")
+                        .value(true))
+                .andExpect(jsonPath("$.inventory.creditTabs.allowCashierSearchCustomersByName")
                         .value(true));
 
         entityManager.clear();
@@ -165,6 +169,8 @@ class BusinessInventorySettingsIT {
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.inventory.creditTabs.allowCashierTabClearance")
+                        .value(true))
+                .andExpect(jsonPath("$.inventory.creditTabs.allowCashierSearchCustomersByName")
                         .value(true));
     }
 

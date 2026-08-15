@@ -209,7 +209,9 @@ public class IdentityService {
         User user = requireTenantUser(businessId, userId);
 
         if (user.statusAsEnum() != UserStatus.ACTIVE) {
-            // Idempotent: already inactive.
+            // Idempotent on status, but still revoke: rows created before
+            // deactivation revoked sessions may leave a suspended user signed in.
+            userSessionRepository.revokeAllActiveForUser(user.getId(), Instant.now());
             Role role = roleRepository.findById(user.getRoleId()).orElse(null);
             return toResponse(user, role);
         }
@@ -219,8 +221,21 @@ public class IdentityService {
         }
         user.setStatus(UserStatus.SUSPENDED);
         User saved = userRepository.save(user);
+        userSessionRepository.revokeAllActiveForUser(saved.getId(), Instant.now());
         Role role = roleRepository.findById(saved.getRoleId()).orElse(null);
         return toResponse(saved, role);
+    }
+
+    /**
+     * Admin signs a user out of every device by revoking their session rows.
+     * Credentials are untouched, so the user can sign back in — use
+     * {@link #deactivateUser} to remove access. Returns the number of sessions
+     * that were still active.
+     */
+    @Transactional
+    public int revokeUserSessions(String businessId, String userId) {
+        User user = requireTenantUser(businessId, userId);
+        return userSessionRepository.revokeAllActiveForUser(user.getId(), Instant.now());
     }
 
     /**

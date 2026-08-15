@@ -220,6 +220,48 @@ class IdentityServiceTest {
     }
 
     @Test
+    void deactivateRevokesSessions() {
+        User user = ownerUserOf(TENANT_A);
+        user.setRoleId(ROLE_CASHIER);
+        given(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(user.getId(), TENANT_A))
+                .willReturn(Optional.of(user));
+        given(roleRepository.findById(ROLE_CASHIER)).willReturn(Optional.of(cashierRole));
+        given(userRepository.save(any(User.class))).willAnswer(inv -> inv.getArgument(0));
+        given(permissionRepository.findPermissionKeysByRoleId(ROLE_CASHIER)).willReturn(List.of());
+
+        UserResponse response = identityService.deactivateUser(TENANT_A, user.getId());
+
+        assertThat(response.status()).isEqualTo("suspended");
+        verify(userSessionRepository).revokeAllActiveForUser(eq(user.getId()), any(Instant.class));
+    }
+
+    // ---------- revokeUserSessions ------------------------------------------
+
+    @Test
+    void revokeUserSessionsReturnsRevokedCount() {
+        User user = ownerUserOf(TENANT_A);
+        given(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(user.getId(), TENANT_A))
+                .willReturn(Optional.of(user));
+        given(userSessionRepository.revokeAllActiveForUser(eq(user.getId()), any(Instant.class)))
+                .willReturn(2);
+
+        assertThat(identityService.revokeUserSessions(TENANT_A, user.getId())).isEqualTo(2);
+    }
+
+    @Test
+    void revokeUserSessionsRejectsOtherTenant() {
+        given(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull("user-1", TENANT_B))
+                .willReturn(Optional.empty());
+
+        ResponseStatusException ex = catchThrowableOfType(
+                () -> identityService.revokeUserSessions(TENANT_B, "user-1"),
+                ResponseStatusException.class);
+
+        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        verify(userSessionRepository, never()).revokeAllActiveForUser(anyString(), any(Instant.class));
+    }
+
+    @Test
     void updateUserStatusToSuspendedBlocksLastOwner() {
         User user = ownerUserOf(TENANT_A);
         given(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(user.getId(), TENANT_A))

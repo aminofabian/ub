@@ -3,7 +3,6 @@ package zelisline.ub.purchasing.application;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -68,9 +67,6 @@ public class SupplierDisbursementService {
     @Value("${app.public.api-base-url:http://localhost:5050}")
     private String publicApiBaseUrl;
 
-    @Value("${app.payments.send-money.stale-pending-seconds:180}")
-    private int stalePendingSeconds;
-
     @Transactional(readOnly = true)
     public SupplyPayOptionsResponse payOptions(String businessId, String invoiceId) {
         SupplierInvoice inv = requirePayableInvoice(businessId, invoiceId);
@@ -88,6 +84,13 @@ public class SupplierDisbursementService {
         boolean kopokopoEligible = gatewayReady && destinationConfigured && open.compareTo(MONEY) > 0;
 
         Optional<SupplierDisbursement> pending = findPendingDisbursement(businessId, invoiceId);
+        Optional<SupplierDisbursement> latest = disbursementRepository
+                .findByBusinessIdAndSupplierInvoiceIdOrderByCreatedAtDesc(businessId, invoiceId)
+                .stream()
+                .findFirst();
+        if (latest.isPresent() && isOpenForConfirm(latest.get())) {
+            pollSendMoneyStatus(latest.get());
+        }
 
         return new SupplyPayOptionsResponse(
                 open,
@@ -101,8 +104,14 @@ public class SupplierDisbursementService {
                 destinationConfigured && supplier != null ? supplier.getPayoutPaybillNumber() : null,
                 destinationConfigured && supplier != null ? supplier.getPayoutPaybillAccount() : null,
                 kopokopoEligible,
-                pending.isPresent(),
-                pending.map(SupplierDisbursement::getId).orElse(null));
+                pending.filter(d -> SupplierDisbursementStatuses.PENDING.equals(d.getStatus())).isPresent()
+                        || latest.filter(d -> SupplierDisbursementStatuses.PENDING.equals(d.getStatus())).isPresent(),
+                pending.map(SupplierDisbursement::getId)
+                        .or(() -> latest.filter(d -> SupplierDisbursementStatuses.PENDING.equals(d.getStatus()))
+                                .map(SupplierDisbursement::getId))
+                        .orElse(null),
+                latest.map(SupplierDisbursement::getStatus).orElse(null),
+                latest.map(this::publicDisbursementMessage).orElse(null));
     }
 
     @Transactional
@@ -224,14 +233,40 @@ public class SupplierDisbursementService {
         if (isOpenForConfirm(d)) {
             pollSendMoneyStatus(d);
         }
-        reconcileStalePending(d);
+        return toPayResponse(d);
+    }
 
-        return new SupplyKopokopoPayResponse(
-                SupplierDisbursementStatuses.SUCCESS.equals(d.getStatus()),
-                d.getId(),
-                d.getKopokopoSendMoneyId(),
-                d.getStatus(),
-                d.getFailureReason() != null ? d.getFailureReason() : d.getStatus());
+    /**
+     * Stop waiting on a pending or failed Send Money that has not posted to the ledger.
+     * Polls KopoKopo first so a completed transfer is recorded instead of cancelled.
+     */
+    @Transactional
+    public SupplyKopokopoPayResponse cancelDisbursement(String businessId, String invoiceId) {
+        SupplierDisbursement d = disbursementRepository
+                .findByBusinessIdAndSupplierInvoiceIdOrderByCreatedAtDesc(businessId, invoiceId)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No disbursement found"));
+
+        if (SupplierDisbursementStatuses.SUCCESS.equals(d.getStatus())
+                || d.getSupplierPaymentId() != null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "This payment already completed — it cannot be cancelled");
+        }
+        if (SupplierDisbursementStatuses.CANCELLED.equals(d.getStatus())) {
+            return toPayResponse(d);
+        }
+
+        if (isOpenForConfirm(d)) {
+            pollSendMoneyStatus(d);
+        }
+        if (SupplierDisbursementStatuses.SUCCESS.equals(d.getStatus())
+                || d.getSupplierPaymentId() != null) {
+            return toPayResponse(d);
+        }
+
+        markCancelled(d, "Cancelled — PalMart stopped waiting. If M-Pesa still completes, it will be recorded.");
+        return toPayResponse(d);
     }
 
     @Transactional
@@ -305,7 +340,8 @@ public class SupplierDisbursementService {
             confirmDisbursement(disbursement, parsed);
             return true;
         }
-        if (parsed.terminalFailure() && SupplierDisbursementStatuses.PENDING.equals(disbursement.getStatus())) {
+        if (parsed.terminalFailure() && isOpenForConfirm(disbursement)
+                && !SupplierDisbursementStatuses.FAILED.equals(disbursement.getStatus())) {
             markFailed(disbursement, kopokopoDeclineMessage(parsed));
             return true;
         }
@@ -319,7 +355,10 @@ public class SupplierDisbursementService {
     public int pollOpenDisbursements(Instant createdAfter) {
         List<SupplierDisbursement> candidates = disbursementRepository
                 .findByStatusInAndCreatedAtAfterOrderByCreatedAtAsc(
-                        List.of(SupplierDisbursementStatuses.PENDING, SupplierDisbursementStatuses.FAILED),
+                        List.of(
+                                SupplierDisbursementStatuses.PENDING,
+                                SupplierDisbursementStatuses.FAILED,
+                                SupplierDisbursementStatuses.CANCELLED),
                         createdAfter);
         int settled = 0;
         for (SupplierDisbursement d : candidates) {
@@ -365,7 +404,8 @@ public class SupplierDisbursementService {
             if (status.success()) {
                 confirmDisbursement(disbursement, status);
             } else if (status.terminalFailure()
-                    && SupplierDisbursementStatuses.PENDING.equals(disbursement.getStatus())) {
+                    && (SupplierDisbursementStatuses.PENDING.equals(disbursement.getStatus())
+                    || SupplierDisbursementStatuses.CANCELLED.equals(disbursement.getStatus()))) {
                 log.warn("KopoKopo Send Money declined: disbursement={} sendMoneyId={} reason={} payload={}",
                         disbursement.getId(),
                         sendMoneyId,
@@ -379,11 +419,42 @@ public class SupplierDisbursementService {
         }
     }
 
-    /** Pending, or timed-out/failed locally without a ledger payment yet. */
+    /** Pending, cancelled, or timed-out/failed locally without a ledger payment yet. */
     private static boolean isOpenForConfirm(SupplierDisbursement disbursement) {
-        return SupplierDisbursementStatuses.PENDING.equals(disbursement.getStatus())
-                || (SupplierDisbursementStatuses.FAILED.equals(disbursement.getStatus())
-                && disbursement.getSupplierPaymentId() == null);
+        if (disbursement.getSupplierPaymentId() != null) {
+            return false;
+        }
+        String status = disbursement.getStatus();
+        return SupplierDisbursementStatuses.PENDING.equals(status)
+                || SupplierDisbursementStatuses.FAILED.equals(status)
+                || SupplierDisbursementStatuses.CANCELLED.equals(status);
+    }
+
+    private SupplyKopokopoPayResponse toPayResponse(SupplierDisbursement d) {
+        return new SupplyKopokopoPayResponse(
+                SupplierDisbursementStatuses.SUCCESS.equals(d.getStatus()),
+                d.getId(),
+                d.getKopokopoSendMoneyId(),
+                d.getStatus(),
+                publicDisbursementMessage(d));
+    }
+
+    private String publicDisbursementMessage(SupplierDisbursement d) {
+        if (d == null) {
+            return null;
+        }
+        if (SupplierDisbursementStatuses.PENDING.equals(d.getStatus())) {
+            return "Pending — waiting for KopoKopo / M-Pesa confirmation.";
+        }
+        if (SupplierDisbursementStatuses.CANCELLED.equals(d.getStatus())) {
+            return d.getFailureReason() != null
+                    ? d.getFailureReason()
+                    : "Cancelled.";
+        }
+        if (d.getFailureReason() != null && !d.getFailureReason().isBlank()) {
+            return d.getFailureReason();
+        }
+        return d.getStatus();
     }
 
     private static String kopokopoDeclineMessage(WebhookResult parsed) {
@@ -508,6 +579,13 @@ public class SupplierDisbursementService {
         }
     }
 
+    private void markCancelled(SupplierDisbursement disbursement, String reason) {
+        disbursement.setStatus(SupplierDisbursementStatuses.CANCELLED);
+        disbursement.setFailureReason(reason);
+        disbursementRepository.save(disbursement);
+        log.info("Supplier disbursement cancelled: id={} reason={}", disbursement.getId(), reason);
+    }
+
     private void markFailed(SupplierDisbursement disbursement, String reason) {
         disbursement.setStatus(SupplierDisbursementStatuses.FAILED);
         disbursement.setFailureReason(reason);
@@ -549,17 +627,8 @@ public class SupplierDisbursementService {
         if (!SupplierDisbursementStatuses.PENDING.equals(disbursement.getStatus())) {
             return;
         }
-        Instant staleBefore = Instant.now().minus(Math.max(stalePendingSeconds, 60), ChronoUnit.SECONDS);
-        if (disbursement.getCreatedAt() != null && disbursement.getCreatedAt().isBefore(staleBefore)) {
-            // Ask KopoKopo once more before giving up — money may already have left the till.
-            pollSendMoneyStatus(disbursement);
-            if (!SupplierDisbursementStatuses.PENDING.equals(disbursement.getStatus())) {
-                return;
-            }
-            markFailed(
-                    disbursement,
-                    "Timed out waiting for KopoKopo confirmation. Check KopoKopo or retry Send Money.");
-        }
+        // Ask KopoKopo — stay pending while they still report pending. Do not invent Failed.
+        pollSendMoneyStatus(disbursement);
     }
 
     private SupplierInvoice requirePayableInvoice(String businessId, String invoiceId) {

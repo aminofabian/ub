@@ -21,6 +21,9 @@ public record SupplyPayOptionsResponse(
         String payoutPaybillAccount,
         boolean kopokopoPayEligible,
         boolean pendingDisbursement,
-        String pendingDisbursementId
+        String pendingDisbursementId,
+        /** Latest Send Money row: pending, failed, cancelled, success, or null. */
+        String latestDisbursementStatus,
+        String latestDisbursementMessage
 ) {
 }

@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -82,7 +83,6 @@ class SupplierDisbursementWebhookTest {
                 new ObjectMapper(),
                 pathBAssociatedCostService);
         ReflectionTestUtils.setField(service, "publicApiBaseUrl", "http://localhost:5050");
-        ReflectionTestUtils.setField(service, "stalePendingSeconds", 180);
     }
 
     @Test
@@ -162,6 +162,45 @@ class SupplierDisbursementWebhookTest {
         verify(webhookEventRepository, never()).save(any());
         verify(supplierPaymentService, times(1)).recordKopokopoDisbursement(
                 any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void cancelPending_marksCancelledWhenKopokopoStillPending() {
+        SupplierDisbursement pending = pendingDisbursement();
+        when(disbursementRepository.findByBusinessIdAndSupplierInvoiceIdOrderByCreatedAtDesc("biz-1", "inv-1"))
+                .thenReturn(List.of(pending));
+        when(disbursementRepository.save(pending)).thenReturn(pending);
+
+        var response = service.cancelDisbursement("biz-1", "inv-1");
+
+        assertThat(response.status()).isEqualTo(SupplierDisbursementStatuses.CANCELLED);
+        assertThat(pending.getStatus()).isEqualTo(SupplierDisbursementStatuses.CANCELLED);
+        verify(supplierPaymentService, never()).recordKopokopoDisbursement(
+                any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void cancelPending_recordsLedgerWhenKopokopoAlreadySucceeded() {
+        SupplierDisbursement pending = pendingDisbursement();
+        pending.setPaymentGatewayConfigId("cfg-1");
+        when(disbursementRepository.findByBusinessIdAndSupplierInvoiceIdOrderByCreatedAtDesc("biz-1", "inv-1"))
+                .thenReturn(List.of(pending));
+        zelisline.ub.payments.domain.PaymentGatewayConfig cfg = new zelisline.ub.payments.domain.PaymentGatewayConfig();
+        cfg.setId("cfg-1");
+        cfg.setGatewayType(GatewayType.KOPOKOPO);
+        cfg.setCredentialsJson("enc");
+        when(configRepository.findById("cfg-1")).thenReturn(Optional.of(cfg));
+        when(encryptionService.decrypt("enc")).thenReturn("{\"tillNumber\":\"123\"}");
+        when(kopokopoGateway.querySendMoneyStatus(eq("sm-1"), any()))
+                .thenReturn(sendMoney(true, false, "sm-1", "sm-1", "QCLREF"));
+        when(supplierPaymentService.recordKopokopoDisbursement(
+                any(), any(), any(), any(), any(), any()))
+                .thenReturn(new PostSupplierPaymentResponse("pay-1", null, null, null));
+
+        var response = service.cancelDisbursement("biz-1", "inv-1");
+
+        assertThat(response.status()).isEqualTo(SupplierDisbursementStatuses.SUCCESS);
+        assertThat(pending.getSupplierPaymentId()).isEqualTo("pay-1");
     }
 
     @Test

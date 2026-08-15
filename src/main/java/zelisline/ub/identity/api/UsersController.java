@@ -33,6 +33,7 @@ import zelisline.ub.identity.api.dto.AdminSetPasswordRequest;
 import zelisline.ub.identity.api.dto.AdminSetPinRequest;
 import zelisline.ub.identity.api.dto.AssignRoleRequest;
 import zelisline.ub.identity.api.dto.CreateUserRequest;
+import zelisline.ub.identity.api.dto.ForceLogoutResponse;
 import zelisline.ub.identity.api.dto.SetUserItemTypesRequest;
 import zelisline.ub.identity.api.dto.UpdateUserRequest;
 import zelisline.ub.identity.api.dto.UserPinResponse;
@@ -225,6 +226,32 @@ public class UsersController {
                 .newState(map("status", deactivated.status()))
                 .build());
         return deactivated;
+    }
+
+    /**
+     * Signs the user out of every device without changing their credentials
+     * (lost phone, shared till, forgotten session on a customer's laptop).
+     */
+    @PostMapping("/{userId}/force-logout")
+    @PreAuthorize("hasPermission(null, 'users.update')")
+    public ForceLogoutResponse forceLogout(@PathVariable String userId, HttpServletRequest request) {
+        CurrentTenantUser.require(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String actorId = CurrentTenantUser.auditActorId(request);
+        UserResponse user = identityService.getUser(businessId, userId);
+        int revoked = identityService.revokeUserSessions(businessId, userId);
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.SECURITY, AuditEventTypes.USER_SESSIONS_REVOKED, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .branchId(user.branchId())
+                .actor(actorId, AuditEventActorType.USER)
+                .target("user", user.id())
+                .targetLabel(user.email())
+                .ipAddress(clientIp(request))
+                .userAgent(request.getHeader("User-Agent"))
+                .source("web_admin")
+                .metadata(map("revokedSessions", revoked))
+                .build());
+        return new ForceLogoutResponse(user.id(), revoked);
     }
 
     @PostMapping("/{userId}/role")

@@ -134,6 +134,18 @@ public class PurchasingSuppliesController {
                 invoiceId);
     }
 
+    @PostMapping("/{invoiceId}/disbursement-cancel")
+    @PreAuthorize("hasPermission(null, 'purchasing.payment.write')")
+    public SupplyKopokopoPayResponse cancelDisbursement(
+            @PathVariable String invoiceId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return supplierDisbursementService.cancelDisbursement(
+                TenantRequestIds.resolveBusinessId(request),
+                invoiceId);
+    }
+
     @GetMapping("/{invoiceId}/payment-history")
     @PreAuthorize("hasPermission(null, 'purchasing.payment.read')")
     public List<SupplyPaymentHistoryRow> paymentHistory(

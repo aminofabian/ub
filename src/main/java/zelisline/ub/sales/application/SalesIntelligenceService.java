@@ -681,11 +681,10 @@ public class SalesIntelligenceService {
     private static final String Q_CUSTOMERS_BY_MONTH = """
             SELECT EXTRACT(YEAR FROM CAST(s.sold_at AS DATE)) AS yr,
                    EXTRACT(MONTH FROM CAST(s.sold_at AS DATE)) AS mo,
-                   COUNT(DISTINCT s.customer_id) AS customer_count
+                   COUNT(*) AS customer_count
               FROM sales s
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
-               AND s.customer_id IS NOT NULL
                AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
                AND (? IS NULL OR s.branch_id = ?)
           GROUP BY EXTRACT(YEAR FROM CAST(s.sold_at AS DATE)),
@@ -694,11 +693,10 @@ public class SalesIntelligenceService {
             """;
 
     private static final String Q_CUSTOMERS_DISTINCT = """
-            SELECT COUNT(DISTINCT s.customer_id) AS customer_count
+            SELECT COUNT(*) AS customer_count
               FROM sales s
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
-               AND s.customer_id IS NOT NULL
                AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
                AND (? IS NULL OR s.branch_id = ?)
             """;

@@ -15,7 +15,9 @@ import org.springframework.web.bind.annotation.RestController;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
+import zelisline.ub.sales.api.dto.BranchCogsRow;
 import zelisline.ub.sales.api.dto.CategoryDailyRevenueRow;
+import zelisline.ub.sales.api.dto.CustomerTrendResponse;
 import zelisline.ub.sales.api.dto.ItemActivityResponse;
 import zelisline.ub.sales.api.dto.ItemRevenueRow;
 import zelisline.ub.sales.api.dto.ItemVelocityRow;
@@ -135,6 +137,50 @@ public class SalesIntelligenceController {
     ) {
         CurrentTenantUser.require(request);
         return salesIntelligenceService.paymentLedger(
+                TenantRequestIds.resolveBusinessId(request), from, to, branchId);
+    }
+
+    @GetMapping("/items-by-profit")
+    @PreAuthorize("hasPermission(null, 'sales.intelligence.read')")
+    public List<ItemRevenueRow> itemsByProfit(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) String categoryId,
+            @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) String itemTypeId,
+            @RequestParam(required = false) Integer limit,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return salesIntelligenceService.itemsByProfit(
+                TenantRequestIds.resolveBusinessId(request), from, to, categoryId, branchId, itemTypeId, limit);
+    }
+
+    @GetMapping("/cogs-by-branch")
+    @PreAuthorize("hasPermission(null, 'sales.intelligence.read')")
+    public List<BranchCogsRow> cogsByBranch(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) String categoryId,
+            @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) String itemTypeId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return salesIntelligenceService.cogsByBranch(
+                TenantRequestIds.resolveBusinessId(request), from, to, categoryId, branchId, itemTypeId);
+    }
+
+    @GetMapping("/customers-by-month")
+    @PreAuthorize("hasPermission(null, 'sales.intelligence.read')")
+    public CustomerTrendResponse customersByMonth(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) String branchId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return salesIntelligenceService.customersByMonth(
                 TenantRequestIds.resolveBusinessId(request), from, to, branchId);
     }
 

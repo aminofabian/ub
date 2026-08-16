@@ -37,7 +37,9 @@ import zelisline.ub.reporting.repository.MvSalesDailyRepository.ItemDailyRollup;
 import zelisline.ub.reporting.repository.MvSalesDailyRepository.ItemDayQtyRevenue;
 import zelisline.ub.reporting.repository.MvSalesDailyRepository.ItemVelocityPast;
 import zelisline.ub.sales.SalesConstants;
+import zelisline.ub.sales.api.dto.BranchCogsRow;
 import zelisline.ub.sales.api.dto.CategoryDailyRevenueRow;
+import zelisline.ub.sales.api.dto.CustomerTrendResponse;
 import zelisline.ub.sales.api.dto.ItemActivityResponse;
 import zelisline.ub.sales.api.dto.ItemActivitySummary;
 import zelisline.ub.sales.api.dto.ItemDailySalesRow;
@@ -45,6 +47,7 @@ import zelisline.ub.sales.api.dto.ItemPeriodBuckets;
 import zelisline.ub.sales.api.dto.ItemRevenueRow;
 import zelisline.ub.sales.api.dto.ItemStockInRow;
 import zelisline.ub.sales.api.dto.ItemVelocityRow;
+import zelisline.ub.sales.api.dto.MonthlyCustomerRow;
 import zelisline.ub.sales.api.dto.PaymentLedgerRow;
 import zelisline.ub.sales.api.dto.PaymentMethodBreakdownRow;
 import zelisline.ub.sales.api.dto.RecentSaleRow;
@@ -62,6 +65,8 @@ public class SalesIntelligenceService {
     private static final BigDecimal QTY_ZERO = BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
     private static final int DEFAULT_VELOCITY_LIMIT = 100;
     private static final int MAX_VELOCITY_LIMIT = 500;
+    private static final int DEFAULT_PROFIT_ITEM_LIMIT = 10;
+    private static final int MAX_PROFIT_ITEM_LIMIT = 50;
     private static final int STOCK_IN_LIMIT = 40;
     private static final int ITEM_RECENT_SALES_LIMIT = 80;
     private static final List<String> STOCK_IN_TYPES = List.of(
@@ -598,6 +603,104 @@ public class SalesIntelligenceService {
                AND (? IS NULL OR i.item_type_id = ?)
           GROUP BY s.sold_by, COALESCE(NULLIF(TRIM(u.name), ''), u.email, s.sold_by)
           ORDER BY total_revenue DESC
+            """;
+
+    private static final String Q_ITEMS_FILTERED = """
+            SELECT sil.item_id,
+                   i.name AS item_name,
+                   i.sku,
+                   COALESCE(SUM(sil.quantity), 0) AS qty_sold,
+                   COALESCE(SUM(sil.line_total), 0) AS gross,
+                   COALESCE(SUM(sil.profit), 0) AS profit_gross
+              FROM sale_items sil
+              JOIN sales s ON s.id = sil.sale_id
+              JOIN items i ON i.id = sil.item_id AND i.business_id = s.business_id AND i.deleted_at IS NULL
+             WHERE s.business_id = ?
+               AND s.status IN (?, ?)
+               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND (? IS NULL OR i.category_id = ?)
+               AND (? IS NULL OR s.branch_id = ?)
+               AND (? IS NULL OR i.item_type_id = ?)
+          GROUP BY sil.item_id, i.name, i.sku
+            """;
+
+    private static final String Q_ITEMS_REFUNDS_FILTERED = """
+            SELECT sil.item_id,
+                   COALESCE(SUM(rl.quantity), 0) AS qty_refunded,
+                   COALESCE(SUM(rl.amount), 0) AS refund_amt,
+                   COALESCE(SUM(sil.profit * (rl.quantity / NULLIF(sil.quantity, 0))), 0) AS profit_refund
+              FROM refund_lines rl
+              JOIN refunds r ON r.id = rl.refund_id
+              JOIN sale_items sil ON sil.id = rl.sale_item_id
+              JOIN sales s ON s.id = sil.sale_id
+              JOIN items i ON i.id = sil.item_id AND i.business_id = r.business_id AND i.deleted_at IS NULL
+             WHERE r.business_id = ?
+               AND r.status = ?
+               AND CAST(r.refunded_at AS DATE) BETWEEN ? AND ?
+               AND (? IS NULL OR i.category_id = ?)
+               AND (? IS NULL OR s.branch_id = ?)
+               AND (? IS NULL OR i.item_type_id = ?)
+          GROUP BY sil.item_id
+            """;
+
+    private static final String Q_COGS_BY_BRANCH = """
+            SELECT s.branch_id AS branch_id,
+                   COALESCE(NULLIF(TRIM(b.name), ''), s.branch_id) AS branch_name,
+                   COALESCE(SUM(sil.cost_total), 0) AS cogs
+              FROM sales s
+              JOIN sale_items sil ON sil.sale_id = s.id
+              JOIN items i ON i.id = sil.item_id AND i.business_id = s.business_id AND i.deleted_at IS NULL
+         LEFT JOIN branches b ON b.id = s.branch_id AND b.business_id = s.business_id
+             WHERE s.business_id = ?
+               AND s.status IN (?, ?)
+               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND (? IS NULL OR i.category_id = ?)
+               AND (? IS NULL OR s.branch_id = ?)
+               AND (? IS NULL OR i.item_type_id = ?)
+          GROUP BY s.branch_id, COALESCE(NULLIF(TRIM(b.name), ''), s.branch_id)
+          ORDER BY cogs DESC
+            """;
+
+    private static final String Q_COGS_REFUNDS_BY_BRANCH = """
+            SELECT s.branch_id AS branch_id,
+                   COALESCE(SUM(sil.cost_total * (rl.quantity / NULLIF(sil.quantity, 0))), 0) AS cogs_refund
+              FROM refund_lines rl
+              JOIN refunds r ON r.id = rl.refund_id
+              JOIN sale_items sil ON sil.id = rl.sale_item_id
+              JOIN sales s ON s.id = sil.sale_id
+              JOIN items i ON i.id = sil.item_id AND i.business_id = r.business_id AND i.deleted_at IS NULL
+             WHERE r.business_id = ?
+               AND r.status = ?
+               AND CAST(r.refunded_at AS DATE) BETWEEN ? AND ?
+               AND (? IS NULL OR i.category_id = ?)
+               AND (? IS NULL OR s.branch_id = ?)
+               AND (? IS NULL OR i.item_type_id = ?)
+          GROUP BY s.branch_id
+            """;
+
+    private static final String Q_CUSTOMERS_BY_MONTH = """
+            SELECT EXTRACT(YEAR FROM CAST(s.sold_at AS DATE)) AS yr,
+                   EXTRACT(MONTH FROM CAST(s.sold_at AS DATE)) AS mo,
+                   COUNT(DISTINCT s.customer_id) AS customer_count
+              FROM sales s
+             WHERE s.business_id = ?
+               AND s.status IN (?, ?)
+               AND s.customer_id IS NOT NULL
+               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND (? IS NULL OR s.branch_id = ?)
+          GROUP BY EXTRACT(YEAR FROM CAST(s.sold_at AS DATE)),
+                   EXTRACT(MONTH FROM CAST(s.sold_at AS DATE))
+          ORDER BY yr, mo
+            """;
+
+    private static final String Q_CUSTOMERS_DISTINCT = """
+            SELECT COUNT(DISTINCT s.customer_id) AS customer_count
+              FROM sales s
+             WHERE s.business_id = ?
+               AND s.status IN (?, ?)
+               AND s.customer_id IS NOT NULL
+               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND (? IS NULL OR s.branch_id = ?)
             """;
 
     @Transactional(readOnly = true)
@@ -1303,6 +1406,217 @@ public class SalesIntelligenceService {
                 typeFilter,
                 typeFilter);
         return out;
+    }
+
+    @Transactional(readOnly = true)
+    public List<ItemRevenueRow> itemsByProfit(
+            String businessId,
+            LocalDate fromInclusive,
+            LocalDate toInclusive,
+            String categoryId,
+            String branchId,
+            String itemTypeId,
+            Integer limit
+    ) {
+        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
+        Date from = Date.valueOf(w[0]);
+        Date to = Date.valueOf(w[1]);
+        String catFilter = blankToNull(categoryId);
+        String branchFilter = blankToNull(branchId);
+        String typeFilter = blankToNull(itemTypeId);
+        int cap = limit == null
+                ? DEFAULT_PROFIT_ITEM_LIMIT
+                : Math.max(1, Math.min(limit, MAX_PROFIT_ITEM_LIMIT));
+
+        Map<String, ItemAgg> byItem = new HashMap<>();
+        jdbc.query(
+                Q_ITEMS_FILTERED,
+                rs -> {
+                    String id = rs.getString("item_id");
+                    String name = rs.getString("item_name");
+                    String sku = rs.getString("sku");
+                    BigDecimal qty = rs.getBigDecimal("qty_sold").setScale(4, RoundingMode.HALF_UP);
+                    BigDecimal gross = rs.getBigDecimal("gross").setScale(2, RoundingMode.HALF_UP);
+                    BigDecimal profit = rs.getBigDecimal("profit_gross").setScale(2, RoundingMode.HALF_UP);
+                    byItem.merge(id, new ItemAgg(name, sku, qty, gross, ZERO, profit, ZERO), SalesIntelligenceService::combineItem);
+                },
+                businessId,
+                SalesConstants.SALE_STATUS_COMPLETED,
+                SalesConstants.SALE_STATUS_REFUNDED,
+                from,
+                to,
+                catFilter,
+                catFilter,
+                branchFilter,
+                branchFilter,
+                typeFilter,
+                typeFilter);
+
+        jdbc.query(
+                Q_ITEMS_REFUNDS_FILTERED,
+                rs -> {
+                    String id = rs.getString("item_id");
+                    BigDecimal qty = rs.getBigDecimal("qty_refunded").setScale(4, RoundingMode.HALF_UP);
+                    BigDecimal refund = rs.getBigDecimal("refund_amt").setScale(2, RoundingMode.HALF_UP);
+                    BigDecimal profit = rs.getBigDecimal("profit_refund").setScale(2, RoundingMode.HALF_UP);
+                    byItem.merge(id, new ItemAgg(null, null, qty.negate(), ZERO, refund, ZERO, profit), SalesIntelligenceService::combineItem);
+                },
+                businessId,
+                SalesConstants.REFUND_STATUS_COMPLETED,
+                from,
+                to,
+                catFilter,
+                catFilter,
+                branchFilter,
+                branchFilter,
+                typeFilter,
+                typeFilter);
+
+        List<ItemRevenueRow> out = new ArrayList<>();
+        for (Map.Entry<String, ItemAgg> e : byItem.entrySet()) {
+            ItemAgg a = e.getValue();
+            BigDecimal net = a.gross.subtract(a.refunds).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal netProfit = a.profitGross.subtract(a.profitRefunds).setScale(2, RoundingMode.HALF_UP);
+            if (net.signum() == 0 && netProfit.signum() == 0) {
+                continue;
+            }
+            out.add(new ItemRevenueRow(e.getKey(), a.name, a.sku, a.qty, a.gross, a.refunds, net, netProfit));
+        }
+        out.sort(Comparator.comparing(ItemRevenueRow::netProfit).reversed());
+        if (out.size() > cap) {
+            return new ArrayList<>(out.subList(0, cap));
+        }
+        return out;
+    }
+
+    @Transactional(readOnly = true)
+    public List<BranchCogsRow> cogsByBranch(
+            String businessId,
+            LocalDate fromInclusive,
+            LocalDate toInclusive,
+            String categoryId,
+            String branchId,
+            String itemTypeId
+    ) {
+        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
+        Date from = Date.valueOf(w[0]);
+        Date to = Date.valueOf(w[1]);
+        String catFilter = blankToNull(categoryId);
+        String branchFilter = blankToNull(branchId);
+        String typeFilter = blankToNull(itemTypeId);
+
+        Map<String, BranchCogsAgg> byBranch = new HashMap<>();
+        jdbc.query(
+                Q_COGS_BY_BRANCH,
+                rs -> {
+                    String id = rs.getString("branch_id");
+                    String name = rs.getString("branch_name");
+                    BigDecimal cogs = rs.getBigDecimal("cogs").setScale(2, RoundingMode.HALF_UP);
+                    byBranch.merge(id, new BranchCogsAgg(name, cogs, ZERO), SalesIntelligenceService::combineBranchCogs);
+                },
+                businessId,
+                SalesConstants.SALE_STATUS_COMPLETED,
+                SalesConstants.SALE_STATUS_REFUNDED,
+                from,
+                to,
+                catFilter,
+                catFilter,
+                branchFilter,
+                branchFilter,
+                typeFilter,
+                typeFilter);
+
+        jdbc.query(
+                Q_COGS_REFUNDS_BY_BRANCH,
+                rs -> {
+                    String id = rs.getString("branch_id");
+                    BigDecimal refund = rs.getBigDecimal("cogs_refund").setScale(2, RoundingMode.HALF_UP);
+                    byBranch.merge(id, new BranchCogsAgg(null, ZERO, refund), SalesIntelligenceService::combineBranchCogs);
+                },
+                businessId,
+                SalesConstants.REFUND_STATUS_COMPLETED,
+                from,
+                to,
+                catFilter,
+                catFilter,
+                branchFilter,
+                branchFilter,
+                typeFilter,
+                typeFilter);
+
+        List<BranchCogsRow> out = new ArrayList<>();
+        for (Map.Entry<String, BranchCogsAgg> e : byBranch.entrySet()) {
+            BranchCogsAgg a = e.getValue();
+            BigDecimal net = a.cogs.subtract(a.refunds).setScale(2, RoundingMode.HALF_UP);
+            if (net.signum() == 0) {
+                continue;
+            }
+            out.add(new BranchCogsRow(e.getKey(), a.name != null ? a.name : e.getKey(), net));
+        }
+        out.sort(Comparator.comparing(BranchCogsRow::cogs).reversed());
+        return out;
+    }
+
+    @Transactional(readOnly = true)
+    public CustomerTrendResponse customersByMonth(
+            String businessId,
+            LocalDate fromInclusive,
+            LocalDate toInclusive,
+            String branchId
+    ) {
+        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
+        Date from = Date.valueOf(w[0]);
+        Date to = Date.valueOf(w[1]);
+        String branchFilter = blankToNull(branchId);
+
+        List<MonthlyCustomerRow> months = new ArrayList<>();
+        jdbc.query(
+                Q_CUSTOMERS_BY_MONTH,
+                rs -> {
+                    months.add(new MonthlyCustomerRow(
+                            (int) rs.getDouble("yr"),
+                            (int) rs.getDouble("mo"),
+                            rs.getLong("customer_count")));
+                },
+                businessId,
+                SalesConstants.SALE_STATUS_COMPLETED,
+                SalesConstants.SALE_STATUS_REFUNDED,
+                from,
+                to,
+                branchFilter,
+                branchFilter);
+
+        Long total = jdbc.queryForObject(
+                Q_CUSTOMERS_DISTINCT,
+                Long.class,
+                businessId,
+                SalesConstants.SALE_STATUS_COMPLETED,
+                SalesConstants.SALE_STATUS_REFUNDED,
+                from,
+                to,
+                branchFilter,
+                branchFilter);
+
+        return new CustomerTrendResponse(total == null ? 0L : total, months);
+    }
+
+    private static BranchCogsAgg combineBranchCogs(BranchCogsAgg a, BranchCogsAgg b) {
+        return new BranchCogsAgg(
+                a.name != null ? a.name : b.name,
+                a.cogs.add(b.cogs),
+                a.refunds.add(b.refunds));
+    }
+
+    private static final class BranchCogsAgg {
+        final String name;
+        final BigDecimal cogs;
+        final BigDecimal refunds;
+
+        BranchCogsAgg(String name, BigDecimal cogs, BigDecimal refunds) {
+            this.name = name;
+            this.cogs = cogs;
+            this.refunds = refunds;
+        }
     }
 
     private static String blankToNull(String value) {

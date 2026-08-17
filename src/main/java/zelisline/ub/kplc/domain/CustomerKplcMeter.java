@@ -1,6 +1,7 @@
 package zelisline.ub.kplc.domain;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 
 import jakarta.persistence.Column;
@@ -32,6 +33,15 @@ public class CustomerKplcMeter {
 
     @Column(name = "last_used_at", nullable = false)
     private Instant lastUsedAt;
+
+    @Column(name = "depletion_alerts_enabled", nullable = false)
+    private boolean depletionAlertsEnabled;
+
+    @Column(name = "last_two_day_alert_on")
+    private LocalDate lastTwoDayAlertOn;
+
+    @Column(name = "last_one_day_alert_on")
+    private LocalDate lastOneDayAlertOn;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

@@ -81,7 +81,7 @@ public class CustomerKplcTokenArchive {
     }
 
     @Transactional(readOnly = true)
-    public PublicKplcSpendStatsResponse stats(String businessId, String customerId, String meterNumber) {
+    public List<PublicKplcTokenResponse> list(String businessId, String customerId, String meterNumber) {
         List<CustomerKplcToken> stored = tokenRepository
                 .findByBusinessIdAndCustomerIdAndMeterNumberOrderByPurchasedAtDesc(
                         businessId, customerId, meterNumber);
@@ -96,7 +96,12 @@ public class CustomerKplcTokenArchive {
                     row.getPaymentMethod(),
                     List.of()));
         }
-        return KplcSpendStats.from(asTokens);
+        return asTokens;
+    }
+
+    @Transactional(readOnly = true)
+    public PublicKplcSpendStatsResponse stats(String businessId, String customerId, String meterNumber) {
+        return KplcSpendStats.from(list(businessId, customerId, meterNumber));
     }
 
     private CustomerKplcToken findByPurchase(

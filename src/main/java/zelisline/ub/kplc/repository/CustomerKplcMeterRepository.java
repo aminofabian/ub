@@ -19,4 +19,6 @@ public interface CustomerKplcMeterRepository extends JpaRepository<CustomerKplcM
 
     void deleteByBusinessIdAndCustomerIdAndMeterNumber(
             String businessId, String customerId, String meterNumber);
+
+    List<CustomerKplcMeter> findByDepletionAlertsEnabledTrue();
 }

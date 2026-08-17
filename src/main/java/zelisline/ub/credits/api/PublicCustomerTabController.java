@@ -28,6 +28,8 @@ import zelisline.ub.credits.api.dto.PublicTabStkResponse;
 import zelisline.ub.credits.api.dto.SubmitPublicClaimRequest;
 import zelisline.ub.credits.application.PublicCustomerTabService;
 import zelisline.ub.kplc.api.dto.PublicKplcConfigResponse;
+import zelisline.ub.kplc.api.dto.PublicKplcDepletionAlertRequest;
+import zelisline.ub.kplc.api.dto.PublicKplcDepletionResponse;
 import zelisline.ub.kplc.api.dto.PublicKplcSaveMeterRequest;
 import zelisline.ub.kplc.api.dto.PublicKplcTokenHistoryResponse;
 import zelisline.ub.kplc.application.PublicKplcService;
@@ -191,5 +193,17 @@ public class PublicCustomerTabController {
         String businessId = publicHostBusinessResolver.resolveOrThrow(request);
         String customerId = publicCustomerTabService.requireCustomerId(businessId, phone);
         return publicKplcService.history(businessId, customerId, meter);
+    }
+
+    @PutMapping("/{phone}/kplc/meters/{meter}/depletion-alerts")
+    public PublicKplcDepletionResponse kplcDepletionAlerts(
+            @PathVariable String phone,
+            @PathVariable String meter,
+            @Valid @RequestBody PublicKplcDepletionAlertRequest body,
+            HttpServletRequest request
+    ) {
+        String businessId = publicHostBusinessResolver.resolveOrThrow(request);
+        String customerId = publicCustomerTabService.requireCustomerId(businessId, phone);
+        return publicKplcService.setDepletionAlerts(businessId, customerId, meter, body.enabled());
     }
 }

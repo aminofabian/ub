@@ -13,6 +13,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.kplc.api.dto.PublicKplcConfigResponse;
+import zelisline.ub.kplc.api.dto.PublicKplcDepletionResponse;
 import zelisline.ub.kplc.api.dto.PublicKplcMeterResponse;
 import zelisline.ub.kplc.api.dto.PublicKplcSpendStatsResponse;
 import zelisline.ub.kplc.api.dto.PublicKplcTokenHistoryResponse;
@@ -67,7 +68,34 @@ public class PublicKplcService {
         if (stats.months().isEmpty() && !tokens.isEmpty()) {
             stats = KplcSpendStats.from(tokens);
         }
-        return new PublicKplcTokenHistoryResponse(meter, false, COMING_SOON, tokens, stats);
+        List<PublicKplcTokenResponse> forEstimate = tokenArchive.list(businessId, customerId, meter);
+        if (forEstimate.isEmpty()) {
+            forEstimate = tokens;
+        }
+        CustomerKplcMeter saved = meterRepository
+                .findByBusinessIdAndCustomerIdAndMeterNumber(businessId, customerId, meter)
+                .orElse(null);
+        PublicKplcDepletionResponse depletion = depletionOf(forEstimate, saved);
+        return new PublicKplcTokenHistoryResponse(meter, false, COMING_SOON, tokens, stats, depletion);
+    }
+
+    @Transactional
+    public PublicKplcDepletionResponse setDepletionAlerts(
+            String businessId,
+            String customerId,
+            String rawMeter,
+            boolean enabled
+    ) {
+        String meter = requireMeter(rawMeter);
+        remember(businessId, customerId, meter);
+        CustomerKplcMeter saved = meterRepository
+                .findByBusinessIdAndCustomerIdAndMeterNumber(businessId, customerId, meter)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Save this meter first, then turn on reminders."));
+        saved.setDepletionAlertsEnabled(enabled);
+        meterRepository.save(saved);
+        List<PublicKplcTokenResponse> stored = tokenArchive.list(businessId, customerId, meter);
+        return depletionOf(stored, saved);
     }
 
     private List<PublicKplcMeterResponse> meters(String businessId, String customerId) {
@@ -115,5 +143,23 @@ public class PublicKplcService {
                     "Enter the meter number as printed on the meter or last token slip");
         }
         return meter;
+    }
+
+    static PublicKplcDepletionResponse depletionOf(
+            List<PublicKplcTokenResponse> tokens,
+            CustomerKplcMeter meter
+    ) {
+        boolean alerts = meter != null && meter.isDepletionAlertsEnabled();
+        return KplcDepletionEstimator.estimate(tokens, Instant.now())
+                .map(estimate -> new PublicKplcDepletionResponse(
+                        estimate.estimatedEmptyAt(),
+                        estimate.remainingUnits(),
+                        estimate.lastPurchaseUnits(),
+                        estimate.dailyUseUnits(),
+                        estimate.sampleIntervals(),
+                        estimate.alreadyEmpty(),
+                        alerts))
+                .orElse(new PublicKplcDepletionResponse(
+                        null, null, null, null, 0, false, alerts));
     }
 }

@@ -7,6 +7,7 @@ public record PublicKplcTokenHistoryResponse(
         boolean purchaseAvailable,
         String purchaseMessage,
         List<PublicKplcTokenResponse> tokens,
-        PublicKplcSpendStatsResponse stats
+        PublicKplcSpendStatsResponse stats,
+        PublicKplcDepletionResponse depletion
 ) {
 }

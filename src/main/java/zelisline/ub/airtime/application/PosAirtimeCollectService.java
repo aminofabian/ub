@@ -54,6 +54,7 @@ public class PosAirtimeCollectService {
                 rawPhone,
                 amount,
                 customerId,
+                payerPhone,
                 idempotencyKey);
 
         if (!AirtimeOrderStatuses.AWAITING_PAYMENT.equals(order.status())) {

@@ -110,19 +110,26 @@ public class PublicCustomerTabController {
                 body.reference());
     }
 
-    /** Same airtime offer as the storefront, resolved from the tab's tenant host. */
+    /** Same airtime offer as the storefront, plus this tab's saved To / Pay numbers. */
     @GetMapping("/{phone}/airtime")
-    public PublicAirtimeConfigResponse airtimeConfig(HttpServletRequest request) {
-        return publicAirtimeService.configForBusiness(publicHostBusinessResolver.resolveOrThrow(request));
+    public PublicAirtimeConfigResponse airtimeConfig(
+            @PathVariable String phone,
+            HttpServletRequest request
+    ) {
+        String businessId = publicHostBusinessResolver.resolveOrThrow(request);
+        String customerId = publicCustomerTabService.requireCustomerId(businessId, phone);
+        return publicAirtimeService.configForCustomer(businessId, customerId);
     }
 
     @PostMapping("/{phone}/airtime/orders")
     public PublicAirtimeOrderResponse createAirtimeOrder(
+            @PathVariable String phone,
             @Valid @RequestBody PublicAirtimeOrderRequest body,
             HttpServletRequest request
     ) {
-        return publicAirtimeService.createOrderForBusiness(
-                publicHostBusinessResolver.resolveOrThrow(request), body);
+        String businessId = publicHostBusinessResolver.resolveOrThrow(request);
+        String customerId = publicCustomerTabService.requireCustomerId(businessId, phone);
+        return publicAirtimeService.createOrderForBusiness(businessId, body, customerId);
     }
 
     @GetMapping("/{phone}/airtime/orders/{orderId}")

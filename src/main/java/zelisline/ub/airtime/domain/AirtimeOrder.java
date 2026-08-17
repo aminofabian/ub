@@ -40,6 +40,10 @@ public class AirtimeOrder {
     @Column(name = "phone_number", nullable = false, length = 32)
     private String phoneNumber;
 
+    /** M-Pesa number that paid, when different from {@link #phoneNumber}. */
+    @Column(name = "payer_phone", length = 32)
+    private String payerPhone;
+
     @Column(name = "network", length = 16)
     private String network;
 

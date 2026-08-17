@@ -194,6 +194,7 @@ public class AirtimeSaleService {
         order.setTender(resolvedTender);
         order.setCashierUserId(cashierUserId);
         order.setCustomerId(customerId);
+        order.setPayerPhone(phone);
         order.setSaleId(saleId);
         order.setStatus(AirtimeOrderStatuses.REQUESTED);
         try {
@@ -234,7 +235,7 @@ public class AirtimeSaleService {
     ) {
         return createAwaitingPayment(
                 businessId, null, null, AirtimeChannels.STOREFRONT, AirtimeTenders.MPESA,
-                rawPhone, rawAmount, customerId, idempotencyKey);
+                rawPhone, rawAmount, customerId, null, idempotencyKey);
     }
 
     /**
@@ -251,6 +252,7 @@ public class AirtimeSaleService {
             String rawPhone,
             BigDecimal rawAmount,
             String customerId,
+            String payerPhone,
             String idempotencyKey
     ) {
         String idem = idempotencyKey != null && !idempotencyKey.isBlank()
@@ -292,6 +294,9 @@ public class AirtimeSaleService {
         order.setTender(AirtimeTenders.normalize(tender));
         order.setCashierUserId(cashierUserId);
         order.setCustomerId(customerId);
+        String payer = StkPhoneNormalizer.normalize(
+                payerPhone != null && !payerPhone.isBlank() ? payerPhone : rawPhone);
+        order.setPayerPhone(payer != null ? payer : phone);
         order.setStatus(AirtimeOrderStatuses.AWAITING_PAYMENT);
         try {
             order = orderRepository.save(order);

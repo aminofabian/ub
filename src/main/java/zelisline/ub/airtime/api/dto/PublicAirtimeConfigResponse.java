@@ -10,6 +10,11 @@ public record PublicAirtimeConfigResponse(
         BigDecimal maxAmount,
         String currency,
         List<BigDecimal> quickAmounts,
-        String reason
+        String reason,
+        /** Present on the customer tab; empty on the anonymous storefront. */
+        PublicAirtimeRecentsResponse recents
 ) {
+    public PublicAirtimeConfigResponse {
+        recents = recents != null ? recents : PublicAirtimeRecentsResponse.empty();
+    }
 }

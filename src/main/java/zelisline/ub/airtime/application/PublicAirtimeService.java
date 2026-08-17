@@ -1,10 +1,15 @@
 package zelisline.ub.airtime.application;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,9 +20,11 @@ import zelisline.ub.airtime.api.dto.AirtimeOrderResponse;
 import zelisline.ub.airtime.api.dto.PublicAirtimeConfigResponse;
 import zelisline.ub.airtime.api.dto.PublicAirtimeOrderRequest;
 import zelisline.ub.airtime.api.dto.PublicAirtimeOrderResponse;
+import zelisline.ub.airtime.api.dto.PublicAirtimeRecentsResponse;
 import zelisline.ub.airtime.domain.AirtimeOrder;
 import zelisline.ub.airtime.domain.AirtimeOrderStatuses;
 import zelisline.ub.airtime.repository.AirtimeOrderRepository;
+import zelisline.ub.credits.domain.KenyanPhoneForms;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.PaymentGatewayStkService;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
@@ -54,16 +61,20 @@ public class PublicAirtimeService {
 
     @Transactional(readOnly = true)
     public PublicAirtimeConfigResponse configForBusiness(String businessId) {
+        return configForCustomer(businessId, null);
+    }
+
+    @Transactional(readOnly = true)
+    public PublicAirtimeConfigResponse configForCustomer(String businessId, String customerId) {
         var availability = settingsService.availability(businessId, true);
         return new PublicAirtimeConfigResponse(
                 availability.available(),
                 availability.minAmount(),
-                // Never leak how much float the merchant is holding — publish the
-                // configured ceiling, and let the order attempt fail if it is short.
                 availability.maxAmount(),
                 availability.currency(),
                 availability.quickAmounts(),
-                availability.available() ? null : "Airtime is not available from this store right now");
+                availability.available() ? null : "Airtime is not available from this store right now",
+                recentsForCustomer(businessId, customerId));
     }
 
     /**
@@ -75,11 +86,24 @@ public class PublicAirtimeService {
     }
 
     public PublicAirtimeOrderResponse createOrderForBusiness(String businessId, PublicAirtimeOrderRequest body) {
+        return createOrderForBusiness(businessId, body, null);
+    }
+
+    public PublicAirtimeOrderResponse createOrderForBusiness(
+            String businessId,
+            PublicAirtimeOrderRequest body,
+            String customerId
+    ) {
         AirtimeOrderResponse order = saleService.createAwaitingPayment(
                 businessId,
+                null,
+                null,
+                zelisline.ub.airtime.domain.AirtimeChannels.STOREFRONT,
+                zelisline.ub.airtime.domain.AirtimeTenders.MPESA,
                 body.phoneNumber(),
                 body.amount(),
-                null,
+                customerId,
+                body.payerPhone(),
                 UUID.randomUUID().toString());
 
         String payerRaw = body.payerPhone() != null && !body.payerPhone().isBlank()
@@ -158,6 +182,47 @@ public class PublicAirtimeService {
                 null,
                 order.getReceipt(),
                 shopperMessage(order.getStatus()));
+    }
+
+    private PublicAirtimeRecentsResponse recentsForCustomer(String businessId, String customerId) {
+        if (customerId == null || customerId.isBlank()) {
+            return PublicAirtimeRecentsResponse.empty();
+        }
+        List<AirtimeOrder> orders = orderRepository
+                .findByBusinessIdAndCustomerIdAndStatusOrderByCompletedAtDesc(
+                        businessId,
+                        customerId,
+                        AirtimeOrderStatuses.SUCCESS,
+                        PageRequest.of(0, 24));
+        Set<String> recipients = new LinkedHashSet<>();
+        Set<String> payers = new LinkedHashSet<>();
+        String lastRecipient = null;
+        String lastPayer = null;
+        BigDecimal lastAmount = null;
+        for (AirtimeOrder order : orders) {
+            String recv = KenyanPhoneForms.toLocal07(order.getPhoneNumber());
+            String payRaw = order.getPayerPhone() != null && !order.getPayerPhone().isBlank()
+                    ? order.getPayerPhone()
+                    : order.getPhoneNumber();
+            String pay = KenyanPhoneForms.toLocal07(payRaw);
+            if (lastRecipient == null && recv != null) {
+                lastRecipient = recv;
+                lastPayer = pay;
+                lastAmount = order.getAmount();
+            }
+            if (recv != null) {
+                recipients.add(recv);
+            }
+            if (pay != null) {
+                payers.add(pay);
+            }
+        }
+        return new PublicAirtimeRecentsResponse(
+                new ArrayList<>(recipients).stream().limit(6).toList(),
+                new ArrayList<>(payers).stream().limit(6).toList(),
+                lastRecipient,
+                lastPayer,
+                lastAmount);
     }
 
     private static String shopperMessage(String status) {

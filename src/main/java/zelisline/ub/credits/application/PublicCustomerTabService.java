@@ -204,6 +204,12 @@ public class PublicCustomerTabService {
                 wallet);
     }
 
+    /** Public tab path key → customer id, or 404. */
+    @Transactional(readOnly = true)
+    public String requireCustomerId(String businessId, String phoneRaw) {
+        return resolveCustomerOrThrow(businessId, phoneRaw).customer().getId();
+    }
+
     private ResolvedCustomer resolveCustomerOrThrow(String businessId, String phoneRaw) {
         if (!KenyanPhoneForms.looksLikeKenyanMobile(phoneRaw)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tab not found");

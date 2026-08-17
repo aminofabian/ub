@@ -2,12 +2,15 @@ package zelisline.ub.credits.api;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -24,6 +27,10 @@ import zelisline.ub.credits.api.dto.PublicTabStkRequest;
 import zelisline.ub.credits.api.dto.PublicTabStkResponse;
 import zelisline.ub.credits.api.dto.SubmitPublicClaimRequest;
 import zelisline.ub.credits.application.PublicCustomerTabService;
+import zelisline.ub.kplc.api.dto.PublicKplcConfigResponse;
+import zelisline.ub.kplc.api.dto.PublicKplcSaveMeterRequest;
+import zelisline.ub.kplc.api.dto.PublicKplcTokenHistoryResponse;
+import zelisline.ub.kplc.application.PublicKplcService;
 import zelisline.ub.platform.pageseal.api.PageSealController;
 import zelisline.ub.tenancy.application.PublicHostBusinessResolver;
 
@@ -41,6 +48,7 @@ public class PublicCustomerTabController {
     private final PublicCustomerTabService publicCustomerTabService;
     private final PublicHostBusinessResolver publicHostBusinessResolver;
     private final PublicAirtimeService publicAirtimeService;
+    private final PublicKplcService publicKplcService;
 
     @GetMapping("/{phone}")
     public PublicCustomerTabResponse overview(
@@ -139,5 +147,49 @@ public class PublicCustomerTabController {
     ) {
         return publicAirtimeService.statusForBusiness(
                 publicHostBusinessResolver.resolveOrThrow(request), orderId);
+    }
+
+    /** Saved meters + coming-soon purchase flag. Token buying is not live yet. */
+    @GetMapping("/{phone}/kplc")
+    public PublicKplcConfigResponse kplcConfig(
+            @PathVariable String phone,
+            HttpServletRequest request
+    ) {
+        String businessId = publicHostBusinessResolver.resolveOrThrow(request);
+        String customerId = publicCustomerTabService.requireCustomerId(businessId, phone);
+        return publicKplcService.config(businessId, customerId);
+    }
+
+    @PutMapping("/{phone}/kplc/meters")
+    public PublicKplcConfigResponse saveKplcMeter(
+            @PathVariable String phone,
+            @Valid @RequestBody PublicKplcSaveMeterRequest body,
+            HttpServletRequest request
+    ) {
+        String businessId = publicHostBusinessResolver.resolveOrThrow(request);
+        String customerId = publicCustomerTabService.requireCustomerId(businessId, phone);
+        return publicKplcService.saveMeter(businessId, customerId, body.meterNumber());
+    }
+
+    @DeleteMapping("/{phone}/kplc/meters/{meter}")
+    public PublicKplcConfigResponse removeKplcMeter(
+            @PathVariable String phone,
+            @PathVariable String meter,
+            HttpServletRequest request
+    ) {
+        String businessId = publicHostBusinessResolver.resolveOrThrow(request);
+        String customerId = publicCustomerTabService.requireCustomerId(businessId, phone);
+        return publicKplcService.removeMeter(businessId, customerId, meter);
+    }
+
+    @GetMapping("/{phone}/kplc/tokens")
+    public PublicKplcTokenHistoryResponse kplcTokens(
+            @PathVariable String phone,
+            @RequestParam String meter,
+            HttpServletRequest request
+    ) {
+        String businessId = publicHostBusinessResolver.resolveOrThrow(request);
+        String customerId = publicCustomerTabService.requireCustomerId(businessId, phone);
+        return publicKplcService.history(businessId, customerId, meter);
     }
 }

@@ -3,6 +3,8 @@ package zelisline.ub.kplc.application;
 import java.time.Instant;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -12,6 +14,7 @@ import org.springframework.web.server.ResponseStatusException;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.kplc.api.dto.PublicKplcConfigResponse;
 import zelisline.ub.kplc.api.dto.PublicKplcMeterResponse;
+import zelisline.ub.kplc.api.dto.PublicKplcSpendStatsResponse;
 import zelisline.ub.kplc.api.dto.PublicKplcTokenHistoryResponse;
 import zelisline.ub.kplc.api.dto.PublicKplcTokenResponse;
 import zelisline.ub.kplc.domain.CustomerKplcMeter;
@@ -22,11 +25,14 @@ import zelisline.ub.kplc.repository.CustomerKplcMeterRepository;
 @RequiredArgsConstructor
 public class PublicKplcService {
 
+    private static final Logger log = LoggerFactory.getLogger(PublicKplcService.class);
+
     static final String COMING_SOON =
             "We're still working on buying tokens here. For now you can look up tokens you've already bought.";
 
     private final CustomerKplcMeterRepository meterRepository;
     private final KplcTokenLookupClient lookupClient;
+    private final CustomerKplcTokenArchive tokenArchive;
 
     @Transactional(readOnly = true)
     public PublicKplcConfigResponse config(String businessId, String customerId) {
@@ -50,7 +56,18 @@ public class PublicKplcService {
         String meter = requireMeter(rawMeter);
         List<PublicKplcTokenResponse> tokens = lookupClient.fetchHistory(meter);
         remember(businessId, customerId, meter);
-        return new PublicKplcTokenHistoryResponse(meter, false, COMING_SOON, tokens);
+        try {
+            tokenArchive.rememberFetched(businessId, customerId, meter, tokens);
+        } catch (Exception e) {
+            log.warn("Could not archive KPLC tokens for meterTail={}: {}",
+                    meter.length() < 4 ? "****" : meter.substring(meter.length() - 4),
+                    e.getMessage());
+        }
+        PublicKplcSpendStatsResponse stats = tokenArchive.stats(businessId, customerId, meter);
+        if (stats.months().isEmpty() && !tokens.isEmpty()) {
+            stats = KplcSpendStats.from(tokens);
+        }
+        return new PublicKplcTokenHistoryResponse(meter, false, COMING_SOON, tokens, stats);
     }
 
     private List<PublicKplcMeterResponse> meters(String businessId, String customerId) {

@@ -6,6 +6,7 @@ public record PublicKplcTokenHistoryResponse(
         String meterNumber,
         boolean purchaseAvailable,
         String purchaseMessage,
-        List<PublicKplcTokenResponse> tokens
+        List<PublicKplcTokenResponse> tokens,
+        PublicKplcSpendStatsResponse stats
 ) {
 }

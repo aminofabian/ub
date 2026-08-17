@@ -936,6 +936,7 @@ public class GatewayStkPushService {
             case CREDIT_AR -> confirmCreditArIntent(push, parsed);
             case POS_PAYMENT -> {
                 creditKioskPayIfPlatformStk(push);
+                inboundTillPaymentService.captureConfirmedPayer(push.getBusinessId(), parsed, push.getId());
                 publishPosConfirmation(push);
             }
             case STOREFRONT_CART -> log.info(

@@ -66,7 +66,7 @@ public class MpesaPayerIdentityService {
     ) {
         String first = PayerNameNormalizer.normalize(firstNameRaw);
         String last = PayerNameNormalizer.normalize(lastNameRaw);
-        if (first.isEmpty() || last.isEmpty()) {
+        if (first.isEmpty()) {
             return Optional.empty();
         }
         String fingerprint = MaskedMsisdn.fingerprint(phoneRaw);

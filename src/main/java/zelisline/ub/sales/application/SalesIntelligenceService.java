@@ -452,12 +452,40 @@ public class SalesIntelligenceService {
         return byItem;
     }
 
+    private static final String JOIN_SALE_MPESA_PAYER = """
+             LEFT JOIN inbound_till_payments itp ON itp.id = (
+                  SELECT itp2.id
+                    FROM inbound_till_payments itp2
+                   WHERE itp2.business_id = s.business_id
+                     AND (
+                          itp2.linked_sale_id = s.id
+                          OR (
+                            itp2.mpesa_receipt IS NOT NULL
+                            AND EXISTS (
+                              SELECT 1 FROM sale_payments spx
+                               WHERE spx.sale_id = s.id
+                                 AND spx.gateway_txn_id IS NOT NULL
+                                 AND TRIM(spx.gateway_txn_id) <> ''
+                                 AND LOWER(TRIM(spx.gateway_txn_id)) = LOWER(TRIM(itp2.mpesa_receipt))
+                            )
+                          )
+                     )
+                   ORDER BY CASE WHEN itp2.linked_sale_id = s.id THEN 0 ELSE 1 END,
+                            itp2.created_at DESC
+                   LIMIT 1
+             )
+            """;
+
     private static final String Q_RECENT_SALES = """
             SELECT s.id AS sale_id,
                    s.receipt_no,
                    s.sold_at,
                    COALESCE(NULLIF(TRIM(u.name), ''), u.email, s.sold_by) AS cashier_name,
-                   COALESCE(cu.name, '') AS customer_name,
+                   COALESCE(
+                       NULLIF(TRIM(cu.name), ''),
+                       NULLIF(TRIM(CONCAT_WS(' ', itp.payer_first_name, itp.payer_last_name)), ''),
+                       ''
+                   ) AS customer_name,
                    (SELECT CASE
                         WHEN COUNT(DISTINCT sp2.method) > 1 THEN 'split'
                         ELSE COALESCE(MAX(sp2.method), 'unknown')
@@ -481,23 +509,25 @@ public class SalesIntelligenceService {
                           AND spv.gateway_txn_id IS NOT NULL
                           AND TRIM(spv.gateway_txn_id) <> ''
                    ) AS mpesa_verified,
-                   s.customer_id,
+                   COALESCE(NULLIF(TRIM(s.customer_id), ''), itp.linked_customer_id) AS customer_id,
                    cu.customer_no,
                    (SELECT p.masked_msisdn
                       FROM customer_phones p
-                     WHERE p.customer_id = s.customer_id
+                     WHERE p.customer_id = COALESCE(NULLIF(TRIM(s.customer_id), ''), itp.linked_customer_id)
                      ORDER BY p.is_primary DESC, p.created_at ASC
                      LIMIT 1) AS customer_masked_msisdn,
                    (SELECT p.verified_at IS NOT NULL AND p.phone IS NOT NULL AND TRIM(p.phone) <> ''
                       FROM customer_phones p
-                     WHERE p.customer_id = s.customer_id
+                     WHERE p.customer_id = COALESCE(NULLIF(TRIM(s.customer_id), ''), itp.linked_customer_id)
                      ORDER BY p.is_primary DESC, p.created_at ASC
                      LIMIT 1) AS customer_phone_verified
               FROM sale_items sil
               JOIN sales s ON s.id = sil.sale_id
               JOIN items i ON i.id = sil.item_id AND i.business_id = s.business_id AND i.deleted_at IS NULL
          LEFT JOIN users u ON u.id = s.sold_by AND u.business_id = s.business_id AND u.deleted_at IS NULL
-         LEFT JOIN customers cu ON cu.id = s.customer_id AND cu.business_id = s.business_id
+            """ + JOIN_SALE_MPESA_PAYER + """
+         LEFT JOIN customers cu ON cu.id = COALESCE(NULLIF(TRIM(s.customer_id), ''), itp.linked_customer_id)
+                               AND cu.business_id = s.business_id
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
                AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
@@ -720,12 +750,16 @@ public class SalesIntelligenceService {
             """;
 
     private static final String Q_CUSTOMER_SPEND = """
-            SELECT c.id AS customer_id,
+            SELECT COALESCE(NULLIF(TRIM(s.customer_id), ''), itp.linked_customer_id) AS customer_id,
                    c.customer_no,
-                   c.name,
+                   COALESCE(
+                       NULLIF(TRIM(c.name), ''),
+                       NULLIF(TRIM(MAX(CONCAT_WS(' ', itp.payer_first_name, itp.payer_last_name))), ''),
+                       c.name
+                   ) AS name,
                    c.first_name,
                    c.last_name,
-                   c.origin,
+                   COALESCE(NULLIF(TRIM(c.origin), ''), 'mpesa_inferred') AS origin,
                    COUNT(DISTINCT s.id) AS sale_count,
                    COALESCE(SUM(s.grand_total), 0) AS spend,
                    MIN(CAST(s.sold_at AS DATE)) AS first_visit,
@@ -741,36 +775,43 @@ public class SalesIntelligenceService {
                      ORDER BY p.is_primary DESC, p.created_at ASC
                      LIMIT 1) AS phone_verified
               FROM sales s
-              JOIN customers c ON c.id = s.customer_id AND c.business_id = s.business_id
+            """ + JOIN_SALE_MPESA_PAYER + """
+              JOIN customers c ON c.id = COALESCE(NULLIF(TRIM(s.customer_id), ''), itp.linked_customer_id)
+                               AND c.business_id = s.business_id
              WHERE s.business_id = ?
-               AND s.customer_id IS NOT NULL
+               AND COALESCE(NULLIF(TRIM(s.customer_id), ''), itp.linked_customer_id) IS NOT NULL
                AND s.status IN (?, ?)
                AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
                AND (? IS NULL OR s.branch_id = ?)
                AND c.deleted_at IS NULL
-          GROUP BY c.id, c.customer_no, c.name, c.first_name, c.last_name, c.origin
+          GROUP BY COALESCE(NULLIF(TRIM(s.customer_id), ''), itp.linked_customer_id),
+                   c.id, c.customer_no, c.name, c.first_name, c.last_name, c.origin
             """;
 
     private static final String Q_CUSTOMER_VISIT_DAYS = """
-            SELECT s.customer_id AS customer_id,
+            SELECT COALESCE(NULLIF(TRIM(s.customer_id), ''), itp.linked_customer_id) AS customer_id,
                    CAST(s.sold_at AS DATE) AS visit_date
               FROM sales s
-              JOIN customers c ON c.id = s.customer_id AND c.business_id = s.business_id
+            """ + JOIN_SALE_MPESA_PAYER + """
+              JOIN customers c ON c.id = COALESCE(NULLIF(TRIM(s.customer_id), ''), itp.linked_customer_id)
+                               AND c.business_id = s.business_id
              WHERE s.business_id = ?
-               AND s.customer_id IS NOT NULL
+               AND COALESCE(NULLIF(TRIM(s.customer_id), ''), itp.linked_customer_id) IS NOT NULL
                AND s.status IN (?, ?)
                AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
                AND (? IS NULL OR s.branch_id = ?)
                AND c.deleted_at IS NULL
-          GROUP BY s.customer_id, CAST(s.sold_at AS DATE)
+          GROUP BY COALESCE(NULLIF(TRIM(s.customer_id), ''), itp.linked_customer_id),
+                   CAST(s.sold_at AS DATE)
             """;
 
     private static final String Q_WALK_IN_SPEND = """
             SELECT COUNT(*) AS sale_count,
                    COALESCE(SUM(s.grand_total), 0) AS spend
               FROM sales s
+            """ + JOIN_SALE_MPESA_PAYER + """
              WHERE s.business_id = ?
-               AND s.customer_id IS NULL
+               AND COALESCE(NULLIF(TRIM(s.customer_id), ''), itp.linked_customer_id) IS NULL
                AND s.status IN (?, ?)
                AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
                AND (? IS NULL OR s.branch_id = ?)

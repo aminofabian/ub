@@ -26,11 +26,11 @@ public final class PayerNameNormalizer {
 
     public static String identityKey(String firstNorm, String lastNorm, String fingerprint) {
         if (firstNorm == null || firstNorm.isBlank()
-                || lastNorm == null || lastNorm.isBlank()
                 || fingerprint == null || fingerprint.isBlank()) {
             return null;
         }
-        return firstNorm + "|" + lastNorm + "|" + fingerprint;
+        String last = lastNorm == null || lastNorm.isBlank() ? "_" : lastNorm;
+        return firstNorm + "|" + last + "|" + fingerprint;
     }
 
     /** First token / remainder. Single-token names have an empty last name. */

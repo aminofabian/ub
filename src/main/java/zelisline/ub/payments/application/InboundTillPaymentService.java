@@ -31,7 +31,10 @@ import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.InboundTillPayment;
 import zelisline.ub.payments.domain.InboundTillPaymentStatuses;
 import zelisline.ub.payments.domain.spi.WebhookResult;
+import zelisline.ub.payments.infrastructure.KopokopoPayerPayload;
 import zelisline.ub.payments.repository.InboundTillPaymentRepository;
+import zelisline.ub.credits.domain.MaskedMsisdn;
+import zelisline.ub.sales.repository.SalePaymentRepository;
 
 /**
  * Persists unmatched Buy Goods webhooks and late-binds them to till-awaits, sales, or
@@ -50,6 +53,7 @@ public class InboundTillPaymentService {
     private final ObjectProvider<PublicPaymentClaimService> publicPaymentClaimService;
     private final ObjectMapper objectMapper;
     private final MpesaPayerIdentityService mpesaPayerIdentityService;
+    private final SalePaymentRepository salePaymentRepository;
 
     /**
      * Idempotently store a successful unmatched buygoods webhook as PENDING.
@@ -277,6 +281,7 @@ public class InboundTillPaymentService {
             }
             inboundRepository.save(inbound);
         }
+        ensureCustomerOnInbound(businessId, inbound);
         if (inbound.getLinkedCustomerId() != null) {
             mpesaPayerIdentityService.attachToSaleIfUnassigned(
                     businessId, saleId, inbound.getLinkedCustomerId());
@@ -387,6 +392,151 @@ public class InboundTillPaymentService {
             log.debug("Could not extract till_number from buygoods payload: {}", e.getMessage());
         }
         return null;
+    }
+
+    /**
+     * Store payer identity from a confirmed STK / buygoods webhook so later sale
+     * create and the shopper ranking can see the M-Pesa name, not only credit tabs.
+     */
+    @Transactional
+    public void captureConfirmedPayer(String businessId, WebhookResult parsed, String pushId) {
+        if (parsed == null || !parsed.success() || businessId == null) {
+            return;
+        }
+        String receipt = trimOrNull(parsed.gatewayTransactionId());
+        if (receipt == null) {
+            receipt = trimOrNull(parsed.reference());
+        }
+        if (receipt == null) {
+            return;
+        }
+        InboundTillPayment row = inboundRepository
+                .findFirstByBusinessIdAndMpesaReceiptIgnoreCase(businessId, receipt)
+                .orElseGet(InboundTillPayment::new);
+        if (row.getId() == null) {
+            row.setBusinessId(businessId);
+            row.setGatewayType(GatewayType.KOPOKOPO);
+            String eventId = resolveEventId(parsed);
+            row.setGatewayEventId(eventId != null ? eventId : "stk-" + receipt);
+            row.setMpesaReceipt(receipt);
+            row.setAmount(parsed.amount() != null
+                    ? parsed.amount().setScale(2, RoundingMode.HALF_UP)
+                    : null);
+            row.setRawPayload(parsed.rawPayload());
+            row.setStatus(InboundTillPaymentStatuses.LINKED);
+        }
+        if (pushId != null && !pushId.isBlank() && row.getLinkedPushId() == null) {
+            row.setLinkedPushId(pushId);
+        }
+        applyParsedPayer(row, parsed);
+        inboundRepository.save(row);
+        ensureCustomerOnInbound(businessId, row);
+    }
+
+    /**
+     * Hydrate names from stored webhook JSON and create inferred customers for
+     * till payers that never opened a credit tab.
+     */
+    @Transactional
+    public void backfillPayers(String businessId) {
+        if (businessId == null || businessId.isBlank()) {
+            return;
+        }
+        List<InboundTillPayment> recent =
+                inboundRepository.findTop400ByBusinessIdOrderByCreatedAtDesc(businessId);
+        for (InboundTillPayment row : recent) {
+            ensureCustomerOnInbound(businessId, row);
+            attachInboundToMatchingSales(businessId, row);
+        }
+    }
+
+    private void attachInboundToMatchingSales(String businessId, InboundTillPayment row) {
+        if (row.getLinkedCustomerId() == null || row.getLinkedCustomerId().isBlank()) {
+            return;
+        }
+        if (row.getLinkedSaleId() != null) {
+            mpesaPayerIdentityService.attachToSaleIfUnassigned(
+                    businessId, row.getLinkedSaleId(), row.getLinkedCustomerId());
+        }
+        if (row.getMpesaReceipt() == null || row.getMpesaReceipt().isBlank()) {
+            return;
+        }
+        for (var payment : salePaymentRepository.findByBusinessIdAndGatewayTxnIdIgnoreCase(
+                businessId, row.getMpesaReceipt())) {
+            mpesaPayerIdentityService.attachToSaleIfUnassigned(
+                    businessId, payment.getSaleId(), row.getLinkedCustomerId());
+            if (row.getLinkedSaleId() == null) {
+                row.setLinkedSaleId(payment.getSaleId());
+                inboundRepository.save(row);
+            }
+        }
+    }
+
+    private void ensureCustomerOnInbound(String businessId, InboundTillPayment row) {
+        hydrateFromRawIfNeeded(row);
+        if (row.getLinkedCustomerId() != null && !row.getLinkedCustomerId().isBlank()) {
+            return;
+        }
+        String phoneRaw = row.getMaskedMsisdn() != null && !row.getMaskedMsisdn().isBlank()
+                ? row.getMaskedMsisdn()
+                : row.getPhone();
+        boolean masked = MaskedMsisdn.isMasked(phoneRaw)
+                || (row.getPhone() == null || row.getPhone().isBlank());
+        mpesaPayerIdentityService.resolveOrCreate(
+                businessId,
+                row.getPayerFirstName(),
+                row.getPayerLastName(),
+                phoneRaw,
+                masked).ifPresent(c -> {
+            row.setLinkedCustomerId(c.getId());
+            inboundRepository.save(row);
+        });
+    }
+
+    private void applyParsedPayer(InboundTillPayment row, WebhookResult parsed) {
+        if (parsed.firstName() != null && (row.getPayerFirstName() == null || row.getPayerFirstName().isBlank())) {
+            row.setPayerFirstName(parsed.firstName());
+        }
+        if (parsed.lastName() != null && (row.getPayerLastName() == null || row.getPayerLastName().isBlank())) {
+            row.setPayerLastName(parsed.lastName());
+        }
+        if (parsed.maskedPhone() != null && (row.getMaskedMsisdn() == null || row.getMaskedMsisdn().isBlank())) {
+            row.setMaskedMsisdn(parsed.maskedPhone());
+        }
+        if (!parsed.phoneIsMasked() && parsed.phoneNumber() != null
+                && (row.getPhone() == null || row.getPhone().isBlank())) {
+            row.setPhone(StkPhoneNormalizer.normalize(parsed.phoneNumber()));
+        }
+    }
+
+    private void hydrateFromRawIfNeeded(InboundTillPayment row) {
+        boolean missingName = (row.getPayerFirstName() == null || row.getPayerFirstName().isBlank())
+                && (row.getPayerLastName() == null || row.getPayerLastName().isBlank());
+        boolean missingPhone = (row.getMaskedMsisdn() == null || row.getMaskedMsisdn().isBlank())
+                && (row.getPhone() == null || row.getPhone().isBlank());
+        if (!missingName && !missingPhone) {
+            return;
+        }
+        if (row.getRawPayload() == null || row.getRawPayload().isBlank()) {
+            return;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(row.getRawPayload());
+            KopokopoPayerPayload.Extracted extracted = KopokopoPayerPayload.extract(root);
+            if (missingName && extracted.hasName()) {
+                row.setPayerFirstName(extracted.firstName());
+                row.setPayerLastName(extracted.lastName());
+            }
+            if (missingPhone && extracted.phoneRaw() != null) {
+                if (extracted.masked()) {
+                    row.setMaskedMsisdn(MaskedMsisdn.compact(extracted.phoneRaw()));
+                } else {
+                    row.setPhone(StkPhoneNormalizer.normalize(extracted.phoneRaw()));
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Could not hydrate payer from inbound payload: {}", e.getMessage());
+        }
     }
 
     private void ensurePayerLinked(String businessId, InboundTillPayment row, WebhookResult parsed) {

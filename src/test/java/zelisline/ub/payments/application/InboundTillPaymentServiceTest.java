@@ -3,6 +3,7 @@ package zelisline.ub.payments.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -36,6 +37,7 @@ import zelisline.ub.payments.domain.InboundTillPayment;
 import zelisline.ub.payments.domain.InboundTillPaymentStatuses;
 import zelisline.ub.payments.domain.spi.WebhookResult;
 import zelisline.ub.payments.repository.InboundTillPaymentRepository;
+import zelisline.ub.sales.repository.SalePaymentRepository;
 
 @ExtendWith(MockitoExtension.class)
 class InboundTillPaymentServiceTest {
@@ -50,6 +52,8 @@ class InboundTillPaymentServiceTest {
     private PublicPaymentClaimService publicPaymentClaimService;
     @Mock
     private MpesaPayerIdentityService mpesaPayerIdentityService;
+    @Mock
+    private SalePaymentRepository salePaymentRepository;
 
     private InboundTillPaymentService service;
 
@@ -60,9 +64,13 @@ class InboundTillPaymentServiceTest {
                 publicPaymentClaimRepository,
                 publicPaymentClaimServiceProvider,
                 new ObjectMapper(),
-                mpesaPayerIdentityService);
+                mpesaPayerIdentityService,
+                salePaymentRepository);
         org.mockito.Mockito.lenient()
                 .when(mpesaPayerIdentityService.resolveFromWebhook(any(), any()))
+                .thenReturn(Optional.empty());
+        org.mockito.Mockito.lenient()
+                .when(mpesaPayerIdentityService.resolveOrCreate(any(), any(), any(), any(), anyBoolean()))
                 .thenReturn(Optional.empty());
     }
 

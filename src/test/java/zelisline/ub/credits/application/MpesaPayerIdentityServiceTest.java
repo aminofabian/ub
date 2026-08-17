@@ -113,4 +113,34 @@ class MpesaPayerIdentityServiceTest {
         assertThat(resolved.getId()).isEqualTo("cust-9");
         verify(customerRepository, org.mockito.Mockito.never()).nextCustomerNo(any());
     }
+
+    @Test
+    void createsInferredCustomerWhenLastNameIsMissing() {
+        when(customerRepository.findByBusinessIdAndMpesaIdentityKeyAndDeletedAtIsNull(
+                eq("biz"), eq("JOHN|_|2547|123")))
+                .thenReturn(Optional.empty());
+        when(customerPhoneRepository.findByBusinessIdAndMaskFingerprint("biz", "2547|123"))
+                .thenReturn(List.of());
+        when(customerRepository.nextCustomerNo("biz")).thenReturn(13L);
+        when(customerRepository.save(any(Customer.class))).thenAnswer(inv -> {
+            Customer c = inv.getArgument(0);
+            if (c.getId() == null) {
+                c.setId("cust-13");
+            }
+            return c;
+        });
+        when(customerPhoneRepository.findByCustomerIdOrderByCreatedAtAsc("cust-13"))
+                .thenReturn(List.of());
+        when(creditAccountRepository.findByCustomerIdAndBusinessId("cust-13", "biz"))
+                .thenReturn(Optional.empty());
+
+        WebhookResult parsed = new WebhookResult(
+                null, "OAG81M7W3K", null, new BigDecimal("100.00"), "OAG81M7W3K",
+                true, false, null, "evt-1", "buygoods_transaction_received", "{}",
+                null, "JOHN", null, "2547XXXXX123", true);
+
+        Customer created = service.resolveFromWebhook("biz", parsed).orElseThrow();
+        assertThat(created.getMpesaIdentityKey()).isEqualTo("JOHN|_|2547|123");
+        assertThat(created.getFirstName()).isEqualTo("John");
+    }
 }

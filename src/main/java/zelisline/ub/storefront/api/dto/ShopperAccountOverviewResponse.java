@@ -16,6 +16,7 @@ public record ShopperAccountOverviewResponse(
         List<ShopperLedgerLineResponse> recentLedgerLines,
         int ledgerLinesTotal,
         boolean ledgerTruncated,
-        BigDecimal loyaltyKesPerPoint
+        BigDecimal loyaltyKesPerPoint,
+        String tabPhone
 ) {
 }

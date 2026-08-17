@@ -21,7 +21,9 @@ import zelisline.ub.credits.application.CreditCustomerStatementService.CreditSta
 import zelisline.ub.credits.application.CreditCustomerStatementService.StatementLineDto;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.Customer;
+import zelisline.ub.credits.domain.CustomerPhone;
 import zelisline.ub.credits.repository.CreditAccountRepository;
+import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.repository.UserRepository;
@@ -38,6 +40,7 @@ public class ShopperAccountService {
 
     private final UserRepository userRepository;
     private final CustomerRepository customerRepository;
+    private final CustomerPhoneRepository customerPhoneRepository;
     private final CreditAccountRepository creditAccountRepository;
     private final CreditCustomerStatementService creditCustomerStatementService;
     private final BusinessCreditSettingsService businessCreditSettingsService;
@@ -87,7 +90,8 @@ public class ShopperAccountService {
                     List.of(),
                     0,
                     false,
-                    kesPerPoint
+                    kesPerPoint,
+                    null
             );
         }
 
@@ -155,8 +159,32 @@ public class ShopperAccountService {
                 rows,
                 totalLedger,
                 totalLedger > rows.size(),
-                kesPerPoint
+                kesPerPoint,
+                resolveTabPhone(customer.getId())
         );
+    }
+
+    private String resolveTabPhone(String customerId) {
+        var phones = customerPhoneRepository.findByCustomerIdOrderByCreatedAtAsc(customerId);
+        CustomerPhone chosen = null;
+        for (var row : phones) {
+            if (row.isPrimary()) {
+                chosen = row;
+                break;
+            }
+            if (chosen == null) {
+                chosen = row;
+            }
+        }
+        if (chosen == null) {
+            return null;
+        }
+        String assigned = chosen.getAssignedMsisdn();
+        if (assigned != null && !assigned.isBlank()) {
+            return assigned.trim();
+        }
+        String phone = chosen.getPhone();
+        return phone == null || phone.isBlank() ? null : phone.trim();
     }
 
     private static ShopperBalancesResponse zeroBalances() {

@@ -1,5 +1,5 @@
--- Fast till-payer lookup from sales. Idempotent: a killed deploy can leave the
--- index in place without a Flyway success row; a plain ADD INDEX then fails startup.
+-- Lookups of the till payment linked to a sale. Idempotent: a killed deploy can leave
+-- the index in place without a Flyway success row; a plain ADD INDEX then fails startup.
 SET @idx_exists := (
   SELECT COUNT(1)
     FROM information_schema.statistics

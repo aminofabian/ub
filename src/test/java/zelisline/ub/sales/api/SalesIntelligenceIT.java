@@ -35,6 +35,8 @@ import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
+import zelisline.ub.credits.repository.CustomerPhoneRepository;
+import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.finance.repository.JournalEntryRepository;
 import zelisline.ub.finance.repository.JournalLineRepository;
 import zelisline.ub.finance.repository.LedgerAccountRepository;
@@ -47,11 +49,20 @@ import zelisline.ub.identity.repository.PermissionRepository;
 import zelisline.ub.identity.repository.RolePermissionRepository;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.payments.domain.GatewayType;
+import zelisline.ub.payments.domain.InboundTillPayment;
+import zelisline.ub.payments.domain.InboundTillPaymentStatuses;
+import zelisline.ub.payments.repository.InboundTillPaymentRepository;
 import zelisline.ub.platform.security.TestAuthenticationFilter;
 import zelisline.ub.purchasing.domain.InventoryBatch;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.purchasing.repository.StockMovementRepository;
+import zelisline.ub.sales.api.dto.CustomerSpendResponse;
 import zelisline.ub.sales.api.dto.RevenueByCategoryRow;
+import zelisline.ub.sales.domain.Sale;
+import zelisline.ub.sales.domain.SaleItem;
+import zelisline.ub.sales.domain.SalePayment;
+import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.repository.RefundLineRepository;
 import zelisline.ub.sales.repository.RefundPaymentRepository;
 import zelisline.ub.sales.repository.RefundRepository;
@@ -151,6 +162,15 @@ class SalesIntelligenceIT {
     private LedgerAccountRepository ledgerAccountRepository;
 
     @Autowired
+    private InboundTillPaymentRepository inboundTillPaymentRepository;
+
+    @Autowired
+    private CustomerRepository customerRepository;
+
+    @Autowired
+    private CustomerPhoneRepository customerPhoneRepository;
+
+    @Autowired
     private CatalogBootstrapService catalogBootstrapService;
 
     @Autowired
@@ -173,6 +193,9 @@ class SalesIntelligenceIT {
         refundPaymentRepository.deleteAll();
         refundLineRepository.deleteAll();
         refundRepository.deleteAll();
+        inboundTillPaymentRepository.deleteAll();
+        customerPhoneRepository.deleteAll();
+        customerRepository.deleteAll();
         salePaymentRepository.deleteAll();
         saleItemRepository.deleteAll();
         saleRepository.deleteAll();
@@ -389,6 +412,125 @@ class SalesIntelligenceIT {
         assertThat(rows.getFirst().categoryId()).isEqualTo(categoryDrinksId);
         assertThat(rows.getFirst().netRevenue()).isEqualByComparingTo(new BigDecimal("60.00"));
         assertThat(rows.getFirst().netProfit()).isEqualByComparingTo(new BigDecimal("42.00"));
+    }
+
+    /**
+     * Seeds sales rows straight through the repositories: POST /api/v1/sales needs
+     * {@code SELECT MAX(receipt_no) ... FOR UPDATE}, which H2 rejects on a grouped select.
+     */
+    @Test
+    void customerSpend_namesTillPayerAndCountsSplitTenderSaleOnce() throws Exception {
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+
+        String splitSaleId = seedSale(1001, new BigDecimal("100.00"));
+        seedSaleItem(splitSaleId, itemDrinksId, new BigDecimal("100.00"));
+        seedPayment(splitSaleId, 0, new BigDecimal("60.00"), "RCPT-A");
+        seedPayment(splitSaleId, 1, new BigDecimal("40.00"), "RCPT-B");
+        inboundTillPaymentRepository.save(inbound("RCPT-A", new BigDecimal("60.00")));
+        inboundTillPaymentRepository.save(inbound("RCPT-B", new BigDecimal("40.00")));
+
+        String cashSaleId = seedSale(1002, new BigDecimal("25.00"));
+        seedPayment(cashSaleId, 0, new BigDecimal("25.00"), null);
+
+        MvcResult report = mockMvc.perform(get("/api/v1/sales/intelligence/customer-spend")
+                        .param("from", today.minusDays(2).toString())
+                        .param("to", today.plusDays(2).toString())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, user.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ID))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        CustomerSpendResponse res = objectMapper.readValue(
+                report.getResponse().getContentAsString(), CustomerSpendResponse.class);
+
+        assertThat(res.rows()).hasSize(1);
+        var row = res.rows().getFirst();
+        assertThat(row.rank()).isEqualTo(1);
+        assertThat(row.name()).isEqualTo("Wanjiku Kamau");
+        assertThat(row.saleCount()).isEqualTo(1L);
+        assertThat(row.visitDays()).isEqualTo(1);
+        // Two M-Pesa receipts on one sale must not double-count the basket.
+        assertThat(row.spend()).isEqualByComparingTo(new BigDecimal("100.00"));
+        assertThat(row.avgBasket()).isEqualByComparingTo(new BigDecimal("100.00"));
+        assertThat(row.sharePct()).isEqualByComparingTo(new BigDecimal("100.0"));
+        assertThat(res.identifiedSpend()).isEqualByComparingTo(new BigDecimal("100.00"));
+        assertThat(res.identifiedSaleCount()).isEqualTo(1L);
+        assertThat(res.identifiedCustomerCount()).isEqualTo(1L);
+        assertThat(res.walkInSaleCount()).isEqualTo(1L);
+        assertThat(res.walkInSpend()).isEqualByComparingTo(new BigDecimal("25.00"));
+
+        MvcResult recent = mockMvc.perform(get("/api/v1/sales/intelligence/recent-sales")
+                        .param("from", today.minusDays(2).toString())
+                        .param("to", today.plusDays(2).toString())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, user.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ID))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode lines = objectMapper.readTree(recent.getResponse().getContentAsString());
+        // One sale line, not one per M-Pesa receipt.
+        assertThat(lines).hasSize(1);
+        assertThat(lines.get(0).get("customerName").asText()).isEqualTo("WANJIKU KAMAU");
+        assertThat(lines.get(0).get("saleId").asText()).isEqualTo(splitSaleId);
+    }
+
+    private void seedSaleItem(String saleId, String itemId, BigDecimal lineTotal) {
+        SaleItem line = new SaleItem();
+        line.setSaleId(saleId);
+        line.setItemId(itemId);
+        line.setLineIndex(0);
+        line.setQuantity(BigDecimal.ONE);
+        line.setUnitPrice(lineTotal);
+        line.setLineTotal(lineTotal);
+        line.setUnitCost(BigDecimal.ZERO);
+        line.setCostTotal(BigDecimal.ZERO);
+        line.setProfit(lineTotal);
+        saleItemRepository.save(line);
+    }
+
+    private String seedSale(long receiptNo, BigDecimal grandTotal) {
+        Sale sale = new Sale();
+        sale.setBusinessId(TENANT);
+        sale.setBranchId(branchId);
+        sale.setShiftId(UUID.randomUUID().toString());
+        sale.setStatus(SalesConstants.SALE_STATUS_COMPLETED);
+        sale.setIdempotencyKey("seed-" + receiptNo + "-" + UUID.randomUUID());
+        sale.setReceiptNo(receiptNo);
+        sale.setGrandTotal(grandTotal);
+        sale.setSoldBy(user.getId());
+        sale.setSoldAt(Instant.now().minusSeconds(600));
+        return saleRepository.save(sale).getId();
+    }
+
+    private void seedPayment(String saleId, int sortOrder, BigDecimal amount, String receipt) {
+        SalePayment payment = new SalePayment();
+        payment.setSaleId(saleId);
+        payment.setMethod(receipt == null
+                ? SalesConstants.PAYMENT_METHOD_CASH
+                : SalesConstants.PAYMENT_METHOD_MPESA_MANUAL);
+        payment.setAmount(amount);
+        payment.setSortOrder(sortOrder);
+        if (receipt != null) {
+            payment.setReference(receipt);
+            payment.setGatewayTxnId(receipt);
+        }
+        salePaymentRepository.save(payment);
+    }
+
+    private InboundTillPayment inbound(String receipt, BigDecimal amount) {
+        InboundTillPayment row = new InboundTillPayment();
+        row.setBusinessId(TENANT);
+        row.setGatewayType(GatewayType.KOPOKOPO);
+        row.setGatewayEventId("evt-" + receipt);
+        row.setMpesaReceipt(receipt);
+        row.setPayerFirstName("WANJIKU");
+        row.setPayerLastName("KAMAU");
+        row.setMaskedMsisdn("2547XXXXX678");
+        row.setAmount(amount);
+        row.setStatus(InboundTillPaymentStatuses.PENDING);
+        return row;
     }
 
     private void openShift(BigDecimal openingCash) throws Exception {

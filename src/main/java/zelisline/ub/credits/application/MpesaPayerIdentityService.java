@@ -101,6 +101,7 @@ public class MpesaPayerIdentityService {
         Optional<Customer> byMaskFit = findByNameAndMaskFit(businessId, first, last, phoneRaw);
         if (byMaskFit.isPresent()) {
             Customer existing = byMaskFit.get();
+            applyNamesIfAllowed(existing, first, last);
             ensureIdentityKey(existing, identityKey);
             ensureMaskedPhoneRow(existing, phoneRaw, phoneIsMasked);
             return Optional.of(existing);
@@ -362,8 +363,11 @@ public class MpesaPayerIdentityService {
             if (c == null) {
                 continue;
             }
+            // A stored blank last name is the same payer seen before M-Pesa gave us the
+            // full name; the shared mask fingerprint is the same number either way.
+            String storedLast = PayerNameNormalizer.normalize(c.getLastName());
             boolean nameMatch = firstNorm.equals(PayerNameNormalizer.normalize(c.getFirstName()))
-                    && lastNorm.equals(PayerNameNormalizer.normalize(c.getLastName()));
+                    && (lastNorm.equals(storedLast) || storedLast.isEmpty());
             if (!nameMatch) {
                 continue;
             }

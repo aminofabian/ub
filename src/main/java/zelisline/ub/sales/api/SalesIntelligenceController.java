@@ -27,7 +27,6 @@ import zelisline.ub.sales.api.dto.PaymentMethodBreakdownRow;
 import zelisline.ub.sales.api.dto.RecentSaleRow;
 import zelisline.ub.sales.api.dto.RevenueByCategoryRow;
 import zelisline.ub.sales.api.dto.StaffPerformanceRow;
-import zelisline.ub.payments.application.InboundTillPaymentService;
 import zelisline.ub.sales.application.SalesIntelligenceService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
@@ -38,7 +37,6 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class SalesIntelligenceController {
 
     private final SalesIntelligenceService salesIntelligenceService;
-    private final InboundTillPaymentService inboundTillPaymentService;
 
     @GetMapping("/revenue-by-category")
     @PreAuthorize("hasPermission(null, 'sales.intelligence.read')")
@@ -105,10 +103,8 @@ public class SalesIntelligenceController {
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        String businessId = TenantRequestIds.resolveBusinessId(request);
-        inboundTillPaymentService.backfillPayers(businessId);
         return salesIntelligenceService.recentSales(
-                businessId,
+                TenantRequestIds.resolveBusinessId(request),
                 from,
                 to,
                 branchId,
@@ -199,10 +195,8 @@ public class SalesIntelligenceController {
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        String businessId = TenantRequestIds.resolveBusinessId(request);
-        inboundTillPaymentService.backfillPayers(businessId);
         return salesIntelligenceService.customerSpend(
-                businessId, from, to, branchId, limit);
+                TenantRequestIds.resolveBusinessId(request), from, to, branchId, limit);
     }
 
     @GetMapping("/staff-performance")

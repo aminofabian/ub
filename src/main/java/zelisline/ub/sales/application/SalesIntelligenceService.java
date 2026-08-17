@@ -6,6 +6,7 @@ import java.sql.Date;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -40,6 +41,8 @@ import zelisline.ub.credits.domain.MaskedMsisdn;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.BranchCogsRow;
 import zelisline.ub.sales.api.dto.CategoryDailyRevenueRow;
+import zelisline.ub.sales.api.dto.CustomerSpendResponse;
+import zelisline.ub.sales.api.dto.CustomerSpendRow;
 import zelisline.ub.sales.api.dto.CustomerTrendResponse;
 import zelisline.ub.sales.api.dto.ItemActivityResponse;
 import zelisline.ub.sales.api.dto.ItemActivitySummary;
@@ -70,6 +73,8 @@ public class SalesIntelligenceService {
     private static final int MAX_PROFIT_ITEM_LIMIT = 50;
     private static final int STOCK_IN_LIMIT = 40;
     private static final int ITEM_RECENT_SALES_LIMIT = 80;
+    private static final int DEFAULT_CUSTOMER_SPEND_LIMIT = 400;
+    private static final int MAX_CUSTOMER_SPEND_LIMIT = 800;
     private static final List<String> STOCK_IN_TYPES = List.of(
             PurchasingConstants.MOVEMENT_RECEIPT,
             InventoryConstants.MOVEMENT_OPENING,
@@ -709,6 +714,63 @@ public class SalesIntelligenceService {
             SELECT COUNT(*) AS customer_count
               FROM sales s
              WHERE s.business_id = ?
+               AND s.status IN (?, ?)
+               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND (? IS NULL OR s.branch_id = ?)
+            """;
+
+    private static final String Q_CUSTOMER_SPEND = """
+            SELECT c.id AS customer_id,
+                   c.customer_no,
+                   c.name,
+                   c.first_name,
+                   c.last_name,
+                   c.origin,
+                   COUNT(DISTINCT s.id) AS sale_count,
+                   COALESCE(SUM(s.grand_total), 0) AS spend,
+                   MIN(CAST(s.sold_at AS DATE)) AS first_visit,
+                   MAX(CAST(s.sold_at AS DATE)) AS last_visit,
+                   (SELECT p.masked_msisdn
+                      FROM customer_phones p
+                     WHERE p.customer_id = c.id
+                     ORDER BY p.is_primary DESC, p.created_at ASC
+                     LIMIT 1) AS masked_msisdn,
+                   (SELECT p.verified_at IS NOT NULL AND p.phone IS NOT NULL AND TRIM(p.phone) <> ''
+                      FROM customer_phones p
+                     WHERE p.customer_id = c.id
+                     ORDER BY p.is_primary DESC, p.created_at ASC
+                     LIMIT 1) AS phone_verified
+              FROM sales s
+              JOIN customers c ON c.id = s.customer_id AND c.business_id = s.business_id
+             WHERE s.business_id = ?
+               AND s.customer_id IS NOT NULL
+               AND s.status IN (?, ?)
+               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND (? IS NULL OR s.branch_id = ?)
+               AND c.deleted_at IS NULL
+          GROUP BY c.id, c.customer_no, c.name, c.first_name, c.last_name, c.origin
+            """;
+
+    private static final String Q_CUSTOMER_VISIT_DAYS = """
+            SELECT s.customer_id AS customer_id,
+                   CAST(s.sold_at AS DATE) AS visit_date
+              FROM sales s
+              JOIN customers c ON c.id = s.customer_id AND c.business_id = s.business_id
+             WHERE s.business_id = ?
+               AND s.customer_id IS NOT NULL
+               AND s.status IN (?, ?)
+               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND (? IS NULL OR s.branch_id = ?)
+               AND c.deleted_at IS NULL
+          GROUP BY s.customer_id, CAST(s.sold_at AS DATE)
+            """;
+
+    private static final String Q_WALK_IN_SPEND = """
+            SELECT COUNT(*) AS sale_count,
+                   COALESCE(SUM(s.grand_total), 0) AS spend
+              FROM sales s
+             WHERE s.business_id = ?
+               AND s.customer_id IS NULL
                AND s.status IN (?, ?)
                AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
                AND (? IS NULL OR s.branch_id = ?)
@@ -1624,6 +1686,209 @@ public class SalesIntelligenceService {
                 branchFilter);
 
         return new CustomerTrendResponse(total == null ? 0L : total, months);
+    }
+
+    @Transactional(readOnly = true)
+    public CustomerSpendResponse customerSpend(
+            String businessId,
+            LocalDate fromInclusive,
+            LocalDate toInclusive,
+            String branchId,
+            Integer limit
+    ) {
+        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
+        Date from = Date.valueOf(w[0]);
+        Date to = Date.valueOf(w[1]);
+        LocalDate asOf = w[1];
+        String branchFilter = blankToNull(branchId);
+        int rowLimit = limit == null
+                ? DEFAULT_CUSTOMER_SPEND_LIMIT
+                : Math.max(1, Math.min(limit, MAX_CUSTOMER_SPEND_LIMIT));
+
+        record Agg(
+                String customerId,
+                Long customerNo,
+                String name,
+                String firstName,
+                String lastName,
+                String origin,
+                long saleCount,
+                BigDecimal spend,
+                LocalDate firstVisit,
+                LocalDate lastVisit,
+                String maskedMsisdn,
+                Boolean phoneVerified
+        ) {
+        }
+
+        List<Agg> aggs = new ArrayList<>();
+        jdbc.query(
+                Q_CUSTOMER_SPEND,
+                rs -> {
+                    long customerNo = rs.getLong("customer_no");
+                    Long customerNoOrNull = rs.wasNull() ? null : customerNo;
+                    Date first = rs.getDate("first_visit");
+                    Date last = rs.getDate("last_visit");
+                    Boolean phoneVerified = rs.getObject("phone_verified") == null
+                            ? null
+                            : rs.getBoolean("phone_verified");
+                    BigDecimal spend = rs.getBigDecimal("spend");
+                    aggs.add(new Agg(
+                            rs.getString("customer_id"),
+                            customerNoOrNull,
+                            rs.getString("name"),
+                            rs.getString("first_name"),
+                            rs.getString("last_name"),
+                            rs.getString("origin"),
+                            rs.getLong("sale_count"),
+                            spend == null ? ZERO : spend.setScale(2, RoundingMode.HALF_UP),
+                            first == null ? null : first.toLocalDate(),
+                            last == null ? null : last.toLocalDate(),
+                            rs.getString("masked_msisdn"),
+                            phoneVerified));
+                },
+                businessId,
+                SalesConstants.SALE_STATUS_COMPLETED,
+                SalesConstants.SALE_STATUS_REFUNDED,
+                from,
+                to,
+                branchFilter,
+                branchFilter);
+
+        Map<String, List<LocalDate>> visitsByCustomer = new HashMap<>();
+        jdbc.query(
+                Q_CUSTOMER_VISIT_DAYS,
+                rs -> {
+                    Date visit = rs.getDate("visit_date");
+                    if (visit == null) {
+                        return;
+                    }
+                    visitsByCustomer
+                            .computeIfAbsent(rs.getString("customer_id"), k -> new ArrayList<>())
+                            .add(visit.toLocalDate());
+                },
+                businessId,
+                SalesConstants.SALE_STATUS_COMPLETED,
+                SalesConstants.SALE_STATUS_REFUNDED,
+                from,
+                to,
+                branchFilter,
+                branchFilter);
+
+        long walkInCount = 0L;
+        BigDecimal walkInSpend = ZERO;
+        List<Map<String, Object>> walkIn = jdbc.queryForList(
+                Q_WALK_IN_SPEND,
+                businessId,
+                SalesConstants.SALE_STATUS_COMPLETED,
+                SalesConstants.SALE_STATUS_REFUNDED,
+                from,
+                to,
+                branchFilter,
+                branchFilter);
+        if (!walkIn.isEmpty()) {
+            Object count = walkIn.get(0).get("sale_count");
+            Object spend = walkIn.get(0).get("spend");
+            walkInCount = count instanceof Number n ? n.longValue() : 0L;
+            walkInSpend = spend instanceof BigDecimal bd
+                    ? bd.setScale(2, RoundingMode.HALF_UP)
+                    : (spend instanceof Number n
+                            ? BigDecimal.valueOf(n.doubleValue()).setScale(2, RoundingMode.HALF_UP)
+                            : ZERO);
+        }
+
+        BigDecimal identifiedSpend = ZERO;
+        long identifiedSaleCount = 0L;
+        List<CustomerSpendMath.SpendRank> ranks = new ArrayList<>();
+        for (Agg agg : aggs) {
+            identifiedSpend = identifiedSpend.add(agg.spend());
+            identifiedSaleCount += agg.saleCount();
+            ranks.add(new CustomerSpendMath.SpendRank(
+                    agg.customerId(), agg.spend(), agg.saleCount(), agg.lastVisit()));
+        }
+        Set<String> champions = CustomerSpendMath.championIds(ranks, asOf);
+
+        List<CustomerSpendRow> built = new ArrayList<>();
+        for (Agg agg : aggs) {
+            CustomerSpendMath.Rhythm rhythm = CustomerSpendMath.rhythm(
+                    visitsByCustomer.getOrDefault(agg.customerId(), List.of()), asOf);
+            Integer daysSince = agg.lastVisit() == null
+                    ? null
+                    : (int) ChronoUnit.DAYS.between(agg.lastVisit(), asOf);
+            BigDecimal avgBasket = agg.saleCount() <= 0
+                    ? ZERO
+                    : agg.spend().divide(BigDecimal.valueOf(agg.saleCount()), 2, RoundingMode.HALF_UP);
+            String cohort = champions.contains(agg.customerId())
+                    ? "champion"
+                    : CustomerSpendMath.cohort(agg.saleCount(), agg.firstVisit(), agg.lastVisit(), asOf);
+            String masked = agg.maskedMsisdn();
+            built.add(new CustomerSpendRow(
+                    0,
+                    agg.customerId(),
+                    agg.customerNo(),
+                    CustomerSpendMath.displayName(agg.firstName(), agg.lastName(), agg.name()),
+                    agg.origin() == null ? "" : agg.origin(),
+                    masked != null ? MaskedMsisdn.displayMasked(masked) : null,
+                    agg.phoneVerified(),
+                    agg.saleCount(),
+                    rhythm.visitDays(),
+                    agg.spend(),
+                    avgBasket,
+                    CustomerSpendMath.sharePct(agg.spend(), identifiedSpend),
+                    agg.firstVisit(),
+                    agg.lastVisit(),
+                    daysSince,
+                    rhythm.weekStreak(),
+                    rhythm.longestWeekStreak(),
+                    rhythm.cadence(),
+                    rhythm.favoriteWeekday(),
+                    cohort));
+        }
+
+        built.sort(Comparator
+                .comparing(CustomerSpendRow::spend, Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(CustomerSpendRow::saleCount, Comparator.reverseOrder())
+                .thenComparing(CustomerSpendRow::name, Comparator.nullsLast(String::compareToIgnoreCase)));
+
+        boolean truncated = built.size() > rowLimit;
+        if (truncated) {
+            built = new ArrayList<>(built.subList(0, rowLimit));
+        }
+        List<CustomerSpendRow> ranked = new ArrayList<>(built.size());
+        for (int i = 0; i < built.size(); i++) {
+            CustomerSpendRow row = built.get(i);
+            ranked.add(new CustomerSpendRow(
+                    i + 1,
+                    row.customerId(),
+                    row.customerNo(),
+                    row.name(),
+                    row.origin(),
+                    row.maskedHint(),
+                    row.phoneVerified(),
+                    row.saleCount(),
+                    row.visitDays(),
+                    row.spend(),
+                    row.avgBasket(),
+                    row.sharePct(),
+                    row.firstVisit(),
+                    row.lastVisit(),
+                    row.daysSinceLastVisit(),
+                    row.weekStreak(),
+                    row.longestWeekStreak(),
+                    row.cadence(),
+                    row.favoriteWeekday(),
+                    row.cohort()));
+        }
+
+        return new CustomerSpendResponse(
+                asOf,
+                aggs.size(),
+                identifiedSaleCount,
+                identifiedSpend,
+                walkInCount,
+                walkInSpend,
+                truncated,
+                ranked);
     }
 
     private static BranchCogsAgg combineBranchCogs(BranchCogsAgg a, BranchCogsAgg b) {

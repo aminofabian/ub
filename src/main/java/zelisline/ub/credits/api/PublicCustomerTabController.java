@@ -14,6 +14,10 @@ import org.springframework.web.bind.annotation.RestController;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.airtime.api.dto.PublicAirtimeConfigResponse;
+import zelisline.ub.airtime.api.dto.PublicAirtimeOrderRequest;
+import zelisline.ub.airtime.api.dto.PublicAirtimeOrderResponse;
+import zelisline.ub.airtime.application.PublicAirtimeService;
 import zelisline.ub.credits.api.dto.PublicCustomerTabResponse;
 import zelisline.ub.credits.api.dto.PublicTabManualPaymentResponse;
 import zelisline.ub.credits.api.dto.PublicTabStkRequest;
@@ -36,6 +40,7 @@ public class PublicCustomerTabController {
 
     private final PublicCustomerTabService publicCustomerTabService;
     private final PublicHostBusinessResolver publicHostBusinessResolver;
+    private final PublicAirtimeService publicAirtimeService;
 
     @GetMapping("/{phone}")
     public PublicCustomerTabResponse overview(
@@ -103,5 +108,29 @@ public class PublicCustomerTabController {
                 phone,
                 body.amount(),
                 body.reference());
+    }
+
+    /** Same airtime offer as the storefront, resolved from the tab's tenant host. */
+    @GetMapping("/{phone}/airtime")
+    public PublicAirtimeConfigResponse airtimeConfig(HttpServletRequest request) {
+        return publicAirtimeService.configForBusiness(publicHostBusinessResolver.resolveOrThrow(request));
+    }
+
+    @PostMapping("/{phone}/airtime/orders")
+    public PublicAirtimeOrderResponse createAirtimeOrder(
+            @Valid @RequestBody PublicAirtimeOrderRequest body,
+            HttpServletRequest request
+    ) {
+        return publicAirtimeService.createOrderForBusiness(
+                publicHostBusinessResolver.resolveOrThrow(request), body);
+    }
+
+    @GetMapping("/{phone}/airtime/orders/{orderId}")
+    public PublicAirtimeOrderResponse airtimeStatus(
+            @PathVariable String orderId,
+            HttpServletRequest request
+    ) {
+        return publicAirtimeService.statusForBusiness(
+                publicHostBusinessResolver.resolveOrThrow(request), orderId);
     }
 }

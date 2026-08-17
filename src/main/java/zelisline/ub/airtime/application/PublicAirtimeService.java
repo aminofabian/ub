@@ -49,8 +49,12 @@ public class PublicAirtimeService {
 
     @Transactional(readOnly = true)
     public PublicAirtimeConfigResponse config(String slug) {
-        Business business = requireBusiness(slug);
-        var availability = settingsService.availability(business.getId(), true);
+        return configForBusiness(requireBusiness(slug).getId());
+    }
+
+    @Transactional(readOnly = true)
+    public PublicAirtimeConfigResponse configForBusiness(String businessId) {
+        var availability = settingsService.availability(businessId, true);
         return new PublicAirtimeConfigResponse(
                 availability.available(),
                 availability.minAmount(),
@@ -67,10 +71,12 @@ public class PublicAirtimeService {
      * several seconds. Persistence happens in nested transactional services.
      */
     public PublicAirtimeOrderResponse createOrder(String slug, PublicAirtimeOrderRequest body) {
-        Business business = requireBusiness(slug);
+        return createOrderForBusiness(requireBusiness(slug).getId(), body);
+    }
 
+    public PublicAirtimeOrderResponse createOrderForBusiness(String businessId, PublicAirtimeOrderRequest body) {
         AirtimeOrderResponse order = saleService.createAwaitingPayment(
-                business.getId(),
+                businessId,
                 body.phoneNumber(),
                 body.amount(),
                 null,
@@ -87,7 +93,7 @@ public class PublicAirtimeService {
         }
 
         PaymentGatewayStkService.StkPushOutcome outcome = stkPushRetryHelper.initiateAfterClearingPhone(
-                business.getId(),
+                businessId,
                 body.configId(),
                 payer,
                 order.amount(),
@@ -106,7 +112,7 @@ public class PublicAirtimeService {
         }
 
         gatewayStkPushService.registerPush(
-                business.getId(),
+                businessId,
                 GatewayType.valueOf(outcome.gatewayType()),
                 outcome.configId(),
                 outcome.checkoutRequestId(),
@@ -117,7 +123,7 @@ public class PublicAirtimeService {
                 payer);
 
         log.info("Storefront airtime awaiting payment: order={} business={} amount={}",
-                order.id(), business.getId(), order.amount());
+                order.id(), businessId, order.amount());
 
         return new PublicAirtimeOrderResponse(
                 order.id(), order.phoneNumber(), order.network(), order.amount(), order.currency(),
@@ -128,8 +134,12 @@ public class PublicAirtimeService {
 
     @Transactional(readOnly = true)
     public PublicAirtimeOrderResponse status(String slug, String orderId) {
-        Business business = requireBusiness(slug);
-        AirtimeOrder order = orderRepository.findByIdAndBusinessId(orderId.trim(), business.getId())
+        return statusForBusiness(requireBusiness(slug).getId(), orderId);
+    }
+
+    @Transactional(readOnly = true)
+    public PublicAirtimeOrderResponse statusForBusiness(String businessId, String orderId) {
+        AirtimeOrder order = orderRepository.findByIdAndBusinessId(orderId.trim(), businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Airtime order not found"));
 
         boolean delivered = AirtimeOrderStatuses.SUCCESS.equals(order.getStatus());

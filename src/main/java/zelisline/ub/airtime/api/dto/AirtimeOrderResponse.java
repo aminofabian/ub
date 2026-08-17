@@ -7,6 +7,7 @@ public record AirtimeOrderResponse(
         String id,
         String businessId,
         String channel,
+        String tender,
         String phoneNumber,
         String network,
         BigDecimal amount,

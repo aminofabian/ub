@@ -27,10 +27,12 @@ import zelisline.ub.airtime.domain.AirtimeChannels;
 import zelisline.ub.airtime.domain.AirtimeNetworks;
 import zelisline.ub.airtime.domain.AirtimeOrder;
 import zelisline.ub.airtime.domain.AirtimeOrderStatuses;
+import zelisline.ub.airtime.domain.AirtimeTenders;
 import zelisline.ub.airtime.domain.PlatformAirtimeSettings;
 import zelisline.ub.airtime.infrastructure.InstalipaAirtimeGateway;
 import zelisline.ub.airtime.infrastructure.InstalipaAirtimeGateway.AirtimeResult;
 import zelisline.ub.airtime.repository.AirtimeOrderRepository;
+import zelisline.ub.credits.application.CreditSaleDebtService;
 import zelisline.ub.payments.application.KioskPayWalletService;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.payments.domain.KioskPayAccount;
@@ -70,6 +72,7 @@ public class AirtimeSaleService {
     private final PlatformAirtimeSettingsService platformSettings;
     private final BusinessAirtimeSettingsService businessSettings;
     private final KioskPayWalletService walletService;
+    private final CreditSaleDebtService creditSaleDebtService;
     private final InstalipaAirtimeGateway gateway;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -129,6 +132,7 @@ public class AirtimeSaleService {
             String channel,
             String customerId,
             String saleId,
+            String tender,
             String idempotencyKey
     ) {
         String idem = idempotencyKey != null && !idempotencyKey.isBlank()
@@ -144,7 +148,14 @@ public class AirtimeSaleService {
         Map<String, String> credentials = requireReadyProvider(platform);
 
         String resolvedChannel = AirtimeChannels.isKnown(channel) ? channel : AirtimeChannels.POS;
+        String resolvedTender = AirtimeTenders.normalize(tender);
         boolean storefront = AirtimeChannels.STOREFRONT.equals(resolvedChannel);
+        if (AirtimeTenders.TAB.equals(resolvedTender)) {
+            if (customerId == null || customerId.isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Pick a customer to charge this airtime to their tab");
+            }
+        }
 
         var availability = businessSettings.availability(businessId, storefront);
         if (!availability.available()) {
@@ -174,8 +185,13 @@ public class AirtimeSaleService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, problem);
         }
 
+        if (AirtimeTenders.TAB.equals(resolvedTender)) {
+            creditSaleDebtService.assertCanCharge(businessId, customerId, amount);
+        }
+
         AirtimeOrder order = newOrder(
                 businessId, branchId, resolvedChannel, phone, amount, platform, idem);
+        order.setTender(resolvedTender);
         order.setCashierUserId(cashierUserId);
         order.setCustomerId(customerId);
         order.setSaleId(saleId);
@@ -189,6 +205,17 @@ public class AirtimeSaleService {
 
         walletService.holdForAirtime(
                 account, order.getCost(), order.getCurrency(), order.getId(), holdRef(order));
+
+        if (AirtimeTenders.TAB.equals(resolvedTender)) {
+            try {
+                creditSaleDebtService.applyDebtForAirtime(
+                        businessId, order.getId(), customerId, amount);
+            } catch (RuntimeException e) {
+                failOrder(order, account, e.getMessage() != null
+                        ? e.getMessage() : "Could not charge the customer's tab", true);
+                return toResponse(order, account);
+            }
+        }
 
         return dispatch(order, account, platform, credentials);
     }
@@ -205,6 +232,27 @@ public class AirtimeSaleService {
             String customerId,
             String idempotencyKey
     ) {
+        return createAwaitingPayment(
+                businessId, null, null, AirtimeChannels.STOREFRONT, AirtimeTenders.MPESA,
+                rawPhone, rawAmount, customerId, idempotencyKey);
+    }
+
+    /**
+     * Record an unpaid airtime order (storefront shopper or till M-Pesa) and wait
+     * for STK before holding the wallet.
+     */
+    @Transactional
+    public AirtimeOrderResponse createAwaitingPayment(
+            String businessId,
+            String branchId,
+            String cashierUserId,
+            String channel,
+            String tender,
+            String rawPhone,
+            BigDecimal rawAmount,
+            String customerId,
+            String idempotencyKey
+    ) {
         String idem = idempotencyKey != null && !idempotencyKey.isBlank()
                 ? idempotencyKey.trim()
                 : UUID.randomUUID().toString();
@@ -216,7 +264,9 @@ public class AirtimeSaleService {
         PlatformAirtimeSettings platform = platformSettings.loadSingleton();
         requireReadyProvider(platform);
 
-        var availability = businessSettings.availability(businessId, true);
+        String resolvedChannel = AirtimeChannels.isKnown(channel) ? channel : AirtimeChannels.STOREFRONT;
+        boolean storefront = AirtimeChannels.STOREFRONT.equals(resolvedChannel);
+        var availability = businessSettings.availability(businessId, storefront);
         if (!availability.available()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     availability.reason() != null ? availability.reason() : "Airtime is not available");
@@ -238,7 +288,9 @@ public class AirtimeSaleService {
         }
 
         AirtimeOrder order = newOrder(
-                businessId, null, AirtimeChannels.STOREFRONT, phone, amount, platform, idem);
+                businessId, branchId, resolvedChannel, phone, amount, platform, idem);
+        order.setTender(AirtimeTenders.normalize(tender));
+        order.setCashierUserId(cashierUserId);
         order.setCustomerId(customerId);
         order.setStatus(AirtimeOrderStatuses.AWAITING_PAYMENT);
         try {
@@ -547,6 +599,7 @@ public class AirtimeSaleService {
         order.setBusinessId(businessId);
         order.setBranchId(branchId);
         order.setChannel(channel);
+        order.setTender(AirtimeTenders.CASH);
         order.setPhoneNumber(phone);
         order.setNetwork(AirtimeNetworks.detect(phone));
         order.setAmount(amount);
@@ -596,6 +649,16 @@ public class AirtimeSaleService {
                         wallet, order.getCost(), order.getCurrency(), order.getId(), releaseRef(order));
             } catch (Exception e) {
                 log.error("Airtime hold release failed for order={}", order.getId(), e);
+            }
+        }
+        if (AirtimeTenders.TAB.equals(order.getTender())
+                && order.getCustomerId() != null
+                && !order.getCustomerId().isBlank()) {
+            try {
+                creditSaleDebtService.reverseDebtForAirtime(
+                        order.getBusinessId(), order.getId(), order.getCustomerId());
+            } catch (Exception e) {
+                log.error("Airtime tab reverse failed for order={}", order.getId(), e);
             }
         }
         order.setStatus(AirtimeOrderStatuses.FAILED);
@@ -739,6 +802,7 @@ public class AirtimeSaleService {
                 order.getId(),
                 order.getBusinessId(),
                 order.getChannel(),
+                order.getTender(),
                 order.getPhoneNumber(),
                 order.getNetwork(),
                 order.getAmount(),
@@ -762,6 +826,7 @@ public class AirtimeSaleService {
                 order.getId(),
                 order.getBusinessId(),
                 order.getChannel(),
+                order.getTender(),
                 order.getPhoneNumber(),
                 order.getNetwork(),
                 order.getAmount(),

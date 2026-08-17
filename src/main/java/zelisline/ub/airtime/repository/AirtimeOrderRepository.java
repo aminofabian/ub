@@ -30,6 +30,9 @@ public interface AirtimeOrderRepository extends JpaRepository<AirtimeOrder, Stri
 
     List<AirtimeOrder> findByWebOrderId(String webOrderId);
 
+    List<AirtimeOrder> findByBusinessIdAndCustomerIdAndStatusOrderByCompletedAtDesc(
+            String businessId, String customerId, String status, Pageable pageable);
+
     @Query("""
             select coalesce(sum(o.amount), 0) from AirtimeOrder o
             where o.businessId = :businessId

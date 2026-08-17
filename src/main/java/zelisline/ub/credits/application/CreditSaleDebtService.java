@@ -92,6 +92,57 @@ public class CreditSaleDebtService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customer not found"));
     }
 
+    /** Throws when the customer cannot take {@code amount} more on their tab. */
+    public void assertCanCharge(String businessId, String customerId, BigDecimal amount) {
+        assertCustomerExists(businessId, customerId);
+        if (amount == null || amount.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Tab charge must be positive");
+        }
+        CreditAccount acc = creditAccountRepository
+                .findByCustomerIdAndBusinessId(customerId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Credit account not found"));
+        BigDecimal scaled = amount.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal next = acc.getBalanceOwed().add(scaled).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        assertWithinLimit(acc, next);
+    }
+
+    /**
+     * Charge airtime to a customer's tab. {@code airtimeOrderId} is stored as the
+     * credit transaction's sale id so a retry cannot double-charge.
+     */
+    @Transactional
+    public void applyDebtForAirtime(
+            String businessId, String airtimeOrderId, String customerId, BigDecimal amount) {
+        if (amount == null || amount.signum() <= 0 || airtimeOrderId == null || airtimeOrderId.isBlank()) {
+            return;
+        }
+        if (!creditTransactionRepository.findBySaleIdOrderByCreatedAtAsc(airtimeOrderId).isEmpty()) {
+            return;
+        }
+        applyDebtForNewSale(businessId, airtimeOrderId, customerId, amount);
+    }
+
+    /** Undo {@link #applyDebtForAirtime} when the telco never delivered. */
+    @Transactional
+    public void reverseDebtForAirtime(String businessId, String airtimeOrderId, String customerId) {
+        if (airtimeOrderId == null || airtimeOrderId.isBlank()) {
+            return;
+        }
+        List<CreditTransaction> rows = creditTransactionRepository.findBySaleIdOrderByCreatedAtAsc(airtimeOrderId);
+        BigDecimal charged = BigDecimal.ZERO;
+        for (CreditTransaction t : rows) {
+            if (CreditTxnTypes.DEBT.equals(t.getTxnType())) {
+                charged = charged.add(t.getAmount());
+            } else if (CreditTxnTypes.ADJUSTMENT.equals(t.getTxnType())) {
+                charged = charged.subtract(t.getAmount());
+            }
+        }
+        if (charged.signum() <= 0) {
+            return;
+        }
+        reduceDebtForCreditRefund(businessId, airtimeOrderId, customerId, charged);
+    }
+
     /** Reduces {@code balance_owed} after verified inbound tender (claims, gateways). */
     @Transactional
     public void applyInboundArPayment(String businessId, String creditAccountId, BigDecimal paymentAmount) {

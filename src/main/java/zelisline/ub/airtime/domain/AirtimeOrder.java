@@ -33,6 +33,10 @@ public class AirtimeOrder {
     @Column(name = "channel", nullable = false, length = 16)
     private String channel;
 
+    /** Cash, M-Pesa, or tab — how the shopper reimbursed the shop. */
+    @Column(name = "tender", nullable = false, length = 16)
+    private String tender = AirtimeTenders.CASH;
+
     @Column(name = "phone_number", nullable = false, length = 32)
     private String phoneNumber;
 

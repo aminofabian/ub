@@ -16,6 +16,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.airtime.domain.AirtimeOrder;
+import zelisline.ub.airtime.domain.AirtimeOrderStatuses;
+import zelisline.ub.airtime.domain.AirtimeTenders;
+import zelisline.ub.airtime.repository.AirtimeOrderRepository;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.credits.CreditTxnTypes;
@@ -50,6 +54,7 @@ public class CustomerTabPurchasesService {
     private final SaleRepository saleRepository;
     private final SaleItemRepository saleItemRepository;
     private final ItemRepository itemRepository;
+    private final AirtimeOrderRepository airtimeOrderRepository;
 
     @Transactional(readOnly = true)
     public List<TabPurchaseRowResponse> list(String businessId, String customerId) {
@@ -103,7 +108,7 @@ public class CustomerTabPurchasesService {
         }
 
         if (sales.isEmpty()) {
-            return List.of();
+            return List.copyOf(airtimeRows(businessId, customerId));
         }
 
         Set<String> saleIds = new HashSet<>();
@@ -187,7 +192,49 @@ public class CustomerTabPurchasesService {
                             sale.getId(), BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP)),
                     List.copyOf(lines)));
         }
-        return List.copyOf(out);
+        List<TabPurchaseRowResponse> merged = new ArrayList<>(out);
+        merged.addAll(airtimeRows(businessId, customerId));
+        merged.sort((a, b) -> {
+            if (a.soldAt() == null && b.soldAt() == null) return 0;
+            if (a.soldAt() == null) return 1;
+            if (b.soldAt() == null) return -1;
+            return b.soldAt().compareTo(a.soldAt());
+        });
+        if (merged.size() > DEFAULT_LIMIT) {
+            merged = new ArrayList<>(merged.subList(0, DEFAULT_LIMIT));
+        }
+        return List.copyOf(merged);
+    }
+
+    private List<TabPurchaseRowResponse> airtimeRows(String businessId, String customerId) {
+        List<AirtimeOrder> orders = airtimeOrderRepository
+                .findByBusinessIdAndCustomerIdAndStatusOrderByCompletedAtDesc(
+                        businessId, customerId, AirtimeOrderStatuses.SUCCESS,
+                        PageRequest.of(0, DEFAULT_LIMIT));
+        List<TabPurchaseRowResponse> rows = new ArrayList<>();
+        for (AirtimeOrder order : orders) {
+            if (!AirtimeTenders.TAB.equals(order.getTender())) {
+                continue;
+            }
+            String network = order.getNetwork() != null && !order.getNetwork().isBlank()
+                    ? order.getNetwork().charAt(0) + order.getNetwork().substring(1).toLowerCase()
+                    : "Airtime";
+            String phone = order.getPhoneNumber() != null ? order.getPhoneNumber() : "";
+            rows.add(new TabPurchaseRowResponse(
+                    order.getId(),
+                    null,
+                    order.getCompletedAt() != null ? order.getCompletedAt() : order.getRequestedAt(),
+                    "completed",
+                    scaleMoney(order.getAmount()),
+                    scaleMoney(order.getAmount()),
+                    BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP),
+                    List.of(new TabPurchaseLineResponse(
+                            network + " airtime · " + phone,
+                            BigDecimal.ONE.setScale(QTY_SCALE, RoundingMode.HALF_UP),
+                            scaleUnitPrice(order.getAmount()),
+                            scaleMoney(order.getAmount())))));
+        }
+        return rows;
     }
 
     private static boolean isVisibleSale(Sale sale) {

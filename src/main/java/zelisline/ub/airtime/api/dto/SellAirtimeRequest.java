@@ -17,6 +17,15 @@ public record SellAirtimeRequest(
         /** POS or DASHBOARD; storefront orders come through the public endpoint. */
         String channel,
 
+        /**
+         * How the shopper pays the shop: {@code CASH}, {@code MPESA}, or {@code TAB}.
+         * The Kiosk Pay wallet still funds Instalipa. Defaults to cash.
+         */
+        String tender,
+
+        /** M-Pesa paying number when {@code tender} is {@code MPESA}. Defaults to {@code phoneNumber}. */
+        String payerPhone,
+
         String customerId,
 
         /** Set when the till already recorded the cash sale this airtime belongs to. */

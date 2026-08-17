@@ -29,6 +29,8 @@ import zelisline.ub.airtime.api.dto.SellAirtimeRequest;
 import zelisline.ub.airtime.api.dto.UpdateAirtimeSettingsRequest;
 import zelisline.ub.airtime.application.AirtimeSaleService;
 import zelisline.ub.airtime.application.BusinessAirtimeSettingsService;
+import zelisline.ub.airtime.application.PosAirtimeCollectService;
+import zelisline.ub.airtime.domain.AirtimeTenders;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.tenancy.api.TenantRequestIds;
@@ -41,6 +43,7 @@ public class AirtimeTenantController {
 
     private final AirtimeSaleService saleService;
     private final BusinessAirtimeSettingsService settingsService;
+    private final PosAirtimeCollectService posAirtimeCollectService;
 
     /** Cashier / storefront gate: should airtime be offered, and within what bounds. */
     @GetMapping("/availability")
@@ -78,8 +81,21 @@ public class AirtimeTenantController {
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Idempotency-Key is required");
         }
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String tender = AirtimeTenders.normalize(body.tender());
+        if (AirtimeTenders.MPESA.equals(tender)) {
+            return posAirtimeCollectService.prompt(
+                    businessId,
+                    principal.branchId(),
+                    principal.userId(),
+                    body.phoneNumber(),
+                    body.amount(),
+                    body.payerPhone(),
+                    body.customerId(),
+                    idempotencyKey.trim());
+        }
         return saleService.sell(
-                TenantRequestIds.resolveBusinessId(request),
+                businessId,
                 principal.branchId(),
                 principal.userId(),
                 body.phoneNumber(),
@@ -87,6 +103,7 @@ public class AirtimeTenantController {
                 body.channel(),
                 body.customerId(),
                 body.saleId(),
+                tender,
                 idempotencyKey.trim());
     }
 

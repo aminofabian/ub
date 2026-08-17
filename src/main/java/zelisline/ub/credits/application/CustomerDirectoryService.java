@@ -41,8 +41,11 @@ import zelisline.ub.credits.api.dto.OutstandingTabRowResponse;
 import zelisline.ub.credits.api.dto.PatchCustomerRequest;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.Customer;
+import zelisline.ub.credits.domain.CustomerOrigins;
 import zelisline.ub.credits.domain.CustomerPhone;
 import zelisline.ub.credits.domain.CustomerPhoneNormalizer;
+import zelisline.ub.credits.domain.MaskedMsisdn;
+import zelisline.ub.credits.domain.PayerNameNormalizer;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
@@ -60,6 +63,7 @@ public class CustomerDirectoryService {
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
     private final CustomerPhoneVerificationService customerPhoneVerificationService;
+    private final MpesaPayerIdentityService mpesaPayerIdentityService;
 
     @Transactional(readOnly = true)
     public Page<CustomerResponse> list(
@@ -198,14 +202,42 @@ public class CustomerDirectoryService {
             verifiedAt = Instant.now();
         }
 
+        String primaryPhone = drafts.isEmpty() ? null : drafts.getFirst().phone();
+        Optional<Customer> inferred = mpesaPayerIdentityService.attachStaffRegistration(
+                businessId, request.name().trim(), primaryPhone);
+        if (inferred.isPresent()) {
+            Customer existing = inferred.get();
+            if (verifiedAt != null) {
+                mpesaPayerIdentityService.markSelfVerified(existing, primaryPhone);
+            }
+            publishCustomerEvent(businessId, existing, actorUserId, AuditEventTypes.CUSTOMER_UPDATED, null);
+            return toResponseSingle(businessId, existing);
+        }
+
         Customer customer = new Customer();
         customer.setBusinessId(businessId);
+        customer.setCustomerNo(customerRepository.nextCustomerNo(businessId));
         customer.setName(request.name().trim());
+        String[] parts = PayerNameNormalizer.splitDisplayName(request.name());
+        customer.setFirstName(parts[0].isEmpty() ? null : parts[0]);
+        customer.setLastName(parts[1].isEmpty() ? null : parts[1]);
+        customer.setFirstNameNorm(PayerNameNormalizer.normalize(parts[0]));
+        customer.setLastNameNorm(PayerNameNormalizer.normalize(parts[1]));
+        customer.setOrigin(verifiedAt != null ? CustomerOrigins.SELF_VERIFIED : CustomerOrigins.STAFF);
         customer.setEmail(blankToNull(request.email()));
         customer.setNotes(blankToNull(request.notes()));
         customerRepository.save(customer);
 
         persistPhonesFromDrafts(businessId, customer.getId(), drafts, verifiedAt);
+        String fp = MaskedMsisdn.fingerprint(primaryPhone);
+        String identityKey = PayerNameNormalizer.identityKey(
+                customer.getFirstNameNorm(), customer.getLastNameNorm(), fp);
+        if (identityKey != null
+                && customerRepository.findByBusinessIdAndMpesaIdentityKeyAndDeletedAtIsNull(businessId, identityKey)
+                        .isEmpty()) {
+            customer.setMpesaIdentityKey(identityKey);
+            customerRepository.save(customer);
+        }
         openCreditAccount(businessId, customer.getId(), request.creditLimit());
         publishCustomerEvent(businessId, customer, actorUserId, AuditEventTypes.CUSTOMER_CREATED, null);
         if (request.creditLimit() != null && request.creditLimit().signum() >= 0) {
@@ -342,13 +374,15 @@ public class CustomerDirectoryService {
             boolean hasLetters = trimmed.chars().anyMatch(Character::isLetter);
             String namePart = hasLetters ? trimmed.toLowerCase() : null;
             String phoneDigits = digits.isEmpty() ? null : digits;
-            if (namePart == null && phoneDigits == null) {
+            Long customerNo = parseCustomerNoQuery(trimmed);
+            if (namePart == null && phoneDigits == null && customerNo == null) {
                 return Page.empty(pageable);
             }
             return customerRepository.findByBusinessIdAndNameOrPhoneContains(
                     businessId,
                     namePart,
                     phoneDigits,
+                    customerNo,
                     createdFrom,
                     createdToExclusive,
                     pageable);
@@ -356,7 +390,7 @@ public class CustomerDirectoryService {
         boolean hasRange = createdFrom != null || createdToExclusive != null;
         if (phoneRaw == null || phoneRaw.isBlank()) {
             if (!hasRange) {
-                return customerRepository.findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(
+                return customerRepository.findByBusinessIdAndDeletedAtIsNullOrderByCustomerNoAscNameAsc(
                         businessId, pageable);
             }
             return customerRepository.findByBusinessIdAndDeletedAtIsNullAndCreatedAtRange(
@@ -369,6 +403,27 @@ public class CustomerDirectoryService {
         }
         return customerRepository.findByBusinessIdAndPhoneNormalizedAndCreatedAtRange(
                 businessId, normalized, createdFrom, createdToExclusive, pageable);
+    }
+
+    private static Long parseCustomerNoQuery(String trimmed) {
+        if (trimmed == null || trimmed.isBlank()) {
+            return null;
+        }
+        String raw = trimmed.trim();
+        if (raw.startsWith("#")) {
+            raw = raw.substring(1);
+        } else if (raw.length() >= 2 && (raw.charAt(0) == 'C' || raw.charAt(0) == 'c')
+                && (raw.charAt(1) == '-' || raw.charAt(1) == '#')) {
+            raw = raw.substring(2);
+        }
+        if (raw.isEmpty() || !raw.chars().allMatch(Character::isDigit)) {
+            return null;
+        }
+        try {
+            return Long.parseLong(raw);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private Customer loadActive(String businessId, String customerId) {
@@ -409,11 +464,24 @@ public class CustomerDirectoryService {
     private CustomerResponse assembleResponse(Customer c, List<CustomerPhone> phones, CreditAccount acc) {
         List<CustomerPhoneResponse> phoneResponses = Optional.ofNullable(phones).orElse(List.of()).stream()
                 .map(p -> new CustomerPhoneResponse(
-                        p.getId(), p.getPhone(), p.isPrimary(), p.getVerifiedAt(), p.getCreatedAt()))
+                        p.getId(),
+                        p.getPhone(),
+                        p.getMaskedMsisdn(),
+                        p.getAssignedMsisdn(),
+                        p.getMaskedMsisdn() != null
+                                ? MaskedMsisdn.displayMasked(p.getMaskedMsisdn())
+                                : null,
+                        p.isPrimary(),
+                        p.getVerifiedAt(),
+                        p.getCreatedAt()))
                 .toList();
         return new CustomerResponse(
                 c.getId(),
+                c.getCustomerNo(),
                 c.getName(),
+                c.getFirstName(),
+                c.getLastName(),
+                c.getOrigin(),
                 c.getEmail(),
                 c.getNotes(),
                 c.getVersion(),

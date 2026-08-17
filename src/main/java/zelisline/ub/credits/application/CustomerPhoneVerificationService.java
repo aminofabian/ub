@@ -40,10 +40,29 @@ public class CustomerPhoneVerificationService {
 
     @Transactional
     public SendCustomerPhoneVerificationResponse send(String businessId, String rawPhone) {
+        return send(businessId, rawPhone, null);
+    }
+
+    @Transactional
+    public SendCustomerPhoneVerificationResponse sendForOwner(
+            String businessId,
+            String rawPhone,
+            String ownerCustomerId
+    ) {
+        return send(businessId, rawPhone, ownerCustomerId);
+    }
+
+    private SendCustomerPhoneVerificationResponse send(
+            String businessId,
+            String rawPhone,
+            String ownerCustomerId
+    ) {
         String phone = normalizeOrThrow(rawPhone);
-        if (customerPhoneRepository.existsByBusinessIdAndPhone(businessId, phone)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Phone already in use for this business");
-        }
+        customerPhoneRepository.findFirstByBusinessIdAndPhone(businessId, phone).ifPresent(existing -> {
+            if (ownerCustomerId == null || !ownerCustomerId.equals(existing.getCustomerId())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Phone already in use for this business");
+            }
+        });
 
         Instant now = Instant.now();
         verificationRepository.findFirstByBusinessIdAndPhoneAndConsumedAtIsNullOrderByCreatedAtDesc(businessId, phone)

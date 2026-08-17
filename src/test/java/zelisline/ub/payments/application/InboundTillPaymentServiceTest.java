@@ -26,7 +26,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import zelisline.ub.credits.CreditClaimChannels;
 import zelisline.ub.credits.CreditClaimStatuses;
+import zelisline.ub.credits.application.MpesaPayerIdentityService;
 import zelisline.ub.credits.application.PublicPaymentClaimService;
+import zelisline.ub.credits.domain.Customer;
 import zelisline.ub.credits.domain.PublicPaymentClaim;
 import zelisline.ub.credits.repository.PublicPaymentClaimRepository;
 import zelisline.ub.payments.domain.GatewayType;
@@ -46,6 +48,8 @@ class InboundTillPaymentServiceTest {
     private ObjectProvider<PublicPaymentClaimService> publicPaymentClaimServiceProvider;
     @Mock
     private PublicPaymentClaimService publicPaymentClaimService;
+    @Mock
+    private MpesaPayerIdentityService mpesaPayerIdentityService;
 
     private InboundTillPaymentService service;
 
@@ -55,7 +59,11 @@ class InboundTillPaymentServiceTest {
                 inboundRepository,
                 publicPaymentClaimRepository,
                 publicPaymentClaimServiceProvider,
-                new ObjectMapper());
+                new ObjectMapper(),
+                mpesaPayerIdentityService);
+        org.mockito.Mockito.lenient()
+                .when(mpesaPayerIdentityService.resolveFromWebhook(any(), any()))
+                .thenReturn(Optional.empty());
     }
 
     @Test

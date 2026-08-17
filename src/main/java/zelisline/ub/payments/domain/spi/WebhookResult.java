@@ -22,14 +22,20 @@ public record WebhookResult(
         String topic,
         String rawPayload,
         /** Human-readable decline reason from the gateway when {@link #terminalFailure} is true. */
-        String failureMessage
+        String failureMessage,
+        String firstName,
+        String lastName,
+        /** Compact masked MSISDN ({@code 2547XXXXX123}) when Kopokopo hid middle digits. */
+        String maskedPhone,
+        boolean phoneIsMasked
 ) {
     public static WebhookResult empty(String rawPayload) {
         return new WebhookResult(
-                null, null, null, null, null, false, false, null, null, null, rawPayload, null);
+                null, null, null, null, null, false, false, null, null, null, rawPayload, null,
+                null, null, null, false);
     }
 
-    /** Convenience constructor for callers that do not supply a failure message. */
+    /** Convenience constructor for callers that do not supply a failure message or payer identity. */
     public WebhookResult(
             String businessId,
             String gatewayTransactionId,
@@ -55,6 +61,70 @@ public record WebhookResult(
                 webhookEventId,
                 topic,
                 rawPayload,
-                null);
+                null,
+                null,
+                null,
+                null,
+                false);
+    }
+
+    /** Convenience constructor with a failure message and no payer identity. */
+    public WebhookResult(
+            String businessId,
+            String gatewayTransactionId,
+            String phoneNumber,
+            BigDecimal amount,
+            String reference,
+            boolean success,
+            boolean terminalFailure,
+            String gatewayCheckoutId,
+            String webhookEventId,
+            String topic,
+            String rawPayload,
+            String failureMessage
+    ) {
+        this(
+                businessId,
+                gatewayTransactionId,
+                phoneNumber,
+                amount,
+                reference,
+                success,
+                terminalFailure,
+                gatewayCheckoutId,
+                webhookEventId,
+                topic,
+                rawPayload,
+                failureMessage,
+                null,
+                null,
+                null,
+                false);
+    }
+
+    public WebhookResult withPayer(
+            String firstName,
+            String lastName,
+            String phoneNumber,
+            String maskedPhone,
+            boolean phoneIsMasked
+    ) {
+        return new WebhookResult(
+                businessId(),
+                gatewayTransactionId(),
+                phoneNumber,
+                amount(),
+                reference(),
+                success(),
+                terminalFailure(),
+                gatewayCheckoutId(),
+                webhookEventId(),
+                topic(),
+                rawPayload(),
+                failureMessage(),
+                firstName,
+                lastName,
+                maskedPhone,
+                phoneIsMasked);
     }
 }

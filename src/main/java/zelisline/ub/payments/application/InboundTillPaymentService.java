@@ -22,7 +22,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.CreditClaimChannels;
 import zelisline.ub.credits.CreditClaimStatuses;
+import zelisline.ub.credits.application.MpesaPayerIdentityService;
 import zelisline.ub.credits.application.PublicPaymentClaimService;
+import zelisline.ub.credits.domain.Customer;
 import zelisline.ub.credits.domain.PublicPaymentClaim;
 import zelisline.ub.credits.repository.PublicPaymentClaimRepository;
 import zelisline.ub.payments.domain.GatewayType;
@@ -47,6 +49,7 @@ public class InboundTillPaymentService {
     private final PublicPaymentClaimRepository publicPaymentClaimRepository;
     private final ObjectProvider<PublicPaymentClaimService> publicPaymentClaimService;
     private final ObjectMapper objectMapper;
+    private final MpesaPayerIdentityService mpesaPayerIdentityService;
 
     /**
      * Idempotently store a successful unmatched buygoods webhook as PENDING.
@@ -68,7 +71,10 @@ public class InboundTillPaymentService {
             return Optional.empty();
         }
         if (inboundRepository.existsByGatewayTypeAndGatewayEventId(GatewayType.KOPOKOPO, eventId)) {
-            return inboundRepository.findByGatewayTypeAndGatewayEventId(GatewayType.KOPOKOPO, eventId);
+            Optional<InboundTillPayment> existing = inboundRepository
+                    .findByGatewayTypeAndGatewayEventId(GatewayType.KOPOKOPO, eventId);
+            existing.ifPresent(row -> ensurePayerLinked(businessId, row, parsed));
+            return existing;
         }
 
         String txnReceipt = trimOrNull(parsed.gatewayTransactionId());
@@ -77,6 +83,7 @@ public class InboundTillPaymentService {
             Optional<InboundTillPayment> byReceipt = inboundRepository
                     .findFirstByBusinessIdAndMpesaReceiptIgnoreCase(businessId, receipt);
             if (byReceipt.isPresent()) {
+                byReceipt.ifPresent(row -> ensurePayerLinked(businessId, row, parsed));
                 return byReceipt;
             }
         }
@@ -86,12 +93,17 @@ public class InboundTillPaymentService {
         row.setGatewayType(GatewayType.KOPOKOPO);
         row.setGatewayEventId(eventId);
         row.setMpesaReceipt(receipt);
-        row.setPhone(StkPhoneNormalizer.normalize(parsed.phoneNumber()));
+        row.setPhone(parsed.phoneIsMasked() ? null : StkPhoneNormalizer.normalize(parsed.phoneNumber()));
+        row.setPayerFirstName(parsed.firstName());
+        row.setPayerLastName(parsed.lastName());
+        row.setMaskedMsisdn(parsed.maskedPhone());
         row.setAmount(parsed.amount().setScale(2, RoundingMode.HALF_UP));
         row.setTillNumber(extractTillNumber(parsed.rawPayload()));
         row.setRawPayload(parsed.rawPayload());
         row.setStatus(InboundTillPaymentStatuses.PENDING);
         try {
+            Optional<Customer> payer = mpesaPayerIdentityService.resolveFromWebhook(businessId, parsed);
+            payer.ifPresent(c -> row.setLinkedCustomerId(c.getId()));
             return Optional.of(inboundRepository.save(row));
         } catch (DataIntegrityViolationException e) {
             log.info("Inbound till payment duplicate ignored eventId={} business={}", eventId, businessId);
@@ -265,6 +277,10 @@ public class InboundTillPaymentService {
             }
             inboundRepository.save(inbound);
         }
+        if (inbound.getLinkedCustomerId() != null) {
+            mpesaPayerIdentityService.attachToSaleIfUnassigned(
+                    businessId, saleId, inbound.getLinkedCustomerId());
+        }
         String txn = inbound.getMpesaReceipt() != null ? inbound.getMpesaReceipt() : receipt;
         return Optional.of(txn);
     }
@@ -355,6 +371,12 @@ public class InboundTillPaymentService {
             JsonNode root = objectMapper.readTree(rawPayload);
             JsonNode resource = root.path("event").path("resource");
             if (resource.isMissingNode() || resource.isNull()) {
+                resource = root.path("attributes");
+            }
+            if (resource.isMissingNode() || resource.isNull()) {
+                resource = root.path("data").path("attributes");
+            }
+            if (resource.isMissingNode() || resource.isNull()) {
                 return null;
             }
             if (resource.hasNonNull("till_number")) {
@@ -365,6 +387,25 @@ public class InboundTillPaymentService {
             log.debug("Could not extract till_number from buygoods payload: {}", e.getMessage());
         }
         return null;
+    }
+
+    private void ensurePayerLinked(String businessId, InboundTillPayment row, WebhookResult parsed) {
+        if (row.getLinkedCustomerId() != null && !row.getLinkedCustomerId().isBlank()) {
+            return;
+        }
+        mpesaPayerIdentityService.resolveFromWebhook(businessId, parsed).ifPresent(c -> {
+            row.setLinkedCustomerId(c.getId());
+            if (row.getPayerFirstName() == null) {
+                row.setPayerFirstName(parsed.firstName());
+            }
+            if (row.getPayerLastName() == null) {
+                row.setPayerLastName(parsed.lastName());
+            }
+            if (row.getMaskedMsisdn() == null) {
+                row.setMaskedMsisdn(parsed.maskedPhone());
+            }
+            inboundRepository.save(row);
+        });
     }
 
     private static String resolveEventId(WebhookResult parsed) {

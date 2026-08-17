@@ -27,8 +27,17 @@ public class CustomerPhone {
     @Column(name = "customer_id", nullable = false, length = 36)
     private String customerId;
 
-    @Column(name = "phone", nullable = false, length = 32)
+    @Column(name = "phone", length = 32)
     private String phone;
+
+    @Column(name = "masked_msisdn", length = 32)
+    private String maskedMsisdn;
+
+    @Column(name = "mask_fingerprint", length = 64)
+    private String maskFingerprint;
+
+    @Column(name = "assigned_msisdn", length = 32)
+    private String assignedMsisdn;
 
     @Column(name = "is_primary", nullable = false)
     private boolean primary;

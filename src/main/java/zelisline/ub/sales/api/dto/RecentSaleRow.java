@@ -24,6 +24,10 @@ public record RecentSaleRow(
         /** {@code walk_in} for POS; {@code online_store} for storefront checkout. */
         String channel,
         /** True when an M-Pesa tender was confirmed via gateway webhook/STK receipt. */
-        Boolean mpesaVerified
+        Boolean mpesaVerified,
+        String customerId,
+        Long customerNo,
+        String customerMaskedHint,
+        Boolean customerPhoneVerified
 ) {
 }

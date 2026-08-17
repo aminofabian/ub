@@ -2,6 +2,7 @@ package zelisline.ub.credits.repository;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -14,6 +15,10 @@ public interface CustomerPhoneRepository extends JpaRepository<CustomerPhone, St
     List<CustomerPhone> findByCustomerIdIn(Collection<String> customerIds);
 
     boolean existsByBusinessIdAndPhone(String businessId, String phone);
+
+    Optional<CustomerPhone> findFirstByBusinessIdAndPhone(String businessId, String phone);
+
+    List<CustomerPhone> findByBusinessIdAndMaskFingerprint(String businessId, String maskFingerprint);
 
     void deleteByCustomerId(String customerId);
 }

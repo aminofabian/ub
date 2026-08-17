@@ -36,6 +36,7 @@ import zelisline.ub.reporting.repository.MvSalesDailyRepository;
 import zelisline.ub.reporting.repository.MvSalesDailyRepository.ItemDailyRollup;
 import zelisline.ub.reporting.repository.MvSalesDailyRepository.ItemDayQtyRevenue;
 import zelisline.ub.reporting.repository.MvSalesDailyRepository.ItemVelocityPast;
+import zelisline.ub.credits.domain.MaskedMsisdn;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.BranchCogsRow;
 import zelisline.ub.sales.api.dto.CategoryDailyRevenueRow;
@@ -474,7 +475,19 @@ public class SalesIntelligenceService {
                         WHERE spv.sale_id = s.id
                           AND spv.gateway_txn_id IS NOT NULL
                           AND TRIM(spv.gateway_txn_id) <> ''
-                   ) AS mpesa_verified
+                   ) AS mpesa_verified,
+                   s.customer_id,
+                   cu.customer_no,
+                   (SELECT p.masked_msisdn
+                      FROM customer_phones p
+                     WHERE p.customer_id = s.customer_id
+                     ORDER BY p.is_primary DESC, p.created_at ASC
+                     LIMIT 1) AS customer_masked_msisdn,
+                   (SELECT p.verified_at IS NOT NULL AND p.phone IS NOT NULL AND TRIM(p.phone) <> ''
+                      FROM customer_phones p
+                     WHERE p.customer_id = s.customer_id
+                     ORDER BY p.is_primary DESC, p.created_at ASC
+                     LIMIT 1) AS customer_phone_verified
               FROM sale_items sil
               JOIN sales s ON s.id = sil.sale_id
               JOIN items i ON i.id = sil.item_id AND i.business_id = s.business_id AND i.deleted_at IS NULL
@@ -735,9 +748,16 @@ public class SalesIntelligenceService {
                 Q_RECENT_SALES,
                 rs -> {
                     long receiptNo = rs.getLong("receipt_no");
+                    Long receiptNoOrNull = rs.wasNull() ? null : receiptNo;
+                    long customerNo = rs.getLong("customer_no");
+                    Long customerNoOrNull = rs.wasNull() ? null : customerNo;
+                    String masked = rs.getString("customer_masked_msisdn");
+                    Boolean phoneVerified = rs.getObject("customer_phone_verified") == null
+                            ? null
+                            : rs.getBoolean("customer_phone_verified");
                     out.add(new RecentSaleRow(
                             rs.getString("sale_id"),
-                            rs.wasNull() ? null : receiptNo,
+                            receiptNoOrNull,
                             rs.getTimestamp("sold_at").toInstant(),
                             rs.getString("cashier_name"),
                             rs.getString("customer_name"),
@@ -751,7 +771,11 @@ public class SalesIntelligenceService {
                             rs.getBigDecimal("profit").setScale(2, RoundingMode.HALF_UP),
                             rs.getString("status"),
                             rs.getString("channel"),
-                            rs.getBoolean("mpesa_verified")
+                            rs.getBoolean("mpesa_verified"),
+                            rs.getString("customer_id"),
+                            customerNoOrNull,
+                            masked != null ? MaskedMsisdn.displayMasked(masked) : null,
+                            phoneVerified
                     ));
                 },
                 businessId,
@@ -1273,7 +1297,11 @@ public class SalesIntelligenceService {
                             rs.getBigDecimal("profit").setScale(2, RoundingMode.HALF_UP),
                             rs.getString("status"),
                             rs.getString("channel"),
-                            false
+                            false,
+                            null,
+                            null,
+                            null,
+                            null
                     ));
                 },
                 businessId,

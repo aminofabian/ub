@@ -41,6 +41,15 @@ public class InboundTillPayment {
     @Column(name = "phone", length = 32)
     private String phone;
 
+    @Column(name = "payer_first_name", length = 120)
+    private String payerFirstName;
+
+    @Column(name = "payer_last_name", length = 120)
+    private String payerLastName;
+
+    @Column(name = "masked_msisdn", length = 32)
+    private String maskedMsisdn;
+
     @Column(name = "amount", nullable = false, precision = 14, scale = 2)
     private BigDecimal amount;
 
@@ -61,6 +70,9 @@ public class InboundTillPayment {
 
     @Column(name = "linked_claim_id", length = 36)
     private String linkedClaimId;
+
+    @Column(name = "linked_customer_id", length = 36)
+    private String linkedCustomerId;
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;

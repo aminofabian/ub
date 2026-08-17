@@ -26,8 +26,32 @@ public class Customer {
     @Column(name = "business_id", nullable = false, length = 36)
     private String businessId;
 
+    @Column(name = "customer_no")
+    private Long customerNo;
+
     @Column(name = "name", nullable = false, length = 500)
     private String name;
+
+    @Column(name = "first_name", length = 120)
+    private String firstName;
+
+    @Column(name = "last_name", length = 120)
+    private String lastName;
+
+    @Column(name = "first_name_norm", length = 120)
+    private String firstNameNorm;
+
+    @Column(name = "last_name_norm", length = 120)
+    private String lastNameNorm;
+
+    @Column(name = "origin", nullable = false, length = 32)
+    private String origin = CustomerOrigins.STAFF;
+
+    @Column(name = "mpesa_identity_key", length = 280)
+    private String mpesaIdentityKey;
+
+    @Column(name = "mpesa_name_updated_at")
+    private Instant mpesaNameUpdatedAt;
 
     @Column(name = "email", length = 255)
     private String email;

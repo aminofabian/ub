@@ -34,6 +34,8 @@ import zelisline.ub.credits.api.dto.IssuePaymentClaimResponse;
 import zelisline.ub.credits.api.dto.OutstandingTabRowResponse;
 import zelisline.ub.credits.api.dto.PatchCustomerRequest;
 import zelisline.ub.credits.api.dto.RemindPaymentRequest;
+import zelisline.ub.credits.api.dto.RevealCustomerPhoneRequest;
+import zelisline.ub.credits.api.dto.RevealCustomerPhoneVerifyRequest;
 import zelisline.ub.credits.api.dto.SendCustomerPhoneVerificationRequest;
 import zelisline.ub.credits.api.dto.SendCustomerPhoneVerificationResponse;
 import zelisline.ub.credits.api.dto.TabPurchaseRowResponse;
@@ -47,6 +49,7 @@ import zelisline.ub.credits.application.CustomerDirectoryService;
 import zelisline.ub.credits.application.CustomerPhoneVerificationService;
 import zelisline.ub.credits.application.CustomerTabPurchasesService;
 import zelisline.ub.credits.application.OverdueDebtReminderService;
+import zelisline.ub.credits.application.PayerPhoneClaimService;
 import zelisline.ub.credits.application.PublicPaymentClaimService;
 import zelisline.ub.credits.application.PublicPaymentClaimService.IssuedClaimToken;
 import zelisline.ub.credits.application.WalletLedgerService;
@@ -69,6 +72,7 @@ public class CustomersController {
     private final CashierTabClearanceAccess cashierTabClearanceAccess;
     private final OverdueDebtReminderService overdueDebtReminderService;
     private final CustomerPhoneVerificationService customerPhoneVerificationService;
+    private final PayerPhoneClaimService payerPhoneClaimService;
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'credits.customers.read')")
@@ -135,6 +139,33 @@ public class CustomersController {
         CurrentTenantUser.require(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         String resolved = customerDirectoryService.resolveCustomerIdOrThrow(businessId, customerId);
+        return customerDirectoryService.get(businessId, resolved);
+    }
+
+    @PostMapping("/{customerId}/reveal-phone")
+    @PreAuthorize("hasPermission(null, 'credits.customers.write')")
+    public SendCustomerPhoneVerificationResponse sendRevealPhone(
+            @PathVariable String customerId,
+            @Valid @RequestBody RevealCustomerPhoneRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String resolved = customerDirectoryService.resolveCustomerIdOrThrow(businessId, customerId);
+        return payerPhoneClaimService.sendStaffReveal(businessId, resolved, body.missingDigits());
+    }
+
+    @PostMapping("/{customerId}/reveal-phone/verify")
+    @PreAuthorize("hasPermission(null, 'credits.customers.write')")
+    public CustomerResponse verifyRevealPhone(
+            @PathVariable String customerId,
+            @Valid @RequestBody RevealCustomerPhoneVerifyRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String resolved = customerDirectoryService.resolveCustomerIdOrThrow(businessId, customerId);
+        payerPhoneClaimService.verifyStaffReveal(businessId, resolved, body.missingDigits(), body.code());
         return customerDirectoryService.get(businessId, resolved);
     }
 

@@ -5,7 +5,11 @@ import java.util.List;
 
 public record CustomerResponse(
         String id,
+        Long customerNo,
         String name,
+        String firstName,
+        String lastName,
+        String origin,
         String email,
         String notes,
         long version,

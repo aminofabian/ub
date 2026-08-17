@@ -30,6 +30,8 @@ import zelisline.ub.payments.domain.spi.StkPushRequest;
 import zelisline.ub.payments.domain.spi.StkPushResponse;
 import zelisline.ub.payments.domain.spi.StkStatusResponse;
 import zelisline.ub.payments.domain.spi.ValidationResult;
+import zelisline.ub.credits.domain.MaskedMsisdn;
+import zelisline.ub.credits.domain.PayerNameNormalizer;
 import zelisline.ub.payments.domain.spi.WebhookResult;
 
 /**
@@ -511,9 +513,25 @@ public class KopokopoPaymentGateway implements PaymentGateway {
                 return parseSendMoneyWebhook(root, rawBody);
             }
 
-            // STK callback / status payload: { "data": { "id", "attributes": { status, metadata, event } } }
+            // JSON:API buygoods: { "data": { "type": "buygoods_transaction_received", "attributes": {...} } }
             if (root.has("data") && root.get("data").isObject()) {
-                return parseIncomingPaymentData(root.get("data"), null, rawBody);
+                var data = root.get("data");
+                if (isBuygoodsType(textOrNull(data, "type"))) {
+                    return parseBuygoodsAttributes(
+                            data.has("id") ? data.get("id").asText() : null,
+                            data.get("attributes"),
+                            rawBody);
+                }
+                // STK callback / status payload: { "data": { "id", "attributes": { status, metadata, event } } }
+                return parseIncomingPaymentData(data, null, rawBody);
+            }
+
+            // Root-shaped customer-initiated buygoods: { "id", "type", "attributes" }
+            if (isBuygoodsType(textOrNull(root, "type")) && root.has("attributes")) {
+                return parseBuygoodsAttributes(
+                        root.has("id") ? root.get("id").asText() : null,
+                        root.get("attributes"),
+                        rawBody);
             }
 
             // K2Connect topic webhook: { topic, id, event: { resource } }
@@ -527,14 +545,19 @@ public class KopokopoPaymentGateway implements PaymentGateway {
                 }
 
                 String gatewayTxnId = resource.has("id") ? resource.get("id").asText() : null;
-                String phone = normalizeWebhookPhone(textOrNull(resource, "sender_phone_number"));
+                ParsedWebhookPhone phone = parseWebhookPhoneNode(resource);
                 BigDecimal amount = parseAmount(textOrNull(resource, "amount"));
                 String reference = textOrNull(resource, "reference");
                 String status = textOrNull(resource, "status");
+                String firstName = firstNonBlank(
+                        textOrNull(resource, "first_name"),
+                        textOrNull(resource, "sender_first_name"));
+                String lastName = firstNonBlank(
+                        textOrNull(resource, "last_name"),
+                        textOrNull(resource, "sender_last_name"));
 
-                // Till/buygoods: only confirm when we have a real M-Pesa receipt reference.
-                boolean success = "buygoods_transaction_received".equals(topic)
-                        && "Received".equalsIgnoreCase(status)
+                boolean success = isBuygoodsType(topic)
+                        && isBuygoodsPaidStatus(status)
                         && reference != null
                         && !reference.isBlank();
                 boolean failed = isTerminalStkFailureStatus(status);
@@ -542,15 +565,20 @@ public class KopokopoPaymentGateway implements PaymentGateway {
                 return new WebhookResult(
                         null,
                         success ? reference : gatewayTxnId,
-                        phone,
+                        phone.realOrNull(),
                         amount,
                         reference,
                         success,
                         failed,
                         null,
                         webhookEventId,
-                        topic,
-                        rawBody);
+                        isBuygoodsType(topic) ? "buygoods_transaction_received" : topic,
+                        rawBody,
+                        null,
+                        blankToNull(PayerNameNormalizer.normalize(firstName)),
+                        blankToNull(PayerNameNormalizer.normalize(lastName)),
+                        phone.maskedCompact(),
+                        phone.isMasked());
             }
 
             return WebhookResult.empty(rawBody);
@@ -843,11 +871,21 @@ public class KopokopoPaymentGateway implements PaymentGateway {
 
         String phone = null;
         BigDecimal amount = null;
+        String firstName = null;
+        String lastName = null;
+        ParsedWebhookPhone parsedPhone = ParsedWebhookPhone.empty();
         if (attrs.has("event") && attrs.get("event").has("resource")) {
             var resource = attrs.get("event").get("resource");
             if (resource != null && !resource.isNull()) {
-                phone = normalizeWebhookPhone(textOrNull(resource, "sender_phone_number"));
+                parsedPhone = parseWebhookPhoneNode(resource);
+                phone = parsedPhone.realOrNull();
                 amount = parseAmount(textOrNull(resource, "amount"));
+                firstName = firstNonBlank(
+                        textOrNull(resource, "first_name"),
+                        textOrNull(resource, "sender_first_name"));
+                lastName = firstNonBlank(
+                        textOrNull(resource, "last_name"),
+                        textOrNull(resource, "sender_last_name"));
             }
         }
 
@@ -868,7 +906,12 @@ public class KopokopoPaymentGateway implements PaymentGateway {
                 checkoutId,
                 webhookEventId,
                 "incoming_payment",
-                rawBody);
+                rawBody,
+                null,
+                blankToNull(PayerNameNormalizer.normalize(firstName)),
+                blankToNull(PayerNameNormalizer.normalize(lastName)),
+                parsedPhone.maskedCompact(),
+                parsedPhone.isMasked());
     }
 
     /**
@@ -986,6 +1029,95 @@ public class KopokopoPaymentGateway implements PaymentGateway {
             return first.get("code").asText();
         }
         return first.toString();
+    }
+
+    private WebhookResult parseBuygoodsAttributes(
+            String eventId,
+            com.fasterxml.jackson.databind.JsonNode attrs,
+            String rawBody
+    ) {
+        if (attrs == null || attrs.isNull()) {
+            return WebhookResult.empty(rawBody);
+        }
+        String reference = textOrNull(attrs, "reference");
+        String status = textOrNull(attrs, "status");
+        BigDecimal amount = parseAmount(textOrNull(attrs, "amount"));
+        String firstName = textOrNull(attrs, "first_name");
+        String lastName = textOrNull(attrs, "last_name");
+        ParsedWebhookPhone phone = parseWebhookPhoneNode(attrs);
+        boolean success = isBuygoodsPaidStatus(status) && reference != null && !reference.isBlank();
+        boolean failed = isTerminalStkFailureStatus(status);
+        return new WebhookResult(
+                null,
+                success ? reference : eventId,
+                phone.realOrNull(),
+                amount,
+                reference,
+                success,
+                failed,
+                null,
+                eventId,
+                "buygoods_transaction_received",
+                rawBody,
+                null,
+                blankToNull(PayerNameNormalizer.normalize(firstName)),
+                blankToNull(PayerNameNormalizer.normalize(lastName)),
+                phone.maskedCompact(),
+                phone.isMasked());
+    }
+
+    static boolean isBuygoodsType(String type) {
+        return type != null && "buygoods_transaction_received".equalsIgnoreCase(type.trim());
+    }
+
+    static boolean isBuygoodsPaidStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return false;
+        }
+        return "Received".equalsIgnoreCase(status) || "Success".equalsIgnoreCase(status);
+    }
+
+    private static ParsedWebhookPhone parseWebhookPhoneNode(com.fasterxml.jackson.databind.JsonNode node) {
+        String raw = firstNonBlank(
+                textOrNull(node, "phone_number"),
+                textOrNull(node, "sender_phone_number"));
+        return parseWebhookPhone(raw);
+    }
+
+    static ParsedWebhookPhone parseWebhookPhone(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return ParsedWebhookPhone.empty();
+        }
+        if (MaskedMsisdn.isMasked(raw)) {
+            String compact = MaskedMsisdn.compact(raw);
+            return new ParsedWebhookPhone(null, compact, true);
+        }
+        String real = normalizeWebhookPhone(raw);
+        return new ParsedWebhookPhone(real, null, false);
+    }
+
+    private static String firstNonBlank(String a, String b) {
+        if (a != null && !a.isBlank()) {
+            return a;
+        }
+        if (b != null && !b.isBlank()) {
+            return b;
+        }
+        return null;
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    record ParsedWebhookPhone(String real, String maskedCompact, boolean isMasked) {
+        static ParsedWebhookPhone empty() {
+            return new ParsedWebhookPhone(null, null, false);
+        }
+
+        String realOrNull() {
+            return isMasked ? null : real;
+        }
     }
 
     private static String textOrNull(com.fasterxml.jackson.databind.JsonNode node, String field) {

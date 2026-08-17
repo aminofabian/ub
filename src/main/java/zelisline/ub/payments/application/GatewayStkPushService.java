@@ -28,6 +28,7 @@ import zelisline.ub.credits.application.BusinessCreditSettingsService;
 import zelisline.ub.credits.application.CreditSaleDebtService;
 import zelisline.ub.credits.application.CreditsJournalService;
 import zelisline.ub.credits.application.CustomerPhoneOnPaymentService;
+import zelisline.ub.credits.application.MpesaPayerIdentityService;
 import zelisline.ub.credits.application.WalletLedgerService;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.MpesaStkIntent;
@@ -89,6 +90,7 @@ public class GatewayStkPushService {
     private final CreditSaleDebtService creditSaleDebtService;
     private final CreditsJournalService creditsJournalService;
     private final CustomerPhoneOnPaymentService customerPhoneOnPaymentService;
+    private final MpesaPayerIdentityService mpesaPayerIdentityService;
     private final CredentialEncryptionService encryptionService;
     private final KopokopoPaymentGateway kopokopoGateway;
     private final ObjectMapper objectMapper;
@@ -423,7 +425,11 @@ public class GatewayStkPushService {
         }
 
         if (parsed.success()) {
-            confirmPush(push, parsed.gatewayTransactionId(), parsed.amount());
+            if (parsed.topic() != null
+                    && parsed.topic().equalsIgnoreCase("buygoods_transaction_received")) {
+                inboundTillPaymentService.persistUnmatchedBuygoods(businessId, parsed);
+            }
+            confirmPush(push, parsed.gatewayTransactionId(), parsed.amount(), parsed);
             String receipt = parsed.gatewayTransactionId() != null
                     ? parsed.gatewayTransactionId()
                     : parsed.reference();
@@ -897,6 +903,15 @@ public class GatewayStkPushService {
     }
 
     private void confirmPush(GatewayStkPush push, String gatewayTxnId, BigDecimal webhookAmount) {
+        confirmPush(push, gatewayTxnId, webhookAmount, null);
+    }
+
+    private void confirmPush(
+            GatewayStkPush push,
+            String gatewayTxnId,
+            BigDecimal webhookAmount,
+            WebhookResult parsed
+    ) {
         if (!GatewayStkPushStatuses.PENDING.equals(push.getStatus())) {
             return;
         }
@@ -918,7 +933,7 @@ public class GatewayStkPushService {
         switch (push.getContextType()) {
             case WEB_ORDER -> confirmWebOrder(push);
             case WALLET_INTENT -> confirmWalletIntent(push);
-            case CREDIT_AR -> confirmCreditArIntent(push);
+            case CREDIT_AR -> confirmCreditArIntent(push, parsed);
             case POS_PAYMENT -> {
                 creditKioskPayIfPlatformStk(push);
                 publishPosConfirmation(push);
@@ -1101,6 +1116,10 @@ public class GatewayStkPushService {
     }
 
     private void confirmCreditArIntent(GatewayStkPush push) {
+        confirmCreditArIntent(push, null);
+    }
+
+    private void confirmCreditArIntent(GatewayStkPush push, WebhookResult parsed) {
         MpesaStkIntent intent = resolveIntent(push);
         if (intent == null) {
             log.warn("Credit AR STK intent not found for push {}", push.getId());
@@ -1131,6 +1150,14 @@ public class GatewayStkPushService {
                 }
                 customerPhoneOnPaymentService.syncPrimaryPhoneAfterPayment(
                         intent.getBusinessId(), acc.getCustomerId(), paidPhone);
+                if (parsed != null) {
+                    mpesaPayerIdentityService.applyStkPayerNames(
+                            intent.getBusinessId(),
+                            acc.getCustomerId(),
+                            paidPhone,
+                            parsed.firstName(),
+                            parsed.lastName());
+                }
 
                 String phoneDigits = StkPhoneNormalizer.normalize(paidPhone);
                 eventPublisher.publishEvent(new CreditTabPaymentConfirmationEvent(

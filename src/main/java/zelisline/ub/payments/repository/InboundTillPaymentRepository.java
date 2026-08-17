@@ -29,8 +29,6 @@ public interface InboundTillPaymentRepository extends JpaRepository<InboundTillP
             String mpesaReceipt
     );
 
-    List<InboundTillPayment> findTop400ByBusinessIdOrderByCreatedAtDesc(String businessId);
-
     List<InboundTillPayment> findByBusinessIdAndStatusAndCreatedAtAfterOrderByCreatedAtDesc(
             String businessId,
             String status,

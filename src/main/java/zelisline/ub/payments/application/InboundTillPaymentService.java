@@ -34,7 +34,6 @@ import zelisline.ub.payments.domain.spi.WebhookResult;
 import zelisline.ub.payments.infrastructure.KopokopoPayerPayload;
 import zelisline.ub.payments.repository.InboundTillPaymentRepository;
 import zelisline.ub.credits.domain.MaskedMsisdn;
-import zelisline.ub.sales.repository.SalePaymentRepository;
 
 /**
  * Persists unmatched Buy Goods webhooks and late-binds them to till-awaits, sales, or
@@ -53,7 +52,6 @@ public class InboundTillPaymentService {
     private final ObjectProvider<PublicPaymentClaimService> publicPaymentClaimService;
     private final ObjectMapper objectMapper;
     private final MpesaPayerIdentityService mpesaPayerIdentityService;
-    private final SalePaymentRepository salePaymentRepository;
 
     /**
      * Idempotently store a successful unmatched buygoods webhook as PENDING.
@@ -431,45 +429,6 @@ public class InboundTillPaymentService {
         applyParsedPayer(row, parsed);
         inboundRepository.save(row);
         ensureCustomerOnInbound(businessId, row);
-    }
-
-    /**
-     * Hydrate names from stored webhook JSON and create inferred customers for
-     * till payers that never opened a credit tab.
-     */
-    @Transactional
-    public void backfillPayers(String businessId) {
-        if (businessId == null || businessId.isBlank()) {
-            return;
-        }
-        List<InboundTillPayment> recent =
-                inboundRepository.findTop400ByBusinessIdOrderByCreatedAtDesc(businessId);
-        for (InboundTillPayment row : recent) {
-            ensureCustomerOnInbound(businessId, row);
-            attachInboundToMatchingSales(businessId, row);
-        }
-    }
-
-    private void attachInboundToMatchingSales(String businessId, InboundTillPayment row) {
-        if (row.getLinkedCustomerId() == null || row.getLinkedCustomerId().isBlank()) {
-            return;
-        }
-        if (row.getLinkedSaleId() != null) {
-            mpesaPayerIdentityService.attachToSaleIfUnassigned(
-                    businessId, row.getLinkedSaleId(), row.getLinkedCustomerId());
-        }
-        if (row.getMpesaReceipt() == null || row.getMpesaReceipt().isBlank()) {
-            return;
-        }
-        for (var payment : salePaymentRepository.findByBusinessIdAndGatewayTxnIdIgnoreCase(
-                businessId, row.getMpesaReceipt())) {
-            mpesaPayerIdentityService.attachToSaleIfUnassigned(
-                    businessId, payment.getSaleId(), row.getLinkedCustomerId());
-            if (row.getLinkedSaleId() == null) {
-                row.setLinkedSaleId(payment.getSaleId());
-                inboundRepository.save(row);
-            }
-        }
     }
 
     private void ensureCustomerOnInbound(String businessId, InboundTillPayment row) {

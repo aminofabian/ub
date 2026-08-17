@@ -37,7 +37,6 @@ import zelisline.ub.payments.domain.InboundTillPayment;
 import zelisline.ub.payments.domain.InboundTillPaymentStatuses;
 import zelisline.ub.payments.domain.spi.WebhookResult;
 import zelisline.ub.payments.repository.InboundTillPaymentRepository;
-import zelisline.ub.sales.repository.SalePaymentRepository;
 
 @ExtendWith(MockitoExtension.class)
 class InboundTillPaymentServiceTest {
@@ -52,8 +51,6 @@ class InboundTillPaymentServiceTest {
     private PublicPaymentClaimService publicPaymentClaimService;
     @Mock
     private MpesaPayerIdentityService mpesaPayerIdentityService;
-    @Mock
-    private SalePaymentRepository salePaymentRepository;
 
     private InboundTillPaymentService service;
 
@@ -64,8 +61,7 @@ class InboundTillPaymentServiceTest {
                 publicPaymentClaimRepository,
                 publicPaymentClaimServiceProvider,
                 new ObjectMapper(),
-                mpesaPayerIdentityService,
-                salePaymentRepository);
+                mpesaPayerIdentityService);
         org.mockito.Mockito.lenient()
                 .when(mpesaPayerIdentityService.resolveFromWebhook(any(), any()))
                 .thenReturn(Optional.empty());

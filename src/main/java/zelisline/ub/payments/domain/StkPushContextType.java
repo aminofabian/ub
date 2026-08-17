@@ -11,5 +11,9 @@ public enum StkPushContextType {
     /** Remote grocery / delivery invoice awaiting M-Pesa. */
     GROCERY_INVOICE,
     /** Kenyan TLD purchase — Palmart platform till; settles via DomainPurchaseService.markPaid. */
-    DOMAIN_ORDER
+    DOMAIN_ORDER,
+    /** Storefront airtime purchase awaiting the shopper's payment before dispatch. */
+    AIRTIME_ORDER,
+    /** Merchant funding their own Kiosk Pay wallet (airtime float). */
+    KIOSK_PAY_TOPUP
 }

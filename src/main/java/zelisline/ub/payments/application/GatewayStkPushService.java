@@ -101,6 +101,7 @@ public class GatewayStkPushService {
     private final ObjectProvider<zelisline.ub.platform.application.PlatformDomainSettingsService> platformDomainSettingsService;
     private final ObjectProvider<PlatformKioskPaySettingsService> platformKioskPaySettingsService;
     private final ObjectProvider<KioskPayWalletService> kioskPayWalletService;
+    private final ObjectProvider<zelisline.ub.airtime.application.AirtimeSaleService> airtimeSaleService;
     private final InboundTillPaymentService inboundTillPaymentService;
     /** Own proxy, so gateway polling can open a transaction only to write the result. */
     private final ObjectProvider<GatewayStkPushService> self;
@@ -927,8 +928,40 @@ public class GatewayStkPushService {
                     push.getId(), gatewayTxnId);
             case GROCERY_INVOICE -> confirmGroceryInvoice(push);
             case DOMAIN_ORDER -> confirmDomainOrder(push);
+            case AIRTIME_ORDER -> confirmAirtimeOrder(push);
+            case KIOSK_PAY_TOPUP -> confirmKioskPayTopUp(push);
             default -> log.warn("Unknown STK context type: {}", push.getContextType());
         }
+    }
+
+    /** Shopper paid for storefront airtime — the tenant's wallet can now fund the send. */
+    private void confirmAirtimeOrder(GatewayStkPush push) {
+        if (push.getContextId() == null) {
+            return;
+        }
+        var airtime = airtimeSaleService.getIfAvailable();
+        if (airtime == null) {
+            log.warn("Airtime order {} paid but the airtime module is unavailable", push.getContextId());
+            return;
+        }
+        airtime.markPaidAndDispatch(push.getContextId());
+    }
+
+    /**
+     * Merchant funded their own wallet. All-or-nothing with the push confirmation,
+     * the same as a collection — never confirm money in without the ledger entry.
+     */
+    private void confirmKioskPayTopUp(GatewayStkPush push) {
+        KioskPayWalletService wallet = kioskPayWalletService.getIfAvailable();
+        if (wallet == null) {
+            return;
+        }
+        wallet.creditTopUp(
+                push.getBusinessId(),
+                push.getAmount(),
+                "KES",
+                "kp-topup-" + push.getGatewayCheckoutId(),
+                push.getGatewayCheckoutId());
     }
 
     private void creditKioskPayIfPlatformStk(GatewayStkPush push) {
@@ -996,6 +1029,16 @@ public class GatewayStkPushService {
                 }
             } catch (Exception e) {
                 log.warn("Failed to mark domain order STK failed {}", push.getContextId(), e);
+            }
+        }
+        if (push.getContextType() == StkPushContextType.AIRTIME_ORDER && push.getContextId() != null) {
+            try {
+                var airtime = airtimeSaleService.getIfAvailable();
+                if (airtime != null) {
+                    airtime.cancelUnpaid(push.getContextId(), reason);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to cancel unpaid airtime order {}", push.getContextId(), e);
             }
         }
         publishStkRealtime(push, false, reason);

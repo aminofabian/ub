@@ -326,6 +326,166 @@ public class KioskPayWalletService {
     }
 
     /**
+     * Merchant funded their own wallet (M-Pesa STK to the platform till). Unlike a
+     * collection this is not sales revenue — it is float the merchant put in so they
+     * can sell airtime, so it never touches {@code lifetimeIn}.
+     */
+    @Transactional
+    public void creditTopUp(
+            String businessId,
+            BigDecimal amount,
+            String currency,
+            String reference,
+            String gatewayCheckoutId
+    ) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            return;
+        }
+        if (reference != null && ledgerRepository.findByReference(reference).isPresent()) {
+            return;
+        }
+        PlatformKioskPaySettings settings = platformSettings.loadSingleton();
+        KioskPayAccount account = getOrCreate(businessId);
+        String cur = currency != null && !currency.isBlank() ? currency : settings.getCurrency();
+
+        applyDelta(account, amount, BigDecimal.ZERO);
+        accountRepository.save(account);
+        writeEntry(
+                account,
+                KioskPayLedgerEntryTypes.TOPUP,
+                KioskPayLedgerEntryTypes.CREDIT,
+                amount,
+                cur,
+                amount,
+                BigDecimal.ZERO,
+                reference,
+                "TOPUP",
+                null,
+                null,
+                gatewayCheckoutId,
+                "Wallet top-up");
+        publishBalance(account, cur, "TOPUP");
+    }
+
+    /**
+     * Reserve airtime face value before handing the request to the provider, so a
+     * merchant can never sell more airtime than their wallet can cover. Mirrors
+     * {@link #holdForWithdraw} — held funds sit in pending until the provider's
+     * callback settles or releases them.
+     */
+    @Transactional
+    public void holdForAirtime(
+            KioskPayAccount account,
+            BigDecimal amount,
+            String currency,
+            String orderId,
+            String reference
+    ) {
+        if (account.getAvailableBalance().compareTo(amount) < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Not enough Kiosk Pay balance to send this airtime");
+        }
+        String cur = currency == null || currency.isBlank() ? "KES" : currency;
+        applyDelta(account, amount.negate(), amount);
+        accountRepository.save(account);
+        writeEntry(
+                account,
+                KioskPayLedgerEntryTypes.AIRTIME_HOLD,
+                KioskPayLedgerEntryTypes.DEBIT,
+                amount,
+                cur,
+                amount.negate(),
+                amount,
+                reference,
+                "AIRTIME",
+                orderId,
+                null,
+                null,
+                "Airtime reserved");
+        publishBalance(account, cur, "AIRTIME_HOLD");
+    }
+
+    /** Airtime delivered — clear the hold and credit the merchant's margin. */
+    @Transactional
+    public void settleAirtime(
+            KioskPayAccount account,
+            BigDecimal amount,
+            BigDecimal commission,
+            String currency,
+            String orderId,
+            String referenceStem
+    ) {
+        String cur = currency == null || currency.isBlank() ? "KES" : currency;
+        applyDelta(account, BigDecimal.ZERO, amount.negate());
+        account.setLifetimeOut(account.getLifetimeOut().add(amount));
+        accountRepository.save(account);
+        writeEntry(
+                account,
+                KioskPayLedgerEntryTypes.AIRTIME_SETTLE,
+                KioskPayLedgerEntryTypes.DEBIT,
+                amount,
+                cur,
+                BigDecimal.ZERO,
+                amount.negate(),
+                referenceStem,
+                "AIRTIME",
+                orderId,
+                null,
+                null,
+                "Airtime delivered");
+
+        BigDecimal margin = commission == null ? BigDecimal.ZERO : commission.max(BigDecimal.ZERO);
+        if (margin.compareTo(BigDecimal.ZERO) > 0) {
+            applyDelta(account, margin, BigDecimal.ZERO);
+            accountRepository.save(account);
+            writeEntry(
+                    account,
+                    KioskPayLedgerEntryTypes.AIRTIME_COMMISSION,
+                    KioskPayLedgerEntryTypes.CREDIT,
+                    margin,
+                    cur,
+                    margin,
+                    BigDecimal.ZERO,
+                    referenceStem != null ? referenceStem + ":commission" : null,
+                    "AIRTIME",
+                    orderId,
+                    null,
+                    null,
+                    "Airtime commission");
+        }
+        publishBalance(account, cur, "AIRTIME_SETTLE");
+    }
+
+    /** Airtime failed — hand the reserved funds back to available balance. */
+    @Transactional
+    public void releaseAirtimeHold(
+            KioskPayAccount account,
+            BigDecimal amount,
+            String currency,
+            String orderId,
+            String reference
+    ) {
+        String cur = currency == null || currency.isBlank() ? "KES" : currency;
+        applyDelta(account, amount, amount.negate());
+        accountRepository.save(account);
+        writeEntry(
+                account,
+                KioskPayLedgerEntryTypes.AIRTIME_RELEASE,
+                KioskPayLedgerEntryTypes.CREDIT,
+                amount,
+                cur,
+                amount,
+                amount.negate(),
+                reference,
+                "AIRTIME",
+                orderId,
+                null,
+                null,
+                "Airtime failed — funds released");
+        publishBalance(account, cur, "AIRTIME_RELEASE");
+    }
+
+    /**
      * Super-admin manual wallet adjustment (reversal / correction). Positive delta
      * credits available balance; negative debits it (must not go below zero).
      */

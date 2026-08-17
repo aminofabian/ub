@@ -210,6 +210,38 @@ public class RealtimeBridge {
                 event.businessId(), event.reason(), sessionIds.size());
     }
 
+    /**
+     * Airtime is confirmed asynchronously by the telco, so the till watches this
+     * instead of holding the cashier on a spinner.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onAirtimeOrderUpdated(AirtimeOrderUpdatedEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        var dataMap = new LinkedHashMap<String, Object>();
+        dataMap.put("businessId", event.businessId() != null ? event.businessId() : "");
+        dataMap.put("orderId", event.orderId() != null ? event.orderId() : "");
+        dataMap.put("status", event.status() != null ? event.status() : "");
+        dataMap.put("phoneNumber", event.phoneNumber() != null ? event.phoneNumber() : "");
+        dataMap.put("amount", event.amount() != null ? event.amount().toPlainString() : "0");
+        dataMap.put("commission", event.commission() != null ? event.commission().toPlainString() : "0");
+        dataMap.put("currency", event.currency() != null ? event.currency() : "KES");
+        dataMap.put("receipt", event.receipt() != null ? event.receipt() : "");
+        dataMap.put("failureReason", event.failureReason() != null ? event.failureReason() : "");
+        dataMap.put("walletBalance",
+                event.walletBalance() != null ? event.walletBalance().toPlainString() : "");
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) {
+            return;
+        }
+
+        Set<String> sessionIds = sessionRegistry.findAllSessionsForBusiness(event.businessId());
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "airtime.order.updated", eventId, "HIGH", Instant.now(), payloadJson);
+        }
+        log.debug("Airtime order updated: order={} status={} sessions={}",
+                event.orderId(), event.status(), sessionIds.size());
+    }
+
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPaymentConfirmed(PaymentConfirmedEvent event) {
         String eventId = UUID.randomUUID().toString();
@@ -815,6 +847,19 @@ public class RealtimeBridge {
             String currency,
             String status,
             String reason) {}
+
+    /** Airtime order moved on (submitted / delivered / failed). */
+    public record AirtimeOrderUpdatedEvent(
+            String businessId,
+            String orderId,
+            String status,
+            String phoneNumber,
+            BigDecimal amount,
+            BigDecimal commission,
+            String currency,
+            String receipt,
+            String failureReason,
+            BigDecimal walletBalance) {}
 
     public record ApprovalRequestedEvent(
             String businessId, String branchId, String approvalId, String adjustmentType,

@@ -231,7 +231,8 @@ public class BusinessInventorySettingsService {
         }
         return new StockLevelsSettingsResponse(
                 stockLevels.path(KEY_ALLOW_EDIT_STOCK_MANAGER).asBoolean(false),
-                stockLevels.path(KEY_ALLOW_EDIT_GROCERY_CLERK).asBoolean(false),
+                // Edit stock on grocery counter — default on until admin turns off.
+                stockLevels.path(KEY_ALLOW_EDIT_GROCERY_CLERK).asBoolean(true),
                 stockLevels.path(KEY_ALLOW_NEGATIVE_STOCK).asBoolean(false),
                 // Absent keys default on — stock managers historically saw these pages.
                 stockLevels.path(KEY_ALLOW_ACTIVITY_STOCK_MANAGER).asBoolean(true),

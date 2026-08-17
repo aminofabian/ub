@@ -118,7 +118,7 @@ class BusinessInventorySettingsIT {
                 .andExpect(jsonPath("$.inventory.stockLevels.allowStockEditForStockManager")
                         .value(false))
                 .andExpect(jsonPath("$.inventory.stockLevels.allowStockEditForGroceryClerk")
-                        .value(false))
+                        .value(true))
                 .andExpect(jsonPath("$.inventory.stockLevels.allowNegativeStock")
                         .value(false))
                 .andExpect(jsonPath("$.inventory.stockLevels.allowActivityForStockManager")

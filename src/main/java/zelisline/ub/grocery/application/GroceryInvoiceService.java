@@ -457,7 +457,7 @@ public class GroceryInvoiceService {
                         "Item not found: " + line.getItemId());
             }
             BigDecimal saleQty = normalizeInvoiceQuantity(item, line.getQuantity(), line.getLineIndex() + 1);
-            saleLines.add(new PostSaleLineRequest(
+            saleLines.add(PostSaleLineRequest.catalogItem(
                     line.getItemId(),
                     saleQty,
                     line.getUnitPrice()
@@ -475,7 +475,7 @@ public class GroceryInvoiceService {
             BigDecimal unitPrice = extra.unitPrice() == null
                     ? BigDecimal.ZERO
                     : extra.unitPrice().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
-            saleLines.add(new PostSaleLineRequest(
+            saleLines.add(PostSaleLineRequest.catalogItem(
                     extra.itemId(),
                     saleQty,
                     unitPrice

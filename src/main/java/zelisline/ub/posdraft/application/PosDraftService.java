@@ -331,10 +331,19 @@ public class PosDraftService {
         assertVersion(draft, request.expectedVersion());
 
         List<PosDraftLine> activeLines = loadActiveLines(draftId);
-        if (activeLines.isEmpty()) {
+        List<PostSaleLineRequest> extraLines = request.additionalLines() == null
+                ? List.of()
+                : request.additionalLines();
+        for (PostSaleLineRequest extra : extraLines) {
+            if (!extra.isAirtime()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Only airtime can be added when completing a sale");
+            }
+        }
+        if (activeLines.isEmpty() && extraLines.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Draft has no lines");
         }
-        if (draft.getGrandTotal().signum() <= 0) {
+        if (draft.getGrandTotal().signum() <= 0 && extraLines.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Draft total must be positive");
         }
 
@@ -344,12 +353,13 @@ public class PosDraftService {
 
         List<PostSaleLineRequest> saleLines = new ArrayList<>();
         for (PosDraftLine line : activeLines) {
-            saleLines.add(new PostSaleLineRequest(
+            saleLines.add(PostSaleLineRequest.catalogItem(
                     line.getItemId(),
                     line.getQuantity(),
                     line.getUnitPrice()
             ));
         }
+        saleLines.addAll(extraLines);
 
         String customerId = blankToNull(request.customerId());
         if (customerId == null) {

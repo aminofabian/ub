@@ -232,10 +232,14 @@ public class SaleVoidService {
 
     private void restoreInventory(String businessId, Sale sale, List<SaleItem> itemRows, String userId) {
         List<SaleItem> sorted = new ArrayList<>(itemRows);
+        sorted.removeIf(si -> si.isAirtime() || si.getItemId() == null || si.getBatchId() == null);
         sorted.sort(Comparator.comparing(SaleItem::getItemId).thenComparing(SaleItem::getBatchId));
         Item item = null;
         String lastStockHolderId = null;
         for (SaleItem si : sorted) {
+            if (si.isAirtime() || si.getItemId() == null || si.getBatchId() == null) {
+                continue;
+            }
             Item sold = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(si.getItemId(), businessId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
             String stockHolderId = packageVariantStockResolver.stockHolderItemId(sold);

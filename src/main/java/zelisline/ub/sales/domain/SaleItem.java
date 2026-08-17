@@ -27,10 +27,22 @@ public class SaleItem {
     @Column(name = "line_index", nullable = false)
     private int lineIndex;
 
-    @Column(name = "item_id", nullable = false, length = 36)
+    @Column(name = "line_kind", nullable = false, length = 16)
+    private String lineKind = SaleLineKinds.ITEM;
+
+    @Column(name = "line_label", length = 255)
+    private String lineLabel;
+
+    @Column(name = "airtime_phone", length = 32)
+    private String airtimePhone;
+
+    @Column(name = "airtime_network", length = 16)
+    private String airtimeNetwork;
+
+    @Column(name = "item_id", length = 36)
     private String itemId;
 
-    @Column(name = "batch_id", nullable = false, length = 36)
+    @Column(name = "batch_id", length = 36)
     private String batchId;
 
     @Column(name = "quantity", nullable = false, precision = 14, scale = 4)
@@ -56,5 +68,12 @@ public class SaleItem {
         if (id == null || id.isBlank()) {
             id = UUID.randomUUID().toString();
         }
+        if (lineKind == null || lineKind.isBlank()) {
+            lineKind = SaleLineKinds.ITEM;
+        }
+    }
+
+    public boolean isAirtime() {
+        return SaleLineKinds.isAirtime(lineKind);
     }
 }

@@ -154,7 +154,9 @@ public class CustomerTabPurchasesService {
             List<SaleItem> lines = saleItemRepository.findBySaleIdOrderByLineIndexAsc(saleId);
             itemsBySale.put(saleId, lines);
             for (SaleItem line : lines) {
-                itemIds.add(line.getItemId());
+                if (line.getItemId() != null && !line.getItemId().isBlank()) {
+                    itemIds.add(line.getItemId());
+                }
             }
         }
 
@@ -176,7 +178,11 @@ public class CustomerTabPurchasesService {
             List<TabPurchaseLineResponse> lines = new ArrayList<>(saleItems.size());
             for (SaleItem si : saleItems) {
                 lines.add(new TabPurchaseLineResponse(
-                        itemNames.getOrDefault(si.getItemId(), "Item"),
+                        si.isAirtime()
+                                ? (si.getLineLabel() != null && !si.getLineLabel().isBlank()
+                                        ? si.getLineLabel()
+                                        : "Airtime")
+                                : itemNames.getOrDefault(si.getItemId(), "Item"),
                         scaleQty(si.getQuantity()),
                         scaleUnitPrice(si.getUnitPrice()),
                         scaleMoney(si.getLineTotal())));

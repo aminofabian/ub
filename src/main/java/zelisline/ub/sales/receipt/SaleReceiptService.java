@@ -79,13 +79,32 @@ public class SaleReceiptService {
         List<SaleItem> items = saleItemRepository.findBySaleIdOrderByLineIndexAsc(sale.getId());
         List<SalePayment> pays = salePaymentRepository.findBySaleIdOrderBySortOrderAsc(sale.getId());
 
-        List<String> itemIds = items.stream().map(SaleItem::getItemId).distinct().toList();
-        Map<String, Item> itemMap = itemRepository.findAllById(itemIds).stream()
+        List<String> itemIds = items.stream()
+                .map(SaleItem::getItemId)
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .toList();
+        Map<String, Item> itemMap = itemIds.isEmpty()
+                ? Map.of()
+                : itemRepository.findAllById(itemIds).stream()
                 .filter(i -> businessId.equals(i.getBusinessId()))
                 .collect(Collectors.toMap(Item::getId, i -> i));
 
         List<ReceiptLineRow> lines = new ArrayList<>();
         for (SaleItem si : items) {
+            if (si.isAirtime()) {
+                String desc = si.getLineLabel() != null && !si.getLineLabel().isBlank()
+                        ? si.getLineLabel()
+                        : "Airtime";
+                lines.add(new ReceiptLineRow(
+                        desc,
+                        si.getQuantity().stripTrailingZeros().toPlainString(),
+                        null,
+                        money(si.getUnitPrice()),
+                        money(si.getLineTotal())
+                ));
+                continue;
+            }
             Item it = itemMap.get(si.getItemId());
             String desc = it != null ? it.getName() : "Item";
             if (it != null && it.getVariantName() != null && !it.getVariantName().isBlank()) {

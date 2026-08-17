@@ -5,13 +5,15 @@ import java.util.List;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
+import zelisline.ub.sales.api.dto.PostSaleLineRequest;
 import zelisline.ub.sales.api.dto.PostSalePaymentRequest;
-import zelisline.ub.sales.api.dto.SaleResponse;
 
 public record CompletePosDraftRequest(
         @NotEmpty @Valid List<PostSalePaymentRequest> payments,
         String customerId,
         Instant clientSoldAt,
-        Long expectedVersion
+        Long expectedVersion,
+        /** Wallet airtime parked on the till cart — not stored on the draft. */
+        @Valid List<PostSaleLineRequest> additionalLines
 ) {
 }

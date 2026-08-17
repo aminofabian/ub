@@ -280,6 +280,10 @@ public class SaleRefundService {
             }
             SaleItem si = saleItemRepository.findByIdAndSaleId(sid, sale.getId())
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown sale line"));
+            if (si.isAirtime() || si.getItemId() == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Airtime on this sale cannot be refunded as stock — void the sale or retry the top-up from Airtime");
+            }
             Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(si.getItemId(), sale.getBusinessId())
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
             boolean weighed = item.isWeighed();

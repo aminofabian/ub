@@ -60,6 +60,7 @@ import zelisline.ub.sales.api.dto.PostSaleRequest;
 import zelisline.ub.sales.api.dto.SaleResponse;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.SaleItem;
+import zelisline.ub.sales.domain.SaleLineKinds;
 import zelisline.ub.sales.domain.SalePayment;
 import zelisline.ub.sales.domain.Shift;
 import zelisline.ub.sales.repository.SaleItemRepository;
@@ -564,6 +565,11 @@ public class SaleService {
         List<SaleItem> all = new ArrayList<>();
         int lineIndex = 0;
         for (PostSaleLineRequest line : req.lines()) {
+            if (line.isAirtime()) {
+                all.add(buildAirtimeSaleItem(saleId, lineIndex, line));
+                lineIndex++;
+                continue;
+            }
             BigDecimal qty = line.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
             List<BatchAllocationLine> allocations = inventoryBatchPickerService.pickAndApplyPhysicalDecrement(
                     businessId,
@@ -579,6 +585,31 @@ public class SaleService {
             lineIndex++;
         }
         return all;
+    }
+
+    private static SaleItem buildAirtimeSaleItem(String saleId, int lineIndex, PostSaleLineRequest line) {
+        BigDecimal qty = line.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal lineTotal = qty.multiply(line.unitPrice()).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        String phone = line.airtimePhone() != null ? line.airtimePhone().trim() : "";
+        String network = line.airtimeNetwork() != null ? line.airtimeNetwork().trim() : "";
+        String label = line.label() != null && !line.label().isBlank()
+                ? line.label().trim()
+                : ((network.isBlank() ? "Airtime" : network + " airtime")
+                        + (phone.isBlank() ? "" : " · " + phone));
+        SaleItem row = new SaleItem();
+        row.setSaleId(saleId);
+        row.setLineIndex(lineIndex);
+        row.setLineKind(SaleLineKinds.AIRTIME);
+        row.setLineLabel(label);
+        row.setAirtimePhone(phone.isBlank() ? null : phone);
+        row.setAirtimeNetwork(network.isBlank() ? null : network);
+        row.setQuantity(qty);
+        row.setUnitPrice(line.unitPrice().setScale(QTY_SCALE, RoundingMode.HALF_UP));
+        row.setLineTotal(lineTotal);
+        row.setUnitCost(BigDecimal.ZERO.setScale(QTY_SCALE, RoundingMode.HALF_UP));
+        row.setCostTotal(BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+        row.setProfit(lineTotal);
+        return row;
     }
 
     private static List<SaleItem> buildItemsForCartLine(
@@ -600,6 +631,7 @@ public class SaleService {
             SaleItem row = new SaleItem();
             row.setSaleId(saleId);
             row.setLineIndex(lineIndex);
+            row.setLineKind(SaleLineKinds.ITEM);
             row.setItemId(line.itemId());
             row.setBatchId(a.batchId());
             row.setQuantity(a.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP));
@@ -710,8 +742,15 @@ public class SaleService {
         if (lines == null || lines.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Sale must contain at least one line");
         }
-        List<String> itemIds = lines.stream().map(PostSaleLineRequest::itemId).distinct().toList();
-        Map<String, zelisline.ub.catalog.domain.Item> itemsById = itemRepository
+        List<String> itemIds = lines.stream()
+                .filter(l -> !l.isAirtime())
+                .map(PostSaleLineRequest::itemId)
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .toList();
+        Map<String, zelisline.ub.catalog.domain.Item> itemsById = itemIds.isEmpty()
+                ? Map.of()
+                : itemRepository
                 .findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)
                 .stream()
                 .collect(java.util.stream.Collectors.toMap(
@@ -719,11 +758,17 @@ public class SaleService {
                         item -> item,
                         (a, b) -> a));
 
-        Map<String, BigDecimal> shelfPrices = pricingService.getCurrentOpenSellingPricesForItems(
+        Map<String, BigDecimal> shelfPrices = itemIds.isEmpty()
+                ? Map.of()
+                : pricingService.getCurrentOpenSellingPricesForItems(
                 businessId, branchId, itemIds);
 
         for (int i = 0; i < lines.size(); i++) {
             PostSaleLineRequest line = lines.get(i);
+            if (line.isAirtime()) {
+                validateAirtimeSaleLine(i, line);
+                continue;
+            }
             zelisline.ub.catalog.domain.Item item = itemsById.get(line.itemId());
             if (item == null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -775,6 +820,35 @@ public class SaleService {
                 throw new ResponseStatusException(HttpStatus.FORBIDDEN,
                         "Line " + (i + 1) + ": price override requires manager approval");
             }
+        }
+    }
+
+    private void validateAirtimeSaleLine(int i, PostSaleLineRequest line) {
+        if (line.airtimePhone() == null || line.airtimePhone().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Line " + (i + 1) + ": airtime needs a Kenyan mobile number");
+        }
+        if (zelisline.ub.payments.application.StkPhoneNormalizer.normalize(line.airtimePhone()) == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Line " + (i + 1) + ": enter a valid Kenyan mobile number");
+        }
+        if (line.quantity() == null || line.quantity().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Line " + (i + 1) + ": quantity must be positive");
+        }
+        BigDecimal stripped = line.quantity().stripTrailingZeros();
+        if (stripped.scale() > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Line " + (i + 1) + ": airtime quantity must be a whole number");
+        }
+        if (line.unitPrice() == null || line.unitPrice().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Line " + (i + 1) + ": airtime amount must be positive");
+        }
+        BigDecimal priceScale = line.unitPrice().stripTrailingZeros();
+        if (priceScale.scale() > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Line " + (i + 1) + ": airtime amount must be a whole number");
         }
     }
 
@@ -942,9 +1016,12 @@ public class SaleService {
         }
         List<String> itemIds = saleItems.stream()
                 .map(SaleItem::getItemId)
+                .filter(id -> id != null && !id.isBlank())
                 .distinct()
                 .toList();
-        Map<String, String> itemNames = itemRepository
+        Map<String, String> itemNames = itemIds.isEmpty()
+                ? Map.of()
+                : itemRepository
                 .findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)
                 .stream()
                 .collect(java.util.stream.Collectors.toMap(
@@ -953,7 +1030,11 @@ public class SaleService {
                         (a, b) -> a));
         return saleItems.stream()
                 .map(line -> new CreditSaleReminderLineItem(
-                        itemNames.getOrDefault(line.getItemId(), "Item"),
+                        line.isAirtime()
+                                ? (line.getLineLabel() != null && !line.getLineLabel().isBlank()
+                                        ? line.getLineLabel()
+                                        : "Airtime")
+                                : itemNames.getOrDefault(line.getItemId(), "Item"),
                         line.getQuantity(),
                         line.getLineTotal()))
                 .toList();

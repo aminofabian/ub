@@ -7,6 +7,8 @@ public record SaleItemResponse(
         int lineIndex,
         String itemId,
         String batchId,
+        String lineKind,
+        String lineLabel,
         BigDecimal quantity,
         BigDecimal unitPrice,
         BigDecimal lineTotal,

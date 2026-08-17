@@ -28,6 +28,8 @@ public final class SaleResponseMapper {
                     si.getLineIndex(),
                     si.getItemId(),
                     si.getBatchId(),
+                    si.getLineKind(),
+                    si.getLineLabel(),
                     si.getQuantity(),
                     si.getUnitPrice(),
                     si.getLineTotal(),

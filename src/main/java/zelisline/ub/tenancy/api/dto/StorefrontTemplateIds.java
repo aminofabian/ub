@@ -18,7 +18,8 @@ public final class StorefrontTemplateIds {
             "oxide",
             "tint-lab",
             "milk-run",
-            "carbon-desk"
+            "carbon-desk",
+            "chem-lab"
     );
 
     public static final Set<String> LANDING_TEMPLATES = Set.of(
@@ -27,7 +28,8 @@ public final class StorefrontTemplateIds {
             "fresh-market",
             "butchery-cut",
             "minimart-hours",
-            "brand-poster"
+            "brand-poster",
+            "front-window"
     );
 
     private StorefrontTemplateIds() {

@@ -52,17 +52,24 @@ public class CustomerPhoneVerificationService {
         return send(businessId, rawPhone, ownerCustomerId);
     }
 
+    @Transactional
+    public SendCustomerPhoneVerificationResponse sendForShopper(String businessId, String rawPhone) {
+        return send(businessId, rawPhone, "shopper");
+    }
+
     private SendCustomerPhoneVerificationResponse send(
             String businessId,
             String rawPhone,
             String ownerCustomerId
     ) {
         String phone = normalizeOrThrow(rawPhone);
-        customerPhoneRepository.findFirstByBusinessIdAndPhone(businessId, phone).ifPresent(existing -> {
-            if (ownerCustomerId == null || !ownerCustomerId.equals(existing.getCustomerId())) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "Phone already in use for this business");
-            }
-        });
+        if (!"shopper".equals(ownerCustomerId)) {
+            customerPhoneRepository.findFirstByBusinessIdAndPhone(businessId, phone).ifPresent(existing -> {
+                if (ownerCustomerId == null || !ownerCustomerId.equals(existing.getCustomerId())) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, "Phone already in use for this business");
+                }
+            });
+        }
 
         Instant now = Instant.now();
         verificationRepository.findFirstByBusinessIdAndPhoneAndConsumedAtIsNullOrderByCreatedAtDesc(businessId, phone)

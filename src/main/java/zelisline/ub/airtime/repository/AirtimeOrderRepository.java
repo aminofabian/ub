@@ -24,6 +24,16 @@ public interface AirtimeOrderRepository extends JpaRepository<AirtimeOrder, Stri
 
     List<AirtimeOrder> findByBusinessIdOrderByCreatedAtDesc(String businessId, Pageable pageable);
 
+    List<AirtimeOrder> findByBusinessIdAndChannelOrderByCreatedAtDesc(
+            String businessId, String channel, Pageable pageable);
+
+    long countByBusinessIdAndChannelAndStatus(String businessId, String channel, String status);
+
+    long countByBusinessIdAndChannelAndStatusIn(String businessId, String channel, List<String> statuses);
+
+    long countByBusinessIdAndChannelAndStatusAndCompletedAtGreaterThanEqual(
+            String businessId, String channel, String status, Instant since);
+
     List<AirtimeOrder> findByBusinessIdAndStatusInOrderByCreatedAtAsc(String businessId, List<String> statuses);
 
     List<AirtimeOrder> findByStatusInOrderByCreatedAtAsc(List<String> statuses);
@@ -48,6 +58,48 @@ public interface AirtimeOrderRepository extends JpaRepository<AirtimeOrder, Stri
               and o.completedAt >= :since
             """)
     BigDecimal sumCommissionSince(@Param("businessId") String businessId, @Param("since") Instant since);
+
+    @Query("""
+            select coalesce(sum(o.amount), 0) from AirtimeOrder o
+            where o.businessId = :businessId
+              and o.channel = :channel
+              and o.status = 'SUCCESS'
+            """)
+    BigDecimal sumSuccessAmountByChannel(
+            @Param("businessId") String businessId, @Param("channel") String channel);
+
+    @Query("""
+            select coalesce(sum(o.commission), 0) from AirtimeOrder o
+            where o.businessId = :businessId
+              and o.channel = :channel
+              and o.status = 'SUCCESS'
+            """)
+    BigDecimal sumSuccessCommissionByChannel(
+            @Param("businessId") String businessId, @Param("channel") String channel);
+
+    @Query("""
+            select coalesce(sum(o.amount), 0) from AirtimeOrder o
+            where o.businessId = :businessId
+              and o.channel = :channel
+              and o.status = 'SUCCESS'
+              and o.completedAt >= :since
+            """)
+    BigDecimal sumSuccessAmountByChannelSince(
+            @Param("businessId") String businessId,
+            @Param("channel") String channel,
+            @Param("since") Instant since);
+
+    @Query("""
+            select coalesce(sum(o.commission), 0) from AirtimeOrder o
+            where o.businessId = :businessId
+              and o.channel = :channel
+              and o.status = 'SUCCESS'
+              and o.completedAt >= :since
+            """)
+    BigDecimal sumSuccessCommissionByChannelSince(
+            @Param("businessId") String businessId,
+            @Param("channel") String channel,
+            @Param("since") Instant since);
 
     @Query("""
             select coalesce(sum(o.amount), 0) from AirtimeOrder o

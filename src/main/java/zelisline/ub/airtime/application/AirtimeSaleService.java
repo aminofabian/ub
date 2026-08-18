@@ -4,6 +4,8 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
@@ -23,6 +25,7 @@ import org.springframework.web.server.ResponseStatusException;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.airtime.api.dto.AirtimeOrderResponse;
 import zelisline.ub.airtime.api.dto.AirtimeQuoteResponse;
+import zelisline.ub.airtime.api.dto.AirtimeStorefrontSummaryResponse;
 import zelisline.ub.airtime.domain.AirtimeChannels;
 import zelisline.ub.airtime.domain.AirtimeNetworks;
 import zelisline.ub.airtime.domain.AirtimeOrder;
@@ -67,6 +70,8 @@ public class AirtimeSaleService {
     /** Never leak platform float or provider ops detail to a tenant. */
     private static final String PUBLIC_PROVIDER_FAILURE =
             "Airtime couldn't be sent right now. The money was returned to your wallet — try again shortly.";
+
+    private static final ZoneId NAIROBI = ZoneId.of("Africa/Nairobi");
 
     private final AirtimeOrderRepository orderRepository;
     private final PlatformAirtimeSettingsService platformSettings;
@@ -545,11 +550,55 @@ public class AirtimeSaleService {
 
     @Transactional(readOnly = true)
     public List<AirtimeOrderResponse> list(String businessId, int limit) {
-        int capped = Math.min(Math.max(limit, 1), 100);
-        return orderRepository.findByBusinessIdOrderByCreatedAtDesc(businessId, PageRequest.of(0, capped))
-                .stream()
-                .map(o -> toResponse(o, null))
-                .toList();
+        return list(businessId, limit, null);
+    }
+
+    @Transactional(readOnly = true)
+    public List<AirtimeOrderResponse> list(String businessId, int limit, String channel) {
+        int capped = Math.min(Math.max(limit, 1), 200);
+        var page = PageRequest.of(0, capped);
+        List<AirtimeOrder> rows;
+        if (channel != null && !channel.isBlank()) {
+            String normalized = channel.trim().toUpperCase();
+            if (!AirtimeChannels.isKnown(normalized)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown airtime channel");
+            }
+            rows = orderRepository.findByBusinessIdAndChannelOrderByCreatedAtDesc(
+                    businessId, normalized, page);
+        } else {
+            rows = orderRepository.findByBusinessIdOrderByCreatedAtDesc(businessId, page);
+        }
+        return rows.stream().map(o -> toResponse(o, null)).toList();
+    }
+
+    /** All-time and Nairobi-today totals for storefront airtime. */
+    @Transactional(readOnly = true)
+    public AirtimeStorefrontSummaryResponse storefrontSummary(String businessId) {
+        PlatformAirtimeSettings platform = platformSettings.loadSingleton();
+        Instant todayStart = LocalDate.now(NAIROBI).atStartOfDay(NAIROBI).toInstant();
+        String channel = AirtimeChannels.STOREFRONT;
+        return new AirtimeStorefrontSummaryResponse(
+                platform.getCurrency(),
+                platform.getTenantCommissionPercent(),
+                orderRepository.countByBusinessIdAndChannelAndStatus(
+                        businessId, channel, AirtimeOrderStatuses.SUCCESS),
+                zeroIfNull(orderRepository.sumSuccessAmountByChannel(businessId, channel)),
+                zeroIfNull(orderRepository.sumSuccessCommissionByChannel(businessId, channel)),
+                orderRepository.countByBusinessIdAndChannelAndStatusAndCompletedAtGreaterThanEqual(
+                        businessId, channel, AirtimeOrderStatuses.SUCCESS, todayStart),
+                zeroIfNull(orderRepository.sumSuccessAmountByChannelSince(
+                        businessId, channel, todayStart)),
+                zeroIfNull(orderRepository.sumSuccessCommissionByChannelSince(
+                        businessId, channel, todayStart)),
+                orderRepository.countByBusinessIdAndChannelAndStatus(
+                        businessId, channel, AirtimeOrderStatuses.AWAITING_PAYMENT),
+                orderRepository.countByBusinessIdAndChannelAndStatusIn(
+                        businessId, channel, List.of(
+                                AirtimeOrderStatuses.REQUESTED,
+                                AirtimeOrderStatuses.SUBMITTED,
+                                AirtimeOrderStatuses.PENDING)),
+                orderRepository.countByBusinessIdAndChannelAndStatus(
+                        businessId, channel, AirtimeOrderStatuses.FAILED));
     }
 
     @Transactional(readOnly = true)
@@ -783,6 +832,10 @@ public class AirtimeSaleService {
         return v == null ? "0" : v.stripTrailingZeros().toPlainString();
     }
 
+    private static BigDecimal zeroIfNull(BigDecimal v) {
+        return v == null ? BigDecimal.ZERO : v;
+    }
+
     private static String truncate(String s, int max) {
         if (s == null) {
             return null;
@@ -809,6 +862,7 @@ public class AirtimeSaleService {
                 order.getChannel(),
                 order.getTender(),
                 order.getPhoneNumber(),
+                order.getPayerPhone(),
                 order.getNetwork(),
                 order.getAmount(),
                 order.getCost(),
@@ -833,6 +887,7 @@ public class AirtimeSaleService {
                 order.getChannel(),
                 order.getTender(),
                 order.getPhoneNumber(),
+                order.getPayerPhone(),
                 order.getNetwork(),
                 order.getAmount(),
                 order.getCost(),

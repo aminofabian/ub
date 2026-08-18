@@ -25,6 +25,7 @@ import zelisline.ub.airtime.api.dto.AirtimeAvailabilityResponse;
 import zelisline.ub.airtime.api.dto.AirtimeOrderResponse;
 import zelisline.ub.airtime.api.dto.AirtimeQuoteResponse;
 import zelisline.ub.airtime.api.dto.AirtimeSettingsResponse;
+import zelisline.ub.airtime.api.dto.AirtimeStorefrontSummaryResponse;
 import zelisline.ub.airtime.api.dto.SellAirtimeRequest;
 import zelisline.ub.airtime.api.dto.UpdateAirtimeSettingsRequest;
 import zelisline.ub.airtime.application.AirtimeSaleService;
@@ -111,10 +112,18 @@ public class AirtimeTenantController {
     @PreAuthorize("hasPermission(null, 'airtime.read')")
     public List<AirtimeOrderResponse> orders(
             HttpServletRequest request,
-            @RequestParam(defaultValue = "20") int limit
+            @RequestParam(defaultValue = "20") int limit,
+            @RequestParam(required = false) String channel
     ) {
         CurrentTenantUser.require(request);
-        return saleService.list(TenantRequestIds.resolveBusinessId(request), limit);
+        return saleService.list(TenantRequestIds.resolveBusinessId(request), limit, channel);
+    }
+
+    @GetMapping("/storefront/summary")
+    @PreAuthorize("hasPermission(null, 'airtime.read')")
+    public AirtimeStorefrontSummaryResponse storefrontSummary(HttpServletRequest request) {
+        CurrentTenantUser.require(request);
+        return saleService.storefrontSummary(TenantRequestIds.resolveBusinessId(request));
     }
 
     @GetMapping("/orders/{orderId}")

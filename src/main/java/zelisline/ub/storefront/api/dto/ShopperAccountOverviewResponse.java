@@ -3,6 +3,8 @@ package zelisline.ub.storefront.api.dto;
 import java.math.BigDecimal;
 import java.util.List;
 
+import zelisline.ub.credits.api.dto.TabPurchaseRowResponse;
+
 public record ShopperAccountOverviewResponse(
         String email,
         boolean linkedStorefrontProfile,
@@ -17,6 +19,7 @@ public record ShopperAccountOverviewResponse(
         int ledgerLinesTotal,
         boolean ledgerTruncated,
         BigDecimal loyaltyKesPerPoint,
-        String tabPhone
+        String tabPhone,
+        List<TabPurchaseRowResponse> tillPurchases
 ) {
 }

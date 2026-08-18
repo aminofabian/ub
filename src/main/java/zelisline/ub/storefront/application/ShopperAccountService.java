@@ -15,13 +15,22 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.credits.api.dto.AddCustomerPhoneRequest;
+import zelisline.ub.credits.api.dto.CreateCustomerRequest;
+import zelisline.ub.credits.api.dto.CustomerPhoneDraft;
+import zelisline.ub.credits.api.dto.TabPurchaseRowResponse;
 import zelisline.ub.credits.application.BusinessCreditSettingsService;
 import zelisline.ub.credits.application.CreditCustomerStatementService;
 import zelisline.ub.credits.application.CreditCustomerStatementService.CreditStatement;
 import zelisline.ub.credits.application.CreditCustomerStatementService.StatementLineDto;
+import zelisline.ub.credits.application.CustomerDirectoryService;
+import zelisline.ub.credits.application.CustomerPhoneVerificationService;
+import zelisline.ub.credits.application.CustomerTabPurchasesService;
+import zelisline.ub.credits.application.MpesaPayerIdentityService;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.Customer;
 import zelisline.ub.credits.domain.CustomerPhone;
+import zelisline.ub.credits.domain.KenyanPhoneForms;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
@@ -45,6 +54,10 @@ public class ShopperAccountService {
     private final CreditCustomerStatementService creditCustomerStatementService;
     private final BusinessCreditSettingsService businessCreditSettingsService;
     private final WebOrderAdminService webOrderAdminService;
+    private final CustomerTabPurchasesService customerTabPurchasesService;
+    private final CustomerPhoneVerificationService customerPhoneVerificationService;
+    private final CustomerDirectoryService customerDirectoryService;
+    private final MpesaPayerIdentityService mpesaPayerIdentityService;
 
     @Transactional(readOnly = true)
     public String normalizedEmailForUser(String businessId, String userId) {
@@ -57,7 +70,98 @@ public class ShopperAccountService {
     public ShopperAccountOverviewResponse overview(String businessId, String userId, int page, int pageSize) {
         User user = userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(userId, businessId).orElseThrow(() ->
                 new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+        return overviewFor(businessId, user, page, pageSize);
+    }
 
+    /**
+     * Attach a verified Kenyan mobile to this shopper: store it on the user,
+     * and tether (or create) the store directory profile so till slips, wallet,
+     * and tab show up on the hub.
+     */
+    @Transactional
+    public ShopperAccountOverviewResponse linkPhone(
+            String businessId,
+            String userId,
+            String rawPhone,
+            String verificationToken
+    ) {
+        String phone = customerPhoneVerificationService.consumeRegistrationToken(
+                businessId, verificationToken, rawPhone);
+        User user = userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(userId, businessId).orElseThrow(() ->
+                new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+
+        String storePhone = KenyanPhoneForms.toLocal07(phone);
+        if (storePhone == null) {
+            storePhone = phone;
+        }
+        user.setPhone(storePhone);
+        userRepository.save(user);
+
+        String emailNorm = normalizeEmail(user.getEmail());
+        Customer byEmail = findCustomerByEmail(businessId, emailNorm);
+        Customer byPhone = findCustomerByPhone(businessId, phone);
+
+        if (byEmail != null && byPhone != null && !byEmail.getId().equals(byPhone.getId())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "This number is already on another customer at this shop");
+        }
+
+        Customer customer = byEmail != null ? byEmail : byPhone;
+        if (customer == null) {
+            customerDirectoryService.create(
+                    businessId,
+                    new CreateCustomerRequest(
+                            displayName(user),
+                            user.getEmail(),
+                            null,
+                            null,
+                            List.of(new CustomerPhoneDraft(storePhone, true)),
+                            null),
+                    userId);
+            customer = findCustomerByEmail(businessId, emailNorm);
+            if (customer == null) {
+                customer = findCustomerByPhone(businessId, phone);
+            }
+            if (customer != null && (customer.getEmail() == null || customer.getEmail().isBlank())) {
+                customer.setEmail(user.getEmail());
+                customerRepository.save(customer);
+            }
+        } else {
+            String existingEmail = customer.getEmail();
+            if (existingEmail != null && !existingEmail.isBlank()) {
+                if (!emailNorm.equals(existingEmail.trim().toLowerCase(Locale.ROOT))) {
+                    throw new ResponseStatusException(
+                            HttpStatus.CONFLICT,
+                            "This number is already on another customer at this shop");
+                }
+            } else {
+                customer.setEmail(user.getEmail());
+                customerRepository.save(customer);
+            }
+            if (!phoneOnCustomer(customer.getId(), phone)) {
+                try {
+                    customerDirectoryService.addPhone(
+                            businessId,
+                            customer.getId(),
+                            new AddCustomerPhoneRequest(storePhone, true),
+                            userId);
+                } catch (ResponseStatusException ex) {
+                    if (ex.getStatusCode() != HttpStatus.CONFLICT) {
+                        throw ex;
+                    }
+                }
+            }
+        }
+
+        if (customer != null) {
+            mpesaPayerIdentityService.markSelfVerified(customer, phone);
+        }
+
+        return overviewFor(businessId, user, 0, 12);
+    }
+
+    private ShopperAccountOverviewResponse overviewFor(String businessId, User user, int page, int pageSize) {
         String emailNorm = normalizeEmail(user.getEmail());
 
         int p = Math.max(0, page);
@@ -65,12 +169,8 @@ public class ShopperAccountService {
         Pageable pageable = PageRequest.of(p, s);
         var orderSlice = webOrderAdminService.pageOrdersForShopperEmail(businessId, emailNorm, pageable);
 
-        var candidates = customerRepository.findActiveByBusinessIdAndNormalizedEmail(
-                businessId,
-                emailNorm,
-                PageRequest.of(0, 1));
+        Customer customer = findCustomerByEmail(businessId, emailNorm);
 
-        Customer customer = candidates.isEmpty() ? null : candidates.getFirst();
         BigDecimal kesPerPoint = businessCreditSettingsService
                 .resolveForBusiness(businessId)
                 .getLoyaltyKesPerPoint()
@@ -91,7 +191,8 @@ public class ShopperAccountService {
                     0,
                     false,
                     kesPerPoint,
-                    null
+                    null,
+                    List.of()
             );
         }
 
@@ -160,8 +261,60 @@ public class ShopperAccountService {
                 totalLedger,
                 totalLedger > rows.size(),
                 kesPerPoint,
-                resolveTabPhone(customer.getId())
+                resolveTabPhone(customer.getId()),
+                loadTillPurchases(businessId, customer)
         );
+    }
+
+    private List<TabPurchaseRowResponse> loadTillPurchases(String businessId, Customer customer) {
+        try {
+            return customerTabPurchasesService.list(businessId, customer.getId());
+        } catch (ResponseStatusException ex) {
+            if (ex.getStatusCode() == HttpStatus.NOT_FOUND) {
+                return List.of();
+            }
+            throw ex;
+        }
+    }
+
+    private Customer findCustomerByEmail(String businessId, String emailNorm) {
+        var candidates = customerRepository.findActiveByBusinessIdAndNormalizedEmail(
+                businessId,
+                emailNorm,
+                PageRequest.of(0, 1));
+        return candidates.isEmpty() ? null : candidates.getFirst();
+    }
+
+    private Customer findCustomerByPhone(String businessId, String rawPhone) {
+        for (String candidate : KenyanPhoneForms.lookupCandidates(rawPhone)) {
+            var page = customerRepository.findByBusinessIdAndPhoneNormalized(
+                    businessId, candidate, PageRequest.of(0, 1));
+            if (!page.isEmpty()) {
+                return page.getContent().getFirst();
+            }
+        }
+        return null;
+    }
+
+    private boolean phoneOnCustomer(String customerId, String rawPhone) {
+        var candidates = KenyanPhoneForms.lookupCandidates(rawPhone);
+        for (CustomerPhone row : customerPhoneRepository.findByCustomerIdOrderByCreatedAtAsc(customerId)) {
+            if (row.getPhone() != null && candidates.contains(row.getPhone())) {
+                return true;
+            }
+            if (row.getAssignedMsisdn() != null && candidates.contains(row.getAssignedMsisdn())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String displayName(User user) {
+        String name = user.getName();
+        if (name != null && !name.isBlank()) {
+            return name.trim();
+        }
+        return user.getEmail();
     }
 
     private String resolveTabPhone(String customerId) {

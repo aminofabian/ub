@@ -4,14 +4,18 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.storefront.api.dto.ShopperAccountOverviewResponse;
+import zelisline.ub.storefront.api.dto.ShopperLinkPhoneRequest;
 import zelisline.ub.storefront.api.dto.WebOrderDetailResponse;
 import zelisline.ub.storefront.application.ShopperAccountService;
 import zelisline.ub.storefront.application.WebOrderAdminService;
@@ -49,5 +53,20 @@ public class ShopperMeController {
         String tenant = TenantRequestIds.resolveBusinessId(request);
         String emailNorm = shopperAccountService.normalizedEmailForUser(tenant, principal.userId());
         return webOrderAdminService.getOrderForShopperEmail(tenant, orderId.trim(), emailNorm);
+    }
+
+    @PostMapping("/phone")
+    @PreAuthorize("isAuthenticated()")
+    public ShopperAccountOverviewResponse linkPhone(
+            @Valid @RequestBody ShopperLinkPhoneRequest body,
+            HttpServletRequest request
+    ) {
+        var principal = CurrentTenantUser.requireHuman(request);
+        String tenant = TenantRequestIds.resolveBusinessId(request);
+        return shopperAccountService.linkPhone(
+                tenant,
+                principal.userId(),
+                body.phone(),
+                body.phoneVerificationToken());
     }
 }

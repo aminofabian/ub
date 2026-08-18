@@ -23,6 +23,29 @@ class KplcDepletionEstimatorTest {
     private static final ZoneId NAIROBI = KplcSpendStats.NAIROBI;
 
     @Test
+    void doesNotTreatIdleDaysAfterLastBuyAsExtraConsumptionHistory() {
+        Instant t1 = LocalDateTime.of(2026, 7, 28, 12, 0).atZone(NAIROBI).toInstant();
+        Instant t2 = LocalDateTime.of(2026, 8, 6, 12, 0).atZone(NAIROBI).toInstant();
+        Instant t3 = LocalDateTime.of(2026, 8, 10, 12, 0).atZone(NAIROBI).toInstant();
+        Instant t4 = LocalDateTime.of(2026, 8, 15, 12, 0).atZone(NAIROBI).toInstant();
+        Instant now = LocalDateTime.of(2026, 8, 18, 22, 0).atZone(NAIROBI).toInstant();
+
+        KplcDepletionEstimator.Estimate got = KplcDepletionEstimator.estimate(List.of(
+                token(t1, "53.2"),
+                token(t2, "28.4"),
+                token(t3, "35.4"),
+                token(t4, "53.1")
+        ), now).orElseThrow();
+
+        assertFalse(got.alreadyEmpty());
+        assertThat(got.lastPurchaseUnits()).isEqualByComparingTo("53.1");
+        assertThat(got.dailyUseUnits()).isBetween(new BigDecimal("6.0"), new BigDecimal("7.0"));
+        assertThat(got.remainingUnits()).isBetween(new BigDecimal("28.0"), new BigDecimal("42.0"));
+        assertThat(got.lastPurchaseUnits().subtract(got.remainingUnits()))
+                .isGreaterThan(new BigDecimal("12"));
+    }
+
+    @Test
     void estimatesEmptyFromHowLongPreviousSlipsLasted() {
         Instant t1 = LocalDateTime.of(2026, 8, 7, 12, 10).atZone(NAIROBI).toInstant();
         Instant t2 = LocalDateTime.of(2026, 8, 11, 19, 11).atZone(NAIROBI).toInstant();

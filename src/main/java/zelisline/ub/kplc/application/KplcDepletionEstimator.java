@@ -18,7 +18,10 @@ import zelisline.ub.kplc.api.dto.PublicKplcTokenResponse;
  *
  * <p>Hourly spend is the last five tokens (or fewer if that is all we have):
  * kWh on every finished slip in that window, divided by hours from the oldest
- * of those buys until now. A sixth older slip does not move the rate.
+ * of those buys until the latest buy (completed cycles only). Time after the
+ * last purchase is not in the denominator — that stretch belongs to the
+ * current token, whose kWh are not yet in the numerator. A sixth older slip
+ * does not move the rate.
  *
  * <p>Stock walks forward: leftover from an early buy is added to the next
  * token instead of assuming the tank was empty. From the last buy, kWh burn
@@ -82,8 +85,9 @@ final class KplcDepletionEstimator {
         }
 
         List<PublicKplcTokenResponse> window = last(dated, RATE_WINDOW);
+        PublicKplcTokenResponse latest = dated.getLast();
         Instant start = window.getFirst().purchasedAt();
-        Duration span = Duration.between(start, now);
+        Duration span = Duration.between(start, latest.purchasedAt());
         if (span.compareTo(MIN_SPAN) < 0) {
             return Optional.empty();
         }
@@ -103,7 +107,6 @@ final class KplcDepletionEstimator {
         if (dailyBd.signum() <= 0) {
             return Optional.empty();
         }
-        PublicKplcTokenResponse latest = dated.getLast();
         double lastUnits = latest.units().doubleValue();
         int sampleIntervals = window.size();
 

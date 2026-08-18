@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -19,13 +20,15 @@ import zelisline.ub.kplc.api.dto.PublicKplcTokenResponse;
 
 class KplcDepletionEstimatorTest {
 
+    private static final ZoneId NAIROBI = KplcSpendStats.NAIROBI;
+
     @Test
     void estimatesEmptyFromHowLongPreviousSlipsLasted() {
-        Instant t1 = LocalDateTime.of(2026, 8, 7, 12, 10).atZone(KplcSpendStats.NAIROBI).toInstant();
-        Instant t2 = LocalDateTime.of(2026, 8, 11, 19, 11).atZone(KplcSpendStats.NAIROBI).toInstant();
-        Instant t3 = LocalDateTime.of(2026, 8, 12, 15, 26).atZone(KplcSpendStats.NAIROBI).toInstant();
-        Instant t4 = LocalDateTime.of(2026, 8, 16, 23, 26).atZone(KplcSpendStats.NAIROBI).toInstant();
-        Instant now = LocalDateTime.of(2026, 8, 17, 14, 40).atZone(KplcSpendStats.NAIROBI).toInstant();
+        Instant t1 = LocalDateTime.of(2026, 8, 7, 12, 10).atZone(NAIROBI).toInstant();
+        Instant t2 = LocalDateTime.of(2026, 8, 11, 19, 11).atZone(NAIROBI).toInstant();
+        Instant t3 = LocalDateTime.of(2026, 8, 12, 15, 26).atZone(NAIROBI).toInstant();
+        Instant t4 = LocalDateTime.of(2026, 8, 16, 23, 26).atZone(NAIROBI).toInstant();
+        Instant now = LocalDateTime.of(2026, 8, 17, 14, 40).atZone(NAIROBI).toInstant();
 
         Optional<KplcDepletionEstimator.Estimate> estimate = KplcDepletionEstimator.estimate(List.of(
                 token(t4, "10.7"),
@@ -35,17 +38,88 @@ class KplcDepletionEstimatorTest {
         ), now);
 
         assertTrue(estimate.isPresent());
-        assertFalse(estimate.get().alreadyEmpty());
-        assertThat(estimate.get().dailyUseUnits()).isPositive();
-        assertThat(estimate.get().remainingUnits()).isPositive();
-        assertTrue(estimate.get().estimatedEmptyAt().isAfter(now));
-        assertEquals(3, estimate.get().sampleIntervals());
+        KplcDepletionEstimator.Estimate got = estimate.get();
+        assertFalse(got.alreadyEmpty());
+        assertThat(got.dailyUseUnits()).isBetween(new BigDecimal("3.5"), new BigDecimal("4.6"));
+        assertThat(got.remainingUnits()).isBetween(new BigDecimal("6.0"), new BigDecimal("10.5"));
+        assertTrue(got.estimatedEmptyAt().isAfter(now));
+        assertTrue(got.estimatedEmptyAt().isBefore(
+                LocalDateTime.of(2026, 8, 21, 0, 0).atZone(NAIROBI).toInstant()));
+        assertEquals(2, got.sampleIntervals());
+        assertThat(got.lastPurchaseUnits()).isEqualByComparingTo("10.7");
+    }
+
+    @Test
+    void carriesLeftoverWhenYouBuyBeforeTheMeterIsEmpty() {
+        Instant t1 = LocalDateTime.of(2026, 8, 1, 8, 0).atZone(NAIROBI).toInstant();
+        Instant t2 = LocalDateTime.of(2026, 8, 6, 8, 0).atZone(NAIROBI).toInstant();
+        Instant t3 = LocalDateTime.of(2026, 8, 7, 8, 0).atZone(NAIROBI).toInstant();
+        Instant t4 = LocalDateTime.of(2026, 8, 8, 8, 0).atZone(NAIROBI).toInstant();
+        Instant now = LocalDateTime.of(2026, 8, 8, 20, 0).atZone(NAIROBI).toInstant();
+
+        KplcDepletionEstimator.Estimate got = KplcDepletionEstimator.estimate(List.of(
+                token(t1, "20"),
+                token(t2, "20"),
+                token(t3, "20"),
+                token(t4, "20")
+        ), now).orElseThrow();
+
+        assertFalse(got.alreadyEmpty());
+        assertThat(got.dailyUseUnits()).isBetween(new BigDecimal("3.5"), new BigDecimal("4.5"));
+        assertThat(got.carryInUnits()).isGreaterThan(new BigDecimal("10"));
+        assertThat(got.remainingUnits()).isGreaterThan(new BigDecimal("30"));
+        assertTrue(got.estimatedEmptyAt().isAfter(
+                LocalDateTime.of(2026, 8, 14, 0, 0).atZone(NAIROBI).toInstant()));
+        assertEquals(1, got.sampleIntervals());
+    }
+
+    @Test
+    void emptyClockLeansEveningNotAFlatDrip() {
+        Instant buy = LocalDateTime.of(2026, 8, 18, 7, 0).atZone(NAIROBI).toInstant();
+        Instant now = buy;
+        KplcDepletionEstimator.Estimate got = KplcDepletionEstimator.estimate(List.of(
+                token(buy.minusSeconds(4 * 86_400), "16"),
+                token(buy, "3")
+        ), now).orElseThrow();
+
+        assertThat(got.dailyUseUnits()).isBetween(new BigDecimal("3.5"), new BigDecimal("4.5"));
+        ZonedDateTime empty = got.estimatedEmptyAt().atZone(NAIROBI);
+        assertEquals(18, empty.getDayOfMonth());
+        assertThat(empty.getHour()).isGreaterThanOrEqualTo(16);
+    }
+
+    @Test
+    void emptyAtDoesNotJumpWhenYouRefreshAnHourLater() {
+        Instant t1 = LocalDateTime.of(2026, 8, 10, 7, 0).atZone(NAIROBI).toInstant();
+        Instant t2 = LocalDateTime.of(2026, 8, 14, 7, 0).atZone(NAIROBI).toInstant();
+        Instant now = LocalDateTime.of(2026, 8, 15, 10, 0).atZone(NAIROBI).toInstant();
+        Instant later = LocalDateTime.of(2026, 8, 15, 11, 0).atZone(NAIROBI).toInstant();
+
+        Instant first = KplcDepletionEstimator.estimate(List.of(token(t1, "16"), token(t2, "16")), now)
+                .orElseThrow()
+                .estimatedEmptyAt();
+        Instant second = KplcDepletionEstimator.estimate(List.of(token(t1, "16"), token(t2, "16")), later)
+                .orElseThrow()
+                .estimatedEmptyAt();
+        long driftMinutes = Math.abs(DurationBetweenMinutes(first, second));
+        assertThat(driftMinutes).isLessThan(25);
     }
 
     @Test
     void needsTwoDatedPurchases() {
         Instant t1 = Instant.parse("2026-08-16T20:26:00Z");
         assertTrue(KplcDepletionEstimator.estimate(List.of(token(t1, "10.7")), t1).isEmpty());
+    }
+
+    @Test
+    void hourSharesCoverAFullDay() {
+        double sum = 0;
+        for (int hour = 0; hour < 24; hour++) {
+            sum += KplcDepletionEstimator.hourShare(hour);
+        }
+        assertThat(sum).isCloseTo(1.0, org.assertj.core.data.Offset.offset(1e-9));
+        assertThat(KplcDepletionEstimator.hourShare(19))
+                .isGreaterThan(KplcDepletionEstimator.hourShare(3));
     }
 
     @Test
@@ -61,6 +135,10 @@ class KplcDepletionEstimatorTest {
         assertEquals(
                 "KPLC meter 3715 6667 398 looks like it runs out tomorrow (Wed 19 Aug). Buy a token before the lights go.",
                 KplcDepletionAlertService.stripShopPrefix(one, "Palmart"));
+    }
+
+    private static long DurationBetweenMinutes(Instant a, Instant b) {
+        return Math.round(Math.abs(a.toEpochMilli() - b.toEpochMilli()) / 60_000.0);
     }
 
     private static PublicKplcTokenResponse token(Instant at, String units) {

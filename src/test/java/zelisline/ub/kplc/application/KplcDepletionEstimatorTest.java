@@ -58,6 +58,9 @@ class KplcDepletionEstimatorTest {
         String one = KplcDepletionAlertService.buildMessage(
                 "Palmart", "37156667398", 1, emptyOn, ZoneId.of("Africa/Nairobi"));
         assertTrue(one.contains("tomorrow"));
+        assertEquals(
+                "KPLC meter 3715 6667 398 looks like it runs out tomorrow (Wed 19 Aug). Buy a token before the lights go.",
+                KplcDepletionAlertService.stripShopPrefix(one, "Palmart"));
     }
 
     private static PublicKplcTokenResponse token(Instant at, String units) {

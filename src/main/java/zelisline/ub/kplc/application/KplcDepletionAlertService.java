@@ -17,14 +17,23 @@ import org.springframework.transaction.annotation.Transactional;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.application.BusinessCreditMessagingSettingsService;
+import zelisline.ub.credits.domain.Customer;
 import zelisline.ub.credits.domain.CustomerPhone;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
+import zelisline.ub.credits.repository.CustomerRepository;
+import zelisline.ub.identity.domain.User;
+import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.kplc.api.dto.PublicKplcTokenResponse;
 import zelisline.ub.kplc.domain.CustomerKplcMeter;
 import zelisline.ub.kplc.domain.KplcMeterNumbers;
 import zelisline.ub.kplc.repository.CustomerKplcMeterRepository;
 import zelisline.ub.messaging.application.CustomerMessageDispatcher;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
+import zelisline.ub.notifications.domain.DeviceToken;
+import zelisline.ub.notifications.infrastructure.ExpoPushSender;
+import zelisline.ub.notifications.infrastructure.FcmSender;
+import zelisline.ub.notifications.infrastructure.WebPushSender;
+import zelisline.ub.notifications.repository.DeviceTokenRepository;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
@@ -40,9 +49,15 @@ public class KplcDepletionAlertService {
     private final CustomerKplcMeterRepository meterRepository;
     private final CustomerKplcTokenArchive tokenArchive;
     private final CustomerPhoneRepository customerPhoneRepository;
+    private final CustomerRepository customerRepository;
+    private final UserRepository userRepository;
+    private final DeviceTokenRepository deviceTokenRepository;
     private final BusinessRepository businessRepository;
     private final BusinessCreditMessagingSettingsService messagingSettingsService;
     private final CustomerMessageDispatcher customerMessageDispatcher;
+    private final WebPushSender webPushSender;
+    private final FcmSender fcmSender;
+    private final ExpoPushSender expoPushSender;
     private final Clock clock;
 
     @Value("${app.kplc.depletion-alerts.zone:Africa/Nairobi}")
@@ -79,22 +94,13 @@ public class KplcDepletionAlertService {
         } else {
             return false;
         }
-        String phoneDigits = resolvePhone(meter.getCustomerId());
-        if (phoneDigits == null) {
-            log.warn("KPLC depletion alert skipped, no phone customer={}", meter.getCustomerId());
-            return false;
-        }
-        TenantMessagingConfig messaging = messagingSettingsService.resolveForDispatch(meter.getBusinessId());
         String shop = businessRepository.findById(meter.getBusinessId())
                 .map(Business::getName)
                 .orElse("the shop");
         String message = buildMessage(shop, meter.getMeterNumber(), kind, emptyOn, zone);
-        CustomerMessageDispatcher.DeliveryResult delivery =
-                customerMessageDispatcher.deliver(messaging, phoneDigits, message);
-        boolean ok = "sent".equals(delivery.outcome()) || "stub".equals(delivery.outcome());
-        if (!ok) {
-            log.warn("KPLC depletion alert failed meterTail={} outcome={} detail={}",
-                    tail(meter.getMeterNumber()), delivery.outcome(), delivery.detail());
+        boolean smsOk = sendSms(meter, message);
+        int pushSent = pushShopper(meter, shop, message);
+        if (!smsOk && pushSent == 0) {
             return false;
         }
         if (kind == 2) {
@@ -103,9 +109,56 @@ public class KplcDepletionAlertService {
             meter.setLastOneDayAlertOn(emptyOn);
         }
         meterRepository.save(meter);
-        log.info("KPLC depletion alert kind={} meterTail={} emptyOn={}",
-                kind, tail(meter.getMeterNumber()), emptyOn);
+        log.info("KPLC depletion alert kind={} meterTail={} emptyOn={} sms={} push={}",
+                kind, tail(meter.getMeterNumber()), emptyOn, smsOk, pushSent);
         return true;
+    }
+
+    private boolean sendSms(CustomerKplcMeter meter, String message) {
+        String phoneDigits = resolvePhone(meter.getCustomerId());
+        if (phoneDigits == null) {
+            log.warn("KPLC depletion SMS skipped, no phone customer={}", meter.getCustomerId());
+            return false;
+        }
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForDispatch(meter.getBusinessId());
+        CustomerMessageDispatcher.DeliveryResult delivery =
+                customerMessageDispatcher.deliver(messaging, phoneDigits, message);
+        boolean ok = "sent".equals(delivery.outcome()) || "stub".equals(delivery.outcome());
+        if (!ok) {
+            log.warn("KPLC depletion SMS failed meterTail={} outcome={} detail={}",
+                    tail(meter.getMeterNumber()), delivery.outcome(), delivery.detail());
+        }
+        return ok;
+    }
+
+    private int pushShopper(CustomerKplcMeter meter, String shop, String message) {
+        String userId = resolveShopperUserId(meter);
+        if (userId == null) {
+            return 0;
+        }
+        List<DeviceToken> tokens = deviceTokenRepository.findByBusinessIdAndUserIdAndRevokedAtIsNull(
+                meter.getBusinessId(), userId);
+        if (tokens.isEmpty()) {
+            return 0;
+        }
+        String title = shop;
+        String body = stripShopPrefix(message, shop);
+        int webSent = webPushSender.sendToTokens(tokens, title, body, "/");
+        int fcmSent = fcmSender.sendToTokens(tokens, title, body);
+        int expoSent = expoPushSender.sendToTokens(tokens, title, body);
+        return webSent + fcmSent + expoSent;
+    }
+
+    private String resolveShopperUserId(CustomerKplcMeter meter) {
+        return customerRepository
+                .findByIdAndBusinessIdAndDeletedAtIsNull(meter.getCustomerId(), meter.getBusinessId())
+                .map(Customer::getEmail)
+                .filter(email -> email != null && !email.isBlank())
+                .map(email -> email.trim().toLowerCase(Locale.ROOT))
+                .flatMap(email -> userRepository.findByBusinessIdAndEmailAndDeletedAtIsNull(
+                        meter.getBusinessId(), email))
+                .map(User::getId)
+                .orElse(null);
     }
 
     static String buildMessage(String shopName, String meterNumber, int daysBefore, LocalDate emptyOn, ZoneId zone) {
@@ -114,6 +167,14 @@ public class KplcDepletionAlertService {
         String day = emptyOn.format(DAY_LABEL);
         return shopName + ": KPLC meter " + meter + " looks like it runs out " + when
                 + " (" + day + "). Buy a token before the lights go.";
+    }
+
+    static String stripShopPrefix(String message, String shop) {
+        String prefix = shop + ": ";
+        if (message != null && shop != null && message.startsWith(prefix)) {
+            return message.substring(prefix.length());
+        }
+        return message;
     }
 
     private String resolvePhone(String customerId) {

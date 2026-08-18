@@ -27,6 +27,7 @@ import zelisline.ub.notifications.repository.DeviceTokenRepository;
 import zelisline.ub.notifications.repository.NotificationDeliveryRepository;
 import zelisline.ub.notifications.repository.NotificationRepository;
 import zelisline.ub.identity.application.NotificationService;
+import zelisline.ub.notifications.infrastructure.ExpoPushSender;
 import zelisline.ub.notifications.infrastructure.FcmSender;
 import zelisline.ub.notifications.infrastructure.WebPushSender;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
@@ -41,6 +42,7 @@ public class NotificationDeliveryTxnService {
     private final UserRepository userRepository;
     private final WebPushSender webPushSender;
     private final FcmSender fcmSender;
+    private final ExpoPushSender expoPushSender;
     private final NotificationService outboundMailService;
     private final SmsMessagingClient smsMessagingClient;
     private final MetaWhatsAppMessagingClient whatsAppMessagingClient;
@@ -103,8 +105,10 @@ public class NotificationDeliveryTxnService {
         }
         int webSent = webPushSender.sendToTokens(tokens, payload.title(), payload.body(), payload.actionUrl());
         int fcmSent = fcmSender.sendToTokens(tokens, payload.title(), payload.body());
-        if (webSent > 0 || fcmSent > 0) {
-            markSent(delivery, webSent > 0 ? "vapid" : "fcm");
+        int expoSent = expoPushSender.sendToTokens(tokens, payload.title(), payload.body());
+        if (webSent > 0 || fcmSent > 0 || expoSent > 0) {
+            String provider = webSent > 0 ? "vapid" : expoSent > 0 ? "expo" : "fcm";
+            markSent(delivery, provider);
             return true;
         }
         return false;

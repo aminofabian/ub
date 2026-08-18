@@ -35,6 +35,9 @@ public class FcmSender {
             if (!isMobilePlatform(token.getPlatform())) {
                 continue;
             }
+            if (ExpoPushSender.isExpoPushToken(token.getToken())) {
+                continue;
+            }
             if (send(token.getToken(), title, body).sent()) {
                 sent++;
             }

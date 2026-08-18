@@ -13,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.notifications.domain.DeviceToken;
 import zelisline.ub.notifications.domain.Notification;
+import zelisline.ub.notifications.infrastructure.ExpoPushSender;
 import zelisline.ub.notifications.infrastructure.FcmSender;
 import zelisline.ub.notifications.infrastructure.WebPushSender;
 import zelisline.ub.notifications.repository.DeviceTokenRepository;
@@ -32,6 +33,7 @@ public class StaffWebPushFanoutService {
     private final DeviceTokenRepository deviceTokenRepository;
     private final WebPushSender webPushSender;
     private final FcmSender fcmSender;
+    private final ExpoPushSender expoPushSender;
     private final ObjectMapper objectMapper;
 
     public void fanoutForStaffAlert(Notification notification) {
@@ -54,14 +56,16 @@ public class StaffWebPushFanoutService {
                 payload.body(),
                 payload.actionUrl());
         int fcmSent = fcmSender.sendToTokens(tokens, payload.title(), payload.body());
+        int expoSent = expoPushSender.sendToTokens(tokens, payload.title(), payload.body());
         log.debug(
-                "Staff push fan-out: type={} business={} users={} tokens={} webSent={} fcmSent={}",
+                "Staff push fan-out: type={} business={} users={} tokens={} webSent={} fcmSent={} expoSent={}",
                 notification.getType(),
                 notification.getBusinessId(),
                 userIds.size(),
                 tokens.size(),
                 webSent,
-                fcmSent);
+                fcmSent,
+                expoSent);
     }
 
     private ParsedPayload parsePayload(String json) {

@@ -7,8 +7,6 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
@@ -18,9 +16,9 @@ import zelisline.ub.kplc.api.dto.PublicKplcTokenResponse;
 /**
  * Estimates remaining kWh and when the meter goes dark.
  *
- * <p>Daily use comes from how long <em>full cycles</em> lasted (buys at least
- * 36 hours apart). Panic top-ups and stacked slips are left out of the rate so
- * they cannot look like a 20 kWh/day house.
+ * <p>Hourly spend is the last five tokens (or fewer if that is all we have):
+ * kWh on every finished slip in that window, divided by hours from the oldest
+ * of those buys until now. A sixth older slip does not move the rate.
  *
  * <p>Stock walks forward: leftover from an early buy is added to the next
  * token instead of assuming the tank was empty. From the last buy, kWh burn
@@ -33,10 +31,10 @@ final class KplcDepletionEstimator {
 
     static final ZoneId ZONE = ZoneId.of("Africa/Nairobi");
 
-    /** Skip lookup glitches / duplicate stamps. */
-    private static final Duration MIN_INTERVAL = Duration.ofHours(6);
-    /** Gaps shorter than this are top-ups, not a finished cycle. */
-    private static final Duration MIN_CYCLE = Duration.ofHours(36);
+    /** Oldest of the last N tokens starts the spend clock. */
+    private static final int RATE_WINDOW = 5;
+    /** Window must cover more than a same-day duplicate lookup. */
+    private static final Duration MIN_SPAN = Duration.ofHours(6);
     private static final int RATE_SCALE = 4;
     private static final int DISPLAY_SCALE = 1;
     private static final double EMPTY_EPS = 0.05;
@@ -83,54 +81,31 @@ final class KplcDepletionEstimator {
             return Optional.empty();
         }
 
-        List<BigDecimal> cycleRates = new ArrayList<>();
-        List<BigDecimal> anyRates = new ArrayList<>();
-        for (int i = 0; i < dated.size() - 1; i++) {
-            Instant start = dated.get(i).purchasedAt();
-            Instant end = dated.get(i + 1).purchasedAt();
-            Duration gap = Duration.between(start, end);
-            if (gap.compareTo(MIN_INTERVAL) < 0) {
-                continue;
-            }
-            double days = gap.toMillis() / 86_400_000.0;
-            if (days <= 0) {
-                continue;
-            }
-            BigDecimal rate = dated.get(i).units()
-                    .divide(BigDecimal.valueOf(days), RATE_SCALE, RoundingMode.HALF_UP);
-            if (rate.signum() <= 0) {
-                continue;
-            }
-            anyRates.add(rate);
-            if (gap.compareTo(MIN_CYCLE) >= 0) {
-                cycleRates.add(rate);
-            }
-        }
-        List<BigDecimal> rates = !cycleRates.isEmpty() ? cycleRates : anyRates;
-        if (rates.isEmpty()) {
-            Instant first = dated.getFirst().purchasedAt();
-            Instant last = dated.getLast().purchasedAt();
-            Duration span = Duration.between(first, last);
-            if (span.compareTo(MIN_INTERVAL) < 0) {
-                return Optional.empty();
-            }
-            BigDecimal consumed = BigDecimal.ZERO;
-            for (int i = 0; i < dated.size() - 1; i++) {
-                consumed = consumed.add(dated.get(i).units());
-            }
-            if (consumed.signum() <= 0) {
-                return Optional.empty();
-            }
-            double days = span.toMillis() / 86_400_000.0;
-            rates.add(consumed.divide(BigDecimal.valueOf(days), RATE_SCALE, RoundingMode.HALF_UP));
-        }
-        BigDecimal dailyBd = median(rates);
-        if (dailyBd == null || dailyBd.signum() <= 0) {
+        List<PublicKplcTokenResponse> window = last(dated, RATE_WINDOW);
+        Instant start = window.getFirst().purchasedAt();
+        Duration span = Duration.between(start, now);
+        if (span.compareTo(MIN_SPAN) < 0) {
             return Optional.empty();
         }
-        double daily = dailyBd.doubleValue();
+        BigDecimal consumed = BigDecimal.ZERO;
+        for (int i = 0; i < window.size() - 1; i++) {
+            consumed = consumed.add(window.get(i).units());
+        }
+        if (consumed.signum() <= 0) {
+            return Optional.empty();
+        }
+        double hours = span.toMillis() / 3_600_000.0;
+        if (hours <= 0) {
+            return Optional.empty();
+        }
+        double daily = (consumed.doubleValue() / hours) * 24.0;
+        BigDecimal dailyBd = BigDecimal.valueOf(daily).setScale(RATE_SCALE, RoundingMode.HALF_UP);
+        if (dailyBd.signum() <= 0) {
+            return Optional.empty();
+        }
         PublicKplcTokenResponse latest = dated.getLast();
         double lastUnits = latest.units().doubleValue();
+        int sampleIntervals = window.size();
 
         double stock = 0;
         for (int i = 0; i < dated.size(); i++) {
@@ -162,7 +137,7 @@ final class KplcDepletionEstimator {
                 BigDecimal.valueOf(remaining).setScale(DISPLAY_SCALE, RoundingMode.HALF_UP),
                 latest.units(),
                 dailyBd,
-                rates.size(),
+                sampleIntervals,
                 alreadyEmpty,
                 BigDecimal.valueOf(carryIn).setScale(DISPLAY_SCALE, RoundingMode.HALF_UP)));
     }
@@ -239,16 +214,10 @@ final class KplcDepletionEstimator {
                 - z.getNano() / 1_000_000L;
     }
 
-    private static BigDecimal median(List<BigDecimal> rates) {
-        if (rates.isEmpty()) {
-            return null;
+    private static <T> List<T> last(List<T> items, int n) {
+        if (items.size() <= n) {
+            return items;
         }
-        List<BigDecimal> sorted = new ArrayList<>(rates);
-        Collections.sort(sorted);
-        int mid = sorted.size() / 2;
-        if (sorted.size() % 2 == 1) {
-            return sorted.get(mid);
-        }
-        return sorted.get(mid - 1).add(sorted.get(mid)).divide(BigDecimal.TWO, RATE_SCALE, RoundingMode.HALF_UP);
+        return items.subList(items.size() - n, items.size());
     }
 }

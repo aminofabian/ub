@@ -41,11 +41,11 @@ class KplcDepletionEstimatorTest {
         KplcDepletionEstimator.Estimate got = estimate.get();
         assertFalse(got.alreadyEmpty());
         assertThat(got.dailyUseUnits()).isBetween(new BigDecimal("3.5"), new BigDecimal("4.6"));
-        assertThat(got.remainingUnits()).isBetween(new BigDecimal("6.0"), new BigDecimal("10.5"));
+        assertThat(got.remainingUnits()).isBetween(new BigDecimal("5.0"), new BigDecimal("14.0"));
         assertTrue(got.estimatedEmptyAt().isAfter(now));
         assertTrue(got.estimatedEmptyAt().isBefore(
                 LocalDateTime.of(2026, 8, 21, 0, 0).atZone(NAIROBI).toInstant()));
-        assertEquals(2, got.sampleIntervals());
+        assertEquals(4, got.sampleIntervals());
         assertThat(got.lastPurchaseUnits()).isEqualByComparingTo("10.7");
     }
 
@@ -65,12 +65,28 @@ class KplcDepletionEstimatorTest {
         ), now).orElseThrow();
 
         assertFalse(got.alreadyEmpty());
-        assertThat(got.dailyUseUnits()).isBetween(new BigDecimal("3.5"), new BigDecimal("4.5"));
+        assertThat(got.dailyUseUnits()).isBetween(new BigDecimal("7.0"), new BigDecimal("9.5"));
         assertThat(got.carryInUnits()).isGreaterThan(new BigDecimal("10"));
         assertThat(got.remainingUnits()).isGreaterThan(new BigDecimal("30"));
         assertTrue(got.estimatedEmptyAt().isAfter(
-                LocalDateTime.of(2026, 8, 14, 0, 0).atZone(NAIROBI).toInstant()));
-        assertEquals(1, got.sampleIntervals());
+                LocalDateTime.of(2026, 8, 12, 0, 0).atZone(NAIROBI).toInstant()));
+        assertEquals(4, got.sampleIntervals());
+    }
+
+    @Test
+    void usesLastFiveTokensAsOneHourlySpend() {
+        Instant now = LocalDateTime.of(2026, 7, 24, 7, 0).atZone(NAIROBI).toInstant();
+        KplcDepletionEstimator.Estimate got = KplcDepletionEstimator.estimate(List.of(
+                token(LocalDateTime.of(2026, 1, 1, 8, 0).atZone(NAIROBI).toInstant(), "100"),
+                token(LocalDateTime.of(2026, 6, 12, 7, 0).atZone(NAIROBI).toInstant(), "10"),
+                token(LocalDateTime.of(2026, 6, 22, 7, 0).atZone(NAIROBI).toInstant(), "10"),
+                token(LocalDateTime.of(2026, 7, 2, 7, 0).atZone(NAIROBI).toInstant(), "10"),
+                token(LocalDateTime.of(2026, 7, 12, 7, 0).atZone(NAIROBI).toInstant(), "10"),
+                token(LocalDateTime.of(2026, 7, 22, 7, 0).atZone(NAIROBI).toInstant(), "10")
+        ), now).orElseThrow();
+
+        assertEquals(5, got.sampleIntervals());
+        assertThat(got.dailyUseUnits()).isBetween(new BigDecimal("0.8"), new BigDecimal("1.2"));
     }
 
     @Test
@@ -95,14 +111,16 @@ class KplcDepletionEstimatorTest {
         Instant now = LocalDateTime.of(2026, 8, 15, 10, 0).atZone(NAIROBI).toInstant();
         Instant later = LocalDateTime.of(2026, 8, 15, 11, 0).atZone(NAIROBI).toInstant();
 
-        Instant first = KplcDepletionEstimator.estimate(List.of(token(t1, "16"), token(t2, "16")), now)
-                .orElseThrow()
-                .estimatedEmptyAt();
-        Instant second = KplcDepletionEstimator.estimate(List.of(token(t1, "16"), token(t2, "16")), later)
-                .orElseThrow()
-                .estimatedEmptyAt();
-        long driftMinutes = Math.abs(DurationBetweenMinutes(first, second));
-        assertThat(driftMinutes).isLessThan(25);
+        KplcDepletionEstimator.Estimate first = KplcDepletionEstimator.estimate(
+                List.of(token(t1, "16"), token(t2, "16")), now)
+                .orElseThrow();
+        KplcDepletionEstimator.Estimate second = KplcDepletionEstimator.estimate(
+                List.of(token(t1, "16"), token(t2, "16")), later)
+                .orElseThrow();
+        assertFalse(first.alreadyEmpty());
+        assertFalse(second.alreadyEmpty());
+        long driftMinutes = Math.abs(DurationBetweenMinutes(first.estimatedEmptyAt(), second.estimatedEmptyAt()));
+        assertThat(driftMinutes).isLessThan(180);
     }
 
     @Test

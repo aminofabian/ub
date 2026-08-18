@@ -6,6 +6,12 @@ import zelisline.ub.payments.application.StkPhoneNormalizer;
  * Maps a Kenyan MSISDN to its mobile network so the cashier sees which telco
  * they are about to top up before committing the sale. Instalipa does not need
  * the network — this is purely so a mistyped number is caught by eye.
+ *
+ * <p>Safaricom: 070x, 071x, 072x, 0740–0743, 079x, 0110–0119, 0140–0143, 0180–0182
+ * Airtel: 073x, 0750–0756, 0785–0789, 0100–0102
+ * Telkom: 0770–0779
+ * Equitel: 0763–0766
+ * Faiba (JTL): 0747
  */
 public final class AirtimeNetworks {
 
@@ -24,57 +30,54 @@ public final class AirtimeNetworks {
         if (msisdn == null || msisdn.length() < 6) {
             return null;
         }
-        int prefix;
+        int ndc;
         try {
-            prefix = Integer.parseInt(msisdn.substring(3, 6));
+            ndc = Integer.parseInt(msisdn.substring(3, 6));
         } catch (NumberFormatException e) {
             return null;
         }
+        return fromNdc(ndc);
+    }
 
-        if (prefix == 747) {
+    static String fromNdc(int ndc) {
+        if (ndc == 747) {
             return JTL;
         }
-        if (prefix >= 763 && prefix <= 765) {
-            return EQUITEL;
+        if (ndc >= 700 && ndc <= 729) {
+            return SAFARICOM;
         }
-        if (prefix >= 770 && prefix <= 779) {
+        if (ndc >= 740 && ndc <= 743) {
+            return SAFARICOM;
+        }
+        if (ndc >= 790 && ndc <= 799) {
+            return SAFARICOM;
+        }
+        if (ndc >= 110 && ndc <= 119) {
+            return SAFARICOM;
+        }
+        if (ndc >= 140 && ndc <= 143) {
+            return SAFARICOM;
+        }
+        if (ndc >= 180 && ndc <= 182) {
+            return SAFARICOM;
+        }
+        if (ndc >= 730 && ndc <= 739) {
+            return AIRTEL;
+        }
+        if (ndc >= 750 && ndc <= 756) {
+            return AIRTEL;
+        }
+        if (ndc >= 785 && ndc <= 789) {
+            return AIRTEL;
+        }
+        if (ndc >= 100 && ndc <= 102) {
+            return AIRTEL;
+        }
+        if (ndc >= 770 && ndc <= 779) {
             return TELKOM;
         }
-        if (prefix >= 100 && prefix <= 102) {
-            return AIRTEL;
-        }
-        if (prefix >= 730 && prefix <= 739) {
-            return AIRTEL;
-        }
-        if (prefix >= 750 && prefix <= 756) {
-            return AIRTEL;
-        }
-        if (prefix == 762) {
-            return AIRTEL;
-        }
-        if (prefix >= 780 && prefix <= 789) {
-            return AIRTEL;
-        }
-        if (prefix >= 110 && prefix <= 115) {
-            return SAFARICOM;
-        }
-        if (prefix >= 700 && prefix <= 729) {
-            return SAFARICOM;
-        }
-        if (prefix >= 740 && prefix <= 746) {
-            return SAFARICOM;
-        }
-        if (prefix == 748) {
-            return SAFARICOM;
-        }
-        if (prefix >= 757 && prefix <= 759) {
-            return SAFARICOM;
-        }
-        if (prefix >= 768 && prefix <= 769) {
-            return SAFARICOM;
-        }
-        if (prefix >= 790 && prefix <= 799) {
-            return SAFARICOM;
+        if (ndc >= 763 && ndc <= 766) {
+            return EQUITEL;
         }
         return null;
     }

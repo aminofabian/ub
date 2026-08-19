@@ -23,6 +23,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.identity.api.dto.EmailLookupRequest;
 import zelisline.ub.identity.api.dto.EmailLookupResponse;
 import zelisline.ub.identity.api.dto.PasswordForgotRequest;
+import zelisline.ub.identity.api.dto.LoginResponse;
 import zelisline.ub.identity.api.dto.RegisterRequest;
 import zelisline.ub.identity.api.dto.RegisterResponse;
 import zelisline.ub.identity.api.dto.VerifyEmailRequest;
@@ -62,6 +63,7 @@ public class AuthRegistrationService {
     private final EmailVerificationEmailRenderer emailVerificationEmailRenderer;
     private final PublicHostResolverService publicHostResolverService;
     private final FrontendAuthLinkBuilder frontendAuthLinkBuilder;
+    private final AuthService authService;
     private final Environment environment;
 
     @Value("${app.auth.self-signup-enabled:true}")
@@ -125,8 +127,12 @@ public class AuthRegistrationService {
         return new RegisterResponse(saved.getId(), saved.getEmail(), UserStatus.ACTIVE.wire(), null);
     }
 
+    /**
+     * Activates an invited user and issues a web session so they can continue
+     * onboarding without signing in again.
+     */
     @Transactional
-    public void verifyEmail(HttpServletRequest http, VerifyEmailRequest request) {
+    public LoginResponse verifyEmail(HttpServletRequest http, VerifyEmailRequest request) {
         String businessId = TenantRequestIds.resolveBusinessId(http);
         String hash = TokenHasher.sha256Hex(request.token());
         var row = emailVerificationTokenRepository.findByTokenHashAndUsedAtIsNull(hash)
@@ -139,15 +145,13 @@ public class AuthRegistrationService {
         if (user.getDeletedAt() != null || !user.getBusinessId().equals(businessId)) {
             throw invalidToken();
         }
-        if (user.statusAsEnum() != UserStatus.INVITED) {
-            row.setUsedAt(Instant.now());
-            emailVerificationTokenRepository.save(row);
-            return;
+        if (user.statusAsEnum() == UserStatus.INVITED) {
+            user.setStatus(UserStatus.ACTIVE);
+            userRepository.save(user);
         }
-        user.setStatus(UserStatus.ACTIVE);
-        userRepository.save(user);
         row.setUsedAt(Instant.now());
         emailVerificationTokenRepository.save(row);
+        return authService.issueSessionForUser(user, http, "email_verification");
     }
 
     /**

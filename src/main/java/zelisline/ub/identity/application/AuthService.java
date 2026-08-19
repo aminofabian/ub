@@ -146,6 +146,23 @@ public class AuthService {
         return response;
     }
 
+    /** Issue a normal web session after phone OTP + tab PIN (shopper). */
+    @Transactional
+    public LoginResponse issueSessionForUser(User user, HttpServletRequest http) {
+        return issueSessionForUser(user, http, "shopper_phone");
+    }
+
+    /** Issue a normal web session (email verification, shopper phone, etc.). */
+    @Transactional
+    public LoginResponse issueSessionForUser(User user, HttpServletRequest http, String loginMethod) {
+        assertCanAuthenticate(user);
+        recordLoginSuccess(user);
+        LoginResponse response = issueNewSessionWithSession(user, http).tokens();
+        String method = loginMethod == null || loginMethod.isBlank() ? "session" : loginMethod.trim();
+        publishLoginEvent(user, http, response, AuditEventTypes.LOGIN_SUCCEEDED, null, null, method);
+        return response;
+    }
+
     @Transactional
     public LoginResponse loginPin(HttpServletRequest http, LoginPinRequest request) {
         String businessId = TenantRequestIds.resolveBusinessId(http);

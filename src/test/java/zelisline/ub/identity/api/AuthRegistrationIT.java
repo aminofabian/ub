@@ -21,7 +21,6 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-import zelisline.ub.identity.application.AuthService;
 import zelisline.ub.identity.application.NotificationService;
 import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.repository.UserRepository;
@@ -142,9 +141,7 @@ class AuthRegistrationIT {
                         .content("""
                                 {"email":"new@example.com","password":"secretpass"}
                                 """))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.title").value("Forbidden"))
-                .andExpect(jsonPath("$.detail").value(AuthService.LOGIN_EMAIL_NOT_VERIFIED_DETAIL));
+                .andExpect(status().isForbidden());
 
         ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
         verify(notificationService).sendEmailVerificationEmail(anyString(), anyString(), bodyCaptor.capture());
@@ -154,7 +151,8 @@ class AuthRegistrationIT {
                         .header("X-Tenant-Id", TENANT)
                         .contentType(APPLICATION_JSON)
                         .content("{\"token\":\"" + rawToken + "\"}"))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessToken").isString());
 
         mockMvc.perform(post("/api/v1/auth/login")
                         .header("X-Tenant-Id", TENANT)

@@ -66,9 +66,11 @@ public class AuthController {
     }
 
     @PostMapping("/verify-email")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void verifyEmail(@Valid @RequestBody VerifyEmailRequest body, HttpServletRequest http) {
-        authRegistrationService.verifyEmail(http, body);
+    public ResponseEntity<LoginResponse> verifyEmail(
+            @Valid @RequestBody VerifyEmailRequest body,
+            HttpServletRequest http
+    ) {
+        return toSessionResponse(authRegistrationService.verifyEmail(http, body));
     }
 
     /**

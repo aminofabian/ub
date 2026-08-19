@@ -11,7 +11,20 @@ public record PublicCatalogItemCardResponse(
         String name,
         String variantName,
         String imageUrl,
+        /**
+         * Final storefront price after applying any active catalog discounts.
+         * This is what shoppers pay.
+         */
         BigDecimal price,
+        /**
+         * Regular storefront price before any active catalog discounts.
+         * Non-null only when a discount is active for this item.
+         */
+        BigDecimal regularPrice,
+        /** Amount saved versus regular price (after rounding). */
+        BigDecimal savedAmount,
+        /** Discount label shown for shoppers (e.g. "Weekend Sale"). */
+        String discountName,
         /** On-hand quantity at the storefront catalog branch (active inventory batches). */
         BigDecimal qtyOnHand,
         /** Latest buying price across all suppliers (most recent effectiveFrom). */

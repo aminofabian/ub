@@ -23,7 +23,7 @@ import org.springframework.web.server.ResponseStatusException;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.audit.AuditEventTypes;
 import zelisline.ub.identity.application.RequestPermissionService;
-import zelisline.ub.pricing.application.PricingService;
+import zelisline.ub.discounts.application.DiscountResolutionService;
 import zelisline.ub.audit.application.AuditEventBuilder;
 import zelisline.ub.audit.application.AuditEventPublisher;
 import zelisline.ub.audit.domain.AuditEventActorType;
@@ -108,7 +108,7 @@ public class SaleService {
     private final CreditAccountRepository creditAccountRepository;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
-    private final PricingService pricingService;
+    private final DiscountResolutionService discountResolutionService;
     private final RequestPermissionService requestPermissionService;
     private final FeatureFlagService featureFlagService;
     private final CashDrawerLedgerService cashDrawerLedgerService;
@@ -156,8 +156,9 @@ public class SaleService {
     ) {
         var creditSettingsResolved = businessCreditSettingsService.resolveForBusiness(businessId);
         requireBranch(businessId, req.branchId());
-        validateSaleLines(businessId, req.branchId(), req.lines(), roleId);
-        BigDecimal grandTotal = computeCartTotal(req.lines());
+        Map<Integer, EffectiveLinePricing> linePricing =
+                resolveAndValidateSaleLines(businessId, req.branchId(), req.lines(), roleId);
+        BigDecimal grandTotal = computeCartTotal(req.lines(), linePricing);
         validatePositiveMoney(grandTotal);
         ResolvedPayments resolved = normalizeAndResolvePayments(req.payments(), grandTotal);
         String customerId = blankToNull(req.customerId());
@@ -187,7 +188,7 @@ public class SaleService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "No open shift"));
 
         String saleId = UUID.randomUUID().toString();
-        List<SaleItem> saleItems = pickAndBuildSaleItems(businessId, req, saleId, userId);
+        List<SaleItem> saleItems = pickAndBuildSaleItems(businessId, req, saleId, userId, linePricing);
 
         Shift shift = openShiftResolver
                 .findOpenForUpdate(businessId, req.branchId(), tillDeviceKey)
@@ -560,7 +561,8 @@ public class SaleService {
             String businessId,
             PostSaleRequest req,
             String saleId,
-            String userId
+            String userId,
+            Map<Integer, EffectiveLinePricing> linePricing
     ) {
         List<SaleItem> all = new ArrayList<>();
         int lineIndex = 0;
@@ -581,7 +583,8 @@ public class SaleService {
                     InventoryConstants.MOVEMENT_SALE,
                     userId
             );
-            all.addAll(buildItemsForCartLine(saleId, lineIndex, line, allocations));
+            EffectiveLinePricing pricing = linePricing.get(lineIndex);
+            all.addAll(buildItemsForCartLine(saleId, lineIndex, line, allocations, pricing));
             lineIndex++;
         }
         return all;
@@ -616,10 +619,14 @@ public class SaleService {
             String saleId,
             int lineIndex,
             PostSaleLineRequest line,
-            List<BatchAllocationLine> allocations
+            List<BatchAllocationLine> allocations,
+            EffectiveLinePricing pricing
     ) {
+        BigDecimal chargedUnitPrice = pricing != null
+                ? pricing.chargedUnitPrice()
+                : line.unitPrice().setScale(QTY_SCALE, RoundingMode.HALF_UP);
         BigDecimal lineQty = line.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
-        BigDecimal lineTotal = lineQty.multiply(line.unitPrice()).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal lineTotal = lineQty.multiply(chargedUnitPrice).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         BigDecimal revenueAllocated = BigDecimal.ZERO;
         List<SaleItem> rows = new ArrayList<>();
         for (int i = 0; i < allocations.size(); i++) {
@@ -635,11 +642,17 @@ public class SaleService {
             row.setItemId(line.itemId());
             row.setBatchId(a.batchId());
             row.setQuantity(a.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP));
-            row.setUnitPrice(line.unitPrice().setScale(QTY_SCALE, RoundingMode.HALF_UP));
+            row.setUnitPrice(chargedUnitPrice);
             row.setLineTotal(portion);
             row.setUnitCost(a.unitCost().setScale(QTY_SCALE, RoundingMode.HALF_UP));
             row.setCostTotal(costTotal);
             row.setProfit(profit);
+            if (pricing != null) {
+                row.setRegularUnitPrice(pricing.regularUnitPrice());
+                row.setDiscountAmount(pricing.discountAmount());
+                row.setDiscountId(pricing.discountId());
+                row.setDiscountName(pricing.discountName());
+            }
             rows.add(row);
         }
         return rows;
@@ -721,11 +734,18 @@ public class SaleService {
         );
     }
 
-    private static BigDecimal computeCartTotal(List<PostSaleLineRequest> lines) {
+    private static BigDecimal computeCartTotal(
+            List<PostSaleLineRequest> lines,
+            Map<Integer, EffectiveLinePricing> linePricing
+    ) {
         BigDecimal total = BigDecimal.ZERO;
-        for (PostSaleLineRequest l : lines) {
+        for (int i = 0; i < lines.size(); i++) {
+            PostSaleLineRequest l = lines.get(i);
+            BigDecimal unit = linePricing != null && linePricing.containsKey(i)
+                    ? linePricing.get(i).chargedUnitPrice()
+                    : l.unitPrice();
             BigDecimal line = l.quantity()
-                    .multiply(l.unitPrice())
+                    .multiply(unit)
                     .setScale(MONEY_SCALE, RoundingMode.HALF_UP);
             total = total.add(line);
         }
@@ -738,7 +758,12 @@ public class SaleService {
         }
     }
 
-    private void validateSaleLines(String businessId, String branchId, List<PostSaleLineRequest> lines, String roleId) {
+    private Map<Integer, EffectiveLinePricing> resolveAndValidateSaleLines(
+            String businessId,
+            String branchId,
+            List<PostSaleLineRequest> lines,
+            String roleId
+    ) {
         if (lines == null || lines.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Sale must contain at least one line");
         }
@@ -758,11 +783,11 @@ public class SaleService {
                         item -> item,
                         (a, b) -> a));
 
-        Map<String, BigDecimal> shelfPrices = itemIds.isEmpty()
+        Map<String, zelisline.ub.discounts.api.dto.ResolvedPriceResponse> resolvedPrices = itemIds.isEmpty()
                 ? Map.of()
-                : pricingService.getCurrentOpenSellingPricesForItems(
-                businessId, branchId, itemIds);
+                : discountResolutionService.resolveForItems(businessId, branchId, itemIds);
 
+        Map<Integer, EffectiveLinePricing> out = new LinkedHashMap<>();
         for (int i = 0; i < lines.size(); i++) {
             PostSaleLineRequest line = lines.get(i);
             if (line.isAirtime()) {
@@ -794,19 +819,16 @@ public class SaleService {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                             "Line " + (i + 1) + ": weighed item must use a weight unit (kg, g, lb)");
                 }
-                // v1: kg only for weighed sale lines to avoid unit-conversion complexity.
                 if (!"kg".equals(unit)) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                             "Line " + (i + 1) + ": weighed items currently sell in kg only");
                 }
-                // Ignore trailing zeros (e.g. 0.3470 from DECIMAL storage).
                 BigDecimal weightScale = line.quantity().stripTrailingZeros();
                 if (weightScale.scale() > WEIGHTED_QTY_SCALE) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                             "Line " + (i + 1) + ": weight may have at most " + WEIGHTED_QTY_SCALE + " decimal places");
                 }
             } else {
-                // Non-weighed items must be sold with integer quantities.
                 BigDecimal stripped = line.quantity().stripTrailingZeros();
                 if (stripped.scale() > 0) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -814,12 +836,76 @@ public class SaleService {
                 }
             }
 
-            BigDecimal shelfPrice = shelfPrices.get(line.itemId());
-            if (shelfPrice != null && isPriceOverride(line.unitPrice(), shelfPrice)
-                    && !hasPriceOverridePermission(businessId, roleId)) {
-                throw new ResponseStatusException(HttpStatus.FORBIDDEN,
-                        "Line " + (i + 1) + ": price override requires manager approval");
+            zelisline.ub.discounts.api.dto.ResolvedPriceResponse resolved =
+                    resolvedPrices.getOrDefault(line.itemId(), discountResolutionService.resolveForItem(
+                            businessId, line.itemId(), branchId));
+            out.put(i, resolveLinePricing(i, line, resolved, roleId, businessId));
+        }
+        return out;
+    }
+
+    private EffectiveLinePricing resolveLinePricing(
+            int lineIndex,
+            PostSaleLineRequest line,
+            zelisline.ub.discounts.api.dto.ResolvedPriceResponse resolved,
+            String roleId,
+            String businessId
+    ) {
+        BigDecimal regular = resolved.regularPrice();
+        BigDecimal finalPrice = resolved.finalPrice();
+        BigDecimal sent = line.unitPrice();
+
+        if (regular == null || finalPrice == null) {
+            return EffectiveLinePricing.noDiscount(sent.setScale(QTY_SCALE, RoundingMode.HALF_UP));
+        }
+
+        if (DiscountResolutionService.pricesMatch(sent, finalPrice)) {
+            return EffectiveLinePricing.fromDiscount(finalPrice, regular, resolved.discount());
+        }
+        if (DiscountResolutionService.pricesMatch(sent, regular) && !line.sellAtRegularFlag()) {
+            return EffectiveLinePricing.fromDiscount(finalPrice, regular, resolved.discount());
+        }
+        if (DiscountResolutionService.pricesMatch(sent, regular) && line.sellAtRegularFlag()) {
+            requirePriceOverridePermission(businessId, roleId, lineIndex);
+            return EffectiveLinePricing.noDiscount(regular.setScale(QTY_SCALE, RoundingMode.HALF_UP));
+        }
+        requirePriceOverridePermission(businessId, roleId, lineIndex);
+        return EffectiveLinePricing.noDiscount(sent.setScale(QTY_SCALE, RoundingMode.HALF_UP));
+    }
+
+    private void requirePriceOverridePermission(String businessId, String roleId, int lineIndex) {
+        if (!hasPriceOverridePermission(businessId, roleId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Line " + (lineIndex + 1) + ": price override requires manager approval");
+        }
+    }
+
+    private record EffectiveLinePricing(
+            BigDecimal chargedUnitPrice,
+            BigDecimal regularUnitPrice,
+            BigDecimal discountAmount,
+            String discountId,
+            String discountName
+    ) {
+        static EffectiveLinePricing noDiscount(BigDecimal charged) {
+            return new EffectiveLinePricing(charged, charged, BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.UNNECESSARY), null, null);
+        }
+
+        static EffectiveLinePricing fromDiscount(
+                BigDecimal charged,
+                BigDecimal regular,
+                zelisline.ub.discounts.api.dto.ResolvedDiscountRef discount
+        ) {
+            BigDecimal saved = regular.subtract(charged).max(BigDecimal.ZERO).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+            if (discount == null || saved.signum() == 0) {
+                return noDiscount(charged.setScale(QTY_SCALE, RoundingMode.HALF_UP));
             }
+            return new EffectiveLinePricing(
+                    charged.setScale(QTY_SCALE, RoundingMode.HALF_UP),
+                    regular.setScale(QTY_SCALE, RoundingMode.HALF_UP),
+                    saved,
+                    discount.id(),
+                    discount.name());
         }
     }
 
@@ -850,10 +936,6 @@ public class SaleService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Line " + (i + 1) + ": airtime amount must be a whole number");
         }
-    }
-
-    private boolean isPriceOverride(BigDecimal unitPrice, BigDecimal shelfPrice) {
-        return unitPrice.subtract(shelfPrice).abs().compareTo(TOLERANCE) > 0;
     }
 
     private boolean hasPriceOverridePermission(String businessId, String roleId) {

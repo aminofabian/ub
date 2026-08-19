@@ -30,6 +30,7 @@ import zelisline.ub.pricing.api.dto.PutPriceRuleRequest;
 import zelisline.ub.pricing.api.dto.SellPriceSuggestionResponse;
 import zelisline.ub.pricing.api.dto.SellingPriceResponse;
 import zelisline.ub.pricing.api.dto.TaxRateResponse;
+import zelisline.ub.discounts.application.DiscountResolutionService;
 import zelisline.ub.pricing.application.PricingService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.TenantRequestIds;
@@ -41,6 +42,7 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class PricingController {
 
     private final PricingService pricingService;
+    private final DiscountResolutionService discountResolutionService;
 
     @PostMapping("/selling-prices")
     @PreAuthorize("hasPermission(null, 'pricing.sell_price.set')")
@@ -164,5 +166,23 @@ public class PricingController {
     ) {
         CurrentTenantUser.requireHuman(request);
         return pricingService.createTaxRate(TenantRequestIds.resolveBusinessId(request), body);
+    }
+
+    @GetMapping("/resolved-price")
+    @PreAuthorize(
+            "hasPermission(null, 'pricing.read') or hasPermission(null, 'sales.sell') "
+                    + "or hasPermission(null, 'purchasing.path_b.read') "
+                    + "or hasPermission(null, 'purchasing.path_b.write')"
+    )
+    public zelisline.ub.discounts.api.dto.ResolvedPriceResponse getResolvedPrice(
+            @RequestParam String itemId,
+            @RequestParam(required = false) String branchId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return discountResolutionService.resolveForItem(
+                TenantRequestIds.resolveBusinessId(request),
+                itemId,
+                branchId);
     }
 }

@@ -63,6 +63,18 @@ public class SaleItem {
     @Column(name = "profit", nullable = false, precision = 14, scale = 2)
     private BigDecimal profit;
 
+    @Column(name = "regular_unit_price", precision = 14, scale = 4)
+    private BigDecimal regularUnitPrice;
+
+    @Column(name = "discount_amount", precision = 14, scale = 2)
+    private BigDecimal discountAmount;
+
+    @Column(name = "discount_id", length = 36)
+    private String discountId;
+
+    @Column(name = "discount_name")
+    private String discountName;
+
     @PrePersist
     void onCreate() {
         if (id == null || id.isBlank()) {

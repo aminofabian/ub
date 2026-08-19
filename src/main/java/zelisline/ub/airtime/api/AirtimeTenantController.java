@@ -130,7 +130,7 @@ public class AirtimeTenantController {
     @PreAuthorize("hasPermission(null, 'airtime.read')")
     public AirtimeOrderResponse order(HttpServletRequest request, @PathVariable String orderId) {
         CurrentTenantUser.require(request);
-        return saleService.get(TenantRequestIds.resolveBusinessId(request), orderId);
+        return saleService.getWithProviderCheck(TenantRequestIds.resolveBusinessId(request), orderId);
     }
 
     @GetMapping("/settings")

@@ -608,6 +608,52 @@ public class AirtimeSaleService {
         return toResponse(order, null);
     }
 
+    /**
+     * Like {@link #get} but when the order is in-flight and has a provider
+     * transaction id, proactively queries Instalipa so the cashier's polling
+     * loop can resolve without waiting for the webhook callback.
+     */
+    @Transactional
+    public AirtimeOrderResponse getWithProviderCheck(String businessId, String orderId) {
+        AirtimeOrder order = orderRepository.findByIdAndBusinessId(orderId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Airtime order not found"));
+        if (order.isTerminal()) {
+            return toResponse(order, null);
+        }
+        String txn = order.getProviderTransactionId();
+        if (txn == null || txn.isBlank()) {
+            return toResponse(order, null);
+        }
+        Instant submitted = order.getSubmittedAt() != null ? order.getSubmittedAt() : order.getRequestedAt();
+        if (submitted != null && submitted.isAfter(Instant.now().minusSeconds(3))) {
+            return toResponse(order, null);
+        }
+        Map<String, String> credentials = platformSettings.credentials().orElse(null);
+        if (credentials == null) {
+            return toResponse(order, null);
+        }
+        try {
+            PlatformAirtimeSettings platform = platformSettings.loadSingleton();
+            AirtimeResult status = gateway.queryStatus(credentials, platform.getBaseUrl(), txn);
+            if (status.floatBalance() != null) {
+                platformSettings.recordFloatBalance(status.floatBalance());
+            }
+            KioskPayAccount account = walletService.getOrCreate(order.getBusinessId());
+            if (status.success()) {
+                settleOrder(order, account, status.receipt());
+                return toResponse(order, account);
+            }
+            if (status.accepted() && status.terminalFailure()) {
+                noteProviderFailure(order, status.message());
+                failOrder(order, account, status.message(), true);
+                return toResponse(order, account);
+            }
+        } catch (Exception e) {
+            log.debug("Provider check on poll for order={}: {}", orderId, e.getMessage());
+        }
+        return toResponse(order, null);
+    }
+
     @Transactional(readOnly = true)
     public List<AirtimeOrderResponse> listForSuperAdmin(int limit) {
         int capped = Math.min(Math.max(limit, 1), 200);

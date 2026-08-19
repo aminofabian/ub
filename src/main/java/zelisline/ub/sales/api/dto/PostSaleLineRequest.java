@@ -13,14 +13,19 @@ public record PostSaleLineRequest(
         String kind,
         String label,
         String airtimePhone,
-        String airtimeNetwork
+        String airtimeNetwork,
+        Boolean sellAtRegular
 ) {
     public static PostSaleLineRequest catalogItem(
             String itemId,
             BigDecimal quantity,
             BigDecimal unitPrice
     ) {
-        return new PostSaleLineRequest(itemId, quantity, unitPrice, null, null, null, null);
+        return new PostSaleLineRequest(itemId, quantity, unitPrice, null, null, null, null, null);
+    }
+
+    public boolean sellAtRegularFlag() {
+        return Boolean.TRUE.equals(sellAtRegular);
     }
 
     public boolean isAirtime() {

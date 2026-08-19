@@ -30,6 +30,8 @@ import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
+import zelisline.ub.discounts.api.dto.ResolvedPriceResponse;
+import zelisline.ub.discounts.application.DiscountResolutionService;
 import zelisline.ub.pricing.application.PricingService;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.storefront.api.dto.PublicCatalogItemCardResponse;
@@ -55,6 +57,7 @@ public class PublicStorefrontCatalogService {
     private final PublicStorefrontContextService storefrontContextService;
     private final ItemRepository itemRepository;
     private final PricingService pricingService;
+    private final DiscountResolutionService discountResolutionService;
     private final ItemImageRepository itemImageRepository;
     private final CategoryRepository categoryRepository;
     private final ItemTypeRepository itemTypeRepository;
@@ -64,6 +67,7 @@ public class PublicStorefrontCatalogService {
             PublicStorefrontContextService storefrontContextService,
             ItemRepository itemRepository,
             PricingService pricingService,
+            DiscountResolutionService discountResolutionService,
             ItemImageRepository itemImageRepository,
             CategoryRepository categoryRepository,
             ItemTypeRepository itemTypeRepository,
@@ -72,6 +76,7 @@ public class PublicStorefrontCatalogService {
         this.storefrontContextService = storefrontContextService;
         this.itemRepository = itemRepository;
         this.pricingService = pricingService;
+        this.discountResolutionService = discountResolutionService;
         this.itemImageRepository = itemImageRepository;
         this.categoryRepository = categoryRepository;
         this.itemTypeRepository = itemTypeRepository;
@@ -245,6 +250,10 @@ public class PublicStorefrontCatalogService {
         }
         String parentId = item.getVariantOfItemId() != null ? item.getVariantOfItemId() : item.getId();
         Item parent = loadParentItem(ctx, item);
+        ResolvedPriceResponse resolved = discountResolutionService.resolveForItem(
+                ctx.business().getId(),
+                item.getId(),
+                ctx.catalogBranch().getId());
         return new PublicCatalogItemDetailResponse(
                 item.getId(),
                 item.getSku(),
@@ -253,8 +262,10 @@ public class PublicStorefrontCatalogService {
                 blankToNull(item.getVariantName()),
                 item.getVariantOfItemId(),
                 ctx.business().getCurrency(),
-                pricingService.getCurrentOpenSellingPrice(
-                        ctx.business().getId(), item.getId(), ctx.catalogBranch().getId()),
+                resolved.finalPrice(),
+                resolved.regularPrice(),
+                resolved.savedAmount(),
+                resolved.discount() != null ? resolved.discount().name() : null,
                 onHand,
                 listImagesForItem(item, parent),
                 listPublishedVariants(ctx, parentId),
@@ -279,6 +290,10 @@ public class PublicStorefrontCatalogService {
         }
         String parentId = item.getVariantOfItemId() != null ? item.getVariantOfItemId() : item.getId();
         Item parent = loadParentItem(ctx, item);
+        ResolvedPriceResponse resolved = discountResolutionService.resolveForItem(
+                ctx.business().getId(),
+                item.getId(),
+                ctx.catalogBranch().getId());
         return new PublicCatalogItemDetailResponse(
                 item.getId(),
                 item.getSku(),
@@ -287,8 +302,10 @@ public class PublicStorefrontCatalogService {
                 blankToNull(item.getVariantName()),
                 item.getVariantOfItemId(),
                 ctx.business().getCurrency(),
-                pricingService.getCurrentOpenSellingPrice(
-                        ctx.business().getId(), item.getId(), ctx.catalogBranch().getId()),
+                resolved.finalPrice(),
+                resolved.regularPrice(),
+                resolved.savedAmount(),
+                resolved.discount() != null ? resolved.discount().name() : null,
                 onHand,
                 listImagesForItem(item, parent),
                 listPublishedVariants(ctx, parentId),
@@ -428,7 +445,7 @@ public class PublicStorefrontCatalogService {
             return List.of();
         }
         List<String> itemIds = items.stream().map(Item::getId).toList();
-        Map<String, BigDecimal> prices = loadPrices(ctx, itemIds);
+        Map<String, ResolvedPriceResponse> resolvedPrices = loadResolvedPrices(ctx, itemIds);
         Map<String, BigDecimal> qty = storefrontCatalogStockService.displayQtyForItems(
                 ctx.business().getId(), ctx.catalogBranch().getId(), items);
         Map<String, BigDecimal> buyingPrices = pricingService.getLatestBuyingPricesForItems(
@@ -438,13 +455,17 @@ public class PublicStorefrontCatalogService {
                 .map(i -> {
                     BigDecimal latestBuying = buyingPrices.get(i.getId());
                     BigDecimal fallbackBuying = latestBuying != null ? latestBuying : i.getBuyingPrice();
+                    ResolvedPriceResponse resolved = resolvedPrices.get(i.getId());
                     return new PublicCatalogItemCardResponse(
                             i.getId(),
                             i.getSku(),
                             i.getName(),
                             blankToNull(i.getVariantName()),
                             thumbs.get(i.getId()),
-                            prices.get(i.getId()),
+                            resolved != null ? resolved.finalPrice() : null,
+                            resolved != null ? resolved.regularPrice() : null,
+                            resolved != null ? resolved.savedAmount() : null,
+                            resolved != null && resolved.discount() != null ? resolved.discount().name() : null,
                             qty.getOrDefault(i.getId(), BigDecimal.ZERO).setScale(4, RoundingMode.HALF_UP),
                             fallbackBuying,
                             StorefrontOnlinePurchaseRules.resolveMode(i),
@@ -455,8 +476,8 @@ public class PublicStorefrontCatalogService {
                 .toList();
     }
 
-    private Map<String, BigDecimal> loadPrices(PublicStorefrontContext ctx, List<String> itemIds) {
-        return pricingService.getCurrentOpenSellingPricesForItems(
+    private Map<String, ResolvedPriceResponse> loadResolvedPrices(PublicStorefrontContext ctx, List<String> itemIds) {
+        return discountResolutionService.resolveForItems(
                 ctx.business().getId(), ctx.catalogBranch().getId(), itemIds);
     }
 
@@ -583,7 +604,7 @@ public class PublicStorefrontCatalogService {
             return List.of();
         }
         List<String> inStockIds = publishedInStock.stream().map(Item::getId).toList();
-        Map<String, BigDecimal> prices = loadPrices(ctx, inStockIds);
+        Map<String, ResolvedPriceResponse> resolvedPrices = loadResolvedPrices(ctx, inStockIds);
         Map<String, String> thumbs = resolveThumbnailUrlsForItems(publishedInStock);
         return publishedInStock.stream()
                 .map(v -> new PublicCatalogVariantResponse(
@@ -592,7 +613,12 @@ public class PublicStorefrontCatalogService {
                         v.getName(),
                         blankToNull(v.getVariantName()),
                         thumbs.get(v.getId()),
-                        prices.get(v.getId()),
+                        resolvedPrices.containsKey(v.getId()) ? resolvedPrices.get(v.getId()).finalPrice() : null,
+                        resolvedPrices.containsKey(v.getId()) ? resolvedPrices.get(v.getId()).regularPrice() : null,
+                        resolvedPrices.containsKey(v.getId()) ? resolvedPrices.get(v.getId()).savedAmount() : null,
+                        resolvedPrices.containsKey(v.getId()) && resolvedPrices.get(v.getId()).discount() != null
+                                ? resolvedPrices.get(v.getId()).discount().name()
+                                : null,
                         qtyByItem.getOrDefault(v.getId(), BigDecimal.ZERO).setScale(4, RoundingMode.HALF_UP),
                         StorefrontOnlinePurchaseRules.resolveMode(v),
                         v.isWeighed(),

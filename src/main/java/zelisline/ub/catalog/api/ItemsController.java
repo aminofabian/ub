@@ -47,6 +47,8 @@ import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.application.ItemCreateResult;
 import zelisline.ub.catalog.application.ItemTimelineService;
 import zelisline.ub.catalog.application.ProductDescriptionGeneratorService;
+import zelisline.ub.discounts.api.dto.ResolvedDiscountRef;
+import zelisline.ub.discounts.application.DiscountResolutionService;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -68,6 +70,7 @@ public class ItemsController {
     private final ItemCatalogService itemCatalogService;
     private final ItemTimelineService itemTimelineService;
     private final CategoryPricingResolutionService categoryPricingResolutionService;
+    private final DiscountResolutionService discountResolutionService;
     private final ProductDescriptionGeneratorService productDescriptionGeneratorService;
     private final BranchResolutionService branchResolutionService;
     private final UserItemTypeRepository userItemTypeRepository;
@@ -213,6 +216,21 @@ public class ItemsController {
     public EffectivePricingContextResponse pricingContext(@PathVariable("id") String id, HttpServletRequest request) {
         CurrentTenantUser.require(request);
         return categoryPricingResolutionService.resolve(TenantRequestIds.resolveBusinessId(request), id);
+    }
+
+    @GetMapping("/{id}/active-discount")
+    @PreAuthorize("hasPermission(null, 'catalog.items.read')")
+    public ResolvedDiscountRef activeDiscount(
+            @PathVariable("id") String id,
+            @RequestParam(required = false) String branchId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        var resolved = discountResolutionService.resolveForItem(
+                TenantRequestIds.resolveBusinessId(request),
+                id,
+                branchId);
+        return resolved.discount();
     }
 
     @GetMapping("/{id}/timeline")

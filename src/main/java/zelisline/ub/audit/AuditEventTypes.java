@@ -129,6 +129,14 @@ public final class AuditEventTypes {
     public static final String TAX_RATE_CHANGED = "tax_rate.changed";
     /** Admin correction of an item's unit cost (rewrites active batch costs + reference cost). */
     public static final String ITEM_COST_ADJUSTED = "item.cost.adjusted";
+    public static final String DISCOUNT_CREATED = "discount.created";
+    public static final String DISCOUNT_PUBLISHED = "discount.published";
+    public static final String DISCOUNT_UPDATED = "discount.updated";
+    public static final String DISCOUNT_PAUSED = "discount.paused";
+    public static final String DISCOUNT_RESUMED = "discount.resumed";
+    public static final String DISCOUNT_EXPIRED = "discount.expired";
+    public static final String DISCOUNT_DELETED = "discount.deleted";
+    public static final String DISCOUNT_DUPLICATED = "discount.duplicated";
 
     // Suppliers
     public static final String SUPPLIER_CREATED = "supplier.created";

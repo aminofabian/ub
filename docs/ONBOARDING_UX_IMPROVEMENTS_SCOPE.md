@@ -334,3 +334,89 @@ Do **not** implement A2 unless Product explicitly locks D1=A2.
 | 2026-07-22 | Initial scope from live questionnaire + catalog + hub audit |
 | 2026-07-22 | v2 — added §2b screen-by-screen audit (steps 1–6 + cross-cutting); Phase A gains A0 (inline pack preview on step 6); Phase B gains B6–B8 (micro-copy, country chip, resumable apply) |
 | 2026-07-22 | v3 — started implementation: A0–A3 + B quick wins (step-6 pack card, catalog `packId` happy path, hub stock banner/checklist, skip-preserve + resume, departments→sections, Create my shop) |
+| 2026-08-19 | v4 — status audit: **Phase A is complete** (A0 pack card + slim review drawer, A1 catalog happy path, A2 stock-first checklist, A3 stock-shelves banner); **most of Phase B complete** (B1 sections copy, B2 onboarding import defaults, B4 skip-preserve + resume, B7 country chip, B6 progress bar / step-4 copy / step-5 button). Remaining slice = B3 (legacy tour retire), B6 leftovers (step-1 copy, step-2 reset note), B5 (landing copy), B8 (resumable apply) — see §13 |
+| 2026-08-19 | v5 — B3 done (tour UI deleted, `onboarding-tour.ts` constants-only, alias removed at call sites), B6 leftovers done (step-1 rename copy, step-2 reset note), B5 done (landing copy catalog-first). B8 remains — see §13 |
+| 2026-08-19 | v6 — B8 done: `applyOnboardingQuestionnaire` is now sequential idempotent phases with structured failure reporting (`OnboardingApplyResult` + `formatApplyFailureMessage`); provider stays on step 6 on failure; unit tests added. Phase B complete. |
+
+---
+
+## 13. Remaining Phase B — audit status & next slice (2026-08-19)
+
+**Status: B3 + B6 leftovers + B5 + B8 all implemented (2026-08-19).**
+
+### Already done (verified in code)
+
+| Item | Evidence |
+|------|----------|
+| A0 step-6 pack card | `onboarding-questionnaire.tsx` renders suggested pack inline (name, count, samples) + “Open {pack}” |
+| A1 catalog happy path | `onboarding-catalog-drawer.tsx`: pack pre-selected, products pre-ticked, `createMissingCategories: true`, import progress, `onSuccess` → hub |
+| A2 stock-first checklist | `post-setup-checklist.tsx`: “Import a starter pack” first, done when `catalogueCount > 0` |
+| A3 stock banner | `stock-shelves-banner.tsx` on hub for empty catalogs, with Resume-setup action |
+| B1 sections copy | Step 3 = “Choose your product sections” + till/reports subtitle |
+| B2 onboarding import defaults | `products/catalog/page.tsx` sets `createMissingCategories` from `?from=onboarding` |
+| B4 skip-preserve + resume | `dismissOnboardingQuestionnaire` keeps answers; `resumeOnboardingQuestionnaire` + hub reopen |
+| B7 country chip | Questionnaire header shows `{COUNTRY} · {CURRENCY}` chip |
+| B6 (partial) | Progress bar counts 5 answer steps; step-4 consequence copy; step-5/6 button “Create my shop”; `applyOnboardingQuestionnaire` auto-names empty branch slots (`Shop N`) |
+
+### Remaining — next slice
+
+**B3. Retire the legacy guided tour** ✅ (2026-08-19)
+
+- `markOnboardingTourPending()` alias → direct `markOnboardingQuestionnairePending()` in
+  `app/(auth)/signup/page.tsx` (2×) and `components/tenant-console/landing/landing-signup-modal.tsx` (1×).
+- Deleted unmounted tour UI (no other importers): `onboarding-tour-provider.tsx`,
+  `onboarding-tour-card.tsx`, `onboarding-spotlight.tsx`, `lib/onboarding-anchor.ts`.
+- `lib/onboarding-tour.ts` is now **constants only** (`ONBOARDING_TARGETS`,
+  `ONBOARDING_EMPHASIS`, `OnboardingTargetId`, `OnboardingEmphasisId`) — live dashboard
+  pages still use them for `data-onboarding-*` attributes and `form-drawer` types; the tour
+  state machinery (`ONBOARDING_TOUR_STEPS`, state machine, `tourRouteForStep`, the
+  deprecated alias) was removed.
+- **Kept** the `?onboarding=` drawer openers on pages — `products/catalog`
+  `goCreateFromScratch` still generates `?onboarding=create-product` (live path), and the
+  remaining openers are inert deep-links.
+
+**B6 leftovers** ✅ (2026-08-19)
+
+- Step 1: “You can rename these anytime.” micro-copy under the branch-name inputs.
+- Step 2: inline “Departments reset to match your new shop type.” note when store types
+  change after step 3 (one-shot; clears when leaving step 2).
+
+**B5. Landing copy — catalog-first** ✅ (2026-08-19)
+
+- `landing-how-it-works.tsx` step 02 “Stock your catalog”: CSV-first wording
+  (“…or import a CSV”) → starter-pack-first (“Import a starter pack built for your shop
+  type … barcodes and prices pre-filled”), meta “Afternoon” → “Minutes”.
+
+**B8. Resumable apply** ✅ (2026-08-19)
+
+- `applyOnboardingQuestionnaire` rewritten as sequential idempotent phases
+  (branches → storefront + butcher flag → item types → branding → logo). Each phase
+  re-reads current state (`fetchBranches()` / `fetchItemTypes()`) before creating, so a
+  retry never double-creates branches or sections.
+- Returns `OnboardingApplyResult` (`phases`, `failedPhase`, `error`, `completed`);
+  `formatApplyFailureMessage()` tells the user exactly what failed and that earlier steps
+  are kept (“We saved the first 2 steps. Your product sections could not be saved…”), with
+  a logo-specific hint (“Remove the logo on the previous step…”).
+- Provider `handleContinue` (step 6) uses the result: on failure it stays on step 6 with
+  the message; the final `completed` patch failure is reported separately.
+- New unit tests: `lib/onboarding-questionnaire-apply.test.ts` (3 cases).
+
+### Order
+
+1. B3 ✅ → 2. B6 leftovers ✅ → 3. B5 ✅ → 4. B8 ✅
+
+### Validation (all green)
+
+- `bunx tsc --noEmit -p frontend/tsconfig.json` — clean.
+- eslint on touched files — clean.
+- `bun test` — 382 pass; only the 2 pre-existing failures (`inventory-access`,
+  `ops-client-log`), no new failures.
+- Manual pending: questionnaire step-2 type-change note, step-1 copy, landing “how it works”,
+  and a forced logo failure → message + retry without duplicate branches/sections.
+- Backend: `AuthRegistrationIT` + `PublicAuthEndpointsTest` pass (verify-email session change).
+  Full backend suite has **pre-existing** failures unrelated to this work (verified: fail in
+  isolation, test files + code paths unchanged) — `FrontendAuthLinkBuilderTest` (`:80` port in
+  mock request), `RealtimeWebSocketSecurityIT` (JPA `jpaSharedEM_entityManagerFactory` wiring),
+  `AuthLoginIT` / `ItemCatalogIT` / customers / sales / pricing (error-title + data assertions).
+  Also fixed a compile error in the in-progress email feature (`r.userId()` → `r.getUserId()`) so
+  the backend builds at all.

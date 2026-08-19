@@ -1,10 +1,18 @@
 package zelisline.ub.integrations.csvimport.application;
 
+import java.util.Map;
+
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.integrations.csvimport.api.dto.CsvImportResponse;
 import zelisline.ub.integrations.csvimport.domain.ImportJob;
 import zelisline.ub.integrations.csvimport.repository.ImportJobRepository;
@@ -19,6 +27,8 @@ public class ImportJobRunner {
     private final ImportJobPayloadStorage payloadStorage;
     private final ImportJobProgressWriter progressWriter;
     private final CsvImportApplicationService csvImportApplicationService;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
 
     /** Single-queue drain suitable for a background ticker or integration tests. */
     public synchronized void processNext() {
@@ -49,16 +59,46 @@ public class ImportJobRunner {
             }
         } catch (ResponseStatusException ex) {
             String msg = ex.getReason() != null ? ex.getReason() : ex.getMessage();
+            publishImportFailed(job, msg != null ? msg : ex.getStatusCode().toString());
             progressWriter.finalizeThrowable(jobId, msg != null ? msg : ex.getStatusCode().toString());
         } catch (RuntimeException | Error ex) {
             log.warn("import job crashed jobId={}", jobId, ex);
+            publishImportFailed(job, ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
             progressWriter.finalizeThrowable(jobId, ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
         } catch (Exception ex) {
             log.warn("import job IO/other failure jobId={}", jobId, ex);
+            publishImportFailed(job, ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
             progressWriter.finalizeThrowable(jobId, ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
         } finally {
             payloadStorage.deleteQuietly(payloadPath);
         }
+    }
+
+    /**
+     * Records a durable ERROR event when an import job crashes, so the
+     * activity-log failures view surfaces broken imports per business.
+     */
+    private void publishImportFailed(ImportJob job, String message) {
+        try {
+            auditEventPublisher.publishSynchronous(auditEventBuilder
+                    .builder(AuditEventCategory.SYSTEM, AuditEventTypes.IMPORT_JOB_FAILED, AuditEventSeverity.ERROR)
+                    .businessId(job.getBusinessId())
+                    .actor(job.getActorUserId(), job.getActorUserId() != null ? AuditEventActorType.USER : AuditEventActorType.SYSTEM)
+                    .target("import_job", job.getId())
+                    .targetLabel(job.getKind() != null ? job.getKind().name() : null)
+                    .source("scheduler")
+                    .reason(truncate(message, 500))
+                    .metadata(Map.of("dryRun", String.valueOf(job.isDryRun()))).build());
+        } catch (Exception ignored) {
+            // Never fail the import because of an audit write.
+        }
+    }
+
+    private static String truncate(String value, int max) {
+        if (value == null || value.length() <= max) {
+            return value;
+        }
+        return value.substring(0, max);
     }
 
     private void runItems(ImportJob job, byte[] bytes, CsvImportProgressSink sink) {

@@ -63,7 +63,7 @@ public class ItemTimelineService {
                 null,
                 null,
                 null,
-                null,
+                List.of(AuditEventSeverity.values()),
                 null,
                 "item",
                 item.getId(),

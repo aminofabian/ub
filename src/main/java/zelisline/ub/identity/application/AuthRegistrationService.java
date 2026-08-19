@@ -277,6 +277,22 @@ public class AuthRegistrationService {
         return link;
     }
 
+    /**
+     * Mint a verification URL without sending the stock verify mail — used when a
+     * platform campaign already carries the continue button.
+     */
+    @Transactional
+    public String issueVerificationLinkOnly(User user) {
+        emailVerificationTokenRepository.deleteUnusedByUserId(user.getId());
+        String raw = newRawToken();
+        EmailVerificationToken token = new EmailVerificationToken();
+        token.setUserId(user.getId());
+        token.setTokenHash(TokenHasher.sha256Hex(raw));
+        token.setExpiresAt(Instant.now().plus(emailVerificationTtlHours, ChronoUnit.HOURS));
+        emailVerificationTokenRepository.save(token);
+        return frontendAuthLinkBuilder.verificationLinkForBusiness(user.getBusinessId(), raw);
+    }
+
     private static String normaliseEmail(String email) {
         return email.trim().toLowerCase();
     }

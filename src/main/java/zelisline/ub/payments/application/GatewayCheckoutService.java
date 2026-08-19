@@ -24,6 +24,12 @@ import org.springframework.web.server.ResponseStatusException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.notifications.application.NotificationOutboxService;
 import zelisline.ub.payments.api.dto.GatewayCheckoutResponse;
 import zelisline.ub.payments.domain.GatewayCheckout;
@@ -83,6 +89,8 @@ public class GatewayCheckoutService {
     private final ObjectProvider<KioskPayWalletService> kioskPayWalletService;
     private final ObjectProvider<PlatformKioskPaySettingsService> platformKioskPaySettingsService;
     private final ObjectMapper objectMapper;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
 
     @Value("${app.public.frontend-base-url:http://localhost:3000}")
     private String frontendBaseUrl;
@@ -539,7 +547,34 @@ public class GatewayCheckoutService {
                     webOrderRepository.save(order);
                 }
             });
+            publishOrderPaymentFailed(checkout, reason);
         }
+    }
+
+    /**
+     * Records a durable ERROR event when a web order's hosted-checkout payment
+     * fails, so the activity-log failures view surfaces lost sales.
+     */
+    private void publishOrderPaymentFailed(GatewayCheckout checkout, String reason) {
+        try {
+            auditEventPublisher.publishSynchronous(auditEventBuilder
+                    .builder(AuditEventCategory.ORDERS, AuditEventTypes.ORDER_PAYMENT_FAILED, AuditEventSeverity.ERROR)
+                    .businessId(checkout.getBusinessId())
+                    .actor(null, AuditEventActorType.SYSTEM)
+                    .target("web_order", checkout.getContextId())
+                    .source("api")
+                    .reason(truncate(reason, 500))
+                    .metadata(Map.of("checkoutId", checkout.getId())).build());
+        } catch (Exception ignored) {
+            // Never fail checkout bookkeeping because of an audit write.
+        }
+    }
+
+    private static String truncate(String value, int max) {
+        if (value == null || value.length() <= max) {
+            return value;
+        }
+        return value.substring(0, max);
     }
 
     private void markCancelled(GatewayCheckout checkout, String reason) {

@@ -173,4 +173,6 @@ public final class AuditEventTypes {
     public static final String CATALOG_RESOLVED = "catalog.resolved";
     public static final String CATALOG_PACK_ADOPTED = "catalog.pack_adopted";
     public static final String BUSINESS_REGION_CHANGED = "business.region_changed";
+
+    public static final String PLATFORM_EMAIL_CAMPAIGN_SENT = "platform.email_campaign.sent";
 }

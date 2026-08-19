@@ -17,4 +17,12 @@ class PublicAuthEndpointsTest {
         assertTrue(PublicAuthEndpoints.matches("/api/v1/supplier-portal/auth/claim/complete"));
         assertFalse(PublicAuthEndpoints.matches("/api/v1/supplier-portal/profile"));
     }
+
+    @Test
+    void shopperPhoneAuthRoutesBypassJwtFilter() {
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/shopper/auth/send-code"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/shopper/auth/verify-code"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/shopper/auth/session"));
+        assertFalse(PublicAuthEndpoints.matches("/api/v1/me/shopper"));
+    }
 }

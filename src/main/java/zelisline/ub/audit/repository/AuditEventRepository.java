@@ -1,6 +1,7 @@
 package zelisline.ub.audit.repository;
 
 import java.time.Instant;
+import java.util.List;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -22,7 +23,7 @@ public interface AuditEventRepository extends JpaRepository<AuditEvent, String> 
               AND (:branchId IS NULL OR e.branchId = :branchId)
               AND (:category IS NULL OR e.category = :category)
               AND (:eventType IS NULL OR e.eventType = :eventType)
-              AND (:severity IS NULL OR e.severity = :severity)
+              AND e.severity IN :severities
               AND (:actorId IS NULL OR e.actorId = :actorId)
               AND (:targetType IS NULL OR e.targetType = :targetType)
               AND (:targetId IS NULL OR e.targetId = :targetId)
@@ -36,7 +37,7 @@ public interface AuditEventRepository extends JpaRepository<AuditEvent, String> 
             @Param("branchId") String branchId,
             @Param("category") AuditEventCategory category,
             @Param("eventType") String eventType,
-            @Param("severity") AuditEventSeverity severity,
+            @Param("severities") List<AuditEventSeverity> severities,
             @Param("actorId") String actorId,
             @Param("targetType") String targetType,
             @Param("targetId") String targetId,
@@ -44,5 +45,26 @@ public interface AuditEventRepository extends JpaRepository<AuditEvent, String> 
             @Param("from") Instant from,
             @Param("to") Instant to,
             Pageable pageable
+    );
+
+    @Query("""
+            SELECT e.severity, e.category, COUNT(e) FROM AuditEvent e
+            WHERE e.businessId = :businessId
+              AND (:branchId IS NULL OR e.branchId = :branchId)
+              AND (:category IS NULL OR e.category = :category)
+              AND (:eventType IS NULL OR e.eventType = :eventType)
+              AND e.severity IN :severities
+              AND (:from IS NULL OR e.createdAt >= :from)
+              AND (:to IS NULL OR e.createdAt <= :to)
+            GROUP BY e.severity, e.category
+            """)
+    List<Object[]> countBySeverityAndCategory(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("category") AuditEventCategory category,
+            @Param("eventType") String eventType,
+            @Param("severities") List<AuditEventSeverity> severities,
+            @Param("from") Instant from,
+            @Param("to") Instant to
     );
 }

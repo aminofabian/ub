@@ -124,4 +124,42 @@ public class FrontendAuthLinkBuilder {
         prefix.append("/").append(pagePath).append("?token=");
         return prefix.toString();
     }
+
+    /** Shop origin for a tenant (slug host). Used by platform email campaigns. */
+    public String tenantOrigin(String businessId) {
+        String host = resolveHostFromBusinessSlug(businessId).orElse(null);
+        if (host == null || host.isBlank()) {
+            try {
+                java.net.URI prefix = java.net.URI.create(emailVerificationUrlPrefix);
+                String scheme = prefix.getScheme() == null ? "https" : prefix.getScheme();
+                String h = prefix.getHost();
+                if (h == null || h.isBlank()) {
+                    return "http://localhost:3000";
+                }
+                int port = prefix.getPort();
+                return port > 0 ? scheme + "://" + h + ":" + port : scheme + "://" + h;
+            } catch (RuntimeException ex) {
+                return "http://localhost:3000";
+            }
+        }
+        boolean local = host.contains("localhost") || "127.0.0.1".equals(host);
+        String scheme = local ? "http" : "https";
+        if (local && !host.contains(":")) {
+            return scheme + "://" + host + ":3000";
+        }
+        return scheme + "://" + host;
+    }
+
+    public String verificationLinkForBusiness(String businessId, String rawToken) {
+        String hostHint = resolveHostFromBusinessSlug(businessId).orElse(null);
+        String origin = tenantOrigin(businessId);
+        StringBuilder link = new StringBuilder(origin)
+                .append("/verify-email?token=")
+                .append(rawToken);
+        if (hostHint != null && !hostHint.isBlank()) {
+            link.append("&host=")
+                    .append(URLEncoder.encode(hostHint.trim(), StandardCharsets.UTF_8));
+        }
+        return link.toString();
+    }
 }

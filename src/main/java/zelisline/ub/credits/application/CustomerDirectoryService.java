@@ -513,6 +513,17 @@ public class CustomerDirectoryService {
         creditAccountRepository.save(row);
     }
 
+    public CreditAccount ensureCreditAccount(String businessId, String customerId) {
+        return creditAccountRepository.findByCustomerIdAndBusinessId(customerId, businessId)
+                .orElseGet(() -> {
+                    openCreditAccount(businessId, customerId, null);
+                    return creditAccountRepository
+                            .findByCustomerIdAndBusinessId(customerId, businessId)
+                            .orElseThrow(() -> new ResponseStatusException(
+                                    HttpStatus.INTERNAL_SERVER_ERROR, "Could not open a tab for this customer"));
+                });
+    }
+
     private void persistPhonesFromDrafts(
             String businessId,
             String customerId,

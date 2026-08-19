@@ -36,5 +36,7 @@ public interface BusinessRepository extends JpaRepository<Business, String> {
 
     Optional<Business> findByIdAndDeletedAtIsNull(String id);
 
+    java.util.List<Business> findByDeletedAtIsNull();
+
     Page<Business> findByDeletedAtIsNull(Pageable pageable);
 }

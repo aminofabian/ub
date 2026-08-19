@@ -22,6 +22,26 @@ public interface NotificationService {
     /** In-app notification projection to email (plain + minimal HTML). */
     void sendNotificationEmail(String toEmail, String subject, String textBody, String htmlBody);
 
+    default void sendNotificationEmail(
+            String toEmail,
+            String subject,
+            String textBody,
+            String htmlBody,
+            String fromDisplayName
+    ) {
+        sendNotificationEmail(toEmail, subject, textBody, htmlBody);
+    }
+
+    default void sendPlatformCampaignEmail(
+            String toEmail,
+            String subject,
+            String textBody,
+            String htmlBody,
+            String fromDisplayName
+    ) {
+        sendNotificationEmail(toEmail, subject, textBody, htmlBody, fromDisplayName);
+    }
+
     /**
      * Owner/platform reply to a Talk to Us contact message.
      *

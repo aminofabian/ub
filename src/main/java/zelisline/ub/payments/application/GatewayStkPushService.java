@@ -23,6 +23,12 @@ import org.springframework.web.server.ResponseStatusException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.credits.MpesaStkStatuses;
 import zelisline.ub.credits.application.BusinessCreditSettingsService;
 import zelisline.ub.credits.application.CreditSaleDebtService;
@@ -107,6 +113,8 @@ public class GatewayStkPushService {
     private final InboundTillPaymentService inboundTillPaymentService;
     /** Own proxy, so gateway polling can open a transaction only to write the result. */
     private final ObjectProvider<GatewayStkPushService> self;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
 
     @Transactional
     public GatewayStkPush registerPush(
@@ -1008,6 +1016,7 @@ public class GatewayStkPushService {
         push.setStatus(GatewayStkPushStatuses.FAILED);
         push.setFailureReason(reason);
         pushRepository.save(push);
+        publishStkPushFailed(push, reason);
 
         if (push.getContextType() == StkPushContextType.WEB_ORDER && push.getContextId() != null) {
             webOrderRepository.findById(push.getContextId()).ifPresent(order -> {
@@ -1058,6 +1067,39 @@ public class GatewayStkPushService {
             }
         }
         publishStkRealtime(push, false, reason);
+    }
+
+    /**
+     * Records a durable ERROR event so the activity-log failures view surfaces
+     * failed M-Pesa pushes with their context and provider reference.
+     */
+    private void publishStkPushFailed(GatewayStkPush push, String reason) {
+        try {
+            auditEventPublisher.publishSynchronous(auditEventBuilder
+                    .builder(AuditEventCategory.SALES, AuditEventTypes.STK_PUSH_FAILED, AuditEventSeverity.ERROR)
+                    .businessId(push.getBusinessId())
+                    .actor(null, AuditEventActorType.SYSTEM)
+                    .target(push.getContextType() != null
+                            ? push.getContextType().name().toLowerCase(Locale.ROOT)
+                            : "stk_push", push.getContextId())
+                    .targetLabel(push.getMerchantReference())
+                    .source("api")
+                    .reason(truncate(reason, 500))
+                    .metadata(Map.of(
+                            "contextType", push.getContextType() != null ? push.getContextType().name() : "UNKNOWN",
+                            "gatewayCheckoutId", push.getGatewayCheckoutId() != null ? push.getGatewayCheckoutId() : "",
+                            "amount", push.getAmount() != null ? push.getAmount().toPlainString() : ""
+                    )).build());
+        } catch (Exception ignored) {
+            // Never fail payment bookkeeping because of an audit write.
+        }
+    }
+
+    private static String truncate(String value, int max) {
+        if (value == null || value.length() <= max) {
+            return value;
+        }
+        return value.substring(0, max);
     }
 
     private void confirmWebOrder(GatewayStkPush push) {

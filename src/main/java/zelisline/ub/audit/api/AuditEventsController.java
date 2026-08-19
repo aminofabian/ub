@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.audit.api.dto.AuditEventFilterRequest;
 import zelisline.ub.audit.api.dto.AuditEventResponse;
+import zelisline.ub.audit.api.dto.AuditEventSummaryResponse;
 import zelisline.ub.audit.application.AuditEventQueryService;
 import zelisline.ub.audit.domain.AuditEvent;
 import zelisline.ub.audit.domain.AuditEventCategory;
@@ -58,6 +59,7 @@ public class AuditEventsController {
                 filter.category(),
                 filter.eventType(),
                 filter.severity(),
+                filter.minSeverity(),
                 filter.actorId(),
                 filter.targetType(),
                 filter.targetId(),
@@ -68,6 +70,29 @@ public class AuditEventsController {
         );
 
         return page.map(this::toResponse);
+    }
+
+    /** Period totals for the activity-log header cards (same filters as the list). */
+    @GetMapping("/summary")
+    @PreAuthorize("hasPermission(null, 'audit.read')")
+    public AuditEventSummaryResponse summary(
+            @Valid AuditEventFilterRequest filter,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String branchId = effectiveBranchId(principal, filter.branchId());
+
+        return queryService.summarize(
+                businessId,
+                branchId,
+                filter.category(),
+                filter.eventType(),
+                filter.severity(),
+                filter.minSeverity(),
+                filter.from(),
+                filter.to()
+        );
     }
 
     private String effectiveBranchId(TenantPrincipal principal, String requestedBranchId) {

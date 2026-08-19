@@ -12,6 +12,8 @@ public record AuditEventFilterRequest(
         AuditEventCategory category,
         String eventType,
         AuditEventSeverity severity,
+        /** Inclusive lower bound — e.g. WARN surfaces WARN, ERROR and CRITICAL (used by the failures view). */
+        AuditEventSeverity minSeverity,
         String actorId,
         String targetType,
         String targetId,

@@ -5,6 +5,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import jakarta.servlet.http.HttpServletRequest;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
@@ -27,7 +29,16 @@ import org.springframework.web.server.ResponseStatusException;
 import jakarta.persistence.PersistenceException;
 import jakarta.validation.ConstraintViolationException;
 
+import lombok.RequiredArgsConstructor;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.platform.persistence.DataIntegrityProblems;
+import zelisline.ub.platform.security.CurrentTenantUser;
+import zelisline.ub.tenancy.api.TenantRequestIds;
 
 /**
  * Centralised Problem+JSON ({@link ProblemDetail}) translation for Phase 1.
@@ -37,10 +48,14 @@ import zelisline.ub.platform.persistence.DataIntegrityProblems;
  * Admin UI can rely on a single shape.
  */
 @RestControllerAdvice
+@RequiredArgsConstructor
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
     private static final String PROBLEM_BASE = "urn:problem:";
+
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
 
     @ExceptionHandler(InvalidDataAccessResourceUsageException.class)
     public ResponseEntity<ProblemDetail> handleInvalidDataAccess(InvalidDataAccessResourceUsageException ex) {
@@ -249,9 +264,10 @@ public class GlobalExceptionHandler {
             org.springframework.transaction.UnexpectedRollbackException.class,
             org.springframework.transaction.TransactionSystemException.class
     })
-    public ResponseEntity<ProblemDetail> handleTransactionFailure(Exception ex) {
+    public ResponseEntity<ProblemDetail> handleTransactionFailure(Exception ex, HttpServletRequest request) {
         String correlationId = MDC.get(CorrelationIdFilter.CORRELATION_ID_MDC_KEY);
         log.error("Transaction failure (correlationId={})", correlationId, ex);
+        publishSystemException(request, ex);
         ProblemDetail body = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
         body.setTitle("Database not ready");
         body.setType(URI.create(PROBLEM_BASE + "schema-mismatch"));
@@ -260,12 +276,12 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ProblemDetail> handleUnexpected(Exception ex) {
+    public ResponseEntity<ProblemDetail> handleUnexpected(Exception ex, HttpServletRequest request) {
         String correlationId = MDC.get(CorrelationIdFilter.CORRELATION_ID_MDC_KEY);
         // Nested UnexpectedRollbackException under a different wrapper.
         if (ex.getCause() instanceof org.springframework.transaction.UnexpectedRollbackException
                 || ex.getCause() instanceof org.springframework.transaction.TransactionSystemException) {
-            return handleTransactionFailure(ex);
+            return handleTransactionFailure(ex, request);
         }
         String flat = flattenMessages(ex).toLowerCase();
         if (flat.contains("supplier_user_sessions")
@@ -273,6 +289,7 @@ public class GlobalExceptionHandler {
                 || flat.contains("supplier_users")
                 || flat.contains("marketplace_suppliers")) {
             log.error("Supplier portal persistence failure (correlationId={})", correlationId, ex);
+            publishSystemException(request, ex);
             ProblemDetail body = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
             body.setTitle("Database not ready");
             body.setType(URI.create(PROBLEM_BASE + "schema-mismatch"));
@@ -280,11 +297,58 @@ public class GlobalExceptionHandler {
             return problem(body, HttpStatus.INTERNAL_SERVER_ERROR);
         }
         log.error("Unhandled exception (correlationId={})", correlationId, ex);
+        publishSystemException(request, ex);
         ProblemDetail body = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
         body.setTitle("Internal server error");
         body.setType(URI.create(PROBLEM_BASE + "internal-error"));
         body.setDetail("Unexpected server error. Retry, or sign in if your account was already created.");
         return problem(body, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    /**
+     * Records an ERROR-severity {@code system.exception} audit event for tenant-scoped
+     * 5xx responses. Platform-level / pre-tenant requests (no resolvable business id)
+     * are skipped, and an audit-write failure never masks the original response.
+     */
+    private void publishSystemException(HttpServletRequest request, Exception ex) {
+        try {
+            String businessId = TenantRequestIds.resolveBusinessId(request);
+            if (businessId == null || businessId.isBlank()) {
+                return;
+            }
+            String actorId = safeAuditActorId(request);
+            String message = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
+            auditEventPublisher.publishSynchronous(auditEventBuilder
+                    .builder(AuditEventCategory.SYSTEM, AuditEventTypes.SYSTEM_EXCEPTION, AuditEventSeverity.ERROR)
+                    .businessId(businessId)
+                    .actor(actorId, actorId != null ? AuditEventActorType.USER : AuditEventActorType.SYSTEM)
+                    .target("request", null)
+                    .targetLabel(request.getMethod() + " " + request.getRequestURI())
+                    .source("api")
+                    .reason(truncate(message, 500))
+                    .metadata(Map.of(
+                            "exception", ex.getClass().getName(),
+                            "method", request.getMethod(),
+                            "path", request.getRequestURI()
+                    )).build());
+        } catch (Exception ignored) {
+            // Never fail the response because of an audit write.
+        }
+    }
+
+    private static String safeAuditActorId(HttpServletRequest request) {
+        try {
+            return CurrentTenantUser.auditActorId(request);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static String truncate(String value, int max) {
+        if (value == null || value.length() <= max) {
+            return value;
+        }
+        return value.substring(0, max);
     }
 
     private ResponseEntity<ProblemDetail> problem(ProblemDetail body, HttpStatusCode status) {

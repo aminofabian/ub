@@ -73,11 +73,27 @@ public class LoggingNotificationService implements NotificationService {
 
     @Override
     public void sendNotificationEmail(String toEmail, String subject, String textBody, String htmlBody) {
+        sendNotificationEmail(toEmail, subject, textBody, htmlBody, null);
+    }
+
+    @Override
+    public void sendNotificationEmail(
+            String toEmail, String subject, String textBody, String htmlBody, String fromDisplayName) {
         if (htmlBody != null && !htmlBody.isBlank()) {
-            sendOrLogHtml(toEmail, subject, htmlBody, "notification");
+            sendOrLogHtml(toEmail, subject, htmlBody, "notification", fromDisplayName);
             return;
         }
         sendOrLog(toEmail, subject, textBody != null ? textBody : "", "notification");
+    }
+
+    @Override
+    public void sendPlatformCampaignEmail(
+            String toEmail, String subject, String textBody, String htmlBody, String fromDisplayName) {
+        if (htmlBody != null && !htmlBody.isBlank()) {
+            sendOrLogHtml(toEmail, subject, htmlBody, "platform campaign", fromDisplayName);
+            return;
+        }
+        sendOrLog(toEmail, subject, textBody != null ? textBody : "", "platform campaign");
     }
 
     @Override

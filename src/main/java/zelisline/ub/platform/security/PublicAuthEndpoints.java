@@ -26,7 +26,10 @@ public final class PublicAuthEndpoints {
             "/api/v1/supplier-portal/auth/claim/send-code",
             "/api/v1/supplier-portal/auth/claim/verify-code",
             "/api/v1/supplier-portal/auth/claim/verify-invite",
-            "/api/v1/supplier-portal/auth/claim/complete"
+            "/api/v1/supplier-portal/auth/claim/complete",
+            "/api/v1/public/shopper/auth/send-code",
+            "/api/v1/public/shopper/auth/verify-code",
+            "/api/v1/public/shopper/auth/session"
     );
 
     private PublicAuthEndpoints() {

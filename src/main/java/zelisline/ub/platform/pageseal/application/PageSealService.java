@@ -355,6 +355,67 @@ public class PageSealService {
         return mintUnlock(PageSealScopes.CUSTOMER_TAB, account.getId());
     }
 
+    @Transactional(readOnly = true)
+    public boolean customerTabHasPin(String businessId, String phoneRaw) {
+        try {
+            String hash = resolveTab(businessId, phoneRaw).account().getPagePinHash();
+            return hash != null && !hash.isBlank();
+        } catch (ResponseStatusException ex) {
+            if (ex.getStatusCode() == HttpStatus.NOT_FOUND) {
+                return false;
+            }
+            throw ex;
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public String customerTabDisplayName(String businessId, String phoneRaw) {
+        try {
+            String name = resolveTab(businessId, phoneRaw).customer().getName();
+            return name == null || name.isBlank() ? null : name.trim();
+        } catch (ResponseStatusException ex) {
+            if (ex.getStatusCode() == HttpStatus.NOT_FOUND) {
+                return null;
+            }
+            throw ex;
+        }
+    }
+
+    /**
+     * Shopper login PIN is the tab seal PIN. Creates it on first visit, checks it after.
+     */
+    @Transactional
+    public PageSealUnlockResponse setOrVerifyShopperPin(
+            String businessId,
+            String phoneRaw,
+            String pin,
+            String confirmPin,
+            boolean expectExisting
+    ) {
+        ResolvedTab tab = resolveTab(businessId, phoneRaw);
+        CreditAccount account = tab.account();
+        boolean has = account.getPagePinHash() != null && !account.getPagePinHash().isBlank();
+        if (expectExisting) {
+            if (!has) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Set a 4-digit PIN for this number");
+            }
+            assertPin(PageSealScopes.CUSTOMER_TAB, account.getId(), account.getPagePinHash(), pin);
+        } else {
+            if (has) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "This number already has a PIN");
+            }
+            String confirmation = confirmPin == null || confirmPin.isBlank() ? pin : confirmPin;
+            String normalized = normalizePin(pin, confirmation);
+            Instant now = Instant.now();
+            account.setPagePinHash(encodePin(PageSealScopes.CUSTOMER_TAB, account.getId(), normalized));
+            account.setPageSealed(true);
+            account.setPageSealVerifiedAt(now);
+            account.setPageSealUpdatedAt(now);
+            creditAccountRepository.save(account);
+        }
+        return mintUnlock(PageSealScopes.CUSTOMER_TAB, account.getId());
+    }
+
     private PageSealSendCodeResponse sendCode(
             String scope,
             String subjectId,

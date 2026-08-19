@@ -161,6 +161,38 @@ public class ShopperAccountService {
         return overviewFor(businessId, user, 0, 12);
     }
 
+    /**
+     * Phone is the shop customer. Creates a directory row when this number is new.
+     */
+    @Transactional
+    public Customer ensureCustomerForVerifiedPhone(
+            String businessId,
+            String local07,
+            String displayName,
+            String actorUserId
+    ) {
+        Customer customer = findCustomerByPhone(businessId, local07);
+        if (customer != null) {
+            return customer;
+        }
+        String name = displayName == null || displayName.isBlank() ? local07 : displayName.trim();
+        customerDirectoryService.create(
+                businessId,
+                new CreateCustomerRequest(
+                        name,
+                        null,
+                        null,
+                        null,
+                        List.of(new CustomerPhoneDraft(local07, true)),
+                        null),
+                actorUserId);
+        customer = findCustomerByPhone(businessId, local07);
+        if (customer == null) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Could not open a customer for this number");
+        }
+        return customer;
+    }
+
     private ShopperAccountOverviewResponse overviewFor(String businessId, User user, int page, int pageSize) {
         String emailNorm = normalizeEmail(user.getEmail());
 
@@ -169,7 +201,7 @@ public class ShopperAccountService {
         Pageable pageable = PageRequest.of(p, s);
         var orderSlice = webOrderAdminService.pageOrdersForShopperEmail(businessId, emailNorm, pageable);
 
-        Customer customer = findCustomerByEmail(businessId, emailNorm);
+        Customer customer = resolveDirectoryCustomer(businessId, user);
 
         BigDecimal kesPerPoint = businessCreditSettingsService
                 .resolveForBusiness(businessId)
@@ -275,6 +307,19 @@ public class ShopperAccountService {
             }
             throw ex;
         }
+    }
+
+    private Customer resolveDirectoryCustomer(String businessId, User user) {
+        if (user.getPhone() != null && !user.getPhone().isBlank()) {
+            Customer byPhone = findCustomerByPhone(businessId, user.getPhone());
+            if (byPhone != null) {
+                return byPhone;
+            }
+        }
+        if (user.getEmail() != null && !ShopperPhoneEmails.isSynthetic(user.getEmail())) {
+            return findCustomerByEmail(businessId, normalizeEmail(user.getEmail()));
+        }
+        return null;
     }
 
     private Customer findCustomerByEmail(String businessId, String emailNorm) {

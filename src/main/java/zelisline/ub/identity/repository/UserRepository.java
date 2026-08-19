@@ -41,6 +41,8 @@ public interface UserRepository extends JpaRepository<User, String> {
 
     Optional<User> findByBusinessIdAndEmailAndDeletedAtIsNull(String businessId, String email);
 
+    List<User> findByBusinessIdAndPhoneAndDeletedAtIsNull(String businessId, String phone);
+
     /** Global lookup for host-domain login routing — finds which business a user belongs to. */
     @Query("select u from User u where u.email = :email and u.deletedAt is null and u.status = 'active' order by u.createdAt asc")
     Optional<User> findFirstActiveByEmail(@Param("email") String email);
@@ -139,4 +141,18 @@ public interface UserRepository extends JpaRepository<User, String> {
     List<String> findBuyerUserIdsByBusinessIdAndRoleId(
             @Param("businessId") String businessId,
             @Param("roleId") String roleId);
+
+    @Query("""
+        select u from User u
+         where u.deletedAt is null
+           and u.roleId in :roleIds
+        """)
+    List<User> findLiveByRoleIds(@Param("roleIds") java.util.Collection<String> roleIds);
+
+    @Query("""
+        select u from User u
+         where u.deletedAt is null
+           and u.id in :ids
+        """)
+    List<User> findLiveByIds(@Param("ids") java.util.Collection<String> ids);
 }

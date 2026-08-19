@@ -1536,8 +1536,12 @@ paths:
               $ref: '#/components/schemas/VerifyEmailRequest'
         required: true
       responses:
-        '204':
-          description: No Content
+        '200':
+          description: Email verified — session issued so the user can continue without signing in again
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
   /api/v1/auth/resend-verification:
     post:
       tags:

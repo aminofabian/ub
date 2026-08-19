@@ -1,6 +1,7 @@
 -- Catalog discount promotions (overlay on shelf price; does not mutate selling_prices).
+-- Uses IF NOT EXISTS / IGNORE to be re-runnable after a partial prior attempt.
 
-CREATE TABLE discounts (
+CREATE TABLE IF NOT EXISTS discounts (
   id              CHAR(36)     NOT NULL PRIMARY KEY,
   business_id     CHAR(36)     NOT NULL,
   name            VARCHAR(255) NOT NULL,
@@ -23,10 +24,7 @@ CREATE TABLE discounts (
   CONSTRAINT fk_discounts_business FOREIGN KEY (business_id) REFERENCES businesses (id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_discounts_business_status ON discounts (business_id, published_at, paused, start_at, end_at);
-CREATE INDEX idx_discounts_business_scope ON discounts (business_id, scope, branch_id);
-
-CREATE TABLE discount_items (
+CREATE TABLE IF NOT EXISTS discount_items (
   discount_id  CHAR(36) NOT NULL,
   item_id      CHAR(36) NOT NULL,
   PRIMARY KEY (discount_id, item_id),
@@ -34,7 +32,7 @@ CREATE TABLE discount_items (
   CONSTRAINT fk_di_item FOREIGN KEY (item_id) REFERENCES items (id) ON DELETE CASCADE
 );
 
-CREATE TABLE discount_categories (
+CREATE TABLE IF NOT EXISTS discount_categories (
   discount_id   CHAR(36) NOT NULL,
   category_id   CHAR(36) NOT NULL,
   PRIMARY KEY (discount_id, category_id),
@@ -42,7 +40,7 @@ CREATE TABLE discount_categories (
   CONSTRAINT fk_dc_category FOREIGN KEY (category_id) REFERENCES categories (id) ON DELETE CASCADE
 );
 
-CREATE TABLE discount_suppliers (
+CREATE TABLE IF NOT EXISTS discount_suppliers (
   discount_id          CHAR(36) NOT NULL,
   supplier_id          CHAR(36) NOT NULL,
   include_any_linked   BOOLEAN  NOT NULL DEFAULT FALSE,
@@ -51,7 +49,7 @@ CREATE TABLE discount_suppliers (
   CONSTRAINT fk_ds_supplier FOREIGN KEY (supplier_id) REFERENCES suppliers (id) ON DELETE CASCADE
 );
 
-CREATE TABLE discount_exclusions (
+CREATE TABLE IF NOT EXISTS discount_exclusions (
   discount_id  CHAR(36) NOT NULL,
   item_id      CHAR(36) NOT NULL,
   PRIMARY KEY (discount_id, item_id),
@@ -59,15 +57,51 @@ CREATE TABLE discount_exclusions (
   CONSTRAINT fk_de_item FOREIGN KEY (item_id) REFERENCES items (id) ON DELETE CASCADE
 );
 
-ALTER TABLE sale_items
-  ADD COLUMN regular_unit_price DECIMAL(14,4) NULL,
-  ADD COLUMN discount_amount     DECIMAL(14,2) NULL,
-  ADD COLUMN discount_id         CHAR(36)     NULL,
-  ADD COLUMN discount_name       VARCHAR(255) NULL;
+-- sale_items columns (idempotent: MySQL 8+ ignores ADD COLUMN IF NOT EXISTS isn't supported,
+-- so we use a stored procedure via Flyway's placeholder-aware script runner).
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'sale_items' AND column_name = 'regular_unit_price');
+SET @sql = IF(@col_exists = 0, 'ALTER TABLE sale_items ADD COLUMN regular_unit_price DECIMAL(14,4) NULL', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
-CREATE INDEX idx_sale_items_discount_id ON sale_items (discount_id);
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'sale_items' AND column_name = 'discount_amount');
+SET @sql = IF(@col_exists = 0, 'ALTER TABLE sale_items ADD COLUMN discount_amount DECIMAL(14,2) NULL', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
-INSERT INTO permissions (id, permission_key, description) VALUES
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'sale_items' AND column_name = 'discount_id');
+SET @sql = IF(@col_exists = 0, 'ALTER TABLE sale_items ADD COLUMN discount_id CHAR(36) NULL', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'sale_items' AND column_name = 'discount_name');
+SET @sql = IF(@col_exists = 0, 'ALTER TABLE sale_items ADD COLUMN discount_name VARCHAR(255) NULL', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @idx_exists = (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'sale_items' AND index_name = 'idx_sale_items_discount_id');
+SET @sql = IF(@idx_exists = 0, 'CREATE INDEX idx_sale_items_discount_id ON sale_items (discount_id)', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @idx_exists = (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'discounts' AND index_name = 'idx_discounts_business_status');
+SET @sql = IF(@idx_exists = 0, 'CREATE INDEX idx_discounts_business_status ON discounts (business_id, published_at, paused, start_at, end_at)', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @idx_exists = (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'discounts' AND index_name = 'idx_discounts_business_scope');
+SET @sql = IF(@idx_exists = 0, 'CREATE INDEX idx_discounts_business_scope ON discounts (business_id, scope, branch_id)', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+INSERT IGNORE INTO permissions (id, permission_key, description) VALUES
   ('11111111-0000-0000-0000-000000000093', 'pricing.discounts.manage',
    'Create, edit, publish, and pause catalog discount promotions.');
 

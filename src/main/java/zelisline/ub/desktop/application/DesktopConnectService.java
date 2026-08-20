@@ -1,0 +1,391 @@
+package zelisline.ub.desktop.application;
+
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.Collections;
+import java.util.List;
+import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Profile;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.server.ResponseStatusException;
+import zelisline.ub.catalog.domain.Category;
+import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.repository.CategoryRepository;
+import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.catalog.application.CatalogBootstrapService;
+import zelisline.ub.desktop.api.dto.DesktopConnectRequest;
+import zelisline.ub.desktop.api.dto.DesktopConnectResponse;
+import zelisline.ub.desktop.api.dto.MasterDataSnapshot;
+import zelisline.ub.finance.application.LedgerBootstrapService;
+import zelisline.ub.identity.api.dto.LoginRequest;
+import zelisline.ub.identity.api.dto.LoginResponse;
+import zelisline.ub.identity.application.IdentityService;
+import zelisline.ub.identity.domain.Role;
+import zelisline.ub.identity.domain.User;
+import zelisline.ub.identity.domain.UserStatus;
+import zelisline.ub.identity.repository.RoleRepository;
+import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.pricing.domain.TaxRate;
+import zelisline.ub.pricing.repository.TaxRateRepository;
+import zelisline.ub.sales.api.dto.PostOpenShiftRequest;
+import zelisline.ub.sales.api.dto.ShiftResponse;
+import zelisline.ub.sales.application.ShiftService;
+import zelisline.ub.tenancy.domain.Branch;
+import zelisline.ub.tenancy.domain.Business;
+import zelisline.ub.tenancy.repository.BranchRepository;
+import zelisline.ub.tenancy.repository.BusinessRepository;
+
+/**
+ * "Sign in with my online shop" — seeds a fresh desktop install from an
+ * existing cloud business instead of creating a brand-new one
+ * (DESKTOP_INSTALLATION.md §9b).
+ *
+ * <p>Flow: authenticate to the cloud with the owner's credentials, pull the
+ * master-data snapshot ({@code GET /api/v1/desktop/sync/master-data}), then
+ * seed the local MariaDB with the same entity IDs so future sync runs can
+ * upsert idempotently. Writes the {@code .initialized} marker last, so the
+ * install flips to the normal staff-login flow only after the seed completes.
+ *
+ * <p>Credentials are never stored: the password is used once for the cloud
+ * login, and the local owner account is created with a locally-hashed copy.
+ * A small {@code conf/cloud-sync.json} mapping (origin + cloud business id)
+ * is written for future incremental sync runs.
+ */
+@Service
+@Profile("desktop")
+@RequiredArgsConstructor
+public class DesktopConnectService {
+
+    private static final Logger log = LoggerFactory.getLogger(DesktopConnectService.class);
+
+    /** Default hardware tier for connect installs (single till, full). */
+    private static final String DEFAULT_HARDWARE_TIER = "B";
+
+    private final BusinessRepository businessRepository;
+    private final UserRepository userRepository;
+    private final RoleRepository roleRepository;
+    private final BranchRepository branchRepository;
+    private final CategoryRepository categoryRepository;
+    private final ItemRepository itemRepository;
+    private final TaxRateRepository taxRateRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final CatalogBootstrapService catalogBootstrapService;
+    private final LedgerBootstrapService ledgerBootstrapService;
+    private final ShiftService shiftService;
+    private final DesktopInitializationService initializationService;
+    private final TransactionTemplate transactionTemplate;
+    private final CloudSyncSession cloudSyncSession;
+
+    @Value("${app.desktop.business-id:}")
+    private String desktopBusinessId;
+
+    public DesktopConnectResponse connect(DesktopConnectRequest request) {
+        String localId = desktopBusinessId == null ? "" : desktopBusinessId.trim();
+        if (localId.isEmpty()) {
+            throw new ResponseStatusException(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "app.desktop.business-id is not configured — set APP_DESKTOP_BUSINESS_ID before connecting"
+            );
+        }
+        if (businessRepository.findByIdAndDeletedAtIsNull(localId).isPresent()) {
+            throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Desktop install is already set up"
+            );
+        }
+
+        String origin = request.normalizedOrigin();
+        log.info("[DesktopConnect] authenticating against {} for {}", origin, request.email());
+
+        // 1. Authenticate to the cloud with the existing shop credentials.
+        RestClient client = RestClient.builder().baseUrl(origin).build();
+        LoginResponse login;
+        try {
+            login = client
+                .post()
+                .uri("/api/v1/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(new LoginRequest(request.email(), request.password()))
+                .retrieve()
+                .body(LoginResponse.class);
+        } catch (Exception e) {
+            log.warn("[DesktopConnect] cloud login failed: {}", e.getMessage());
+            throw new ResponseStatusException(
+                HttpStatus.UNAUTHORIZED,
+                "Could not sign in to the online shop — check your email and password"
+            );
+        }
+        if (login == null || login.accessToken() == null || login.accessToken().isBlank()) {
+            throw new ResponseStatusException(
+                HttpStatus.UNAUTHORIZED,
+                "Could not sign in to the online shop — check your email and password"
+            );
+        }
+        String cloudBusinessId = login.user() == null ? null : login.user().businessId();
+        if (cloudBusinessId == null || cloudBusinessId.isBlank()) {
+            throw new ResponseStatusException(
+                HttpStatus.UNAUTHORIZED,
+                "Signed in, but no shop is linked to this account"
+            );
+        }
+        String cloudOwnerName = login.user() == null || login.user().name() == null
+            ? request.email()
+            : login.user().name();
+
+        // 2. Pull the master-data snapshot.
+        MasterDataSnapshot snapshot;
+        try {
+            snapshot = client
+                .get()
+                .uri("/api/v1/desktop/sync/master-data")
+                .header("Authorization", "Bearer " + login.accessToken())
+                .header("X-Tenant-Id", cloudBusinessId)
+                .retrieve()
+                .body(MasterDataSnapshot.class);
+        } catch (Exception e) {
+            log.warn("[DesktopConnect] snapshot pull failed: {}", e.getMessage());
+            throw new ResponseStatusException(
+                HttpStatus.BAD_GATEWAY,
+                "Connected, but could not download the shop data (" + e.getMessage() + ")"
+            );
+        }
+        if (snapshot == null || snapshot.business() == null) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_GATEWAY,
+                "The online shop returned an empty snapshot"
+            );
+        }
+
+        // 3. Seed the local MariaDB from the snapshot (atomic — the marker is
+        // only written after every row is in place).
+        SeedResult seeded = transactionTemplate.execute(status -> {
+            try {
+                return seed(localId, snapshot, request, cloudOwnerName);
+            } catch (RuntimeException e) {
+                status.setRollbackOnly();
+                throw e;
+            }
+        });
+        if (seeded == null) {
+            throw new ResponseStatusException(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "Seeding failed — nothing was written"
+            );
+        }
+
+        // 4. Cloud mapping for future incremental sync runs.
+        cloudSyncSession.persist(
+            origin,
+            cloudBusinessId,
+            login.accessToken(),
+            login.refreshToken(),
+            login.user() == null ? null : login.user().id()
+        );
+
+        log.info(
+            "[DesktopConnect] connected business={} from cloud business={} ({} items, {} categories)",
+            localId,
+            cloudBusinessId,
+            snapshot.items().size(),
+            snapshot.categories().size()
+        );
+
+        return new DesktopConnectResponse(
+            localId,
+            seeded.branchId(),
+            "Connected to your online shop"
+        );
+    }
+
+    private SeedResult seed(
+            String localId,
+            MasterDataSnapshot snapshot,
+            DesktopConnectRequest request,
+            String cloudOwnerName) {
+        MasterDataSnapshot.BusinessData cloud = snapshot.business();
+
+        Role ownerRole = roleRepository
+            .findSystemRoleByKey(IdentityService.OWNER_ROLE_KEY)
+            .orElseThrow(() ->
+                new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Owner role is not configured — Flyway migrations may not have run"
+                )
+            );
+
+        // ── Business ───────────────────────────────────────────────────
+        Business business = new Business();
+        business.setId(localId);
+        business.setName(cloud.name() == null ? "My Shop" : cloud.name().trim());
+        business.setSlug(cloud.slug() == null ? "desktop" : cloud.slug());
+        business.setCurrency(cloud.currency() == null ? "KES" : cloud.currency());
+        business.setCountryCode(cloud.countryCode() == null ? "KE" : cloud.countryCode());
+        business.setTimezone(cloud.timezone() == null ? "Africa/Nairobi" : cloud.timezone());
+        business.setSubscriptionTier("desktop");
+        business.setSettings(cloud.settings() == null || cloud.settings().isBlank()
+            ? "{}"
+            : cloud.settings());
+        businessRepository.save(business);
+        catalogBootstrapService.seedDefaultItemTypesIfMissing(localId);
+        ledgerBootstrapService.ensureStandardAccounts(localId);
+
+        // ── Branches ───────────────────────────────────────────────────
+        Branch firstBranch = null;
+        for (MasterDataSnapshot.BranchData b : snapshot.branches()) {
+            Branch branch = new Branch();
+            branch.setId(b.id());
+            branch.setBusinessId(localId);
+            branch.setName(b.name());
+            branch.setAddress(b.address());
+            branch.setReceiptSettings(b.receiptSettings());
+            branch.setActive(b.active());
+            branchRepository.save(branch);
+            if (firstBranch == null) {
+                firstBranch = branch;
+            }
+        }
+        if (firstBranch == null) {
+            firstBranch = new Branch();
+            firstBranch.setBusinessId(localId);
+            firstBranch.setName("Main Branch");
+            firstBranch.setActive(true);
+            firstBranch = branchRepository.save(firstBranch);
+        }
+
+        // ── Tax rates ──────────────────────────────────────────────────
+        for (MasterDataSnapshot.TaxRateData t : snapshot.taxRates()) {
+            TaxRate tax = new TaxRate();
+            tax.setId(t.id());
+            tax.setBusinessId(localId);
+            tax.setName(t.name());
+            tax.setRatePercent(t.ratePercent());
+            tax.setInclusive(t.inclusive());
+            tax.setActive(t.active());
+            taxRateRepository.save(tax);
+        }
+
+        // ── Categories (same ids — ids are stable across sync runs) ────
+        for (MasterDataSnapshot.CategoryData c : snapshot.categories()) {
+            Category category = new Category();
+            category.setId(c.id());
+            category.setBusinessId(localId);
+            category.setName(c.name());
+            category.setSlug(c.slug() == null || c.slug().isBlank()
+                ? slugify(c.name())
+                : c.slug());
+            category.setDescription(c.description());
+            category.setParentId(c.parentId());
+            category.setPosition(c.position());
+            category.setDefaultTaxRateId(c.defaultTaxRateId());
+            category.setDefaultMarkupPct(c.defaultMarkupPct());
+            category.setActive(c.active());
+            categoryRepository.save(category);
+        }
+
+        // ── Items ──────────────────────────────────────────────────────
+        for (MasterDataSnapshot.ItemData i : snapshot.items()) {
+            Item item = new Item();
+            item.setId(i.id());
+            item.setBusinessId(localId);
+            item.setSku(i.sku());
+            item.setBarcode(i.barcode());
+            item.setPluCode(i.pluCode());
+            item.setName(i.name());
+            item.setDescription(i.description());
+            item.setCategoryId(i.categoryId());
+            item.setUnitType(i.unitType() == null ? "each" : i.unitType());
+            item.setStocked(i.stocked());
+            item.setCurrentStock(i.currentStock() == null ? BigDecimal.ZERO : i.currentStock());
+            item.setPackagingUnitName(i.packagingUnitName());
+            item.setPackagingUnitQty(i.packagingUnitQty());
+            item.setBundlePrice(i.bundlePrice());
+            item.setBuyingPrice(i.buyingPrice());
+            item.setMinStockLevel(i.minStockLevel());
+            item.setVariantOfItemId(i.variantOfItemId());
+            item.setVariantName(i.variantName());
+            item.setActive(i.active());
+            itemRepository.save(item);
+        }
+
+        // ── Owner user (credentials from the connect request) ──────────
+        String email = request.email().trim().toLowerCase(java.util.Locale.ROOT);
+        if (userRepository
+                .findByBusinessIdAndEmailAndDeletedAtIsNull(localId, email)
+                .isPresent()) {
+            throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "An account with this email already exists for this business"
+            );
+        }
+        User owner = new User();
+        owner.setBusinessId(localId);
+        owner.setEmail(email);
+        owner.setName(cloudOwnerName.trim());
+        owner.setPasswordHash(passwordEncoder.encode(request.password()));
+        owner.setRoleId(ownerRole.getId());
+        owner.setStatus(UserStatus.ACTIVE);
+        User savedOwner = userRepository.save(owner);
+
+        // ── Starter shift (mirrors the create-shop wizard) ─────────────
+        String shiftId = null;
+        try {
+            PostOpenShiftRequest shiftReq = new PostOpenShiftRequest(
+                firstBranch.getId(),
+                BigDecimal.ZERO, // opening cash — user counts later
+                "Initial shift — opened by online-shop connect",
+                Collections.emptyList()
+            );
+            ShiftResponse shift = shiftService.openShift(
+                localId,
+                shiftReq,
+                savedOwner.getId()
+            );
+            shiftId = shift.id();
+            log.info(
+                "[DesktopConnect] opened starter shift={} on branch={}",
+                shiftId,
+                firstBranch.getId()
+            );
+        } catch (Exception e) {
+            // Non-fatal: the owner can open a shift manually.
+            log.warn("[DesktopConnect] could not open starter shift: {}", e.getMessage());
+        }
+
+        // ── Filesystem artefacts (marker written last) ─────────────────
+        try {
+            initializationService.completeInitialization(
+                localId,
+                DEFAULT_HARDWARE_TIER,
+                Instant.now()
+            );
+        } catch (IOException e) {
+            throw new ResponseStatusException(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "Connected, but could not finalize the install: " + e.getMessage()
+            );
+        }
+
+        return new SeedResult(firstBranch.getId());
+    }
+
+    private static String slugify(String name) {
+        if (name == null || name.isBlank()) {
+            return "category";
+        }
+        return name.trim()
+            .toLowerCase(java.util.Locale.ROOT)
+            .replaceAll("[^a-z0-9]+", "-")
+            .replaceAll("(^-|-$)", "");
+    }
+
+    private record SeedResult(String branchId) {}
+}

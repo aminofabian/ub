@@ -85,6 +85,10 @@ public class Shift {
     @Column(name = "blind_closing")
     private boolean blindClosing;
 
+    /** When the desktop install uploaded this shift to the cloud (null = pending). */
+    @Column(name = "cloud_synced_at")
+    private Instant cloudSyncedAt;
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;

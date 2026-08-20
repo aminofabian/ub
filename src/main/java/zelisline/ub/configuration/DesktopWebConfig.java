@@ -168,6 +168,9 @@ public class DesktopWebConfig implements WebMvcConfigurer {
     private static final List<String> DESKTOP_PUBLIC_API_PATTERNS = List.of(
         "/api/v1/desktop/setup",
         "/api/v1/desktop/setup/**",
+        // "Sign in with my online shop" — must be reachable before any local
+        // user exists, same as the setup wizard.
+        "/api/v1/desktop/connect",
         // License status is polled by the shell + frontend on every page load
         // before a user logs in, so it must be unauthenticated.
         "/api/v1/license/status"

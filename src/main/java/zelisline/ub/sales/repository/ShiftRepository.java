@@ -128,6 +128,12 @@ public interface ShiftRepository extends JpaRepository<Shift, String> {
 
     Optional<Shift> findByIdAndBusinessId(String id, String businessId);
 
+    /** Closed shifts the desktop install has not yet uploaded to the cloud. */
+    List<Shift> findByBusinessIdAndStatusAndCloudSyncedAtIsNullOrderByClosedAtAsc(
+        String businessId,
+        String status
+    );
+
     /** List all shifts for a business, latest first. */
     @Query("""
             select s from Shift s

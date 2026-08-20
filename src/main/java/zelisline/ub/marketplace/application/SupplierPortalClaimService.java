@@ -380,7 +380,7 @@ public class SupplierPortalClaimService {
     ) {
         portalSettingsService.requireClaimEnabled();
         PlatformSupplierPortalSettings settings = portalSettingsService.loadSingleton();
-        portalSettingsService.validatePassword(request.password());
+        String secretHash = encodeUnlockSecret(request);
 
         String token = request.setupToken() == null ? "" : request.setupToken().trim();
         if (token.isBlank()) {
@@ -400,9 +400,9 @@ public class SupplierPortalClaimService {
         try {
             user = claimAccountTransaction.execute(status -> {
                 if (invite != null) {
-                    return createUserFromInvite(invite, request, settings);
+                    return createUserFromInvite(invite, request, settings, secretHash);
                 }
-                return createUserFromSelfClaim(request, settings, tokenHash);
+                return createUserFromSelfClaim(request, settings, tokenHash, secretHash);
             });
         } catch (ResponseStatusException ex) {
             throw ex;
@@ -441,7 +441,8 @@ public class SupplierPortalClaimService {
     private SupplierUser createUserFromInvite(
             SupplierPortalClaimInvite inviteRef,
             SupplierPortalClaimCompleteRequest request,
-            PlatformSupplierPortalSettings settings
+            PlatformSupplierPortalSettings settings,
+            String secretHash
     ) {
         // Reload inside the TX — the lookup above is outside and may be detached.
         SupplierPortalClaimInvite invite = inviteRepository.findById(inviteRef.getId())
@@ -476,6 +477,7 @@ public class SupplierPortalClaimService {
         if (email != null && (marketplace.getContactEmail() == null || marketplace.getContactEmail().isBlank())) {
             marketplace.setContactEmail(email);
         }
+        applyDeskCard(marketplace, request, phone);
         if (marketplace.getStatus() == null || marketplace.getStatus().isBlank()) {
             marketplace.setStatus(MarketplaceSupplierStatuses.ACTIVE);
         }
@@ -499,7 +501,7 @@ public class SupplierPortalClaimService {
         user.setPhone(phone);
         user.setEmail(email);
         user.setName(MarketplaceSupplierNaming.preferDisplayName(displayName, marketplace.getName()));
-        user.setPasswordHash(passwordEncoder.encode(request.password()));
+        user.setPasswordHash(secretHash);
         user.setRoleKey(SupplierUserRoles.ADMIN);
         user.setActive(true);
         user.setLastLoginAt(now);
@@ -513,7 +515,8 @@ public class SupplierPortalClaimService {
     private SupplierUser createUserFromSelfClaim(
             SupplierPortalClaimCompleteRequest request,
             PlatformSupplierPortalSettings settings,
-            String tokenHash
+            String tokenHash,
+            String secretHash
     ) {
         portalSettingsService.requireSelfClaimAllowed();
 
@@ -568,6 +571,7 @@ public class SupplierPortalClaimService {
             } else {
                 marketplace.setUsername(allocateUsername(displayName, phone));
             }
+            applyDeskCard(marketplace, request, phone);
             marketplaceSupplierRepository.saveAndFlush(marketplace);
         } else {
             if (marketplace.getContactPhone() == null || marketplace.getContactPhone().isBlank()) {
@@ -576,6 +580,7 @@ public class SupplierPortalClaimService {
             if (email != null && (marketplace.getContactEmail() == null || marketplace.getContactEmail().isBlank())) {
                 marketplace.setContactEmail(email);
             }
+            applyDeskCard(marketplace, request, phone);
             // Prefer a real shop/claim name over phone-derived "Supplier 2874".
             if (MarketplaceSupplierNaming.isPlaceholderName(marketplace.getName())
                     && displayName != null
@@ -608,7 +613,7 @@ public class SupplierPortalClaimService {
         user.setPhone(phone);
         user.setEmail(email);
         user.setName(MarketplaceSupplierNaming.preferDisplayName(displayName, marketplace.getName()));
-        user.setPasswordHash(passwordEncoder.encode(request.password()));
+        user.setPasswordHash(secretHash);
         user.setRoleKey(SupplierUserRoles.ADMIN);
         user.setActive(true);
         user.setLastLoginAt(now);
@@ -990,6 +995,54 @@ public class SupplierPortalClaimService {
             result |= a.charAt(i) ^ b.charAt(i);
         }
         return result == 0;
+    }
+
+    private String encodeUnlockSecret(SupplierPortalClaimCompleteRequest request) {
+        String pin = blankToNull(request.pin());
+        String password = blankToNull(request.password());
+        if (pin != null) {
+            if (!pin.matches("\\d{4,6}")) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "PIN must be 4 to 6 digits");
+            }
+            if (password != null) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Choose a PIN or a password, not both");
+            }
+            return passwordEncoder.encode(pin);
+        }
+        portalSettingsService.validatePassword(password);
+        return passwordEncoder.encode(password);
+    }
+
+    private void applyDeskCard(
+            MarketplaceSupplier marketplace,
+            SupplierPortalClaimCompleteRequest request,
+            String verifiedPhone
+    ) {
+        String altRaw = blankToNull(request.altPhone());
+        if (altRaw != null) {
+            String alt = StkPhoneNormalizer.normalize(altRaw);
+            if (alt == null || alt.isBlank()) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Enter a valid extra WhatsApp number");
+            }
+            if (!alt.equals(verifiedPhone)) {
+                if (marketplace.getAltContactPhone() == null || marketplace.getAltContactPhone().isBlank()) {
+                    marketplace.setAltContactPhone(alt);
+                }
+            }
+        }
+        String location = blankToNull(request.location());
+        if (location != null
+                && (marketplace.getContactLocation() == null || marketplace.getContactLocation().isBlank())) {
+            marketplace.setContactLocation(location);
+        }
+        String person = blankToNull(request.name());
+        if (person != null
+                && (marketplace.getContactPerson() == null || marketplace.getContactPerson().isBlank())) {
+            marketplace.setContactPerson(person);
+        }
     }
 
     private static String blankToNull(String value) {

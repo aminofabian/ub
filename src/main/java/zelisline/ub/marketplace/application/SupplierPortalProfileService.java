@@ -77,6 +77,22 @@ public class SupplierPortalProfileService {
         if (request.contactPhone() != null) {
             supplier.setContactPhone(blankToNull(request.contactPhone()));
         }
+        if (request.altContactPhone() != null) {
+            String alt = blankToNull(request.altContactPhone());
+            if (alt != null) {
+                String normalized = StkPhoneNormalizer.normalize(alt);
+                if (normalized == null || normalized.isBlank()) {
+                    throw new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST, "Enter a valid extra WhatsApp number");
+                }
+                supplier.setAltContactPhone(normalized);
+            } else {
+                supplier.setAltContactPhone(null);
+            }
+        }
+        if (request.contactLocation() != null) {
+            supplier.setContactLocation(blankToNull(request.contactLocation()));
+        }
         if (request.deliveryRegions() != null) {
             supplier.setDeliveryRegionsJson(writeJson(request.deliveryRegions()));
         }
@@ -266,6 +282,8 @@ public class SupplierPortalProfileService {
                 supplier.getDescription(),
                 supplier.getContactEmail(),
                 supplier.getContactPhone(),
+                supplier.getAltContactPhone(),
+                supplier.getContactLocation(),
                 supplier.getStatus(),
                 readJsonList(supplier.getDeliveryRegionsJson()),
                 readJsonList(supplier.getCategoryTagsJson()),

@@ -46,7 +46,8 @@ public class SupplierPortalAuthService {
                 || MarketplaceSupplierStatuses.SUSPENDED.equalsIgnoreCase(marketplace.getStatus())) {
             throw invalidCredentials();
         }
-        if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
+        String secret = request.password() == null ? "" : request.password();
+        if (secret.isBlank() || !passwordEncoder.matches(secret, user.getPasswordHash())) {
             user.setFailedAttempts(user.getFailedAttempts() + 1);
             supplierUserRepository.save(user);
             throw invalidCredentials();
@@ -79,6 +80,7 @@ public class SupplierPortalAuthService {
     }
 
     private ResponseStatusException invalidCredentials() {
-        return new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Incorrect phone/email or password.");
+        return new ResponseStatusException(
+                HttpStatus.UNAUTHORIZED, "Incorrect phone/email or PIN/password.");
     }
 }

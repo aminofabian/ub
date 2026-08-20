@@ -56,6 +56,14 @@ public class MarketplaceSupplier {
     @Column(name = "contact_phone", length = 32)
     private String contactPhone;
 
+    /** Second WhatsApp / call line collected at portal sign-up. */
+    @Column(name = "alt_contact_phone", length = 32)
+    private String altContactPhone;
+
+    /** Area or market the supplier named at sign-up (e.g. Githurai). */
+    @Column(name = "contact_location", length = 255)
+    private String contactLocation;
+
     @Column(name = "business_legal_name", length = 255)
     private String businessLegalName;
 

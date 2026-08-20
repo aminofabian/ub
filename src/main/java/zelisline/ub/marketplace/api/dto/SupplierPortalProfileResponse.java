@@ -9,6 +9,8 @@ public record SupplierPortalProfileResponse(
         String description,
         String contactEmail,
         String contactPhone,
+        String altContactPhone,
+        String contactLocation,
         String status,
         List<String> deliveryRegions,
         List<String> categoryTags,

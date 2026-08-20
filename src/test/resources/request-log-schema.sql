@@ -13,7 +13,7 @@ CREATE TABLE platform_request_log (
   branch_id      CHAR(36)     NULL,
   correlation_id VARCHAR(64)  NULL,
   status         INT          NOT NULL,
-  success        TINYINT      NOT NULL,
+  success        BOOLEAN      NOT NULL,
   duration_ms    BIGINT       NOT NULL,
   ip             VARCHAR(64)  NULL
 );

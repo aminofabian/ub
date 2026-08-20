@@ -39,4 +39,14 @@ public interface BusinessRepository extends JpaRepository<Business, String> {
     java.util.List<Business> findByDeletedAtIsNull();
 
     Page<Business> findByDeletedAtIsNull(Pageable pageable);
+
+    /** Name lookup for the platform request log — resolves tenant names from ids in bulk. */
+    @Query("select b.id as id, b.name as name from Business b where b.id in :ids")
+    java.util.List<BusinessNameRow> findNamesByIds(@Param("ids") java.util.Collection<String> ids);
+
+    interface BusinessNameRow {
+        String getId();
+
+        String getName();
+    }
 }

@@ -67,18 +67,34 @@ class PlatformRequestLogRepositoryIT {
         save("10", "GET", "/api/v1/airtime/quote", RequestLogCategory.AIRTIME, 200, true, 12);
         save("11", "POST", "/api/v1/airtime/orders", RequestLogCategory.AIRTIME, 500, false, 300);
 
-        assertThat(repository.search(null, null, null, PageRequest.of(0, 50))).hasSize(2);
-        assertThat(repository.search(RequestLogCategory.AIRTIME, null, null, PageRequest.of(0, 50)))
+        assertThat(repository.findAll(PlatformRequestLogRepository.matches(null, null, null, null), PageRequest.of(0, 50)))
                 .hasSize(2);
-        assertThat(repository.search(RequestLogCategory.AIRTIME, Boolean.TRUE, null, PageRequest.of(0, 50)))
+        assertThat(repository.findAll(PlatformRequestLogRepository.matches(RequestLogCategory.AIRTIME, null, null, null), PageRequest.of(0, 50)))
+                .hasSize(2);
+        assertThat(repository.findAll(PlatformRequestLogRepository.matches(RequestLogCategory.AIRTIME, Boolean.TRUE, null, null), PageRequest.of(0, 50)))
                 .hasSize(1);
-        assertThat(repository.search(null, Boolean.FALSE, null, PageRequest.of(0, 50)))
+        assertThat(repository.findAll(PlatformRequestLogRepository.matches(null, Boolean.FALSE, null, null), PageRequest.of(0, 50)))
+                .hasSize(1);
+        assertThat(repository.findAll(PlatformRequestLogRepository.matches(null, null, null, "203.0.113.5"), PageRequest.of(0, 50)))
+                .isEmpty();
+        assertThat(repository.findAll(PlatformRequestLogRepository.matches(null, Boolean.FALSE, null, "10.0.0.9"), PageRequest.of(0, 50)))
                 .hasSize(1);
     }
 
     private void save(String id, String method, String path,
             RequestLogCategory category, int status, boolean success, long durationMs) {
-        save(id, method, path, category, status, success, durationMs, Instant.now());
+        PlatformRequestLog row = new PlatformRequestLog();
+        row.setId(id);
+        row.setLoggedAt(Instant.now());
+        row.setMethod(method);
+        row.setPath(path);
+        row.setCategory(category);
+        row.setBusinessId("biz-1");
+        row.setStatus(status);
+        row.setSuccess(success);
+        row.setDurationMs(durationMs);
+        row.setIp("10.0.0.9");
+        repository.save(row);
     }
 
     private void save(String id, String method, String path,
@@ -94,6 +110,7 @@ class PlatformRequestLogRepositoryIT {
         row.setStatus(status);
         row.setSuccess(success);
         row.setDurationMs(durationMs);
+        row.setIp("10.0.0.9");
         repository.save(row);
     }
 

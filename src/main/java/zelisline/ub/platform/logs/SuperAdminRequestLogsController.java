@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.tenancy.repository.BusinessRepository;
 
 /**
  * Super Admin → Platform → Logs — live request feed.
@@ -30,6 +31,7 @@ import lombok.RequiredArgsConstructor;
 public class SuperAdminRequestLogsController {
 
     private final PlatformRequestLogRepository repository;
+    private final BusinessRepository businessRepository;
 
     public record RequestLogRow(
             String id,
@@ -38,6 +40,7 @@ public class SuperAdminRequestLogsController {
             String path,
             RequestLogCategory category,
             String businessId,
+            String businessName,
             String userId,
             String branchId,
             String correlationId,
@@ -68,15 +71,17 @@ public class SuperAdminRequestLogsController {
             @RequestParam(required = false) RequestLogCategory category,
             @RequestParam(required = false) Boolean success,
             @RequestParam(required = false) Integer sinceMinutes,
+            @RequestParam(required = false) String ip,
             @RequestParam(defaultValue = "100") int limit) {
         int capped = Math.max(1, Math.min(limit, 500));
         Instant since = sinceMinutes != null && sinceMinutes > 0
                 ? Instant.now().minus(Duration.ofMinutes(sinceMinutes))
                 : null;
-        return repository.search(category, success, since, PageRequest.of(0, capped))
-                .stream()
-                .map(this::toRow)
-                .toList();
+        List<PlatformRequestLog> rows = repository.findAll(
+                PlatformRequestLogRepository.matches(category, success, since, ip),
+                PageRequest.of(0, capped)).getContent();
+        Map<String, String> tenantNames = resolveTenantNames(rows);
+        return rows.stream().map(p -> toRow(p, tenantNames.get(p.getBusinessId()))).toList();
     }
 
     @GetMapping("/summary")
@@ -139,7 +144,7 @@ public class SuperAdminRequestLogsController {
         return total == 0 ? 0.0 : Math.round((part * 1000.0) / total) / 10.0;
     }
 
-    private RequestLogRow toRow(PlatformRequestLog p) {
+    private RequestLogRow toRow(PlatformRequestLog p, String businessName) {
         return new RequestLogRow(
                 p.getId(),
                 p.getLoggedAt(),
@@ -147,6 +152,7 @@ public class SuperAdminRequestLogsController {
                 p.getPath(),
                 p.getCategory(),
                 p.getBusinessId(),
+                businessName,
                 p.getUserId(),
                 p.getBranchId(),
                 p.getCorrelationId(),
@@ -154,5 +160,20 @@ public class SuperAdminRequestLogsController {
                 p.isSuccess(),
                 p.getDurationMs(),
                 p.getIp());
+    }
+
+    private Map<String, String> resolveTenantNames(List<PlatformRequestLog> rows) {
+        java.util.Set<String> ids = rows.stream()
+                .map(PlatformRequestLog::getBusinessId)
+                .filter(id -> id != null && !id.isBlank())
+                .collect(java.util.stream.Collectors.toSet());
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        return businessRepository.findNamesByIds(ids).stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        BusinessRepository.BusinessNameRow::getId,
+                        BusinessRepository.BusinessNameRow::getName,
+                        (a, b) -> a));
     }
 }

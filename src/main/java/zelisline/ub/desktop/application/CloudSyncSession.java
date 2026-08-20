@@ -16,11 +16,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import zelisline.ub.identity.api.dto.LoginResponse;
 import zelisline.ub.identity.api.dto.RefreshRequest;
+import zelisline.ub.identity.application.RefreshTokenCookieSupport;
 
 /**
  * Owns the {@code APP_DATA/conf/cloud-sync.json} mapping between the desktop
@@ -166,21 +169,35 @@ public class CloudSyncSession {
             return Optional.empty();
         }
         try {
-            LoginResponse resp = client
+            // Platform apex hosts (palmart.co.ke, kiosk.zelisline.com) need the
+            // X-Tenant-Id header to route the refresh to the right tenant. The
+            // refresh token is sent in the body; when cookie-mode auth is on,
+            // the response rotates it via the httpOnly `ub.refresh` cookie.
+            ResponseEntity<LoginResponse> response = client
                 .post()
                 .uri("/api/v1/auth/refresh")
+                .header("X-Tenant-Id", current.cloudBusinessId())
+                .header("X-Kiosk-Client", "native")
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(new RefreshRequest(current.refreshToken()))
                 .retrieve()
-                .body(LoginResponse.class);
+                .toEntity(LoginResponse.class);
+            LoginResponse resp = response.getBody();
             if (resp == null || resp.accessToken() == null || resp.accessToken().isBlank()) {
                 return Optional.empty();
+            }
+            String refreshToken = resp.refreshToken();
+            if (refreshToken == null || refreshToken.isBlank()) {
+                refreshToken = extractRefreshCookie(response.getHeaders());
+            }
+            if (refreshToken == null || refreshToken.isBlank()) {
+                refreshToken = current.refreshToken();
             }
             Session next = new Session(
                 current.origin(),
                 current.cloudBusinessId(),
                 resp.accessToken(),
-                resp.refreshToken() == null ? current.refreshToken() : resp.refreshToken(),
+                refreshToken,
                 current.ownerUserId(),
                 current.staffIds()
             );
@@ -191,6 +208,28 @@ public class CloudSyncSession {
             log.warn("[CloudSync] token refresh failed: {}", e.getMessage());
             return Optional.empty();
         }
+    }
+
+    private static String extractRefreshCookie(HttpHeaders headers) {
+        if (headers == null) {
+            return null;
+        }
+        java.util.List<String> setCookies = headers.get(HttpHeaders.SET_COOKIE);
+        if (setCookies == null) {
+            return null;
+        }
+        String prefix = RefreshTokenCookieSupport.COOKIE_NAME + "=";
+        for (String cookie : setCookies) {
+            String first = cookie.trim();
+            int semi = first.indexOf(';');
+            if (semi >= 0) {
+                first = first.substring(0, semi);
+            }
+            if (first.startsWith(prefix)) {
+                return first.substring(prefix.length());
+            }
+        }
+        return null;
     }
 
     private Path mappingFile() {

@@ -5,6 +5,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
+import org.springframework.http.ResponseEntity;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,6 +38,7 @@ import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.pricing.domain.TaxRate;
 import zelisline.ub.pricing.repository.TaxRateRepository;
 import zelisline.ub.sales.api.dto.PostOpenShiftRequest;
+import zelisline.ub.tenancy.api.dto.PublicHostResolveResponse;
 import zelisline.ub.sales.api.dto.ShiftResponse;
 import zelisline.ub.sales.application.ShiftService;
 import zelisline.ub.tenancy.domain.Branch;
@@ -108,17 +110,37 @@ public class DesktopConnectService {
         String origin = request.normalizedOrigin();
         log.info("[DesktopConnect] authenticating against {} for {}", origin, request.email());
 
-        // 1. Authenticate to the cloud with the existing shop credentials.
         RestClient client = RestClient.builder().baseUrl(origin).build();
+
+        // 0. Resolve the shop id from the email first. The cloud treats its
+        // platform apex hosts (e.g. palmart.co.ke, kiosk.zelisline.com) as
+        // tenant-less, so every call — including login — must carry the
+        // X-Tenant-Id header to be routed to the right tenant.
+        String resolvedBusinessId = resolveBusinessIdByEmail(client, request.email());
+
+        // 1. Authenticate to the cloud with the existing shop credentials.
+        //    - X-Tenant-Id: routes the login to the tenant (platform apex).
+        //    - X-Kiosk-Client: native — keeps the access token in the JSON body
+        //      (the Next.js proxy redacts it for browser clients).
+        //    - The refresh token may only exist as the httpOnly `ub.refresh`
+        //      cookie (cookie-mode auth), so read it from Set-Cookie.
         LoginResponse login;
+        String refreshToken;
         try {
-            login = client
+            ResponseEntity<LoginResponse> response = client
                 .post()
                 .uri("/api/v1/auth/login")
+                .header("X-Tenant-Id", resolvedBusinessId)
+                .header("X-Kiosk-Client", "native")
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(new LoginRequest(request.email(), request.password()))
                 .retrieve()
-                .body(LoginResponse.class);
+                .toEntity(LoginResponse.class);
+            login = response.getBody();
+            refreshToken = login == null ? null : login.refreshToken();
+            if (refreshToken == null || refreshToken.isBlank()) {
+                refreshToken = extractRefreshCookie(response.getHeaders());
+            }
         } catch (Exception e) {
             log.warn("[DesktopConnect] cloud login failed: {}", e.getMessage());
             throw new ResponseStatusException(
@@ -198,7 +220,7 @@ public class DesktopConnectService {
             origin,
             cloudBusinessId,
             login.accessToken(),
-            login.refreshToken(),
+            refreshToken,
             login.user() == null ? null : login.user().id(),
             staffIds
         );
@@ -414,6 +436,62 @@ public class DesktopConnectService {
         }
 
         return new SeedResult(firstBranch.getId(), pendingImages);
+    }
+
+    /**
+     * The cloud exposes the tenant id for an email over a public endpoint, so
+     * the till can attach {@code X-Tenant-Id} to its login call. Works for
+     * both the Next.js proxy (palmart.co.ke) and the direct API base
+     * (kiosk.zelisline.com).
+     */
+    private String resolveBusinessIdByEmail(RestClient client, String email) {
+        try {
+            var response = client
+                .get()
+                .uri(uri -> uri
+                    .path("/api/v1/public/host/resolve-by-email")
+                    .queryParam("email", email)
+                    .build())
+                .retrieve()
+                .body(PublicHostResolveResponse.class);
+            if (response == null || response.tenantId() == null || response.tenantId().isBlank()) {
+                throw new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "No online shop is linked to this account"
+                );
+            }
+            return response.tenantId();
+        } catch (ResponseStatusException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_GATEWAY,
+                "Could not reach your online shop (" + e.getMessage() + ")"
+            );
+        }
+    }
+
+    /** Extract the {@code ub.refresh} token from a Set-Cookie header (cookie-mode auth). */
+    private static String extractRefreshCookie(org.springframework.http.HttpHeaders headers) {
+        if (headers == null) {
+            return null;
+        }
+        List<String> setCookies = headers.get(org.springframework.http.HttpHeaders.SET_COOKIE);
+        if (setCookies == null) {
+            return null;
+        }
+        String prefix = zelisline.ub.identity.application.RefreshTokenCookieSupport.COOKIE_NAME + "=";
+        for (String cookie : setCookies) {
+            String first = cookie.trim();
+            int semi = first.indexOf(';');
+            if (semi >= 0) {
+                first = first.substring(0, semi);
+            }
+            if (first.startsWith(prefix)) {
+                return first.substring(prefix.length());
+            }
+        }
+        return null;
     }
 
     private static String slugify(String name) {

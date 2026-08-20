@@ -724,17 +724,22 @@ public final class CatalogRegionalCloneJdbc {
 
     private static boolean tableExists(Connection connection, String table) throws SQLException {
         DatabaseMetaData meta = connection.getMetaData();
-        try (ResultSet rs = meta.getTables(null, null, table, new String[] {"TABLE"})) {
+        // Scope to the current catalog/schema: a null catalog searches every
+        // schema the user can see, so a table in a sibling database (e.g. a
+        // dev box with ub + ub_test, or a multi-tenant host) would make this
+        // return true and the caller would then hit it in the wrong schema.
+        String catalog = connection.getCatalog();
+        try (ResultSet rs = meta.getTables(catalog, null, table, new String[] {"TABLE"})) {
             if (rs.next()) {
                 return true;
             }
         }
-        try (ResultSet rs = meta.getTables(null, null, table.toLowerCase(), new String[] {"TABLE"})) {
+        try (ResultSet rs = meta.getTables(catalog, null, table.toLowerCase(), new String[] {"TABLE"})) {
             if (rs.next()) {
                 return true;
             }
         }
-        try (ResultSet rs = meta.getTables(null, null, table.toUpperCase(), new String[] {"TABLE"})) {
+        try (ResultSet rs = meta.getTables(catalog, null, table.toUpperCase(), new String[] {"TABLE"})) {
             return rs.next();
         }
     }
@@ -744,20 +749,23 @@ public final class CatalogRegionalCloneJdbc {
             String table,
             String column
     ) throws SQLException {
-        try (ResultSet rs = connection.getMetaData().getColumns(null, null, table, column)) {
+        // See tableExists: metadata lookups must be scoped to the current
+        // catalog, otherwise a column in a sibling schema false-positives.
+        String catalog = connection.getCatalog();
+        try (ResultSet rs = connection.getMetaData().getColumns(catalog, null, table, column)) {
             if (rs.next()) {
                 return true;
             }
         }
         try (ResultSet rs = connection.getMetaData().getColumns(
-                null, null, table.toLowerCase(), column.toLowerCase())) {
+                catalog, null, table.toLowerCase(), column.toLowerCase())) {
             if (rs.next()) {
                 return true;
             }
         }
         // H2 / some drivers are case-sensitive on metadata
         try (ResultSet rs = connection.getMetaData().getColumns(
-                null, null, table.toUpperCase(), column.toUpperCase())) {
+                catalog, null, table.toUpperCase(), column.toUpperCase())) {
             return rs.next();
         }
     }

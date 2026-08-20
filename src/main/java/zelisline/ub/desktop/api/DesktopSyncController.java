@@ -2,7 +2,9 @@ package zelisline.ub.desktop.api;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -12,12 +14,17 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.domain.ItemImage;
 import zelisline.ub.catalog.repository.CategoryRepository;
+import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.desktop.api.dto.MasterDataSnapshot;
 import zelisline.ub.desktop.api.dto.ShiftSyncAck;
 import zelisline.ub.desktop.api.dto.ShiftSyncRequest;
 import zelisline.ub.desktop.application.DesktopSyncIngestService;
+import zelisline.ub.identity.domain.User;
+import zelisline.ub.identity.repository.RoleRepository;
+import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.pricing.domain.TaxRate;
 import zelisline.ub.pricing.repository.TaxRateRepository;
 import zelisline.ub.tenancy.api.TenantRequestIds;
@@ -45,7 +52,10 @@ public class DesktopSyncController {
     private final BranchRepository branchRepository;
     private final CategoryRepository categoryRepository;
     private final ItemRepository itemRepository;
+    private final ItemImageRepository itemImageRepository;
     private final TaxRateRepository taxRateRepository;
+    private final UserRepository userRepository;
+    private final RoleRepository roleRepository;
     private final DesktopSyncIngestService ingestService;
 
     @GetMapping("/master-data")
@@ -58,6 +68,15 @@ public class DesktopSyncController {
                     HttpStatus.NOT_FOUND,
                     "Business not found"
                 )
+            );
+
+        List<Item> items = itemRepository.findByBusinessIdAndDeletedAtIsNull(businessId);
+        List<String> itemIds = items.stream().map(Item::getId).toList();
+        List<ItemImage> images = itemIds.isEmpty()
+            ? List.of()
+            : itemImageRepository.findByItemIdIn(
+                itemIds,
+                Sort.by("itemId").and(Sort.by("sortOrder")).and(Sort.by("id"))
             );
 
         return new MasterDataSnapshot(
@@ -80,16 +99,18 @@ public class DesktopSyncController {
                 .stream()
                 .map(DesktopSyncController::toCategory)
                 .toList(),
-            itemRepository
-                .findByBusinessIdAndDeletedAtIsNull(businessId)
-                .stream()
-                .map(DesktopSyncController::toItem)
-                .toList(),
+            items.stream().map(DesktopSyncController::toItem).toList(),
             taxRateRepository
                 .findByBusinessIdAndActiveIsTrueOrderByNameAsc(businessId)
                 .stream()
                 .map(DesktopSyncController::toTaxRate)
-                .toList()
+                .toList(),
+            userRepository
+                .findByBusinessIdAndDeletedAtIsNull(businessId)
+                .stream()
+                .map(this::toStaff)
+                .toList(),
+            images.stream().map(DesktopSyncController::toImage).toList()
         );
     }
 
@@ -147,6 +168,38 @@ public class DesktopSyncController {
             t.getRatePercent(),
             t.isInclusive(),
             t.isActive()
+        );
+    }
+
+    private MasterDataSnapshot.StaffData toStaff(User u) {
+        String roleKey = u.getRoleId() == null
+            ? null
+            : roleRepository.findByIdAndDeletedAtIsNull(u.getRoleId())
+                .map(zelisline.ub.identity.domain.Role::getRoleKey)
+                .orElse(null);
+        return new MasterDataSnapshot.StaffData(
+            u.getId(),
+            u.getBranchId(),
+            u.getName(),
+            u.getEmail(),
+            u.getPhone(),
+            u.getStatus(),
+            roleKey
+        );
+    }
+
+    private static MasterDataSnapshot.ImageData toImage(ItemImage img) {
+        return new MasterDataSnapshot.ImageData(
+            img.getId(),
+            img.getItemId(),
+            img.getContentType(),
+            img.getSortOrder(),
+            img.getFormat(),
+            img.getSecureUrl(),
+            img.getAltText(),
+            img.getWidth(),
+            img.getHeight(),
+            img.getBytes()
         );
     }
 

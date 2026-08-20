@@ -36,6 +36,14 @@ public class ItemImage {
     @Column(name = "secure_url", length = 2048)
     private String secureUrl;
 
+    /**
+     * Desktop sync only: the originating cloud URL this row was re-hosted
+     * from. Used to detect photo changes on a later sync; always null on the
+     * cloud side.
+     */
+    @Column(name = "cloud_url", length = 2048)
+    private String cloudUrl;
+
     @Column(name = "width")
     private Integer width;
 

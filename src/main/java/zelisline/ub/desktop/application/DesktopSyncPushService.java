@@ -3,6 +3,8 @@ package zelisline.ub.desktop.application;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -79,7 +81,7 @@ public class DesktopSyncPushService {
         }
         log.info("[DesktopSync] pushing {} closed shift(s) to {}", pending.size(), mapping.origin());
 
-        ShiftSyncRequest batch = buildBatch(localId, pending, mapping.ownerUserId());
+        ShiftSyncRequest batch = buildBatch(localId, pending, mapping);
 
         RestClient client = RestClient.builder().baseUrl(mapping.origin()).build();
         ShiftSyncAck ack = postBatch(client, mapping, batch);
@@ -99,13 +101,15 @@ public class DesktopSyncPushService {
     private ShiftSyncRequest buildBatch(
             String localId,
             List<Shift> shifts,
-            String ownerUserId) {
+            CloudSyncSession.Session mapping) {
+        Set<String> cloudStaffIds = mapping.staffIds().stream().collect(Collectors.toSet());
+        String ownerUserId = mapping.ownerUserId();
         List<ShiftSyncRequest.ShiftData> data = new ArrayList<>();
         for (Shift shift : shifts) {
             List<ShiftSyncRequest.SaleData> sales = saleRepository
                 .findByShiftIdAndStatus(shift.getId(), SalesConstants.SHIFT_STATUS_CLOSED)
                 .stream()
-                .map(s -> toSaleData(s, ownerUserId))
+                .map(s -> toSaleData(s, ownerUserId, cloudStaffIds))
                 .toList();
 
             data.add(new ShiftSyncRequest.ShiftData(
@@ -129,7 +133,10 @@ public class DesktopSyncPushService {
         return new ShiftSyncRequest(data);
     }
 
-    private ShiftSyncRequest.SaleData toSaleData(Sale sale, String ownerUserId) {
+    private ShiftSyncRequest.SaleData toSaleData(
+            Sale sale,
+            String ownerUserId,
+            Set<String> cloudStaffIds) {
         List<ShiftSyncRequest.SaleItemData> items = saleItemRepository
             .findBySaleIdOrderByLineIndexAsc(sale.getId())
             .stream()
@@ -141,6 +148,14 @@ public class DesktopSyncPushService {
             .map(this::toPaymentData)
             .toList();
 
+        // Mirrored staff keep their cloud ids, so a local cashier id is already
+        // a cloud id. Locally-created till users (never seen by the cloud) fall
+        // back to the owner so the sale still has a valid attribution.
+        String soldByCloudId = sale.getSoldBy() != null
+            && cloudStaffIds.contains(sale.getSoldBy())
+            ? sale.getSoldBy()
+            : ownerUserId;
+
         return new ShiftSyncRequest.SaleData(
             sale.getId(),
             sale.getBranchId(),
@@ -148,7 +163,7 @@ public class DesktopSyncPushService {
             sale.getIdempotencyKey(),
             sale.getGrandTotal(),
             sale.getCashReceived(),
-            ownerUserId,
+            soldByCloudId,
             sale.getSoldAt(),
             sale.getVoidedAt(),
             sale.getVoidNotes(),

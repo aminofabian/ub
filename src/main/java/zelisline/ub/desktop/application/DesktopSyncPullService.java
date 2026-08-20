@@ -1,6 +1,8 @@
 package zelisline.ub.desktop.application;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,6 +50,8 @@ public class DesktopSyncPullService {
     private final CategoryRepository categoryRepository;
     private final ItemRepository itemRepository;
     private final TaxRateRepository taxRateRepository;
+    private final DesktopStaffSyncService staffSyncService;
+    private final DesktopMediaSyncService mediaSyncService;
     private final CloudSyncSession cloudSyncSession;
     private final TransactionTemplate transactionTemplate;
 
@@ -58,7 +62,9 @@ public class DesktopSyncPullService {
         int branches,
         int categories,
         int items,
-        int taxRates
+        int taxRates,
+        int staff,
+        int images
     ) {}
 
     public PullResult pullMasterData() {
@@ -72,30 +78,43 @@ public class DesktopSyncPullService {
         }
 
         RestClient client = RestClient.builder().baseUrl(mapping.origin()).build();
-        MasterDataSnapshot snapshot = fetchSnapshot(client, mapping);
+        SnapshotFetch fetch = fetchSnapshot(client, mapping);
+        MasterDataSnapshot snapshot = fetch.snapshot();
 
-        PullResult result = transactionTemplate.execute(status -> upsert(localId, snapshot));
-        if (result == null) {
+        UpsertOutcome outcome = transactionTemplate.execute(status -> upsert(localId, snapshot));
+        if (outcome == null) {
             throw new ResponseStatusException(
                 HttpStatus.INTERNAL_SERVER_ERROR,
                 "Sync failed — nothing was written"
             );
         }
+
+        // Re-host product photos after the transaction (network I/O must not
+        // hold the DB transaction open) and remember the mirrored staff ids so
+        // pushed sales can be attributed to the real cashier.
+        mediaSyncService.rehost(localId, outcome.pendingImages());
+        cloudSyncSession.persistStaffIds(fetch.session(), outcome.staffIds());
+
+        PullResult result = outcome.result();
         log.info(
-            "[DesktopSync] pull refresh: {} branch(es), {} category(ies), {} item(s), {} tax rate(s)",
+            "[DesktopSync] pull refresh: {} branch(es), {} category(ies), {} item(s), {} tax rate(s), {} staff, {} image(s)",
             result.branches(),
             result.categories(),
             result.items(),
-            result.taxRates()
+            result.taxRates(),
+            result.staff(),
+            result.images()
         );
         return result;
     }
 
-    private MasterDataSnapshot fetchSnapshot(
+    private record SnapshotFetch(MasterDataSnapshot snapshot, CloudSyncSession.Session session) {}
+
+    private SnapshotFetch fetchSnapshot(
             RestClient client,
             CloudSyncSession.Session mapping) {
         try {
-            return doFetch(client, mapping);
+            return new SnapshotFetch(doFetch(client, mapping), mapping);
         } catch (Exception e) {
             if (!isUnauthorized(e)) {
                 throw new ResponseStatusException(
@@ -113,7 +132,7 @@ public class DesktopSyncPullService {
                 );
             }
             try {
-                return doFetch(client, refreshed);
+                return new SnapshotFetch(doFetch(client, refreshed), refreshed);
             } catch (Exception e2) {
                 throw new ResponseStatusException(
                     HttpStatus.BAD_GATEWAY,
@@ -143,7 +162,13 @@ public class DesktopSyncPullService {
         return snapshot;
     }
 
-    private PullResult upsert(String localId, MasterDataSnapshot snapshot) {
+    private record UpsertOutcome(
+        PullResult result,
+        List<DesktopMediaSyncService.PendingImage> pendingImages,
+        List<String> staffIds
+    ) {}
+
+    private UpsertOutcome upsert(String localId, MasterDataSnapshot snapshot) {
         // Business row must exist (created at connect); refresh its settings.
         businessRepository
             .findByIdAndDeletedAtIsNull(localId)
@@ -217,7 +242,33 @@ public class DesktopSyncPullService {
             taxRates++;
         }
 
-        return new PullResult(branches, categories, items, taxRates);
+        // Staff mirrors (same ids as the cloud → push attribution by id).
+        // Only staff on branches present in the snapshot keep a branch id.
+        List<MasterDataSnapshot.StaffData> staff = snapshot.staff();
+        java.util.Set<String> validBranchIds = snapshot.branches() == null
+            ? java.util.Set.of()
+            : snapshot.branches().stream()
+                .map(MasterDataSnapshot.BranchData::id)
+                .collect(java.util.stream.Collectors.toSet());
+        int staffCount = staffSyncService.upsertStaff(localId, staff, validBranchIds);
+        List<String> staffIds = new ArrayList<>();
+        if (staff != null) {
+            staff.forEach(d -> {
+                if (d.id() != null && !d.id().isBlank()) {
+                    staffIds.add(d.id());
+                }
+            });
+        }
+
+        // Image metadata (files re-hosted after the transaction).
+        List<DesktopMediaSyncService.PendingImage> pending =
+            mediaSyncService.upsertMetadata(localId, snapshot.images());
+
+        return new UpsertOutcome(
+            new PullResult(branches, categories, items, taxRates, staffCount, snapshot.images() == null ? 0 : snapshot.images().size()),
+            pending,
+            staffIds
+        );
     }
 
     private static void applyBusiness(Business b, MasterDataSnapshot.BusinessData d) {

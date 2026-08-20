@@ -9,15 +9,19 @@ import java.util.List;
  * list endpoints, so a till can seed its local MariaDB from a single call.
  *
  * <p>Only the fields a till needs to sell are included: catalog, prices, stock
- * levels, tax rates, branches and business settings. Sales history, customers
- * and media are deliberately out of scope for v1 sync.
+ * levels, tax rates, branches, business settings, staff (for sale attribution)
+ * and image metadata (the till re-hosts the files locally so products stay
+ * visible offline). Sales history and customers are deliberately out of scope
+ * for v1 sync.
  */
 public record MasterDataSnapshot(
         BusinessData business,
         List<BranchData> branches,
         List<CategoryData> categories,
         List<ItemData> items,
-        List<TaxRateData> taxRates
+        List<TaxRateData> taxRates,
+        List<StaffData> staff,
+        List<ImageData> images
 ) {
 
     public record BusinessData(
@@ -77,5 +81,40 @@ public record MasterDataSnapshot(
             BigDecimal ratePercent,
             boolean inclusive,
             boolean active
+    ) {}
+
+    /**
+     * A cloud user (staff member) the till mirrors so pushed sales can be
+     * attributed to the real cashier instead of the shop owner. Credentials are
+     * NOT synced — each local mirror gets a generated password and the till
+     * owner assigns local PINs.
+     */
+    public record StaffData(
+            String id,
+            String branchId,
+            String name,
+            String email,
+            String phone,
+            String status,
+            String roleKey
+    ) {}
+
+    /**
+     * Image metadata for an item. The desktop downloads the file from
+     * {@code secureUrl} once and re-hosts it in the local media store so the
+     * till renders product photos without the network; {@code secureUrl}
+     * remains the offline fallback until the local copy exists.
+     */
+    public record ImageData(
+            String id,
+            String itemId,
+            String contentType,
+            int sortOrder,
+            String format,
+            String secureUrl,
+            String altText,
+            Integer width,
+            Integer height,
+            Long bytes
     ) {}
 }

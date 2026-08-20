@@ -82,6 +82,8 @@ public class DesktopConnectService {
     private final LedgerBootstrapService ledgerBootstrapService;
     private final ShiftService shiftService;
     private final DesktopInitializationService initializationService;
+    private final DesktopStaffSyncService staffSyncService;
+    private final DesktopMediaSyncService mediaSyncService;
     private final TransactionTemplate transactionTemplate;
     private final CloudSyncSession cloudSyncSession;
 
@@ -140,6 +142,7 @@ public class DesktopConnectService {
         String cloudOwnerName = login.user() == null || login.user().name() == null
             ? request.email()
             : login.user().name();
+        String cloudOwnerUserId = login.user() == null ? null : login.user().id();
 
         // 2. Pull the master-data snapshot.
         MasterDataSnapshot snapshot;
@@ -169,7 +172,7 @@ public class DesktopConnectService {
         // only written after every row is in place).
         SeedResult seeded = transactionTemplate.execute(status -> {
             try {
-                return seed(localId, snapshot, request, cloudOwnerName);
+                return seed(localId, snapshot, request, cloudOwnerName, cloudOwnerUserId);
             } catch (RuntimeException e) {
                 status.setRollbackOnly();
                 throw e;
@@ -182,14 +185,30 @@ public class DesktopConnectService {
             );
         }
 
-        // 4. Cloud mapping for future incremental sync runs.
+        // 4. Cloud mapping for future incremental sync runs. The mirrored
+        // staff ids are recorded so pushed sales attribute to the real cashier.
+        java.util.List<String> staffIds = snapshot.staff() == null
+            ? java.util.List.of()
+            : snapshot.staff().stream()
+                .map(MasterDataSnapshot.StaffData::id)
+                .filter(java.util.Objects::nonNull)
+                .filter(id -> !id.isBlank())
+                .toList();
         cloudSyncSession.persist(
             origin,
             cloudBusinessId,
             login.accessToken(),
             login.refreshToken(),
-            login.user() == null ? null : login.user().id()
+            login.user() == null ? null : login.user().id(),
+            staffIds
         );
+
+        // 5. Product photos are downloaded after the session is persisted — a
+        // slow link must not hold the seed transaction open, and a failed
+        // photo is non-fatal (the row keeps the cloud URL until the next
+        // sync). If the app is closed mid-download, the next Sync now
+        // re-downloads whatever is missing.
+        mediaSyncService.rehost(localId, seeded.pendingImages());
 
         log.info(
             "[DesktopConnect] connected business={} from cloud business={} ({} items, {} categories)",
@@ -210,7 +229,8 @@ public class DesktopConnectService {
             String localId,
             MasterDataSnapshot snapshot,
             DesktopConnectRequest request,
-            String cloudOwnerName) {
+            String cloudOwnerName,
+            String cloudOwnerUserId) {
         MasterDataSnapshot.BusinessData cloud = snapshot.business();
 
         Role ownerRole = roleRepository
@@ -317,6 +337,9 @@ public class DesktopConnectService {
         }
 
         // ── Owner user (credentials from the connect request) ──────────
+        // The local owner row reuses the cloud owner id so sale attribution
+        // stays consistent and the staff mirror (below) updates this row
+        // instead of colliding on the unique (business_id, email) constraint.
         String email = request.email().trim().toLowerCase(java.util.Locale.ROOT);
         if (userRepository
                 .findByBusinessIdAndEmailAndDeletedAtIsNull(localId, email)
@@ -327,6 +350,9 @@ public class DesktopConnectService {
             );
         }
         User owner = new User();
+        if (cloudOwnerUserId != null && !cloudOwnerUserId.isBlank()) {
+            owner.setId(cloudOwnerUserId);
+        }
         owner.setBusinessId(localId);
         owner.setEmail(email);
         owner.setName(cloudOwnerName.trim());
@@ -334,6 +360,19 @@ public class DesktopConnectService {
         owner.setRoleId(ownerRole.getId());
         owner.setStatus(UserStatus.ACTIVE);
         User savedOwner = userRepository.save(owner);
+
+        // ── Staff mirrors (cloud ids preserved; credentials NOT synced) ─
+        // Only staff on branches present in the snapshot keep a branch id.
+        java.util.Set<String> validBranchIds = snapshot.branches() == null
+            ? java.util.Set.of()
+            : snapshot.branches().stream()
+                .map(MasterDataSnapshot.BranchData::id)
+                .collect(java.util.stream.Collectors.toSet());
+        staffSyncService.upsertStaff(localId, snapshot.staff(), validBranchIds);
+
+        // ── Image metadata (files re-hosted after the transaction) ─────
+        List<DesktopMediaSyncService.PendingImage> pendingImages =
+            mediaSyncService.upsertMetadata(localId, snapshot.images());
 
         // ── Starter shift (mirrors the create-shop wizard) ─────────────
         String shiftId = null;
@@ -374,7 +413,7 @@ public class DesktopConnectService {
             );
         }
 
-        return new SeedResult(firstBranch.getId());
+        return new SeedResult(firstBranch.getId(), pendingImages);
     }
 
     private static String slugify(String name) {
@@ -387,5 +426,5 @@ public class DesktopConnectService {
             .replaceAll("(^-|-$)", "");
     }
 
-    private record SeedResult(String branchId) {}
+    private record SeedResult(String branchId, List<DesktopMediaSyncService.PendingImage> pendingImages) {}
 }

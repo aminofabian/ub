@@ -8,6 +8,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -46,8 +48,13 @@ public class CloudSyncSession {
             String cloudBusinessId,
             String accessToken,
             String refreshToken,
-            String ownerUserId
-    ) {}
+            String ownerUserId,
+            List<String> staffIds
+    ) {
+        public Session {
+            staffIds = staffIds == null ? List.of() : List.copyOf(staffIds);
+        }
+    }
 
     public Optional<Session> load() {
         Path file = mappingFile();
@@ -56,12 +63,23 @@ public class CloudSyncSession {
         }
         try {
             JsonNode node = objectMapper.readTree(Files.readString(file, StandardCharsets.UTF_8));
+            List<String> staffIds = new ArrayList<>();
+            JsonNode staffNode = node.path("staffIds");
+            if (staffNode.isArray()) {
+                staffNode.forEach(id -> {
+                    String value = id.asText(null);
+                    if (value != null && !value.isBlank()) {
+                        staffIds.add(value);
+                    }
+                });
+            }
             return Optional.of(new Session(
                 node.path("origin").asText(null),
                 node.path("cloudBusinessId").asText(null),
                 node.path("accessToken").asText(null),
                 node.path("refreshToken").asText(null),
-                node.path("ownerUserId").asText(null)
+                node.path("ownerUserId").asText(null),
+                staffIds
             ));
         } catch (IOException | RuntimeException e) {
             log.warn("[CloudSync] could not read cloud-sync.json: {}", e.getMessage());
@@ -75,7 +93,20 @@ public class CloudSyncSession {
             session.cloudBusinessId(),
             session.accessToken(),
             session.refreshToken(),
-            session.ownerUserId()
+            session.ownerUserId(),
+            session.staffIds()
+        );
+    }
+
+    /** Re-persist the session with a fresh staff id list (after a pull). */
+    public void persistStaffIds(Session current, List<String> staffIds) {
+        persist(
+            current.origin(),
+            current.cloudBusinessId(),
+            current.accessToken(),
+            current.refreshToken(),
+            current.ownerUserId(),
+            staffIds
         );
     }
 
@@ -85,6 +116,16 @@ public class CloudSyncSession {
             String accessToken,
             String refreshToken,
             String ownerUserId) {
+        persist(origin, cloudBusinessId, accessToken, refreshToken, ownerUserId, List.of());
+    }
+
+    public void persist(
+            String origin,
+            String cloudBusinessId,
+            String accessToken,
+            String refreshToken,
+            String ownerUserId,
+            List<String> staffIds) {
         try {
             Path confDir = Path.of(appData).resolve("conf");
             Files.createDirectories(confDir);
@@ -99,6 +140,10 @@ public class CloudSyncSession {
             }
             if (ownerUserId != null && !ownerUserId.isBlank()) {
                 node.put("ownerUserId", ownerUserId);
+            }
+            if (staffIds != null) {
+                com.fasterxml.jackson.databind.node.ArrayNode arr = node.putArray("staffIds");
+                staffIds.stream().filter(id -> id != null && !id.isBlank()).forEach(arr::add);
             }
             node.put("connectedAt", Instant.now().toString());
             Files.writeString(
@@ -136,7 +181,8 @@ public class CloudSyncSession {
                 current.cloudBusinessId(),
                 resp.accessToken(),
                 resp.refreshToken() == null ? current.refreshToken() : resp.refreshToken(),
-                current.ownerUserId()
+                current.ownerUserId(),
+                current.staffIds()
             );
             persist(next);
             log.info("[CloudSync] refreshed cloud session for {}", current.origin());

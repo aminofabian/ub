@@ -1,7 +1,7 @@
 package zelisline.ub.platform.logs;
 
-import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import org.springframework.data.domain.Pageable;
@@ -49,6 +49,7 @@ public interface PlatformRequestLogRepository extends JpaRepository<PlatformRequ
 
         double getAvgMs();
 
-        Timestamp getLastAt();
+        /** DATETIME column — Hibernate 7 reads it as {@link LocalDateTime} (UTC session). */
+        LocalDateTime getLastAt();
     }
 }

@@ -2,6 +2,7 @@ package zelisline.ub.platform.logs;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
@@ -104,7 +105,7 @@ public class SuperAdminRequestLogsController {
                     total - success,
                     rate(success, total),
                     Math.round(row.getAvgMs()),
-                    row.getLastAt() == null ? null : row.getLastAt().toInstant()));
+                    row.getLastAt() == null ? null : row.getLastAt().toInstant(ZoneOffset.UTC)));
         }
 
         long total = 0;

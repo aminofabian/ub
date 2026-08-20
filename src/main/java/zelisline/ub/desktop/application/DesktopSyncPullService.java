@@ -92,10 +92,10 @@ public class DesktopSyncPullService {
             );
         }
 
-        // Re-host product photos after the transaction (network I/O must not
-        // hold the DB transaction open) and remember the mirrored staff ids so
-        // pushed sales can be attributed to the real cashier.
-        mediaSyncService.rehost(localId, outcome.pendingImages());
+        // Re-host product photos in the background (network I/O must not hold
+        // the transaction OR the HTTP request open) and remember the mirrored
+        // staff ids so pushed sales can be attributed to the real cashier.
+        mediaSyncService.rehostAsync(localId, outcome.pendingImages());
         cloudSyncSession.persistStaffIds(fetch.session(), outcome.staffIds());
 
         PullResult result = outcome.result();

@@ -2,6 +2,10 @@ package zelisline.ub.desktop.application;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,6 +46,19 @@ public class DesktopMediaSyncService {
 
     private final ItemImageRepository itemImageRepository;
     private final MediaStore mediaStore;
+
+    /** Parallel downloads (photos are small and independent). */
+    private final ExecutorService mediaPool = Executors.newFixedThreadPool(4, r -> {
+        Thread t = new Thread(r, "desktop-media-sync");
+        t.setDaemon(true);
+        return t;
+    });
+    /** Single-thread orchestrator so the caller never blocks on the pool. */
+    private final ExecutorService mediaOrchestrator = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "desktop-media-orchestrator");
+        t.setDaemon(true);
+        return t;
+    });
 
     /** An image whose local file is missing or stale and needs re-hosting. */
     public record PendingImage(String id, String itemId, String cloudUrl, String format) {}
@@ -104,6 +121,19 @@ public class DesktopMediaSyncService {
     }
 
     /**
+     * Kick off a background re-host so connect / Sync-now return immediately.
+     * Photos appear progressively; the item rows keep their cloud URLs until
+     * each local copy lands (online fallback).
+     */
+    public void rehostAsync(String localId, List<PendingImage> pending) {
+        if (pending == null || pending.isEmpty()) {
+            return;
+        }
+        List<PendingImage> snapshot = List.copyOf(pending);
+        mediaOrchestrator.execute(() -> rehost(localId, snapshot));
+    }
+
+    /**
      * Download and re-host pending images. Runs outside the main transaction so
      * network I/O never holds the DB transaction open. Best-effort: a failed
      * download leaves the cloud URL in place (online fallback).
@@ -114,55 +144,74 @@ public class DesktopMediaSyncService {
         if (pending == null || pending.isEmpty()) {
             return 0;
         }
-        int done = 0;
+        CountDownLatch latch = new CountDownLatch(pending.size());
+        AtomicInteger done = new AtomicInteger();
         for (PendingImage p : pending) {
-            try {
-                byte[] bytes = download(p.cloudUrl());
-                if (bytes == null || bytes.length == 0) {
-                    throw new IllegalStateException("empty download");
+            mediaPool.execute(() -> {
+                try {
+                    if (rehostOne(localId, p)) {
+                        done.incrementAndGet();
+                    }
+                } finally {
+                    latch.countDown();
                 }
-                String folder = CloudinaryImageService.folderItems(localId, p.itemId());
-                CloudinaryUploadResult result = mediaStore.uploadImageToFolder(
-                    bytes,
-                    filenameFor(p.cloudUrl(), p.format()),
-                    folder
-                );
-                ItemImage img = itemImageRepository.findById(p.id()).orElse(null);
-                if (img == null) {
-                    log.warn("[DesktopSync] image row {} vanished before re-host", p.id());
-                    continue;
-                }
-                img.setSecureUrl(result.secureUrl());
-                img.setCloudinaryPublicId(result.publicId());
-                img.setProvider(ItemImageStorageProvider.LEGACY);
-                if (result.bytes() != null) {
-                    img.setBytes(result.bytes());
-                }
-                if (result.format() != null) {
-                    img.setFormat(result.format());
-                }
-                if (result.contentType() != null) {
-                    img.setContentType(result.contentType());
-                }
-                if (img.getWidth() == null && result.width() != null) {
-                    img.setWidth(result.width());
-                }
-                if (img.getHeight() == null && result.height() != null) {
-                    img.setHeight(result.height());
-                }
-                itemImageRepository.save(img);
-                done++;
-            } catch (Exception e) {
-                log.warn(
-                    "[DesktopSync] could not re-host image {} from {}: {}",
-                    p.id(),
-                    p.cloudUrl(),
-                    e.getMessage()
-                );
-            }
+            });
         }
-        log.info("[DesktopSync] re-hosted {} product photo(s) locally", done);
-        return done;
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        log.info("[DesktopSync] re-hosted {} product photo(s) locally", done.get());
+        return done.get();
+    }
+
+    private boolean rehostOne(String localId, PendingImage p) {
+        try {
+            byte[] bytes = download(p.cloudUrl());
+            if (bytes == null || bytes.length == 0) {
+                throw new IllegalStateException("empty download");
+            }
+            String folder = CloudinaryImageService.folderItems(localId, p.itemId());
+            CloudinaryUploadResult result = mediaStore.uploadImageToFolder(
+                bytes,
+                filenameFor(p.cloudUrl(), p.format()),
+                folder
+            );
+            ItemImage img = itemImageRepository.findById(p.id()).orElse(null);
+            if (img == null) {
+                log.warn("[DesktopSync] image row {} vanished before re-host", p.id());
+                return false;
+            }
+            img.setSecureUrl(result.secureUrl());
+            img.setCloudinaryPublicId(result.publicId());
+            img.setProvider(ItemImageStorageProvider.LEGACY);
+            if (result.bytes() != null) {
+                img.setBytes(result.bytes());
+            }
+            if (result.format() != null) {
+                img.setFormat(result.format());
+            }
+            if (result.contentType() != null) {
+                img.setContentType(result.contentType());
+            }
+            if (img.getWidth() == null && result.width() != null) {
+                img.setWidth(result.width());
+            }
+            if (img.getHeight() == null && result.height() != null) {
+                img.setHeight(result.height());
+            }
+            itemImageRepository.save(img);
+            return true;
+        } catch (Exception e) {
+            log.warn(
+                "[DesktopSync] could not re-host image {} from {}: {}",
+                p.id(),
+                p.cloudUrl(),
+                e.getMessage()
+            );
+            return false;
+        }
     }
 
     private static byte[] download(String url) throws Exception {

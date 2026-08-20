@@ -228,12 +228,11 @@ public class DesktopConnectService {
             staffIds
         );
 
-        // 5. Product photos are downloaded after the session is persisted — a
-        // slow link must not hold the seed transaction open, and a failed
-        // photo is non-fatal (the row keeps the cloud URL until the next
-        // sync). If the app is closed mid-download, the next Sync now
-        // re-downloads whatever is missing.
-        mediaSyncService.rehost(localId, seeded.pendingImages());
+        // 5. Product photos are downloaded in the background after the session
+        // is persisted, so connect returns fast even with thousands of images.
+        // Rows keep their cloud URL until each local copy lands; a failed
+        // photo is non-fatal, and the next Sync now re-downloads any gaps.
+        mediaSyncService.rehostAsync(localId, seeded.pendingImages());
 
         log.info(
             "[DesktopConnect] connected business={} from cloud business={} ({} items, {} categories)",

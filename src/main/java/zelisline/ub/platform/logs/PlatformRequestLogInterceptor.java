@@ -62,7 +62,9 @@ public class PlatformRequestLogInterceptor implements HandlerInterceptor {
             row.setLoggedAt(Instant.now());
             row.setMethod(request.getMethod());
             String path = request.getRequestURI();
-            row.setPath(path.length() > 512 ? path.substring(0, 512) : path);
+            String query = request.getQueryString();
+            String full = (query == null || query.isBlank()) ? path : path + "?" + query;
+            row.setPath(full.length() > 512 ? full.substring(0, 512) : full);
             row.setCategory(classifier.classify(path));
 
             Object businessId = request.getAttribute(TenantRequestAttributes.BUSINESS_ID);

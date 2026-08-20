@@ -81,6 +81,23 @@ class PlatformRequestLogRepositoryIT {
                 .hasSize(1);
     }
 
+    @Test
+    void countsExpectedHostLookupMisses() {
+        save("20", "GET", "/api/v1/public/host/resolve?host=kiosk.ke", RequestLogCategory.OTHER, 404, false, 3);
+        save("21", "GET", "/api/v1/public/host/resolve?host=shop.example.com", RequestLogCategory.OTHER, 200, true, 4);
+        save("22", "GET", "/api/v1/public/host/resolve-by-email?email=x@y.z", RequestLogCategory.OTHER, 404, false, 2);
+        save("23", "POST", "/api/v1/sales", RequestLogCategory.CASHIER, 500, false, 300);
+
+        // 404s on host-resolve paths are expected misses; other failures are not.
+        assertThat(repository.countExpectedMissesSince(null)).isEqualTo(2);
+
+        // Out-of-window rows are excluded.
+        save("24", "GET", "/api/v1/public/host/resolve?host=old.example.com",
+                RequestLogCategory.OTHER, 404, false, 1, Instant.now().minusSeconds(7200));
+        assertThat(repository.countExpectedMissesSince(Instant.now().minusSeconds(3600))).isEqualTo(2);
+        assertThat(repository.countExpectedMissesSince(null)).isEqualTo(3);
+    }
+
     private void save(String id, String method, String path,
             RequestLogCategory category, int status, boolean success, long durationMs) {
         PlatformRequestLog row = new PlatformRequestLog();

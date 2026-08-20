@@ -30,6 +30,20 @@ public interface PlatformRequestLogRepository
             """, nativeQuery = true)
     List<CategorySummaryRow> summarySince(@Param("since") Instant since);
 
+    /**
+     * Tenant lookups that answered 404 — the platform's own frontend probes
+     * {@code /api/v1/public/host/resolve*} for every host it renders, and an
+     * unknown host (e.g. the platform host itself) is an expected miss, not a
+     * failure. Counted separately so real failures stay visible.
+     */
+    @Query(value = """
+            SELECT COUNT(*) FROM platform_request_log
+            WHERE (:since IS NULL OR logged_at >= :since)
+              AND status = 404
+              AND path LIKE '/api/v1/public/host/resolve%'
+            """, nativeQuery = true)
+    long countExpectedMissesSince(@Param("since") Instant since);
+
     /** Bulk purge used by {@link RequestLogRetention} — returns rows removed. */
     long deleteByLoggedAtBefore(Instant cutoff);
 

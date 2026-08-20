@@ -64,6 +64,7 @@ public class SuperAdminRequestLogsController {
             long success,
             long failed,
             double successRate,
+            long expectedMisses,
             List<CategorySummary> categories) {}
 
     @GetMapping
@@ -126,6 +127,7 @@ public class SuperAdminRequestLogsController {
                 success,
                 total - success,
                 rate(success, total),
+                repository.countExpectedMissesSince(since),
                 categories);
     }
 

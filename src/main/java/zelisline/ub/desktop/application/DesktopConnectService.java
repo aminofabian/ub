@@ -319,6 +319,10 @@ public class DesktopConnectService {
         }
 
         // ── Categories (same ids — ids are stable across sync runs) ────
+        // Parent links are deferred: the snapshot is ordered by `position`,
+        // which does NOT guarantee a parent precedes its child, and the local
+        // FK `fk_categories_parent` rejects an insert whose parent is absent.
+        List<MasterDataSnapshot.CategoryData> categoryParents = new java.util.ArrayList<>();
         for (MasterDataSnapshot.CategoryData c : snapshot.categories()) {
             Category category = new Category();
             category.setId(c.id());
@@ -328,12 +332,24 @@ public class DesktopConnectService {
                 ? slugify(c.name())
                 : c.slug());
             category.setDescription(c.description());
-            category.setParentId(c.parentId());
+            category.setParentId(null);
             category.setPosition(c.position());
             category.setDefaultTaxRateId(c.defaultTaxRateId());
             category.setDefaultMarkupPct(c.defaultMarkupPct());
             category.setActive(c.active());
             categoryRepository.save(category);
+            if (c.parentId() != null && !c.parentId().isBlank()) {
+                categoryParents.add(c);
+            }
+        }
+        for (MasterDataSnapshot.CategoryData c : categoryParents) {
+            categoryRepository.findByIdAndBusinessId(c.parentId(), localId)
+                .ifPresent(parent -> categoryRepository
+                    .findByIdAndBusinessId(c.id(), localId)
+                    .ifPresent(category -> {
+                        category.setParentId(parent.getId());
+                        categoryRepository.save(category);
+                    }));
         }
 
         // ── Item types (items.item_type_id is NOT NULL + FK-bound) ─────

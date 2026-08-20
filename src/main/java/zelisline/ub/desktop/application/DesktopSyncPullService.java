@@ -200,7 +200,11 @@ public class DesktopSyncPullService {
             branches++;
         }
 
+        // Categories — parent links deferred (position ordering does not
+        // guarantee a parent precedes its child; the local FK rejects an
+        // insert whose parent is absent).
         int categories = 0;
+        List<MasterDataSnapshot.CategoryData> categoryParents = new ArrayList<>();
         for (MasterDataSnapshot.CategoryData d : snapshot.categories()) {
             Category category = categoryRepository
                 .findByIdAndBusinessId(d.id(), localId)
@@ -213,6 +217,18 @@ public class DesktopSyncPullService {
             applyCategory(category, d);
             categoryRepository.save(category);
             categories++;
+            if (d.parentId() != null && !d.parentId().isBlank()) {
+                categoryParents.add(d);
+            }
+        }
+        for (MasterDataSnapshot.CategoryData d : categoryParents) {
+            categoryRepository.findByIdAndBusinessId(d.parentId(), localId)
+                .ifPresent(parent -> categoryRepository
+                    .findByIdAndBusinessId(d.id(), localId)
+                    .ifPresent(category -> {
+                        category.setParentId(parent.getId());
+                        categoryRepository.save(category);
+                    }));
         }
 
         // Item types (items.item_type_id is NOT NULL + FK-bound).
@@ -348,7 +364,8 @@ public class DesktopSyncPullService {
         c.setName(d.name());
         c.setSlug(d.slug() == null || d.slug().isBlank() ? slugify(d.name()) : d.slug());
         c.setDescription(d.description());
-        c.setParentId(d.parentId());
+        // Parent link is set in the deferred pass (see upsert).
+        c.setParentId(null);
         c.setPosition(d.position());
         c.setDefaultTaxRateId(d.defaultTaxRateId());
         c.setDefaultMarkupPct(d.defaultMarkupPct());

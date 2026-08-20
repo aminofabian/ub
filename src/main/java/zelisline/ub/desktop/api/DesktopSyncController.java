@@ -15,9 +15,11 @@ import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.ItemImage;
+import zelisline.ub.catalog.domain.ItemType;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.desktop.api.dto.MasterDataSnapshot;
 import zelisline.ub.desktop.api.dto.ShiftSyncAck;
 import zelisline.ub.desktop.api.dto.ShiftSyncRequest;
@@ -53,6 +55,7 @@ public class DesktopSyncController {
     private final CategoryRepository categoryRepository;
     private final ItemRepository itemRepository;
     private final ItemImageRepository itemImageRepository;
+    private final ItemTypeRepository itemTypeRepository;
     private final TaxRateRepository taxRateRepository;
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
@@ -104,6 +107,11 @@ public class DesktopSyncController {
                 .findByBusinessIdAndActiveIsTrueOrderByNameAsc(businessId)
                 .stream()
                 .map(DesktopSyncController::toTaxRate)
+                .toList(),
+            itemTypeRepository
+                .findByBusinessIdOrderBySortOrderAsc(businessId)
+                .stream()
+                .map(DesktopSyncController::toItemType)
                 .toList(),
             userRepository
                 .findByBusinessIdAndDeletedAtIsNull(businessId)
@@ -157,7 +165,21 @@ public class DesktopSyncController {
             i.getMinStockLevel(),
             i.getVariantOfItemId(),
             i.getVariantName(),
-            i.isActive()
+            i.isActive(),
+            i.getItemTypeId()
+        );
+    }
+
+    private static MasterDataSnapshot.ItemTypeData toItemType(ItemType t) {
+        return new MasterDataSnapshot.ItemTypeData(
+            t.getId(),
+            t.getTypeKey(),
+            t.getLabel(),
+            t.getIcon(),
+            t.getColor(),
+            t.getSortOrder(),
+            t.isActive(),
+            t.isDefault()
         );
     }
 

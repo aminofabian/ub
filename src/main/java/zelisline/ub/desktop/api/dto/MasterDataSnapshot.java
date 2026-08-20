@@ -20,6 +20,7 @@ public record MasterDataSnapshot(
         List<CategoryData> categories,
         List<ItemData> items,
         List<TaxRateData> taxRates,
+        List<ItemTypeData> itemTypes,
         List<StaffData> staff,
         List<ImageData> images
 ) {
@@ -72,7 +73,8 @@ public record MasterDataSnapshot(
             BigDecimal minStockLevel,
             String variantOfItemId,
             String variantName,
-            boolean active
+            boolean active,
+            String itemTypeId
     ) {}
 
     public record TaxRateData(
@@ -81,6 +83,21 @@ public record MasterDataSnapshot(
             BigDecimal ratePercent,
             boolean inclusive,
             boolean active
+    ) {}
+
+    /**
+     * Catalog item types — the till mirrors them with the same ids because
+     * {@code items.item_type_id} is NOT NULL and FK-bound on the local schema.
+     */
+    public record ItemTypeData(
+            String id,
+            String typeKey,
+            String label,
+            String icon,
+            String color,
+            int sortOrder,
+            boolean active,
+            boolean isDefault
     ) {}
 
     /**

@@ -16,8 +16,10 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.domain.ItemType;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.desktop.api.dto.MasterDataSnapshot;
 import zelisline.ub.pricing.domain.TaxRate;
 import zelisline.ub.pricing.repository.TaxRateRepository;
@@ -49,6 +51,7 @@ public class DesktopSyncPullService {
     private final BranchRepository branchRepository;
     private final CategoryRepository categoryRepository;
     private final ItemRepository itemRepository;
+    private final ItemTypeRepository itemTypeRepository;
     private final TaxRateRepository taxRateRepository;
     private final DesktopStaffSyncService staffSyncService;
     private final DesktopMediaSyncService mediaSyncService;
@@ -212,7 +215,47 @@ public class DesktopSyncPullService {
             categories++;
         }
 
+        // Item types (items.item_type_id is NOT NULL + FK-bound).
+        // Null-tolerant: a cloud that hasn't deployed the item-types field
+        // sends no list; the fallback then resolves the local default.
+        java.util.List<MasterDataSnapshot.ItemTypeData> itemTypes =
+            snapshot.itemTypes() == null ? List.of() : snapshot.itemTypes();
+        java.util.Map<String, String> itemTypeIds = new java.util.HashMap<>();
+        for (MasterDataSnapshot.ItemTypeData t : itemTypes) {
+            if (t.id() == null || t.id().isBlank()) {
+                continue;
+            }
+            ItemType itemType = itemTypeRepository
+                .findByIdAndBusinessId(t.id(), localId)
+                .orElseGet(() -> {
+                    ItemType created = new ItemType();
+                    created.setId(t.id());
+                    created.setBusinessId(localId);
+                    return created;
+                });
+            itemType.setTypeKey(t.typeKey());
+            itemType.setLabel(t.label());
+            itemType.setIcon(t.icon());
+            itemType.setColor(t.color());
+            itemType.setSortOrder(t.sortOrder());
+            itemType.setActive(t.active());
+            itemType.setDefault(t.isDefault());
+            itemTypeRepository.save(itemType);
+            itemTypeIds.put(t.id(), t.id());
+        }
+        String fallbackItemTypeId = itemTypeIds.isEmpty()
+            ? itemTypeRepository.findByBusinessIdAndIsDefaultTrue(localId)
+                .map(ItemType::getId)
+                .orElseGet(() -> itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(localId)
+                    .stream().map(ItemType::getId).findFirst().orElse(null))
+            : itemTypeIds.values().iterator().next();
+
+        // Items — variant links deferred: a variant may precede its parent in
+        // the snapshot, or the parent may be missing (soft-deleted on the
+        // cloud), either of which the local FK rejects. Phase 2 links only
+        // variants whose parent landed locally.
         int items = 0;
+        List<MasterDataSnapshot.ItemData> variantLinks = new ArrayList<>();
         for (MasterDataSnapshot.ItemData d : snapshot.items()) {
             Item item = itemRepository
                 .findByIdAndBusinessIdAndDeletedAtIsNull(d.id(), localId)
@@ -222,9 +265,21 @@ public class DesktopSyncPullService {
                     created.setBusinessId(localId);
                     return created;
                 });
-            applyItem(item, d);
+            applyItem(item, d, fallbackItemTypeId, itemTypeIds);
             itemRepository.save(item);
             items++;
+            if (d.variantOfItemId() != null && !d.variantOfItemId().isBlank()) {
+                variantLinks.add(d);
+            }
+        }
+        for (MasterDataSnapshot.ItemData d : variantLinks) {
+            itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(d.variantOfItemId(), localId)
+                .ifPresent(parent -> itemRepository
+                    .findByIdAndBusinessIdAndDeletedAtIsNull(d.id(), localId)
+                    .ifPresent(item -> {
+                        item.setVariantOfItemId(parent.getId());
+                        itemRepository.save(item);
+                    }));
         }
 
         int taxRates = 0;
@@ -300,7 +355,11 @@ public class DesktopSyncPullService {
         c.setActive(d.active());
     }
 
-    private static void applyItem(Item i, MasterDataSnapshot.ItemData d) {
+    private static void applyItem(
+            Item i,
+            MasterDataSnapshot.ItemData d,
+            String fallbackItemTypeId,
+            java.util.Map<String, String> itemTypeIds) {
         i.setSku(d.sku());
         i.setBarcode(d.barcode());
         i.setPluCode(d.pluCode());
@@ -315,9 +374,14 @@ public class DesktopSyncPullService {
         i.setBundlePrice(d.bundlePrice());
         i.setBuyingPrice(d.buyingPrice());
         i.setMinStockLevel(d.minStockLevel());
-        i.setVariantOfItemId(d.variantOfItemId());
+        // Variant parent is linked in phase 2 (after all items exist).
+        i.setVariantOfItemId(null);
         i.setVariantName(d.variantName());
         i.setActive(d.active());
+        String typeId = d.itemTypeId();
+        i.setItemTypeId(typeId != null && itemTypeIds.containsKey(typeId)
+            ? typeId
+            : fallbackItemTypeId);
     }
 
     private static void applyTaxRate(TaxRate t, MasterDataSnapshot.TaxRateData d) {

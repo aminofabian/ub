@@ -20,8 +20,10 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.domain.ItemType;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.desktop.api.dto.DesktopConnectRequest;
 import zelisline.ub.desktop.api.dto.DesktopConnectResponse;
@@ -78,6 +80,7 @@ public class DesktopConnectService {
     private final BranchRepository branchRepository;
     private final CategoryRepository categoryRepository;
     private final ItemRepository itemRepository;
+    private final ItemTypeRepository itemTypeRepository;
     private final TaxRateRepository taxRateRepository;
     private final PasswordEncoder passwordEncoder;
     private final CatalogBootstrapService catalogBootstrapService;
@@ -333,7 +336,44 @@ public class DesktopConnectService {
             categoryRepository.save(category);
         }
 
+        // ── Item types (items.item_type_id is NOT NULL + FK-bound) ─────
+        // Null-tolerant: a cloud that hasn't deployed the item-types field
+        // sends no list; the fallback then resolves the local default.
+        java.util.List<MasterDataSnapshot.ItemTypeData> itemTypes =
+            snapshot.itemTypes() == null ? List.of() : snapshot.itemTypes();
+        java.util.Map<String, String> itemTypeIds = new java.util.HashMap<>();
+        for (MasterDataSnapshot.ItemTypeData t : itemTypes) {
+            if (t.id() == null || t.id().isBlank()) {
+                continue;
+            }
+            ItemType itemType = new ItemType();
+            itemType.setId(t.id());
+            itemType.setBusinessId(localId);
+            itemType.setTypeKey(t.typeKey());
+            itemType.setLabel(t.label());
+            itemType.setIcon(t.icon());
+            itemType.setColor(t.color());
+            itemType.setSortOrder(t.sortOrder());
+            itemType.setActive(t.active());
+            itemType.setDefault(t.isDefault());
+            itemTypeRepository.save(itemType);
+            itemTypeIds.put(t.id(), t.id());
+        }
+        // Fallback for items whose type is missing from the snapshot: the
+        // seeded local default (or the first synced type).
+        String fallbackItemTypeId = itemTypeIds.isEmpty()
+            ? itemTypeRepository.findByBusinessIdAndIsDefaultTrue(localId)
+                .map(ItemType::getId)
+                .orElseGet(() -> itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(localId)
+                    .stream().map(ItemType::getId).findFirst().orElse(null))
+            : itemTypeIds.values().iterator().next();
+
         // ── Items ──────────────────────────────────────────────────────
+        // Variant links are deferred: a variant may precede its parent in the
+        // snapshot, and a parent soft-deleted on the cloud may be missing
+        // entirely (the local FK would reject it). Phase 2 links only variants
+        // whose parent actually landed locally.
+        List<MasterDataSnapshot.ItemData> variantLinks = new java.util.ArrayList<>();
         for (MasterDataSnapshot.ItemData i : snapshot.items()) {
             Item item = new Item();
             item.setId(i.id());
@@ -352,10 +392,26 @@ public class DesktopConnectService {
             item.setBundlePrice(i.bundlePrice());
             item.setBuyingPrice(i.buyingPrice());
             item.setMinStockLevel(i.minStockLevel());
-            item.setVariantOfItemId(i.variantOfItemId());
+            item.setVariantOfItemId(null);
             item.setVariantName(i.variantName());
             item.setActive(i.active());
+            String typeId = i.itemTypeId();
+            item.setItemTypeId(typeId != null && itemTypeIds.containsKey(typeId)
+                ? typeId
+                : fallbackItemTypeId);
             itemRepository.save(item);
+            if (i.variantOfItemId() != null && !i.variantOfItemId().isBlank()) {
+                variantLinks.add(i);
+            }
+        }
+        for (MasterDataSnapshot.ItemData i : variantLinks) {
+            itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(i.variantOfItemId(), localId)
+                .ifPresent(parent -> itemRepository
+                    .findByIdAndBusinessIdAndDeletedAtIsNull(i.id(), localId)
+                    .ifPresent(item -> {
+                        item.setVariantOfItemId(parent.getId());
+                        itemRepository.save(item);
+                    }));
         }
 
         // ── Owner user (credentials from the connect request) ──────────

@@ -154,6 +154,10 @@ public class SecurityConfig {
 
                         .requestMatchers(HttpMethod.GET, "/api/v1/platform/mobile-schema-version").permitAll()
 
+                        // Desktop installs ship log bundles here when online; gated by a
+                        // shared X-Desktop-Log-Ingest-Key checked inside the controller.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/platform/desktop-logs").permitAll()
+
                         .requestMatchers("/api/v1/super-admin/**").hasRole("SUPER_ADMIN")
 
                         .requestMatchers("/api/v1/supplier-portal/**").hasRole("SUPPLIER")

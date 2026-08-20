@@ -216,7 +216,7 @@ public class CustomerDirectoryService {
 
         Customer customer = new Customer();
         customer.setBusinessId(businessId);
-        customer.setCustomerNo(customerRepository.nextCustomerNo(businessId));
+        customer.setCustomerNo(customerRepository.nextCustomerNo(businessId).map(n -> n + 1).orElse(1L));
         customer.setName(request.name().trim());
         String[] parts = PayerNameNormalizer.splitDisplayName(request.name());
         customer.setFirstName(parts[0].isEmpty() ? null : parts[0]);

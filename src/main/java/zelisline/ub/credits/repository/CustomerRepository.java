@@ -7,11 +7,9 @@ import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
-import jakarta.persistence.LockModeType;
 import zelisline.ub.credits.domain.Customer;
 
 public interface CustomerRepository extends JpaRepository<Customer, String> {
@@ -24,12 +22,23 @@ public interface CustomerRepository extends JpaRepository<Customer, String> {
     List<Customer> findByBusinessIdAndFirstNameNormAndLastNameNormAndDeletedAtIsNull(
             String businessId, String firstNameNorm, String lastNameNorm);
 
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    /**
+     * Current highest customer number for the business (empty when none yet).
+     *
+     * <p>Locks the max row (and the trailing gap on the
+     * {@code (business_id, customer_no)} unique index) so concurrent creates
+     * for the same business serialize instead of colliding; the unique index
+     * is the backstop. Callers add 1 for the next number. A plain (non-aggregate)
+     * {@code FOR UPDATE} select is used because MySQL/MariaDB (and H2's MySQL
+     * mode) reject {@code FOR UPDATE} on grouped/aggregate queries, and Hibernate 7
+     * forbids {@code @Lock} on native queries.
+     */
     @Query(
-            value = "SELECT COALESCE(MAX(customer_no), 0) + 1 FROM customers WHERE business_id = :businessId FOR UPDATE",
+            value = "SELECT customer_no FROM customers WHERE business_id = :businessId"
+                    + " ORDER BY customer_no DESC LIMIT 1 FOR UPDATE",
             nativeQuery = true
     )
-    long nextCustomerNo(@Param("businessId") String businessId);
+    Optional<Long> nextCustomerNo(@Param("businessId") String businessId);
 
     Page<Customer> findByBusinessIdAndDeletedAtIsNullOrderByCustomerNoAscNameAsc(
             String businessId, Pageable pageable);

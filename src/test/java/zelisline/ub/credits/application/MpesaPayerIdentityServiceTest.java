@@ -57,7 +57,7 @@ class MpesaPayerIdentityServiceTest {
                 .thenReturn(Optional.empty());
         when(customerPhoneRepository.findByBusinessIdAndMaskFingerprint("biz", "2547|123"))
                 .thenReturn(List.of());
-        when(customerRepository.nextCustomerNo("biz")).thenReturn(12L);
+        when(customerRepository.nextCustomerNo("biz")).thenReturn(Optional.of(12L));
         when(customerRepository.save(any(Customer.class))).thenAnswer(inv -> {
             Customer c = inv.getArgument(0);
             if (c.getId() == null) {
@@ -77,7 +77,7 @@ class MpesaPayerIdentityServiceTest {
 
         Customer created = service.resolveFromWebhook("biz", parsed).orElseThrow();
 
-        assertThat(created.getCustomerNo()).isEqualTo(12L);
+        assertThat(created.getCustomerNo()).isEqualTo(13L);
         assertThat(created.getOrigin()).isEqualTo(CustomerOrigins.MPESA_INFERRED);
         assertThat(created.getMpesaIdentityKey()).isEqualTo("JOHN|DOE|2547|123");
         ArgumentCaptor<CustomerPhone> phoneCap = ArgumentCaptor.forClass(CustomerPhone.class);
@@ -121,7 +121,7 @@ class MpesaPayerIdentityServiceTest {
                 .thenReturn(Optional.empty());
         when(customerPhoneRepository.findByBusinessIdAndMaskFingerprint("biz", "2547|123"))
                 .thenReturn(List.of());
-        when(customerRepository.nextCustomerNo("biz")).thenReturn(13L);
+        when(customerRepository.nextCustomerNo("biz")).thenReturn(Optional.of(13L));
         when(customerRepository.save(any(Customer.class))).thenAnswer(inv -> {
             Customer c = inv.getArgument(0);
             if (c.getId() == null) {

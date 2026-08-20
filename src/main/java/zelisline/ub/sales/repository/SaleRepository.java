@@ -31,16 +31,22 @@ public interface SaleRepository extends JpaRepository<Sale, String> {
     Optional<Sale> findByIdAndBusinessIdForUpdate(@Param("id") String id, @Param("businessId") String businessId);
 
     /**
-     * Next sequential receipt number for the business. FOR UPDATE takes a
-     * next-key lock on the (business_id, receipt_no) index so concurrent
-     * sales for the same business serialize instead of colliding; the unique
-     * index is the backstop.
+     * Current highest receipt number for the business (empty when none yet).
+     *
+     * <p>Locks the max row (and the trailing gap on the
+     * {@code (business_id, receipt_no)} index) so concurrent sales for the same
+     * business serialize instead of colliding; the unique index is the backstop.
+     * Callers add 1 for the next number. A plain (non-aggregate) {@code FOR UPDATE}
+     * select is used because MySQL/MariaDB (and H2's MySQL mode) reject
+     * {@code FOR UPDATE} on grouped/aggregate queries, and Hibernate 7 forbids
+     * {@code @Lock} on native queries.
      */
     @Query(
-            value = "SELECT COALESCE(MAX(receipt_no), 0) + 1 FROM sales WHERE business_id = :businessId FOR UPDATE",
+            value = "SELECT receipt_no FROM sales WHERE business_id = :businessId"
+                    + " ORDER BY receipt_no DESC LIMIT 1 FOR UPDATE",
             nativeQuery = true
     )
-    long nextReceiptNo(@Param("businessId") String businessId);
+    Optional<Long> nextReceiptNo(@Param("businessId") String businessId);
 
     boolean existsByBusinessId(String businessId);
 }

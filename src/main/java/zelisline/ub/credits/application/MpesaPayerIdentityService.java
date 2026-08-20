@@ -204,7 +204,7 @@ public class MpesaPayerIdentityService {
     ) {
         Customer customer = new Customer();
         customer.setBusinessId(businessId);
-        customer.setCustomerNo(customerRepository.nextCustomerNo(businessId));
+        customer.setCustomerNo(customerRepository.nextCustomerNo(businessId).map(n -> n + 1).orElse(1L));
         customer.setFirstName(title(first));
         customer.setLastName(title(last));
         customer.setFirstNameNorm(first);

@@ -275,6 +275,20 @@ public class IdentityService {
     }
 
     /**
+     * Self-service: the current user sets their own till PIN (first-login
+     * onboarding). Unlike the admin path, this does NOT revoke the user's
+     * active sessions — they just authenticated and must stay signed in.
+     */
+    @Transactional
+    public UserResponse setMyPin(String businessId, String userId, String pin) {
+        User user = requireTenantUser(businessId, userId);
+        applyPin(user, businessId, pin.trim());
+        User saved = userRepository.save(user);
+        Role role = roleRepository.findById(saved.getRoleId()).orElse(null);
+        return toResponse(saved, role);
+    }
+
+    /**
      * Admin reveal of a till PIN. Returns the decrypted value only when
      * {@code pin_enc} is present; legacy hash-only rows are not recoverable.
      */

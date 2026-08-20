@@ -471,12 +471,12 @@ public class PageSealService {
             channel = delivery.channel();
             outcome = delivery.outcome();
             if (!"sent".equals(outcome) && !"stub".equals(outcome)) {
+                log.warn(
+                        "Page seal OTP not sent scope={} subject={} phone={} channel={} outcome={} detail={}",
+                        scope, subjectId, phone, channel, outcome, delivery.detail());
                 throw new ResponseStatusException(
                         HttpStatus.BAD_GATEWAY,
-                        "Could not send verification code"
-                                + (delivery.detail() != null ? " (" + delivery.detail() + ")" : "")
-                                + ". Configure SMS (Sozuri/TextSMS) on this shop or under"
-                                + " Super Admin → Platform integrations.");
+                        "We couldn't send the code. Check the number and try again in a moment.");
             }
         }
         // Always surface the code when the provider stubbed — otherwise the UI says "sent" with nothing to enter.

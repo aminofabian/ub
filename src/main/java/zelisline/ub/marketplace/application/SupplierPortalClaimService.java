@@ -67,6 +67,9 @@ public class SupplierPortalClaimService {
 
     static final Duration SETUP_TOKEN_TTL = Duration.ofMinutes(15);
 
+    private static final String USER_OTP_SEND_FAILED =
+            "We couldn't send the code. Check the number and try again in a moment.";
+
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final SupplierPhoneVerificationRepository verificationRepository;
@@ -207,10 +210,10 @@ public class SupplierPortalClaimService {
         boolean smsReady = messaging.enabled() && messaging.smsConfigured();
         boolean waReady = messaging.enabled() && messaging.metaWhatsAppConfigured();
         if (!smsReady && !waReady && !returnOtpWhenStubbed) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Messaging is not configured. Set SMS under Super Admin → Platform → Integrations "
-                            + "(Sozuri or TextSMS), then try again.");
+            log.warn(
+                    "Supplier claim OTP not sent: messaging not configured phone={} smsReady={} waReady={}",
+                    phone, smsReady, waReady);
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, USER_OTP_SEND_FAILED);
         }
 
         String message = portalSettingsService.defaultSmsBody(code, settings.getCodeExpiryMinutes());
@@ -225,11 +228,10 @@ public class SupplierPortalClaimService {
             channel = delivery.channel();
             outcome = delivery.outcome();
             if (!"sent".equals(outcome) && !"stub".equals(outcome)) {
-                throw new ResponseStatusException(
-                        HttpStatus.BAD_GATEWAY,
-                        "Could not send verification code"
-                                + (delivery.detail() != null ? " (" + delivery.detail() + ")" : "")
-                                + ". Configure SMS (Sozuri/TextSMS) for reliable OTP delivery.");
+                log.warn(
+                        "Supplier claim OTP not sent phone={} channel={} outcome={} detail={}",
+                        phone, channel, outcome, delivery.detail());
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, USER_OTP_SEND_FAILED);
             }
             if ("stub".equals(outcome)) {
                 log.info("Supplier claim OTP stubbed: phone={} code={} channel={}", phone, code, channel);

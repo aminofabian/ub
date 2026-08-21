@@ -171,6 +171,11 @@ public class DesktopWebConfig implements WebMvcConfigurer {
         // "Sign in with my online shop" — must be reachable before any local
         // user exists, same as the setup wizard.
         "/api/v1/desktop/connect",
+        // Reconnect refreshes the cloud session when it has expired, so the
+        // frontend sends it without an Authorization header (requiresAuth:
+        // false). Without this exemption the cloud chain's /api/** require
+        // auth and the reconnect POST 403s before reaching the controller.
+        "/api/v1/desktop/reconnect",
         // License status is polled by the shell + frontend on every page load
         // before a user logs in, so it must be unauthenticated.
         "/api/v1/license/status"

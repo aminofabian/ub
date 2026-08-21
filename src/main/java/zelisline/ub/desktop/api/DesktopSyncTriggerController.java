@@ -2,9 +2,11 @@ package zelisline.ub.desktop.api;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Profile;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import zelisline.ub.desktop.application.DesktopMediaSyncService;
 import zelisline.ub.desktop.application.DesktopSyncPullService;
 import zelisline.ub.desktop.application.DesktopSyncPushService;
 
@@ -27,10 +29,17 @@ public class DesktopSyncTriggerController {
 
     private final DesktopSyncPushService syncPushService;
     private final DesktopSyncPullService syncPullService;
+    private final DesktopMediaSyncService mediaSyncService;
 
     @PostMapping
     public DesktopSyncPushService.SyncPushResult syncNow() {
         return syncPushService.pushPending();
+    }
+
+    /** Live progress of the background product-photo download. */
+    @GetMapping("/media-status")
+    public DesktopMediaSyncService.MediaStatus mediaStatus() {
+        return mediaSyncService.status();
     }
 
     /** Pull master data down, then push pending sales up. */

@@ -60,6 +60,17 @@ public class DesktopMediaSyncService {
         return t;
     });
 
+    /** Live progress for the Settings → Sync now UI. */
+    private final AtomicInteger mediaTotal = new AtomicInteger();
+    private final AtomicInteger mediaDone = new AtomicInteger();
+    private volatile boolean mediaRunning = false;
+
+    public record MediaStatus(boolean downloading, int total, int done) {}
+
+    public MediaStatus status() {
+        return new MediaStatus(mediaRunning, mediaTotal.get(), mediaDone.get());
+    }
+
     /** An image whose local file is missing or stale and needs re-hosting. */
     public record PendingImage(String id, String itemId, String cloudUrl, String format) {}
 
@@ -144,6 +155,9 @@ public class DesktopMediaSyncService {
         if (pending == null || pending.isEmpty()) {
             return 0;
         }
+        mediaRunning = true;
+        mediaTotal.set(pending.size());
+        mediaDone.set(0);
         CountDownLatch latch = new CountDownLatch(pending.size());
         AtomicInteger done = new AtomicInteger();
         for (PendingImage p : pending) {
@@ -151,6 +165,7 @@ public class DesktopMediaSyncService {
                 try {
                     if (rehostOne(localId, p)) {
                         done.incrementAndGet();
+                        mediaDone.set(done.get());
                     }
                 } finally {
                     latch.countDown();
@@ -161,6 +176,8 @@ public class DesktopMediaSyncService {
             latch.await();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        } finally {
+            mediaRunning = false;
         }
         log.info("[DesktopSync] re-hosted {} product photo(s) locally", done.get());
         return done.get();

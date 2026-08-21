@@ -46,6 +46,9 @@ public interface UserRepository extends JpaRepository<User, String> {
     /** Full staff list for a tenant — used by the desktop sync snapshot. */
     List<User> findByBusinessIdAndDeletedAtIsNull(String businessId);
 
+    /** Users of a specific role (e.g. the storefront `buyer` role) for cleanup. */
+    List<User> findByBusinessIdAndRoleIdAndDeletedAtIsNull(String businessId, String roleId);
+
     /** Global lookup for host-domain login routing — finds which business a user belongs to. */
     @Query("select u from User u where u.email = :email and u.deletedAt is null and u.status = 'active' order by u.createdAt asc")
     Optional<User> findFirstActiveByEmail(@Param("email") String email);

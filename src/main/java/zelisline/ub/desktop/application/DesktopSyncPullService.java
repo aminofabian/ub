@@ -322,6 +322,9 @@ public class DesktopSyncPullService {
                 .map(MasterDataSnapshot.BranchData::id)
                 .collect(java.util.stream.Collectors.toSet());
         int staffCount = staffSyncService.upsertStaff(localId, staff, validBranchIds);
+        // Clean up any buyer (storefront customer) rows a pre-fix sync already
+        // mirrored — they are not till staff.
+        staffSyncService.removeBuyerStaff(localId);
         List<String> staffIds = new ArrayList<>();
         if (staff != null) {
             staff.forEach(d -> {

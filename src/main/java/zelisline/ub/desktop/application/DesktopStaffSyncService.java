@@ -1,6 +1,7 @@
 package zelisline.ub.desktop.application;
 
 import java.security.SecureRandom;
+import java.time.Instant;
 import java.util.Locale;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -10,6 +11,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import zelisline.ub.desktop.api.dto.MasterDataSnapshot;
 import zelisline.ub.identity.application.IdentityService;
+import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.domain.UserStatus;
 import zelisline.ub.identity.repository.RoleRepository;
@@ -36,6 +38,7 @@ import zelisline.ub.identity.repository.UserRepository;
 public class DesktopStaffSyncService {
 
     private static final Logger log = LoggerFactory.getLogger(DesktopStaffSyncService.class);
+    private static final String BUYER_ROLE_KEY = "buyer";
 
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
@@ -95,6 +98,32 @@ public class DesktopStaffSyncService {
         }
         log.info("[DesktopSync] mirrored {} staff member(s) onto local install", count);
         return count;
+    }
+
+    /**
+     * Soft-delete any storefront customer (buyer) rows that a pre-fix sync
+     * already mirrored onto the register. Buyers are not till staff; soft-delete
+     * keeps shift/sale references intact while hiding the account from every
+     * list query.
+     *
+     * @return number of buyer accounts removed
+     */
+    public int removeBuyerStaff(String localId) {
+        Role buyer = roleRepository.findSystemRoleByKey(BUYER_ROLE_KEY).orElse(null);
+        if (buyer == null) {
+            return 0;
+        }
+        java.util.List<User> buyers =
+            userRepository.findByBusinessIdAndRoleIdAndDeletedAtIsNull(localId, buyer.getId());
+        Instant now = Instant.now();
+        for (User u : buyers) {
+            u.setDeletedAt(now);
+            userRepository.save(u);
+        }
+        if (!buyers.isEmpty()) {
+            log.info("[DesktopSync] soft-deleted {} buyer account(s) from the local install", buyers.size());
+        }
+        return buyers.size();
     }
 
     private void applyIdentity(

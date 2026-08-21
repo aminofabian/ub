@@ -6,15 +6,19 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.security.KeyPair;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.server.ResponseStatusException;
+import zelisline.ub.desktop.license.SuperAdminDesktopLicensesController.IssueRecord;
 import zelisline.ub.desktop.license.SuperAdminDesktopLicensesController.IssueRequest;
 import zelisline.ub.desktop.license.SuperAdminDesktopLicensesController.IssueResponse;
 import zelisline.ub.identity.application.NotificationService;
@@ -32,9 +36,13 @@ class SuperAdminDesktopLicensesControllerTest {
     private final String publicKey = LicenseService.encodePublicKey(keys.getPublic());
 
     private final NotificationService mail = mock(NotificationService.class);
+    private final DesktopLicenseIssueRepository repo = mock(DesktopLicenseIssueRepository.class);
 
     private SuperAdminDesktopLicensesController controller() {
-        return new SuperAdminDesktopLicensesController(new DesktopLicenseIssuer(privateKey), mail);
+        when(repo.save(any(DesktopLicenseIssue.class)))
+            .thenAnswer(inv -> inv.getArgument(0));
+        return new SuperAdminDesktopLicensesController(
+            new DesktopLicenseIssuer(privateKey), mail, repo);
     }
 
     private LicenseService verifier() {
@@ -120,9 +128,59 @@ class SuperAdminDesktopLicensesControllerTest {
     }
 
     @Test
+    void issuePersistsHistoryRow() {
+        IssueResponse response = controller().issue(
+            new IssueRequest(BUSINESS, "shop", 30, null, null, null, "owner@shop.co.ke"));
+
+        assertNotNull(response.id());
+        assertNotNull(response.createdAt());
+        verify(repo).save(any(DesktopLicenseIssue.class));
+    }
+
+    @Test
+    void resendEmailsStoredToken() {
+        DesktopLicenseIssue row = new DesktopLicenseIssue();
+        row.setId("lic-1");
+        row.setBusinessName(BUSINESS);
+        row.setPlan("shop");
+        row.setIssuedAt(Instant.now());
+        row.setExpiresAt(Instant.now().plus(30, ChronoUnit.DAYS));
+        row.setRecipientEmail("owner@shop.co.ke");
+        row.setToken("stored-token");
+        when(repo.findById("lic-1")).thenReturn(Optional.of(row));
+
+        IssueRecord record = controller().resend("lic-1");
+
+        assertEquals("lic-1", record.id());
+        assertTrue(record.emailSent());
+        verify(mail).sendNotificationEmail(
+            org.mockito.ArgumentMatchers.eq("owner@shop.co.ke"),
+            contains("Kiosk Desktop license"),
+            contains("stored-token"),
+            contains("stored-token")
+        );
+    }
+
+    @Test
+    void resendWithoutEmailIsRejected() {
+        DesktopLicenseIssue row = new DesktopLicenseIssue();
+        row.setId("lic-2");
+        row.setBusinessName(BUSINESS);
+        row.setToken("x");
+        when(repo.findById("lic-2")).thenReturn(Optional.of(row));
+
+        assertThrows(
+            ResponseStatusException.class,
+            () -> controller().resend("lic-2")
+        );
+    }
+
+    @Test
     void unconfiguredIssuerReturns503() {
+        when(repo.save(any(DesktopLicenseIssue.class)))
+            .thenAnswer(inv -> inv.getArgument(0));
         SuperAdminDesktopLicensesController unconfigured =
-            new SuperAdminDesktopLicensesController(new DesktopLicenseIssuer(""), mail);
+            new SuperAdminDesktopLicensesController(new DesktopLicenseIssuer(""), mail, repo);
 
         ResponseStatusException ex = assertThrows(
             ResponseStatusException.class,

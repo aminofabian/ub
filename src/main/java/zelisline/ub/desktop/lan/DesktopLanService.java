@@ -10,6 +10,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,14 +38,19 @@ public class DesktopLanService {
 
     private static final Logger log = LoggerFactory.getLogger(DesktopLanService.class);
 
+    private static final String NETSH = "C:\\Windows\\System32\\netsh.exe";
+
     private final Path lanEnabledFile;
     private final int serverPort;
+    /** Windows Firewall rule name used to open the POS port for LAN clients. */
+    private final String firewallRuleName;
 
     public DesktopLanService(
             @Value("${APP_DATA:${user.home}/.palmart}") String appDataDir,
             @Value("${server.port:5050}") int serverPort) {
         this.lanEnabledFile = Path.of(appDataDir, "conf", "lan-enabled");
         this.serverPort = serverPort;
+        this.firewallRuleName = "Palmart Kiosk " + serverPort;
     }
 
     /** Is LAN sharing currently active? (Reads the marker file, not the live bind.) */
@@ -61,9 +68,15 @@ public class DesktopLanService {
                 Files.createDirectories(lanEnabledFile.getParent());
                 Files.writeString(lanEnabledFile, "true", StandardCharsets.UTF_8);
                 log.info("[LAN] enabled — server will bind to 0.0.0.0 on next restart");
+                // Best effort: Windows Firewall would otherwise block other
+                // devices from reaching this PC even though the bind is 0.0.0.0.
+                // Fails silently when the app lacks admin rights — the frontend
+                // then shows the manual one-liner from {@link #firewallNote()}.
+                applyFirewallRule(true);
             } else {
                 Files.deleteIfExists(lanEnabledFile);
                 log.info("[LAN] disabled — server will bind to 127.0.0.1 on next restart");
+                applyFirewallRule(false);
             }
         } catch (IOException e) {
             log.error("[LAN] failed to write lan-enabled file: {}", e.getMessage());
@@ -133,7 +146,7 @@ public class DesktopLanService {
         boolean enabled = isLanEnabled();
         String url = lanConnectionUrl();
         List<String> addresses = detectLanAddresses();
-        return new LanStatus(enabled, url, addresses, serverPort);
+        return new LanStatus(enabled, url, addresses, serverPort, false, enabled ? firewallNote() : null);
     }
 
     /**
@@ -145,6 +158,84 @@ public class DesktopLanService {
         boolean nowEnabled = !wasEnabled;
         String url = nowEnabled ? lanConnectionUrl() : null;
         List<String> addresses = detectLanAddresses();
-        return new LanStatus(nowEnabled, url, addresses, serverPort, true);
+        return new LanStatus(nowEnabled, url, addresses, serverPort, true, nowEnabled ? firewallNote() : null);
+    }
+
+    /**
+     * Adds/removes the Windows Firewall inbound rule for the POS port.
+     * Best effort: adding rules requires elevation, which the till usually
+     * does not have — failures are logged and surfaced via {@link #firewallNote()}.
+     */
+    private void applyFirewallRule(boolean add) {
+        if (!isWindows()) {
+            return;
+        }
+        try {
+            List<String> cmd = new ArrayList<>();
+            cmd.add(NETSH);
+            cmd.add("advfirewall");
+            cmd.add("firewall");
+            cmd.add(add ? "add" : "delete");
+            cmd.add("rule");
+            cmd.add("name=" + firewallRuleName);
+            if (add) {
+                cmd.add("dir=in");
+                cmd.add("action=allow");
+                cmd.add("protocol=TCP");
+                cmd.add("localport=" + serverPort);
+            }
+            Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+            String out = p.inputReader().lines().collect(Collectors.joining("\n"));
+            if (!p.waitFor(10, TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                log.warn("[LAN] firewall rule {} timed out", add ? "add" : "remove");
+                return;
+            }
+            if (p.exitValue() == 0) {
+                log.info("[LAN] firewall rule {}: {}", add ? "added" : "removed", firewallRuleName);
+            } else {
+                log.warn("[LAN] firewall rule {} failed (exit {}): {}",
+                        add ? "add" : "remove", p.exitValue(), out.trim());
+            }
+        } catch (Exception e) {
+            log.warn("[LAN] could not {} firewall rule: {}", add ? "add" : "remove", e.getMessage());
+        }
+    }
+
+    /**
+     * Guidance for the Settings UI when LAN is on but Windows Firewall has no
+     * inbound rule for the POS port (other devices will be blocked). Returns
+     * {@code null} when the rule exists or cannot be verified (don't nag).
+     */
+    private String firewallNote() {
+        if (!isWindows()) {
+            return null;
+        }
+        try {
+            Process p = new ProcessBuilder(NETSH, "advfirewall", "firewall", "show", "rule",
+                    "name=" + firewallRuleName).redirectErrorStream(true).start();
+            String out = p.inputReader().lines().collect(Collectors.joining("\n"));
+            if (!p.waitFor(10, TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                return null;
+            }
+            // English output says "No rules match the specified criteria." when
+            // absent; localized output may differ, in which case we stay quiet
+            // rather than showing a false warning.
+            if (out.toLowerCase().contains("no rules match")) {
+                return "Windows Firewall is blocking other devices from reaching this PC."
+                        + " Run this once in PowerShell as Administrator, then try the URL from the other device again:\n"
+                        + "netsh advfirewall firewall add rule name=\"" + firewallRuleName
+                        + "\" dir=in action=allow protocol=TCP localport=" + serverPort;
+            }
+            return null;
+        } catch (Exception e) {
+            log.warn("[LAN] could not check firewall rule: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase().contains("win");
     }
 }

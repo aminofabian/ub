@@ -9,11 +9,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.api.dto.CatalogListScope;
+import zelisline.ub.catalog.api.dto.ItemSummaryResponse;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
@@ -52,7 +55,11 @@ public class PosTopProductsService {
                 scopedType,
                 PageRequest.of(0, Math.min(bounded * 3, 300)));
         if (rows.isEmpty()) {
-            return List.of();
+            // Fresh install (or a branch with no sales yet): fall back to the
+            // sellable catalog so the till's main shelf isn't empty after a
+            // connect/sync. Ranked by name — the moment sales land, the real
+            // top-seller list takes over.
+            return fallbackCatalog(businessId, branchId, scopedType, bounded);
         }
         List<String> itemIds = new ArrayList<>(rows.size());
         for (Object[] row : rows) {
@@ -117,6 +124,53 @@ public class PosTopProductsService {
             return Set.of();
         }
         return new HashSet<>(itemRepository.findParentIdsHavingVariants(businessId, rootIds));
+    }
+
+    /**
+     * Sellable-catalog fill for the POS shelf when the branch has no sales yet.
+     * Uses the same {@code SKUS_ONLY} scope as the cashier's product search so
+     * group-label parents stay hidden.
+     */
+    private List<PosTopProductResponse> fallbackCatalog(
+            String businessId,
+            String branchId,
+            String itemTypeId,
+            int limit) {
+        Page<ItemSummaryResponse> page = itemCatalogService.listItems(
+                businessId,
+                null,
+                null,
+                null,
+                false,
+                false,
+                false,
+                CatalogListScope.SKUS_ONLY,
+                null,
+                branchId,
+                itemTypeId,
+                PageRequest.of(0, limit));
+        List<PosTopProductResponse> out = new ArrayList<>(limit);
+        for (ItemSummaryResponse row : page.getContent()) {
+            if (row.groupLabelOnly()) {
+                continue; // defensive — SKUS_ONLY already excludes these
+            }
+            out.add(new PosTopProductResponse(
+                    row.id(),
+                    row.name(),
+                    row.sku(),
+                    row.thumbnailUrl(),
+                    0L,
+                    BigDecimal.ZERO,
+                    null,
+                    blankToNull(row.variantName()),
+                    blankToNull(row.brand()),
+                    blankToNull(row.size()),
+                    blankToNull(row.variantOfItemId()),
+                    row.packageVariant() ? Boolean.TRUE : Boolean.FALSE,
+                    row.packageUnitsPerSale()
+            ));
+        }
+        return out;
     }
 
     private static String blankToNull(String raw) {

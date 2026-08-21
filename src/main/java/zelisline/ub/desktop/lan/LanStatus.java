@@ -19,9 +19,15 @@ public record LanStatus(
         /** The server port. */
         int port,
         /** True after a toggle — the frontend should tell the user a restart is needed. */
-        boolean restartRequired
+        boolean restartRequired,
+        /**
+         * Non-null when LAN is on but Windows Firewall has no inbound rule for
+         * the port (other devices will be blocked). Contains the admin one-liner
+         * to open it. Null when the rule exists or can't be verified.
+         */
+        String firewallNote
 ) {
     public LanStatus(boolean enabled, String lanUrl, List<String> addresses, int port) {
-        this(enabled, lanUrl, addresses, port, false);
+        this(enabled, lanUrl, addresses, port, false, null);
     }
 }

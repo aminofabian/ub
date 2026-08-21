@@ -57,6 +57,7 @@ public class DesktopSyncPullService {
     private final DesktopMediaSyncService mediaSyncService;
     private final CloudSyncSession cloudSyncSession;
     private final TransactionTemplate transactionTemplate;
+    private final DesktopSyncProgressService syncProgress;
 
     @Value("${app.desktop.business-id:}")
     private String desktopBusinessId;
@@ -81,8 +82,10 @@ public class DesktopSyncPullService {
         }
 
         RestClient client = RestClient.builder().baseUrl(mapping.origin()).build();
+        syncProgress.downloadStarted();
         SnapshotFetch fetch = fetchSnapshot(client, mapping);
         MasterDataSnapshot snapshot = fetch.snapshot();
+        syncProgress.applyStarted(snapshot.items() == null ? 0 : snapshot.items().size());
 
         UpsertOutcome outcome = transactionTemplate.execute(status -> upsert(localId, snapshot));
         if (outcome == null) {
@@ -284,6 +287,7 @@ public class DesktopSyncPullService {
             applyItem(item, d, fallbackItemTypeId, itemTypeIds);
             itemRepository.save(item);
             items++;
+            syncProgress.applyProgress(items);
             if (d.variantOfItemId() != null && !d.variantOfItemId().isBlank()) {
                 variantLinks.add(d);
             }

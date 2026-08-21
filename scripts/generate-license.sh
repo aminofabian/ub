@@ -7,8 +7,20 @@
 #   ./gradlew compileJava first (or run this — it compiles if needed).
 #
 # Usage:
+#   bash backend/scripts/generate-license.sh bootstrap [--force]
+#       ONE-COMMAND SETUP. Generates a key pair once (idempotent — reuses
+#       existing keys), stores it OUTSIDE the repo at
+#       $HOME/.palmart-license/ (private.pem + public.pem, chmod 600), bakes
+#       the PUBLIC key into application-desktop.properties automatically, and
+#       prints the APP_DESKTOP_LICENSE_PRIVATE_KEY line for the cloud.
+#       --force regenerates the key pair (invalidates previously issued
+#       licenses — only do this before any licenses exist).
+#
+#   bash backend/scripts/generate-license.sh pubkey
+#       Prints the stored public key (e.g. to verify the bake / share it).
+#
 #   bash backend/scripts/generate-license.sh keys
-#       Generates a fresh Ed25519 key pair and prints:
+#       Prints a fresh key pair to stdout (manual flow):
 #         PUBLIC_KEY=<base64>   → paste into application-desktop.properties
 #                                 (app.desktop.license.public-key=…)
 #         PRIVATE_KEY=<base64>  → keep secret, never ship. Feed it back to
@@ -31,22 +43,39 @@
 #   bash backend/scripts/generate-license.sh verify --token <token>
 #       Round-trip check: decodes + verifies a token against a public key
 #       (the same check the till performs) and prints the payload.
+#
+# Env: PALMART_LICENSE_KEY_DIR overrides the key store location (default
+# $HOME/.palmart-license).
 set -euo pipefail
 
-case "${1:-}" in
-  -h|--help|help)
-    sed -n '3,32p' "$0" | sed 's/^# \{0,1\}//'
-    exit 0
-    ;;
-esac
-
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+KEY_DIR="${PALMART_LICENSE_KEY_DIR:-$HOME/.palmart-license}"
+PRIVATE_KEY_FILE="$KEY_DIR/private.pem"
+PUBLIC_KEY_FILE="$KEY_DIR/public.pem"
+PROPS="$ROOT/src/main/resources/application-desktop.properties"
 CP="$ROOT/build/classes/java/main"
 
 usage() {
-  sed -n '3,32p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,45p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-1}"
 }
+
+case "${1:-}" in
+  -h|--help|help)
+    sed -n '3,45p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+  pubkey)
+    # No Java/Gradle needed — just read the stored public key.
+    if [ ! -f "$PUBLIC_KEY_FILE" ]; then
+      echo "No keys yet — run: bash backend/scripts/generate-license.sh bootstrap" >&2
+      exit 1
+    fi
+    cat "$PUBLIC_KEY_FILE"
+    echo
+    exit 0
+    ;;
+esac
 
 # ── ensure the backend classes + runtime deps are compiled ─────────────────
 if [ ! -d "$CP" ] || [ -z "$(ls -A "$CP" 2>/dev/null)" ]; then
@@ -76,6 +105,8 @@ HARNESS=/tmp/PalmartLicenseCli.java
 cat > "$HARNESS" << 'JAVA'
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import zelisline.ub.desktop.license.LicensePayload;
 import zelisline.ub.desktop.license.LicenseService;
 
@@ -85,6 +116,7 @@ public class PalmartLicenseCli {
         if (args.length == 0) { usage(2); }
         switch (args[0]) {
             case "keys" -> generateKeys();
+            case "writekeys" -> writeKeys(args);
             case "issue" -> issue(args);
             case "verify" -> verify(args);
             default -> { System.err.println("unknown command: " + args[0]); usage(2); }
@@ -96,11 +128,23 @@ public class PalmartLicenseCli {
         System.out.println("PUBLIC_KEY=" + LicenseService.encodePublicKey(kp.getPublic()));
         System.out.println("PRIVATE_KEY=" + LicenseService.encodePrivateKey(kp.getPrivate()));
         System.err.println();
-        System.err.println("# Paste PUBLIC_KEY into application-desktop.properties:");
-        System.err.println("#   app.desktop.license.public-key=<PUBLIC_KEY>");
-        System.err.println("# Keep PRIVATE_KEY secret — issue tokens with:");
-        System.err.println("#   LICENSE_PRIVATE_KEY=<PRIVATE_KEY> bash backend/scripts/generate-license.sh issue \\");
-        System.err.println("#       --business \"Shop Name\" --plan shop --days 365");
+        System.err.println("# Prefer the one-command setup:");
+        System.err.println("#   bash backend/scripts/generate-license.sh bootstrap");
+        System.err.println("# Manual: paste PUBLIC_KEY into application-desktop.properties and");
+        System.err.println("# set APP_DESKTOP_LICENSE_PRIVATE_KEY=<PRIVATE_KEY> on the cloud.");
+    }
+
+    /** Writes a fresh key pair as private.pem / public.pem into the given dir. */
+    private static void writeKeys(String[] args) throws Exception {
+        if (args.length < 2) {
+            System.err.println("writekeys requires a directory");
+            System.exit(2);
+        }
+        Path dir = Path.of(args[1]);
+        Files.createDirectories(dir);
+        var kp = LicenseService.generateKeyPair();
+        Files.writeString(dir.resolve("private.pem"), LicenseService.encodePrivateKey(kp.getPrivate()));
+        Files.writeString(dir.resolve("public.pem"), LicenseService.encodePublicKey(kp.getPublic()));
     }
 
     private static void issue(String[] args) {
@@ -173,8 +217,8 @@ public class PalmartLicenseCli {
     }
 
     private static void usage(int code) {
-        System.err.println("commands: keys | issue | verify");
-        System.err.println("  keys  — generate a new Ed25519 key pair");
+        System.err.println("commands: bootstrap | pubkey | keys | issue | verify");
+        System.err.println("  keys  — generate a new Ed25519 key pair (stdout)");
         System.err.println("  issue — --business NAME --plan counter|shop|lan (--days N | --expires ISO | --perpetual) [--fingerprint HASH]");
         System.err.println("  verify— --token TOKEN [--public-key BASE64 | LICENSE_PUBLIC_KEY]");
         System.exit(code);
@@ -190,4 +234,54 @@ if ! javac -cp "$CLASSPATH" -d /tmp "$HARNESS" 2>/tmp/license-cli-compile.err; t
   exit 1
 fi
 
-java -cp "/tmp:$CLASSPATH" PalmartLicenseCli "$@"
+CMD="${1:-}"
+case "$CMD" in
+  bootstrap)
+    # ── One-command setup: keys → store → bake → print cloud env ─────────
+    FORCE=0
+    [ "${2:-}" = "--force" ] && FORCE=1
+    if [ -f "$PRIVATE_KEY_FILE" ] && [ -f "$PUBLIC_KEY_FILE" ] && [ "$FORCE" = 0 ]; then
+      echo "  keys already exist at $KEY_DIR — reusing (bootstrap --force to regenerate)."
+    else
+      mkdir -p "$KEY_DIR"
+      java -cp "/tmp:$CLASSPATH" PalmartLicenseCli writekeys "$KEY_DIR"
+      chmod 600 "$PRIVATE_KEY_FILE" "$PUBLIC_KEY_FILE"
+      echo "  generated key pair → $KEY_DIR (private.pem / public.pem, mode 600)"
+    fi
+
+    PUB="$(cat "$PUBLIC_KEY_FILE")"
+    python3 - "$PROPS" "$PUB" << 'PY'
+import sys, pathlib
+props = pathlib.Path(sys.argv[1])
+pub = sys.argv[2]
+text = props.read_text()
+target = "app.desktop.license.public-key=${APP_DESKTOP_LICENSE_PUBLIC_KEY:" + pub + "}"
+if target in text:
+    print("  application-desktop.properties already carries this public key — no change.")
+    sys.exit(0)
+lines = text.splitlines()
+out, done = [], False
+for ln in lines:
+    if ln.startswith("app.desktop.license.public-key="):
+        out.append(target)
+        done = True
+    else:
+        out.append(ln)
+if not done:
+    out.append(target)
+props.write_text("\n".join(out) + "\n")
+print("  patched application-desktop.properties — public key will be baked into the next release.")
+PY
+
+    echo
+    echo "  ✅ Desktop JARs will verify licenses once the next release ships."
+    echo "  ☁  Set this env var on the CLOUD deployment, then restart:"
+    echo "     APP_DESKTOP_LICENSE_PRIVATE_KEY=$(cat "$PRIVATE_KEY_FILE")"
+    echo "  🔑 Keep $PRIVATE_KEY_FILE safe — anyone with it can mint licenses."
+    echo "     Back it up; never commit it or send it to support."
+    ;;
+  *)
+    # keys / issue / verify — delegate to the Java CLI
+    java -cp "/tmp:$CLASSPATH" PalmartLicenseCli "$@"
+    ;;
+esac

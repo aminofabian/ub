@@ -62,6 +62,11 @@ public class DesktopStaffSyncService {
             if (d.id() == null || d.id().isBlank()) {
                 continue;
             }
+            // Storefront customers (buyers) are not till staff — never mirror
+            // them onto the register.
+            if (d.roleKey() != null && "buyer".equalsIgnoreCase(d.roleKey())) {
+                continue;
+            }
             User user = userRepository
                 .findByIdAndBusinessIdAndDeletedAtIsNull(d.id(), localId)
                 .orElseGet(() -> {

@@ -50,6 +50,9 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
 @RequiredArgsConstructor
 public class DesktopSyncController {
 
+    /** Storefront customer roles that must not be mirrored onto the till. */
+    private static final java.util.Set<String> NON_TILL_ROLE_KEYS = java.util.Set.of("buyer");
+
     private final BusinessRepository businessRepository;
     private final BranchRepository branchRepository;
     private final CategoryRepository categoryRepository;
@@ -117,6 +120,7 @@ public class DesktopSyncController {
                 .findByBusinessIdAndDeletedAtIsNull(businessId)
                 .stream()
                 .map(this::toStaff)
+                .filter(s -> s.roleKey() == null || !NON_TILL_ROLE_KEYS.contains(s.roleKey()))
                 .toList(),
             images.stream().map(DesktopSyncController::toImage).toList()
         );

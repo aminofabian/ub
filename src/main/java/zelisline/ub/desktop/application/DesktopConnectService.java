@@ -249,6 +249,87 @@ public class DesktopConnectService {
         );
     }
 
+    /**
+     * Re-authenticate an already-connected install when the stored cloud
+     * session has expired. Unlike {@link #connect(DesktopConnectRequest)} this
+     * does NOT re-seed the local DB — it only refreshes the cloud tokens in
+     * {@code cloud-sync.json} so the next Sync now works again.
+     */
+    public DesktopConnectResponse reconnect(DesktopConnectRequest request) {
+        String localId = desktopBusinessId == null ? "" : desktopBusinessId.trim();
+        if (localId.isEmpty()) {
+            throw new ResponseStatusException(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "app.desktop.business-id is not configured — set APP_DESKTOP_BUSINESS_ID before reconnecting"
+            );
+        }
+        if (businessRepository.findByIdAndDeletedAtIsNull(localId).isEmpty()) {
+            throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "This PC has not been set up yet — open Setup to connect first"
+            );
+        }
+
+        String origin = request.normalizedOrigin();
+        RestClient client = RestClient.builder().baseUrl(origin).build();
+        String resolvedBusinessId = resolveBusinessIdByEmail(client, request.email());
+
+        LoginResponse login;
+        String refreshToken;
+        try {
+            ResponseEntity<LoginResponse> response = client
+                .post()
+                .uri("/api/v1/auth/login")
+                .header("X-Tenant-Id", resolvedBusinessId)
+                .header("X-Kiosk-Client", "native")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(new LoginRequest(request.email(), request.password()))
+                .retrieve()
+                .toEntity(LoginResponse.class);
+            login = response.getBody();
+            refreshToken = login == null ? null : login.refreshToken();
+            if (refreshToken == null || refreshToken.isBlank()) {
+                refreshToken = extractRefreshCookie(response.getHeaders());
+            }
+        } catch (Exception e) {
+            log.warn("[DesktopConnect] cloud reconnect login failed: {}", e.getMessage());
+            throw new ResponseStatusException(
+                HttpStatus.UNAUTHORIZED,
+                "Could not sign in to the online shop — check your email and password"
+            );
+        }
+        if (login == null || login.accessToken() == null || login.accessToken().isBlank()) {
+            throw new ResponseStatusException(
+                HttpStatus.UNAUTHORIZED,
+                "Could not sign in to the online shop — check your email and password"
+            );
+        }
+        String cloudBusinessId = login.user() == null ? null : login.user().businessId();
+        if (cloudBusinessId == null || cloudBusinessId.isBlank()) {
+            throw new ResponseStatusException(
+                HttpStatus.UNAUTHORIZED,
+                "Signed in, but no shop is linked to this account"
+            );
+        }
+
+        // Keep the staff-id mapping from the previous session so push
+        // attribution stays intact across a reconnect.
+        List<String> staffIds = cloudSyncSession
+            .load()
+            .map(CloudSyncSession.Session::staffIds)
+            .orElse(List.of());
+        cloudSyncSession.persist(
+            origin,
+            cloudBusinessId,
+            login.accessToken(),
+            refreshToken,
+            login.user() == null ? null : login.user().id(),
+            staffIds
+        );
+        log.info("[DesktopConnect] reconnected business={} to cloud business={}", localId, cloudBusinessId);
+        return new DesktopConnectResponse(localId, null, "Reconnected to your online shop");
+    }
+
     private SeedResult seed(
             String localId,
             MasterDataSnapshot snapshot,

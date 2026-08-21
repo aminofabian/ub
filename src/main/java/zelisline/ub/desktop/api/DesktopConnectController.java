@@ -30,4 +30,11 @@ public class DesktopConnectController {
             @Valid @RequestBody DesktopConnectRequest request) {
         return desktopConnectService.connect(request);
     }
+
+    /** Re-authenticate an existing install when the cloud session expires. */
+    @PostMapping("/reconnect")
+    public DesktopConnectResponse reconnect(
+            @Valid @RequestBody DesktopConnectRequest request) {
+        return desktopConnectService.reconnect(request);
+    }
 }

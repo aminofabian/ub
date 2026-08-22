@@ -291,6 +291,7 @@ public class PublicHostResolverService {
                 storefront.storeThemeId(),
                 storefront.landingTemplateId(),
                 storefront.landingContent(),
+                storefront.designJson(),
                 Instant.now(),
                 countryCode,
                 localities.isEmpty() ? List.of() : localities

@@ -30,6 +30,11 @@ public record PublicHostResolveResponse(
         String storeThemeId,
         String landingTemplateId,
         LandingContentDto landingContent,
+        /**
+         * Merchant design overrides (opaque JSON). Rendered on top of the
+         * theme defaults by the storefront; never interpreted server-side.
+         */
+        String designJson,
         Instant resolvedAt,
         /** ISO-3166 alpha-2 when known (e.g. {@code KE}). */
         String countryCode,

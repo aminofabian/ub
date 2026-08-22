@@ -49,6 +49,7 @@ class EmailVerificationBrandingContextTest {
                 "mart",
                 "coming-soon-editorial",
                 null,
+                null,
                 java.time.Instant.now(),
                 "KE",
                 java.util.List.of());

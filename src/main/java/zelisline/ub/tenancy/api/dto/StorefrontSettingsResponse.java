@@ -11,7 +11,8 @@ public record StorefrontSettingsResponse(
         List<DeliveryAreaDto> deliveryAreas,
         String storeThemeId,
         String landingTemplateId,
-        LandingContentDto landingContent
+        LandingContentDto landingContent,
+        String designJson
 ) {
     public static StorefrontSettingsResponse defaults() {
         return new StorefrontSettingsResponse(
@@ -23,6 +24,7 @@ public record StorefrontSettingsResponse(
                 DeliveryAreaDefaults.seed(),
                 StorefrontTemplateIds.DEFAULT_STORE_THEME,
                 StorefrontTemplateIds.DEFAULT_LANDING_TEMPLATE,
+                null,
                 null
         );
     }

@@ -79,7 +79,8 @@ public class StorefrontSettingsService {
                 StorefrontTemplateIds.normalizeLandingTemplateId(
                     textOrNull(sf.get("landingTemplateId"))
                 ),
-                readLandingContent(sf.get("landingContent"))
+                readLandingContent(sf.get("landingContent")),
+                textOrNull(sf.get("designJson"))
             );
         } catch (Exception e) {
             return StorefrontSettingsResponse.defaults();
@@ -868,6 +869,28 @@ public class StorefrontSettingsService {
                 putTextIfPresent(node, "address", content.address());
                 putTextIfPresent(node, "ctaLabel", content.ctaLabel());
                 storefront.set("landingContent", node);
+            }
+        }
+        if (patch.designJson() != null) {
+            String raw = patch.designJson().trim();
+            if (raw.isEmpty()) {
+                storefront.remove("designJson");
+            } else {
+                try {
+                    JsonNode parsed = parseSettingsDocument(raw);
+                    if (!parsed.isObject()) {
+                        throw new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST,
+                            "designJson must be a JSON object"
+                        );
+                    }
+                    storefront.put("designJson", raw);
+                } catch (JsonProcessingException e) {
+                    throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "designJson must be valid JSON"
+                    );
+                }
             }
         }
     }

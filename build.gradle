@@ -175,7 +175,7 @@ def mariadbDownloadUrl = {
     } else if (os.isLinux()) {
         // Linux generic glibc .tar.gz — works on any glibc 2.31+ distro
         def plat = isArm ? 'aarch64' : 'x86_64'
-        return "${base}/bintar-linux-systemd/mariadb-${mariadbVersion}-linux-systemd-${plat}.tar.gz"
+        return "${base}/bintar-linux-systemd-${plat}/mariadb-${mariadbVersion}-linux-systemd-${plat}.tar.gz"
     } else if (os.isWindows()) {
         return "${base}/winx64-packages/mariadb-${mariadbVersion}-winx64.zip"
     }

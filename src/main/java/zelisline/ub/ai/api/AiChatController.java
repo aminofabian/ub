@@ -19,9 +19,12 @@ import zelisline.ub.ai.api.dto.AiFeedbackRequest;
 import zelisline.ub.ai.api.dto.AiRouteGuideResponse;
 import zelisline.ub.ai.api.dto.AiStatusResponse;
 import zelisline.ub.ai.api.dto.PriceRadarResponse;
+import zelisline.ub.ai.api.dto.StorefrontDesignSuggestRequest;
+import zelisline.ub.ai.api.dto.StorefrontDesignSuggestResponse;
 import zelisline.ub.ai.application.GuideChatService;
 import zelisline.ub.ai.application.PriceRadarService;
 import zelisline.ub.ai.application.RouteGuideCatalog;
+import zelisline.ub.ai.application.StorefrontDesignAiService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.tenancy.api.TenantRequestIds;
@@ -35,6 +38,7 @@ public class AiChatController {
     private final GuideChatService guideChatService;
     private final RouteGuideCatalog routeGuideCatalog;
     private final PriceRadarService priceRadarService;
+    private final StorefrontDesignAiService storefrontDesignAiService;
 
     @GetMapping("/status")
     @PreAuthorize("isAuthenticated()")
@@ -89,5 +93,16 @@ public class AiChatController {
         CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         guideChatService.feedback(businessId, body);
+    }
+
+    @PostMapping("/storefront-design/suggest")
+    @PreAuthorize("isAuthenticated()")
+    public StorefrontDesignSuggestResponse suggest(
+            @Valid @RequestBody StorefrontDesignSuggestRequest body,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal user = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return storefrontDesignAiService.suggest(businessId, user.userId(), body);
     }
 }

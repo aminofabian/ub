@@ -119,7 +119,7 @@ public class DesktopSyncProgressService {
         Snapshot s = snapshot;
         snapshot = new Snapshot(
             Phase.UPLOADING,
-            "Uploading sales from closed shifts…",
+            "Uploading sales to your online shop…",
             s.startedAt(),
             s.finishedAt(),
             s.itemsDone(),

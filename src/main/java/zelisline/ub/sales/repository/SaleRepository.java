@@ -26,6 +26,12 @@ public interface SaleRepository extends JpaRepository<Sale, String> {
 
     List<Sale> findByShiftIdAndStatus(String shiftId, String status);
 
+    /** Sales the desktop till has not yet uploaded to the cloud (realtime sync). */
+    List<Sale> findByBusinessIdAndCloudSyncedAtIsNullOrderBySoldAtAsc(String businessId);
+
+    /** Unsynced sales still left in a shift (used to decide when to stamp the shift). */
+    long countByShiftIdAndCloudSyncedAtIsNull(String shiftId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select s from Sale s where s.id = :id and s.businessId = :businessId")
     Optional<Sale> findByIdAndBusinessIdForUpdate(@Param("id") String id, @Param("businessId") String businessId);

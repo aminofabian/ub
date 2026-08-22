@@ -9,14 +9,14 @@ import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 
 /**
- * Batch of closed shifts (with their sales) uploaded by a desktop till to the
+ * Batch of till shifts (with their sales) uploaded by a desktop install to the
  * cloud (DESKTOP_INSTALLATION.md §9c — the "up" direction of store-and-forward
  * sync).
  *
- * <p>The desktop sends each shift exactly once per {@code cloud_synced_at}
- * marker, and the cloud ingests idempotently: a sale whose
- * {@code idempotencyKey} (or id) already exists is skipped, so a retried push
- * after a partial failure never double-counts.
+ * <p>The desktop pushes sales as they happen (realtime) and again at shift
+ * close; the cloud ingests idempotently — a sale whose {@code idempotencyKey}
+ * (or id) already exists is skipped, so a retried push after a partial failure
+ * never double-counts.
  *
  * <p>Deliberately excludes cloud-owned fields: receipt numbers (unique per
  * business on the cloud), ledger journal references, and customer ids (customers

@@ -4,11 +4,12 @@ import java.time.Instant;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import zelisline.ub.desktop.api.dto.ShiftSyncAck;
 import zelisline.ub.desktop.api.dto.ShiftSyncRequest;
-import zelisline.ub.sales.SalesConstants;
+import zelisline.ub.platform.realtime.RealtimeBridge;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.SaleItem;
 import zelisline.ub.sales.domain.SalePayment;
@@ -27,7 +28,8 @@ import zelisline.ub.sales.repository.ShiftRepository;
  * business. Because the whole batch runs in one transaction, a failed push
  * rolls back entirely and the till simply retries later.
  *
- * <p>v1 scope: sales are recorded directly (visible in cloud reports) but the
+ * <p>v1 scope: sales are recorded directly (visible in cloud reports, and
+ * announced in realtime to connected POS/dashboard sessions) but the
  * heavy pipelines are intentionally not re-run — no receipt-number allocation,
  * no ledger journal postings, no stock deduction, no customer resolution.
  * Those are follow-ups, and the till's local copy is the source of truth for
@@ -43,6 +45,7 @@ public class DesktopSyncIngestService {
     private final SaleRepository saleRepository;
     private final SaleItemRepository saleItemRepository;
     private final SalePaymentRepository salePaymentRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public ShiftSyncAck ingest(String businessId, ShiftSyncRequest request) {
@@ -69,6 +72,13 @@ public class DesktopSyncIngestService {
                 }
                 ingestSale(businessId, data.id(), saleData);
                 salesIngested++;
+                // Realtime fan-out: tell connected cloud POS sessions / dashboards
+                // that a till sale just landed (same event a web POS sale fires).
+                eventPublisher.publishEvent(new RealtimeBridge.SaleCompletedEvent(
+                    businessId,
+                    saleData.branchId(),
+                    saleData.id(),
+                    saleData.grandTotal()));
             }
         }
 

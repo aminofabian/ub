@@ -11,14 +11,19 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import zelisline.ub.platform.realtime.RealtimeBridge;
 
 /**
- * Desktop-only hook that makes closing a shift push the closed shift (and any
- * other pending ones) to the shop's online instance immediately.
+ * Desktop-only hook that makes closing a shift push the shift's final state
+ * (closing cash / variance) — plus any straggler sales that weren't uploaded
+ * yet — to the shop's online instance immediately.
  *
- * <p>Without this, offline sales made at the till sit in the local outbox until
- * someone runs Settings → Sync now — easy to miss at closing time. The push is
- * idempotent ({@link DesktopSyncPushService#pushPending()} stamps
- * {@code cloud_synced_at} only after the cloud acknowledges the batch), so a
- * failed push is safely retried by the next shift close or manual sync.
+ * <p>Everyday sales are already pushed in realtime by
+ * {@link DesktopSaleCompletedSyncListener}, so by close time most shifts are
+ * synced; this hook is the safety net that guarantees the shift record (with
+ * its closing figures) reaches the cloud and that an offline stretch at close
+ * is caught. The push is idempotent
+ * ({@link DesktopSyncPushService#pushPending()} stamps the per-sale
+ * {@code cloud_synced_at} markers only after the cloud acknowledges the
+ * batch), so a failed push is safely retried by the next shift close, the
+ * periodic flush, or manual sync.
  *
  * <p>Runs async off the shift-close request; failures are logged and leave the
  * shifts pending — the till never blocks on the network at close.

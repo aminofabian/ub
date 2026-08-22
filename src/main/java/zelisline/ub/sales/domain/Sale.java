@@ -87,6 +87,10 @@ public class Sale {
     @Column(name = "refunded_total", nullable = false, precision = 14, scale = 2)
     private BigDecimal refundedTotal = BigDecimal.ZERO;
 
+    /** When the desktop till uploaded this sale to the cloud (null = pending). */
+    @Column(name = "cloud_synced_at")
+    private Instant cloudSyncedAt;
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;

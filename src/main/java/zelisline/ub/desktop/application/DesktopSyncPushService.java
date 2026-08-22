@@ -3,7 +3,9 @@ package zelisline.ub.desktop.application;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -28,15 +30,20 @@ import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
 
 /**
- * Desktop-side push of closed shifts to the shop's online instance — the
- * "up" direction of store-and-forward sync (see {@code ShiftSyncRequest}).
+ * Desktop-side push of till sales to the shop's online instance — the "up"
+ * direction of store-and-forward sync (see {@code ShiftSyncRequest}).
  *
- * <p>Reads the cloud mapping written by {@link DesktopConnectService}
- * ({@code APP_DATA/conf/cloud-sync.json}), uploads every closed shift whose
- * {@code cloud_synced_at} marker is still null, and stamps the marker only
- * after the cloud acknowledges the batch. A failed push leaves the shifts
- * pending so the next run retries them — and the cloud's idempotent ingest
- * (per-sale {@code idempotencyKey}) makes retries safe.
+ * <p>Sync is tracked <em>per sale</em>: every sale whose {@code cloud_synced_at}
+ * marker is still null is uploaded, whether its shift is open or closed. That
+ * is what makes realtime sync work — a sale completed at the till is pushed the
+ * moment it happens (see {@link DesktopSaleCompletedSyncListener}), and a till
+ * that comes online later flushes everything that piled up while offline
+ * (startup + periodic retry, see {@link DesktopSyncScheduler}).
+ *
+ * <p>Closed shifts that were never fully uploaded are pushed once more at close
+ * so the cloud gets their final state (closing cash / variance). The cloud
+ * ingest is idempotent (per-sale {@code idempotencyKey}), so a failed push
+ * leaves the markers untouched and the next run retries safely.
  *
  * <p>v1 notes: the stored cloud access token is reused until it expires — if
  * the cloud rejects it with 401 the caller should ask the owner to reconnect.
@@ -55,6 +62,7 @@ public class DesktopSyncPushService {
     private final SaleItemRepository saleItemRepository;
     private final SalePaymentRepository salePaymentRepository;
     private final CloudSyncSession cloudSyncSession;
+    private final RestClient.Builder restClientBuilder;
 
     @Value("${app.desktop.business-id:}")
     private String desktopBusinessId;
@@ -71,43 +79,73 @@ public class DesktopSyncPushService {
             return new SyncPushResult(0, 0, false);
         }
 
-        List<Shift> pending = shiftRepository
+        // Sales not yet acknowledged by the cloud — includes sales made in the
+        // still-open shift (realtime) and anything that piled up while offline.
+        List<Sale> pendingSales = saleRepository
+            .findByBusinessIdAndCloudSyncedAtIsNullOrderBySoldAtAsc(localId);
+        // Closed shifts whose final state was never uploaded (closing cash /
+        // variance, or an empty shift) still need one last push at close.
+        List<Shift> pendingClosedShifts = shiftRepository
             .findByBusinessIdAndStatusAndCloudSyncedAtIsNullOrderByClosedAtAsc(
                 localId,
                 SalesConstants.SHIFT_STATUS_CLOSED
             );
-        if (pending.isEmpty()) {
+
+        Set<String> shiftIds = new TreeSet<>();
+        pendingSales.forEach(s -> shiftIds.add(s.getShiftId()));
+        pendingClosedShifts.forEach(s -> shiftIds.add(s.getId()));
+        if (shiftIds.isEmpty()) {
             return new SyncPushResult(0, 0, true);
         }
-        log.info("[DesktopSync] pushing {} closed shift(s) to {}", pending.size(), mapping.origin());
+        log.info("[DesktopSync] pushing {} pending sale(s) in {} shift(s) to {}",
+            pendingSales.size(), shiftIds.size(), mapping.origin());
 
-        ShiftSyncRequest batch = buildBatch(localId, pending, mapping);
+        Map<String, Shift> shiftsById = shiftRepository
+            .findAllById(shiftIds)
+            .stream()
+            .collect(Collectors.toMap(Shift::getId, s -> s));
 
-        RestClient client = RestClient.builder().baseUrl(mapping.origin()).build();
+        ShiftSyncRequest batch = buildBatch(pendingSales, shiftsById, mapping);
+
+        RestClient client = restClientBuilder.baseUrl(mapping.origin()).build();
         ShiftSyncAck ack = postBatch(client, mapping, batch);
 
         Instant syncedAt = Instant.now();
-        pending.forEach(s -> s.setCloudSyncedAt(syncedAt));
-        shiftRepository.saveAll(pending);
+        pendingSales.forEach(s -> s.setCloudSyncedAt(syncedAt));
+        saleRepository.saveAll(pendingSales);
+
+        // A closed shift is only fully uploaded once every one of its sales is
+        // acknowledged; a shift with stragglers stays pending for the next run.
+        List<Shift> closedToStamp = pendingClosedShifts.stream()
+            .filter(s -> saleRepository.countByShiftIdAndCloudSyncedAtIsNull(s.getId()) == 0)
+            .toList();
+        closedToStamp.forEach(s -> s.setCloudSyncedAt(syncedAt));
+        shiftRepository.saveAll(closedToStamp);
+
         log.info(
-            "[DesktopSync] acknowledged: {} sale(s) new, {} skipped; marked {} shift(s) synced",
+            "[DesktopSync] acknowledged: {} sale(s) new, {} skipped; marked {} sale(s) and {} shift(s) synced",
             ack.salesIngested(),
             ack.salesSkipped(),
-            pending.size()
+            pendingSales.size(),
+            closedToStamp.size()
         );
-        return new SyncPushResult(pending.size(), ack.salesIngested(), true);
+        return new SyncPushResult(closedToStamp.size(), ack.salesIngested(), true);
     }
 
     private ShiftSyncRequest buildBatch(
-            String localId,
-            List<Shift> shifts,
+            List<Sale> pendingSales,
+            Map<String, Shift> shiftsById,
             CloudSyncSession.Session mapping) {
         Set<String> cloudStaffIds = mapping.staffIds().stream().collect(Collectors.toSet());
         String ownerUserId = mapping.ownerUserId();
+
+        Map<String, List<Sale>> salesByShift = pendingSales.stream()
+            .collect(Collectors.groupingBy(Sale::getShiftId));
+
         List<ShiftSyncRequest.ShiftData> data = new ArrayList<>();
-        for (Shift shift : shifts) {
-            List<ShiftSyncRequest.SaleData> sales = saleRepository
-                .findByShiftIdAndStatus(shift.getId(), SalesConstants.SHIFT_STATUS_CLOSED)
+        for (Shift shift : shiftsById.values()) {
+            List<ShiftSyncRequest.SaleData> sales = salesByShift
+                .getOrDefault(shift.getId(), List.of())
                 .stream()
                 .map(s -> toSaleData(s, ownerUserId, cloudStaffIds))
                 .toList();

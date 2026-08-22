@@ -19,6 +19,12 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.desktop.api.dto.ShiftSyncAck;
 import zelisline.ub.desktop.api.dto.ShiftSyncRequest;
+import zelisline.ub.credits.domain.CreditAccount;
+import zelisline.ub.credits.domain.Customer;
+import zelisline.ub.credits.domain.CustomerPhone;
+import zelisline.ub.credits.repository.CreditAccountRepository;
+import zelisline.ub.credits.repository.CustomerPhoneRepository;
+import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.SaleItem;
@@ -61,6 +67,9 @@ public class DesktopSyncPushService {
     private final SaleRepository saleRepository;
     private final SaleItemRepository saleItemRepository;
     private final SalePaymentRepository salePaymentRepository;
+    private final CustomerRepository customerRepository;
+    private final CustomerPhoneRepository customerPhoneRepository;
+    private final CreditAccountRepository creditAccountRepository;
     private final CloudSyncSession cloudSyncSession;
     private final RestClient.Builder restClientBuilder;
 
@@ -90,22 +99,27 @@ public class DesktopSyncPushService {
                 localId,
                 SalesConstants.SHIFT_STATUS_CLOSED
             );
+        // Customers created or edited on the till since the last upload — pushed
+        // in the SAME batch as the sales that reference them so the cloud's
+        // sales.customer_id FK always resolves, whatever triggered the flush.
+        List<Customer> dirtyCustomers = customerRepository.findDirtyForDesktopSync(localId);
 
         Set<String> shiftIds = new TreeSet<>();
         pendingSales.forEach(s -> shiftIds.add(s.getShiftId()));
         pendingClosedShifts.forEach(s -> shiftIds.add(s.getId()));
-        if (shiftIds.isEmpty()) {
+        if (shiftIds.isEmpty() && dirtyCustomers.isEmpty()) {
             return new SyncPushResult(0, 0, true);
         }
-        log.info("[DesktopSync] pushing {} pending sale(s) in {} shift(s) to {}",
-            pendingSales.size(), shiftIds.size(), mapping.origin());
+        log.info(
+            "[DesktopSync] pushing {} pending sale(s) in {} shift(s) and {} customer(s) to {}",
+            pendingSales.size(), shiftIds.size(), dirtyCustomers.size(), mapping.origin());
 
         Map<String, Shift> shiftsById = shiftRepository
             .findAllById(shiftIds)
             .stream()
             .collect(Collectors.toMap(Shift::getId, s -> s));
 
-        ShiftSyncRequest batch = buildBatch(pendingSales, shiftsById, mapping);
+        ShiftSyncRequest batch = buildBatch(pendingSales, shiftsById, dirtyCustomers, mapping);
 
         RestClient client = restClientBuilder.baseUrl(mapping.origin()).build();
         ShiftSyncAck ack = postBatch(client, mapping, batch);
@@ -122,12 +136,17 @@ public class DesktopSyncPushService {
         closedToStamp.forEach(s -> s.setCloudSyncedAt(syncedAt));
         shiftRepository.saveAll(closedToStamp);
 
+        dirtyCustomers.forEach(c -> c.setCloudSyncedAt(syncedAt));
+        customerRepository.saveAll(dirtyCustomers);
+
         log.info(
-            "[DesktopSync] acknowledged: {} sale(s) new, {} skipped; marked {} sale(s) and {} shift(s) synced",
+            "[DesktopSync] acknowledged: {} sale(s) new, {} skipped; marked {} sale(s), "
+                + "{} shift(s) and {} customer(s) synced",
             ack.salesIngested(),
             ack.salesSkipped(),
             pendingSales.size(),
-            closedToStamp.size()
+            closedToStamp.size(),
+            dirtyCustomers.size()
         );
         return new SyncPushResult(closedToStamp.size(), ack.salesIngested(), true);
     }
@@ -135,9 +154,14 @@ public class DesktopSyncPushService {
     private ShiftSyncRequest buildBatch(
             List<Sale> pendingSales,
             Map<String, Shift> shiftsById,
+            List<Customer> dirtyCustomers,
             CloudSyncSession.Session mapping) {
         Set<String> cloudStaffIds = mapping.staffIds().stream().collect(Collectors.toSet());
         String ownerUserId = mapping.ownerUserId();
+
+        List<ShiftSyncRequest.CustomerData> customerData = dirtyCustomers.stream()
+            .map(this::toCustomerData)
+            .toList();
 
         Map<String, List<Sale>> salesByShift = pendingSales.stream()
             .collect(Collectors.groupingBy(Sale::getShiftId));
@@ -169,7 +193,7 @@ public class DesktopSyncPushService {
                 sales
             ));
         }
-        return new ShiftSyncRequest(data);
+        return new ShiftSyncRequest(data, customerData);
     }
 
     /**
@@ -218,12 +242,39 @@ public class DesktopSyncPushService {
             sale.getGrandTotal(),
             sale.getCashReceived(),
             soldByCloudId,
+            sale.getCustomerId(),
             sale.getSoldAt(),
             sale.getVoidedAt(),
             sale.getVoidNotes(),
             sale.getRefundedTotal(),
             items,
             payments
+        );
+    }
+
+    /** Customer + phones + live credit state, as the till's authoritative copy. */
+    private ShiftSyncRequest.CustomerData toCustomerData(Customer customer) {
+        List<ShiftSyncRequest.CustomerPhoneData> phones = customerPhoneRepository
+            .findByCustomerIdOrderByCreatedAtAsc(customer.getId())
+            .stream()
+            .map(p -> new ShiftSyncRequest.CustomerPhoneData(
+                p.getId(), p.getPhone(), p.isPrimary()))
+            .toList();
+        ShiftSyncRequest.CreditAccountData credit = creditAccountRepository
+            .findByCustomerIdAndBusinessId(customer.getId(), customer.getBusinessId())
+            .map(a -> new ShiftSyncRequest.CreditAccountData(
+                a.getBalanceOwed(),
+                a.getWalletBalance(),
+                a.getLoyaltyPoints(),
+                a.getCreditLimit()))
+            .orElse(null);
+        return new ShiftSyncRequest.CustomerData(
+            customer.getId(),
+            customer.getName(),
+            customer.getEmail(),
+            customer.getNotes(),
+            phones,
+            credit
         );
     }
 

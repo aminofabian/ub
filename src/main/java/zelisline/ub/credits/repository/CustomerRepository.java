@@ -10,11 +10,36 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.Customer;
+import zelisline.ub.credits.domain.CustomerPhone;
 
 public interface CustomerRepository extends JpaRepository<Customer, String> {
 
     Optional<Customer> findByIdAndBusinessIdAndDeletedAtIsNull(String id, String businessId);
+
+    /** All live customers of a business — used by the desktop sync export. */
+    List<Customer> findByBusinessIdAndDeletedAtIsNull(String businessId);
+
+    /**
+     * Customers the till must upload: never synced, or edited locally since the
+     * last sync. Balance changes live on {@code credit_accounts} (not the
+     * customer row), so a credit sale / tab payment is covered by the subquery.
+     */
+    @Query("""
+            select c from Customer c
+             where c.businessId = :businessId
+               and c.deletedAt is null
+               and (c.cloudSyncedAt is null
+                    or c.updatedAt > c.cloudSyncedAt
+                    or exists (select 1 from CreditAccount a
+                                where a.customerId = c.id
+                                  and a.updatedAt > c.cloudSyncedAt)
+                    or exists (select 1 from CustomerPhone p
+                                where p.customerId = c.id
+                                  and p.createdAt > c.cloudSyncedAt))
+             order by c.updatedAt asc""")
+    List<Customer> findDirtyForDesktopSync(@Param("businessId") String businessId);
 
     Optional<Customer> findByBusinessIdAndMpesaIdentityKeyAndDeletedAtIsNull(
             String businessId, String mpesaIdentityKey);

@@ -5,7 +5,6 @@ import java.time.Instant;
 import java.util.List;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 
 /**
@@ -22,7 +21,11 @@ import jakarta.validation.constraints.NotNull;
  * business on the cloud), ledger journal references, and customer ids (customers
  * are not synced in v1 — the till keeps its own local references).
  */
-public record ShiftSyncRequest(@Valid @NotEmpty List<ShiftData> shifts) {
+public record ShiftSyncRequest(
+        @Valid List<ShiftData> shifts,
+        /** Customers created/edited on the till since the last upload. */
+        @Valid List<CustomerData> customers
+) {
 
     public record ShiftData(
         @NotBlank String id,
@@ -53,12 +56,41 @@ public record ShiftSyncRequest(@Valid @NotEmpty List<ShiftData> shifts) {
         BigDecimal cashReceived,
         /** Cloud user id (the desktop remaps local cashier ids to the owner). */
         @NotBlank String soldBy,
+        String customerId,
         Instant soldAt,
         Instant voidedAt,
         String voidNotes,
         BigDecimal refundedTotal,
         @Valid List<SaleItemData> items,
         @Valid List<SalePaymentData> payments
+    ) {}
+
+    /**
+     * Customer (with phones + credit account) created or edited on the till —
+     * upserted by the cloud before the sales that reference it, so the
+     * {@code sales.customer_id} FK always resolves.
+     */
+    public record CustomerData(
+        @NotBlank String id,
+        @NotBlank String name,
+        String email,
+        String notes,
+        @Valid List<CustomerPhoneData> phones,
+        CreditAccountData creditAccount
+    ) {}
+
+    public record CustomerPhoneData(
+        @NotBlank String id,
+        @NotBlank String phone,
+        boolean primary
+    ) {}
+
+    /** Live credit-account state; the till's balance is authoritative for its own edits. */
+    public record CreditAccountData(
+        @NotNull BigDecimal balanceOwed,
+        BigDecimal walletBalance,
+        int loyaltyPoints,
+        BigDecimal creditLimit
     ) {}
 
     public record SaleItemData(

@@ -17,6 +17,9 @@ import org.springframework.context.ApplicationEventPublisher;
 
 import zelisline.ub.desktop.api.dto.ShiftSyncAck;
 import zelisline.ub.desktop.api.dto.ShiftSyncRequest;
+import zelisline.ub.credits.repository.CreditAccountRepository;
+import zelisline.ub.credits.repository.CustomerPhoneRepository;
+import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.platform.realtime.RealtimeBridge;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.repository.SaleItemRepository;
@@ -35,12 +38,16 @@ class DesktopSyncIngestServiceTest {
     private final SaleRepository saleRepository = mock(SaleRepository.class);
     private final SaleItemRepository saleItemRepository = mock(SaleItemRepository.class);
     private final SalePaymentRepository salePaymentRepository = mock(SalePaymentRepository.class);
+    private final CustomerRepository customerRepository = mock(CustomerRepository.class);
+    private final CustomerPhoneRepository customerPhoneRepository = mock(CustomerPhoneRepository.class);
+    private final CreditAccountRepository creditAccountRepository = mock(CreditAccountRepository.class);
     private final ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
 
     private DesktopSyncIngestService service() {
         return new DesktopSyncIngestService(
             shiftRepository, saleRepository, saleItemRepository,
-            salePaymentRepository, eventPublisher);
+            salePaymentRepository, customerRepository, customerPhoneRepository,
+            creditAccountRepository, eventPublisher);
     }
 
     private static ShiftSyncRequest requestWithOneSale(String saleId, String idempotencyKey) {
@@ -68,6 +75,7 @@ class DesktopSyncIngestServiceTest {
                 new BigDecimal("1500.00"),
                 null,
                 "owner-id",
+                "customer-1",
                 Instant.parse("2026-08-20T10:00:00Z"),
                 null,
                 null,
@@ -75,7 +83,7 @@ class DesktopSyncIngestServiceTest {
                 List.of(),
                 List.of()
             ))
-        )));
+        )), null);
     }
 
     @Test
@@ -95,9 +103,55 @@ class DesktopSyncIngestServiceTest {
         // till's (remapped) opener through, or the whole batch rolls back.
         verify(shiftRepository).save(org.mockito.ArgumentMatchers.argThat(shift ->
             "owner-id".equals(((zelisline.ub.sales.domain.Shift) shift).getOpenedBy())));
+        // The sale keeps the till's customer reference (customers are upserted
+        // earlier in the same batch, so the sales.customer_id FK resolves).
+        verify(saleRepository).save(org.mockito.ArgumentMatchers.argThat(sale ->
+            "customer-1".equals(((zelisline.ub.sales.domain.Sale) sale).getCustomerId())));
         // The cloud announces the till sale to live POS/dashboard sessions.
         verify(eventPublisher).publishEvent(eq(new RealtimeBridge.SaleCompletedEvent(
             "cloud-biz", "branch-1", "sale-1", new BigDecimal("1500.00"))));
+    }
+
+    @Test
+    void upsertsTillCustomersBeforeSales() {
+        ShiftSyncRequest request = new ShiftSyncRequest(
+            List.of(new ShiftSyncRequest.ShiftData(
+                "shift-1", "branch-1", "till-1", SalesConstants.SHIFT_STATUS_OPEN,
+                "owner-id", new BigDecimal("5000.00"), new BigDecimal("5000.00"),
+                null, null, null, null, null, false,
+                Instant.parse("2026-08-20T08:00:00Z"), null, List.of())),
+            List.of(new ShiftSyncRequest.CustomerData(
+                "customer-1",
+                "Jane Doe",
+                "jane@example.com",
+                null,
+                List.of(new ShiftSyncRequest.CustomerPhoneData(
+                    "phone-1", "254700111222", true)),
+                new ShiftSyncRequest.CreditAccountData(
+                    new BigDecimal("500.00"), BigDecimal.ZERO, 12, new BigDecimal("5000.00")))));
+        when(customerRepository.findByIdAndBusinessIdAndDeletedAtIsNull("customer-1", "cloud-biz"))
+            .thenReturn(Optional.empty());
+        when(customerRepository.nextCustomerNo("cloud-biz")).thenReturn(Optional.of(4L));
+        when(customerPhoneRepository.findByCustomerIdOrderByCreatedAtAsc(any()))
+            .thenReturn(List.of());
+        when(customerPhoneRepository.existsByBusinessIdAndPhone("cloud-biz", "254700111222"))
+            .thenReturn(false);
+        when(creditAccountRepository.findByCustomerIdAndBusinessId("customer-1", "cloud-biz"))
+            .thenReturn(Optional.empty());
+
+        service().ingest("cloud-biz", request);
+
+        // New cloud customer gets the next sequential number so the portal's
+        // customer numbering stays intact.
+        verify(customerRepository).saveAndFlush(org.mockito.ArgumentMatchers.argThat(c ->
+            "customer-1".equals(((zelisline.ub.credits.domain.Customer) c).getId())
+                && Long.valueOf(5L).equals(((zelisline.ub.credits.domain.Customer) c).getCustomerNo())));
+        verify(customerPhoneRepository).save(org.mockito.ArgumentMatchers.argThat(p ->
+            "254700111222".equals(((zelisline.ub.credits.domain.CustomerPhone) p).getPhone())));
+        // The till's authoritative balance is adopted on the cloud copy.
+        verify(creditAccountRepository).save(org.mockito.ArgumentMatchers.argThat(a ->
+            new BigDecimal("500.00").compareTo(
+                ((zelisline.ub.credits.domain.CreditAccount) a).getBalanceOwed()) == 0));
     }
 
     @Test

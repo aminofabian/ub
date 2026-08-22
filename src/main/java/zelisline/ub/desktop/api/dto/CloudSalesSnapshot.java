@@ -13,7 +13,11 @@ import java.util.List;
  * Idempotent by sale id — the till skips sales it already has (including the
  * ones it uploaded itself).
  */
-public record CloudSalesSnapshot(List<CloudSaleData> sales) {
+public record CloudSalesSnapshot(
+        List<CloudSaleData> sales,
+        /** Live customer directory (phones + credit accounts) so the till stays current. */
+        List<CloudCustomerData> customers
+) {
 
     public record CloudSaleData(
             String id,
@@ -25,6 +29,7 @@ public record CloudSalesSnapshot(List<CloudSaleData> sales) {
             BigDecimal grandTotal,
             BigDecimal cashReceived,
             String soldBy,
+            String customerId,
             Instant soldAt,
             Instant voidedAt,
             String voidNotes,
@@ -58,5 +63,28 @@ public record CloudSalesSnapshot(List<CloudSaleData> sales) {
             BigDecimal amount,
             String reference,
             int sortOrder
+    ) {}
+
+    public record CloudCustomerData(
+            String id,
+            String name,
+            String email,
+            String notes,
+            List<CloudCustomerPhoneData> phones,
+            CloudCreditAccountData creditAccount
+    ) {}
+
+    public record CloudCustomerPhoneData(
+            String id,
+            String phone,
+            boolean primary
+    ) {}
+
+    /** Live credit-account state; the cloud's balance is authoritative for its own edits. */
+    public record CloudCreditAccountData(
+            BigDecimal balanceOwed,
+            BigDecimal walletBalance,
+            int loyaltyPoints,
+            BigDecimal creditLimit
     ) {}
 }

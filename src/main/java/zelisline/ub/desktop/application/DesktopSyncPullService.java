@@ -20,6 +20,15 @@ import zelisline.ub.catalog.domain.ItemType;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
+import zelisline.ub.catalog.repository.CategoryRepository;
+import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.catalog.repository.ItemTypeRepository;
+import zelisline.ub.credits.domain.CreditAccount;
+import zelisline.ub.credits.domain.Customer;
+import zelisline.ub.credits.domain.CustomerPhone;
+import zelisline.ub.credits.repository.CreditAccountRepository;
+import zelisline.ub.credits.repository.CustomerPhoneRepository;
+import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.desktop.api.dto.CloudSalesSnapshot;
 import zelisline.ub.desktop.api.dto.MasterDataSnapshot;
 import zelisline.ub.identity.repository.UserRepository;
@@ -78,6 +87,9 @@ public class DesktopSyncPullService {
     private final SalePaymentRepository salePaymentRepository;
     private final ShiftRepository shiftRepository;
     private final UserRepository userRepository;
+    private final CustomerRepository customerRepository;
+    private final CustomerPhoneRepository customerPhoneRepository;
+    private final CreditAccountRepository creditAccountRepository;
     private final RestClient.Builder restClientBuilder;
 
     @Value("${app.desktop.business-id:}")
@@ -273,6 +285,15 @@ public class DesktopSyncPullService {
             .stream()
             .findFirst()
             .orElse(null);
+        // Mirror the cloud's customer directory (phones + live credit state)
+        // before the sales that reference it, so sales.customer_id resolves.
+        // Stamped cloud_synced_at so an untouched mirror is never pushed back;
+        // the next local edit (balance change from a till sale) re-pushes it.
+        if (snapshot.customers() != null) {
+            for (CloudSalesSnapshot.CloudCustomerData customerData : snapshot.customers()) {
+                upsertCloudCustomer(localId, customerData);
+            }
+        }
         int inserted = 0;
         for (CloudSalesSnapshot.CloudSaleData data : snapshot.sales()) {
             if (saleRepository.findByIdAndBusinessId(data.id(), localId).isPresent()) {
@@ -282,6 +303,116 @@ public class DesktopSyncPullService {
             inserted++;
         }
         return inserted;
+    }
+
+    /** Upsert a cloud customer (phones replaced wholesale; balance adopted as-is). */
+    private void upsertCloudCustomer(String localId, CloudSalesSnapshot.CloudCustomerData data) {
+        // Mirror is change-aware: an unchanged copy is left untouched (no
+        // updated_at / cloud_synced_at bump, no phone delete+reinsert), so the
+        // 2-minute pull doesn't rewrite the whole directory — and an untouched
+        // mirror is never re-pushed (updated_at stays <= cloud_synced_at).
+        java.util.Optional<Customer> existing = customerRepository
+            .findByIdAndBusinessIdAndDeletedAtIsNull(data.id(), localId);
+        Customer customer = existing.orElseGet(() -> {
+            Customer c = new Customer();
+            c.setId(data.id());
+            c.setBusinessId(localId);
+            return c;
+        });
+        boolean changed = existing.isEmpty()
+            || !java.util.Objects.equals(customer.getName(), data.name())
+            || !java.util.Objects.equals(customer.getEmail(), data.email())
+            || !java.util.Objects.equals(customer.getNotes(), data.notes());
+        if (changed) {
+            customer.setName(data.name());
+            customer.setEmail(data.email());
+            customer.setNotes(data.notes());
+            // Flush BEFORE any child row (phones / credit account) is queued —
+            // Hibernate does not order unassociated inserts, and the FK on
+            // credit_accounts.customer_id would otherwise fire first.
+            customer.setCloudSyncedAt(java.time.Instant.now());
+            customerRepository.saveAndFlush(customer);
+        }
+
+        boolean phonesChanged = data.phones() != null && phonesDiffer(customer.getId(), data.phones());
+        if (phonesChanged) {
+            customerPhoneRepository.findByCustomerIdOrderByCreatedAtAsc(customer.getId())
+                .forEach(p -> customerPhoneRepository.delete(p));
+            for (CloudSalesSnapshot.CloudCustomerPhoneData phoneData : data.phones()) {
+                if (customerPhoneRepository.existsByBusinessIdAndPhone(localId, phoneData.phone())) {
+                    continue;
+                }
+                CustomerPhone phone = new CustomerPhone();
+                phone.setId(phoneData.id());
+                phone.setBusinessId(localId);
+                phone.setCustomerId(customer.getId());
+                phone.setPhone(phoneData.phone());
+                phone.setPrimary(phoneData.primary());
+                customerPhoneRepository.save(phone);
+            }
+        }
+
+        boolean balanceChanged = false;
+        if (data.creditAccount() != null) {
+            CreditAccount acc = creditAccountRepository
+                .findByCustomerIdAndBusinessId(customer.getId(), localId)
+                .orElseGet(() -> {
+                    CreditAccount createdAcc = new CreditAccount();
+                    createdAcc.setId(java.util.UUID.randomUUID().toString());
+                    createdAcc.setBusinessId(localId);
+                    createdAcc.setCustomerId(customer.getId());
+                    return createdAcc;
+                });
+            // BigDecimal equality keeps an unchanged balance from dirtying the
+            // row; only touch last_activity_at when the balance actually moved.
+            BigDecimal incoming = data.creditAccount().balanceOwed() == null
+                ? java.math.BigDecimal.ZERO
+                : data.creditAccount().balanceOwed();
+            if (incoming.compareTo(acc.getBalanceOwed()) != 0) {
+                balanceChanged = true;
+                acc.setBalanceOwed(incoming);
+                acc.setLastActivityAt(java.time.Instant.now());
+            }
+            if (data.creditAccount().walletBalance() != null) {
+                acc.setWalletBalance(data.creditAccount().walletBalance());
+            }
+            acc.setLoyaltyPoints(data.creditAccount().loyaltyPoints());
+            acc.setCreditLimit(data.creditAccount().creditLimit());
+            creditAccountRepository.save(acc);
+        }
+
+        // Advance the sync stamp whenever ANY part of the customer changed —
+        // including balance/phones — so the dirty query below sees nothing to
+        // re-push (a balance the till merely adopted from the cloud must not
+        // bounce back, while a balance it changed itself stays dirty). The row
+        // already exists (created/flushed above or in an earlier cycle), so a
+        // plain save is enough here.
+        if (!changed && (phonesChanged || balanceChanged)) {
+            customer.setCloudSyncedAt(java.time.Instant.now());
+            customerRepository.save(customer);
+        }
+    }
+
+    private boolean phonesDiffer(
+            String customerId,
+            List<CloudSalesSnapshot.CloudCustomerPhoneData> incoming) {
+        List<CustomerPhone> existing = customerPhoneRepository
+            .findByCustomerIdOrderByCreatedAtAsc(customerId);
+        if (existing.size() != incoming.size()) {
+            return true;
+        }
+        java.util.Map<String, CloudSalesSnapshot.CloudCustomerPhoneData> byId = incoming.stream()
+            .collect(java.util.stream.Collectors.toMap(
+                CloudSalesSnapshot.CloudCustomerPhoneData::id, p -> p));
+        for (CustomerPhone phone : existing) {
+            CloudSalesSnapshot.CloudCustomerPhoneData match = byId.get(phone.getId());
+            if (match == null
+                || !java.util.Objects.equals(match.phone(), phone.getPhone())
+                || match.primary() != phone.isPrimary()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void insertCloudSale(
@@ -368,6 +499,13 @@ public class DesktopSyncPullService {
         }
         sale.setReceiptNo(receiptNo);
         sale.setSoldBy(soldBy);
+        // Customer was just mirrored from the same snapshot, so the FK resolves;
+        // old sales referencing a customer the cloud has since deleted drop it.
+        if (data.customerId() != null
+            && customerRepository.findByIdAndBusinessIdAndDeletedAtIsNull(
+                data.customerId(), localId).isPresent()) {
+            sale.setCustomerId(data.customerId());
+        }
         sale.setSoldAt(data.soldAt() == null ? java.time.Instant.now() : data.soldAt());
         sale.setVoidedAt(data.voidedAt());
         sale.setVoidNotes(data.voidNotes());

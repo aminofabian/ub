@@ -25,6 +25,12 @@ import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
+import zelisline.ub.credits.domain.CreditAccount;
+import zelisline.ub.credits.domain.Customer;
+import zelisline.ub.credits.domain.CustomerPhone;
+import zelisline.ub.credits.repository.CreditAccountRepository;
+import zelisline.ub.credits.repository.CustomerPhoneRepository;
+import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.desktop.api.dto.CloudSalesSnapshot;
 import zelisline.ub.desktop.api.dto.MasterDataSnapshot;
 import zelisline.ub.desktop.api.dto.ShiftSyncAck;
@@ -81,6 +87,9 @@ public class DesktopSyncController {
     private final SaleItemRepository saleItemRepository;
     private final SalePaymentRepository salePaymentRepository;
     private final ShiftRepository shiftRepository;
+    private final CustomerRepository customerRepository;
+    private final CustomerPhoneRepository customerPhoneRepository;
+    private final CreditAccountRepository creditAccountRepository;
 
     @GetMapping("/master-data")
     public MasterDataSnapshot masterData(HttpServletRequest request) {
@@ -256,6 +265,13 @@ public class DesktopSyncController {
             @Valid @RequestBody ShiftSyncRequest request,
             HttpServletRequest http) {
         String businessId = TenantRequestIds.resolveBusinessId(http);
+        if ((request.shifts() == null || request.shifts().isEmpty())
+                && (request.customers() == null || request.customers().isEmpty())) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Batch is empty — provide at least one shift or customer"
+            );
+        }
         return ingestService.ingest(businessId, request);
     }
 
@@ -286,7 +302,50 @@ public class DesktopSyncController {
         List<CloudSalesSnapshot.CloudSaleData> data = sales.stream()
             .map(s -> toCloudSale(s, shifts.get(s.getShiftId())))
             .toList();
-        return new CloudSalesSnapshot(data);
+        List<CloudSalesSnapshot.CloudCustomerData> customers = loadCloudCustomers(businessId);
+        return new CloudSalesSnapshot(data, customers);
+    }
+
+    /** Live customer directory for the till: name/phones + current credit state. */
+    private List<CloudSalesSnapshot.CloudCustomerData> loadCloudCustomers(String businessId) {
+        List<Customer> customers = customerRepository.findByBusinessIdAndDeletedAtIsNull(businessId);
+        List<String> ids = customers.stream().map(Customer::getId).toList();
+        Map<String, List<CustomerPhone>> phones = ids.isEmpty()
+            ? Map.of()
+            : customerPhoneRepository.findByCustomerIdIn(ids).stream()
+                .collect(Collectors.groupingBy(CustomerPhone::getCustomerId));
+        Map<String, CreditAccount> credit = ids.isEmpty()
+            ? Map.of()
+            : creditAccountRepository.findByCustomerIdIn(ids).stream()
+                .collect(Collectors.toMap(CreditAccount::getCustomerId, a -> a));
+        return customers.stream()
+            .map(c -> toCloudCustomer(c, phones.getOrDefault(c.getId(), List.of()), credit.get(c.getId())))
+            .toList();
+    }
+
+    private static CloudSalesSnapshot.CloudCustomerData toCloudCustomer(
+            Customer customer,
+            List<CustomerPhone> phones,
+            CreditAccount creditAccount) {
+        List<CloudSalesSnapshot.CloudCustomerPhoneData> phoneData = phones.stream()
+            .map(p -> new CloudSalesSnapshot.CloudCustomerPhoneData(
+                p.getId(), p.getPhone(), p.isPrimary()))
+            .toList();
+        CloudSalesSnapshot.CloudCreditAccountData creditData = creditAccount == null
+            ? null
+            : new CloudSalesSnapshot.CloudCreditAccountData(
+                creditAccount.getBalanceOwed(),
+                creditAccount.getWalletBalance(),
+                creditAccount.getLoyaltyPoints(),
+                creditAccount.getCreditLimit());
+        return new CloudSalesSnapshot.CloudCustomerData(
+            customer.getId(),
+            customer.getName(),
+            customer.getEmail(),
+            customer.getNotes(),
+            phoneData,
+            creditData
+        );
     }
 
     private CloudSalesSnapshot.CloudSaleData toCloudSale(Sale sale, Shift shift) {
@@ -310,6 +369,7 @@ public class DesktopSyncController {
             sale.getGrandTotal(),
             sale.getCashReceived(),
             sale.getSoldBy(),
+            sale.getCustomerId(),
             sale.getSoldAt(),
             sale.getVoidedAt(),
             sale.getVoidNotes(),

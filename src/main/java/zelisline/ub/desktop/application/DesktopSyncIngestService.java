@@ -9,6 +9,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import zelisline.ub.desktop.api.dto.ShiftSyncAck;
 import zelisline.ub.desktop.api.dto.ShiftSyncRequest;
+import zelisline.ub.credits.domain.CreditAccount;
+import zelisline.ub.credits.domain.Customer;
+import zelisline.ub.credits.domain.CustomerPhone;
+import zelisline.ub.credits.repository.CreditAccountRepository;
+import zelisline.ub.credits.repository.CustomerPhoneRepository;
+import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.platform.realtime.RealtimeBridge;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.SaleItem;
@@ -45,10 +51,21 @@ public class DesktopSyncIngestService {
     private final SaleRepository saleRepository;
     private final SaleItemRepository saleItemRepository;
     private final SalePaymentRepository salePaymentRepository;
+    private final CustomerRepository customerRepository;
+    private final CustomerPhoneRepository customerPhoneRepository;
+    private final CreditAccountRepository creditAccountRepository;
     private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public ShiftSyncAck ingest(String businessId, ShiftSyncRequest request) {
+        int customersIngested = 0;
+        if (request.customers() != null) {
+            for (ShiftSyncRequest.CustomerData data : request.customers()) {
+                upsertCustomer(businessId, data);
+                customersIngested++;
+            }
+        }
+
         int shifts = 0;
         int salesIngested = 0;
         int salesSkipped = 0;
@@ -83,12 +100,82 @@ public class DesktopSyncIngestService {
         }
 
         log.info(
-            "[DesktopSync] ingested {} shift(s): {} new sale(s), {} already seen",
+            "[DesktopSync] ingested {} customer(s), {} shift(s): {} new sale(s), {} already seen",
+            customersIngested,
             shifts,
             salesIngested,
             salesSkipped
         );
         return new ShiftSyncAck(shifts, salesIngested, salesSkipped);
+    }
+
+    /**
+     * Upsert a till-created customer so the sales below can reference it (FK
+     * {@code sales.customer_id}). Phones are replaced wholesale from the till's
+     * copy (it is the source of truth for customers it created); the credit
+     * account carries the till's authoritative balance. A new cloud customer
+     * gets the next sequential number so the cloud's numbering stays intact.
+     */
+    private void upsertCustomer(String businessId, ShiftSyncRequest.CustomerData data) {
+        Customer customer = customerRepository
+            .findByIdAndBusinessIdAndDeletedAtIsNull(data.id(), businessId)
+            .orElseGet(() -> {
+                Customer created = new Customer();
+                created.setId(data.id());
+                created.setBusinessId(businessId);
+                created.setCustomerNo(customerRepository
+                    .nextCustomerNo(businessId)
+                    .map(n -> n + 1)
+                    .orElse(1L));
+                return created;
+            });
+        customer.setName(data.name());
+        customer.setEmail(data.email());
+        customer.setNotes(data.notes());
+        // Flush BEFORE phones / credit account are queued — Hibernate does not
+        // order unassociated inserts, so credit_accounts (alphabetically first)
+        // would otherwise hit the customers FK before the row exists.
+        customerRepository.saveAndFlush(customer);
+
+        if (data.phones() != null) {
+            // Replace the till's phone list wholesale (idempotent re-push safe).
+            customerPhoneRepository.findByCustomerIdOrderByCreatedAtAsc(customer.getId())
+                .forEach(p -> customerPhoneRepository.delete(p));
+            for (ShiftSyncRequest.CustomerPhoneData phoneData : data.phones()) {
+                // A phone may already belong to a cloud-created customer — skip
+                // rather than trip uq_customer_phones_business_phone.
+                if (customerPhoneRepository.existsByBusinessIdAndPhone(businessId, phoneData.phone())) {
+                    continue;
+                }
+                CustomerPhone phone = new CustomerPhone();
+                phone.setId(phoneData.id());
+                phone.setBusinessId(businessId);
+                phone.setCustomerId(customer.getId());
+                phone.setPhone(phoneData.phone());
+                phone.setPrimary(phoneData.primary());
+                customerPhoneRepository.save(phone);
+            }
+        }
+
+        if (data.creditAccount() != null) {
+            CreditAccount acc = creditAccountRepository
+                .findByCustomerIdAndBusinessId(customer.getId(), businessId)
+                .orElseGet(() -> {
+                    CreditAccount created = new CreditAccount();
+                    created.setId(java.util.UUID.randomUUID().toString());
+                    created.setBusinessId(businessId);
+                    created.setCustomerId(customer.getId());
+                    return created;
+                });
+            acc.setBalanceOwed(data.creditAccount().balanceOwed());
+            if (data.creditAccount().walletBalance() != null) {
+                acc.setWalletBalance(data.creditAccount().walletBalance());
+            }
+            acc.setLoyaltyPoints(data.creditAccount().loyaltyPoints());
+            acc.setCreditLimit(data.creditAccount().creditLimit());
+            acc.setLastActivityAt(java.time.Instant.now());
+            creditAccountRepository.save(acc);
+        }
     }
 
     private void ingestShift(String businessId, ShiftSyncRequest.ShiftData data) {
@@ -131,8 +218,8 @@ public class DesktopSyncIngestService {
         sale.setGrandTotal(data.grandTotal());
         sale.setCashReceived(data.cashReceived());
         sale.setSoldBy(data.soldBy());
-        // Customers are not synced in v1 — the till keeps its own references.
-        sale.setCustomerId(null);
+        // Customers are upserted earlier in the same batch, so the FK resolves.
+        sale.setCustomerId(data.customerId());
         sale.setSoldAt(data.soldAt() == null ? Instant.now() : data.soldAt());
         sale.setVoidedAt(data.voidedAt());
         sale.setVoidNotes(data.voidNotes());

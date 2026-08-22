@@ -37,6 +37,10 @@ import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
+import zelisline.ub.credits.domain.Customer;
+import zelisline.ub.credits.repository.CreditAccountRepository;
+import zelisline.ub.credits.repository.CustomerPhoneRepository;
+import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.desktop.api.dto.CloudSalesSnapshot;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.repository.UserRepository;
@@ -80,6 +84,9 @@ class DesktopSyncPullServiceTest {
     private final SalePaymentRepository salePaymentRepository = mock(SalePaymentRepository.class);
     private final ShiftRepository shiftRepository = mock(ShiftRepository.class);
     private final UserRepository userRepository = mock(UserRepository.class);
+    private final CustomerRepository customerRepository = mock(CustomerRepository.class);
+    private final CustomerPhoneRepository customerPhoneRepository = mock(CustomerPhoneRepository.class);
+    private final CreditAccountRepository creditAccountRepository = mock(CreditAccountRepository.class);
 
     private final RestClient.Builder restClientBuilder = RestClient.builder();
     private final ObjectMapper objectMapper = new ObjectMapper()
@@ -107,12 +114,15 @@ class DesktopSyncPullServiceTest {
             .thenReturn(Optional.of(mock(Branch.class)));
         when(itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull("item-1", LOCAL_BUSINESS))
             .thenReturn(Optional.of(mock(Item.class)));
+        when(customerRepository.findByIdAndBusinessIdAndDeletedAtIsNull("customer-1", LOCAL_BUSINESS))
+            .thenReturn(Optional.of(mock(Customer.class)));
 
         service = new DesktopSyncPullService(
             businessRepository, branchRepository, categoryRepository, itemRepository,
             itemTypeRepository, taxRateRepository, staffSyncService, mediaSyncService,
             cloudSyncSession, transactionTemplate, syncProgress, saleRepository,
             saleItemRepository, salePaymentRepository, shiftRepository, userRepository,
+            customerRepository, customerPhoneRepository, creditAccountRepository,
             restClientBuilder);
         ReflectionTestUtils.setField(service, "desktopBusinessId", LOCAL_BUSINESS);
 
@@ -130,6 +140,7 @@ class DesktopSyncPullServiceTest {
             new BigDecimal("1500.00"),
             new BigDecimal("1500.00"),
             STAFF_ID,
+            "customer-1",
             Instant.parse("2026-08-20T10:00:00Z"),
             null,
             null,
@@ -154,7 +165,7 @@ class DesktopSyncPullServiceTest {
     }
 
     private String snapshotJson(List<CloudSalesSnapshot.CloudSaleData> sales) throws Exception {
-        return objectMapper.writeValueAsString(new CloudSalesSnapshot(sales));
+        return objectMapper.writeValueAsString(new CloudSalesSnapshot(sales, null));
     }
 
     @Test
@@ -281,12 +292,54 @@ class DesktopSyncPullServiceTest {
 
     @Test
     void noCloudSalesIsAQuietNoOp() throws Exception {
-        expectSalesRequest("1970-01-01T00:00:00Z", "{\"sales\":[]}");
+        expectSalesRequest("1970-01-01T00:00:00Z", "{\"sales\":[],\"customers\":[]}");
 
         int inserted = service.pullCloudSales();
 
         server.verify();
         assertEquals(0, inserted);
         verify(saleRepository, never()).save(any());
+    }
+
+    @Test
+    void mirrorsCloudCustomersWithTheirCreditState() throws Exception {
+        // The cloud customer directory (phones + live credit account) rides the
+        // sales pull, and pulled sales keep their customer reference.
+        String json = """
+            {"sales":[{"id":"sale-1","branchId":"%s","shiftId":"cloud-shift-1","shiftOpenedAt":"2026-08-20T08:00:00Z","status":"completed","idempotencyKey":"idem-sale-1","grandTotal":1500.00,"cashReceived":1500.00,"soldBy":"%s","customerId":"customer-1","soldAt":"2026-08-20T10:00:00Z","voidedAt":null,"voidNotes":null,"refundedTotal":0.00,"receiptNo":1,"items":[],"payments":[{"id":"pay-1","method":"CASH","amount":1500.00,"reference":null,"sortOrder":0}]}],
+             "customers":[{"id":"customer-1","name":"Jane Doe","email":"jane@example.com","notes":null,"phones":[{"id":"phone-1","phone":"254700111222","primary":true}],"creditAccount":{"balanceOwed":500.00,"walletBalance":0,"loyaltyPoints":12,"creditLimit":5000.00}}]}
+            """.formatted(BRANCH_ID, STAFF_ID);
+        expectSalesRequest("1970-01-01T00:00:00Z", json);
+        when(customerPhoneRepository.findByCustomerIdOrderByCreatedAtAsc("customer-1"))
+            .thenReturn(List.of());
+        when(customerPhoneRepository.existsByBusinessIdAndPhone(LOCAL_BUSINESS, "254700111222"))
+            .thenReturn(false);
+        when(creditAccountRepository.findByCustomerIdAndBusinessId("customer-1", LOCAL_BUSINESS))
+            .thenReturn(Optional.empty());
+        // Upsert path sees no local row (creates one); the sale's FK guard runs
+        // after the mirror and finds it present.
+        java.util.concurrent.atomic.AtomicInteger lookups = new java.util.concurrent.atomic.AtomicInteger();
+        when(customerRepository.findByIdAndBusinessIdAndDeletedAtIsNull("customer-1", LOCAL_BUSINESS))
+            .thenAnswer(inv -> lookups.incrementAndGet() == 1
+                ? Optional.empty()
+                : Optional.of(mock(Customer.class)));
+
+        int inserted = service.pullCloudSales();
+
+        server.verify();
+        assertEquals(1, inserted);
+        // Customer is mirrored and stamped synced so it is never pushed back up.
+        verify(customerRepository).saveAndFlush(org.mockito.ArgumentMatchers.argThat(c ->
+            "customer-1".equals(c.getId())
+                && "Jane Doe".equals(c.getName())
+                && c.getCloudSyncedAt() != null));
+        verify(customerPhoneRepository).save(org.mockito.ArgumentMatchers.argThat(p ->
+            "254700111222".equals(p.getPhone()) && p.isPrimary()));
+        // The cloud's balance is adopted as-is on the till's copy.
+        verify(creditAccountRepository).save(org.mockito.ArgumentMatchers.argThat(a ->
+            new BigDecimal("500.00").compareTo(a.getBalanceOwed()) == 0));
+        // The pulled sale keeps its customer reference (FK resolves after mirror).
+        verify(saleRepository).save(org.mockito.ArgumentMatchers.argThat(sale ->
+            "customer-1".equals(sale.getCustomerId())));
     }
 }

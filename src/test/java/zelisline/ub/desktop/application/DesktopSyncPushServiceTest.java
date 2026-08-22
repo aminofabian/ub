@@ -30,6 +30,11 @@ import org.springframework.web.client.RestClient;
 
 import zelisline.ub.desktop.api.dto.ShiftSyncAck;
 import zelisline.ub.desktop.application.DesktopSyncPushService.SyncPushResult;
+import zelisline.ub.credits.domain.CreditAccount;
+import zelisline.ub.credits.domain.Customer;
+import zelisline.ub.credits.repository.CreditAccountRepository;
+import zelisline.ub.credits.repository.CustomerPhoneRepository;
+import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.Shift;
@@ -52,6 +57,9 @@ class DesktopSyncPushServiceTest {
     private final SaleRepository saleRepository = mock(SaleRepository.class);
     private final SaleItemRepository saleItemRepository = mock(SaleItemRepository.class);
     private final SalePaymentRepository salePaymentRepository = mock(SalePaymentRepository.class);
+    private final CustomerRepository customerRepository = mock(CustomerRepository.class);
+    private final CustomerPhoneRepository customerPhoneRepository = mock(CustomerPhoneRepository.class);
+    private final CreditAccountRepository creditAccountRepository = mock(CreditAccountRepository.class);
     private final CloudSyncSession cloudSyncSession = mock(CloudSyncSession.class);
 
     private final RestClient.Builder restClientBuilder = RestClient.builder();
@@ -69,7 +77,8 @@ class DesktopSyncPushServiceTest {
 
         service = new DesktopSyncPushService(
             shiftRepository, saleRepository, saleItemRepository,
-            salePaymentRepository, cloudSyncSession, restClientBuilder);
+            salePaymentRepository, customerRepository, customerPhoneRepository,
+            creditAccountRepository, cloudSyncSession, restClientBuilder);
         ReflectionTestUtils.setField(service, "desktopBusinessId", LOCAL_BUSINESS);
 
         server = MockRestServiceServer.bindTo(restClientBuilder).build();
@@ -173,6 +182,44 @@ class DesktopSyncPushServiceTest {
         assertFalse(result.configured());
         assertEquals(0, result.salesPushed());
         verify(saleRepository, never()).findByBusinessIdAndCloudSyncedAtIsNullOrderBySoldAtAsc(anyString());
+    }
+
+    @Test
+    void pushesDirtyCustomersWithTheirCreditState() {
+        // A customer created on the till (or whose balance changed locally) is
+        // uploaded even with no pending sales, and stamped synced after ack.
+        Customer jane = new Customer();
+        jane.setId("c-1");
+        jane.setBusinessId(LOCAL_BUSINESS);
+        jane.setName("Jane Doe");
+        when(customerRepository.findDirtyForDesktopSync(LOCAL_BUSINESS))
+            .thenReturn(List.of(jane));
+        when(customerPhoneRepository.findByCustomerIdOrderByCreatedAtAsc("c-1"))
+            .thenReturn(List.of());
+        CreditAccount acc = new CreditAccount();
+        acc.setBalanceOwed(new BigDecimal("500.00"));
+        when(creditAccountRepository.findByCustomerIdAndBusinessId("c-1", LOCAL_BUSINESS))
+            .thenReturn(Optional.of(acc));
+        when(saleRepository.findByBusinessIdAndCloudSyncedAtIsNullOrderBySoldAtAsc(LOCAL_BUSINESS))
+            .thenReturn(List.of());
+        when(shiftRepository.findByBusinessIdAndStatusAndCloudSyncedAtIsNullOrderByClosedAtAsc(
+                LOCAL_BUSINESS, SalesConstants.SHIFT_STATUS_CLOSED))
+            .thenReturn(List.of());
+
+        server.expect(requestTo(CLOUD_ORIGIN + "/api/v1/desktop/sync/shifts"))
+            .andExpect(method(HttpMethod.POST))
+            .andRespond(withSuccess(
+                "{\"shiftsIngested\":0,\"salesIngested\":0,\"salesSkipped\":0}",
+                MediaType.APPLICATION_JSON));
+
+        SyncPushResult result = service.pushPending();
+
+        server.verify();
+        assertTrue(result.configured());
+        verify(customerRepository).saveAll(org.mockito.ArgumentMatchers.argThat(list -> {
+            Customer stamped = ((java.util.List<Customer>) list).get(0);
+            return stamped.getCloudSyncedAt() != null;
+        }));
     }
 
     @Test

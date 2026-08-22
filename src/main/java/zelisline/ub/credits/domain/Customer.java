@@ -69,6 +69,10 @@ public class Customer {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    /** When the desktop till uploaded this customer to the cloud (null = pending). */
+    @Column(name = "cloud_synced_at")
+    private Instant cloudSyncedAt;
+
     @Column(name = "deleted_at")
     private Instant deletedAt;
 

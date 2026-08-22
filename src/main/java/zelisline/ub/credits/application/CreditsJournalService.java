@@ -4,15 +4,20 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.List;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.credits.CreditClaimChannels;
 import zelisline.ub.finance.LedgerAccountCodes;
 import zelisline.ub.finance.application.LedgerAccountResolver;
 import zelisline.ub.finance.application.LedgerPostingPort;
 import zelisline.ub.finance.domain.JournalEntry;
+import zelisline.ub.finance.domain.JournalLine;
+import zelisline.ub.finance.repository.JournalEntryRepository;
+import zelisline.ub.finance.repository.JournalLineRepository;
 import zelisline.ub.sales.SalesConstants;
 
 @Service
@@ -23,6 +28,8 @@ public class CreditsJournalService {
 
     private final LedgerPostingPort ledgerPostingPort;
     private final LedgerAccountResolver ledgerAccountResolver;
+    private final JournalEntryRepository journalEntryRepository;
+    private final JournalLineRepository journalLineRepository;
 
     @Transactional
     public String postCashWalletTopUp(String businessId, BigDecimal amount, String sourceId, String memo) {
@@ -97,6 +104,68 @@ public class CreditsJournalService {
                 LedgerAccountCodes.LOYALTY_REDEMPTION_LIABILITY,
                 amt
         );
+    }
+
+    /**
+     * Opposite of an inbound AR settlement: Dr AR / Cr cash or M-Pesa clearing.
+     */
+    @Transactional
+    public String postInboundArPaymentReversal(
+            String businessId,
+            BigDecimal amount,
+            String sourceId,
+            String memo,
+            String channel
+    ) {
+        boolean cash = channel == null || CreditClaimChannels.CASH.equals(channel);
+        return postBalancedTwoLine(
+                businessId,
+                SalesConstants.JOURNAL_SOURCE_PUBLIC_PAYMENT_CLAIM_REVERSAL,
+                sourceId,
+                memo,
+                LedgerAccountCodes.ACCOUNTS_RECEIVABLE_CUSTOMERS,
+                cash ? LedgerAccountCodes.OPERATING_CASH : LedgerAccountCodes.MPESA_CLEARING,
+                amount
+        );
+    }
+
+    /**
+     * Posts the opposite of an existing two-line inbound AR journal. Returns null when the
+     * original entry is missing.
+     */
+    @Transactional
+    public String reversePostedInboundAr(
+            String businessId,
+            String originalJournalId,
+            String reversalSourceId,
+            String memo
+    ) {
+        if (originalJournalId == null || originalJournalId.isBlank()) {
+            return null;
+        }
+        JournalEntry original = journalEntryRepository.findById(originalJournalId).orElse(null);
+        if (original == null || !businessId.equals(original.getBusinessId())) {
+            return null;
+        }
+        List<JournalLine> lines = journalLineRepository.findByJournalEntryId(original.getId());
+        if (lines.isEmpty()) {
+            return null;
+        }
+        JournalEntry entry = new JournalEntry();
+        entry.setBusinessId(businessId);
+        entry.setEntryDate(LocalDate.now(ZoneOffset.UTC));
+        entry.setSourceType(SalesConstants.JOURNAL_SOURCE_PUBLIC_PAYMENT_CLAIM_REVERSAL);
+        entry.setSourceId(reversalSourceId);
+        entry.setMemo(memo);
+        for (JournalLine line : lines) {
+            if (line.getDebit() != null && line.getDebit().signum() > 0) {
+                entry.credit(line.getLedgerAccountId(), line.getDebit());
+            }
+            if (line.getCredit() != null && line.getCredit().signum() > 0) {
+                entry.debit(line.getLedgerAccountId(), line.getCredit());
+            }
+        }
+        return ledgerPostingPort.post(entry);
     }
 
     /** Reverse a previously accrued earn (void or partial refund). Skips when amount is non-positive. */

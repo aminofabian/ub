@@ -23,6 +23,7 @@ import org.springframework.security.web.servlet.util.matcher.PathPatternRequestM
 import org.springframework.security.web.util.matcher.NegatedRequestMatcher;
 import org.springframework.security.web.util.matcher.OrRequestMatcher;
 import org.springframework.security.web.util.matcher.RequestMatcher;
+import org.springframework.web.client.RestClient;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import org.springframework.web.servlet.resource.PathResourceResolver;
@@ -180,6 +181,17 @@ public class DesktopWebConfig implements WebMvcConfigurer {
         // before a user logs in, so it must be unauthenticated.
         "/api/v1/license/status"
     );
+
+    /**
+     * The cloud profile never auto-configures a {@code RestClient.Builder}
+     * bean (Spring Boot 4 does not register one), but the desktop sync push
+     * injects it so tests can bind a {@code MockRestServiceServer}. Provide it
+     * here, desktop-only.
+     */
+    @Bean
+    public RestClient.Builder restClientBuilder() {
+        return RestClient.builder();
+    }
 
     @Bean
     @Order(Ordered.HIGHEST_PRECEDENCE)

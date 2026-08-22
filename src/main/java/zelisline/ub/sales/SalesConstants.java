@@ -51,6 +51,8 @@ public final class SalesConstants {
     public static final String JOURNAL_SOURCE_WALLET_TOPUP_MPESA_STK = "wallet_topup_mpesa_stk";
     /** Approved public/customer-submitted inbound payment toward AR (Phase 5). */
     public static final String JOURNAL_SOURCE_PUBLIC_PAYMENT_CLAIM = "public_payment_claim";
+    /** Reversal of an inbound AR payment posted in error. */
+    public static final String JOURNAL_SOURCE_PUBLIC_PAYMENT_CLAIM_REVERSAL = "public_payment_claim_reversal";
     /** Loyalty earn accrual — Dr marketing expense / Cr loyalty liability (ADR-0009). */
     public static final String JOURNAL_SOURCE_LOYALTY_EARN_ACCRUAL = "loyalty_earn_accrual";
     /** Reversal for void/refund of loyalty earn accrual. */

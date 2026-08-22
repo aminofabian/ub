@@ -18,4 +18,9 @@ public interface PublicPaymentClaimRepository extends JpaRepository<PublicPaymen
             String status,
             String submittedReference
     );
+
+    List<PublicPaymentClaim> findByCreditAccountIdAndStatusOrderByCreatedAtAsc(
+            String creditAccountId,
+            String status
+    );
 }

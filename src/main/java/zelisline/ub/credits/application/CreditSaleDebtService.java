@@ -146,6 +146,16 @@ public class CreditSaleDebtService {
     /** Reduces {@code balance_owed} after verified inbound tender (claims, gateways). */
     @Transactional
     public void applyInboundArPayment(String businessId, String creditAccountId, BigDecimal paymentAmount) {
+        applyInboundArPayment(businessId, creditAccountId, paymentAmount, null);
+    }
+
+    @Transactional
+    public void applyInboundArPayment(
+            String businessId,
+            String creditAccountId,
+            BigDecimal paymentAmount,
+            String sourceId
+    ) {
         if (paymentAmount == null || paymentAmount.signum() <= 0) {
             return;
         }
@@ -159,7 +169,36 @@ public class CreditSaleDebtService {
         acc.setBalanceOwed(next);
         acc.setLastActivityAt(Instant.now());
         creditAccountRepository.save(acc);
-        insertTxn(businessId, acc.getId(), null, CreditTxnTypes.PAYMENT, scaled);
+        insertTxn(businessId, acc.getId(), blankToNull(sourceId), CreditTxnTypes.PAYMENT, scaled);
+    }
+
+    /**
+     * Restores {@code balance_owed} after a mistaken inbound payment. Does not apply the credit
+     * limit — the tab is returning to a balance that already existed.
+     */
+    @Transactional
+    public void reverseInboundArPayment(String businessId, CreditTransaction payment) {
+        if (payment == null || !CreditTxnTypes.PAYMENT.equals(payment.getTxnType())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only tab payments can be reversed");
+        }
+        if (!businessId.equals(payment.getBusinessId())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Payment not found");
+        }
+        List<CreditTransaction> linked = creditTransactionRepository.findBySaleIdOrderByCreatedAtAsc(payment.getId());
+        for (CreditTransaction t : linked) {
+            if (CreditTxnTypes.PAYMENT_REVERSAL.equals(t.getTxnType())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "This payment has already been reversed");
+            }
+        }
+        CreditAccount acc = creditAccountRepository
+                .findByIdAndBusinessIdForUpdate(payment.getCreditAccountId(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Credit account not found"));
+        BigDecimal scaled = payment.getAmount().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal next = acc.getBalanceOwed().add(scaled).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        acc.setBalanceOwed(next);
+        acc.setLastActivityAt(Instant.now());
+        creditAccountRepository.save(acc);
+        insertTxn(businessId, acc.getId(), payment.getId(), CreditTxnTypes.PAYMENT_REVERSAL, scaled);
     }
 
     private CreditAccount loadAccountForUpdate(String customerId, String businessId) {
@@ -182,6 +221,13 @@ public class CreditSaleDebtService {
         row.setTxnType(type);
         row.setAmount(amount);
         creditTransactionRepository.save(row);
+    }
+
+    private static String blankToNull(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        return raw.trim();
     }
 
     private static BigDecimal sumCustomerCredit(List<SalePayment> payments) {

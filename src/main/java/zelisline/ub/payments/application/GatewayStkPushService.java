@@ -1174,7 +1174,7 @@ public class GatewayStkPushService {
         try {
             BigDecimal pay = intent.getAmount();
             creditSaleDebtService.applyInboundArPayment(
-                    intent.getBusinessId(), intent.getCreditAccountId(), pay);
+                    intent.getBusinessId(), intent.getCreditAccountId(), pay, intent.getId());
             creditsJournalService.postInboundMpesaTowardAr(
                     intent.getBusinessId(),
                     pay,

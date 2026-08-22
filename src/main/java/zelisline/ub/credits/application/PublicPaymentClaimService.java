@@ -16,6 +16,7 @@ import java.util.UUID;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,20 +26,27 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.CreditClaimChannels;
 import zelisline.ub.credits.CreditClaimSources;
 import zelisline.ub.credits.CreditClaimStatuses;
+import zelisline.ub.credits.CreditTxnTypes;
+import zelisline.ub.credits.api.dto.AmendTabPaymentRequest;
 import zelisline.ub.credits.api.dto.PaymentClaimReviewRowResponse;
 import zelisline.ub.credits.api.dto.ProposeTabClearanceRequest;
 import zelisline.ub.credits.api.dto.RecordTabPaymentRequest;
 import zelisline.ub.credits.api.dto.RecordTabPaymentResponse;
 import zelisline.ub.credits.domain.CreditAccount;
+import zelisline.ub.credits.domain.CreditTransaction;
 import zelisline.ub.credits.domain.Customer;
 import zelisline.ub.credits.domain.CustomerPhone;
 import zelisline.ub.credits.domain.PublicPaymentClaim;
 import zelisline.ub.credits.repository.CreditAccountRepository;
+import zelisline.ub.credits.repository.CreditTransactionRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.credits.repository.PublicPaymentClaimRepository;
+import zelisline.ub.finance.domain.JournalEntry;
+import zelisline.ub.finance.repository.JournalEntryRepository;
 import zelisline.ub.opsalerts.application.CreditPaymentOpsAlertEvent;
 import zelisline.ub.payments.application.InboundTillPaymentService;
+import zelisline.ub.sales.SalesConstants;
 
 @Service
 @RequiredArgsConstructor
@@ -49,10 +57,12 @@ public class PublicPaymentClaimService {
 
     private final PublicPaymentClaimRepository publicPaymentClaimRepository;
     private final CreditAccountRepository creditAccountRepository;
+    private final CreditTransactionRepository creditTransactionRepository;
     private final CustomerRepository customerRepository;
     private final CustomerPhoneRepository customerPhoneRepository;
     private final CreditSaleDebtService creditSaleDebtService;
     private final CreditsJournalService creditsJournalService;
+    private final JournalEntryRepository journalEntryRepository;
     private final CashierTabClearanceAccess cashierTabClearanceAccess;
     private final ObjectProvider<InboundTillPaymentService> inboundTillPaymentService;
     private final ApplicationEventPublisher eventPublisher;
@@ -195,7 +205,7 @@ public class PublicPaymentClaimService {
         row.setCreditNote("Admin clearance — " + req.channel());
         publicPaymentClaimRepository.save(row);
 
-        creditSaleDebtService.applyInboundArPayment(businessId, account.getId(), amount);
+        creditSaleDebtService.applyInboundArPayment(businessId, account.getId(), amount, row.getId());
         String memo = "Admin tab payment " + row.getId() + " (" + req.channel() + ")";
         String je = CreditClaimChannels.CASH.equals(req.channel())
                 ? creditsJournalService.postInboundCashTowardAr(businessId, amount, row.getId(), memo)
@@ -226,6 +236,70 @@ public class PublicPaymentClaimService {
                 via));
 
         return new RecordTabPaymentResponse(row.getId(), remaining.toPlainString());
+    }
+
+    /**
+     * Restores {@code balance_owed} after a mistaken tab payment (the most recent payment on
+     * the account). Mirrors the inbound AR journal and marks the originating claim (if any)
+     * as {@code reversed} for audit.
+     */
+    @Transactional
+    public RecordTabPaymentResponse reverseTabPayment(String businessId, String customerId) {
+        CreditAccount account = creditAccountRepository
+                .findByCustomerIdAndBusinessIdForUpdate(customerId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Credit account not found"));
+        CreditTransaction payment = latestPaymentFor(account.getId());
+        if (payment == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No tab payment to reverse");
+        }
+        creditSaleDebtService.reverseInboundArPayment(businessId, payment);
+
+        String claimId = payment.getSaleId();
+        PublicPaymentClaim claim = claimId == null
+                ? null
+                : publicPaymentClaimRepository.findById(claimId).orElse(null);
+        if (claim != null
+                && businessId.equals(claim.getBusinessId())
+                && CreditClaimStatuses.APPROVED.equals(claim.getStatus())) {
+            claim.setStatus(CreditClaimStatuses.REVERSED);
+            claim.setUpdatedAt(Instant.now());
+            publicPaymentClaimRepository.save(claim);
+        }
+
+        reversePaymentJournal(businessId, payment);
+
+        CreditAccount refreshed = creditAccountRepository
+                .findByIdAndBusinessIdForUpdate(account.getId(), businessId)
+                .orElse(account);
+        BigDecimal remaining = refreshed.getBalanceOwed() == null
+                ? BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP)
+                : refreshed.getBalanceOwed().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        return new RecordTabPaymentResponse(claimId, remaining.toPlainString());
+    }
+
+    /**
+     * Reverse a mistaken tab payment and record the corrected amount in one step.
+     * The corrected payment is posted as a fresh claim (audit trail) and must not
+     * exceed the restored balance.
+     */
+    @Transactional
+    public RecordTabPaymentResponse amendTabPayment(
+            String businessId,
+            AmendTabPaymentRequest req,
+            String actorUserId
+    ) {
+        if (!CreditClaimChannels.isValid(req.channel())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Channel must be 'cash' or 'mpesa'");
+        }
+        reverseTabPayment(businessId, req.customerId());
+        return recordAdminTabPayment(
+                businessId,
+                new RecordTabPaymentRequest(
+                        req.customerId(),
+                        req.amount(),
+                        req.channel(),
+                        req.reference()),
+                actorUserId);
     }
 
     /**
@@ -353,7 +427,7 @@ public class PublicPaymentClaimService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Claim has no submitted amount");
         }
         BigDecimal pay = row.getSubmittedAmount().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
-        creditSaleDebtService.applyInboundArPayment(businessId, row.getCreditAccountId(), pay);
+        creditSaleDebtService.applyInboundArPayment(businessId, row.getCreditAccountId(), pay, row.getId());
         String memo = "Public payment claim " + claimId + " (" + channel + ")";
         String je = CreditClaimChannels.CASH.equals(channel)
                 ? creditsJournalService.postInboundCashTowardAr(businessId, pay, claimId, memo)
@@ -404,6 +478,49 @@ public class PublicPaymentClaimService {
     private static void assertBusiness(PublicPaymentClaim row, String businessId) {
         if (!businessId.equals(row.getBusinessId())) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Claim not found");
+        }
+    }
+
+    private CreditTransaction latestPaymentFor(String creditAccountId) {
+        List<CreditTransaction> latest = creditTransactionRepository
+                .findByCreditAccountIdAndTxnTypeAndSaleIdIsNotNullOrderByCreatedAtDesc(
+                        creditAccountId,
+                        CreditTxnTypes.PAYMENT,
+                        PageRequest.of(0, 1));
+        return latest.isEmpty() ? null : latest.get(0);
+    }
+
+    /**
+     * Posts the mirror journal (Dr AR / Cr cash or M-Pesa clearing) for a reversed tab
+     * payment. Prefers the journal id recorded on the originating claim; falls back to
+     * the journal posted under the same source id (e.g. M-Pesa STK tab payments).
+     */
+    private void reversePaymentJournal(String businessId, CreditTransaction payment) {
+        String sourceId = payment.getSaleId();
+        if (sourceId == null) {
+            return;
+        }
+        String originalJournalId = null;
+        PublicPaymentClaim claim = publicPaymentClaimRepository.findById(sourceId).orElse(null);
+        if (claim != null && businessId.equals(claim.getBusinessId())) {
+            originalJournalId = claim.getApprovedJournalId();
+        }
+        if (originalJournalId == null) {
+            List<JournalEntry> entries = journalEntryRepository
+                    .findAllByBusinessIdAndSourceTypeAndSourceIdOrderByCreatedAtAscIdAsc(
+                            businessId,
+                            SalesConstants.JOURNAL_SOURCE_PUBLIC_PAYMENT_CLAIM,
+                            sourceId);
+            if (!entries.isEmpty()) {
+                originalJournalId = entries.get(0).getId();
+            }
+        }
+        if (originalJournalId != null) {
+            creditsJournalService.reversePostedInboundAr(
+                    businessId,
+                    originalJournalId,
+                    payment.getId(),
+                    "Reversal of tab payment " + payment.getId());
         }
     }
 

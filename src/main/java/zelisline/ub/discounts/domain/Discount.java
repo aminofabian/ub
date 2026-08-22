@@ -39,7 +39,8 @@ public class Discount {
     @Column(name = "method", nullable = false, length = 20)
     private String method;
 
-    @Column(name = "value", nullable = false, precision = 14, scale = 4)
+    // `value` is a reserved word in H2; backticks force Hibernate to emit quoted DDL.
+    @Column(name = "`value`", nullable = false, precision = 14, scale = 4)
     private BigDecimal value;
 
     @Column(name = "scope", nullable = false, length = 20)

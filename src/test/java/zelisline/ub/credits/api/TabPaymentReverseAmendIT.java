@@ -10,11 +10,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.math.BigDecimal;
 import java.util.List;
 
+import javax.sql.DataSource;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -86,6 +89,8 @@ class TabPaymentReverseAmendIT {
     private PermissionRepository permissionRepository;
     @Autowired
     private RolePermissionRepository rolePermissionRepository;
+    @Autowired
+    private DataSource dataSource;
 
     @MockitoBean
     @SuppressWarnings("unused")
@@ -285,6 +290,65 @@ class TabPaymentReverseAmendIT {
         assertThat(txns).hasSize(2);
         assertThat(txns.get(1).getTxnType()).isEqualTo("payment_reversal");
         assertThat(txns.get(1).getSaleId()).isEqualTo(payment.getId());
+    }
+
+    @Test
+    void reverseFailsWithProductionFkUntilV232DropsIt() throws Exception {
+        // Recreate the production V30 FK (create-drop skips it) to reproduce the live
+        // "Invalid data / Could not persist the requested change" 400 on reverse.
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        jdbc.execute("""
+                ALTER TABLE credit_transactions
+                ADD CONSTRAINT fk_credit_txn_sale FOREIGN KEY (sale_id) REFERENCES sales (id)
+                """);
+
+        // Payment recorded by older code: null sale id, tab zeroed.
+        CreditTransaction payment = new CreditTransaction();
+        payment.setBusinessId(TENANT);
+        payment.setCreditAccountId(creditAccountRepository
+                .findByCustomerIdAndBusinessId(customerId, TENANT)
+                .orElseThrow()
+                .getId());
+        payment.setSaleId(null);
+        payment.setTxnType("payment");
+        payment.setAmount(new BigDecimal("150.00"));
+        creditTransactionRepository.save(payment);
+        CreditAccount acc = creditAccountRepository
+                .findByCustomerIdAndBusinessId(customerId, TENANT)
+                .orElseThrow();
+        acc.setBalanceOwed(BigDecimal.ZERO);
+        creditAccountRepository.save(acc);
+
+        // Live-site reproduction: the reversal row's sale_id (the payment's id) is not a
+        // sales id, so the V30 FK rejects it.
+        mockMvc.perform(post("/api/v1/credits/tab-payments/reverse")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, admin.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ADMIN)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"customerId":"%s"}
+                                """.formatted(customerId)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.title").value("Invalid data"));
+
+        // Apply the V232 migration, then the same reverse succeeds.
+        try (var in = getClass().getResourceAsStream(
+                "/db/migration/V232__credit_transactions_drop_sale_fk.sql")) {
+            String migrationSql = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            jdbc.execute(migrationSql.trim());
+        }
+
+        mockMvc.perform(post("/api/v1/credits/tab-payments/reverse")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, admin.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ADMIN)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"customerId":"%s"}
+                                """.formatted(customerId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.balanceOwed").value("150.00"));
     }
 
     @Test

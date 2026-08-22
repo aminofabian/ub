@@ -273,7 +273,8 @@ public class SuperAdminDesktopLicensesController {
             Integer days,
             String expiresAt,
             Boolean perpetual,
-            String fingerprint,
+            /** The till's Machine ID (Settings → License) — required so the key only works on that machine. */
+            @NotBlank(message = "Machine ID is required — get it from the till (Settings → License)") String fingerprint,
             @Email(message = "email must be a valid address") String email
     ) {}
 

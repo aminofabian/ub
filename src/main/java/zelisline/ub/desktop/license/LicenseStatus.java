@@ -25,7 +25,9 @@ public record LicenseStatus(
         /** ISO‑8601 expiry instant, or null for perpetual / pre‑setup. */
         Instant expiresAt,
         /** When true, the UI must prevent any write operation. */
-        boolean readOnly
+        boolean readOnly,
+        /** This machine's fingerprint (SHA‑256 hex) — the vendor needs it to issue a bound license. */
+        String machineId
 ) {
     // ── factory methods ────────────────────────────────────────────────
 
@@ -36,7 +38,8 @@ public record LicenseStatus(
                 plan,
                 daysRemaining,
                 expiresAt,
-                false
+                false,
+                null
         );
     }
 
@@ -47,7 +50,8 @@ public record LicenseStatus(
                 plan,
                 0L,
                 expiresAt,
-                true
+                true,
+                null
         );
     }
 
@@ -58,7 +62,8 @@ public record LicenseStatus(
                 null,
                 null,
                 null,
-                true
+                true,
+                null
         );
     }
 
@@ -69,7 +74,8 @@ public record LicenseStatus(
                 null,
                 daysRemaining,
                 null,
-                false
+                false,
+                null
         );
     }
 
@@ -80,7 +86,14 @@ public record LicenseStatus(
                 null,
                 0L,
                 expiredAt,
-                true
+                true,
+                null
         );
+    }
+
+    /** Copy with the machine id attached (the Settings page shows it regardless of state). */
+    LicenseStatus withMachineId(String machineId) {
+        return new LicenseStatus(
+            state, message, plan, daysRemaining, expiresAt, readOnly, machineId);
     }
 }

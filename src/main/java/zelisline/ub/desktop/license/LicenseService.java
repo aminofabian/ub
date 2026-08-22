@@ -1,6 +1,5 @@
 package zelisline.ub.desktop.license;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
@@ -20,6 +19,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -60,19 +60,35 @@ public class LicenseService {
     private static final int TRIAL_DAYS = 30;
 
     private final PublicKey publicKey;
+    private final MachineFingerprintProvider machineFingerprintProvider;
     private final Path initializedFile;
 
+    /**
+     * Spring wiring (desktop profile): binds the till's machine fingerprint.
+     */
+    @Autowired
     public LicenseService(
-        @Value("${app.desktop.license.public-key:}") String publicKeyBase64
+        @Value("${app.desktop.license.public-key:}") String publicKeyBase64,
+        MachineFingerprintProvider machineFingerprintProvider
     ) {
-        // Resolve APP_DATA directly
-        this.initializedFile = Path.of(
-            System.getenv().getOrDefault(
-                "APP_DATA",
-                System.getProperty("user.home") + "/.palmart"
-            ),
-            ".initialized"
-        );
+        this(publicKeyBase64, machineFingerprintProvider, resolveInitializedFile());
+    }
+
+    /**
+     * Standalone verifier (vendor CLI {@code verify}, tests) — no machine
+     * binding is enforced because there is no local machine identity here.
+     */
+    public LicenseService(String publicKeyBase64) {
+        this(publicKeyBase64, null, resolveInitializedFile());
+    }
+
+    private LicenseService(
+        String publicKeyBase64,
+        MachineFingerprintProvider machineFingerprintProvider,
+        Path initializedFile
+    ) {
+        this.machineFingerprintProvider = machineFingerprintProvider;
+        this.initializedFile = initializedFile;
 
         if (publicKeyBase64 == null || publicKeyBase64.isBlank()) {
             log.warn(
@@ -97,6 +113,16 @@ public class LicenseService {
                 );
             }
         }
+    }
+
+    private static Path resolveInitializedFile() {
+        return Path.of(
+            System.getenv().getOrDefault(
+                "APP_DATA",
+                System.getProperty("user.home") + "/.palmart"
+            ),
+            ".initialized"
+        );
     }
 
     // ========================================================================
@@ -185,13 +211,19 @@ public class LicenseService {
      * @return a status object the frontend can render
      */
     public LicenseStatus checkStatus(String token, String businessName) {
+        // The till always exposes its Machine ID — the vendor needs it to issue
+        // a bound license (Settings → License shows it with a copy button).
+        String machineId = machineFingerprintProvider != null
+            ? machineFingerprintProvider.get()
+            : null;
+
         // ── Licensed mode ──────────────────────────────────────────────
         if (token != null && !token.isBlank()) {
             LicensePayload payload = decodeAndVerify(token);
             if (payload == null) {
                 return LicenseStatus.invalid(
                     "The license signature is invalid or the token is corrupt."
-                );
+                ).withMachineId(machineId);
             }
 
             if (
@@ -204,7 +236,24 @@ public class LicenseService {
                         "', not '" +
                         businessName +
                         "'."
-                );
+                ).withMachineId(machineId);
+            }
+
+            // Machine binding: a license is valid only on the till it was
+            // issued for. A token without a fingerprint is refused — this is
+            // what stops one person's key working on another person's machine.
+            String expected = payload.machineFingerprint();
+            if (expected == null || expected.isBlank()) {
+                return LicenseStatus.invalid(
+                    "This license is not bound to a machine. Ask your vendor to " +
+                    "re-issue it using the Machine ID shown below."
+                ).withMachineId(machineId);
+            }
+            if (machineId == null || !expected.equalsIgnoreCase(machineId)) {
+                return LicenseStatus.invalid(
+                    "This license is bound to a different machine. Send the " +
+                    "Machine ID shown below to your vendor to get a key for this computer."
+                ).withMachineId(machineId);
             }
 
             if (
@@ -214,7 +263,7 @@ public class LicenseService {
                 return LicenseStatus.expired(
                     payload.plan(),
                     payload.expiresAt()
-                );
+                ).withMachineId(machineId);
             }
 
             long days =
@@ -228,13 +277,13 @@ public class LicenseService {
                 payload.plan(),
                 payload.expiresAt(),
                 days
-            );
+            ).withMachineId(machineId);
         }
 
         // ── Trial mode ────────────────────────────────────────────────
         if (!Files.exists(initializedFile)) {
             // Setup hasn't happened yet — no trial to check.
-            return LicenseStatus.trialActive(TRIAL_DAYS);
+            return LicenseStatus.trialActive(TRIAL_DAYS).withMachineId(machineId);
         }
 
         try {
@@ -252,7 +301,7 @@ public class LicenseService {
                 }
             }
             if (setupAt == null) {
-                return LicenseStatus.trialActive(TRIAL_DAYS);
+                return LicenseStatus.trialActive(TRIAL_DAYS).withMachineId(machineId);
             }
 
             long daysSinceSetup = ChronoUnit.DAYS.between(
@@ -264,16 +313,16 @@ public class LicenseService {
             if (daysRemaining <= 0) {
                 return LicenseStatus.trialExpired(
                     setupAt.plus(TRIAL_DAYS, ChronoUnit.DAYS)
-                );
+                ).withMachineId(machineId);
             }
 
-            return LicenseStatus.trialActive(daysRemaining);
+            return LicenseStatus.trialActive(daysRemaining).withMachineId(machineId);
         } catch (IOException e) {
             log.warn(
                 "[License] could not read .initialized file: {}",
                 e.getMessage()
             );
-            return LicenseStatus.trialActive(TRIAL_DAYS);
+            return LicenseStatus.trialActive(TRIAL_DAYS).withMachineId(machineId);
         }
     }
 

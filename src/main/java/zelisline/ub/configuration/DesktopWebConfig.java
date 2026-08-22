@@ -204,9 +204,17 @@ public class DesktopWebConfig implements WebMvcConfigurer {
                 .map(RequestMatcher.class::cast)
                 .toList()
         );
+        // The shell stops the JVM with POST /actuator/shutdown (enabled in
+        // application-desktop.properties). It is loopback-only and callers
+        // can't spoof it, but it lives under /actuator/** so the cloud chain
+        // would 403 it — leaving Windows no clean shutdown path (the signal
+        // fallback is TerminateProcess, which can kill the JVM mid-Flyway
+        // migration). Permit the path here, desktop-only.
+        RequestMatcher actuatorShutdownMatcher = pp.matcher("/actuator/shutdown");
         RequestMatcher combined = new OrRequestMatcher(
             uiMatcher,
-            desktopPublicApiMatcher
+            desktopPublicApiMatcher,
+            actuatorShutdownMatcher
         );
 
         http.securityMatcher(combined)

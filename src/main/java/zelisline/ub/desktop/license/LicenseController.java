@@ -81,6 +81,15 @@ public class LicenseController {
                             + "Make sure you pasted the entire token.");
         }
 
+        // Verify the full license (business name, machine binding, expiry)
+        // BEFORE persisting — a token for another machine must never be
+        // stored, or the till would flip read-only with a confusing message.
+        LicenseStatus status = licenseService.checkStatus(
+                request.token().trim(), business.getName());
+        if ("invalid".equals(status.state())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, status.message());
+        }
+
         // Store the new token in business settings
         String settings = business.getSettings();
         try {
@@ -100,8 +109,6 @@ public class LicenseController {
 
         return licenseService.checkStatus(request.token().trim(), business.getName());
     }
-
-    // ── helpers ────────────────────────────────────────────────────────────
 
     private String readStoredLicenseToken(Business business) {
         String settings = business.getSettings();

@@ -109,7 +109,7 @@ class DesktopLicenseIssuerConfigServiceTest {
 
         // The same key must actually sign a token the till's verifier accepts.
         DesktopLicenseIssuer.IssuedLicense issued =
-            dbIssuer().issue("Console Shop", "shop", null, null);
+            dbIssuer().issue("Console Shop", "shop", null, "b".repeat(64));
         LicensePayload payload = new LicenseService(publicKey).decodeAndVerify(issued.token());
         assertNotNull(payload, "token issued with the console key must verify against its public key");
     }

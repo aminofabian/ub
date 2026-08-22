@@ -32,7 +32,7 @@
 #
 #   LICENSE_PRIVATE_KEY=<base64> \
 #   bash backend/scripts/generate-license.sh issue \
-#       --business "My Shop" --plan shop --days 365 [--fingerprint <sha256>]
+#       --business "My Shop" --plan shop --days 365 --fingerprint <machine-id>
 #       Prints the license token to send to the customer.
 #
 #       --business  must match the shop name entered in the first-run wizard
@@ -40,8 +40,10 @@
 #       --plan      counter | shop | lan
 #       --days N    validity in days from now (or --expires <ISO-8601> for an
 #                   exact expiry instant, or --perpetual for no expiry).
-#       --fingerprint optional SHA-256 of MAC+disk; carried in the token but
-#                   NOT yet enforced by the runtime.
+#       --fingerprint REQUIRED — the till's Machine ID, shown in
+#                   Kiosk Desktop → Settings → License (copy button). The
+#                   runtime rejects any token whose fingerprint doesn't match
+#                   the machine, so a key for shop A cannot be used on shop B.
 #
 #   LICENSE_PUBLIC_KEY=<base64> \
 #   bash backend/scripts/generate-license.sh verify --token <token>
@@ -177,6 +179,10 @@ public class PalmartLicenseCli {
             usage(2);
         }
         String fingerprint = arg(args, "--fingerprint");
+        if (fingerprint == null || fingerprint.isBlank()) {
+            System.err.println("issue requires --fingerprint: the till's Machine ID from Kiosk Desktop → Settings → License");
+            usage(2);
+        }
         LicensePayload payload = new LicensePayload(business, plan, issuedAt, expiresAt, fingerprint);
         String token = LicenseService.encodeToken(payload, LicenseService.decodePrivateKey(privateKey));
         System.out.println(token);
@@ -223,7 +229,7 @@ public class PalmartLicenseCli {
     private static void usage(int code) {
         System.err.println("commands: bootstrap | pubkey | keys | issue | verify");
         System.err.println("  keys  — generate a new Ed25519 key pair (stdout)");
-        System.err.println("  issue — --business NAME --plan counter|shop|lan (--days N | --expires ISO | --perpetual) [--fingerprint HASH]");
+        System.err.println("  issue — --business NAME --plan counter|shop|lan (--days N | --expires ISO | --perpetual) --fingerprint MACHINE_ID");
         System.err.println("  verify— --token TOKEN [--public-key BASE64 | LICENSE_PUBLIC_KEY]");
         System.exit(code);
     }

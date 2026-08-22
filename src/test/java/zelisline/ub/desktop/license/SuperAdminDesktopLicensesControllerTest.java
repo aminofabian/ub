@@ -30,6 +30,7 @@ import zelisline.ub.identity.application.NotificationService;
 class SuperAdminDesktopLicensesControllerTest {
 
     private static final String BUSINESS = "Test Shop";
+    private static final String FINGERPRINT = "a".repeat(64);
 
     private final KeyPair keys = LicenseService.generateKeyPair();
     private final String privateKey = LicenseService.encodePrivateKey(keys.getPrivate());
@@ -53,7 +54,7 @@ class SuperAdminDesktopLicensesControllerTest {
     void issuedTokenVerifiesWithTheTillPublicKey() {
         LicenseService till = verifier();
         DesktopLicenseIssuer.IssuedLicense issued =
-            new DesktopLicenseIssuer(privateKey).issue(BUSINESS, "shop", null, null);
+            new DesktopLicenseIssuer(privateKey).issue(BUSINESS, "shop", null, FINGERPRINT);
 
         LicensePayload payload = till.decodeAndVerify(issued.token());
         assertNotNull(payload, "token must verify against the matching public key");
@@ -65,7 +66,7 @@ class SuperAdminDesktopLicensesControllerTest {
     @Test
     void issueResolvesDaysAndDefaultsPlan() {
         IssueResponse response = controller().issue(
-            new IssueRequest(BUSINESS, "", 365, null, null, null, null));
+            new IssueRequest(BUSINESS, "", 365, null, null, FINGERPRINT, null));
 
         assertNotNull(response.token());
         assertEquals("shop", response.plan(), "blank plan defaults to shop");
@@ -81,7 +82,7 @@ class SuperAdminDesktopLicensesControllerTest {
     @Test
     void perpetualHasNoExpiry() {
         IssueResponse response = controller().issue(
-            new IssueRequest(BUSINESS, "lan", null, null, true, null, null));
+            new IssueRequest(BUSINESS, "lan", null, null, true, FINGERPRINT, null));
         assertNull(response.expiresAt());
         assertFalse(response.emailSent());
     }
@@ -90,7 +91,7 @@ class SuperAdminDesktopLicensesControllerTest {
     void missingValidityIsRejected() {
         assertThrows(
             ResponseStatusException.class,
-            () -> controller().issue(new IssueRequest(BUSINESS, "shop", null, null, null, null, null))
+            () -> controller().issue(new IssueRequest(BUSINESS, "shop", null, null, null, FINGERPRINT, null))
         );
     }
 
@@ -99,14 +100,14 @@ class SuperAdminDesktopLicensesControllerTest {
         assertThrows(
             ResponseStatusException.class,
             () -> controller().issue(
-                new IssueRequest(BUSINESS, "shop", null, "not-an-instant", null, null, null))
+                new IssueRequest(BUSINESS, "shop", null, "not-an-instant", null, FINGERPRINT, null))
         );
     }
 
     @Test
     void issueAndEmailSendsToken() {
         IssueResponse response = controller().issueAndEmail(
-            new IssueRequest(BUSINESS, "shop", 30, null, null, null, "owner@shop.co.ke"));
+            new IssueRequest(BUSINESS, "shop", 30, null, null, FINGERPRINT, "owner@shop.co.ke"));
 
         assertTrue(response.emailSent());
         assertEquals("owner@shop.co.ke", response.emailedTo());
@@ -123,14 +124,14 @@ class SuperAdminDesktopLicensesControllerTest {
         assertThrows(
             ResponseStatusException.class,
             () -> controller().issueAndEmail(
-                new IssueRequest(BUSINESS, "shop", 30, null, null, null, null))
+                new IssueRequest(BUSINESS, "shop", 30, null, null, FINGERPRINT, null))
         );
     }
 
     @Test
     void issuePersistsHistoryRow() {
         IssueResponse response = controller().issue(
-            new IssueRequest(BUSINESS, "shop", 30, null, null, null, "owner@shop.co.ke"));
+            new IssueRequest(BUSINESS, "shop", 30, null, null, FINGERPRINT, "owner@shop.co.ke"));
 
         assertNotNull(response.id());
         assertNotNull(response.createdAt());
@@ -184,7 +185,7 @@ class SuperAdminDesktopLicensesControllerTest {
 
         ResponseStatusException ex = assertThrows(
             ResponseStatusException.class,
-            () -> unconfigured.issue(new IssueRequest(BUSINESS, "shop", 30, null, null, null, null))
+            () -> unconfigured.issue(new IssueRequest(BUSINESS, "shop", 30, null, null, FINGERPRINT, null))
         );
         assertEquals(503, ex.getStatusCode().value());
         assertFalse(new DesktopLicenseIssuer("").isConfigured());
@@ -197,5 +198,15 @@ class SuperAdminDesktopLicensesControllerTest {
         LicensePayload payload = verifier().decodeAndVerify(response.token());
         assertNotNull(payload);
         assertEquals("a".repeat(64), payload.machineFingerprint());
+    }
+
+    @Test
+    void missingFingerprintIsRejected() {
+        ResponseStatusException ex = assertThrows(
+            ResponseStatusException.class,
+            () -> controller().issue(
+                new IssueRequest(BUSINESS, "shop", 30, null, null, "  ", null))
+        );
+        assertEquals(400, ex.getStatusCode().value(), "a license must be bound to a machine");
     }
 }

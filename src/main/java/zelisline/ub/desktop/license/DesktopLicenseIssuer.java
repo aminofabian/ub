@@ -73,8 +73,19 @@ public class DesktopLicenseIssuer {
         return resolvePrivateKeyBase64() != null;
     }
 
-    /** Signs a license token for the given shop. Throws 503 when not configured. */
+    /**
+     * Signs a license token for the given shop. Throws 503 when not configured
+     * and 400 when the machine fingerprint is missing — every license must be
+     * bound to a specific till so a key can't be used on another machine.
+     */
     public IssuedLicense issue(String businessName, String plan, Instant expiresAt, String fingerprint) {
+        if (fingerprint == null || fingerprint.isBlank()) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "A Machine ID is required — ask the shop owner for the Machine ID "
+                    + "shown in Kiosk Desktop → Settings → License."
+            );
+        }
         String privateKeyBase64 = resolvePrivateKeyBase64();
         if (privateKeyBase64 == null) {
             throw new ResponseStatusException(

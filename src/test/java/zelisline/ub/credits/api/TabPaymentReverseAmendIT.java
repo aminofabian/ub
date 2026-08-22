@@ -246,6 +246,48 @@ class TabPaymentReverseAmendIT {
     }
 
     @Test
+    void reverseFindsPaymentWithNullSaleId() throws Exception {
+        // Payments recorded without a claim/intent link carry a null sale id; the
+        // statement still shows them as credit_payment and they must be reversible.
+        CreditTransaction payment = new CreditTransaction();
+        payment.setBusinessId(TENANT);
+        payment.setCreditAccountId(creditAccountRepository
+                .findByCustomerIdAndBusinessId(customerId, TENANT)
+                .orElseThrow()
+                .getId());
+        payment.setSaleId(null);
+        payment.setTxnType("payment");
+        payment.setAmount(new BigDecimal("150.00"));
+        creditTransactionRepository.save(payment);
+        // The payment zeroed the tab in real life; keep the account consistent.
+        CreditAccount acc = creditAccountRepository
+                .findByCustomerIdAndBusinessId(customerId, TENANT)
+                .orElseThrow();
+        acc.setBalanceOwed(BigDecimal.ZERO);
+        creditAccountRepository.save(acc);
+
+        mockMvc.perform(post("/api/v1/credits/tab-payments/reverse")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, admin.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ADMIN)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"customerId":"%s"}
+                                """.formatted(customerId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.balanceOwed").value("150.00"));
+
+        List<CreditTransaction> txns = creditTransactionRepository
+                .findByCreditAccountIdOrderByCreatedAtAsc(
+                        creditAccountRepository.findByCustomerIdAndBusinessId(customerId, TENANT)
+                                .orElseThrow()
+                                .getId());
+        assertThat(txns).hasSize(2);
+        assertThat(txns.get(1).getTxnType()).isEqualTo("payment_reversal");
+        assertThat(txns.get(1).getSaleId()).isEqualTo(payment.getId());
+    }
+
+    @Test
     void reverseRequiresClaimsReview() throws Exception {
         mockMvc.perform(post("/api/v1/credits/tab-payments/reverse")
                         .header("X-Tenant-Id", TENANT)

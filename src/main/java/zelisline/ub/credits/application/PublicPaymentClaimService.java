@@ -481,9 +481,14 @@ public class PublicPaymentClaimService {
         }
     }
 
+    /**
+     * The most recent payment on the account — what the credit statement shows as the
+     * latest {@code credit_payment} line. Payments can carry a null sale id (e.g. inbound
+     * tender recorded without a claim/intent link), so no sale-id filter is applied.
+     */
     private CreditTransaction latestPaymentFor(String creditAccountId) {
         List<CreditTransaction> latest = creditTransactionRepository
-                .findByCreditAccountIdAndTxnTypeAndSaleIdIsNotNullOrderByCreatedAtDesc(
+                .findByCreditAccountIdAndTxnTypeOrderByCreatedAtDesc(
                         creditAccountId,
                         CreditTxnTypes.PAYMENT,
                         PageRequest.of(0, 1));

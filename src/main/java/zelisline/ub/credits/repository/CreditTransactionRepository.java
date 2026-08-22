@@ -23,6 +23,13 @@ public interface CreditTransactionRepository extends JpaRepository<CreditTransac
             Pageable pageable
     );
 
+    /** Latest transaction of a type on an account — payments may have a null sale id. */
+    List<CreditTransaction> findByCreditAccountIdAndTxnTypeOrderByCreatedAtDesc(
+            String creditAccountId,
+            String txnType,
+            Pageable pageable
+    );
+
     @Query("""
             select coalesce(sum(t.amount), 0)
             from CreditTransaction t

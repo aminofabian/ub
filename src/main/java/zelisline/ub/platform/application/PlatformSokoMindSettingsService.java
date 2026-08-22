@@ -33,7 +33,8 @@ public class PlatformSokoMindSettingsService {
     private static final String DEFAULT_ANTHROPIC_SMART = "claude-sonnet-4-5-20250929";
     private static final String DEFAULT_DEEPSEEK_MODEL = "DeepSeek-V3-0324";
     private static final String DEFAULT_DEEPSEEK_HOST = "deepseek-v31.p.rapidapi.com";
-    private static final String DEFAULT_DEEPSEEK_URL = "https://deepseek-v31.p.rapidapi.com/";
+    /** Direct DeepSeek API — NOT the RapidAPI proxy (that caused wrong-key 401s). */
+    private static final String DEFAULT_DEEPSEEK_URL = "https://api.deepseek.com/chat/completions";
 
     private final PlatformSokoMindSettingsRepository repository;
     private final CredentialEncryptionService encryptionService;
@@ -111,6 +112,9 @@ public class PlatformSokoMindSettingsService {
         if (body.deepseekApiKey() != null) {
             row.setDeepseekApiKeyEnc(encryptOrClear(body.deepseekApiKey()));
         }
+        if (body.rapidapiDeepseekApiKey() != null) {
+            row.setRapidapiDeepseekApiKeyEnc(encryptOrClear(body.rapidapiDeepseekApiKey()));
+        }
         if (body.deepseekBaseUrl() != null) {
             row.setDeepseekBaseUrl(blankToNull(body.deepseekBaseUrl()));
         }
@@ -172,6 +176,10 @@ public class PlatformSokoMindSettingsService {
                 secrets.readable
                         ? firstNonBlank(secrets.deepseekApiKey, deepseekEnv.apiKey())
                         : blankToNull(deepseekEnv.apiKey());
+        String rapidapiDeepseekKey =
+                secrets.readable
+                        ? firstNonBlank(secrets.rapidapiDeepseekApiKey, deepseekEnv.rapidapiApiKey())
+                        : blankToNull(deepseekEnv.rapidapiApiKey());
 
         String provider =
                 firstNonBlank(
@@ -221,6 +229,7 @@ public class PlatformSokoMindSettingsService {
                         trimToNull(row.getDeepseekModel()),
                         deepseekEnv.model(),
                         DEFAULT_DEEPSEEK_MODEL),
+                rapidapiDeepseekKey,
                 row.isIndustryCompareEnabled(),
                 row.getIndustryCompareMinTwins() > 0
                         ? row.getIndustryCompareMinTwins()
@@ -275,6 +284,7 @@ public class PlatformSokoMindSettingsService {
                         anthropicEnv.smartModel(),
                         DEFAULT_ANTHROPIC_SMART),
                 secrets.hasDeepseekApiKey,
+                secrets.hasRapidapiDeepseekApiKey,
                 firstNonBlank(
                         trimToNull(row.getDeepseekBaseUrl()),
                         deepseekEnv.baseUrl(),
@@ -292,7 +302,7 @@ public class PlatformSokoMindSettingsService {
                 row.getSystemPromptExtra(),
                 openaiEnv.configured(),
                 anthropicEnv.configured(),
-                deepseekEnv.configured(),
+                deepseekEnv.configured() || deepseekEnv.rapidapiConfigured(),
                 secrets.readable,
                 secrets.errorMessage,
                 encryptionService.usesEphemeralKey(),
@@ -325,9 +335,11 @@ public class PlatformSokoMindSettingsService {
                     hasEncrypted(row.getOpenaiApiKeyEnc()),
                     hasEncrypted(row.getAnthropicApiKeyEnc()),
                     hasEncrypted(row.getDeepseekApiKeyEnc()),
+                    hasEncrypted(row.getRapidapiDeepseekApiKeyEnc()),
                     decryptOrNull(row.getOpenaiApiKeyEnc()),
                     decryptOrNull(row.getAnthropicApiKeyEnc()),
                     decryptOrNull(row.getDeepseekApiKeyEnc()),
+                    decryptOrNull(row.getRapidapiDeepseekApiKeyEnc()),
                     persistenceHint);
         } catch (RuntimeException ex) {
             return new SecretRead(
@@ -335,6 +347,8 @@ public class PlatformSokoMindSettingsService {
                     hasEncrypted(row.getOpenaiApiKeyEnc()),
                     hasEncrypted(row.getAnthropicApiKeyEnc()),
                     hasEncrypted(row.getDeepseekApiKeyEnc()),
+                    hasEncrypted(row.getRapidapiDeepseekApiKeyEnc()),
+                    null,
                     null,
                     null,
                     null,
@@ -397,9 +411,11 @@ public class PlatformSokoMindSettingsService {
             boolean hasOpenaiApiKey,
             boolean hasAnthropicApiKey,
             boolean hasDeepseekApiKey,
+            boolean hasRapidapiDeepseekApiKey,
             String openaiApiKey,
             String anthropicApiKey,
             String deepseekApiKey,
+            String rapidapiDeepseekApiKey,
             String errorMessage
     ) {}
 }

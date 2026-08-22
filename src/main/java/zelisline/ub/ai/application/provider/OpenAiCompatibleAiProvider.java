@@ -59,14 +59,29 @@ public class OpenAiCompatibleAiProvider implements AiProvider {
         String model = request.model();
 
         switch (provider) {
-            case PlatformSokoMindSettings.PROVIDER_DEEPSEEK,
-                    PlatformSokoMindSettings.PROVIDER_RAPIDAPI_DEEPSEEK -> {
+            case PlatformSokoMindSettings.PROVIDER_DEEPSEEK -> {
+                // Direct DeepSeek API — Bearer auth against api.deepseek.com.
                 apiKey = config.deepseekApiKey();
-                url = firstNonBlank(config.deepseekBaseUrl(), "https://api.deepseek.com/chat/completions");
-                if (PlatformSokoMindSettings.PROVIDER_RAPIDAPI_DEEPSEEK.equals(provider)
-                        || (config.deepseekHost() != null && !config.deepseekHost().isBlank())) {
-                    rapidHost = config.deepseekHost();
+                String base = firstNonBlank(
+                        config.deepseekBaseUrl(),
+                        "https://api.deepseek.com/chat/completions");
+                url = base.endsWith("/chat/completions")
+                        ? base
+                        : base.endsWith("/")
+                                ? base + "chat/completions"
+                                : base + "/chat/completions";
+                if (model == null || model.isBlank()) {
+                    model = config.deepseekModel();
                 }
+            }
+            case PlatformSokoMindSettings.PROVIDER_RAPIDAPI_DEEPSEEK -> {
+                // RapidAPI proxy — x-rapidapi-key + x-rapidapi-host, its own key.
+                apiKey = config.rapidapiDeepseekApiKey();
+                String host = firstNonBlank(
+                        config.deepseekHost(),
+                        "deepseek-v31.p.rapidapi.com");
+                rapidHost = host;
+                url = "https://" + host + "/chat/completions";
                 if (model == null || model.isBlank()) {
                     model = config.deepseekModel();
                 }
@@ -86,7 +101,8 @@ public class OpenAiCompatibleAiProvider implements AiProvider {
         if (apiKey == null || apiKey.isBlank()) {
             throw new ResponseStatusException(
                     HttpStatus.SERVICE_UNAVAILABLE,
-                    "SokoMind provider key is not configured. Set it in Super Admin → Platform → SokoMind.");
+                    "SokoMind provider '" + provider + "' has no API key configured. "
+                            + "Set it in Super Admin → Platform → SokoMind.");
         }
 
         Map<String, Object> payload = new LinkedHashMap<>();
@@ -126,7 +142,16 @@ public class OpenAiCompatibleAiProvider implements AiProvider {
 
         if (response.getStatus() < 200 || response.getStatus() >= 300) {
             log.warn("SokoMind OpenAI-compatible HTTP {}: {}", response.getStatus(), truncate(response.getBody()));
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "AI provider returned an error");
+            int status = response.getStatus();
+            String hint = switch (status) {
+                case 401, 403 -> " — the API key looks wrong";
+                case 429 -> " — rate limited, try again later";
+                default -> "";
+            };
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "AI provider '" + provider + "' returned HTTP " + status + hint
+                            + ". Check the key in Super Admin → Platform → SokoMind.");
         }
 
         return parse(response.getBody(), provider, model);

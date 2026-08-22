@@ -38,9 +38,10 @@ public record SokoMindProperties(
         if (deepseek == null) {
             deepseek = new DeepSeek(
                     "",
-                    "https://deepseek-v31.p.rapidapi.com/",
+                    "https://api.deepseek.com/chat/completions",
                     "deepseek-v31.p.rapidapi.com",
-                    "DeepSeek-V3-0324");
+                    "DeepSeek-V3-0324",
+                    "");
         }
         if (industryCompareMinTwins <= 0) {
             industryCompareMinTwins = 8;
@@ -73,9 +74,19 @@ public record SokoMindProperties(
         }
     }
 
-    public record DeepSeek(String apiKey, String baseUrl, String host, String model) {
+    public record DeepSeek(
+            String apiKey,
+            String baseUrl,
+            String host,
+            String model,
+            String rapidapiApiKey
+    ) {
         public boolean configured() {
             return apiKey != null && !apiKey.isBlank();
+        }
+
+        public boolean rapidapiConfigured() {
+            return rapidapiApiKey != null && !rapidapiApiKey.isBlank();
         }
     }
 }

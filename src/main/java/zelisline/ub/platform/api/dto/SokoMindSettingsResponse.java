@@ -20,6 +20,7 @@ public record SokoMindSettingsResponse(
         String anthropicMiniModel,
         String anthropicSmartModel,
         boolean hasDeepseekApiKey,
+        boolean hasRapidapiDeepseekApiKey,
         String deepseekBaseUrl,
         String deepseekHost,
         String deepseekModel,

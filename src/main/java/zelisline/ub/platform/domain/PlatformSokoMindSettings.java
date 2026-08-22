@@ -74,6 +74,9 @@ public class PlatformSokoMindSettings {
     @Column(name = "deepseek_api_key_enc", columnDefinition = "TEXT")
     private String deepseekApiKeyEnc;
 
+    @Column(name = "rapidapi_deepseek_api_key_enc", columnDefinition = "TEXT")
+    private String rapidapiDeepseekApiKeyEnc;
+
     @Column(name = "deepseek_base_url", length = 512)
     private String deepseekBaseUrl;
 

@@ -25,6 +25,7 @@ public record UpdateSokoMindSettingsRequest(
         String deepseekBaseUrl,
         String deepseekHost,
         String deepseekModel,
+        String rapidapiDeepseekApiKey,
         Boolean industryCompareEnabled,
         Integer industryCompareMinTwins,
         Integer dailyTokenBudgetPerTenant,

@@ -24,6 +24,7 @@ public record ResolvedSokoMindConfig(
         String deepseekBaseUrl,
         String deepseekHost,
         String deepseekModel,
+        String rapidapiDeepseekApiKey,
         boolean industryCompareEnabled,
         int industryCompareMinTwins,
         Integer dailyTokenBudgetPerTenant,
@@ -34,8 +35,9 @@ public record ResolvedSokoMindConfig(
         return switch (primaryProvider == null ? "" : primaryProvider) {
             case "openai" -> openaiApiKey != null && !openaiApiKey.isBlank();
             case "anthropic" -> anthropicApiKey != null && !anthropicApiKey.isBlank();
-            case "deepseek", "rapidapi_deepseek" ->
-                    deepseekApiKey != null && !deepseekApiKey.isBlank();
+            case "deepseek" -> deepseekApiKey != null && !deepseekApiKey.isBlank();
+            case "rapidapi_deepseek" ->
+                    rapidapiDeepseekApiKey != null && !rapidapiDeepseekApiKey.isBlank();
             default -> false;
         };
     }

@@ -42,7 +42,7 @@ class SuperAdminDesktopLicensesControllerTest {
         when(repo.save(any(DesktopLicenseIssue.class)))
             .thenAnswer(inv -> inv.getArgument(0));
         return new SuperAdminDesktopLicensesController(
-            new DesktopLicenseIssuer(privateKey), mail, repo);
+            new DesktopLicenseIssuer(privateKey), mail, repo, null);
     }
 
     private LicenseService verifier() {
@@ -180,7 +180,7 @@ class SuperAdminDesktopLicensesControllerTest {
         when(repo.save(any(DesktopLicenseIssue.class)))
             .thenAnswer(inv -> inv.getArgument(0));
         SuperAdminDesktopLicensesController unconfigured =
-            new SuperAdminDesktopLicensesController(new DesktopLicenseIssuer(""), mail, repo);
+            new SuperAdminDesktopLicensesController(new DesktopLicenseIssuer(""), mail, repo, null);
 
         ResponseStatusException ex = assertThrows(
             ResponseStatusException.class,

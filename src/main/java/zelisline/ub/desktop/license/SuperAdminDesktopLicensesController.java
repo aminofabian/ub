@@ -8,6 +8,7 @@ import java.util.UUID;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -29,9 +30,11 @@ import zelisline.ub.identity.application.NotificationService;
  * license tokens and optionally email them to the shop owner.
  *
  * <p>Secured by {@code ROLE_SUPER_ADMIN} via {@code /api/v1/super-admin/**} in
- * {@code SecurityConfig}. The private key lives in the cloud env
- * ({@code APP_DESKTOP_LICENSE_PRIVATE_KEY}); without it the issuer reports
- * unconfigured and {@code /issue} returns 503.
+ * {@code SecurityConfig}. The signing key is resolved by {@link DesktopLicenseIssuer}:
+ * the deployment env var ({@code APP_DESKTOP_LICENSE_PRIVATE_KEY}) first, then the
+ * console-managed key in {@code desktop_license_issuer_config} — so it can be
+ * configured from this console without a redeploy. Without any key the issuer
+ * reports unconfigured and {@code /issue} returns 503.
  */
 @RestController
 @RequestMapping("/api/v1/super-admin/desktop-licenses")
@@ -44,11 +47,31 @@ public class SuperAdminDesktopLicensesController {
     private final DesktopLicenseIssuer issuer;
     private final NotificationService notificationService;
     private final DesktopLicenseIssueRepository issueRepository;
+    private final DesktopLicenseIssuerConfigService issuerConfigService;
 
     /** Issuer configuration + public-key sync hint for the console UI. */
     @GetMapping("/status")
-    public IssuerStatus status() {
-        return new IssuerStatus(issuer.isConfigured());
+    public DesktopLicenseIssuerConfigService.IssuerStatus status() {
+        return issuerConfigService.status();
+    }
+
+    /** Store a signing key pasted from {@code generate-license.sh keys}. */
+    @PostMapping("/issuer/key")
+    public DesktopLicenseIssuerConfigService.IssuerStatus setIssuerKey(
+            @Valid @RequestBody DesktopLicenseIssuerConfigService.SetIssuerKeyRequest body) {
+        return issuerConfigService.setKey(body);
+    }
+
+    /** Generate a fresh signing key pair in the console (returns the public key). */
+    @PostMapping("/issuer/generate")
+    public DesktopLicenseIssuerConfigService.GenerateKeyResult generateIssuerKey() {
+        return issuerConfigService.generate();
+    }
+
+    /** Remove the console-managed signing key (env var still wins if set). */
+    @DeleteMapping("/issuer/key")
+    public DesktopLicenseIssuerConfigService.IssuerStatus clearIssuerKey() {
+        return issuerConfigService.clear();
     }
 
     /** Recent issued licenses, newest first. */
@@ -243,9 +266,6 @@ public class SuperAdminDesktopLicensesController {
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s.trim();
     }
-
-    /** Whether the cloud issuer can sign (private key configured). */
-    public record IssuerStatus(boolean configured) {}
 
     public record IssueRequest(
             @NotBlank String businessName,

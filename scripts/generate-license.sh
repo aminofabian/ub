@@ -12,7 +12,9 @@
 #       existing keys), stores it OUTSIDE the repo at
 #       $HOME/.palmart-license/ (private.pem + public.pem, chmod 600), bakes
 #       the PUBLIC key into application-desktop.properties automatically, and
-#       prints the APP_DESKTOP_LICENSE_PRIVATE_KEY line for the cloud.
+#       prints the APP_DESKTOP_LICENSE_PRIVATE_KEY line for the cloud — or paste
+#       PRIVATE_KEY into Super Admin → Platform → Desktop licenses →
+#       "License issuer key" (stored encrypted, no restart needed).
 #       --force regenerates the key pair (invalidates previously issued
 #       licenses — only do this before any licenses exist).
 #
@@ -24,7 +26,9 @@
 #         PUBLIC_KEY=<base64>   → paste into application-desktop.properties
 #                                 (app.desktop.license.public-key=…)
 #         PRIVATE_KEY=<base64>  → keep secret, never ship. Feed it back to
-#                                 `issue` via LICENSE_PRIVATE_KEY or --private-key.
+#                                 `issue` via LICENSE_PRIVATE_KEY or --private-key,
+#                                 or save it from the Super Admin console
+#                                 (Platform → Desktop licenses → License issuer key).
 #
 #   LICENSE_PRIVATE_KEY=<base64> \
 #   bash backend/scripts/generate-license.sh issue \

@@ -104,6 +104,9 @@ public class DesktopSyncIngestService {
         shift.setBranchId(data.branchId());
         shift.setTillDeviceKey(data.tillDeviceKey());
         shift.setStatus(data.status());
+        // shifts.opened_by is NOT NULL — without this every new shift upload
+        // failed the whole ingest (sale included) on the cloud.
+        shift.setOpenedBy(data.openedBy());
         shift.setOpeningCash(data.openingCash());
         shift.setExpectedClosingCash(data.expectedClosingCash());
         shift.setCountedClosingCash(data.countedClosingCash());
@@ -149,7 +152,10 @@ public class DesktopSyncIngestService {
                     : itemData.lineKind());
                 item.setLineLabel(itemData.lineLabel());
                 item.setItemId(itemData.itemId());
-                item.setBatchId(itemData.batchId());
+                // Till batches don't exist on the cloud — referencing one would
+                // trip fk_si_batch and roll back the whole ingest. The till
+                // already omits batch ids on upload; null defensively here too.
+                item.setBatchId(null);
                 item.setQuantity(itemData.quantity());
                 item.setUnitPrice(itemData.unitPrice());
                 item.setLineTotal(itemData.lineTotal());

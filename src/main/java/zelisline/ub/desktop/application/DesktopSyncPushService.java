@@ -155,6 +155,7 @@ public class DesktopSyncPushService {
                 shift.getBranchId(),
                 shift.getTillDeviceKey(),
                 shift.getStatus(),
+                openedByCloudId(shift, ownerUserId, cloudStaffIds),
                 shift.getOpeningCash(),
                 shift.getExpectedClosingCash(),
                 shift.getCountedClosingCash(),
@@ -169,6 +170,21 @@ public class DesktopSyncPushService {
             ));
         }
         return new ShiftSyncRequest(data);
+    }
+
+    /**
+     * Mirrored staff keep their cloud ids; locally-created till users fall back
+     * to the owner so the shift's NOT NULL {@code opened_by} FK resolves on the
+     * cloud (same rule as {@link #toSaleData} for {@code soldBy}).
+     */
+    private static String openedByCloudId(
+            Shift shift,
+            String ownerUserId,
+            Set<String> cloudStaffIds) {
+        return shift.getOpenedBy() != null
+            && cloudStaffIds.contains(shift.getOpenedBy())
+            ? shift.getOpenedBy()
+            : ownerUserId;
     }
 
     private ShiftSyncRequest.SaleData toSaleData(
@@ -212,13 +228,16 @@ public class DesktopSyncPushService {
     }
 
     private ShiftSyncRequest.SaleItemData toItemData(SaleItem item) {
+        // Till batches are local-only (created at stock receipt on the till);
+        // the cloud has no such batches, so sending the id would violate the
+        // cloud's fk_si_batch foreign key and roll back the whole upload.
         return new ShiftSyncRequest.SaleItemData(
             item.getId(),
             item.getLineIndex(),
             item.getLineKind(),
             item.getLineLabel(),
             item.getItemId(),
-            item.getBatchId(),
+            null,
             item.getQuantity(),
             item.getUnitPrice(),
             item.getLineTotal(),

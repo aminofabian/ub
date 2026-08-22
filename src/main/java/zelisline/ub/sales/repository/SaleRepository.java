@@ -32,6 +32,19 @@ public interface SaleRepository extends JpaRepository<Sale, String> {
     /** Unsynced sales still left in a shift (used to decide when to stamp the shift). */
     long countByShiftIdAndCloudSyncedAtIsNull(String shiftId);
 
+    /** Cloud-side incremental pull for the desktop: sales at/after the cursor. */
+    List<Sale> findByBusinessIdAndSoldAtGreaterThanEqualOrderBySoldAtAsc(
+            String businessId,
+            java.time.Instant soldAt,
+            org.springframework.data.domain.Pageable pageable);
+
+    /**
+     * Till and cloud allocate receipt numbers independently (MAX+1), so a
+     * mirrored cloud sale can collide with a local one — checked before insert
+     * to avoid tripping {@code uq_sales_business_receipt_no}.
+     */
+    boolean existsByBusinessIdAndReceiptNo(String businessId, Long receiptNo);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select s from Sale s where s.id = :id and s.businessId = :businessId")
     Optional<Sale> findByIdAndBusinessIdForUpdate(@Param("id") String id, @Param("businessId") String businessId);

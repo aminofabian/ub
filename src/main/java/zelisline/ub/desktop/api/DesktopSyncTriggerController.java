@@ -85,12 +85,15 @@ public class DesktopSyncTriggerController {
     private void runFullSync() {
         try {
             DesktopSyncPullService.PullResult pull = syncPullService.pullMasterData();
+            // Mirror sales made in the web portal / other tills into this till.
+            int pulled = syncPullService.pullCloudSales();
             syncProgress.uploadStarted();
             DesktopSyncPushService.SyncPushResult push = syncPushService.pushPending();
             syncProgress.done(pull, push);
             log.info(
-                "[DesktopSync] full sync finished: {} item(s), {} sale(s) pushed",
+                "[DesktopSync] full sync finished: {} item(s) refreshed, {} cloud sale(s) pulled, {} sale(s) pushed",
                 pull.items(),
+                pulled,
                 push.salesPushed()
             );
         } catch (Exception e) {

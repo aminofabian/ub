@@ -2,14 +2,19 @@ package zelisline.ub.desktop.api;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.catalog.domain.Category;
@@ -20,6 +25,7 @@ import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
+import zelisline.ub.desktop.api.dto.CloudSalesSnapshot;
 import zelisline.ub.desktop.api.dto.MasterDataSnapshot;
 import zelisline.ub.desktop.api.dto.ShiftSyncAck;
 import zelisline.ub.desktop.api.dto.ShiftSyncRequest;
@@ -29,6 +35,14 @@ import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.pricing.domain.TaxRate;
 import zelisline.ub.pricing.repository.TaxRateRepository;
+import zelisline.ub.sales.domain.Sale;
+import zelisline.ub.sales.domain.SaleItem;
+import zelisline.ub.sales.domain.SalePayment;
+import zelisline.ub.sales.domain.Shift;
+import zelisline.ub.sales.repository.SaleItemRepository;
+import zelisline.ub.sales.repository.SalePaymentRepository;
+import zelisline.ub.sales.repository.SaleRepository;
+import zelisline.ub.sales.repository.ShiftRepository;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.domain.Business;
@@ -63,6 +77,10 @@ public class DesktopSyncController {
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final DesktopSyncIngestService ingestService;
+    private final SaleRepository saleRepository;
+    private final SaleItemRepository saleItemRepository;
+    private final SalePaymentRepository salePaymentRepository;
+    private final ShiftRepository shiftRepository;
 
     @GetMapping("/master-data")
     public MasterDataSnapshot masterData(HttpServletRequest request) {
@@ -239,5 +257,107 @@ public class DesktopSyncController {
             HttpServletRequest http) {
         String businessId = TenantRequestIds.resolveBusinessId(http);
         return ingestService.ingest(businessId, request);
+    }
+
+    /**
+     * Cloud → till sales pull (the "down" direction of sync): every sale made
+     * at/after {@code since} (web POS, other tills), with items + payments, so
+     * the till can mirror remote sales into its local database. Idempotent on
+     * the till side (it skips ids it already has).
+     */
+    @GetMapping("/sales")
+    public CloudSalesSnapshot cloudSales(
+            @RequestParam(defaultValue = "1970-01-01T00:00:00Z") String since,
+            HttpServletRequest request) {
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        Instant cursor = parseCursor(since);
+        List<Sale> sales = saleRepository
+            .findByBusinessIdAndSoldAtGreaterThanEqualOrderBySoldAtAsc(
+                businessId, cursor, PageRequest.of(0, 500));
+
+        // Batch-load shifts so each sale carries its shift's openedAt (the till
+        // needs it to create the placeholder shift the FK requires).
+        List<String> shiftIds = sales.stream().map(Sale::getShiftId).distinct().toList();
+        Map<String, Shift> shifts = shiftIds.isEmpty()
+            ? Map.of()
+            : shiftRepository.findAllById(shiftIds).stream()
+                .collect(Collectors.toMap(Shift::getId, s -> s));
+
+        List<CloudSalesSnapshot.CloudSaleData> data = sales.stream()
+            .map(s -> toCloudSale(s, shifts.get(s.getShiftId())))
+            .toList();
+        return new CloudSalesSnapshot(data);
+    }
+
+    private CloudSalesSnapshot.CloudSaleData toCloudSale(Sale sale, Shift shift) {
+        List<CloudSalesSnapshot.CloudSaleItemData> items = saleItemRepository
+            .findBySaleIdOrderByLineIndexAsc(sale.getId())
+            .stream()
+            .map(DesktopSyncController::toCloudItem)
+            .toList();
+        List<CloudSalesSnapshot.CloudSalePaymentData> payments = salePaymentRepository
+            .findBySaleIdOrderBySortOrderAsc(sale.getId())
+            .stream()
+            .map(DesktopSyncController::toCloudPayment)
+            .toList();
+        return new CloudSalesSnapshot.CloudSaleData(
+            sale.getId(),
+            sale.getBranchId(),
+            sale.getShiftId(),
+            shift != null ? shift.getOpenedAt() : null,
+            sale.getStatus(),
+            sale.getIdempotencyKey(),
+            sale.getGrandTotal(),
+            sale.getCashReceived(),
+            sale.getSoldBy(),
+            sale.getSoldAt(),
+            sale.getVoidedAt(),
+            sale.getVoidNotes(),
+            sale.getRefundedTotal(),
+            sale.getReceiptNo(),
+            items,
+            payments
+        );
+    }
+
+    private static CloudSalesSnapshot.CloudSaleItemData toCloudItem(SaleItem item) {
+        return new CloudSalesSnapshot.CloudSaleItemData(
+            item.getId(),
+            item.getLineIndex(),
+            item.getLineKind(),
+            item.getLineLabel(),
+            item.getItemId(),
+            item.getQuantity(),
+            item.getUnitPrice(),
+            item.getLineTotal(),
+            item.getUnitCost(),
+            item.getCostTotal(),
+            item.getProfit(),
+            item.getRegularUnitPrice(),
+            item.getDiscountAmount(),
+            item.getDiscountId(),
+            item.getDiscountName()
+        );
+    }
+
+    private static CloudSalesSnapshot.CloudSalePaymentData toCloudPayment(SalePayment payment) {
+        return new CloudSalesSnapshot.CloudSalePaymentData(
+            payment.getId(),
+            payment.getMethod(),
+            payment.getAmount(),
+            payment.getReference(),
+            payment.getSortOrder()
+        );
+    }
+
+    private static Instant parseCursor(String since) {
+        try {
+            return Instant.parse(since.trim());
+        } catch (Exception e) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "since must be an ISO-8601 instant (e.g. 2026-08-20T00:00:00Z)"
+            );
+        }
     }
 }

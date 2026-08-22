@@ -49,6 +49,7 @@ class DesktopSyncIngestServiceTest {
             "branch-1",
             "till-1",
             SalesConstants.SHIFT_STATUS_OPEN,
+            "owner-id",
             new BigDecimal("5000.00"),
             new BigDecimal("5000.00"),
             null,
@@ -90,6 +91,10 @@ class DesktopSyncIngestServiceTest {
 
         assertEquals(1, ack.salesIngested());
         assertEquals(0, ack.salesSkipped());
+        // shifts.opened_by is NOT NULL on the cloud — the ingest must carry the
+        // till's (remapped) opener through, or the whole batch rolls back.
+        verify(shiftRepository).save(org.mockito.ArgumentMatchers.argThat(shift ->
+            "owner-id".equals(((zelisline.ub.sales.domain.Shift) shift).getOpenedBy())));
         // The cloud announces the till sale to live POS/dashboard sessions.
         verify(eventPublisher).publishEvent(eq(new RealtimeBridge.SaleCompletedEvent(
             "cloud-biz", "branch-1", "sale-1", new BigDecimal("1500.00"))));

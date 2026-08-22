@@ -52,7 +52,8 @@ public class CloudSyncSession {
             String accessToken,
             String refreshToken,
             String ownerUserId,
-            List<String> staffIds
+            List<String> staffIds,
+            java.time.Instant lastSalesPullAt
     ) {
         public Session {
             staffIds = staffIds == null ? List.of() : List.copyOf(staffIds);
@@ -82,7 +83,10 @@ public class CloudSyncSession {
                 node.path("accessToken").asText(null),
                 node.path("refreshToken").asText(null),
                 node.path("ownerUserId").asText(null),
-                staffIds
+                staffIds,
+                node.path("lastSalesPullAt").asText(null) != null
+                    ? java.time.Instant.parse(node.path("lastSalesPullAt").asText())
+                    : null
             ));
         } catch (IOException | RuntimeException e) {
             log.warn("[CloudSync] could not read cloud-sync.json: {}", e.getMessage());
@@ -97,7 +101,8 @@ public class CloudSyncSession {
             session.accessToken(),
             session.refreshToken(),
             session.ownerUserId(),
-            session.staffIds()
+            session.staffIds(),
+            session.lastSalesPullAt()
         );
     }
 
@@ -109,7 +114,21 @@ public class CloudSyncSession {
             current.accessToken(),
             current.refreshToken(),
             current.ownerUserId(),
-            staffIds
+            staffIds,
+            current.lastSalesPullAt()
+        );
+    }
+
+    /** Re-persist the session with the cloud-sales pull cursor advanced. */
+    public void persistLastSalesPullAt(Session current, java.time.Instant lastSalesPullAt) {
+        persist(
+            current.origin(),
+            current.cloudBusinessId(),
+            current.accessToken(),
+            current.refreshToken(),
+            current.ownerUserId(),
+            current.staffIds(),
+            lastSalesPullAt
         );
     }
 
@@ -119,7 +138,7 @@ public class CloudSyncSession {
             String accessToken,
             String refreshToken,
             String ownerUserId) {
-        persist(origin, cloudBusinessId, accessToken, refreshToken, ownerUserId, List.of());
+        persist(origin, cloudBusinessId, accessToken, refreshToken, ownerUserId, List.of(), null);
     }
 
     public void persist(
@@ -129,6 +148,17 @@ public class CloudSyncSession {
             String refreshToken,
             String ownerUserId,
             List<String> staffIds) {
+        persist(origin, cloudBusinessId, accessToken, refreshToken, ownerUserId, staffIds, null);
+    }
+
+    public void persist(
+            String origin,
+            String cloudBusinessId,
+            String accessToken,
+            String refreshToken,
+            String ownerUserId,
+            List<String> staffIds,
+            java.time.Instant lastSalesPullAt) {
         try {
             Path confDir = Path.of(appData).resolve("conf");
             Files.createDirectories(confDir);
@@ -147,6 +177,9 @@ public class CloudSyncSession {
             if (staffIds != null) {
                 com.fasterxml.jackson.databind.node.ArrayNode arr = node.putArray("staffIds");
                 staffIds.stream().filter(id -> id != null && !id.isBlank()).forEach(arr::add);
+            }
+            if (lastSalesPullAt != null) {
+                node.put("lastSalesPullAt", lastSalesPullAt.toString());
             }
             node.put("connectedAt", Instant.now().toString());
             Files.writeString(
@@ -199,7 +232,8 @@ public class CloudSyncSession {
                 resp.accessToken(),
                 refreshToken,
                 current.ownerUserId(),
-                current.staffIds()
+                current.staffIds(),
+                current.lastSalesPullAt()
             );
             persist(next);
             log.info("[CloudSync] refreshed cloud session for {}", current.origin());

@@ -20,9 +20,21 @@ import zelisline.ub.catalog.domain.ItemType;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
+import zelisline.ub.desktop.api.dto.CloudSalesSnapshot;
 import zelisline.ub.desktop.api.dto.MasterDataSnapshot;
+import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.pricing.domain.TaxRate;
 import zelisline.ub.pricing.repository.TaxRateRepository;
+import zelisline.ub.sales.SalesConstants;
+import zelisline.ub.sales.domain.Sale;
+import zelisline.ub.sales.domain.SaleItem;
+import zelisline.ub.sales.domain.SaleLineKinds;
+import zelisline.ub.sales.domain.SalePayment;
+import zelisline.ub.sales.domain.Shift;
+import zelisline.ub.sales.repository.SaleItemRepository;
+import zelisline.ub.sales.repository.SalePaymentRepository;
+import zelisline.ub.sales.repository.SaleRepository;
+import zelisline.ub.sales.repository.ShiftRepository;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BranchRepository;
@@ -47,6 +59,9 @@ public class DesktopSyncPullService {
 
     private static final Logger log = LoggerFactory.getLogger(DesktopSyncPullService.class);
 
+    /** Page size used when downloading cloud sales (matches the controller). */
+    private static final int SALES_PAGE_SIZE = 500;
+
     private final BusinessRepository businessRepository;
     private final BranchRepository branchRepository;
     private final CategoryRepository categoryRepository;
@@ -58,6 +73,12 @@ public class DesktopSyncPullService {
     private final CloudSyncSession cloudSyncSession;
     private final TransactionTemplate transactionTemplate;
     private final DesktopSyncProgressService syncProgress;
+    private final SaleRepository saleRepository;
+    private final SaleItemRepository saleItemRepository;
+    private final SalePaymentRepository salePaymentRepository;
+    private final ShiftRepository shiftRepository;
+    private final UserRepository userRepository;
+    private final RestClient.Builder restClientBuilder;
 
     @Value("${app.desktop.business-id:}")
     private String desktopBusinessId;
@@ -81,7 +102,7 @@ public class DesktopSyncPullService {
             );
         }
 
-        RestClient client = RestClient.builder().baseUrl(mapping.origin()).build();
+        RestClient client = restClientBuilder.baseUrl(mapping.origin()).build();
         syncProgress.downloadStarted();
         SnapshotFetch fetch = fetchSnapshot(client, mapping);
         MasterDataSnapshot snapshot = fetch.snapshot();
@@ -112,6 +133,297 @@ public class DesktopSyncPullService {
             result.images()
         );
         return result;
+    }
+
+    /**
+     * Pull sales made on the cloud (web POS / other tills) into this till —
+     * the "down" direction for sales, so every sale shows up at the till and in
+     * its local reports regardless of where it was made.
+     *
+     * <p>Incremental via {@code lastSalesPullAt} (stored in cloud-sync.json) and
+     * idempotent by sale id: sales already present locally (including this
+     * till's own uploads) are skipped. Pulled sales are stamped
+     * {@code cloud_synced_at} so they are never pushed back up.
+     *
+     * @return number of new sales mirrored into the local database
+     */
+    public int pullCloudSales() {
+        String localId = desktopBusinessId == null ? "" : desktopBusinessId.trim();
+        CloudSyncSession.Session mapping = cloudSyncSession.load().orElse(null);
+        if (mapping == null || localId.isEmpty()) {
+            throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "This PC is not connected to an online shop yet"
+            );
+        }
+
+        java.time.Instant cursor = mapping.lastSalesPullAt() != null
+            ? mapping.lastSalesPullAt()
+            : java.time.Instant.EPOCH;
+        RestClient client = restClientBuilder.baseUrl(mapping.origin()).build();
+
+        // A till that was offline for a while can have many pages of cloud sales
+        // to mirror; keep pulling until a page comes back short (the cursor
+        // advances per page, so an interrupted run resumes where it left off).
+        int total = 0;
+        while (true) {
+            CloudSalesSnapshot snapshot = fetchSales(client, mapping, cursor);
+            List<CloudSalesSnapshot.CloudSaleData> sales = snapshot.sales();
+            if (sales == null || sales.isEmpty()) {
+                break;
+            }
+
+            Integer inserted = transactionTemplate.execute(status ->
+                upsertCloudSales(localId, snapshot));
+            if (inserted == null) {
+                throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Sales pull failed — nothing was written"
+                );
+            }
+            total += inserted;
+
+            // Advance the cursor to the newest sale we've seen (>= semantics +
+            // the idempotent skip make re-pulls safe).
+            java.time.Instant newest = sales.stream()
+                .map(CloudSalesSnapshot.CloudSaleData::soldAt)
+                .filter(java.util.Objects::nonNull)
+                .max(java.time.Instant::compareTo)
+                .orElse(null);
+            if (newest != null && newest.isAfter(cursor)) {
+                cursor = newest;
+                cloudSyncSession.persistLastSalesPullAt(mapping, cursor);
+            }
+
+            if (sales.size() < SALES_PAGE_SIZE) {
+                break;
+            }
+        }
+        log.info(
+            "[DesktopSync] sales pull: {} new sale(s) from {} (cursor now {})",
+            total, mapping.origin(), cursor
+        );
+        return total;
+    }
+
+    private CloudSalesSnapshot fetchSales(
+            RestClient client,
+            CloudSyncSession.Session mapping,
+            java.time.Instant since) {
+        try {
+            return doFetchSales(client, mapping, since);
+        } catch (Exception e) {
+            if (!isUnauthorized(e)) {
+                throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Could not download sales (" + e.getMessage() + ")"
+                );
+            }
+            CloudSyncSession.Session refreshed = cloudSyncSession
+                .refresh(client, mapping)
+                .orElse(null);
+            if (refreshed == null) {
+                throw new ResponseStatusException(
+                    HttpStatus.UNAUTHORIZED,
+                    "Your online-shop session has expired — open Settings → Sync to reconnect"
+                );
+            }
+            try {
+                return doFetchSales(client, refreshed, since);
+            } catch (Exception e2) {
+                throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Could not download sales (" + e2.getMessage() + ")"
+                );
+            }
+        }
+    }
+
+    private CloudSalesSnapshot doFetchSales(
+            RestClient client,
+            CloudSyncSession.Session mapping,
+            java.time.Instant since) {
+        CloudSalesSnapshot snapshot = client
+            .get()
+            .uri(uriBuilder -> uriBuilder
+                .path("/api/v1/desktop/sync/sales")
+                .queryParam("since", since.toString())
+                .build())
+            .header("Authorization", "Bearer " + mapping.accessToken())
+            .header("X-Tenant-Id", mapping.cloudBusinessId())
+            .accept(MediaType.APPLICATION_JSON)
+            .retrieve()
+            .body(CloudSalesSnapshot.class);
+        if (snapshot == null) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_GATEWAY,
+                "The online shop returned an empty sales snapshot"
+            );
+        }
+        return snapshot;
+    }
+
+    /**
+     * Insert cloud sales that don't exist locally yet. Runs in the caller's
+     * transaction. Returns the number of newly inserted sales.
+     */
+    private Integer upsertCloudSales(String localId, CloudSalesSnapshot snapshot) {
+        String fallbackUser = userRepository
+            .findIdsByBusinessIdAndDeletedAtIsNull(localId)
+            .stream()
+            .findFirst()
+            .orElse(null);
+        int inserted = 0;
+        for (CloudSalesSnapshot.CloudSaleData data : snapshot.sales()) {
+            if (saleRepository.findByIdAndBusinessId(data.id(), localId).isPresent()) {
+                continue;
+            }
+            insertCloudSale(localId, data, fallbackUser);
+            inserted++;
+        }
+        return inserted;
+    }
+
+    private void insertCloudSale(
+            String localId,
+            CloudSalesSnapshot.CloudSaleData data,
+            String fallbackUser) {
+        // sales.branch_id / shifts.branch_id are NOT NULL FKs to branches the
+        // till mirrors during master-data sync. A sale at a branch the till
+        // hasn't seen yet fails loudly (the cursor doesn't advance, so it
+        // retries after the next master-data refresh) instead of tripping an
+        // obscure FK error that wedges the whole pull.
+        if (branchRepository
+            .findByIdAndBusinessIdAndDeletedAtIsNull(data.branchId(), localId)
+            .isEmpty()) {
+            throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "A cloud sale (" + data.id() + ") is at a branch this till hasn't "
+                    + "synced yet — run Settings → Sync now to refresh master data"
+            );
+        }
+
+        // sales.sold_by / shifts.opened_by are NOT NULL FKs to local users.
+        // Cloud users are mirrored by the staff sync; if one isn't mirrored yet
+        // (new hire after the last master pull), attribute to any local user so
+        // the sale still records. Customers/ledger refs are not synced in v1.
+        String soldBy = (data.soldBy() != null
+            && userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(
+                data.soldBy(), localId).isPresent())
+            ? data.soldBy()
+            : fallbackUser;
+        if (soldBy == null) {
+            throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "This till has no local staff user to attribute cloud sales to "
+                    + "— run Settings → Sync now to refresh staff"
+            );
+        }
+
+        // The sales.shift_id FK requires the shift to exist — create a closed
+        // placeholder for remote shifts. It is stamped cloud_synced_at so the
+        // push side never uploads it (its zero cash figures must not overwrite
+        // the cloud's real shift totals).
+        Shift shift = shiftRepository
+            .findByIdAndBusinessId(data.shiftId(), localId)
+            .orElseGet(() -> {
+                Shift created = new Shift();
+                created.setId(data.shiftId());
+                created.setBusinessId(localId);
+                created.setBranchId(data.branchId());
+                created.setOpenedBy(soldBy);
+                created.setStatus(SalesConstants.SHIFT_STATUS_CLOSED);
+                created.setOpeningCash(java.math.BigDecimal.ZERO);
+                created.setExpectedClosingCash(java.math.BigDecimal.ZERO);
+                created.setOpenedAt(data.shiftOpenedAt() != null
+                    ? data.shiftOpenedAt()
+                    : data.soldAt() != null ? data.soldAt() : java.time.Instant.now());
+                created.setClosedAt(data.soldAt());
+                created.setCloudSyncedAt(java.time.Instant.now());
+                return created;
+            });
+        shiftRepository.save(shift);
+
+        Sale sale = new Sale();
+        sale.setId(data.id());
+        sale.setBusinessId(localId);
+        sale.setBranchId(data.branchId());
+        sale.setShiftId(data.shiftId());
+        sale.setStatus(data.status());
+        sale.setIdempotencyKey(data.idempotencyKey());
+        sale.setGrandTotal(data.grandTotal());
+        sale.setCashReceived(data.cashReceived());
+        // Keep the cloud receipt number so the local next-receipt sequence
+        // stays aligned — unless another local sale already holds it (the till
+        // and the cloud allocate MAX+1 independently), in which case leave it
+        // blank rather than trip the unique key and roll back the whole batch.
+        Long receiptNo = data.receiptNo();
+        if (receiptNo != null
+            && saleRepository.existsByBusinessIdAndReceiptNo(localId, receiptNo)) {
+            log.warn(
+                "[DesktopSync] cloud sale {} reuses local receipt {} — leaving receipt blank",
+                data.id(), receiptNo
+            );
+            receiptNo = null;
+        }
+        sale.setReceiptNo(receiptNo);
+        sale.setSoldBy(soldBy);
+        sale.setSoldAt(data.soldAt() == null ? java.time.Instant.now() : data.soldAt());
+        sale.setVoidedAt(data.voidedAt());
+        sale.setVoidNotes(data.voidNotes());
+        sale.setRefundedTotal(data.refundedTotal() == null
+            ? java.math.BigDecimal.ZERO
+            : data.refundedTotal());
+        sale.setCloudSyncedAt(java.time.Instant.now());
+        saleRepository.save(sale);
+
+        if (data.items() != null) {
+            for (CloudSalesSnapshot.CloudSaleItemData itemData : data.items()) {
+                // Lines referencing items this till hasn't mirrored yet are
+                // skipped (the sale row itself keeps the correct total).
+                if (itemData.itemId() == null
+                    || itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(
+                        itemData.itemId(), localId).isEmpty()) {
+                    log.debug("[DesktopSync] skipping line {} of sale {} (item not on this till)",
+                        itemData.lineIndex(), data.id());
+                    continue;
+                }
+                SaleItem item = new SaleItem();
+                item.setId(itemData.id());
+                item.setSaleId(sale.getId());
+                item.setLineIndex(itemData.lineIndex());
+                item.setLineKind(itemData.lineKind() == null
+                    ? SaleLineKinds.ITEM
+                    : itemData.lineKind());
+                item.setLineLabel(itemData.lineLabel());
+                item.setItemId(itemData.itemId());
+                item.setBatchId(null);
+                item.setQuantity(itemData.quantity());
+                item.setUnitPrice(itemData.unitPrice());
+                item.setLineTotal(itemData.lineTotal());
+                item.setUnitCost(itemData.unitCost());
+                item.setCostTotal(itemData.costTotal());
+                item.setProfit(itemData.profit());
+                item.setRegularUnitPrice(itemData.regularUnitPrice());
+                item.setDiscountAmount(itemData.discountAmount());
+                item.setDiscountId(itemData.discountId());
+                item.setDiscountName(itemData.discountName());
+                saleItemRepository.save(item);
+            }
+        }
+
+        if (data.payments() != null) {
+            for (CloudSalesSnapshot.CloudSalePaymentData paymentData : data.payments()) {
+                SalePayment payment = new SalePayment();
+                payment.setId(paymentData.id());
+                payment.setSaleId(sale.getId());
+                payment.setMethod(paymentData.method());
+                payment.setAmount(paymentData.amount());
+                payment.setReference(paymentData.reference());
+                payment.setSortOrder(paymentData.sortOrder());
+                salePaymentRepository.save(payment);
+            }
+        }
     }
 
     private record SnapshotFetch(MasterDataSnapshot snapshot, CloudSyncSession.Session session) {}

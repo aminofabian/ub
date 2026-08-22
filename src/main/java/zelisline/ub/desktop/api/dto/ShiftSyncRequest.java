@@ -29,6 +29,8 @@ public record ShiftSyncRequest(@Valid @NotEmpty List<ShiftData> shifts) {
         @NotBlank String branchId,
         @NotBlank String tillDeviceKey,
         @NotBlank String status,
+        /** Cloud user id (the desktop remaps local cashier ids to the owner). */
+        @NotBlank String openedBy,
         @NotNull BigDecimal openingCash,
         @NotNull BigDecimal expectedClosingCash,
         BigDecimal countedClosingCash,

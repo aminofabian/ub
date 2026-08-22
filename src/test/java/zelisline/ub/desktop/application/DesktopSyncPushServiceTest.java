@@ -63,7 +63,7 @@ class DesktopSyncPushServiceTest {
     void setUp() {
         when(cloudSyncSession.load()).thenReturn(Optional.of(new CloudSyncSession.Session(
             CLOUD_ORIGIN, "cloud-biz", "access-token", "refresh-token",
-            "owner-id", List.of("staff-1"))));
+            "owner-id", List.of("staff-1"), Instant.EPOCH)));
         when(saleItemRepository.findBySaleIdOrderByLineIndexAsc(anyString())).thenReturn(List.of());
         when(salePaymentRepository.findBySaleIdOrderBySortOrderAsc(anyString())).thenReturn(List.of());
 

@@ -88,8 +88,8 @@ public class DataPermissionEvaluator implements PermissionEvaluator {
                     tenant.roleId()
             );
         }
-        if ("order_pad.write".equals(perm) || "order_pad.read".equals(perm)) {
-            return inventoryAccess.grantsDelegatedOrderPadAccess(
+        if ("suppliers.read".equals(perm)) {
+            return inventoryAccess.grantsDelegatedPathAAccess(
                     tenant.businessId(),
                     tenant.roleId()
             );

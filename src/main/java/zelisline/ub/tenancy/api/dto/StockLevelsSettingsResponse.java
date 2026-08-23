@@ -22,7 +22,7 @@ public record StockLevelsSettingsResponse(
          */
         boolean allowMinStockForGroceryClerk,
         /**
-         * Grocery counter Order pad drawer. Default on — admin can turn off.
+         * Grocery counter supplier Order drawer (Path A place + WhatsApp). Default on.
          */
         boolean allowOrderPadForGroceryClerk,
         /**

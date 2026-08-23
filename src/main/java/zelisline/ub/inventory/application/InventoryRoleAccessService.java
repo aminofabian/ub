@@ -91,20 +91,14 @@ public class InventoryRoleAccessService {
         return readStockLevels(businessId).allowMinStockForGroceryClerk();
     }
 
-    /** Shared to-order pad on the grocery counter. */
-    public boolean grantsDelegatedOrderPadAccess(String businessId, String roleId) {
-        if (!isGroceryCounterRole(resolveRoleKey(roleId))) {
-            return false;
-        }
-        return readStockLevels(businessId).allowOrderPadForGroceryClerk();
-    }
-
-    /** Path A confirm / receive on the grocery counter. */
+    /** Path A confirm / receive — and supplier Order place — on grocery. */
     public boolean grantsDelegatedPathAAccess(String businessId, String roleId) {
         if (!isGroceryCounterRole(resolveRoleKey(roleId))) {
             return false;
         }
-        return readStockLevels(businessId).allowOrderConfirmForGroceryClerk();
+        StockLevelsSettingsResponse settings = readStockLevels(businessId);
+        return settings.allowOrderPadForGroceryClerk()
+                || settings.allowOrderConfirmForGroceryClerk();
     }
 
     /**

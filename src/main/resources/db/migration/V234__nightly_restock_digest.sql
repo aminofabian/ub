@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS restock_runs (
     pad_line_count INT            NOT NULL DEFAULT 0,
     est_total      DECIMAL(14,4)  NOT NULL DEFAULT 0,
     currency       VARCHAR(3)     NOT NULL DEFAULT 'KES',
-    trigger        VARCHAR(16)    NOT NULL DEFAULT 'scheduled',
+    `trigger`      VARCHAR(16)    NOT NULL DEFAULT 'scheduled',
     error_note     TEXT           NULL,
     created_at     TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at     TIMESTAMP(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),

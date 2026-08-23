@@ -61,8 +61,8 @@ public class RestockRun {
     @Column(name = "currency", nullable = false, length = 3)
     private String currency = "KES";
 
-    /** scheduled | manual */
-    @Column(name = "trigger", nullable = false, length = 16)
+    /** scheduled | manual — column is backtick-quoted; TRIGGER is reserved in MySQL. */
+    @Column(name = "`trigger`", nullable = false, length = 16)
     private String trigger = "scheduled";
 
     @Column(name = "error_note", columnDefinition = "TEXT")

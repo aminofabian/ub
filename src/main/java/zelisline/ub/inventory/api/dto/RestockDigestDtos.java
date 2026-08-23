@@ -68,4 +68,39 @@ public final class RestockDigestDtos {
             String currency,
             String trigger
     ) {}
+
+    /** Accept a run (or part of it) into draft POs + order pad lines. */
+    public record AcceptRestockRunRequest(
+            /** Null / empty = all pending lines of the requested {@code mode}. */
+            List<String> lineIds,
+            /** suggestionId → accepted qty override (optional). */
+            java.util.Map<String, BigDecimal> qtyOverrides,
+            /** po | pad | all (default all). */
+            String mode
+    ) {}
+
+    public record CreatedPurchaseOrderRef(
+            String purchaseOrderId,
+            String poNumber,
+            String supplierId,
+            String supplierName,
+            int lineCount
+    ) {}
+
+    /** A pending line the accept skipped (missing unit cost / missing permission). */
+    public record SkippedAcceptLine(
+            String suggestionId,
+            String itemId,
+            String itemName,
+            String reason
+    ) {}
+
+    public record AcceptRestockRunResponse(
+            RestockRunResponse run,
+            List<CreatedPurchaseOrderRef> purchaseOrders,
+            int padLinesCreated,
+            List<SkippedAcceptLine> skippedLines
+    ) {}
+
+    public record SnoozeRestockSuggestionRequest(Integer days) {}
 }

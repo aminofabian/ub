@@ -30,6 +30,9 @@ public final class PublicAuthEndpoints {
             "/api/v1/public/shopper/auth/send-code",
             "/api/v1/public/shopper/auth/verify-code",
             "/api/v1/public/shopper/auth/session",
+            "/api/v1/public/shopper/auth/identify/send-code",
+            "/api/v1/public/shopper/auth/identify/verify-code",
+            "/api/v1/public/shopper/auth/shops",
             "/api/v1/public/shops/search"
     );
 

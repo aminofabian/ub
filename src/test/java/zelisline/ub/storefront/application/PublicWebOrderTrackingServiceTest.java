@@ -24,7 +24,7 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
 class PublicWebOrderTrackingServiceTest {
 
     private static final String ORDER_ID = "550e8400-e29b-41d4-a716-446655440000";
-    private static final String CODE = "65544000"; // last 8 hex of ORDER_ID
+    private static final String CODE = "55440000"; // last 8 hex of ORDER_ID
 
     private BusinessRepository businessRepository;
     private WebOrderRepository webOrderRepository;

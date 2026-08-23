@@ -4,23 +4,26 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import lombok.RequiredArgsConstructor;
 import zelisline.ub.messaging.domain.WhatsAppMessage;
 
 /**
  * Routes inbound WhatsApp messages to the appropriate handler.
  *
- * <p>Current implementation logs all messages for observability.
- * Future extensions:
  * <ul>
- *   <li>{@code ORDER} → create a draft sale/order in Palmart</li>
- *   <li>{@code TEXT} → customer service bot or command parser</li>
- *   <li>{@code BUTTON}/{@code INTERACTIVE} → handle menu selections</li>
+ *   <li>{@code TEXT} → merchant reply commands first ({@code CONFIRM/READY/COMPLETE <code>}
+ *       drive fulfillment status, scope §19); anything else falls through to logging.</li>
+ *   <li>{@code ORDER} → Meta catalog orders (future: create a draft sale/cart).</li>
+ *   <li>{@code BUTTON}/{@code INTERACTIVE} → menu selections (future).</li>
  * </ul>
  */
 @Component
+@RequiredArgsConstructor
 public class WhatsAppMessageRouter {
 
     private static final Logger log = LoggerFactory.getLogger(WhatsAppMessageRouter.class);
+
+    private final WhatsAppOrderReplyService orderReplyService;
 
     /**
      * Routes a parsed WhatsApp message based on its type.
@@ -42,8 +45,11 @@ public class WhatsAppMessageRouter {
                 log.info("WhatsApp router: ORDER received — draft sale creation not yet implemented");
             }
             case TEXT -> {
-                // TODO: Phase X — customer service bot / command parser
-                log.info("WhatsApp router: TEXT received — bot/command parser not yet implemented");
+                if (orderReplyService.tryApply(message)) {
+                    log.debug("WhatsApp router: TEXT handled as merchant reply command");
+                } else {
+                    log.info("WhatsApp router: TEXT received — no matching command");
+                }
             }
             case BUTTON, INTERACTIVE -> {
                 // TODO: Phase X — handle menu / reply selections

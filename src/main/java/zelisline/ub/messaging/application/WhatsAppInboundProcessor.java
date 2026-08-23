@@ -94,7 +94,8 @@ public class WhatsAppInboundProcessor {
                     type,
                     content,
                     rawJson,
-                    Instant.now()
+                    Instant.now(),
+                    value.metadata() != null ? value.metadata().phoneNumberId() : null
                 );
 
                 messageRouter.route(domainMessage);

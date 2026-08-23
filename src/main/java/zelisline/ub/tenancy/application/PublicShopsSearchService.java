@@ -101,6 +101,28 @@ public class PublicShopsSearchService {
         matches.putIfAbsent(business.getSlug(), toSearch(business));
     }
 
+    /**
+     * Phase 4: resolves a set of business ids (e.g. the shops a verified phone
+     * has a customer record in) into directory rows, skipping missing/deleted
+     * tenants and capping at {@link #MAX_RESULTS}. Public data only.
+     */
+    @Transactional(readOnly = true)
+    public List<PublicShopsSearchResponse> byBusinessIds(java.util.Collection<String> businessIds) {
+        if (businessIds == null || businessIds.isEmpty()) {
+            return List.of();
+        }
+        List<PublicShopsSearchResponse> rows = new java.util.ArrayList<>();
+        for (String id : businessIds) {
+            if (rows.size() >= MAX_RESULTS) {
+                break;
+            }
+            businessRepository.findByIdAndDeletedAtIsNull(id)
+                    .map(this::toSearch)
+                    .ifPresent(rows::add);
+        }
+        return rows;
+    }
+
     private Optional<PublicShopsSearchResponse> resolveByHost(String host) {
         return domainMappingRepository.findByDomainAndActiveTrue(host)
                 .map(DomainMapping::getBusinessId)

@@ -31,4 +31,12 @@ class PublicAuthEndpointsTest {
         assertTrue(PublicAuthEndpoints.matches("/api/v1/public/shops/search"));
         assertFalse(PublicAuthEndpoints.matches("/api/v1/public/shops/"));
     }
+
+    @Test
+    void apexIdentifyRoutesBypassJwtFilter() {
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/shopper/auth/identify/send-code"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/shopper/auth/identify/verify-code"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/shopper/auth/shops"));
+        assertFalse(PublicAuthEndpoints.matches("/api/v1/public/shopper/auth/identify/"));
+    }
 }

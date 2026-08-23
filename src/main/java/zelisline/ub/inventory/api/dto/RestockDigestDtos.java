@@ -87,7 +87,11 @@ public final class RestockDigestDtos {
             int lineCount
     ) {}
 
-    /** A pending line the accept skipped (missing unit cost / missing permission). */
+    /**
+     * A pending line the accept could not take: missing unit cost, missing supplier,
+     * a non-positive qty override, or a permission the caller doesn't hold. Reported
+     * rather than thrown so one bad line can't roll back the rest of the run.
+     */
     public record SkippedAcceptLine(
             String suggestionId,
             String itemId,

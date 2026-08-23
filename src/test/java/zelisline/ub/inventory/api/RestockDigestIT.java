@@ -11,6 +11,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -643,19 +644,52 @@ class RestockDigestIT {
                 .andExpect(status().isConflict());
     }
 
+    /**
+     * A zero qty override skips that one line instead of failing the whole accept — one
+     * bad number must not roll back the POs / pad rows created for the rest of the run.
+     */
     @Test
-    void accept_zeroQtyOverride_rejected() throws Exception {
+    void accept_zeroQtyOverride_skipsLineInsteadOfFailingRun() throws Exception {
         JsonNode run = generate();
         String runId = run.get("id").asText();
         String suggestionId = run.get("suggestions").get(0).get("id").asText();
-        mockMvc.perform(post("/api/v1/inventory/restock/runs/" + runId + "/accept")
-                        .contentType(APPLICATION_JSON)
-                        .content("{\"mode\":\"all\",\"qtyOverrides\":{\"" + suggestionId
-                                + "\":0}}")
-                        .header("X-Tenant-Id", TENANT)
-                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
-                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
-                .andExpect(status().isBadRequest());
+        MvcResult result = mockMvc.perform(
+                        post("/api/v1/inventory/restock/runs/" + runId + "/accept")
+                                .contentType(APPLICATION_JSON)
+                                .content("{\"mode\":\"all\",\"qtyOverrides\":{\"" + suggestionId
+                                        + "\":0}}")
+                                .header("X-Tenant-Id", TENANT)
+                                .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                                .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString());
+        assertThat(skippedSuggestionIds(body)).contains(suggestionId);
+
+        JsonNode line = findSuggestion(body.get("run"), suggestionId);
+        assertThat(line.get("status").asText()).isEqualTo("pending");
+        assertThat(line.get("acceptedQty").isNull()).isTrue();
+    }
+
+    private static List<String> skippedSuggestionIds(JsonNode acceptResponse) {
+        List<String> ids = new ArrayList<>();
+        JsonNode skipped = acceptResponse.get("skippedLines");
+        if (skipped != null) {
+            for (JsonNode line : skipped) {
+                ids.add(line.get("suggestionId").asText());
+            }
+        }
+        return ids;
+    }
+
+    private static JsonNode findSuggestion(JsonNode run, String suggestionId) {
+        for (JsonNode s : run.get("suggestions")) {
+            if (suggestionId.equals(s.get("id").asText())) {
+                return s;
+            }
+        }
+        throw new AssertionError("suggestion " + suggestionId + " not in run response");
     }
 
     private JsonNode acceptAll(String runId) throws Exception {

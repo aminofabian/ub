@@ -110,12 +110,7 @@ public class RestockDigestScheduler {
         if (runTime == null) {
             runTime = LocalTime.of(20, 0);
         }
-        // Stored as a MySQL TIME, so compare at minute precision. Measured in minutes
-        // from midnight rather than LocalTime.plusMinutes so a late run time can't wrap
-        // the window past midnight onto the wrong run date.
-        LocalTime localNow = now.toLocalTime();
-        int elapsed = minutesOfDay(localNow) - minutesOfDay(runTime);
-        if (elapsed < 0 || elapsed > CATCH_UP_MINUTES) {
+        if (!isDue(now.toLocalTime(), runTime)) {
             return false;
         }
         LocalDate runDate = now.toLocalDate();
@@ -133,6 +128,21 @@ public class RestockDigestScheduler {
                 business.getId(), branch.getId(), runDate, InventoryConstants.DIGEST_TRIGGER_SCHEDULED);
         restockDigestNotificationService.notifyRun(business.getId(), run.id());
         return true;
+    }
+
+    /**
+     * True while the local clock sits in {@code [runTime, runTime + CATCH_UP_MINUTES]}.
+     *
+     * <p>Compared in whole minutes from midnight, which buys two things over an exact
+     * {@code LocalTime.equals} check: a {@code restock_run_time} carrying seconds (it's a
+     * MySQL {@code TIME}) still matches, and a deploy or slow tick that straddles the
+     * exact minute no longer drops the branch's digest for the whole day. Subtracting
+     * minutes-of-day rather than calling {@code plusMinutes} keeps a late run time (say
+     * {@code 23:30}) from wrapping the window past midnight onto the next run date.
+     */
+    static boolean isDue(LocalTime localNow, LocalTime runTime) {
+        int elapsed = minutesOfDay(localNow) - minutesOfDay(runTime);
+        return elapsed >= 0 && elapsed <= CATCH_UP_MINUTES;
     }
 
     private static int minutesOfDay(LocalTime time) {

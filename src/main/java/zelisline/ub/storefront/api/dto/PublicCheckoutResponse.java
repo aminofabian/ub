@@ -14,5 +14,7 @@ public record PublicCheckoutResponse(
         BigDecimal grandTotal,
         String currency,
         String catalogBranchName,
-        Instant createdAt
+        Instant createdAt,
+        /** Phase 5: one-tap receipt token — append to the tracking link (`?t=`), single-use. */
+        String receiptToken
 ) {}

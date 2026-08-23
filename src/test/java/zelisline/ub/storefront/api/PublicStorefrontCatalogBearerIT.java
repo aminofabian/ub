@@ -181,8 +181,12 @@ class PublicStorefrontCatalogBearerIT {
                 .andExpect(jsonPath("$.items.length()").value(1))
                 .andReturn();
 
+        // Catalog pages are ordered by item id (random UUID), so the assertion is
+        // on the actual page content, not on creation order.
+        String firstId = JsonPath.read(firstPage.getResponse().getContentAsString(), "$.items[0].id");
         String cursor = JsonPath.read(firstPage.getResponse().getContentAsString(), "$.nextCursor");
-        org.assertj.core.api.Assertions.assertThat(cursor).isEqualTo(firstItemId);
+        org.assertj.core.api.Assertions.assertThat(cursor).isEqualTo(firstId);
+        String expectedSecond = firstId.equals(firstItemId) ? secondItemId : firstItemId;
 
         mockMvc.perform(
                         get("/api/v1/public/businesses/" + SLUG + "/catalog/items")
@@ -191,7 +195,7 @@ class PublicStorefrontCatalogBearerIT {
                                 .header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items.length()").value(1))
-                .andExpect(jsonPath("$.items[0].id").value(secondItemId));
+                .andExpect(jsonPath("$.items[0].id").value(expectedSecond));
     }
 
     private String createPublishedItem(

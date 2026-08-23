@@ -21,6 +21,11 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
  * UUID suffix, so we scan the shop's recent orders and match in Java — per-shop
  * storefront volume is low and a bounded scan is simpler than a derived column
  * in V1.
+ *
+ * <p>Two gates: code + phone last-4 (legacy), or code + the Phase 5 one-tap
+ * receipt token (single-use, 15-min TTL — see {@link ReceiptTokenService}).
+ * Both failures surface as the same generic miss so the API never confirms
+ * whether an order exists (§12 posture).
  */
 @Service
 @RequiredArgsConstructor
@@ -31,25 +36,42 @@ public class PublicWebOrderTrackingService {
     private final BusinessRepository businessRepository;
     private final WebOrderRepository webOrderRepository;
     private final BranchRepository branchRepository;
+    private final ReceiptTokenService receiptTokenService;
 
     @Transactional(readOnly = true)
     public PublicOrderTrackingResponse trackByCode(String slug, String code, String phoneLast4) {
+        WebOrder found = resolveByCode(slug, code);
+        if (found == null || !phoneMatches(found.getCustomerPhone(), phoneLast4)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+        }
+        return toResponse(found, false);
+    }
+
+    @Transactional
+    public PublicOrderTrackingResponse trackByToken(String slug, String code, String rawToken) {
+        WebOrder found = resolveByCode(slug, code);
+        if (found == null || !receiptTokenService.verifyAndConsume(found, rawToken)) {
+            // Generic on purpose: never distinguish unknown order from bad/used/expired token.
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+        }
+        return toResponse(found, true);
+    }
+
+    private WebOrder resolveByCode(String slug, String code) {
         Business business = businessRepository.findBySlugAndDeletedAtIsNull(slug.trim())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Store not found"));
-        String businessId = business.getId();
         String key = code == null ? "" : code.trim();
-
-        WebOrder found = webOrderRepository
-                .findByBusinessIdOrderByCreatedAtDesc(businessId, PageRequest.of(0, RECENT_ORDERS_SCAN))
+        return webOrderRepository
+                .findByBusinessIdOrderByCreatedAtDesc(business.getId(), PageRequest.of(0, RECENT_ORDERS_SCAN))
                 .stream()
                 .filter(o -> WebOrderCodes.matches(key, o.getId()))
                 .findFirst()
                 .orElse(null);
-        if (found == null || !phoneMatches(found.getCustomerPhone(), phoneLast4)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
-        }
+    }
+
+    private PublicOrderTrackingResponse toResponse(WebOrder found, boolean receiptVerified) {
         String branchName = branchRepository
-                .findByIdAndBusinessIdAndDeletedAtIsNull(found.getCatalogBranchId(), businessId)
+                .findByIdAndBusinessIdAndDeletedAtIsNull(found.getCatalogBranchId(), found.getBusinessId())
                 .map(Branch::getName)
                 .orElse("(branch)");
         return new PublicOrderTrackingResponse(
@@ -60,7 +82,9 @@ public class PublicWebOrderTrackingService {
                 found.getGrandTotal(),
                 found.getCurrency(),
                 branchName,
-                found.getCreatedAt());
+                found.getCreatedAt(),
+                receiptVerified ? found.getCustomerPhone() : null,
+                receiptVerified ? Boolean.TRUE : null);
     }
 
     private static boolean phoneMatches(String storedPhone, String phoneLast4) {

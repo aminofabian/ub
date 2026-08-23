@@ -86,6 +86,17 @@ public class WebOrder {
     @Column(name = "pickup_ticket_printed_at")
     private Instant pickupTicketPrintedAt;
 
+    /** SHA-256 hash of the one-tap receipt token (Phase 5); the raw token is never stored. */
+    @Column(name = "receipt_token_hash", length = 64)
+    private String receiptTokenHash;
+
+    @Column(name = "receipt_token_expires_at")
+    private Instant receiptTokenExpiresAt;
+
+    /** Set once the token is redeemed — single-use. */
+    @Column(name = "receipt_token_consumed_at")
+    private Instant receiptTokenConsumedAt;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 

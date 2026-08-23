@@ -28,6 +28,8 @@ import zelisline.ub.identity.repository.RolePermissionRepository;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.platform.security.TestAuthenticationFilter;
+import zelisline.ub.storefront.WebOrderChannels;
+import zelisline.ub.storefront.WebOrderCodes;
 import zelisline.ub.storefront.WebOrderFulfillmentStatuses;
 import zelisline.ub.storefront.WebOrderStatuses;
 import zelisline.ub.storefront.domain.WebOrder;
@@ -177,6 +179,8 @@ class WebOrdersAdminIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content.length()").value(1))
                 .andExpect(jsonPath("$.content[0].id").value(orderId))
+                .andExpect(jsonPath("$.content[0].orderCode").value(WebOrderCodes.code(orderId)))
+                .andExpect(jsonPath("$.content[0].channel").value("WEB"))
                 .andExpect(jsonPath("$.content[0].catalogBranchName").value("Pickup Branch"))
                 .andExpect(jsonPath("$.content[0].grandTotal").value(42.5));
     }
@@ -192,6 +196,38 @@ class WebOrdersAdminIT {
                 .andExpect(jsonPath("$.lines.length()").value(1))
                 .andExpect(jsonPath("$.lines[0].itemName").value("Sample SKU"))
                 .andExpect(jsonPath("$.notes").value("Gate B"));
+    }
+
+    @Test
+    void fulfillment_advanceOnWhatsAppPendingOrder() throws Exception {
+        WebOrder wa = webOrderRepository.findById(orderId).orElseThrow();
+        wa.setChannel(WebOrderChannels.WHATSAPP);
+        wa.setStatus(WebOrderStatuses.PENDING_PAYMENT);
+        wa.setFulfillmentStatus(WebOrderFulfillmentStatuses.AWAITING_CONFIRMATION);
+        webOrderRepository.save(wa);
+
+        mockMvc.perform(
+                        patch("/api/v1/web-orders/" + orderId + "/fulfillment")
+                                .header("X-Tenant-Id", TENANT)
+                                .header(TestAuthenticationFilter.HEADER_USER_ID, staff.getId())
+                                .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ID)
+                                .contentType("application/json")
+                                .content("{\"fulfillmentStatus\":\"confirmed\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.fulfillmentStatus").value("confirmed"));
+    }
+
+    @Test
+    void fulfillment_stillRequiresPaidForWebPendingOrder() throws Exception {
+        // Existing contract preserved: a plain (non-WhatsApp) pending order cannot advance.
+        mockMvc.perform(
+                        patch("/api/v1/web-orders/" + orderId + "/fulfillment")
+                                .header("X-Tenant-Id", TENANT)
+                                .header(TestAuthenticationFilter.HEADER_USER_ID, staff.getId())
+                                .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ID)
+                                .contentType("application/json")
+                                .content("{\"fulfillmentStatus\":\"confirmed\"}"))
+                .andExpect(status().isConflict());
     }
 
     @Test

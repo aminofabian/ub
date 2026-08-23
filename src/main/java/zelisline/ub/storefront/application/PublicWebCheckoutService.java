@@ -52,6 +52,7 @@ public class PublicWebCheckoutService {
     private final InventoryBatchRepository inventoryBatchRepository;
     private final WebOrderRepository webOrderRepository;
     private final WebOrderLineRepository webOrderLineRepository;
+    private final ReceiptTokenService receiptTokenService;
     private final WebCartRepository webCartRepository;
     private final OrderConfirmationEmailRenderer orderConfirmationEmailRenderer;
     private final NotificationService notificationService;
@@ -67,6 +68,7 @@ public class PublicWebCheckoutService {
             InventoryBatchRepository inventoryBatchRepository,
             WebOrderRepository webOrderRepository,
             WebOrderLineRepository webOrderLineRepository,
+            ReceiptTokenService receiptTokenService,
             WebCartRepository webCartRepository,
             OrderConfirmationEmailRenderer orderConfirmationEmailRenderer,
             NotificationService notificationService,
@@ -81,6 +83,7 @@ public class PublicWebCheckoutService {
         this.inventoryBatchRepository = inventoryBatchRepository;
         this.webOrderRepository = webOrderRepository;
         this.webOrderLineRepository = webOrderLineRepository;
+        this.receiptTokenService = receiptTokenService;
         this.webCartRepository = webCartRepository;
         this.orderConfirmationEmailRenderer = orderConfirmationEmailRenderer;
         this.notificationService = notificationService;
@@ -118,6 +121,11 @@ public class PublicWebCheckoutService {
             order.setExpiresAt(Instant.now().plus(expiryMins, ChronoUnit.MINUTES));
         }
         webOrderRepository.save(order);
+
+        // Phase 5: mint the one-tap receipt token so the WhatsApp/SMS link can
+        // carry it (single-use, 15-min TTL). The checkout response returns the
+        // raw token; only its hash is persisted.
+        String receiptToken = receiptTokenService.mint(order);
 
         String businessId = elig.ctx().business().getId();
         String branchId = elig.ctx().catalogBranch().getId();
@@ -203,7 +211,8 @@ public class PublicWebCheckoutService {
                 order.getGrandTotal(),
                 order.getCurrency(),
                 elig.ctx().catalogBranch().getName(),
-                order.getCreatedAt());
+                order.getCreatedAt(),
+                receiptToken);
     }
 
     /**

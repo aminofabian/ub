@@ -27,10 +27,12 @@ public class PublicWebOrderTrackingController {
     public ResponseEntity<PublicOrderTrackingResponse> track(
             @PathVariable String slug,
             @PathVariable String code,
-            @RequestParam(name = "phoneLast4", required = false) String phoneLast4
+            @RequestParam(name = "phoneLast4", required = false) String phoneLast4,
+            @RequestParam(name = "t", required = false) String token
     ) {
-        PublicOrderTrackingResponse body =
-                trackingService.trackByCode(slug, code, phoneLast4);
+        PublicOrderTrackingResponse body = (token != null && !token.isBlank())
+                ? trackingService.trackByToken(slug, code, token)
+                : trackingService.trackByCode(slug, code, phoneLast4);
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())
                 .body(body);

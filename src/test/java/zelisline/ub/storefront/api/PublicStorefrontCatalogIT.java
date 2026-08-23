@@ -1,8 +1,12 @@
 package zelisline.ub.storefront.api;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -320,6 +324,36 @@ class PublicStorefrontCatalogIT {
                         + WebOrderCodes.code(order.getId()))
                         .param("phoneLast4", "9999"))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void handoff_recordsOpenedForWhatsAppOrder() throws Exception {
+        WebOrder order = new WebOrder();
+        order.setBusinessId(TENANT);
+        order.setCartId(UUID.randomUUID().toString());
+        order.setCatalogBranchId(branchId);
+        order.setStatus(WebOrderStatuses.PENDING_PAYMENT);
+        order.setChannel("WHATSAPP");
+        order.setCurrency("KES");
+        order.setGrandTotal(new BigDecimal("500.00"));
+        order.setCustomerName("Njeri");
+        order.setCustomerPhone("0711222333");
+        webOrderRepository.save(order);
+
+        mockMvc.perform(post("/api/v1/public/businesses/" + SLUG + "/orders/"
+                        + order.getId() + "/whatsapp-handoff"))
+                .andExpect(status().isNoContent());
+
+        WebOrder reloaded = webOrderRepository.findById(order.getId()).orElseThrow();
+        assertTrue(reloaded.getHandoffOpenedAt() != null);
+        assertEquals("opened", reloaded.getHandoffState());
+
+        // Second open → reopened.
+        mockMvc.perform(post("/api/v1/public/businesses/" + SLUG + "/orders/"
+                        + order.getId() + "/whatsapp-handoff"))
+                .andExpect(status().isNoContent());
+        WebOrder again = webOrderRepository.findById(order.getId()).orElseThrow();
+        assertEquals("reopened", again.getHandoffState());
     }
 
     @Test

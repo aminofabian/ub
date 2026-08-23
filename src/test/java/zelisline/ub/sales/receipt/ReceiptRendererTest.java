@@ -79,15 +79,22 @@ class ReceiptRendererTest {
     }
 
     @Test
-    void escPos_endsWithFeedAndPartialCut() {
+    void escPos_endsWithFeedPartialCutAndDrawerKick() {
         ReceiptSnapshot s = sampleSnapshot(List.of(
                 new ReceiptLineRow("Soda", "1", "each", "5.00", "5.00")
         ));
 
         byte[] bytes = ReceiptEscPosRenderer.render(s, 58);
 
-        // ESC d 8 then GS V 1 (partial cut) — matches Caysn CN811-UB
-        assertThat(bytes).endsWith(new byte[]{0x1B, 0x64, 0x08, 0x1D, 0x56, 0x01});
+        // Feed (ESC d 8), partial cut (GS V 1), then the cash drawer kick for cash
+        // sales — matches Caysn CN811-UB. The drawer pulse follows the cut on purpose.
+        byte[] feedAndCut = new byte[]{0x1B, 0x64, 0x08, 0x1D, 0x56, 0x01};
+        byte[] drawerKick = new byte[]{
+                0x1B, 0x70, 0x00, 0x19, (byte) 0xFA,
+                0x1B, 0x70, 0x01, 0x19, (byte) 0xFA
+        };
+        assertThat(bytes).contains(feedAndCut);
+        assertThat(bytes).endsWith(drawerKick);
     }
 
     @Test

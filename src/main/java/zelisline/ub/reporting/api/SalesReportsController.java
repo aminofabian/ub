@@ -1,6 +1,7 @@
 package zelisline.ub.reporting.api;
 
 import java.time.LocalDate;
+import java.util.Optional;
 
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -42,10 +43,20 @@ public class SalesReportsController {
             @RequestParam(value = "itemTypeId", required = false) String itemTypeId,
             HttpServletRequest request
     ) {
-        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        Optional<TenantPrincipal> human = CurrentTenantUser.optionalHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
-        String effectiveBranch = branchResolutionService.resolveBranchForReport(
-                businessId, principal.roleId(), principal.branchId(), branchId);
+        String effectiveBranch;
+        if (human.isPresent()) {
+            TenantPrincipal principal = human.get();
+            effectiveBranch = branchResolutionService.resolveBranchForReport(
+                    businessId, principal.roleId(), principal.branchId(), branchId);
+        } else {
+            // Integration API key (scoped via hasPermission): no session branch — fall
+            // back to the default branch like an un-scoped caller.
+            CurrentTenantUser.require(request);
+            effectiveBranch = branchResolutionService.resolveBranchForReport(
+                    businessId, null, null, branchId);
+        }
         return salesReportsService.salesRegister(businessId, from, to, effectiveBranch, itemTypeId);
     }
 }

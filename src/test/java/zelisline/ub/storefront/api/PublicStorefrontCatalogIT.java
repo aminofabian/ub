@@ -448,12 +448,12 @@ class PublicStorefrontCatalogIT {
 
         mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/catalog/items"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[?(@.id=='" + packageId + "')].qtyOnHand").value(3))
+                .andExpect(jsonPath("$.items[?(@.id=='" + packageId + "')].qtyOnHand").value(3.0))
                 .andExpect(jsonPath("$.items[?(@.id=='" + packageId + "')].price").value(250.0));
 
         mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/catalog/items/" + packageId))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.qtyOnHand").value(3))
+                .andExpect(jsonPath("$.qtyOnHand").value(3.0))
                 .andExpect(jsonPath("$.variantName").value("30-pack tray"));
     }
 

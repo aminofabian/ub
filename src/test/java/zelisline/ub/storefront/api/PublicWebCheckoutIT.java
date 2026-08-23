@@ -253,18 +253,14 @@ class PublicWebCheckoutIT {
     }
 
     @Test
-    void checkout_missingSellPrice_returns400() throws Exception {
+    void missingSellPrice_rejectedAtLineAdd() throws Exception {
         String cartId = createCart();
+        // Unpriced items are rejected when added (requireCheckoutPrice), so they can
+        // never reach checkout.
         mockMvc.perform(
                         post("/api/v1/public/businesses/" + SLUG + "/carts/" + cartId + "/lines")
                                 .contentType(MediaType.APPLICATION_JSON)
                                 .content("{\"itemId\":\"%s\",\"quantity\":1}".formatted(unpricedPublishedItemId)))
-                .andExpect(status().isOk());
-
-        mockMvc.perform(
-                        post("/api/v1/public/businesses/" + SLUG + "/carts/" + cartId + "/checkout")
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .content("{\"customerName\":\"A\",\"customerPhone\":\"1\"}"))
                 .andExpect(status().isBadRequest());
 
         org.assertj.core.api.Assertions.assertThat(webOrderRepository.count()).isZero();

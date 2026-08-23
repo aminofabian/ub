@@ -33,6 +33,7 @@ class FrontendAuthLinkBuilderTest {
         MockHttpServletRequest req = new MockHttpServletRequest("POST", "/api/v1/auth/register");
         req.setScheme("https");
         req.setServerName("api.example.com");
+        req.setServerPort(443);
         req.addHeader("X-Tenant-Host", "shop.kiosk.ke");
 
         String link = builder.verificationLink(req, TENANT, "raw-token");

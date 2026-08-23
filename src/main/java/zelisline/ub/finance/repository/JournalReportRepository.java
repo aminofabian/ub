@@ -92,7 +92,7 @@ public interface JournalReportRepository extends JpaRepository<JournalLine, Stri
                    count(distinct s.id)             as saleCount
               from sales s
               join sale_items si on si.sale_id = s.id
-              join items i on i.id = si.item_id and i.business_id = s.business_id and i.deleted_at is null
+              left join items i on i.id = si.item_id and i.business_id = s.business_id and i.deleted_at is null
              where s.business_id = :businessId
                and s.status = 'completed'
                and s.sold_at >= :startInclusive

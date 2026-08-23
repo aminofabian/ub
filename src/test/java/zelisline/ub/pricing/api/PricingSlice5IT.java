@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.math.BigDecimal;
@@ -215,8 +216,9 @@ class PricingSlice5IT {
     }
 
     @Test
-    void sellingPrice_conflictOnSameEffectiveFrom() throws Exception {
+    void sellingPrice_sameEffectiveFromUpsertsPrice() throws Exception {
         postSelling(LocalDate.of(2026, 3, 1), new BigDecimal("9.00"));
+        // Posting the same date again updates the open row instead of conflicting.
         mockMvc.perform(post("/api/v1/pricing/selling-prices")
                         .contentType(APPLICATION_JSON)
                         .content("""
@@ -225,7 +227,12 @@ class PricingSlice5IT {
                         .header("X-Tenant-Id", TENANT)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
-                .andExpect(status().isConflict());
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.price").value(10.00));
+
+        List<SellingPrice> all = sellingPriceRepository.findAll();
+        assertThat(all).hasSize(1); // same-date post updates, never duplicates
+        assertThat(all.getFirst().getPrice()).isEqualByComparingTo("10.00");
     }
 
     @Test

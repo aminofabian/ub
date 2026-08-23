@@ -117,7 +117,7 @@ class AuthLoginIT {
                                 {"email":"owner@example.com","password":"wrong-password"}
                                 """))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.title").value("Unauthorized"))
+                .andExpect(jsonPath("$.title").value("Incorrect email or password."))
                 .andExpect(jsonPath("$.detail").value("Incorrect email or password."));
     }
 
@@ -139,12 +139,12 @@ class AuthLoginIT {
                                 {"email":"invited@example.com","password":"ok-password"}
                                 """))
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.title").value("Forbidden"))
+                .andExpect(jsonPath("$.title").value(AuthService.LOGIN_EMAIL_NOT_VERIFIED_DETAIL))
                 .andExpect(jsonPath("$.detail").value(AuthService.LOGIN_EMAIL_NOT_VERIFIED_DETAIL));
     }
 
     @Test
-    void refreshRotatesAndOldRefreshInvalidatesAllSessions() throws Exception {
+    void refreshRotatesAndReplayRejectedWithinGrace_successorStaysUsable() throws Exception {
         MvcResult login = mockMvc.perform(post("/api/v1/auth/login")
                         .header("X-Tenant-Id", TENANT)
                         .contentType(APPLICATION_JSON)
@@ -166,17 +166,23 @@ class AuthLoginIT {
         String refresh2 = JsonPath.read(refreshed.getResponse().getContentAsString(), "$.refreshToken");
         assertThat(refresh2).isNotEqualTo(refresh1);
 
+        // Replaying the consumed token is rejected…
         mockMvc.perform(post("/api/v1/auth/refresh")
                         .header("X-Tenant-Id", TENANT)
                         .contentType(APPLICATION_JSON)
                         .content(MAPPER.writeValueAsString(java.util.Map.of("refreshToken", refresh1))))
                 .andExpect(status().isUnauthorized());
 
-        mockMvc.perform(post("/api/v1/auth/refresh")
+        // …but inside the rotation grace window that's a benign duplicate: the
+        // family is NOT revoked, so the successor token stays usable.
+        MvcResult again = mockMvc.perform(post("/api/v1/auth/refresh")
                         .header("X-Tenant-Id", TENANT)
                         .contentType(APPLICATION_JSON)
                         .content(MAPPER.writeValueAsString(java.util.Map.of("refreshToken", refresh2))))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isOk())
+                .andReturn();
+        String refresh3 = JsonPath.read(again.getResponse().getContentAsString(), "$.refreshToken");
+        assertThat(refresh3).isNotEqualTo(refresh2);
     }
 
     @Test

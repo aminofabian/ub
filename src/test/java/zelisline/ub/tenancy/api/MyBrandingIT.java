@@ -53,7 +53,12 @@ import zelisline.ub.tenancy.repository.DomainMappingRepository;
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Import(PermissionCacheProbeController.class)
-@TestPropertySource(properties = "spring.jpa.hibernate.ddl-auto=create-drop")
+@TestPropertySource(properties = {
+    "spring.jpa.hibernate.ddl-auto=create-drop",
+    // Cloudinary is the MediaStore this test mocks; enabling it here keeps the no-op
+    // fallback out of the context so MediaStore-typed injection stays unambiguous.
+    "app.media.cloudinary.enabled=true"
+})
 class MyBrandingIT {
 
     private static final String TENANT = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";

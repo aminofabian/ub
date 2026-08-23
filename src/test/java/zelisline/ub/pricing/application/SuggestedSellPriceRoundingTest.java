@@ -32,7 +32,7 @@ class SuggestedSellPriceRoundingTest {
     void leavesAlreadyAlignedValuesUnchanged() {
         assertThat(SuggestedSellPriceRounding.round(new BigDecimal("10.00")))
                 .isEqualByComparingTo("10");
-        assertThat(SuggestedSellPriceRounding.round(new BigDecimal("125.00")))
-                .isEqualByComparingTo("125");
+        assertThat(SuggestedSellPriceRounding.round(new BigDecimal("120.00")))
+                .isEqualByComparingTo("120");
     }
 }

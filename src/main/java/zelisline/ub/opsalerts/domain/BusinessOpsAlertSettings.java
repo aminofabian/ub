@@ -42,6 +42,9 @@ public class BusinessOpsAlertSettings {
     @Column(name = "alert_credit_payment", nullable = false)
     private boolean alertCreditPayment = true;
 
+    @Column(name = "alert_restock_digest", nullable = false)
+    private boolean alertRestockDigest = true;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

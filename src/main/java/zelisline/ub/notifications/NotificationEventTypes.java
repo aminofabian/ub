@@ -12,6 +12,7 @@ public final class NotificationEventTypes {
     public static final String STOCK_LOW = "STOCK_LOW";
     public static final String STOCK_LOW_BATCH_FLUSH = "STOCK_LOW_BATCH_FLUSH";
     public static final String DAILY_SALES_DIGEST = "DAILY_SALES_DIGEST";
+    public static final String RESTOCK_DIGEST = "RESTOCK_DIGEST";
     public static final String WIN_BACK = "WIN_BACK";
     public static final String ABANDONED_CART_DIGEST = "ABANDONED_CART_DIGEST";
     public static final String PEAK_HOURS_DIGEST = "PEAK_HOURS_DIGEST";

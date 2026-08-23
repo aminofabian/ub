@@ -12,6 +12,7 @@ public record OpsAlertSettingsResponse(
         boolean alertShift,
         boolean alertSupply,
         boolean alertCreditPayment,
+        boolean alertRestockDigest,
         boolean messagingReady
 ) {
 }

@@ -24,6 +24,7 @@ public class NotificationOrchestrator {
     private static final Logger log = LoggerFactory.getLogger(NotificationOrchestrator.class);
     private static final String TYPE_STOCK_LOW = "stock.low";
     private static final String TYPE_DAILY_DIGEST = "sales.daily_digest";
+    private static final String TYPE_RESTOCK_DIGEST = "inventory.restock_digest";
 
     private final NotificationService notificationService;
     private final NotificationTemplateRenderer templateRenderer;
@@ -101,6 +102,15 @@ public class NotificationOrchestrator {
                 businessId,
                 TYPE_DAILY_DIGEST,
                 "sales_digest:" + businessId + ":" + payload.getOrDefault("businessDay", ""),
+                payload);
+    }
+
+    public void processRestockDigest(String businessId, Map<String, String> payload) {
+        notifyStaff(
+                businessId,
+                TYPE_RESTOCK_DIGEST,
+                "restock_digest:" + businessId + ":" + payload.getOrDefault("branchId", "")
+                        + ":" + payload.getOrDefault("runId", ""),
                 payload);
     }
 

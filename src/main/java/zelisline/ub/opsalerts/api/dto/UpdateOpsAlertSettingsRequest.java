@@ -7,6 +7,7 @@ public record UpdateOpsAlertSettingsRequest(
         @NotNull Boolean alertWebOrder,
         @NotNull Boolean alertShift,
         @NotNull Boolean alertSupply,
-        @NotNull Boolean alertCreditPayment
+        @NotNull Boolean alertCreditPayment,
+        @NotNull Boolean alertRestockDigest
 ) {
 }

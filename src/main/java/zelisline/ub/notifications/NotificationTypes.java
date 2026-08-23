@@ -19,6 +19,7 @@ public final class NotificationTypes {
     public static final String ABANDONED_CART = "insights.abandoned_cart";
     public static final String PEAK_HOURS = "insights.peak_hours";
     public static final String TOP_PRODUCTS = "insights.top_products";
+    public static final String RESTOCK_DIGEST = "inventory.restock_digest";
 
     private NotificationTypes() {
     }

@@ -752,7 +752,7 @@ public class RealtimeBridge {
             case "credit_sale.reminder", "order.received", "order.payment_received",
                  "order.confirmed", "order.dispatched", "order.delivered",
                  "storefront.order.placed", "storefront.order.paid", "stock.low",
-                 "sales.daily_digest" -> true;
+                 "sales.daily_digest", "inventory.restock_digest" -> true;
             default -> false;
         };
     }
@@ -776,6 +776,7 @@ public class RealtimeBridge {
             case "export.completed" -> "Export ready";
             case "credit_sale.reminder" -> "Credit purchase";
             case "sales.daily_digest" -> "Daily sales summary";
+            case "inventory.restock_digest" -> "Tonight's list";
             default -> type;
         };
     }

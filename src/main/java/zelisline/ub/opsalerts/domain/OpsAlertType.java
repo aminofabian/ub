@@ -5,5 +5,6 @@ public enum OpsAlertType {
     SHIFT_OPENED,
     SHIFT_CLOSED,
     SUPPLY_POSTED,
-    CREDIT_PAYMENT
+    CREDIT_PAYMENT,
+    RESTOCK_DIGEST
 }

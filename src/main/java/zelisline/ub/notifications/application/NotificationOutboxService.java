@@ -220,6 +220,34 @@ public class NotificationOutboxService {
                 writeJson(payload));
     }
 
+    @Transactional
+    public void enqueueRestockDigest(
+            String businessId,
+            String branchId,
+            String runId,
+            String branchName,
+            String lineCount,
+            String estTotal,
+            String currency,
+            String supplierCount
+    ) {
+        var payload = new java.util.LinkedHashMap<String, String>();
+        payload.put("branchId", branchId);
+        payload.put("runId", runId);
+        payload.put("branchName", branchName);
+        payload.put("lineCount", lineCount);
+        payload.put("estTotal", estTotal);
+        payload.put("currency", currency);
+        payload.put("supplierCount", supplierCount);
+        enqueue(
+                businessId,
+                NotificationEventTypes.RESTOCK_DIGEST,
+                "restock_run",
+                runId,
+                "restock_digest:" + businessId + ":" + branchId + ":" + runId,
+                writeJson(payload));
+    }
+
     private String orderPayload(WebOrder order) {
         var map = new java.util.LinkedHashMap<String, String>();
         map.put("orderId", order.getId());

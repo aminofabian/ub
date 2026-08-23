@@ -43,6 +43,7 @@ public class BusinessOpsAlertSettingsService {
         s.setAlertShift(Boolean.TRUE.equals(req.alertShift()));
         s.setAlertSupply(Boolean.TRUE.equals(req.alertSupply()));
         s.setAlertCreditPayment(Boolean.TRUE.equals(req.alertCreditPayment()));
+        s.setAlertRestockDigest(Boolean.TRUE.equals(req.alertRestockDigest()));
         return toResponse(settingsRepository.save(s));
     }
 
@@ -90,6 +91,7 @@ public class BusinessOpsAlertSettingsService {
             case SHIFT_OPENED, SHIFT_CLOSED -> s.isAlertShift();
             case SUPPLY_POSTED -> s.isAlertSupply();
             case CREDIT_PAYMENT -> s.isAlertCreditPayment();
+            case RESTOCK_DIGEST -> s.isAlertRestockDigest();
         };
     }
 
@@ -111,6 +113,7 @@ public class BusinessOpsAlertSettingsService {
             case SHIFT_OPENED, SHIFT_CLOSED -> s.isAlertShift();
             case SUPPLY_POSTED -> s.isAlertSupply();
             case CREDIT_PAYMENT -> s.isAlertCreditPayment();
+            case RESTOCK_DIGEST -> s.isAlertRestockDigest();
         };
         if (!typeOn) {
             return "event_type_disabled:" + type;
@@ -126,6 +129,7 @@ public class BusinessOpsAlertSettingsService {
         s.setAlertShift(true);
         s.setAlertSupply(true);
         s.setAlertCreditPayment(true);
+        s.setAlertRestockDigest(true);
         try {
             return settingsRepository.save(s);
         } catch (DataIntegrityViolationException e) {
@@ -148,6 +152,7 @@ public class BusinessOpsAlertSettingsService {
                 s.isAlertShift(),
                 s.isAlertSupply(),
                 s.isAlertCreditPayment(),
+                s.isAlertRestockDigest(),
                 messagingReady);
     }
 

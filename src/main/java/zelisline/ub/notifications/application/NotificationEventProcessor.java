@@ -75,6 +75,10 @@ public class NotificationEventProcessor {
                             event.getBusinessId(),
                             payload);
                 }
+                case NotificationEventTypes.RESTOCK_DIGEST -> {
+                    Map<String, String> payload = readPayload(event);
+                    orchestrator.processRestockDigest(event.getBusinessId(), payload);
+                }
                 case NotificationEventTypes.ABANDONED_CART_DIGEST -> {
                     Map<String, String> payload = readPayload(event);
                     orchestrator.processAbandonedCartDigest(event.getBusinessId(), payload);

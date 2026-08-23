@@ -111,4 +111,32 @@ public final class RestockDigestDtos {
             String status,
             int lineCount
     ) {}
+
+    /**
+     * Clerk-facing prep view: item names + quantities + evidence only. No unit cost,
+     * no supplier, no order links — visible to any staff of the business.
+     */
+    public record RestockPrepItem(
+            String itemId,
+            String itemName,
+            String itemSku,
+            String target,
+            BigDecimal onHand,
+            BigDecimal par,
+            BigDecimal suggestedQty,
+            String reasonCode,
+            String evidence,
+            String confidence
+    ) {}
+
+    public record RestockPrepResponse(
+            String runId,
+            String branchName,
+            LocalDate runDate,
+            String status,
+            int lineCount,
+            BigDecimal estTotal,
+            String currency,
+            List<RestockPrepItem> items
+    ) {}
 }

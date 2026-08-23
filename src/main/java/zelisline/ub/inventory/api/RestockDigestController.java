@@ -23,6 +23,7 @@ import zelisline.ub.identity.application.RequestPermissionService;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.AcceptRestockRunRequest;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.AcceptRestockRunResponse;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.RestockActiveRunSummary;
+import zelisline.ub.inventory.api.dto.RestockDigestDtos.RestockPrepResponse;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.RestockRunListRow;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.RestockRunResponse;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.SnoozeRestockSuggestionRequest;
@@ -95,6 +96,18 @@ public class RestockDigestController {
         return restockDigestService.activeRunSummary(businessId, branchId.trim());
     }
 
+    /**
+     * Clerk-facing prep view — any authenticated staff of the business may read it;
+     * the payload is redacted (no unit cost / supplier / order links).
+     */
+    @GetMapping("/runs/{runId}/prep")
+    @PreAuthorize("isAuthenticated()")
+    public RestockPrepResponse prep(@PathVariable String runId, HttpServletRequest request) {
+        CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return restockDigestService.prepRun(businessId, runId.trim());
+    }
+
     @GetMapping("/runs/{runId}")
     @PreAuthorize("hasPermission(null, 'purchasing.path_a.read') or hasPermission(null, 'order_pad.read')")
     public RestockRunResponse getRun(@PathVariable String runId, HttpServletRequest request) {
@@ -121,8 +134,9 @@ public class RestockDigestController {
                 businessId, runId.trim(), principal.userId(), canWritePo, canWritePad, body);
     }
 
+    /** Dismiss / snooze mutate the list, so they need a write grant — not just read. */
     @PostMapping("/suggestions/{suggestionId}/dismiss")
-    @PreAuthorize("hasPermission(null, 'purchasing.path_a.read') or hasPermission(null, 'order_pad.read')")
+    @PreAuthorize("hasPermission(null, 'purchasing.path_a.write') or hasPermission(null, 'order_pad.write')")
     public RestockRunResponse dismiss(
             @PathVariable String suggestionId,
             HttpServletRequest request
@@ -133,7 +147,7 @@ public class RestockDigestController {
     }
 
     @PostMapping("/suggestions/{suggestionId}/snooze")
-    @PreAuthorize("hasPermission(null, 'purchasing.path_a.read') or hasPermission(null, 'order_pad.read')")
+    @PreAuthorize("hasPermission(null, 'purchasing.path_a.write') or hasPermission(null, 'order_pad.write')")
     public RestockRunResponse snooze(
             @PathVariable String suggestionId,
             @RequestBody(required = false) SnoozeRestockSuggestionRequest body,

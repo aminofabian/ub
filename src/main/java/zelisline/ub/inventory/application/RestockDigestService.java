@@ -114,22 +114,28 @@ public class RestockDigestService {
             return toRunResponse(businessId, existing, loadSuggestions(existing.getId()), business, branch);
         }
 
-        LocalDate today = LocalDate.now(businessZone(business));
-        LocalDate last7From = today.minusDays(VELOCITY_7D - 1);
-        LocalDate last30From = today.minusDays(VELOCITY_DAYS - 1);
+        // Windows are anchored on the run date (not "now") so a manual run for an
+        // explicit date reads the same history it would have read that night. The
+        // upper bound is exclusive, so minusDays(N) spans exactly N whole days.
+        LocalDate windowEnd = effectiveDate;
+        LocalDate last7From = windowEnd.minusDays(VELOCITY_7D);
+        LocalDate last30From = windowEnd.minusDays(VELOCITY_DAYS);
 
         // Candidate discovery — one window query per branch (MV + OLTP gap-fill).
         Map<String, RestockDigestFormula.VelocityInput> velocityByItem = loadVelocity(
-                businessId, branchId, today, last7From, last30From);
+                businessId, branchId, windowEnd, last7From, last30From);
         // Stock-out proxy: items counted at zero in a stock take / daily audit in window.
         Set<String> stockOutItemIds = new HashSet<>(
-                stockTakeLineRepository.findCountedZeroItemIds(businessId, branchId, last30From, today));
+                stockTakeLineRepository.findCountedZeroItemIds(
+                        businessId, branchId, last30From, windowEnd));
         Set<String> candidateIds = new LinkedHashSet<>(velocityByItem.keySet());
         candidateIds.addAll(stockOutItemIds);
 
         // Batch-load everything once, then compute lines.
         Map<String, Item> itemsById = loadItems(businessId, candidateIds);
-        Map<String, BigDecimal> onHandByItem = resolveDisplayStockByItemId(businessId, branchId, itemsById);
+        LocalDate usableFrom = effectiveDate.plusDays(branch.getRestockCoverDays());
+        Map<String, BigDecimal> onHandByItem =
+                resolveDisplayStockByItemId(businessId, branchId, itemsById, usableFrom);
         Map<String, BigDecimal> inboundByItem = loadInbound(businessId, branchId);
         Map<String, ItemLinkRow> linkByItem = loadPrimaryLinks(businessId, candidateIds);
         Set<String> snoozedItemIds = loadSnoozedItemIds(businessId, branchId, effectiveDate);
@@ -273,6 +279,44 @@ public class RestockDigestService {
                 : new RestockDigestDtos.RestockActiveRunSummary(null, null, null, 0);
     }
 
+    /** Clerk-facing prep view — redacted (no cost / supplier / order links). */
+    @Transactional(readOnly = true)
+    public RestockDigestDtos.RestockPrepResponse prepRun(String businessId, String runId) {
+        RestockRun run = requireRun(businessId, runId);
+        Branch branch = requireBranch(businessId, run.getBranchId());
+        List<RestockSuggestion> rows =
+                restockSuggestionRepository.findByRunIdOrderBySuggestedQtyDescIdAsc(runId);
+        Set<String> itemIds = rows.stream()
+                .map(RestockSuggestion::getItemId)
+                .collect(Collectors.toSet());
+        Map<String, Item> items = loadItems(businessId, itemIds);
+        List<RestockDigestDtos.RestockPrepItem> itemsOut = rows.stream()
+                .map(s -> {
+                    Item item = items.get(s.getItemId());
+                    return new RestockDigestDtos.RestockPrepItem(
+                            s.getItemId(),
+                            item != null && item.getName() != null ? item.getName() : "",
+                            item != null ? item.getSku() : null,
+                            s.getTarget(),
+                            s.getOnHand(),
+                            s.getPar(),
+                            s.getSuggestedQty(),
+                            s.getReasonCode(),
+                            s.getEvidence(),
+                            s.getConfidence());
+                })
+                .toList();
+        return new RestockDigestDtos.RestockPrepResponse(
+                run.getId(),
+                branch.getName(),
+                run.getRunDate(),
+                run.getStatus(),
+                run.getLineCount(),
+                run.getEstTotal(),
+                run.getCurrency(),
+                itemsOut);
+    }
+
     /** Latest run for the branch (404 when none exists). */
     @Transactional(readOnly = true)
     public RestockDigestDtos.RestockRunResponse getLatestForBranch(String businessId, String branchId) {
@@ -343,16 +387,18 @@ public class RestockDigestService {
             padCreated = acceptPadLines(businessId, run, userId, canWritePad, req, padLines, itemNames, skipped, modified);
         }
 
+        // Only move the run forward when a line actually landed — an accept where every
+        // line was skipped (no permission, no cost) leaves the list untouched.
         if (!modified.isEmpty()) {
             restockSuggestionRepository.saveAll(modified);
+            long pendingLeft = all.stream()
+                    .filter(s -> InventoryConstants.DIGEST_SUGGESTION_PENDING.equals(s.getStatus()))
+                    .count();
+            run.setStatus(pendingLeft == 0
+                    ? InventoryConstants.DIGEST_RUN_ACCEPTED
+                    : InventoryConstants.DIGEST_RUN_PARTIALLY_ACCEPTED);
+            restockRunRepository.save(run);
         }
-        long pendingLeft = all.stream()
-                .filter(s -> InventoryConstants.DIGEST_SUGGESTION_PENDING.equals(s.getStatus()))
-                .count();
-        run.setStatus(pendingLeft == 0
-                ? InventoryConstants.DIGEST_RUN_ACCEPTED
-                : InventoryConstants.DIGEST_RUN_PARTIALLY_ACCEPTED);
-        restockRunRepository.save(run);
 
         return new AcceptRestockRunResponse(
                 toRunResponse(businessId, run, loadSuggestions(runId), business, branch),
@@ -374,7 +420,20 @@ public class RestockDigestService {
             List<SkippedAcceptLine> skipped,
             List<RestockSuggestion> modified
     ) {
+        // A po-target line without a supplier snapshot can't be grouped into a PO; report
+        // it instead of letting groupingBy trip over the null key.
         Map<String, List<RestockSuggestion>> bySupplier = poLines.stream()
+                .filter(s -> {
+                    if (s.getSupplierId() != null && !s.getSupplierId().isBlank()) {
+                        return true;
+                    }
+                    skipped.add(new SkippedAcceptLine(
+                            s.getId(),
+                            s.getItemId(),
+                            itemNames.getOrDefault(s.getItemId(), ""),
+                            "no supplier on this line — link a supplier or add it to the order pad"));
+                    return false;
+                })
                 .collect(Collectors.groupingBy(
                         RestockSuggestion::getSupplierId, LinkedHashMap::new, Collectors.toList()));
         for (Map.Entry<String, List<RestockSuggestion>> entry : bySupplier.entrySet()) {
@@ -384,12 +443,36 @@ public class RestockDigestService {
                 skipAll(group, itemNames, skipped, "requires purchasing permission");
                 continue;
             }
+            // Resolve orderable lines first so we never create an empty draft PO for a
+            // group where every line is missing a cost or has a bad qty override.
+            Map<RestockSuggestion, BigDecimal> orderable = new LinkedHashMap<>();
+            for (RestockSuggestion s : group) {
+                String itemName = itemNames.getOrDefault(s.getItemId(), "");
+                BigDecimal qty = resolveAcceptQty(req, s);
+                if (qty == null) {
+                    skipped.add(new SkippedAcceptLine(
+                            s.getId(), s.getItemId(), itemName, "quantity must be greater than zero"));
+                    continue;
+                }
+                BigDecimal cost = s.getUnitCost();
+                if (cost == null || cost.signum() <= 0) {
+                    skipped.add(new SkippedAcceptLine(
+                            s.getId(), s.getItemId(), itemName,
+                            "missing unit cost — set a buying price or supplier cost"));
+                    continue;
+                }
+                orderable.put(s, qty);
+            }
+            if (orderable.isEmpty()) {
+                continue;
+            }
+
             String poId = group.stream()
                     .map(RestockSuggestion::getPurchaseOrderId)
                     .filter(id -> id != null && !id.isBlank())
                     .findFirst()
                     .orElse(null);
-            String poNumber = null;
+            String poNumber;
             if (poId == null) {
                 String notes = "Restock digest " + run.getRunDate() + " — " + branch.getName();
                 PathAPurchaseOrderDetailResponse po = pathAPurchaseService.createPurchaseOrder(
@@ -402,19 +485,13 @@ public class RestockDigestService {
                 poNumber = loadPoNumber(businessId, poId);
             }
             int acceptedInGroup = 0;
-            for (RestockSuggestion s : group) {
-                BigDecimal qty = resolveAcceptQty(req, s);
-                BigDecimal cost = s.getUnitCost();
-                if (cost == null || cost.signum() <= 0) {
-                    skipped.add(new SkippedAcceptLine(
-                            s.getId(), s.getItemId(), itemNames.getOrDefault(s.getItemId(), ""),
-                            "missing unit cost — set a buying price or supplier cost"));
-                    continue;
-                }
+            for (Map.Entry<RestockSuggestion, BigDecimal> line : orderable.entrySet()) {
+                RestockSuggestion s = line.getKey();
+                BigDecimal qty = line.getValue();
                 pathAPurchaseService.addPurchaseOrderLine(
                         businessId,
                         poId,
-                        new AddPathAPurchaseOrderLineRequest(s.getItemId(), qty, cost));
+                        new AddPathAPurchaseOrderLineRequest(s.getItemId(), qty, s.getUnitCost()));
                 s.setStatus(InventoryConstants.DIGEST_SUGGESTION_ACCEPTED);
                 s.setAcceptedQty(qty);
                 s.setPurchaseOrderId(poId);
@@ -443,10 +520,20 @@ public class RestockDigestService {
             skipAll(padLines, itemNames, skipped, "requires order pad permission");
             return 0;
         }
+        // Keep suggestion → pad row aligned by building one ordered list of accepted
+        // lines; lines with a bad qty override are skipped rather than shifting indexes.
+        List<RestockSuggestion> accepted = new ArrayList<>();
         List<OrderPadItem> rows = new ArrayList<>();
-        List<BigDecimal> qtys = new ArrayList<>();
         for (RestockSuggestion s : padLines) {
             BigDecimal qty = resolveAcceptQty(req, s);
+            if (qty == null) {
+                skipped.add(new SkippedAcceptLine(
+                        s.getId(),
+                        s.getItemId(),
+                        itemNames.getOrDefault(s.getItemId(), ""),
+                        "quantity must be greater than zero"));
+                continue;
+            }
             OrderPadItem row = new OrderPadItem();
             row.setBusinessId(businessId);
             row.setBranchId(run.getBranchId());
@@ -456,14 +543,17 @@ public class RestockDigestService {
             row.setNote("Restock digest " + run.getRunDate());
             row.setOrdered(false);
             row.setCreatedBy(userId);
+            accepted.add(s);
             rows.add(row);
-            qtys.add(qty);
+        }
+        if (rows.isEmpty()) {
+            return 0;
         }
         List<OrderPadItem> saved = orderPadItemRepository.saveAll(rows);
-        for (int i = 0; i < padLines.size(); i++) {
-            RestockSuggestion s = padLines.get(i);
+        for (int i = 0; i < accepted.size(); i++) {
+            RestockSuggestion s = accepted.get(i);
             s.setStatus(InventoryConstants.DIGEST_SUGGESTION_ACCEPTED);
-            s.setAcceptedQty(qtys.get(i));
+            s.setAcceptedQty(saved.get(i).getQuantity());
             s.setOrderPadItemId(saved.get(i).getId());
             modified.add(s);
         }
@@ -482,11 +572,17 @@ public class RestockDigestService {
         }
     }
 
+    /**
+     * Accept quantity for a line, or {@code null} when it is not orderable. Returning
+     * null (rather than throwing) keeps one bad override from rolling back the POs and
+     * pad rows already created for the rest of the run — the line is reported in
+     * {@code skippedLines} instead.
+     */
     private BigDecimal resolveAcceptQty(AcceptRestockRunRequest req, RestockSuggestion s) {
         BigDecimal override = req.qtyOverrides() != null ? req.qtyOverrides().get(s.getId()) : null;
         BigDecimal qty = override != null ? override : s.getSuggestedQty();
         if (qty == null || qty.signum() <= 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quantity must be greater than zero");
+            return null;
         }
         return qty.setScale(QTY_SCALE, RoundingMode.HALF_UP);
     }
@@ -610,19 +706,19 @@ public class RestockDigestService {
     private Map<String, RestockDigestFormula.VelocityInput> loadVelocity(
             String businessId,
             String branchId,
-            LocalDate today,
+            LocalDate windowEnd,
             LocalDate last7From,
             LocalDate last30From
     ) {
         Map<String, RestockDigestFormula.VelocityInput> out = new LinkedHashMap<>();
         for (DigestVelocityRow row : mvSalesDailyRepository.digestVelocity(
-                businessId, branchId, today, last7From, last30From)) {
+                businessId, branchId, windowEnd, last7From, last30From)) {
             out.put(row.getItemId(), new RestockDigestFormula.VelocityInput(
                     row.getLast7Qty(), row.getLast30Qty(), row.getDaysWithSales()));
         }
         // OLTP gap-fill for tenants whose MV hasn't refreshed yet.
         for (DigestVelocityRow row : mvSalesDailyRepository.digestVelocityOltp(
-                businessId, branchId, today, last7From, last30From)) {
+                businessId, branchId, windowEnd, last7From, last30From)) {
             out.putIfAbsent(row.getItemId(), new RestockDigestFormula.VelocityInput(
                     row.getLast7Qty(), row.getLast30Qty(), row.getDaysWithSales()));
         }
@@ -699,11 +795,16 @@ public class RestockDigestService {
                 .collect(Collectors.toMap(Item::getId, i -> i, (a, b) -> a));
     }
 
-    /** Branch display on-hand with package-variant pool resolution (mirrors Activity overlay). */
+    /**
+     * Branch display on-hand with package-variant pool resolution (mirrors Activity overlay).
+     * Phase-4 expiry awareness: batches expiring before {@code usableFrom} are excluded,
+     * so stock that will spoil inside the cover window doesn't mask a reorder need.
+     */
     private Map<String, BigDecimal> resolveDisplayStockByItemId(
             String businessId,
             String branchId,
-            Map<String, Item> itemsById
+            Map<String, Item> itemsById,
+            LocalDate usableFrom
     ) {
         if (itemsById.isEmpty()) {
             return Map.of();
@@ -714,8 +815,8 @@ public class RestockDigestService {
         }
         Map<String, BigDecimal> rawByItemId = new HashMap<>();
         if (!poolIds.isEmpty()) {
-            for (Object[] row : inventoryBatchRepository.sumQuantityRemainingForItemsAtBranch(
-                    businessId, branchId, InventoryConstants.BATCH_STATUS_ACTIVE, poolIds)) {
+            for (Object[] row : inventoryBatchRepository.sumUsableQuantityRemainingForItemsAtBranch(
+                    businessId, branchId, InventoryConstants.BATCH_STATUS_ACTIVE, poolIds, usableFrom)) {
                 rawByItemId.put((String) row[0], (BigDecimal) row[1]);
             }
         }

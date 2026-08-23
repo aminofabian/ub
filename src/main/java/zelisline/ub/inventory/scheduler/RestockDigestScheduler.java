@@ -17,6 +17,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.inventory.application.RestockDigestNotificationService;
 import zelisline.ub.inventory.application.RestockDigestService;
+import zelisline.ub.inventory.domain.RestockRun;
 import zelisline.ub.inventory.repository.RestockRunRepository;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.domain.Business;
@@ -40,6 +41,13 @@ public class RestockDigestScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(RestockDigestScheduler.class);
     private static final int TENANT_PAGE_SIZE = 200;
+    /**
+     * How long after the configured time the slot stays claimable. Without a window a
+     * deploy or a slow tick straddling the exact minute would silently drop that
+     * branch's digest for the whole day; the unique {@code (branch_id, run_date)}
+     * constraint still guarantees exactly one run.
+     */
+    private static final int CATCH_UP_MINUTES = 90;
 
     private final BusinessRepository businessRepository;
     private final BranchRepository branchRepository;
@@ -86,9 +94,11 @@ public class RestockDigestScheduler {
     }
 
     /**
-     * When the business-local wall clock matches {@code branch.restockRunTime} (minute
-     * precision) and no run exists for the local date, generate + notify. The unique
-     * {@code (branch_id, run_date)} constraint makes this idempotent under races.
+     * Generate + notify once the business-local wall clock has reached
+     * {@code branch.restockRunTime} (within {@link #CATCH_UP_MINUTES}) and no run exists
+     * for the local date. The unique {@code (branch_id, run_date)} constraint makes this
+     * idempotent under races. Notify runs even when the run already exists but was never
+     * delivered, so a transient WhatsApp / outbox failure doesn't lose the digest.
      */
     private boolean claimRestockSlotIfDue(Business business, Branch branch) {
         if (!branch.isActive() || !branch.isRestockEnabled()) {
@@ -100,19 +110,33 @@ public class RestockDigestScheduler {
         if (runTime == null) {
             runTime = LocalTime.of(20, 0);
         }
-        if (!now.toLocalTime().equals(runTime)) {
+        // Stored as a MySQL TIME, so compare at minute precision. Measured in minutes
+        // from midnight rather than LocalTime.plusMinutes so a late run time can't wrap
+        // the window past midnight onto the wrong run date.
+        LocalTime localNow = now.toLocalTime();
+        int elapsed = minutesOfDay(localNow) - minutesOfDay(runTime);
+        if (elapsed < 0 || elapsed > CATCH_UP_MINUTES) {
             return false;
         }
         LocalDate runDate = now.toLocalDate();
-        Optional<zelisline.ub.inventory.domain.RestockRun> existing =
+        Optional<RestockRun> existing =
                 restockRunRepository.findByBranchIdAndRunDate(branch.getId(), runDate);
         if (existing.isPresent()) {
+            // notifyRun is a no-op unless the run is still `generated`, so this only
+            // retries a delivery that never completed.
+            if (InventoryConstants.DIGEST_RUN_GENERATED.equals(existing.get().getStatus())) {
+                restockDigestNotificationService.notifyRun(business.getId(), existing.get().getId());
+            }
             return false;
         }
         var run = restockDigestService.generateForBranch(
                 business.getId(), branch.getId(), runDate, InventoryConstants.DIGEST_TRIGGER_SCHEDULED);
         restockDigestNotificationService.notifyRun(business.getId(), run.id());
         return true;
+    }
+
+    private static int minutesOfDay(LocalTime time) {
+        return time.getHour() * 60 + time.getMinute();
     }
 
     private static ZoneId resolveZone(Business business) {

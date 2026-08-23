@@ -60,6 +60,13 @@ public class RestockDigestNotificationService {
 
         List<RestockSuggestion> suggestions =
                 restockSuggestionRepository.findByRunIdOrderBySuggestedQtyDescIdAsc(runId);
+        if (suggestions.isEmpty()) {
+            // Nothing to restock is good news, not a notification. Mark it delivered so
+            // the scheduler's catch-up pass doesn't keep retrying an empty night.
+            run.setStatus(InventoryConstants.DIGEST_RUN_NOTIFIED);
+            restockRunRepository.save(run);
+            return;
+        }
 
         String branchName = branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(run.getBranchId(), businessId)
                 .map(Branch::getName)
@@ -82,9 +89,7 @@ public class RestockDigestNotificationService {
                 currency,
                 String.valueOf(supplierCount));
 
-        if (!suggestions.isEmpty()) {
-            dispatchOpsAlert(businessId, run, suggestions, branchName, currency);
-        }
+        dispatchOpsAlert(businessId, run, suggestions, branchName, currency);
 
         run.setStatus(InventoryConstants.DIGEST_RUN_NOTIFIED);
         restockRunRepository.save(run);

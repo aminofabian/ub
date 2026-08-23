@@ -514,6 +514,99 @@ class RestockDigestIT {
     }
 
     @Test
+    void expiringBatch_excludedFromUsableOnHand() throws Exception {
+        // A batch expiring inside the 3-day cover window must not mask the reorder need.
+        InventoryBatch expiring = new InventoryBatch();
+        expiring.setId(UUID.randomUUID().toString());
+        expiring.setBusinessId(TENANT);
+        expiring.setBranchId(branchId);
+        expiring.setItemId(itemId);
+        expiring.setBatchNumber("DIGEST-EXP");
+        expiring.setSourceType("test");
+        expiring.setSourceId("source-expiry-1");
+        BigDecimal qty = new BigDecimal("50");
+        expiring.setInitialQuantity(qty);
+        expiring.setQuantityRemaining(qty);
+        expiring.setUnitCost(new BigDecimal("52.0000"));
+        expiring.setReceivedAt(Instant.parse("2026-04-01T12:00:00Z"));
+        expiring.setExpiryDate(runDate.plusDays(1));
+        expiring.setStatus(InventoryConstants.BATCH_STATUS_ACTIVE);
+        inventoryBatchRepository.save(expiring);
+
+        JsonNode run = generate();
+        assertThat(run.get("lineCount").asInt()).isEqualTo(1);
+        JsonNode line = run.get("suggestions").get(0);
+        // Usable on-hand stays 4 — the 50 units expiring inside the cover window are ignored.
+        assertThat(line.get("onHand").decimalValue()).isEqualByComparingTo("4");
+        assertThat(line.get("suggestedQty").decimalValue()).isEqualByComparingTo("6");
+    }
+
+    @Test
+    void batchExpiringAfterCoverWindow_stillCounts() throws Exception {
+        InventoryBatch future = new InventoryBatch();
+        future.setId(UUID.randomUUID().toString());
+        future.setBusinessId(TENANT);
+        future.setBranchId(branchId);
+        future.setItemId(itemId);
+        future.setBatchNumber("DIGEST-FUT");
+        future.setSourceType("test");
+        future.setSourceId("source-expiry-2");
+        BigDecimal qty = new BigDecimal("50");
+        future.setInitialQuantity(qty);
+        future.setQuantityRemaining(qty);
+        future.setUnitCost(new BigDecimal("52.0000"));
+        future.setReceivedAt(Instant.parse("2026-04-01T12:00:00Z"));
+        future.setExpiryDate(runDate.plusDays(10)); // beyond the 3-day cover window
+        future.setStatus(InventoryConstants.BATCH_STATUS_ACTIVE);
+        inventoryBatchRepository.save(future);
+
+        JsonNode run = generate();
+        // Usable on-hand 54 ≥ par 10 → already covered → suppressed.
+        assertThat(run.get("lineCount").asInt()).isZero();
+        assertThat(run.get("suggestions")).isEmpty();
+    }
+
+    @Test
+    void prepView_visibleToAnyStaffAndRedacted() throws Exception {
+        String clerkRoleId = "22222222-0000-0000-0000-0000000000c1";
+        Role clerkRole = new Role();
+        clerkRole.setId(clerkRoleId);
+        clerkRole.setBusinessId(null);
+        clerkRole.setRoleKey("clerk");
+        clerkRole.setName("Clerk");
+        clerkRole.setSystem(true);
+        roleRepository.save(clerkRole);
+        User clerk = user("clerk-digest@test", clerkRoleId); // no grants at all
+
+        JsonNode run = generate();
+        String runId = run.get("id").asText();
+
+        MvcResult result = mockMvc.perform(get("/api/v1/inventory/restock/runs/" + runId + "/prep")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, clerk.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, clerkRoleId))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString());
+        assertThat(body.get("runId").asText()).isEqualTo(runId);
+        assertThat(body.get("branchName").asText()).isEqualTo("Main");
+        assertThat(body.get("items")).hasSize(1);
+        JsonNode item = body.get("items").get(0);
+        assertThat(item.get("itemName").asText()).isEqualTo("Digest Item");
+        assertThat(item.get("suggestedQty").decimalValue()).isEqualByComparingTo("6");
+        assertThat(item.get("unitCost")).isNull(); // redacted
+        assertThat(item.get("supplierId")).isNull(); // redacted
+        assertThat(item.get("purchaseOrderId")).isNull();
+
+        // The full run view still requires purchasing / order-pad read.
+        mockMvc.perform(get("/api/v1/inventory/restock/runs/" + runId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, clerk.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, clerkRoleId))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     void newRun_expiresPriorPendingRun() throws Exception {
         JsonNode first = generate();
         String firstRunId = first.get("id").asText();

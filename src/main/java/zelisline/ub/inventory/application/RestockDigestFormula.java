@@ -130,7 +130,7 @@ final class RestockDigestFormula {
                 par,
                 suggested,
                 String.join("+", reasons),
-                evidence(reasons, avgDaily, effective, reorderLevel, thinHistory),
+                evidence(reasons, avgDaily, effective, reorderLevel, velocity, thinHistory, parManual != null),
                 confidence));
     }
 
@@ -208,10 +208,17 @@ final class RestockDigestFormula {
             BigDecimal avgDaily,
             BigDecimal effective,
             BigDecimal reorderLevel,
-            boolean thinHistory
+            VelocityInput velocity,
+            boolean thinHistory,
+            boolean manualPar
     ) {
         if (thinHistory || avgDaily.signum() <= 0) {
-            return "No sales history · order up to min×2";
+            long days = velocity == null ? 0 : velocity.daysWithSales();
+            String history = days == 0
+                    ? "No sales history"
+                    : "Only " + days + (days == 1 ? " day" : " days") + " of sales";
+            String target = manualPar ? "order up to your set level" : "order up to min×2";
+            return history + " · " + target;
         }
         BigDecimal daysLeft = effective.divide(avgDaily, 1, RoundingMode.HALF_UP);
         StringBuilder sb = new StringBuilder("Sold ")

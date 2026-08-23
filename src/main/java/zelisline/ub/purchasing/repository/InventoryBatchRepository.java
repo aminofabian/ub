@@ -199,6 +199,29 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
             @Param("itemIds") Collection<String> itemIds
     );
 
+    /**
+     * Usable on-hand for the restock engine: batches expiring before {@code usableFrom}
+     * (run date + cover window) don't count — stock that will spoil before it sells is
+     * not usable for the reorder decision. Batches with no expiry always count.
+     */
+    @Query("""
+            select b.itemId, coalesce(sum(b.quantityRemaining), 0)
+             from InventoryBatch b
+             where b.businessId = :businessId
+               and b.branchId = :branchId
+               and b.status = :status
+               and b.itemId in :itemIds
+               and (b.expiryDate is null or b.expiryDate >= :usableFrom)
+             group by b.itemId
+            """)
+    List<Object[]> sumUsableQuantityRemainingForItemsAtBranch(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("status") String status,
+            @Param("itemIds") Collection<String> itemIds,
+            @Param("usableFrom") LocalDate usableFrom
+    );
+
     @Query("""
             select b.branchId, sum(b.quantityRemaining * b.unitCost)
              from InventoryBatch b, Item i

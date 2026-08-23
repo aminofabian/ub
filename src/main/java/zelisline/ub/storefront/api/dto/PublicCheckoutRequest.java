@@ -7,5 +7,7 @@ public record PublicCheckoutRequest(
         @NotBlank @Size(max = 255) String customerName,
         @NotBlank @Size(max = 64) String customerPhone,
         @Size(max = 255) String customerEmail,
-        @Size(max = 2000) String notes
+        @Size(max = 2000) String notes,
+        /** Optional explicit channel marker: "WHATSAPP" or "WEB" (Phase 3). */
+        @Size(max = 16) String channel
 ) {}

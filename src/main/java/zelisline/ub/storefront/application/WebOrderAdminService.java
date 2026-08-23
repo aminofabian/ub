@@ -16,6 +16,7 @@ import zelisline.ub.storefront.api.dto.WebOrderLineSnapshotResponse;
 import zelisline.ub.storefront.api.dto.WebOrderSummaryResponse;
 import zelisline.ub.storefront.WebOrderFulfillmentStatuses;
 import zelisline.ub.storefront.WebOrderStatuses;
+import zelisline.ub.storefront.WebOrderChannels;
 import zelisline.ub.storefront.WebOrderCodes;
 import zelisline.ub.storefront.domain.WebOrder;
 import zelisline.ub.storefront.domain.WebOrderLine;
@@ -87,9 +88,14 @@ public class WebOrderAdminService {
                 .orElse("(branch)");
         return new WebOrderDetailResponse(
                 o.getId(),
+                WebOrderCodes.code(o.getId()),
+                channelOf(o),
                 o.getCartId(),
                 o.getStatus(),
                 displayFulfillment(o),
+                o.getHandoffState(),
+                o.getHandoffOpenedAt(),
+                o.getExpiresAt(),
                 o.getGrandTotal(),
                 o.getCurrency(),
                 o.getCatalogBranchId(),
@@ -113,6 +119,9 @@ public class WebOrderAdminService {
                 channelOf(o),
                 o.getStatus(),
                 displayFulfillment(o),
+                o.getHandoffState(),
+                o.getHandoffOpenedAt(),
+                o.getExpiresAt(),
                 o.getGrandTotal(),
                 o.getCurrency(),
                 o.getCustomerName(),
@@ -122,13 +131,16 @@ public class WebOrderAdminService {
                 o.getCreatedAt());
     }
 
-    /** V1 channel marker lives in {@code web_orders.notes} (scope D5). */
+    /** Phase 3 column wins; falls back to the V1 notes marker for legacy rows. */
     static String channelOf(WebOrder o) {
+        if (o.getChannel() != null && !o.getChannel().isBlank()) {
+            return o.getChannel().trim();
+        }
         String notes = o.getNotes();
         if (notes != null && notes.toLowerCase(java.util.Locale.ROOT).contains("channel: whatsapp")) {
-            return "WHATSAPP";
+            return WebOrderChannels.WHATSAPP;
         }
-        return "WEB";
+        return WebOrderChannels.WEB;
     }
 
     static String displayFulfillment(WebOrder o) {

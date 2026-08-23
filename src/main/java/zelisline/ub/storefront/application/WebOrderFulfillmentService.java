@@ -8,6 +8,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.notifications.application.NotificationOutboxService;
+import zelisline.ub.storefront.WebOrderChannels;
 import zelisline.ub.storefront.WebOrderFulfillmentStatuses;
 import zelisline.ub.storefront.WebOrderStatuses;
 import zelisline.ub.storefront.api.dto.WebOrderDetailResponse;
@@ -21,6 +22,7 @@ public class WebOrderFulfillmentService {
     private final WebOrderRepository webOrderRepository;
     private final WebOrderAdminService webOrderAdminService;
     private final NotificationOutboxService notificationOutboxService;
+    private final WhatsAppOrderExpiryService expiryService;
 
     @Value("${app.storefront.web-orders.auto-confirm-on-paid:false}")
     private boolean autoConfirmOnPaid;
@@ -45,7 +47,8 @@ public class WebOrderFulfillmentService {
         WebOrder order = webOrderRepository
                 .findByIdAndBusinessId(orderId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found"));
-        if (!WebOrderStatuses.PAID.equals(order.getStatus())) {
+        if (!WebOrderStatuses.PAID.equals(order.getStatus())
+                && !WebOrderChannels.WHATSAPP.equals(order.getChannel())) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "Fulfillment updates require a paid order");
@@ -58,6 +61,11 @@ public class WebOrderFulfillmentService {
         }
         if (current.equals(normalized)) {
             return webOrderAdminService.getOrder(businessId, orderId);
+        }
+        // WhatsApp settlement is arranged in chat: confirming an order the expiry
+        // sweeper already released re-decrements stock (scope §11, soft expiry).
+        if (WebOrderFulfillmentStatuses.CONFIRMED.equals(normalized)) {
+            expiryService.reReserveStock(order);
         }
         order.setFulfillmentStatus(normalized);
         webOrderRepository.save(order);
@@ -82,7 +90,8 @@ public class WebOrderFulfillmentService {
         if (order.getFulfillmentStatus() != null && !order.getFulfillmentStatus().isBlank()) {
             return order.getFulfillmentStatus().trim();
         }
-        if (WebOrderStatuses.PAID.equals(order.getStatus())) {
+        if (WebOrderStatuses.PAID.equals(order.getStatus())
+                || WebOrderChannels.WHATSAPP.equals(order.getChannel())) {
             return WebOrderFulfillmentStatuses.AWAITING_CONFIRMATION;
         }
         return "";

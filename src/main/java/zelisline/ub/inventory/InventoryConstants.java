@@ -10,6 +10,8 @@ public final class InventoryConstants {
     public static final String MOVEMENT_SALE_VOID = "sale_void";
     public static final String MOVEMENT_REFUND = "refund";
     public static final String MOVEMENT_REFUND_WASTAGE = "refund_wastage";
+    /** WhatsApp checkout order never confirmed — stock released by the expiry sweeper (scope §11). */
+    public static final String MOVEMENT_WEB_ORDER_EXPIRY = "web_order_expiry";
     public static final String BATCH_SOURCE_OPENING = "opening_balance";
     public static final String BATCH_SOURCE_STOCK_GAIN = "stock_count_gain";
     public static final String REF_OPERATION = "inventory_operation";

@@ -12,6 +12,7 @@ import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
+import zelisline.ub.storefront.WebOrderCodes;
 
 @Getter
 @Setter
@@ -62,6 +63,25 @@ public class WebOrder {
     @Column(name = "notes", length = 2000)
     private String notes;
 
+    /** WEB | WHATSAPP | POS — first-class channel (Phase 3). */
+    @Column(name = "channel", nullable = false, length = 24)
+    private String channel = "WEB";
+
+    /** Canonical short order code quoted in chat (scope D11). */
+    @Column(name = "code", length = 24)
+    private String code;
+
+    /** opened | reopened | expired — what we can actually observe about the handoff. */
+    @Column(name = "handoff_state", length = 24)
+    private String handoffState;
+
+    @Column(name = "handoff_opened_at")
+    private Instant handoffOpenedAt;
+
+    /** When an unconfirmed WhatsApp order releases its stock (scope §11). */
+    @Column(name = "expires_at")
+    private Instant expiresAt;
+
     /** Set when a cashier till has claimed/auto-printed the pickup ticket (once). */
     @Column(name = "pickup_ticket_printed_at")
     private Instant pickupTicketPrintedAt;
@@ -77,6 +97,12 @@ public class WebOrder {
         Instant n = Instant.now();
         if (id == null || id.isBlank()) {
             id = UUID.randomUUID().toString();
+        }
+        if (code == null || code.isBlank()) {
+            code = WebOrderCodes.code(id);
+        }
+        if (channel == null || channel.isBlank()) {
+            channel = "WEB";
         }
         createdAt = n;
         updatedAt = n;

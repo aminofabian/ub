@@ -32,6 +32,19 @@ public interface WebOrderRepository extends JpaRepository<WebOrder, String> {
 
     Optional<WebOrder> findByIdAndBusinessId(String id, String businessId);
 
+    /** WhatsApp orders still awaiting confirmation whose stock window has lapsed (scope §11). */
+    @Query("""
+            select w from WebOrder w
+             where w.channel = 'WHATSAPP'
+               and w.status = 'pending_payment'
+               and (w.fulfillmentStatus is null or w.fulfillmentStatus = 'awaiting_confirmation')
+               and w.expiresAt is not null
+               and w.expiresAt < :now
+               and (w.handoffState is null or w.handoffState <> 'expired')
+             order by w.expiresAt asc
+            """)
+    List<WebOrder> findExpiredUnconfirmedWhatsAppOrders(@Param("now") Instant now);
+
     /**
      * Atomically claim a one-time pickup-ticket auto-print.
      * Succeeds only when never printed and the order is newer than {@code minCreatedAt}.

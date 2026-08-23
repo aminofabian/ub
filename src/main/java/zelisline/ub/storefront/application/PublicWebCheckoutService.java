@@ -2,6 +2,8 @@ package zelisline.ub.storefront.application;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.regex.Pattern;
 
@@ -22,6 +24,7 @@ import zelisline.ub.inventory.application.InventoryBatchPickerService;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.storefront.WebOrderStatuses;
+import zelisline.ub.storefront.WebOrderChannels;
 import zelisline.ub.storefront.WebOrderCodes;
 import zelisline.ub.storefront.api.dto.PublicCheckoutRequest;
 import zelisline.ub.storefront.api.dto.PublicCheckoutResponse;
@@ -32,6 +35,7 @@ import zelisline.ub.storefront.repository.WebOrderLineRepository;
 import zelisline.ub.storefront.repository.WebOrderRepository;
 import zelisline.ub.tenancy.api.dto.TenantBrandingDto;
 import zelisline.ub.tenancy.application.StorefrontSettingsService;
+import zelisline.ub.tenancy.domain.Business;
 
 @Service
 public class PublicWebCheckoutService {
@@ -108,6 +112,11 @@ public class PublicWebCheckoutService {
         order.setCustomerPhone(phone);
         order.setCustomerEmail(email);
         order.setNotes(notes);
+        order.setChannel(resolveChannel(req.channel(), notes));
+        if (WebOrderChannels.WHATSAPP.equals(order.getChannel())) {
+            int expiryMins = resolveWhatsAppExpiryMins(elig.ctx().business());
+            order.setExpiresAt(Instant.now().plus(expiryMins, ChronoUnit.MINUTES));
+        }
         webOrderRepository.save(order);
 
         String businessId = elig.ctx().business().getId();
@@ -232,5 +241,25 @@ public class PublicWebCheckoutService {
             return null;
         }
         return s.trim();
+    }
+
+    /** Explicit request channel wins; falls back to the V1 notes marker. */
+    private static String resolveChannel(String requested, String notes) {
+        if (requested != null && "WHATSAPP".equalsIgnoreCase(requested.trim())) {
+            return WebOrderChannels.WHATSAPP;
+        }
+        if (notes != null && notes.toLowerCase(java.util.Locale.ROOT).contains("channel: whatsapp")) {
+            return WebOrderChannels.WHATSAPP;
+        }
+        return WebOrderChannels.WEB;
+    }
+
+    private int resolveWhatsAppExpiryMins(Business business) {
+        var settings = storefrontSettingsService.readFromSettingsJson(business.getSettings());
+        if (settings != null && settings.whatsappCheckout() != null
+                && settings.whatsappCheckout().expiryMins() != null) {
+            return settings.whatsappCheckout().expiryMins();
+        }
+        return zelisline.ub.tenancy.api.dto.WhatsAppCheckoutSettings.DEFAULT_EXPIRY_MINS;
     }
 }

@@ -6,9 +6,14 @@ import java.util.List;
 
 public record WebOrderDetailResponse(
         String id,
+        String orderCode,
+        String channel,
         String cartId,
         String status,
         String fulfillmentStatus,
+        String handoffState,
+        Instant handoffOpenedAt,
+        Instant expiresAt,
         BigDecimal grandTotal,
         String currency,
         String catalogBranchId,

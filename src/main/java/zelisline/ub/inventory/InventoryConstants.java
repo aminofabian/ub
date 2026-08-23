@@ -39,6 +39,32 @@ public final class InventoryConstants {
     public static final String RESTOCK_STATUS_ORDERED = "ordered";
     public static final String RESTOCK_STATUS_RECEIVED = "received";
     public static final String RESTOCK_STATUS_REJECTED = "rejected";
+
+    public static final String DIGEST_RUN_GENERATED = "generated";
+    public static final String DIGEST_RUN_NOTIFIED = "notified";
+    public static final String DIGEST_RUN_PARTIALLY_ACCEPTED = "partially_accepted";
+    public static final String DIGEST_RUN_ACCEPTED = "accepted";
+    public static final String DIGEST_RUN_EXPIRED = "expired";
+
+    public static final String DIGEST_SUGGESTION_PENDING = "pending";
+    public static final String DIGEST_SUGGESTION_ACCEPTED = "accepted";
+    public static final String DIGEST_SUGGESTION_SNOOZED = "snoozed";
+    public static final String DIGEST_SUGGESTION_DISMISSED = "dismissed";
+
+    public static final String DIGEST_TARGET_PO = "po";
+    public static final String DIGEST_TARGET_PAD = "pad";
+
+    public static final String DIGEST_TRIGGER_SCHEDULED = "scheduled";
+    public static final String DIGEST_TRIGGER_MANUAL = "manual";
+
+    public static final String DIGEST_REASON_BELOW_MIN = "BELOW_MIN";
+    public static final String DIGEST_REASON_WILL_STOCK_OUT = "WILL_STOCK_OUT";
+    public static final String DIGEST_REASON_FAST_MOVER = "FAST_MOVER";
+    public static final String DIGEST_REASON_STOCKOUT_RECOVERY = "STOCKOUT_RECOVERY";
+
+    public static final String DIGEST_CONFIDENCE_HIGH = "high";
+    public static final String DIGEST_CONFIDENCE_MEDIUM = "medium";
+    public static final String DIGEST_CONFIDENCE_LOW = "low";
     public static final String STOCKTAKE_CHECKLIST_BOTH = "both";
     public static final String ADJUSTMENT_REQUEST_PENDING = "pending";
     public static final String ADJUSTMENT_REQUEST_APPROVED = "approved";

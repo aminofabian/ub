@@ -22,6 +22,10 @@ public record StockLevelsSettingsResponse(
          */
         boolean allowMinStockForGroceryClerk,
         /**
+         * Grocery counter: set order-up-to (par) level in Edit stock. Default on.
+         */
+        boolean allowParLevelForGroceryClerk,
+        /**
          * Grocery counter supplier Order drawer (Path A place + WhatsApp). Default on.
          */
         boolean allowOrderPadForGroceryClerk,
@@ -32,6 +36,6 @@ public record StockLevelsSettingsResponse(
 ) {
     public static StockLevelsSettingsResponse defaults() {
         return new StockLevelsSettingsResponse(
-                false, true, false, true, true, true, true, true, true);
+                false, true, false, true, true, true, true, true, true, true);
     }
 }

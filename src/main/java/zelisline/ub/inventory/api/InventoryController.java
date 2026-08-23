@@ -22,6 +22,7 @@ import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.identity.application.RequestPermissionService;
 import zelisline.ub.inventory.api.dto.BatchAllocationLine;
 import zelisline.ub.inventory.api.dto.BranchValuationLine;
 import zelisline.ub.inventory.api.dto.InventoryMutationResponse;
@@ -39,6 +40,7 @@ import zelisline.ub.inventory.application.InventoryLedgerService;
 import zelisline.ub.inventory.application.InventoryTransferService;
 import zelisline.ub.inventory.application.InventoryValuationService;
 import zelisline.ub.inventory.application.ItemStockThresholdsService;
+import zelisline.ub.inventory.application.InventoryRoleAccessService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.tenancy.api.TenantRequestIds;
@@ -55,6 +57,8 @@ public class InventoryController {
     private final InventoryTransferService inventoryTransferService;
     private final InventoryValuationService inventoryValuationService;
     private final ItemStockThresholdsService itemStockThresholdsService;
+    private final InventoryRoleAccessService inventoryRoleAccessService;
+    private final RequestPermissionService requestPermissionService;
     private final BranchResolutionService branchResolutionService;
 
     @GetMapping("/allocation-preview")
@@ -237,11 +241,15 @@ public class InventoryController {
             @Valid @RequestBody PatchItemStockThresholdsRequest body,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.requireHuman(request);
-        return itemStockThresholdsService.patch(
-                TenantRequestIds.resolveBusinessId(request),
-                itemId,
-                body
-        );
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        boolean fullWrite = requestPermissionService.hasPermission(
+                        principal.roleId(), "inventory.write")
+                || requestPermissionService.hasPermission(
+                        principal.roleId(), "catalog.items.write");
+        boolean canWritePar = fullWrite
+                || inventoryRoleAccessService.grantsDelegatedParLevelWrite(
+                        businessId, principal.roleId());
+        return itemStockThresholdsService.patch(businessId, itemId, body, canWritePar);
     }
 }

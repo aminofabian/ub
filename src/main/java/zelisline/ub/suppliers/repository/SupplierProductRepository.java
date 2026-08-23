@@ -1,5 +1,6 @@
 package zelisline.ub.suppliers.repository;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
 
@@ -108,5 +109,55 @@ public interface SupplierProductRepository extends JpaRepository<SupplierProduct
     List<SupplierProduct> listForSupplier(
             @Param("businessId") String businessId,
             @Param("supplierId") String supplierId
+    );
+
+    /**
+     * Active, non-deleted supplier links for a set of items, ordered by item then primary
+     * flag so the first row per item is its primary link (fallback: any active link). Used
+     * by the nightly restock engine to resolve target / pack / MOQ / lead-time inputs.
+     */
+    interface ItemLinkRow {
+        String getItemId();
+
+        String getLinkId();
+
+        String getSupplierId();
+
+        boolean getPrimary();
+
+        BigDecimal getDefaultCost();
+
+        BigDecimal getPackSize();
+
+        String getPackUnit();
+
+        Integer getLeadTimeDays();
+
+        BigDecimal getMinOrderQty();
+    }
+
+    @Query("""
+            SELECT sp.itemId AS itemId,
+                   sp.id AS linkId,
+                   sp.supplierId AS supplierId,
+                   sp.primaryLink AS primary,
+                   sp.defaultCostPrice AS defaultCost,
+                   sp.packSize AS packSize,
+                   sp.packUnit AS packUnit,
+                   sp.leadTimeDays AS leadTimeDays,
+                   sp.minOrderQty AS minOrderQty
+              FROM SupplierProduct sp
+              JOIN Supplier s ON s.id = sp.supplierId
+             WHERE s.businessId = :businessId
+               AND sp.itemId IN :itemIds
+               AND sp.deletedAt IS NULL
+               AND sp.active = TRUE
+               AND s.deletedAt IS NULL
+               AND LOWER(s.status) = 'active'
+             ORDER BY sp.itemId ASC, sp.primaryLink DESC, sp.updatedAt DESC
+            """)
+    List<ItemLinkRow> listActiveLinksForItems(
+            @Param("businessId") String businessId,
+            @Param("itemIds") java.util.Collection<String> itemIds
     );
 }

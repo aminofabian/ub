@@ -83,12 +83,27 @@ public class InventoryRoleAccessService {
     /**
      * Grocery clerks may set min / reorder levels when the admin toggle is on
      * — used only by the stock-thresholds endpoint (not full catalog write).
+     * Also grants the endpoint when only the par (order-up-to) toggle is on, so
+     * {@code reorderQty} writes are reachable; the field itself is then gated by
+     * {@link #grantsDelegatedParLevelWrite}.
      */
     public boolean grantsDelegatedStockThresholdsWrite(String businessId, String roleId) {
         if (!isGroceryCounterRole(resolveRoleKey(roleId))) {
             return false;
         }
-        return readStockLevels(businessId).allowMinStockForGroceryClerk();
+        StockLevelsSettingsResponse settings = readStockLevels(businessId);
+        return settings.allowMinStockForGroceryClerk()
+                || settings.allowParLevelForGroceryClerk();
+    }
+
+    /**
+     * Grocery clerks may set the order-up-to (par) level when the admin toggle is on.
+     */
+    public boolean grantsDelegatedParLevelWrite(String businessId, String roleId) {
+        if (!isGroceryCounterRole(resolveRoleKey(roleId))) {
+            return false;
+        }
+        return readStockLevels(businessId).allowParLevelForGroceryClerk();
     }
 
     /** Path A confirm / receive — and supplier Order place — on grocery. */

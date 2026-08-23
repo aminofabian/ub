@@ -348,6 +348,69 @@ public interface MvSalesDailyRepository extends JpaRepository<MvSalesDaily, MvSa
             @Param("limit") int limit
     );
 
+    /**
+     * Digest velocity per item at a branch — 7d / 30d qty plus distinct days-with-sales
+     * (for confidence) across the rolling window. Unlike {@link #itemVelocityPast} there
+     * is no {@code HAVING qty > 0} filter and no limit: the nightly engine needs every
+     * candidate, including items whose only signal is a stock-out (they drop out of
+     * velocity once they stop selling, so the engine unions them back in via stock-out
+     * proxies — see RestockDigestService).
+     */
+    interface DigestVelocityRow {
+        String getItemId();
+
+        BigDecimal getLast7Qty();
+
+        BigDecimal getLast30Qty();
+
+        long getDaysWithSales();
+    }
+
+    @Query(value = """
+            SELECT m.item_id AS itemId,
+                   COALESCE(SUM(CASE WHEN m.business_day >= :last7From AND m.business_day < :today THEN m.qty ELSE 0 END), 0) AS last7Qty,
+                   COALESCE(SUM(CASE WHEN m.business_day >= :last30From AND m.business_day < :today THEN m.qty ELSE 0 END), 0) AS last30Qty,
+                   COUNT(DISTINCT CASE WHEN m.business_day >= :last30From AND m.business_day < :today THEN m.business_day END) AS daysWithSales
+              FROM mv_sales_daily m
+              JOIN items i ON i.id = m.item_id AND i.business_id = m.business_id AND i.deleted_at IS NULL
+             WHERE m.business_id = :businessId
+               AND m.branch_id = :branchId
+               AND m.business_day >= :last30From
+               AND m.business_day < :today
+             GROUP BY m.item_id
+            """, nativeQuery = true)
+    List<DigestVelocityRow> digestVelocity(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("today") LocalDate today,
+            @Param("last7From") LocalDate last7From,
+            @Param("last30From") LocalDate last30From
+    );
+
+    /** OLTP twin of {@link #digestVelocity} for tenants whose MV hasn't refreshed yet. */
+    @Query(value = """
+            SELECT si.item_id AS itemId,
+                   COALESCE(SUM(CASE WHEN CAST(s.sold_at AS DATE) >= :last7From AND CAST(s.sold_at AS DATE) < :today THEN si.quantity ELSE 0 END), 0) AS last7Qty,
+                   COALESCE(SUM(CASE WHEN CAST(s.sold_at AS DATE) >= :last30From AND CAST(s.sold_at AS DATE) < :today THEN si.quantity ELSE 0 END), 0) AS last30Qty,
+                   COUNT(DISTINCT CASE WHEN CAST(s.sold_at AS DATE) >= :last30From AND CAST(s.sold_at AS DATE) < :today THEN CAST(s.sold_at AS DATE) END) AS daysWithSales
+              FROM sales s
+              JOIN sale_items si ON si.sale_id = s.id
+              JOIN items i ON i.id = si.item_id AND i.business_id = s.business_id AND i.deleted_at IS NULL
+             WHERE s.business_id = :businessId
+               AND s.branch_id = :branchId
+               AND s.status = 'completed'
+               AND CAST(s.sold_at AS DATE) >= :last30From
+               AND CAST(s.sold_at AS DATE) < :today
+             GROUP BY si.item_id
+            """, nativeQuery = true)
+    List<DigestVelocityRow> digestVelocityOltp(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("today") LocalDate today,
+            @Param("last7From") LocalDate last7From,
+            @Param("last30From") LocalDate last30From
+    );
+
     interface ItemDailyRollup {
         LocalDate getBusinessDay();
 

@@ -116,4 +116,26 @@ public interface StockTakeLineRepository extends JpaRepository<StockTakeLine, St
             @Param("from") LocalDate from,
             @Param("to") LocalDate to
     );
+
+    /**
+     * Item ids counted at zero in a stock take / daily audit at a branch within a window.
+     * Nightly restock V1 proxy for "stock-out days in last 30d" — items that went to zero
+     * get re-suggested even if they stopped selling (and therefore left velocity).
+     */
+    @Query("""
+            select distinct l.itemId from StockTakeLine l
+             join l.session s
+             where s.businessId = :businessId
+               and s.branchId = :branchId
+               and s.sessionDate >= :from
+               and s.sessionDate <= :to
+               and l.countedQty = 0
+               and (l.status = 'submitted' or l.status = 'confirmed')
+            """)
+    List<String> findCountedZeroItemIds(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to
+    );
 }

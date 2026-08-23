@@ -8,6 +8,7 @@ public record StockLevelsPatchRequest(
         Boolean allowStockPageForStockManager,
         Boolean allowSpoilsForGroceryClerk,
         Boolean allowMinStockForGroceryClerk,
+        Boolean allowParLevelForGroceryClerk,
         Boolean allowOrderPadForGroceryClerk,
         Boolean allowOrderConfirmForGroceryClerk
 ) {

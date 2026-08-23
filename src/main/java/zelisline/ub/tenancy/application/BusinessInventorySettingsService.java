@@ -74,6 +74,8 @@ public class BusinessInventorySettingsService {
             "allowSpoilsForGroceryClerk";
     private static final String KEY_ALLOW_MIN_STOCK_GROCERY_CLERK =
             "allowMinStockForGroceryClerk";
+    private static final String KEY_ALLOW_PAR_LEVEL_GROCERY_CLERK =
+            "allowParLevelForGroceryClerk";
     private static final String KEY_ALLOW_ORDER_PAD_GROCERY_CLERK =
             "allowOrderPadForGroceryClerk";
     private static final String KEY_ALLOW_ORDER_CONFIRM_GROCERY_CLERK =
@@ -246,6 +248,7 @@ public class BusinessInventorySettingsService {
                 // Spoils on grocery counter — default on until admin turns off.
                 stockLevels.path(KEY_ALLOW_SPOILS_GROCERY_CLERK).asBoolean(true),
                 stockLevels.path(KEY_ALLOW_MIN_STOCK_GROCERY_CLERK).asBoolean(true),
+                stockLevels.path(KEY_ALLOW_PAR_LEVEL_GROCERY_CLERK).asBoolean(true),
                 stockLevels.path(KEY_ALLOW_ORDER_PAD_GROCERY_CLERK).asBoolean(true),
                 stockLevels.path(KEY_ALLOW_ORDER_CONFIRM_GROCERY_CLERK).asBoolean(true)
         );
@@ -340,6 +343,12 @@ public class BusinessInventorySettingsService {
             stockLevels.put(
                     KEY_ALLOW_MIN_STOCK_GROCERY_CLERK,
                     patch.allowMinStockForGroceryClerk()
+            );
+        }
+        if (patch.allowParLevelForGroceryClerk() != null) {
+            stockLevels.put(
+                    KEY_ALLOW_PAR_LEVEL_GROCERY_CLERK,
+                    patch.allowParLevelForGroceryClerk()
             );
         }
         if (patch.allowOrderPadForGroceryClerk() != null) {

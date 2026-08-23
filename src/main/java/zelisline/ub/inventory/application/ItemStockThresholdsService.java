@@ -23,13 +23,16 @@ public class ItemStockThresholdsService {
     public ItemStockThresholdsResponse patch(
             String businessId,
             String itemId,
-            PatchItemStockThresholdsRequest body
+            PatchItemStockThresholdsRequest body,
+            boolean canWritePar
     ) {
         if (body == null
-                || (body.minStockLevel() == null && body.reorderLevel() == null)) {
+                || (body.minStockLevel() == null
+                        && body.reorderLevel() == null
+                        && body.reorderQty() == null)) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "Provide minStockLevel and/or reorderLevel"
+                    "Provide minStockLevel, reorderLevel and/or reorderQty"
             );
         }
         Item item = itemRepository
@@ -49,10 +52,22 @@ public class ItemStockThresholdsService {
         } else if (body.reorderLevel() != null && body.minStockLevel() == null) {
             item.setMinStockLevel(body.reorderLevel());
         }
+        // Par ("order up to") is independent — no sync with min / reorder.
+        // Only callers with the par-level permission may set it.
+        if (body.reorderQty() != null) {
+            if (!canWritePar) {
+                throw new ResponseStatusException(
+                        HttpStatus.FORBIDDEN,
+                        "Setting order-up-to (par) is not enabled for your role"
+                );
+            }
+            item.setReorderQty(body.reorderQty());
+        }
 
         itemRepository.save(item);
         BigDecimal min = item.getMinStockLevel();
         BigDecimal reorder = item.getReorderLevel();
-        return new ItemStockThresholdsResponse(item.getId(), min, reorder);
+        BigDecimal par = item.getReorderQty();
+        return new ItemStockThresholdsResponse(item.getId(), min, reorder, par);
     }
 }

@@ -1,6 +1,7 @@
 package zelisline.ub.tenancy.domain;
 
 import java.time.Instant;
+import java.time.LocalTime;
 import java.util.UUID;
 
 import jakarta.persistence.Column;
@@ -36,6 +37,15 @@ public class Branch {
 
     @Column(name = "active", nullable = false)
     private boolean active = true;
+
+    @Column(name = "restock_enabled", nullable = false)
+    private boolean restockEnabled = true;
+
+    @Column(name = "restock_run_time", nullable = false)
+    private LocalTime restockRunTime = LocalTime.of(20, 0);
+
+    @Column(name = "restock_cover_days", nullable = false)
+    private int restockCoverDays = 3;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

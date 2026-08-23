@@ -11,6 +11,8 @@ public record PublicCheckoutPaymentOptions(
         List<DisplayInstructions> manual,
         List<PublicOnlinePaymentMethod> online,
         /** When true, cart preview + checkout may register Buy Goods till awaits. */
-        boolean tillListenEnabled
+        boolean tillListenEnabled,
+        /** WhatsApp checkout capability (scope §6); null = not offered. */
+        WhatsAppCheckoutOption whatsappCheckout
 ) {
 }

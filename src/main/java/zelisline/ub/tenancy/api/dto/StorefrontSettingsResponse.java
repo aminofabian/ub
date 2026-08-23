@@ -12,6 +12,7 @@ public record StorefrontSettingsResponse(
         String storeThemeId,
         String landingTemplateId,
         LandingContentDto landingContent,
+        WhatsAppCheckoutSettings whatsappCheckout,
         String designJson
 ) {
     public static StorefrontSettingsResponse defaults() {
@@ -24,6 +25,7 @@ public record StorefrontSettingsResponse(
                 DeliveryAreaDefaults.seed(),
                 StorefrontTemplateIds.DEFAULT_STORE_THEME,
                 StorefrontTemplateIds.DEFAULT_LANDING_TEMPLATE,
+                null,
                 null,
                 null
         );

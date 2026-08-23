@@ -34,6 +34,12 @@ public interface BusinessRepository extends JpaRepository<Business, String> {
 
     java.util.List<Business> findBySlugStartingWithAndDeletedAtIsNull(String slugPrefix);
 
+    /** Apex shop directory search: fuzzy name match, capped (Phase 4). */
+    java.util.List<Business> findTop8ByDeletedAtIsNullAndNameContainingIgnoreCaseOrderByNameAsc(String fragment);
+
+    /** Apex shop directory search: slug prefix match, capped (Phase 4). */
+    java.util.List<Business> findTop8ByDeletedAtIsNullAndSlugStartingWithOrderBySlugAsc(String slugPrefix);
+
     Optional<Business> findByIdAndDeletedAtIsNull(String id);
 
     java.util.List<Business> findByDeletedAtIsNull();

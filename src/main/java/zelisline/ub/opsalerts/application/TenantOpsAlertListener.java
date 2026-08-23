@@ -39,7 +39,7 @@ public class TenantOpsAlertListener {
                     + "Customer: " + safe(event.customerName()) + "\n"
                     + "Phone: " + safe(event.customerPhone()) + "\n"
                     + "Total: " + TenantOpsAlertDispatcher.formatMoney(event.grandTotal(), currency) + "\n"
-                    + "Order: " + shortId(event.orderId());
+                    + "Order: " + zelisline.ub.storefront.WebOrderCodes.code(event.orderId());
             dispatcher.dispatch(event.businessId(), OpsAlertType.WEB_ORDER, message);
         } catch (Exception ex) {
             log.warn("Ops alert web order failed order={}", event != null ? event.orderId() : null, ex);

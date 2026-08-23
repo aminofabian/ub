@@ -16,6 +16,7 @@ import zelisline.ub.storefront.api.dto.WebOrderLineSnapshotResponse;
 import zelisline.ub.storefront.api.dto.WebOrderSummaryResponse;
 import zelisline.ub.storefront.WebOrderFulfillmentStatuses;
 import zelisline.ub.storefront.WebOrderStatuses;
+import zelisline.ub.storefront.WebOrderCodes;
 import zelisline.ub.storefront.domain.WebOrder;
 import zelisline.ub.storefront.domain.WebOrderLine;
 import zelisline.ub.storefront.repository.WebOrderLineRepository;
@@ -108,6 +109,8 @@ public class WebOrderAdminService {
                 .orElse("(branch)");
         return new WebOrderSummaryResponse(
                 o.getId(),
+                WebOrderCodes.code(o.getId()),
+                channelOf(o),
                 o.getStatus(),
                 displayFulfillment(o),
                 o.getGrandTotal(),
@@ -117,6 +120,15 @@ public class WebOrderAdminService {
                 o.getCatalogBranchId(),
                 branchName,
                 o.getCreatedAt());
+    }
+
+    /** V1 channel marker lives in {@code web_orders.notes} (scope D5). */
+    static String channelOf(WebOrder o) {
+        String notes = o.getNotes();
+        if (notes != null && notes.toLowerCase(java.util.Locale.ROOT).contains("channel: whatsapp")) {
+            return "WHATSAPP";
+        }
+        return "WEB";
     }
 
     static String displayFulfillment(WebOrder o) {

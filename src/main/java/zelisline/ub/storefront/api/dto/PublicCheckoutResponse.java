@@ -8,6 +8,8 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record PublicCheckoutResponse(
         String orderId,
+        /** Canonical short order code (scope D11) — what the WhatsApp message quotes. */
+        String orderCode,
         String status,
         BigDecimal grandTotal,
         String currency,

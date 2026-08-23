@@ -29,6 +29,7 @@ import zelisline.ub.tenancy.api.dto.TenantAuthConfigDto;
 import zelisline.ub.tenancy.api.dto.TenantBrandingDto;
 import zelisline.ub.tenancy.api.dto.TenantConfigBundle;
 import zelisline.ub.tenancy.api.dto.TenantPasswordPolicyDto;
+import zelisline.ub.tenancy.api.dto.WhatsAppCheckoutSettings;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.repository.BranchRepository;
 
@@ -66,6 +67,7 @@ public class StorefrontSettingsService {
             if (sf.isMissingNode() || !sf.isObject()) {
                 return StorefrontSettingsResponse.defaults();
             }
+            LandingContentDto landing = readLandingContent(sf.get("landingContent"));
             return new StorefrontSettingsResponse(
                 readEnabled(sf),
                 textOrNull(sf.get("catalogBranchId")),
@@ -79,7 +81,11 @@ public class StorefrontSettingsService {
                 StorefrontTemplateIds.normalizeLandingTemplateId(
                     textOrNull(sf.get("landingTemplateId"))
                 ),
-                readLandingContent(sf.get("landingContent")),
+                landing,
+                readWhatsAppCheckout(
+                    sf.get("whatsappCheckout"),
+                    landing != null ? landing.whatsapp() : null
+                ),
                 textOrNull(sf.get("designJson"))
             );
         } catch (Exception e) {
@@ -905,6 +911,25 @@ public class StorefrontSettingsService {
                 }
             }
         }
+        if (patch.whatsappCheckout() != null) {
+            WhatsAppCheckoutSettings wa = patch.whatsappCheckout();
+            boolean allEmpty = isBlank(wa.number())
+                && isBlank(wa.mode())
+                && isBlank(wa.greeting())
+                && wa.expiryMins() == null;
+            if (allEmpty) {
+                storefront.remove("whatsappCheckout");
+            } else {
+                ObjectNode node = objectMapper.createObjectNode();
+                putTextIfPresent(node, "number", wa.number());
+                putTextIfPresent(node, "mode", wa.mode());
+                putTextIfPresent(node, "greeting", wa.greeting());
+                if (wa.expiryMins() != null) {
+                    node.put("expiryMins", wa.expiryMins());
+                }
+                storefront.set("whatsappCheckout", node);
+            }
+        }
     }
 
     private void validateStorefrontForBusiness(
@@ -937,6 +962,27 @@ public class StorefrontSettingsService {
                 && !StorefrontTemplateIds.isValidLandingTemplateId(landingTemplateId)
         ) {
             throw badRequest("Unknown landingTemplateId: " + landingTemplateId);
+        }
+
+        JsonNode wa = storefront.get("whatsappCheckout");
+        if (wa != null && !wa.isNull()) {
+            if (!wa.isObject()) {
+                throw badRequest("whatsappCheckout must be an object");
+            }
+            String mode = textOrNull(wa.get("mode"));
+            if (mode != null && !WhatsAppCheckoutSettings.isValidMode(mode)) {
+                throw badRequest("whatsappCheckout.mode must be off, fallback, or always");
+            }
+            JsonNode expiry = wa.get("expiryMins");
+            if (expiry != null && !expiry.isNull()) {
+                if (!expiry.canConvertToInt()) {
+                    throw badRequest("whatsappCheckout.expiryMins must be a whole number");
+                }
+                int mins = expiry.asInt();
+                if (mins < 15 || mins > 10080) {
+                    throw badRequest("whatsappCheckout.expiryMins must be between 15 and 10080");
+                }
+            }
         }
 
         JsonNode featured = storefront.get("featuredItemIds");
@@ -1044,6 +1090,43 @@ public class StorefrontSettingsService {
         }
         String s = node.asText().trim();
         return s.isEmpty() ? null : s;
+    }
+
+    /**
+     * "Orders on WhatsApp" settings; {@code landingWhatsapp} is the read-time
+     * fallback for merchants who configured a Milk Run number before the
+     * first-class setting existed (scope §7 migration).
+     */
+    private static WhatsAppCheckoutSettings readWhatsAppCheckout(
+        JsonNode node,
+        String landingWhatsapp
+    ) {
+        String number = null;
+        String mode = null;
+        String greeting = null;
+        Integer expiryMins = null;
+        if (node != null && !node.isNull() && node.isObject()) {
+            number = textOrNull(node.get("number"));
+            mode = textOrNull(node.get("mode"));
+            greeting = textOrNull(node.get("greeting"));
+            JsonNode expiry = node.get("expiryMins");
+            if (expiry != null && expiry.canConvertToInt()) {
+                expiryMins = expiry.asInt();
+            }
+        }
+        if (number == null) {
+            number = landingWhatsapp;
+        }
+        if (number == null) {
+            return null;
+        }
+        if (mode == null) {
+            mode = WhatsAppCheckoutSettings.MODE_FALLBACK;
+        }
+        if (expiryMins == null) {
+            expiryMins = WhatsAppCheckoutSettings.DEFAULT_EXPIRY_MINS;
+        }
+        return new WhatsAppCheckoutSettings(number, mode, greeting, expiryMins);
     }
 
     private static boolean isBlank(String value) {

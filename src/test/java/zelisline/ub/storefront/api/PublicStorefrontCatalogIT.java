@@ -34,6 +34,10 @@ import zelisline.ub.pricing.domain.SellingPrice;
 import zelisline.ub.pricing.repository.SellingPriceRepository;
 import zelisline.ub.purchasing.domain.InventoryBatch;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
+import zelisline.ub.storefront.WebOrderCodes;
+import zelisline.ub.storefront.WebOrderStatuses;
+import zelisline.ub.storefront.domain.WebOrder;
+import zelisline.ub.storefront.repository.WebOrderRepository;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BranchRepository;
@@ -75,6 +79,9 @@ class PublicStorefrontCatalogIT {
 
     @Autowired
     private InventoryBatchRepository inventoryBatchRepository;
+
+    @Autowired
+    private WebOrderRepository webOrderRepository;
 
     @Autowired
     private CatalogBootstrapService catalogBootstrapService;
@@ -229,6 +236,90 @@ class PublicStorefrontCatalogIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.manual").isArray())
                 .andExpect(jsonPath("$.online").isArray());
+    }
+
+    @Test
+    void checkoutOptions_whatsappOfferedWhenNumberAndModeSet() throws Exception {
+        Business b = businessRepository.findById(TENANT).orElseThrow();
+        b.setSettings(
+                "{\"storefront\":{\"enabled\":true,\"catalogBranchId\":\"%s\",\"whatsappCheckout\":"
+                        + "{\"number\":\"0712 345 678\",\"mode\":\"fallback\",\"greeting\":\"Karibu!\"}}}"
+                        .formatted(branchId));
+        businessRepository.save(b);
+
+        mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/payments/checkout-options"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.whatsappCheckout.enabled").value(true))
+                .andExpect(jsonPath("$.whatsappCheckout.digits").value("254712345678"))
+                .andExpect(jsonPath("$.whatsappCheckout.mode").value("fallback"))
+                .andExpect(jsonPath("$.whatsappCheckout.greeting").value("Karibu!"))
+                .andExpect(jsonPath("$.whatsappCheckout.expiryMins").value(180));
+    }
+
+    @Test
+    void checkoutOptions_whatsappHiddenWhenModeOffOrNumberMissing() throws Exception {
+        Business b = businessRepository.findById(TENANT).orElseThrow();
+        b.setSettings(
+                "{\"storefront\":{\"enabled\":true,\"catalogBranchId\":\"%s\",\"whatsappCheckout\":"
+                        + "{\"number\":\"254712345678\",\"mode\":\"off\"}}}"
+                        .formatted(branchId));
+        businessRepository.save(b);
+
+        mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/payments/checkout-options"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.whatsappCheckout").doesNotExist());
+
+        // Malformed number is a hard gate — feature silently disabled.
+        b.setSettings(
+                "{\"storefront\":{\"enabled\":true,\"catalogBranchId\":\"%s\",\"whatsappCheckout\":"
+                        + "{\"number\":\"123\",\"mode\":\"always\"}}}"
+                        .formatted(branchId));
+        businessRepository.save(b);
+        mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/payments/checkout-options"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.whatsappCheckout").doesNotExist());
+    }
+
+    @Test
+    void tracking_byCode_returnsOrderWhenPhoneLast4Matches() throws Exception {
+        WebOrder order = new WebOrder();
+        order.setBusinessId(TENANT);
+        order.setCartId(UUID.randomUUID().toString());
+        order.setCatalogBranchId(branchId);
+        order.setStatus(WebOrderStatuses.PENDING_PAYMENT);
+        order.setCurrency("KES");
+        order.setGrandTotal(new BigDecimal("3300.00"));
+        order.setCustomerName("Wanjiku");
+        order.setCustomerPhone("0714 282 874");
+        order.setNotes("Channel: WhatsApp | Payment: Arrange on WhatsApp");
+        webOrderRepository.save(order);
+
+        mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/orders/by-code/"
+                        + WebOrderCodes.code(order.getId()))
+                        .param("phoneLast4", "2874"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.orderCode").value(WebOrderCodes.code(order.getId())))
+                .andExpect(jsonPath("$.grandTotal").value(3300.00))
+                .andExpect(jsonPath("$.customerName").doesNotExist());
+    }
+
+    @Test
+    void tracking_byCode_rejectsWrongPhoneLast4() throws Exception {
+        WebOrder order = new WebOrder();
+        order.setBusinessId(TENANT);
+        order.setCartId(UUID.randomUUID().toString());
+        order.setCatalogBranchId(branchId);
+        order.setStatus(WebOrderStatuses.PENDING_PAYMENT);
+        order.setCurrency("KES");
+        order.setGrandTotal(new BigDecimal("100.00"));
+        order.setCustomerName("Achieng");
+        order.setCustomerPhone("0722000011");
+        webOrderRepository.save(order);
+
+        mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/orders/by-code/"
+                        + WebOrderCodes.code(order.getId()))
+                        .param("phoneLast4", "9999"))
+                .andExpect(status().isNotFound());
     }
 
     @Test

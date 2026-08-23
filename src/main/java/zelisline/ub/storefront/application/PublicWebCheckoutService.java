@@ -22,6 +22,7 @@ import zelisline.ub.inventory.application.InventoryBatchPickerService;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.storefront.WebOrderStatuses;
+import zelisline.ub.storefront.WebOrderCodes;
 import zelisline.ub.storefront.api.dto.PublicCheckoutRequest;
 import zelisline.ub.storefront.api.dto.PublicCheckoutResponse;
 import zelisline.ub.storefront.domain.WebOrder;
@@ -188,6 +189,7 @@ public class PublicWebCheckoutService {
 
         return new PublicCheckoutResponse(
                 order.getId(),
+                WebOrderCodes.code(order.getId()),
                 order.getStatus(),
                 order.getGrandTotal(),
                 order.getCurrency(),

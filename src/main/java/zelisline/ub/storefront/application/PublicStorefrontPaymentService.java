@@ -39,9 +39,12 @@ import zelisline.ub.storefront.api.dto.PublicTillAwaitResponse;
 import zelisline.ub.storefront.api.dto.PublicTillAwaitStatusResponse;
 import zelisline.ub.storefront.api.dto.PublicWebOrderPaymentStatusResponse;
 import zelisline.ub.storefront.api.dto.PublicWebStkPushResponse;
+import zelisline.ub.storefront.api.dto.WhatsAppCheckoutOption;
 import zelisline.ub.storefront.domain.WebOrder;
 import zelisline.ub.storefront.repository.WebOrderRepository;
 import zelisline.ub.tenancy.application.FeatureFlagService;
+import zelisline.ub.tenancy.application.StorefrontSettingsService;
+import zelisline.ub.tenancy.api.dto.WhatsAppCheckoutSettings;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
@@ -66,6 +69,7 @@ public class PublicStorefrontPaymentService {
     private final ObjectMapper objectMapper;
     private final FeatureFlagService featureFlagService;
     private final KioskPayWalletService kioskPayWalletService;
+    private final StorefrontSettingsService storefrontSettingsService;
 
     @Transactional(readOnly = true)
     public PublicCheckoutPaymentOptions checkoutOptions(String slug) {
@@ -127,7 +131,56 @@ public class PublicStorefrontPaymentService {
             }
             return a.displayName().compareToIgnoreCase(b.displayName());
         });
-        return new PublicCheckoutPaymentOptions(manual, online, tillListenEnabled);
+        return new PublicCheckoutPaymentOptions(manual, online, tillListenEnabled,
+                resolveWhatsAppCheckout(business, online.isEmpty()));
+    }
+
+    /**
+     * Resolve the WhatsApp checkout capability per scope §6. A missing or
+     * malformed merchant number silently disables the feature (hard gate);
+     * {@code mode} decides whether it is offered when online gateways exist.
+     */
+    private WhatsAppCheckoutOption resolveWhatsAppCheckout(Business business, boolean noOnlineGateways) {
+        var settings = storefrontSettingsService.readFromSettingsJson(business.getSettings());
+        WhatsAppCheckoutSettings wa = settings != null ? settings.whatsappCheckout() : null;
+        if (wa == null) {
+            return null;
+        }
+        String digits = normalizeWhatsAppDigits(wa.number());
+        if (digits == null) {
+            return null;
+        }
+        String mode = wa.mode() == null || wa.mode().isBlank()
+                ? WhatsAppCheckoutSettings.MODE_FALLBACK
+                : wa.mode().trim();
+        if (WhatsAppCheckoutSettings.MODE_OFF.equals(mode)) {
+            return null;
+        }
+        if (WhatsAppCheckoutSettings.MODE_FALLBACK.equals(mode) && !noOnlineGateways) {
+            return null;
+        }
+        int expiryMins = wa.expiryMins() == null
+                ? WhatsAppCheckoutSettings.DEFAULT_EXPIRY_MINS
+                : wa.expiryMins();
+        return new WhatsAppCheckoutOption(true, digits, mode, null, wa.greeting(), expiryMins);
+    }
+
+    /** Kenya-friendly wa.me digits: {@code 07… → 2547…}; +254/254/7… pass through. */
+    private static String normalizeWhatsAppDigits(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String digits = raw.replaceAll("\\D", "");
+        if (digits.isEmpty()) {
+            return null;
+        }
+        if (digits.startsWith("0") && digits.length() >= 9) {
+            digits = "254" + digits.substring(1);
+        }
+        if (digits.length() < 9) {
+            return null;
+        }
+        return digits;
     }
 
     @Transactional

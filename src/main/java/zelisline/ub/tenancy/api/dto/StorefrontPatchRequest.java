@@ -15,6 +15,8 @@ public record StorefrontPatchRequest(
         @Size(max = 64) String storeThemeId,
         @Size(max = 64) String landingTemplateId,
         @Valid LandingContentDto landingContent,
+        /** "Orders on WhatsApp" settings (all themes); null = no change. */
+        @Valid WhatsAppCheckoutSettings whatsappCheckout,
         /**
          * Opaque versioned merchant design overrides (see frontend
          * {@code StorefrontDesign}). The backend only validates that it parses

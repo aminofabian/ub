@@ -49,6 +49,7 @@ import zelisline.ub.purchasing.repository.PurchaseOrderLineRepository;
 import zelisline.ub.purchasing.repository.PurchaseOrderRepository;
 import zelisline.ub.reporting.repository.MvSalesDailyRepository;
 import zelisline.ub.reporting.repository.MvSalesDailyRepository.DigestVelocityRow;
+import zelisline.ub.suppliers.SupplierCodes;
 import zelisline.ub.suppliers.repository.SupplierProductRepository;
 import zelisline.ub.suppliers.repository.SupplierProductRepository.ItemLinkRow;
 import zelisline.ub.suppliers.repository.SupplierRepository;
@@ -70,6 +71,8 @@ public class RestockDigestService {
     private static final int QTY_SCALE = 4;
     private static final int VELOCITY_DAYS = 30;
     private static final int VELOCITY_7D = 7;
+    /** Minimum accepted lines before par learning engages for an item. */
+    private static final int MIN_ACCEPT_HISTORY = 3;
 
     private final RestockRunRepository restockRunRepository;
     private final RestockSuggestionRepository restockSuggestionRepository;
@@ -130,6 +133,8 @@ public class RestockDigestService {
         Map<String, BigDecimal> inboundByItem = loadInbound(businessId, branchId);
         Map<String, ItemLinkRow> linkByItem = loadPrimaryLinks(businessId, candidateIds);
         Set<String> snoozedItemIds = loadSnoozedItemIds(businessId, branchId, effectiveDate);
+        // Phase-4 learning: bias par toward what the reviewer actually accepted.
+        Map<String, BigDecimal> parBiases = loadParBiases(businessId, branchId);
 
         RestockRun run = new RestockRun();
         run.setId(UUID.randomUUID().toString()); // pre-assign so suggestion rows can reference it
@@ -168,7 +173,8 @@ public class RestockDigestService {
                             : null,
                     branch.getRestockCoverDays(),
                     stockOut,
-                    snoozed).orElse(null);
+                    snoozed,
+                    parBiases.get(itemId)).orElse(null);
             if (computed == null) {
                 continue;
             }
@@ -195,7 +201,26 @@ public class RestockDigestService {
                             HttpStatus.CONFLICT, "Restock run already exists for this branch and date"));
             return toRunResponse(businessId, winner, loadSuggestions(winner.getId()), business, branch);
         }
+        // A fresh run supersedes the prior one: expire it if it still has pending lines.
+        expirePriorRuns(businessId, branchId, effectiveDate);
         return toRunResponse(businessId, run, loadSuggestions(run.getId()), business, branch);
+    }
+
+    private void expirePriorRuns(String businessId, String branchId, LocalDate runDate) {
+        List<RestockRun> prior = restockRunRepository.findByBranchIdAndRunDateBeforeAndStatusIn(
+                branchId,
+                runDate,
+                List.of(
+                        InventoryConstants.DIGEST_RUN_GENERATED,
+                        InventoryConstants.DIGEST_RUN_NOTIFIED,
+                        InventoryConstants.DIGEST_RUN_PARTIALLY_ACCEPTED));
+        for (RestockRun p : prior) {
+            if (restockSuggestionRepository.existsByRunIdAndStatus(
+                    p.getId(), InventoryConstants.DIGEST_SUGGESTION_PENDING)) {
+                p.setStatus(InventoryConstants.DIGEST_RUN_EXPIRED);
+                restockRunRepository.save(p);
+            }
+        }
     }
 
     // ------------------------------------------------------------------ reads
@@ -232,6 +257,23 @@ public class RestockDigestService {
         return toRunResponse(businessId, run, loadSuggestions(run.getId()), business, branch);
     }
 
+    /** Latest run for the branch — empty summary when none exists or it's no longer actionable. */
+    @Transactional(readOnly = true)
+    public RestockDigestDtos.RestockActiveRunSummary activeRunSummary(String businessId, String branchId) {
+        requireBranch(businessId, branchId);
+        RestockRun run = restockRunRepository.findFirstByBranchIdOrderByRunDateDescIdDesc(branchId)
+                .orElse(null);
+        boolean actionable = run != null
+                && (InventoryConstants.DIGEST_RUN_GENERATED.equals(run.getStatus())
+                        || InventoryConstants.DIGEST_RUN_NOTIFIED.equals(run.getStatus())
+                        || InventoryConstants.DIGEST_RUN_PARTIALLY_ACCEPTED.equals(run.getStatus()));
+        return actionable
+                ? new RestockDigestDtos.RestockActiveRunSummary(
+                        run.getId(), run.getRunDate(), run.getStatus(), run.getLineCount())
+                : new RestockDigestDtos.RestockActiveRunSummary(null, null, null, 0);
+    }
+
+    /** Latest run for the branch (404 when none exists). */
     @Transactional(readOnly = true)
     public RestockDigestDtos.RestockRunResponse getLatestForBranch(String businessId, String branchId) {
         requireBranch(businessId, branchId);
@@ -264,6 +306,10 @@ public class RestockDigestService {
         Business business = requireBusiness(businessId);
         Branch branch = requireBranch(businessId, run.getBranchId());
         List<RestockSuggestion> all = restockSuggestionRepository.findByRunIdOrderBySuggestedQtyDescIdAsc(runId);
+
+        if (InventoryConstants.DIGEST_RUN_EXPIRED.equals(run.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This list has expired — generate a new run");
+        }
 
         Set<String> selectedIds = req.lineIds() == null || req.lineIds().isEmpty()
                 ? all.stream().map(RestockSuggestion::getId).collect(Collectors.toSet())
@@ -488,6 +534,7 @@ public class RestockDigestService {
     public RestockDigestDtos.RestockRunResponse dismissSuggestion(String businessId, String suggestionId) {
         RestockSuggestion s = requireSuggestion(businessId, suggestionId);
         requirePending(s);
+        requireActiveRun(businessId, s.getRunId());
         s.setStatus(InventoryConstants.DIGEST_SUGGESTION_DISMISSED);
         restockSuggestionRepository.save(s);
         return refreshRunResponse(businessId, s.getRunId());
@@ -502,12 +549,20 @@ public class RestockDigestService {
     ) {
         RestockSuggestion s = requireSuggestion(businessId, suggestionId);
         requirePending(s);
+        requireActiveRun(businessId, s.getRunId());
         int d = days <= 0 ? 1 : Math.min(days, 30);
         RestockRun run = requireRun(businessId, s.getRunId());
         s.setStatus(InventoryConstants.DIGEST_SUGGESTION_SNOOZED);
         s.setSnoozeUntil(run.getRunDate().plusDays(d));
         restockSuggestionRepository.save(s);
         return refreshRunResponse(businessId, s.getRunId());
+    }
+
+    private void requireActiveRun(String businessId, String runId) {
+        RestockRun run = requireRun(businessId, runId);
+        if (InventoryConstants.DIGEST_RUN_EXPIRED.equals(run.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This list has expired — generate a new run");
+        }
     }
 
     private static void requirePending(RestockSuggestion s) {
@@ -592,7 +647,10 @@ public class RestockDigestService {
             return Map.of();
         }
         Map<String, ItemLinkRow> out = new HashMap<>();
-        for (ItemLinkRow row : supplierProductRepository.listActiveLinksForItems(businessId, itemIds)) {
+        // Skip the system "Unassigned (migrate)" supplier: items only linked there have
+        // no real supplier yet and belong in the order-pad (target=pad) section.
+        for (ItemLinkRow row : supplierProductRepository.listActiveLinksForItems(
+                businessId, itemIds, SupplierCodes.SYSTEM_UNASSIGNED)) {
             out.putIfAbsent(row.getItemId(), row); // first row per item = primary (query orders primary first)
         }
         return out;
@@ -601,10 +659,36 @@ public class RestockDigestService {
     private Set<String> loadSnoozedItemIds(String businessId, String branchId, LocalDate runDate) {
         return restockSuggestionRepository
                 .findByBusinessIdAndBranchIdAndStatusAndSnoozeUntilGreaterThanEqual(
-                        businessId, branchId, InventoryConstants.DIGEST_SUGGESTION_SNOOZED, runDate)
+                        businessId,
+                        branchId,
+                        InventoryConstants.DIGEST_SUGGESTION_SNOOZED,
+                        runDate,
+                        InventoryConstants.DIGEST_RUN_EXPIRED)
                 .stream()
                 .map(RestockSuggestion::getItemId)
                 .collect(Collectors.toSet());
+    }
+
+    /**
+     * Learned par multiplier per item from accepted-qty history. Only items with at
+     * least {@link #MIN_ACCEPT_HISTORY} accepted lines get a bias; the mean ratio is
+     * clamped to [0.6, 1.4] so one-off over/under-accepting can't swing par wildly.
+     */
+    private Map<String, BigDecimal> loadParBiases(String businessId, String branchId) {
+        Map<String, BigDecimal> out = new HashMap<>();
+        for (RestockSuggestionRepository.AcceptedRatioRow row :
+                restockSuggestionRepository.acceptedRatioByItem(
+                        businessId, branchId, InventoryConstants.DIGEST_SUGGESTION_ACCEPTED)) {
+            if (row.getCount() < MIN_ACCEPT_HISTORY || row.getRatio() == null || row.getRatio() <= 0) {
+                continue;
+            }
+            double clamped = Math.min(Math.max(row.getRatio(), 0.6), 1.4);
+            if (Math.abs(clamped - 1.0) < 0.01) {
+                continue; // nothing meaningful to learn
+            }
+            out.put(row.getItemId(), BigDecimal.valueOf(clamped));
+        }
+        return out;
     }
 
     private Map<String, Item> loadItems(String businessId, Set<String> itemIds) {
@@ -732,8 +816,18 @@ public class RestockDigestService {
                 : supplierRepository.findAllById(supplierIds).stream()
                         .collect(Collectors.toMap(Supplier::getId, Supplier::getName, (a, b) -> a));
         return rows.stream()
-                .map(r -> toSuggestionResponse(r, items.get(r.getItemId()), supplierNames.get(r.getSupplierId())))
+                .map(r -> toSuggestionResponse(
+                        r,
+                        items.get(r.getItemId()),
+                        supplierName(supplierNames, r.getSupplierId())))
                 .toList();
+    }
+
+    private static String supplierName(Map<String, String> names, String supplierId) {
+        if (supplierId == null || supplierId.isBlank()) {
+            return null;
+        }
+        return names.get(supplierId);
     }
 
     private RestockDigestDtos.RestockSuggestionResponse toSuggestionResponse(

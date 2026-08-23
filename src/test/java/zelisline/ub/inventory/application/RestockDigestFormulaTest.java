@@ -209,4 +209,63 @@ class RestockDigestFormulaTest {
 
         assertThat(result).isEmpty();
     }
+
+    @Test
+    void parBias_scalesParUp() {
+        Optional<Computed> result = RestockDigestFormula.compute(
+                new BigDecimal("8"),
+                BigDecimal.ZERO,
+                new BigDecimal("12"),
+                null,
+                RICH,
+                NO_LINK,
+                3,
+                false,
+                false,
+                new BigDecimal("1.4"));
+
+        assertThat(result).isPresent();
+        // par = ceil(40 * 1.4) = 56 → suggested = 56 - 8 = 48
+        assertThat(result.get().par()).isEqualByComparingTo("56");
+        assertThat(result.get().suggestedQty()).isEqualByComparingTo("48");
+    }
+
+    @Test
+    void parBias_scalesParDown() {
+        Optional<Computed> result = RestockDigestFormula.compute(
+                new BigDecimal("8"),
+                BigDecimal.ZERO,
+                new BigDecimal("12"),
+                null,
+                RICH,
+                NO_LINK,
+                3,
+                false,
+                false,
+                new BigDecimal("0.6"));
+
+        assertThat(result).isPresent();
+        // par = ceil(40 * 0.6) = 24 → suggested = 24 - 8 = 16
+        assertThat(result.get().par()).isEqualByComparingTo("24");
+        assertThat(result.get().suggestedQty()).isEqualByComparingTo("16");
+    }
+
+    @Test
+    void parBias_one_isNoOp() {
+        Optional<Computed> result = RestockDigestFormula.compute(
+                new BigDecimal("8"),
+                BigDecimal.ZERO,
+                new BigDecimal("12"),
+                null,
+                RICH,
+                NO_LINK,
+                3,
+                false,
+                false,
+                BigDecimal.ONE);
+
+        assertThat(result).isPresent();
+        assertThat(result.get().par()).isEqualByComparingTo("40");
+        assertThat(result.get().suggestedQty()).isEqualByComparingTo("32");
+    }
 }

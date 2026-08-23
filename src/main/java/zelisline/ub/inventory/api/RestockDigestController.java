@@ -22,6 +22,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.identity.application.RequestPermissionService;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.AcceptRestockRunRequest;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.AcceptRestockRunResponse;
+import zelisline.ub.inventory.api.dto.RestockDigestDtos.RestockActiveRunSummary;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.RestockRunListRow;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.RestockRunResponse;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.SnoozeRestockSuggestionRequest;
@@ -80,6 +81,18 @@ public class RestockDigestController {
         CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         return restockDigestService.getLatestForBranch(businessId, branchId.trim());
+    }
+
+    /** Lightweight "actionable run right now" check for the grocery header chip. */
+    @GetMapping("/runs/active")
+    @PreAuthorize("hasPermission(null, 'purchasing.path_a.read') or hasPermission(null, 'order_pad.read')")
+    public RestockActiveRunSummary activeRun(
+            @RequestParam String branchId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return restockDigestService.activeRunSummary(businessId, branchId.trim());
     }
 
     @GetMapping("/runs/{runId}")

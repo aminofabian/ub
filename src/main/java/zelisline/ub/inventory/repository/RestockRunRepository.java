@@ -18,6 +18,9 @@ public interface RestockRunRepository extends JpaRepository<RestockRun, String> 
 
     Optional<RestockRun> findFirstByBranchIdOrderByRunDateDescIdDesc(String branchId);
 
+    List<RestockRun> findByBranchIdAndRunDateBeforeAndStatusIn(
+            String branchId, LocalDate runDate, List<String> statuses);
+
     @Query("""
             select r from RestockRun r
              where r.businessId = :businessId

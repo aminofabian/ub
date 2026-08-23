@@ -103,4 +103,12 @@ public final class RestockDigestDtos {
     ) {}
 
     public record SnoozeRestockSuggestionRequest(Integer days) {}
+
+    /** Lightweight "is there an actionable run right now" summary for the grocery chip. */
+    public record RestockActiveRunSummary(
+            String runId,
+            LocalDate runDate,
+            String status,
+            int lineCount
+    ) {}
 }

@@ -51,6 +51,8 @@ final class RestockDigestFormula {
      * @param onHand   branch display on-hand
      * @param inbound  open PO + order-pad qty already decided
      * @param stockOut true when the item was counted zero / on-hand is zero (STOCKOUT_RECOVERY input)
+     * @param parBias  learned multiplier on par from accept history (null / 1 = no bias,
+     *                 applied to whatever par was resolved — manual or derived)
      */
     static Optional<Computed> compute(
             BigDecimal onHand,
@@ -61,7 +63,8 @@ final class RestockDigestFormula {
             LinkInput link,
             int coverDays,
             boolean stockOut,
-            boolean snoozed
+            boolean snoozed,
+            BigDecimal parBias
     ) {
         if (snoozed) {
             return Optional.empty();
@@ -91,6 +94,9 @@ final class RestockDigestFormula {
         if (par == null) {
             // No threshold and no velocity → cannot compute (suppression).
             return Optional.empty();
+        }
+        if (parBias != null && parBias.signum() > 0 && parBias.compareTo(BigDecimal.ONE) != 0) {
+            par = par.multiply(parBias).setScale(0, RoundingMode.CEILING).max(BigDecimal.ONE);
         }
 
         BigDecimal suggested = par.subtract(effective).max(BigDecimal.ZERO);
@@ -126,6 +132,22 @@ final class RestockDigestFormula {
                 String.join("+", reasons),
                 evidence(reasons, avgDaily, effective, reorderLevel, thinHistory),
                 confidence));
+    }
+
+    /** No learned bias (keeps existing call sites / tests simple). */
+    static Optional<Computed> compute(
+            BigDecimal onHand,
+            BigDecimal inbound,
+            BigDecimal reorderLevel,
+            BigDecimal parManual,
+            VelocityInput velocity,
+            LinkInput link,
+            int coverDays,
+            boolean stockOut,
+            boolean snoozed
+    ) {
+        return compute(onHand, inbound, reorderLevel, parManual, velocity, link,
+                coverDays, stockOut, snoozed, null);
     }
 
     private static BigDecimal avgDaily(VelocityInput velocity) {

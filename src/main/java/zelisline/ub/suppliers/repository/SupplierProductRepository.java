@@ -154,10 +154,12 @@ public interface SupplierProductRepository extends JpaRepository<SupplierProduct
                AND sp.active = TRUE
                AND s.deletedAt IS NULL
                AND LOWER(s.status) = 'active'
+               AND COALESCE(s.code, '') <> :systemUnassigned
              ORDER BY sp.itemId ASC, sp.primaryLink DESC, sp.updatedAt DESC
             """)
     List<ItemLinkRow> listActiveLinksForItems(
             @Param("businessId") String businessId,
-            @Param("itemIds") java.util.Collection<String> itemIds
+            @Param("itemIds") java.util.Collection<String> itemIds,
+            @Param("systemUnassigned") String systemUnassigned
     );
 }

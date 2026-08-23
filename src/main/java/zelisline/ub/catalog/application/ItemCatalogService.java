@@ -82,6 +82,7 @@ public class ItemCatalogService {
     public static final String ROUTE_POST_ITEMS = "POST /api/v1/items";
 
     private static final Logger log = LoggerFactory.getLogger(ItemCatalogService.class);
+    /** Legacy flat attention level — only used for items with no reorder / min level set. */
     private static final BigDecimal CATALOG_LOW_STOCK_THRESHOLD = new BigDecimal("10");
 
     private final ItemRepository itemRepository;
@@ -2023,7 +2024,7 @@ public class ItemCatalogService {
             BigDecimal displayStock = packageVariantStockResolver.displayStockQty(item, holderStock);
             if (displayStock.compareTo(BigDecimal.ZERO) <= 0) {
                 zeroStockIds.add(item.getId());
-            } else if (displayStock.compareTo(CATALOG_LOW_STOCK_THRESHOLD) < 0) {
+            } else if (isCatalogLowStock(displayStock, item)) {
                 lowStockIds.add(item.getId());
             }
         }
@@ -2032,6 +2033,26 @@ public class ItemCatalogService {
                 lowStockIds.size(),
                 zeroStockIds,
                 lowStockIds);
+    }
+
+    /**
+     * Low-stock threshold aligned with the restock engine (Phase 4): low = on-hand ≤
+     * reorder level, falling back to the min level like {@code RestockDigestService}.
+     * Items with no threshold at all keep the legacy flat attention level so stores
+     * that never set reorder levels don't lose the filter.
+     */
+    static BigDecimal lowStockThreshold(Item item) {
+        if (item.getReorderLevel() != null) {
+            return item.getReorderLevel();
+        }
+        if (item.getMinStockLevel() != null) {
+            return item.getMinStockLevel();
+        }
+        return CATALOG_LOW_STOCK_THRESHOLD;
+    }
+
+    static boolean isCatalogLowStock(BigDecimal displayStock, Item item) {
+        return displayStock != null && displayStock.compareTo(lowStockThreshold(item)) <= 0;
     }
 
     private void assertBarcodeAvailable(String businessId, String barcode, String ignoreItemId) {

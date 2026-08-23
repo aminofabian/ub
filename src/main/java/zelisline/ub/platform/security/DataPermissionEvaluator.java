@@ -82,6 +82,33 @@ public class DataPermissionEvaluator implements PermissionEvaluator {
                     tenant.roleId()
             );
         }
+        if ("purchasing.path_a.write".equals(perm) || "purchasing.path_a.read".equals(perm)) {
+            return inventoryAccess.grantsDelegatedPathAAccess(
+                    tenant.businessId(),
+                    tenant.roleId()
+            );
+        }
+        if ("order_pad.write".equals(perm) || "order_pad.read".equals(perm)) {
+            return inventoryAccess.grantsDelegatedOrderPadAccess(
+                    tenant.businessId(),
+                    tenant.roleId()
+            );
+        }
+        if ("inventory.stock_thresholds.write".equals(perm)) {
+            if (permissions.hasPermission(tenant.roleId(), "inventory.write")
+                    || permissions.hasPermission(tenant.roleId(), "catalog.items.write")
+                    || inventoryAccess.grantsDelegatedInventoryWrite(
+                            tenant.businessId(),
+                            tenant.roleId()
+                    )
+                    || inventoryAccess.grantsDelegatedStockThresholdsWrite(
+                            tenant.businessId(),
+                            tenant.roleId()
+                    )) {
+                return true;
+            }
+            return false;
+        }
         if ("sales.intelligence.read".equals(perm)) {
             return inventoryAccess.grantsDelegatedSalesIntelligenceRead(
                     tenant.businessId(),

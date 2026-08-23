@@ -14,6 +14,10 @@ public record FeatureFlagsPatchRequest(
         Boolean posCashierWeighedToggle,
         /** Allow owners/admins to upload product photos from the cashier shelf. */
         Boolean posCashierAddPhoto,
+        /** Show Order pad on the cashier till (default on when absent). */
+        Boolean posCashierOrderPad,
+        /** Show Confirm orders on the cashier till (default on when absent). */
+        Boolean posCashierOrderConfirm,
         /** Prefill opening float denominations from the previous night's closing count. */
         Boolean shiftsPrefillOpeningFromLastClose,
         /** When M-Pesa till listening starts (POS + storefront). */

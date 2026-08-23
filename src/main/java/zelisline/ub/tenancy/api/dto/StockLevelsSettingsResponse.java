@@ -16,9 +16,22 @@ public record StockLevelsSettingsResponse(
          * Grocery counter Spoils mode for {@code grocery_clerk}. Default on —
          * admin can turn off in business settings.
          */
-        boolean allowSpoilsForGroceryClerk
+        boolean allowSpoilsForGroceryClerk,
+        /**
+         * Grocery counter: set minimum / reorder level in Edit stock. Default on.
+         */
+        boolean allowMinStockForGroceryClerk,
+        /**
+         * Grocery counter Order pad drawer. Default on — admin can turn off.
+         */
+        boolean allowOrderPadForGroceryClerk,
+        /**
+         * Grocery counter Confirm (Path A receive) drawer. Default on.
+         */
+        boolean allowOrderConfirmForGroceryClerk
 ) {
     public static StockLevelsSettingsResponse defaults() {
-        return new StockLevelsSettingsResponse(false, true, false, true, true, true);
+        return new StockLevelsSettingsResponse(
+                false, true, false, true, true, true, true, true, true);
     }
 }

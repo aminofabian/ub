@@ -68,6 +68,18 @@ public class FeatureFlagService {
     /** Allow owners/admins to upload product photos from the cashier shelf. */
     public static final String FLAG_POS_CASHIER_ADD_PHOTO = "pos.cashier_add_photo";
 
+    /**
+     * Show the Order pad button on the cashier till. Absent defaults to enabled;
+     * set {@code false} to hide even when the user has order-pad permission.
+     */
+    public static final String FLAG_POS_CASHIER_ORDER_PAD = "pos.cashier_order_pad";
+
+    /**
+     * Show the Confirm orders button on the cashier till. Absent defaults to enabled;
+     * set {@code false} to hide even when the user has Path A purchasing permission.
+     */
+    public static final String FLAG_POS_CASHIER_ORDER_CONFIRM = "pos.cashier_order_confirm";
+
     /** Auto-add scanned barcodes straight to cart when the barcode resolves to
      * exactly one sellable product. When off, scanned barcodes fill the search
      * box (cashier must tap the hit). Independent of pos_drafts.enabled so

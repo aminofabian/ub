@@ -72,6 +72,12 @@ public class BusinessInventorySettingsService {
             "allowReceiveForGroceryClerk";
     private static final String KEY_ALLOW_SPOILS_GROCERY_CLERK =
             "allowSpoilsForGroceryClerk";
+    private static final String KEY_ALLOW_MIN_STOCK_GROCERY_CLERK =
+            "allowMinStockForGroceryClerk";
+    private static final String KEY_ALLOW_ORDER_PAD_GROCERY_CLERK =
+            "allowOrderPadForGroceryClerk";
+    private static final String KEY_ALLOW_ORDER_CONFIRM_GROCERY_CLERK =
+            "allowOrderConfirmForGroceryClerk";
 
     private final ObjectMapper objectMapper;
 
@@ -238,7 +244,10 @@ public class BusinessInventorySettingsService {
                 stockLevels.path(KEY_ALLOW_ACTIVITY_STOCK_MANAGER).asBoolean(true),
                 stockLevels.path(KEY_ALLOW_STOCK_PAGE_STOCK_MANAGER).asBoolean(true),
                 // Spoils on grocery counter — default on until admin turns off.
-                stockLevels.path(KEY_ALLOW_SPOILS_GROCERY_CLERK).asBoolean(true)
+                stockLevels.path(KEY_ALLOW_SPOILS_GROCERY_CLERK).asBoolean(true),
+                stockLevels.path(KEY_ALLOW_MIN_STOCK_GROCERY_CLERK).asBoolean(true),
+                stockLevels.path(KEY_ALLOW_ORDER_PAD_GROCERY_CLERK).asBoolean(true),
+                stockLevels.path(KEY_ALLOW_ORDER_CONFIRM_GROCERY_CLERK).asBoolean(true)
         );
     }
 
@@ -325,6 +334,24 @@ public class BusinessInventorySettingsService {
             stockLevels.put(
                     KEY_ALLOW_SPOILS_GROCERY_CLERK,
                     patch.allowSpoilsForGroceryClerk()
+            );
+        }
+        if (patch.allowMinStockForGroceryClerk() != null) {
+            stockLevels.put(
+                    KEY_ALLOW_MIN_STOCK_GROCERY_CLERK,
+                    patch.allowMinStockForGroceryClerk()
+            );
+        }
+        if (patch.allowOrderPadForGroceryClerk() != null) {
+            stockLevels.put(
+                    KEY_ALLOW_ORDER_PAD_GROCERY_CLERK,
+                    patch.allowOrderPadForGroceryClerk()
+            );
+        }
+        if (patch.allowOrderConfirmForGroceryClerk() != null) {
+            stockLevels.put(
+                    KEY_ALLOW_ORDER_CONFIRM_GROCERY_CLERK,
+                    patch.allowOrderConfirmForGroceryClerk()
             );
         }
     }

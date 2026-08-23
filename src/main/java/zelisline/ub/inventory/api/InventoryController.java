@@ -7,6 +7,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -25,6 +26,8 @@ import zelisline.ub.inventory.api.dto.BatchAllocationLine;
 import zelisline.ub.inventory.api.dto.BranchValuationLine;
 import zelisline.ub.inventory.api.dto.InventoryMutationResponse;
 import zelisline.ub.inventory.api.dto.InventoryValuationResponse;
+import zelisline.ub.inventory.api.dto.ItemStockThresholdsResponse;
+import zelisline.ub.inventory.api.dto.PatchItemStockThresholdsRequest;
 import zelisline.ub.inventory.api.dto.PostBatchDecreaseRequest;
 import zelisline.ub.inventory.api.dto.PostOpeningBalanceRequest;
 import zelisline.ub.inventory.api.dto.PostStandaloneWastageRequest;
@@ -35,6 +38,7 @@ import zelisline.ub.inventory.application.InventoryBatchPickerService;
 import zelisline.ub.inventory.application.InventoryLedgerService;
 import zelisline.ub.inventory.application.InventoryTransferService;
 import zelisline.ub.inventory.application.InventoryValuationService;
+import zelisline.ub.inventory.application.ItemStockThresholdsService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.tenancy.api.TenantRequestIds;
@@ -50,6 +54,7 @@ public class InventoryController {
     private final InventoryBatchPickerService inventoryBatchPickerService;
     private final InventoryTransferService inventoryTransferService;
     private final InventoryValuationService inventoryValuationService;
+    private final ItemStockThresholdsService itemStockThresholdsService;
     private final BranchResolutionService branchResolutionService;
 
     @GetMapping("/allocation-preview")
@@ -219,5 +224,24 @@ public class InventoryController {
                     businessId, principal.roleId(), principal.branchId(), branchId);
         }
         return inventoryValuationService.valuation(businessId, effectiveBranchId, itemTypeId);
+    }
+
+    /**
+     * Set catalog min / reorder levels (grocery Edit stock). Narrower than full
+     * catalog write — gated by {@code inventory.stock_thresholds.write}.
+     */
+    @PatchMapping("/items/{itemId}/stock-thresholds")
+    @PreAuthorize("hasPermission(null, 'inventory.stock_thresholds.write')")
+    public ItemStockThresholdsResponse patchStockThresholds(
+            @PathVariable String itemId,
+            @Valid @RequestBody PatchItemStockThresholdsRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return itemStockThresholdsService.patch(
+                TenantRequestIds.resolveBusinessId(request),
+                itemId,
+                body
+        );
     }
 }

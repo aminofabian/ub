@@ -23,6 +23,7 @@ public class InventoryRoleAccessService {
 
     private static final String STOCK_MANAGER = "stock_manager";
     private static final String GROCERY_CLERK = "grocery_clerk";
+    private static final String GROCERY_MANAGER = "grocery_manager";
     private static final String CASHIER = "cashier";
     private static final String BUTCHER_CASHIER = "butcher_cashier";
 
@@ -30,11 +31,15 @@ public class InventoryRoleAccessService {
     private final RoleRepository roleRepository;
     private final BusinessInventorySettingsService businessInventorySettingsService;
 
+    private static boolean isGroceryCounterRole(String roleKey) {
+        return GROCERY_CLERK.equals(roleKey) || GROCERY_MANAGER.equals(roleKey);
+    }
+
     public boolean grantsDelegatedInventoryWrite(String businessId, String roleId) {
         StockLevelsSettingsResponse settings = readStockLevels(businessId);
         return switch (resolveRoleKey(roleId)) {
             case STOCK_MANAGER -> settings.allowStockEditForStockManager();
-            case GROCERY_CLERK ->
+            case GROCERY_CLERK, GROCERY_MANAGER ->
                     settings.allowStockEditForGroceryClerk()
                             || settings.allowSpoilsForGroceryClerk();
             default -> false;
@@ -70,9 +75,36 @@ public class InventoryRoleAccessService {
         return switch (resolveRoleKey(roleId)) {
             case STOCK_MANAGER -> settings.allowReceiveForStockManager();
             case CASHIER, BUTCHER_CASHIER -> settings.allowReceiveForCashier();
-            case GROCERY_CLERK -> settings.allowReceiveForGroceryClerk();
+            case GROCERY_CLERK, GROCERY_MANAGER -> settings.allowReceiveForGroceryClerk();
             default -> false;
         };
+    }
+
+    /**
+     * Grocery clerks may set min / reorder levels when the admin toggle is on
+     * — used only by the stock-thresholds endpoint (not full catalog write).
+     */
+    public boolean grantsDelegatedStockThresholdsWrite(String businessId, String roleId) {
+        if (!isGroceryCounterRole(resolveRoleKey(roleId))) {
+            return false;
+        }
+        return readStockLevels(businessId).allowMinStockForGroceryClerk();
+    }
+
+    /** Shared to-order pad on the grocery counter. */
+    public boolean grantsDelegatedOrderPadAccess(String businessId, String roleId) {
+        if (!isGroceryCounterRole(resolveRoleKey(roleId))) {
+            return false;
+        }
+        return readStockLevels(businessId).allowOrderPadForGroceryClerk();
+    }
+
+    /** Path A confirm / receive on the grocery counter. */
+    public boolean grantsDelegatedPathAAccess(String businessId, String roleId) {
+        if (!isGroceryCounterRole(resolveRoleKey(roleId))) {
+            return false;
+        }
+        return readStockLevels(businessId).allowOrderConfirmForGroceryClerk();
     }
 
     /**
@@ -80,12 +112,13 @@ public class InventoryRoleAccessService {
      * counter spoils is enabled they also need read access (cost / on-hand).
      */
     public boolean grantsDelegatedInventoryRead(String businessId, String roleId) {
-        if (!GROCERY_CLERK.equals(resolveRoleKey(roleId))) {
+        if (!isGroceryCounterRole(resolveRoleKey(roleId))) {
             return false;
         }
         StockLevelsSettingsResponse settings = readStockLevels(businessId);
         return settings.allowStockEditForGroceryClerk()
-                || settings.allowSpoilsForGroceryClerk();
+                || settings.allowSpoilsForGroceryClerk()
+                || settings.allowMinStockForGroceryClerk();
     }
 
     /**

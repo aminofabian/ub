@@ -631,6 +631,8 @@ public class StorefrontSettingsService {
                         && patch.posCashierCreateProduct() == null
                         && patch.posCashierWeighedToggle() == null
                         && patch.posCashierAddPhoto() == null
+                        && patch.posCashierOrderPad() == null
+                        && patch.posCashierOrderConfirm() == null
                         && patch.shiftsPrefillOpeningFromLastClose() == null
                         && patch.tillListen() == null
                         && patch.hubAlerts() == null)) {
@@ -661,6 +663,16 @@ public class StorefrontSettingsService {
                 flags,
                 FeatureFlagService.FLAG_POS_CASHIER_ADD_PHOTO,
                 patch.posCashierAddPhoto()
+        );
+        putFlagIfPresent(
+                flags,
+                FeatureFlagService.FLAG_POS_CASHIER_ORDER_PAD,
+                patch.posCashierOrderPad()
+        );
+        putFlagIfPresent(
+                flags,
+                FeatureFlagService.FLAG_POS_CASHIER_ORDER_CONFIRM,
+                patch.posCashierOrderConfirm()
         );
         putFlagIfPresent(
                 flags,

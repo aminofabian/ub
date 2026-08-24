@@ -114,8 +114,9 @@ class SupplierSignInDoorServiceTest {
     /** Shops type 07…; the portal stores 2547… — either has to match. */
     @Test
     void verifiedPhoneMatchesTheAccountInEitherForm() {
-        Mockito.when(supplierUserRepository.findByPhone("254714282874"))
-                .thenReturn(Optional.of(supplierUser("mp-1", "Kimani Wholesalers", "254714282874")));
+        Mockito.when(supplierUserRepository.findActiveByPhoneVariants(
+                        Mockito.anyString(), Mockito.anyString(), Mockito.anyString()))
+                .thenReturn(List.of(supplierUser("mp-1", "Kimani Wholesalers", "254714282874")));
 
         SupplierDoor door = service
                 .byVerifiedPhone(KenyanPhoneForms.lookupCandidates("0714282874"))
@@ -125,7 +126,20 @@ class SupplierSignInDoorServiceTest {
     }
 
     @Test
-    void verifiedPhoneOnAShopsSupplierIndexOffersTheClaim() {
+    void verifiedPhoneMatchesAltLineOnThePassport() {
+        MarketplaceSupplier passport = passport("mp-1", "Kimani Wholesalers");
+        Mockito.when(marketplaceSupplierRepository.findByContactPhoneVariants(
+                        Mockito.anyString(), Mockito.anyString(), Mockito.anyString()))
+                .thenReturn(List.of(passport));
+        Mockito.when(marketplaceSupplierRepository.findById("mp-1")).thenReturn(Optional.of(passport));
+
+        SupplierDoor door = service
+                .byVerifiedPhone(KenyanPhoneForms.lookupCandidates("0714282874"))
+                .orElseThrow();
+
+        assertThat(door.claimed()).isFalse();
+        assertThat(door.name()).isEqualTo("Kimani Wholesalers");
+    }
         SupplierIdentityIndex row = new SupplierIdentityIndex();
         row.setSupplierId("loc-1");
         Mockito.when(identityIndexRepository.findTenantByPhoneVariants(

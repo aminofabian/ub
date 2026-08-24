@@ -74,17 +74,24 @@ public class PublicHostResolveController {
     }
 
     /**
-     * Apex sign-in: every shop/portal tied to an email, with door (staff /
-     * shopper / supplier). Empty list when unknown — never confirms existence
-     * beyond what resolve-by-email already exposes for a single hit.
+     * Apex sign-in: every shop/portal tied to an email, or the supplier door
+     * tied to a phone (phone does not list shops — those need an SMS proof).
+     * Empty list when unknown.
      */
     @GetMapping("/sign-in-destinations")
-    public ResponseEntity<List<PublicSignInDestinationResponse>> signInDestinationsByEmail(
-            @RequestParam("email") String email) {
-        List<PublicSignInDestinationResponse> body =
-                publicSignInDestinationService.byEmail(email);
+    public ResponseEntity<List<PublicSignInDestinationResponse>> signInDestinations(
+            @RequestParam(value = "email", required = false) String email,
+            @RequestParam(value = "phone", required = false) String phone) {
+        List<PublicSignInDestinationResponse> body;
+        if (email != null && !email.isBlank()) {
+            body = publicSignInDestinationService.byEmail(email);
+        } else if (phone != null && !phone.isBlank()) {
+            body = publicSignInDestinationService.byPhone(phone);
+        } else {
+            body = List.of();
+        }
         return ResponseEntity.ok()
-                .cacheControl(CacheControl.maxAge(CACHE_TTL).cachePublic())
+                .cacheControl(CacheControl.noStore())
                 .body(body);
     }
 

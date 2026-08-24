@@ -39,6 +39,27 @@ public interface MarketplaceSupplierRepository extends JpaRepository<Marketplace
 
     Optional<MarketplaceSupplier> findFirstByContactEmailIgnoreCaseOrderByCreatedAtAsc(String contactEmail);
 
+    @Query("""
+            SELECT m FROM MarketplaceSupplier m
+            WHERE (
+                (m.contactPhone IS NOT NULL AND (
+                    m.contactPhone = :phone
+                    OR m.contactPhone = :altPhone
+                    OR m.contactPhone LIKE CONCAT('%', :phoneTail)
+                ))
+                OR (m.altContactPhone IS NOT NULL AND (
+                    m.altContactPhone = :phone
+                    OR m.altContactPhone = :altPhone
+                    OR m.altContactPhone LIKE CONCAT('%', :phoneTail)
+                ))
+            )
+            ORDER BY m.createdAt ASC
+            """)
+    java.util.List<MarketplaceSupplier> findByContactPhoneVariants(
+            @Param("phone") String phone,
+            @Param("altPhone") String altPhone,
+            @Param("phoneTail") String phoneTail);
+
     Optional<MarketplaceSupplier> findBySupplierNumber(String supplierNumber);
 
     boolean existsByUsernameIgnoreCase(String username);

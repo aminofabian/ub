@@ -89,12 +89,10 @@ public class SupplierSignInDoorService {
         }
         PhoneForms forms = PhoneForms.of(phoneCandidates);
 
-        for (String candidate : phoneCandidates) {
-            Optional<SupplierUser> account = supplierUserRepository.findByPhone(candidate)
-                    .filter(SupplierUser::isActive);
-            if (account.isPresent()) {
-                return Optional.of(signInDoor(account.get()));
-            }
+        List<SupplierUser> accounts = supplierUserRepository.findActiveByPhoneVariants(
+                forms.phone(), forms.altPhone(), forms.tail());
+        if (!accounts.isEmpty()) {
+            return Optional.of(signInDoor(accounts.get(0)));
         }
 
         String passportId = passportIdByPhone(phoneCandidates, forms);
@@ -189,11 +187,17 @@ public class SupplierSignInDoorService {
     }
 
     private String passportIdByPhone(List<String> candidates, PhoneForms forms) {
+        List<MarketplaceSupplier> byContact =
+                marketplaceSupplierRepository.findByContactPhoneVariants(
+                        forms.phone(), forms.altPhone(), forms.tail());
+        if (!byContact.isEmpty()) {
+            return byContact.get(0).getId();
+        }
         for (String candidate : candidates) {
-            Optional<MarketplaceSupplier> byContact =
+            Optional<MarketplaceSupplier> legacy =
                     marketplaceSupplierRepository.findFirstByContactPhoneOrderByCreatedAtAsc(candidate);
-            if (byContact.isPresent()) {
-                return byContact.get().getId();
+            if (legacy.isPresent()) {
+                return legacy.get().getId();
             }
         }
         return firstPassportId(identityIndexRepository.findMarketplaceByPhoneVariants(
@@ -217,10 +221,17 @@ public class SupplierSignInDoorService {
         if (fromIndex.isPresent()) {
             return fromIndex;
         }
-        return supplierContactRepository
+        Optional<Supplier> fromContact = supplierContactRepository
                 .findByPhoneVariants(forms.phone(), forms.altPhone(), forms.tail()).stream()
                 .map(SupplierContact::getSupplierId)
                 .flatMap(id -> liveSupplier(id).stream())
+                .findFirst();
+        if (fromContact.isPresent()) {
+            return fromContact;
+        }
+        return supplierRepository
+                .findActiveByPayoutPhoneVariants(forms.phone(), forms.altPhone(), forms.tail())
+                .stream()
                 .findFirst();
     }
 

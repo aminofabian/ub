@@ -55,6 +55,26 @@ public class PublicSignInDestinationService {
     }
 
     /**
+     * Phone peek without OTP: supplier doors only. Shopper/staff shops stay
+     * behind the verified-phone path so a typed number cannot enumerate
+     * which tills or tabs live on it.
+     */
+    @Transactional(readOnly = true)
+    public List<PublicSignInDestinationResponse> byPhone(String rawPhone) {
+        if (rawPhone == null || rawPhone.isBlank()) {
+            return List.of();
+        }
+        List<String> candidates = KenyanPhoneForms.lookupCandidates(rawPhone);
+        if (candidates.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashMap<String, PublicSignInDestinationResponse> out = new LinkedHashMap<>();
+        supplierSignInDoorService.byVerifiedPhone(candidates)
+                .ifPresent(door -> putSupplier(out, door));
+        return List.copyOf(out.values());
+    }
+
+    /**
      * Builds destinations for a phone that has already been platform-verified
      * (token consumed by the caller). Merges customer-shop history, staff/buyer
      * memberships, and an active supplier account on that number.

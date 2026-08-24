@@ -57,7 +57,9 @@ public final class CsvImportReader {
         if (raw == null) {
             return "";
         }
-        return raw.trim().toLowerCase(Locale.ROOT).replace(' ', '_');
+        // Strip UTF-8 BOM (U+FEFF) — Excel often prefixes the first header cell.
+        String cleaned = raw.replace("\uFEFF", "").trim();
+        return cleaned.toLowerCase(Locale.ROOT).replace(' ', '_');
     }
 
     private static String blankToEmpty(String v) {

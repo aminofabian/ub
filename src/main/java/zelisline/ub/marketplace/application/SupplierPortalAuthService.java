@@ -29,6 +29,7 @@ public class SupplierPortalAuthService {
     private final PlatformSupplierPortalSettingsService portalSettingsService;
     private final SupplierPortalSessionService sessionService;
     private final SupplierPortalShopLinkService shopLinkService;
+    private final SupplierSignInDoorService doorService;
 
     @Transactional
     public SupplierPortalLoginResponse login(SupplierPortalLoginRequest request, HttpServletRequest http) {
@@ -69,14 +70,21 @@ public class SupplierPortalAuthService {
             return java.util.Optional.empty();
         }
         String trimmed = raw.trim();
+        java.util.Optional<SupplierUser> direct;
         if (trimmed.contains("@")) {
-            return supplierUserRepository.findByEmail(trimmed.toLowerCase());
+            direct = supplierUserRepository.findByEmail(trimmed.toLowerCase());
+        } else {
+            String phone = StkPhoneNormalizer.normalize(trimmed);
+            direct = phone != null
+                    ? supplierUserRepository.findByPhone(phone)
+                    : supplierUserRepository.findByEmail(trimmed.toLowerCase());
         }
-        String phone = StkPhoneNormalizer.normalize(trimmed);
-        if (phone != null) {
-            return supplierUserRepository.findByPhone(phone);
+        if (direct.isPresent()) {
+            return direct;
         }
-        return supplierUserRepository.findByEmail(trimmed.toLowerCase());
+        // Claim is phone-first, so the account often carries no email while the
+        // shops that stock from them know only an email. Either identity signs in.
+        return doorService.resolveLoginUser(trimmed);
     }
 
     private ResponseStatusException invalidCredentials() {

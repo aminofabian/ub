@@ -37,6 +37,8 @@ public interface MarketplaceSupplierRepository extends JpaRepository<Marketplace
 
     Optional<MarketplaceSupplier> findFirstByContactPhoneOrderByCreatedAtAsc(String contactPhone);
 
+    Optional<MarketplaceSupplier> findFirstByContactEmailIgnoreCaseOrderByCreatedAtAsc(String contactEmail);
+
     Optional<MarketplaceSupplier> findBySupplierNumber(String supplierNumber);
 
     boolean existsByUsernameIgnoreCase(String username);

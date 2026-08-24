@@ -14,16 +14,16 @@ import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
-import zelisline.ub.marketplace.domain.SupplierUser;
-import zelisline.ub.marketplace.repository.SupplierUserRepository;
+import zelisline.ub.marketplace.application.SupplierSignInDoorService;
 import zelisline.ub.tenancy.api.dto.PublicSignInDestinationResponse;
 import zelisline.ub.tenancy.api.dto.PublicShopsSearchResponse;
 
 /**
  * Apex identity → destinations. Given an email (open lookup, same privacy as
  * resolve-by-email) or a platform-verified phone, returns every shop/portal
- * the person can open, tagged with the door (staff till, shopper account, or
- * supplier portal) so the landing sheet never asks "shopper or merchant?".
+ * the person can open, tagged with the door (staff till, shopper account,
+ * supplier portal, or an unclaimed supplier portal) so the landing sheet never
+ * asks "shopper or merchant?".
  */
 @Service
 @RequiredArgsConstructor
@@ -33,7 +33,7 @@ public class PublicSignInDestinationService {
 
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
-    private final SupplierUserRepository supplierUserRepository;
+    private final SupplierSignInDoorService supplierSignInDoorService;
     private final CustomerPhoneRepository customerPhoneRepository;
     private final PublicShopsSearchService publicShopsSearchService;
 
@@ -49,9 +49,7 @@ public class PublicSignInDestinationService {
             addUserDestination(out, user);
         }
 
-        supplierUserRepository.findByEmail(email)
-                .filter(SupplierUser::isActive)
-                .ifPresent(supplier -> putSupplier(out, supplier));
+        supplierSignInDoorService.byEmail(email).ifPresent(door -> putSupplier(out, door));
 
         return List.copyOf(out.values());
     }
@@ -81,11 +79,8 @@ public class PublicSignInDestinationService {
             addUserDestination(out, user);
         }
 
-        for (String candidate : candidates) {
-            supplierUserRepository.findByPhone(candidate)
-                    .filter(SupplierUser::isActive)
-                    .ifPresent(supplier -> putSupplier(out, supplier));
-        }
+        supplierSignInDoorService.byVerifiedPhone(candidates)
+                .ifPresent(door -> putSupplier(out, door));
 
         return List.copyOf(out.values());
     }
@@ -129,26 +124,25 @@ public class PublicSignInDestinationService {
                 row.name(),
                 row.logoUrl(),
                 row.primaryHost(),
-                door));
+                door,
+                null));
     }
 
     private static void putSupplier(
             LinkedHashMap<String, PublicSignInDestinationResponse> out,
-            SupplierUser supplier
+            SupplierSignInDoorService.SupplierDoor supplier
     ) {
-        if (out.size() >= MAX_RESULTS) {
-            return;
-        }
-        String name = supplier.getName() == null || supplier.getName().isBlank()
-                ? "Supplier portal"
-                : supplier.getName().trim();
+        String door = supplier.claimed()
+                ? PublicSignInDestinationResponse.DOOR_SUPPLIER
+                : PublicSignInDestinationResponse.DOOR_SUPPLIER_CLAIM;
         out.putIfAbsent(
-                PublicSignInDestinationResponse.DOOR_SUPPLIER + ":portal",
+                door + ":portal",
                 new PublicSignInDestinationResponse(
                         null,
-                        name,
+                        supplier.name(),
                         null,
                         null,
-                        PublicSignInDestinationResponse.DOOR_SUPPLIER));
+                        door,
+                        supplier.hint()));
     }
 }

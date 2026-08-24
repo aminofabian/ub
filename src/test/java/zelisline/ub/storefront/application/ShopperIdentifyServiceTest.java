@@ -51,7 +51,8 @@ class ShopperIdentifyServiceTest {
                 phoneVerificationService,
                 messagingSettingsService,
                 customerMessageDispatcher,
-                publicShopsSearchService);
+                publicShopsSearchService,
+                Mockito.mock(zelisline.ub.tenancy.application.PublicSignInDestinationService.class));
     }
 
     @Test

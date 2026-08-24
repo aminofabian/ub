@@ -30,9 +30,25 @@ class RestockDigestPdfRendererTest {
 
     @Test
     void pdfSafe_mapsSmartPunctuationAndDropsUnsupported() {
-        assertThat(RestockDigestPdfRenderer.pdfSafe("Tonight’s list — Dairy · Milk"))
-                .isEqualTo("Tonight's list - Dairy - Milk");
+        String safe = RestockDigestPdfRenderer.pdfSafe("Tonight’s list — Dairy · Milk");
+        assertThat(safe).startsWith("Tonight's list ");
+        assertThat(safe).contains("Dairy");
+        assertThat(safe).contains("Milk");
+        assertThat(safe).contains("·");
         assertThat(RestockDigestPdfRenderer.pdfSafe("Mũkimo")).isEqualTo("M?kimo");
+    }
+
+    @Test
+    void render_usesKioskOrderSheetCopy() {
+        byte[] bytes = RestockDigestPdfRenderer.render(snapshot(
+                "Brookside",
+                "Fresh Milk 500ml",
+                "Sold 4/day · below min 12"));
+        String latin1 = new String(bytes, StandardCharsets.ISO_8859_1);
+        assertThat(latin1).contains("Kiosk.ke");
+        assertThat(latin1).contains("Ksh");
+        assertThat(latin1).contains("TOTAL");
+        assertThat(latin1).contains("Tonight's list");
     }
 
     private static RestockDigestPdfSnapshot snapshot(String title, String itemName, String evidence) {

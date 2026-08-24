@@ -149,7 +149,10 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
             FilterChain filterChain
     ) throws ServletException, IOException {
         String serverHost = TenantHostParsing.hostnameOnly(request.getServerName());
-        String lookupHost = resolveLookupHost(serverHost, request.getHeader("X-Tenant-Host"));
+        String lookupHost = resolveLookupHost(
+                serverHost,
+                request.getHeader("X-Tenant-Host"),
+                request.getHeader("X-Forwarded-Host"));
         String path = request.getRequestURI();
         if (path != null && path.contains("/auth/")) {
             logger.info("[DomainResolver] doFilterInternal ENTRY path={} serverHost={} lookupHost={} xTenantHost={} xTenantId={}",
@@ -194,11 +197,26 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
         return value != null && !value.isBlank();
     }
 
-    private String resolveLookupHost(String serverHost, String tenantHostHeader) {
+    /**
+     * @param forwardedHostHeaders {@code X-Tenant-Host} then {@code X-Forwarded-Host}
+     *     (comma list) — used when the request lands on a platform host such as
+     *     the API origin or bare localhost.
+     */
+    private String resolveLookupHost(String serverHost, String... forwardedHostHeaders) {
         if (serverHost != null && !hostsWithoutMapping.contains(serverHost.toLowerCase(Locale.ROOT))) {
             return serverHost;
         }
-        return TenantHostParsing.hostnameOnly(tenantHostHeader);
+        for (String raw : forwardedHostHeaders) {
+            if (raw == null || raw.isBlank()) {
+                continue;
+            }
+            String candidate = TenantHostParsing.hostnameOnly(raw.split(",")[0].trim());
+            if (candidate != null && !candidate.isBlank()
+                    && !hostsWithoutMapping.contains(candidate.toLowerCase(Locale.ROOT))) {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     private void writeTenantNotFound(HttpServletResponse response, String host) throws IOException {

@@ -4,7 +4,6 @@ import java.util.List;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -30,10 +29,8 @@ public class LoginBranchDirectoryService {
 
     @Transactional(readOnly = true)
     public List<PublicBranchResponse> listForTenant(HttpServletRequest http) {
-        String businessId;
-        try {
-            businessId = TenantRequestIds.resolveBusinessId(http);
-        } catch (ResponseStatusException ex) {
+        String businessId = TenantRequestIds.resolveBusinessIdOrNull(http);
+        if (businessId == null) {
             return List.of();
         }
         return branchRepository.findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(businessId).stream()

@@ -14,7 +14,6 @@ import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.filter.OncePerRequestFilter;
-import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -93,25 +92,16 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
         }
         ApiKeyPrincipal principal = principalOpt.get();
 
-        final String resolvedTenant;
-        try {
-            resolvedTenant = TenantRequestIds.resolveBusinessId(request);
-        } catch (ResponseStatusException ex) {
-            HttpStatus st = HttpStatus.resolve(ex.getStatusCode().value());
-            if (st == null) {
-                st = HttpStatus.BAD_REQUEST;
-            }
-            writeProblem(response, st,
-                    ex.getReason() != null ? ex.getReason() : "Bad request", "bad-request");
-            return;
-        }
-
-        if (!principal.businessId().equals(resolvedTenant)) {
+        // The key row is the tenant of record: integrations calling the bare API
+        // origin have no mapped host, so only a *conflicting* host fails here.
+        String hostTenant = TenantRequestIds.resolveBusinessIdOrNull(request);
+        if (hostTenant != null && !principal.businessId().equals(hostTenant)) {
             publishApiKeyEvent(request, principal, AuditEventTypes.API_KEY_INVALID, "API key tenant mismatch");
             writeProblem(response, HttpStatus.FORBIDDEN,
                     "API key tenant does not match resolved host tenant", "forbidden");
             return;
         }
+        TenantRequestIds.bindBusinessId(request, principal.businessId());
 
         invalidApiKeyIpRateLimiter.clear(clientIp);
         maybeTouchLastUsed(principal.apiKeyId());
@@ -161,11 +151,7 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
     }
 
     private String resolveBusinessIdSafe(HttpServletRequest request) {
-        try {
-            return TenantRequestIds.resolveBusinessId(request);
-        } catch (Exception e) {
-            return null;
-        }
+        return TenantRequestIds.resolveBusinessIdOrNull(request);
     }
 
     private static String trimToNull(String value) {

@@ -14,7 +14,6 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.filter.OncePerRequestFilter;
-import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -132,31 +131,27 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
-        final String resolvedTenant;
-        try {
-            resolvedTenant = TenantRequestIds.resolveBusinessId(request);
-        } catch (ResponseStatusException ex) {
-            // Public slug-in-URL routes bypass DomainBusinessResolverFilter, so a
-            // dashboard session Bearer on storefront pagination must not 400.
-            if (PublicApiEndpoints.matches(request.getRequestURI())) {
-                filterChain.doFilter(request, response);
-                return;
-            }
-            HttpStatus st = HttpStatus.resolve(ex.getStatusCode().value());
-            if (st == null) {
-                st = HttpStatus.BAD_REQUEST;
-            }
-            writeProblem(response, st,
-                    ex.getReason() != null ? ex.getReason() : "Bad request", "bad-request");
+        String claimTenant = claims.get(JwtTokenService.CLAIM_BUSINESS_ID, String.class);
+        if (claimTenant == null || claimTenant.isBlank()) {
+            writeProblem(response, HttpStatus.UNAUTHORIZED, "Invalid token claims", "unauthorized");
             return;
         }
 
-        String claimTenant = claims.get(JwtTokenService.CLAIM_BUSINESS_ID, String.class);
-        if (claimTenant == null || !claimTenant.equals(resolvedTenant)) {
-            publishSecurityEvent(request, resolvedTenant, AuditEventTypes.LOGIN_FAILED, "Token tenant mismatch");
+        // A validated JWT carries its own tenant, so hosts without a domain
+        // mapping (platform apex, localhost, native apps, desktop till) are
+        // authoritative through the claim instead of failing the request.
+        String hostTenant = TenantRequestIds.resolveBusinessIdOrNull(request);
+        if (hostTenant != null && !hostTenant.equals(claimTenant)) {
+            publishSecurityEvent(request, hostTenant, AuditEventTypes.LOGIN_FAILED, "Token tenant mismatch");
             writeProblem(response, HttpStatus.FORBIDDEN,
                     "Token tenant does not match resolved host tenant", "forbidden");
             return;
+        }
+        final String resolvedTenant = claimTenant;
+        // Slug-in-URL public routes derive their own tenant from the path, so the
+        // session tenant must not override it.
+        if (!PublicApiEndpoints.matches(request.getRequestURI())) {
+            TenantRequestIds.bindBusinessId(request, resolvedTenant);
         }
 
         String jti = claims.getId();

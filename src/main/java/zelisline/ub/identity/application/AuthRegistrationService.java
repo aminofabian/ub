@@ -133,7 +133,6 @@ public class AuthRegistrationService {
      */
     @Transactional
     public LoginResponse verifyEmail(HttpServletRequest http, VerifyEmailRequest request) {
-        String businessId = TenantRequestIds.resolveBusinessId(http);
         String hash = TokenHasher.sha256Hex(request.token());
         var row = emailVerificationTokenRepository.findByTokenHashAndUsedAtIsNull(hash)
                 .orElseThrow(() -> invalidToken());
@@ -142,9 +141,14 @@ public class AuthRegistrationService {
         }
         User user = userRepository.findById(row.getUserId())
                 .orElseThrow(() -> invalidToken());
-        if (user.getDeletedAt() != null || !user.getBusinessId().equals(businessId)) {
+        // The token identifies the tenant; a verification link opened on the
+        // platform apex (no domain mapping) must still activate the account.
+        String requestBusinessId = TenantRequestIds.resolveBusinessIdOrNull(http);
+        if (user.getDeletedAt() != null
+                || (requestBusinessId != null && !user.getBusinessId().equals(requestBusinessId))) {
             throw invalidToken();
         }
+        TenantRequestIds.bindBusinessId(http, user.getBusinessId());
         if (user.statusAsEnum() == UserStatus.INVITED) {
             user.setStatus(UserStatus.ACTIVE);
             userRepository.save(user);

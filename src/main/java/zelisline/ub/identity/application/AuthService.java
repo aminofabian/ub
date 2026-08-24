@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -88,6 +89,10 @@ public class AuthService {
     public static final String LOGIN_EMAIL_NOT_VERIFIED_DETAIL =
             "Email not verified. Open the link we sent you or use resend verification, then try again.";
 
+    /** Returned when an apex sign-in cannot tell which of several shops the email meant. */
+    public static final String MULTI_SHOP_LOGIN_DETAIL =
+            "This email is registered with more than one shop. Open your shop's web address and sign in there.";
+
     /** Returned when a just-rotated refresh token is replayed inside the grace window. */
     public static final String REFRESH_ALREADY_ROTATED_TITLE = "Refresh token already rotated";
 
@@ -128,8 +133,8 @@ public class AuthService {
 
     @Transactional
     public LoginResponse login(HttpServletRequest http, LoginRequest request) {
-        String businessId = TenantRequestIds.resolveBusinessId(http);
         String email = request.email().trim().toLowerCase();
+        String businessId = resolveCredentialBusinessId(http, email);
         User user = userRepository.findByBusinessIdAndEmailAndDeletedAtIsNull(businessId, email)
                 .orElseThrow(this::invalidCredentials);
         if (user.getPasswordHash() == null) {
@@ -165,8 +170,8 @@ public class AuthService {
 
     @Transactional
     public LoginResponse loginPin(HttpServletRequest http, LoginPinRequest request) {
-        String businessId = TenantRequestIds.resolveBusinessId(http);
         String email = request.email().trim().toLowerCase();
+        String businessId = resolveCredentialBusinessId(http, email);
         String tillDeviceKey = trimToNull(http.getHeader(TillDeviceService.TILL_DEVICE_HEADER));
         User user = userRepository.findByBusinessIdAndEmailAndDeletedAtIsNull(businessId, email)
                 .orElseThrow(this::invalidCredentials);
@@ -206,13 +211,13 @@ public class AuthService {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, UNLOCK_NO_SESSION_DETAIL);
         }
 
-        String businessId = TenantRequestIds.resolveBusinessId(http);
         String tillDeviceKey = trimToNull(http.getHeader(TillDeviceService.TILL_DEVICE_HEADER));
         String hash = TokenHasher.sha256Hex(refreshRaw);
 
         UserSession session = userSessionRepository.findByRefreshTokenHash(hash)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, UNLOCK_NO_SESSION_DETAIL));
-        if (!session.getBusinessId().equals(businessId)) {
+        String businessId = adoptSessionBusinessId(http, session.getBusinessId());
+        if (businessId == null) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, UNLOCK_NO_SESSION_DETAIL);
         }
         assertRefreshSessionValid(session);
@@ -255,7 +260,6 @@ public class AuthService {
         if (refreshRaw == null || refreshRaw.isBlank()) {
             throw invalidCredentials();
         }
-        String businessId = TenantRequestIds.resolveBusinessId(http);
         String hash = TokenHasher.sha256Hex(refreshRaw);
 
         // Read without row lock first so reuse revocation cannot deadlock with
@@ -263,7 +267,8 @@ public class AuthService {
         UserSession peek = userSessionRepository.findByRefreshTokenHash(hash)
                 .orElseThrow(this::invalidCredentials);
 
-        if (!peek.getBusinessId().equals(businessId)) {
+        String businessId = adoptSessionBusinessId(http, peek.getBusinessId());
+        if (businessId == null) {
             throw invalidCredentials();
         }
 
@@ -370,11 +375,14 @@ public class AuthService {
     /** Always {@code 204} — no tenant user enumeration (§3.3). */
     @Transactional
     public void passwordForgot(HttpServletRequest http, PasswordForgotRequest request) {
-        String businessId = TenantRequestIds.resolveBusinessId(http);
         if (request == null || request.email() == null || request.email().isBlank()) {
             return;
         }
         String email = request.email().trim().toLowerCase();
+        String businessId = resolveCredentialBusinessIdOrNull(http, email);
+        if (businessId == null) {
+            return;
+        }
         userRepository.findByBusinessIdAndEmailAndDeletedAtIsNull(businessId, email).ifPresent(user -> {
             if (user.getPasswordHash() == null) {
                 return;
@@ -406,7 +414,6 @@ public class AuthService {
 
     @Transactional
     public void passwordReset(HttpServletRequest http, PasswordResetRequest request) {
-        String businessId = TenantRequestIds.resolveBusinessId(http);
         String hash = TokenHasher.sha256Hex(request.token());
         PasswordResetToken row = passwordResetTokenRepository.findByTokenHashAndUsedAtIsNull(hash)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid or expired token"));
@@ -415,7 +422,8 @@ public class AuthService {
         }
         User user = userRepository.findById(row.getUserId()).orElseThrow(() ->
                 new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid or expired token"));
-        if (user.getDeletedAt() != null || !user.getBusinessId().equals(businessId)) {
+        String businessId = adoptSessionBusinessId(http, user.getBusinessId());
+        if (user.getDeletedAt() != null || businessId == null) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid or expired token");
         }
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
@@ -464,6 +472,63 @@ public class AuthService {
                 .userAgent(trimToNull(http.getHeader("User-Agent")))
                 .source("web_admin")
                 .build());
+    }
+
+    /**
+     * Tenant for an unauthenticated credential call. Hosts without a domain
+     * mapping — the platform apex, bare localhost, native shells, the desktop
+     * till — carry no tenant context, so the email's single active membership
+     * stands in for it instead of failing the sign-in.
+     *
+     * @throws ResponseStatusException {@code 401} when the email has no active
+     *     membership, {@code 400} when it has several and only the caller can
+     *     say which shop they meant.
+     */
+    private String resolveCredentialBusinessId(HttpServletRequest http, String email) {
+        String resolved = TenantRequestIds.resolveBusinessIdOrNull(http);
+        if (resolved != null) {
+            return resolved;
+        }
+        List<User> memberships = userRepository.findAllActiveByEmail(email);
+        if (memberships.size() == 1) {
+            String businessId = memberships.get(0).getBusinessId();
+            TenantRequestIds.bindBusinessId(http, businessId);
+            return businessId;
+        }
+        if (memberships.size() > 1) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, MULTI_SHOP_LOGIN_DETAIL);
+        }
+        throw invalidCredentials();
+    }
+
+    /** Same resolution as {@link #resolveCredentialBusinessId}, but silent (anti-enumeration flows). */
+    private String resolveCredentialBusinessIdOrNull(HttpServletRequest http, String email) {
+        String resolved = TenantRequestIds.resolveBusinessIdOrNull(http);
+        if (resolved != null) {
+            return resolved;
+        }
+        List<User> memberships = userRepository.findAllActiveByEmail(email);
+        if (memberships.size() != 1) {
+            return null;
+        }
+        String businessId = memberships.get(0).getBusinessId();
+        TenantRequestIds.bindBusinessId(http, businessId);
+        return businessId;
+    }
+
+    /**
+     * Tenant for a call already scoped by a token (refresh token, reset token):
+     * the stored row is authoritative, the request only has to not contradict it.
+     *
+     * @return the tenant to use, or {@code null} when the request asserts a different one
+     */
+    private String adoptSessionBusinessId(HttpServletRequest http, String rowBusinessId) {
+        String resolved = TenantRequestIds.resolveBusinessIdOrNull(http);
+        if (resolved == null) {
+            TenantRequestIds.bindBusinessId(http, rowBusinessId);
+            return rowBusinessId;
+        }
+        return resolved.equals(rowBusinessId) ? resolved : null;
     }
 
     private SessionBundle issueNewSessionWithSession(User user, HttpServletRequest http) {

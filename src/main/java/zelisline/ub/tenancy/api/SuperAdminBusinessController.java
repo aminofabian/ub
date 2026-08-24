@@ -31,6 +31,7 @@ import zelisline.ub.tenancy.api.dto.DomainResponse;
 import zelisline.ub.tenancy.api.dto.SaBusinessStatsResponse;
 import zelisline.ub.tenancy.api.dto.SaBusinessUserResponse;
 import zelisline.ub.tenancy.api.dto.UpdateBusinessRequest;
+import zelisline.ub.tenancy.api.dto.UpdateSaBusinessUserStatusRequest;
 import zelisline.ub.tenancy.api.dto.AddDomainRequest;
 import zelisline.ub.tenancy.application.BusinessDeletionService;
 import zelisline.ub.tenancy.application.TenancyService;
@@ -92,6 +93,15 @@ public class SuperAdminBusinessController {
     @GetMapping("/{businessId}/users")
     public List<SaBusinessUserResponse> listUsers(@PathVariable String businessId) {
         return tenancyService.getBusinessUsers(businessId);
+    }
+
+    @PatchMapping("/{businessId}/users/{userId}/status")
+    public SaBusinessUserResponse updateUserStatus(
+            @PathVariable String businessId,
+            @PathVariable String userId,
+            @Valid @RequestBody UpdateSaBusinessUserStatusRequest request
+    ) {
+        return tenancyService.updateBusinessUserStatus(businessId, userId, request.status());
     }
 
     // ── Statistics ───────────────────────────────────────────────────────

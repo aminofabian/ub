@@ -24,8 +24,10 @@ import zelisline.ub.finance.application.LedgerBootstrapService;
 import zelisline.ub.globalcatalog.application.GlobalCatalogResolver;
 import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.domain.User;
+import zelisline.ub.identity.domain.UserStatus;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.identity.repository.UserSessionRepository;
 import zelisline.ub.platform.media.CloudinaryUploadResult;
 import zelisline.ub.platform.media.MediaStore;
 import zelisline.ub.sales.repository.SaleRepository;
@@ -77,6 +79,7 @@ public class TenancyService {
     private final BranchReceiptSettingsService branchReceiptSettingsService;
     private final MediaStore cloudinaryImageService;
     private final UserRepository userRepository;
+    private final UserSessionRepository userSessionRepository;
     private final RoleRepository roleRepository;
     private final ItemRepository itemRepository;
     private final ShiftRepository shiftRepository;
@@ -1042,33 +1045,98 @@ public class TenancyService {
         Page<User> userPage = userRepository.pageByBusiness(businessId, Pageable.unpaged());
         List<User> users = userPage.getContent();
 
-        // Load roles and branches in one pass
-        List<Role> roles = roleRepository.findVisibleForTenant(businessId);
-        Map<String, Role> roleById = roles.stream()
-                .collect(Collectors.toMap(Role::getId, r -> r));
-
-        // Load branches for name display
-        var branches = branchRepository.findByBusinessIdAndDeletedAtIsNull(businessId, Pageable.unpaged());
-        Map<String, String> branchNameById = branches.getContent().stream()
-                .collect(Collectors.toMap(Branch::getId, Branch::getName));
-
+        Map<String, Role> roleById = rolesById(businessId);
+        Map<String, String> branchNameById = branchNameById(businessId);
         return users.stream()
-                .map(u -> {
-                    Role role = roleById.get(u.getRoleId());
-                    return new SaBusinessUserResponse(
-                            u.getId(),
-                            u.getEmail(),
-                            u.getName(),
-                            u.getPhone(),
-                            u.getStatus(),
-                            role != null ? role.getRoleKey() : "unknown",
-                            role != null ? role.getName() : "Unknown",
-                            u.getBranchId() != null ? branchNameById.getOrDefault(u.getBranchId(), "—") : "—",
-                            u.getLastLoginAt(),
-                            u.getCreatedAt()
-                    );
-                })
+                .map(u -> toSaBusinessUser(u, roleById, branchNameById))
                 .toList();
+    }
+
+    /**
+     * Super-admin override for a tenant user's lifecycle status
+     * (invited → active → suspended → locked).
+     *
+     * <p>Moving an active user out of {@code active} revokes their sessions and
+     * refuses to deactivate the last active owner, mirroring the tenant-side
+     * deactivation guards in {@code IdentityService}.
+     */
+    @Transactional
+    public SaBusinessUserResponse updateBusinessUserStatus(
+            String businessId, String userId, String statusWire) {
+        requireBusiness(businessId);
+        User user = userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(userId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "User not found"));
+
+        UserStatus current = user.statusAsEnum();
+        UserStatus next = parseUserStatus(statusWire, current);
+        if (next != current) {
+            if (next != UserStatus.ACTIVE && current == UserStatus.ACTIVE) {
+                if (hasOwnerRole(user.getRoleId())) {
+                    guardLastActiveOwner(businessId);
+                }
+                userSessionRepository.revokeAllActiveForUser(user.getId(), Instant.now());
+            }
+            user.setStatus(next);
+            user = userRepository.save(user);
+        }
+
+        return toSaBusinessUser(user, rolesById(businessId), branchNameById(businessId));
+    }
+
+    private SaBusinessUserResponse toSaBusinessUser(
+            User user, Map<String, Role> roleById, Map<String, String> branchNameById) {
+        Role role = roleById.get(user.getRoleId());
+        return new SaBusinessUserResponse(
+                user.getId(),
+                user.getEmail(),
+                user.getName(),
+                user.getPhone(),
+                user.getStatus(),
+                role != null ? role.getRoleKey() : "unknown",
+                role != null ? role.getName() : "Unknown",
+                user.getBranchId() != null
+                        ? branchNameById.getOrDefault(user.getBranchId(), "—")
+                        : "—",
+                user.getLastLoginAt(),
+                user.getCreatedAt()
+        );
+    }
+
+    private Map<String, Role> rolesById(String businessId) {
+        return roleRepository.findVisibleForTenant(businessId).stream()
+                .collect(Collectors.toMap(Role::getId, r -> r));
+    }
+
+    private Map<String, String> branchNameById(String businessId) {
+        return branchRepository.findByBusinessIdAndDeletedAtIsNull(businessId, Pageable.unpaged())
+                .getContent().stream()
+                .collect(Collectors.toMap(Branch::getId, Branch::getName));
+    }
+
+    private UserStatus parseUserStatus(String wire, UserStatus fallback) {
+        if (wire == null || wire.isBlank()) {
+            return fallback;
+        }
+        try {
+            return UserStatus.fromWire(wire);
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown user status: " + wire);
+        }
+    }
+
+    private boolean hasOwnerRole(String roleId) {
+        return roleRepository.findById(roleId)
+                .map(r -> "owner".equals(r.getRoleKey()))
+                .orElse(false);
+    }
+
+    private void guardLastActiveOwner(String businessId) {
+        long owners = userRepository.countActiveByRoleKey(businessId, "owner");
+        if (owners <= 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Cannot deactivate the last active owner of this tenant");
+        }
     }
 
     // ── Super-admin: business stats ─────────────────────────────────────

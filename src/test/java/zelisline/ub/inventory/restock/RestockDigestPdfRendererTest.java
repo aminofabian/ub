@@ -47,8 +47,24 @@ class RestockDigestPdfRendererTest {
         String latin1 = new String(bytes, StandardCharsets.ISO_8859_1);
         assertThat(latin1).contains("Kiosk.ke");
         assertThat(latin1).contains("Ksh");
-        assertThat(latin1).contains("TOTAL");
-        assertThat(latin1).contains("Tonight's list");
+        assertThat(latin1).contains("Total");
+        assertThat(latin1).contains("PRODUCT");
+        assertThat(latin1).contains("ON HAND");
+        assertThat(latin1).doesNotContain("Tonight's list");
+    }
+
+    @Test
+    void render_listsOnHandParAndQty() {
+        byte[] bytes = RestockDigestPdfRenderer.render(snapshot(
+                "Peter Mutua (Festive)",
+                "Festive Bread 400g White",
+                "Sold 6.5/day"));
+        String latin1 = new String(bytes, StandardCharsets.ISO_8859_1);
+        assertThat(latin1).contains("Festive Bread");
+        assertThat(latin1).contains("400g White");
+        assertThat(latin1).contains("QTY");
+        assertThat(latin1).contains("PAR");
+        assertThat(latin1).contains("416.00");
     }
 
     private static RestockDigestPdfSnapshot snapshot(String title, String itemName, String evidence) {

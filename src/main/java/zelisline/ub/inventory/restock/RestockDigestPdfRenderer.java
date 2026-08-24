@@ -4,8 +4,12 @@ import java.awt.Color;
 import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.regex.Pattern;
 
 import com.lowagie.text.Document;
 import com.lowagie.text.DocumentException;
@@ -15,34 +19,48 @@ import com.lowagie.text.pdf.PdfContentByte;
 import com.lowagie.text.pdf.PdfWriter;
 
 /**
- * Restock digest PDF in the Kiosk.ke marketplace order-sheet language: sage
- * paper, forest hero, Times name, mango totals, dashed leaders.
- *
+ * Restock closing sheet: sage paper, slim forest header, a numbered table.
  * Built-in Type1 fonts are WinAnsi only — grocery names are mapped before draw.
  */
 public final class RestockDigestPdfRenderer {
 
     private static final float PAGE_W = 595f;
     private static final float PAGE_H = 842f;
-    private static final float MARGIN = 32f;
-    private static final float CONTENT_W = PAGE_W - MARGIN * 2;
-    private static final float ROW_H = 22f;
-    private static final float FOOTER_H = 48f;
+    private static final float MARGIN = 36f;
+    private static final float FOOTER_H = 44f;
+    private static final float HEADS_H = 22f;
+    private static final float CONTINUED_H = 48f;
+
+    private static final float COL_AMOUNT = 86f;
+    private static final float COL_QTY = 50f;
+    private static final float COL_PAR = 50f;
+    private static final float COL_ON_HAND = 58f;
+    private static final float COL_GAP = 10f;
+
+    private static final float AMOUNT_RIGHT = PAGE_W - MARGIN;
+    private static final float QTY_RIGHT = AMOUNT_RIGHT - COL_AMOUNT;
+    private static final float PAR_RIGHT = QTY_RIGHT - COL_QTY;
+    private static final float ON_HAND_RIGHT = PAR_RIGHT - COL_PAR;
+    private static final float NAME_MAX = ON_HAND_RIGHT - COL_ON_HAND - COL_GAP - MARGIN;
 
     private static final Color INK = rgb(0x24312A);
-    private static final Color INK_SOFT = rgb(0x5C6A5F);
-    private static final Color PAPER = rgb(0xEFF2EC);
+    private static final Color INK_SOFT = rgb(0x4A5A4E);
+    private static final Color PAPER = rgb(0xF4F6F2);
     private static final Color PAPER_RAISED = rgb(0xF8FAF6);
-    private static final Color LINE = rgb(0xD8DECE);
+    private static final Color LINE = rgb(0xD5DCCE);
     private static final Color FOREST = rgb(0x2F5233);
     private static final Color FOREST_DEEP = rgb(0x1E3B26);
     private static final Color MANGO = rgb(0xB9691A);
     private static final Color TOMATO = rgb(0xC1452B);
-    private static final Color HERO_MUTED = rgb(0xCBD8C4);
-    private static final Color EYEBROW = rgb(0xB9C9B4);
-    private static final Color PILL_INK = rgb(0xE7EEE2);
-    private static final Color PILL_FILL = rgb(0x335938);
+    private static final Color HERO_MUTED = rgb(0xC5D4BE);
     private static final Color WHITE = Color.WHITE;
+
+    private static final Pattern UUID_RE = Pattern.compile(
+            "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern IMPORT_SKU_RE = Pattern.compile("^IMP-", Pattern.CASE_INSENSITIVE);
+    private static final Pattern BARCODE_MIRROR_SKU_RE =
+            Pattern.compile("^BC-\\d{8,}$", Pattern.CASE_INSENSITIVE);
 
     private static final BaseFont HELVETICA;
     private static final BaseFont HELVETICA_BOLD;
@@ -82,7 +100,6 @@ public final class RestockDigestPdfRenderer {
             Context ctx = new Context(
                     pdfSafe(nvl(snapshot.groupTitle())),
                     pdfSafe(nvl(snapshot.branchName())),
-                    pdfSafe(nvl(snapshot.businessName())),
                     pdfSafe(nvl(snapshot.runDateDisplay())),
                     items,
                     formatQty(units),
@@ -95,7 +112,8 @@ public final class RestockDigestPdfRenderer {
             float cursor = paintHero(cb, ctx, true);
 
             for (RestockDigestPdfLine line : lines) {
-                if (cursor - ROW_H < FOOTER_H + 40f) {
+                float rowH = rowHeight(line);
+                if (cursor - rowH < FOOTER_H + 52f) {
                     paintFooter(cb, ctx, pageNo, pageCount);
                     doc.newPage();
                     pageNo++;
@@ -104,13 +122,13 @@ public final class RestockDigestPdfRenderer {
                 cursor = drawRow(cb, cursor, line, ctx.currencyLabel);
             }
 
-            if (cursor < FOOTER_H + 70f) {
+            if (cursor < FOOTER_H + 64f) {
                 paintFooter(cb, ctx, pageNo, pageCount);
                 doc.newPage();
                 pageNo++;
                 cursor = paintHero(cb, ctx, false);
             }
-            drawTotal(cb, cursor, ctx, items, units);
+            drawTotal(cb, cursor, ctx);
             paintFooter(cb, ctx, pageNo, pageCount);
 
             doc.close();
@@ -124,33 +142,27 @@ public final class RestockDigestPdfRenderer {
 
     private static int countPages(Context ctx, List<RestockDigestPdfLine> lines) {
         int pages = 1;
-        float cursor = PAGE_H - heroDrop(ctx) - 32f;
-        for (int i = 0; i < lines.size(); i++) {
-            if (cursor - ROW_H < FOOTER_H + 40f) {
+        float cursor = PAGE_H - heroDrop(ctx, true) - HEADS_H - 6f;
+        for (RestockDigestPdfLine line : lines) {
+            float rowH = rowHeight(line);
+            if (cursor - rowH < FOOTER_H + 52f) {
                 pages++;
-                cursor = PAGE_H - 72f;
+                cursor = PAGE_H - CONTINUED_H - HEADS_H - 6f;
             }
-            cursor -= ROW_H;
+            cursor -= rowH;
         }
-        if (cursor < FOOTER_H + 70f) {
+        if (cursor < FOOTER_H + 64f) {
             pages++;
         }
         return pages;
     }
 
-    private static float heroDrop(Context ctx) {
-        List<String> nameLines = wrapText(ctx.title, TIMES_BOLD, 22, CONTENT_W, 2);
-        float drop = 28f;
-        if (!ctx.location.isBlank()) {
-            drop += 16f;
+    private static float heroDrop(Context ctx, boolean first) {
+        if (!first) {
+            return CONTINUED_H;
         }
-        drop += nameLines.size() * 24f;
-        if (!ctx.listedBy.isBlank()) {
-            drop += 16f;
-        }
-        drop += 32f;
-        drop += 32f;
-        return drop;
+        List<String> nameLines = wrapText(ctx.title, TIMES_BOLD, 17, PAGE_W - MARGIN * 2, 2);
+        return 22f + nameLines.size() * 20f + 18f;
     }
 
     private static float paintHero(PdfContentByte cb, Context ctx, boolean first) {
@@ -160,130 +172,115 @@ public final class RestockDigestPdfRenderer {
 
         if (!first) {
             cb.setColorFill(FOREST_DEEP);
-            cb.rectangle(0, PAGE_H - 44, PAGE_W, 44);
+            cb.rectangle(0, PAGE_H - CONTINUED_H, PAGE_W, CONTINUED_H);
             cb.fill();
-            text(cb, MARGIN, PAGE_H - 28, ctx.title, TIMES_BOLD, 12, WHITE);
-            textRight(cb, PAGE_W - MARGIN, PAGE_H - 28, "Order (continued)", HELVETICA, 9, HERO_MUTED);
-            paintColumnHeads(cb, PAGE_H - 58);
-            return PAGE_H - 72;
+            text(cb, MARGIN, PAGE_H - 30f, truncate(ctx.title, TIMES_BOLD, 12, PAGE_W - MARGIN * 2 - 90f),
+                    TIMES_BOLD, 12, WHITE);
+            textRight(cb, PAGE_W - MARGIN, PAGE_H - 30f, "Continued", HELVETICA, 8, HERO_MUTED);
+            return paintColumnHeads(cb, PAGE_H - CONTINUED_H - 16f);
         }
 
-        List<String> nameLines = wrapText(ctx.title, TIMES_BOLD, 22, CONTENT_W, 2);
-        float drop = heroDrop(ctx);
+        List<String> nameLines = wrapText(ctx.title, TIMES_BOLD, 17, PAGE_W - MARGIN * 2, 2);
+        float drop = heroDrop(ctx, true);
 
         cb.setColorFill(FOREST_DEEP);
         cb.rectangle(0, PAGE_H - drop, PAGE_W, drop);
         cb.fill();
-
-        float y = PAGE_H - 28f;
-        if (!ctx.location.isBlank()) {
-            text(cb, MARGIN, y, ctx.location.toUpperCase(), COURIER_BOLD, 8, EYEBROW);
-            y -= 16f;
-        }
-        for (String line : nameLines) {
-            text(cb, MARGIN, y, line, TIMES_BOLD, 22, PAPER_RAISED);
-            y -= 24f;
-        }
-        if (!ctx.listedBy.isBlank()) {
-            text(cb, MARGIN, y, ctx.listedBy, HELVETICA, 10, HERO_MUTED);
-            y -= 16f;
-        }
-
-        String[] pills = {
-                ctx.items + (ctx.items == 1 ? " item" : " items"),
-                ctx.units + ("1".equals(ctx.units) ? " unit" : " units"),
-                ctx.dateShort
-        };
-        float px = MARGIN;
-        for (String pill : pills) {
-            float w = width(COURIER_BOLD, pill, 8) + 16f;
-            roundFill(cb, px, y - 14f, w, 16f, 8f, PILL_FILL);
-            text(cb, px + 8f, y - 10f, pill, COURIER_BOLD, 8, PILL_INK);
-            px += w + 6f;
-        }
-
         cb.setColorFill(FOREST);
-        cb.rectangle(0, PAGE_H - drop, PAGE_W, 32);
+        cb.rectangle(0, PAGE_H - drop, PAGE_W, 3f);
         cb.fill();
-        text(cb, MARGIN, PAGE_H - drop + 12f, "Tonight's list", COURIER_BOLD, 13, WHITE);
-        textRight(
-                cb,
-                PAGE_W - MARGIN,
-                PAGE_H - drop + 12f,
-                "Confirm quantities, then order",
-                HELVETICA,
-                8,
-                HERO_MUTED);
 
-        float headsY = PAGE_H - drop - 18f;
-        paintColumnHeads(cb, headsY);
-        return headsY - 14f;
+        float y = PAGE_H - 26f;
+        for (String line : nameLines) {
+            text(cb, MARGIN, y, line, TIMES_BOLD, 17, PAPER_RAISED);
+            y -= 20f;
+        }
+        text(cb, MARGIN, y, metaLine(ctx), HELVETICA, 8.5f, HERO_MUTED);
+
+        return paintColumnHeads(cb, PAGE_H - drop - 16f);
     }
 
-    private static void paintColumnHeads(PdfContentByte cb, float y) {
-        text(cb, MARGIN, y, "ITEM", HELVETICA_BOLD, 7.5f, INK_SOFT);
-        textRight(cb, PAGE_W - MARGIN, y, "TOTAL", HELVETICA_BOLD, 7.5f, INK_SOFT);
-        stroke(cb, MARGIN, y - 5f, PAGE_W - MARGIN, y - 5f, LINE, 0.4f);
+    private static String metaLine(Context ctx) {
+        List<String> parts = new ArrayList<>();
+        if (!ctx.location.isBlank()) {
+            parts.add(ctx.location);
+        }
+        if (!ctx.dateShort.isBlank()) {
+            parts.add(ctx.dateShort);
+        }
+        parts.add(ctx.items + (ctx.items == 1 ? " item" : " items"));
+        return String.join("  ·  ", parts);
+    }
+
+    private static float paintColumnHeads(PdfContentByte cb, float y) {
+        text(cb, MARGIN, y, "PRODUCT", HELVETICA_BOLD, 7, INK_SOFT);
+        textRight(cb, ON_HAND_RIGHT, y, "ON HAND", HELVETICA_BOLD, 7, INK_SOFT);
+        textRight(cb, PAR_RIGHT, y, "PAR", HELVETICA_BOLD, 7, INK_SOFT);
+        textRight(cb, QTY_RIGHT, y, "QTY", HELVETICA_BOLD, 7, INK_SOFT);
+        textRight(cb, AMOUNT_RIGHT, y, "AMOUNT", HELVETICA_BOLD, 7, INK_SOFT);
+        stroke(cb, MARGIN, y - 6f, PAGE_W - MARGIN, y - 6f, FOREST, 0.8f);
+        return y - 10f;
+    }
+
+    private static float rowHeight(RestockDigestPdfLine line) {
+        List<String> names = wrapText(pdfSafe(nvl(line.itemName())), HELVETICA, 10, NAME_MAX, 2);
+        float h = 8f + names.size() * 13f + 8f;
+        if (!humanSku(line.itemSku()).isEmpty()) {
+            h += 11f;
+        }
+        return Math.max(h, 28f);
     }
 
     private static float drawRow(PdfContentByte cb, float cursorY, RestockDigestPdfLine line, String currencyLabel) {
-        float y = cursorY - ROW_H;
-        String qty = "\u00D7 " + formatQty(line.quantity());
+        float h = rowHeight(line);
+        float y = cursorY - h;
+        List<String> names = wrapText(pdfSafe(nvl(line.itemName())), HELVETICA, 10, NAME_MAX, 2);
+        String sku = humanSku(line.itemSku());
+        float textY = cursorY - 16f;
+        for (int i = 0; i < names.size(); i++) {
+            text(cb, MARGIN, textY, names.get(i), HELVETICA, 10, INK);
+            textY -= 13f;
+        }
+        if (!sku.isEmpty()) {
+            text(cb, MARGIN, textY, sku, HELVETICA, 8, INK_SOFT);
+        }
+
+        float numY = cursorY - 16f;
+        textRight(cb, ON_HAND_RIGHT, numY, formatQty(line.onHand()), HELVETICA, 10, INK_SOFT);
+        textRight(cb, PAR_RIGHT, numY, formatQty(line.par()), HELVETICA, 10, INK_SOFT);
+        textRight(cb, QTY_RIGHT, numY, formatQty(line.quantity()), HELVETICA_BOLD, 11, INK);
         boolean ask = line.lineTotal() == null;
         String price = ask ? "Ask" : ksh(line.lineTotal(), currencyLabel);
-        float priceW = width(COURIER_BOLD, price, 10);
-        float qtyW = width(HELVETICA, qty, 9);
-        float nameMax = CONTENT_W - priceW - qtyW - 28f;
-        String name = truncate(pdfSafe(nvl(line.itemName())), HELVETICA_BOLD, 10, nameMax);
-
-        text(cb, MARGIN, y + 6f, name, HELVETICA_BOLD, 10, INK);
-        float nameEnd = MARGIN + width(HELVETICA_BOLD, name, 10);
-        text(cb, nameEnd + 6f, y + 6f, qty, HELVETICA, 9, INK_SOFT);
-        float qtyEnd = nameEnd + 6f + qtyW;
-        dashLine(cb, qtyEnd + 6f, y + 8f, PAGE_W - MARGIN - priceW - 8f, y + 8f, LINE);
-        textRight(cb, PAGE_W - MARGIN, y + 6f, price, COURIER_BOLD, 10, ask ? TOMATO : MANGO);
-        stroke(cb, MARGIN, y, PAGE_W - MARGIN, y, LINE, 0.3f);
+        textRight(cb, AMOUNT_RIGHT, numY, price, COURIER_BOLD, 9.5f, ask ? TOMATO : INK);
+        stroke(cb, MARGIN, y, PAGE_W - MARGIN, y, LINE, 0.35f);
         return y;
     }
 
-    private static void drawTotal(
-            PdfContentByte cb,
-            float cursorY,
-            Context ctx,
-            int items,
-            BigDecimal units
-    ) {
-        float y = cursorY - 36f;
-        roundFill(cb, MARGIN, y, CONTENT_W, 32f, 6f, FOREST_DEEP);
-        text(cb, MARGIN + 12f, y + 12f, "TOTAL", HELVETICA_BOLD, 9, HERO_MUTED);
+    private static void drawTotal(PdfContentByte cb, float cursorY, Context ctx) {
+        float y = cursorY - 18f;
+        stroke(cb, MARGIN, y + 14f, PAGE_W - MARGIN, y + 14f, FOREST, 0.8f);
+        text(cb, MARGIN, y, "Total", HELVETICA_BOLD, 10, INK);
         boolean priced = ctx.subtotal != null;
         textRight(
                 cb,
-                PAGE_W - MARGIN - 12f,
-                y + 11f,
+                AMOUNT_RIGHT,
+                y,
                 priced ? ksh(ctx.subtotal, ctx.currencyLabel) : "Ask",
                 COURIER_BOLD,
-                13,
-                WHITE);
-        String summary = items + (items == 1 ? " item" : " items")
-                + " \u00B7 "
-                + formatQty(units)
-                + (units.compareTo(BigDecimal.ONE) == 0 ? " unit" : " units");
-        text(cb, MARGIN, y - 14f, pdfSafe(summary), COURIER_BOLD, 8, INK_SOFT);
+                12,
+                priced ? MANGO : TOMATO);
+        String summary = ctx.items + (ctx.items == 1 ? " item" : " items")
+                + "  ·  "
+                + ctx.units
+                + ("1".equals(ctx.units) ? " unit" : " units");
+        text(cb, MARGIN, y - 14f, pdfSafe(summary), HELVETICA, 8, INK_SOFT);
     }
 
     private static void paintFooter(PdfContentByte cb, Context ctx, int pageNo, int of) {
-        stroke(cb, MARGIN, 32f, PAGE_W - MARGIN, 32f, LINE, 0.3f);
-        text(
-                cb,
-                MARGIN,
-                20f,
-                "Kiosk.ke · Please confirm availability and pricing.",
-                HELVETICA,
-                8,
-                INK_SOFT);
-        String right = ctx.dateShort + "  ·  " + pageNo + " / " + of;
-        textRight(cb, PAGE_W - MARGIN, 20f, pdfSafe(right), COURIER_BOLD, 8, INK_SOFT);
+        stroke(cb, MARGIN, 30f, PAGE_W - MARGIN, 30f, LINE, 0.35f);
+        text(cb, MARGIN, 18f, "Kiosk.ke  ·  Confirm availability and pricing.", HELVETICA, 8, INK_SOFT);
+        String right = pageNo + " / " + of;
+        textRight(cb, PAGE_W - MARGIN, 18f, pdfSafe(right), HELVETICA, 8, INK_SOFT);
     }
 
     private static void text(PdfContentByte cb, float x, float y, String value, BaseFont font, float size, Color color) {
@@ -320,25 +317,6 @@ public final class RestockDigestPdfRenderer {
         cb.stroke();
     }
 
-    private static void dashLine(PdfContentByte cb, float x1, float y1, float x2, float y2, Color color) {
-        if (x2 - x1 < 8f) {
-            return;
-        }
-        cb.setLineDash(0.7f, 1.5f, 0f);
-        cb.setLineWidth(0.4f);
-        cb.setColorStroke(color);
-        cb.moveTo(x1, y1);
-        cb.lineTo(x2, y2);
-        cb.stroke();
-        cb.setLineDash(1f);
-    }
-
-    private static void roundFill(PdfContentByte cb, float x, float y, float w, float h, float r, Color color) {
-        cb.setColorFill(color);
-        cb.roundRectangle(x, y, w, h, Math.min(r, Math.min(w, h) / 2f));
-        cb.fill();
-    }
-
     private static float width(BaseFont font, String text, float size) {
         return font.getWidthPoint(pdfSafe(text), size);
     }
@@ -353,9 +331,10 @@ public final class RestockDigestPdfRenderer {
             }
             String candidate = cur.isEmpty() ? word : cur + " " + word;
             if (!cur.isEmpty() && width(font, candidate, size) > maxWidth) {
-                lines.add(cur);
+                lines.add(truncate(cur, font, size, maxWidth));
                 cur = word;
                 if (lines.size() >= maxLines) {
+                    cur = "";
                     break;
                 }
             } else {
@@ -363,9 +342,9 @@ public final class RestockDigestPdfRenderer {
             }
         }
         if (!cur.isEmpty() && lines.size() < maxLines) {
-            lines.add(cur);
+            lines.add(truncate(cur, font, size, maxWidth));
         }
-        return lines.isEmpty() ? List.of("") : lines.subList(0, Math.min(lines.size(), maxLines));
+        return lines.isEmpty() ? List.of("") : lines;
     }
 
     private static String truncate(String text, BaseFont font, float size, float maxWidth) {
@@ -382,7 +361,7 @@ public final class RestockDigestPdfRenderer {
 
     private static String formatQty(BigDecimal qty) {
         if (qty == null) {
-            return "-";
+            return "—";
         }
         return qty.stripTrailingZeros().toPlainString();
     }
@@ -398,7 +377,27 @@ public final class RestockDigestPdfRenderer {
         if (amount == null) {
             return "Ask";
         }
-        return currencyLabel + " " + amount.setScale(2, RoundingMode.HALF_UP).toPlainString();
+        return currencyLabel + " " + moneyFormat().format(amount.setScale(2, RoundingMode.HALF_UP));
+    }
+
+    private static DecimalFormat moneyFormat() {
+        DecimalFormat format = new DecimalFormat("#,##0.00", DecimalFormatSymbols.getInstance(Locale.US));
+        format.setRoundingMode(RoundingMode.HALF_UP);
+        return format;
+    }
+
+    private static String humanSku(String sku) {
+        if (sku == null) {
+            return "";
+        }
+        String t = sku.trim();
+        if (t.isEmpty()
+                || IMPORT_SKU_RE.matcher(t).find()
+                || BARCODE_MIRROR_SKU_RE.matcher(t).matches()
+                || UUID_RE.matcher(t).matches()) {
+            return "";
+        }
+        return pdfSafe(t);
     }
 
     private static String nvl(String value) {
@@ -447,7 +446,6 @@ public final class RestockDigestPdfRenderer {
     private record Context(
             String title,
             String location,
-            String listedBy,
             String dateShort,
             int items,
             String units,

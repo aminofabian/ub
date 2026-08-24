@@ -23,8 +23,10 @@ import zelisline.ub.credits.repository.CustomerPhoneVerificationRepository;
 import zelisline.ub.identity.application.TokenHasher;
 import zelisline.ub.messaging.application.CustomerMessageDispatcher;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
+import zelisline.ub.tenancy.api.dto.PublicSignInDestinationResponse;
 import zelisline.ub.tenancy.api.dto.PublicShopsSearchResponse;
 import zelisline.ub.tenancy.application.PublicShopsSearchService;
+import zelisline.ub.tenancy.application.PublicSignInDestinationService;
 
 /**
  * Phase 4 apex "one door": tenant-agnostic shopper identification (the doc's
@@ -62,6 +64,7 @@ public class ShopperIdentifyService {
     private final BusinessCreditMessagingSettingsService messagingSettingsService;
     private final CustomerMessageDispatcher customerMessageDispatcher;
     private final PublicShopsSearchService publicShopsSearchService;
+    private final PublicSignInDestinationService publicSignInDestinationService;
 
     @Transactional
     public SendCustomerPhoneVerificationResponse sendCode(String rawPhone) {
@@ -145,6 +148,17 @@ public class ShopperIdentifyService {
             return List.of();
         }
         return publicShopsSearchService.byBusinessIds(businessIds);
+    }
+
+    /**
+     * Same OTP gate as {@link #shops}, but merges shopper history with staff
+     * memberships and supplier portal accounts, each tagged with a door.
+     */
+    @Transactional
+    public List<PublicSignInDestinationResponse> destinations(String rawPhone, String rawToken) {
+        String phone = phoneVerificationService.consumeRegistrationToken(
+                PLATFORM_VERIFICATION_BUSINESS_ID, rawToken, rawPhone);
+        return publicSignInDestinationService.byVerifiedPhone(phone);
     }
 
     private static String normalizeOrThrow(String raw) {

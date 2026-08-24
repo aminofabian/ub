@@ -53,6 +53,33 @@ public interface UserRepository extends JpaRepository<User, String> {
     @Query("select u from User u where u.email = :email and u.deletedAt is null and u.status = 'active' order by u.createdAt asc")
     Optional<User> findFirstActiveByEmail(@Param("email") String email);
 
+    /**
+     * All active memberships for an email across tenants — apex sign-in when
+     * one person staffs (or shops as buyer at) more than one business.
+     */
+    @Query("""
+        select u from User u
+         where u.email = :email
+           and u.deletedAt is null
+           and u.status = 'active'
+         order by u.createdAt asc
+        """)
+    List<User> findAllActiveByEmail(@Param("email") String email);
+
+    /**
+     * Active staff/buyer rows whose phone matches any of the normalized forms
+     * (used after platform phone OTP on the apex).
+     */
+    @Query("""
+        select u from User u
+         where u.deletedAt is null
+           and u.status = 'active'
+           and u.phone is not null
+           and u.phone in :phones
+         order by u.createdAt asc
+        """)
+    List<User> findAllActiveByPhoneIn(@Param("phones") java.util.Collection<String> phones);
+
     boolean existsByBusinessIdAndEmailAndDeletedAtIsNull(String businessId, String email);
 
     long countByBusinessIdAndDeletedAtIsNull(String businessId);

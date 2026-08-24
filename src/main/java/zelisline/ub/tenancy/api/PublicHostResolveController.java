@@ -19,8 +19,10 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.tenancy.api.dto.OnboardBusinessRequest;
 import zelisline.ub.tenancy.api.dto.PublicHostResolveResponse;
+import zelisline.ub.tenancy.api.dto.PublicSignInDestinationResponse;
 import zelisline.ub.tenancy.api.dto.SelfServeCountryResponse;
 import zelisline.ub.tenancy.application.PublicHostResolverService;
+import zelisline.ub.tenancy.application.PublicSignInDestinationService;
 import zelisline.ub.tenancy.application.RegionDefaults;
 
 /**
@@ -40,6 +42,7 @@ public class PublicHostResolveController {
     private static final Duration CACHE_TTL = Duration.ofSeconds(60);
 
     private final PublicHostResolverService publicHostResolverService;
+    private final PublicSignInDestinationService publicSignInDestinationService;
     private final RegionDefaults regionDefaults;
 
     @GetMapping("/resolve")
@@ -65,6 +68,21 @@ public class PublicHostResolveController {
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "No active business found for this email"));
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.maxAge(CACHE_TTL).cachePublic())
+                .body(body);
+    }
+
+    /**
+     * Apex sign-in: every shop/portal tied to an email, with door (staff /
+     * shopper / supplier). Empty list when unknown — never confirms existence
+     * beyond what resolve-by-email already exposes for a single hit.
+     */
+    @GetMapping("/sign-in-destinations")
+    public ResponseEntity<List<PublicSignInDestinationResponse>> signInDestinationsByEmail(
+            @RequestParam("email") String email) {
+        List<PublicSignInDestinationResponse> body =
+                publicSignInDestinationService.byEmail(email);
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.maxAge(CACHE_TTL).cachePublic())
                 .body(body);

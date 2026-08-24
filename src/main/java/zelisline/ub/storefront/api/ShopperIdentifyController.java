@@ -17,6 +17,7 @@ import zelisline.ub.credits.api.dto.ShopperPhoneVerifyRequest;
 import zelisline.ub.credits.api.dto.VerifyCustomerPhoneVerificationResponse;
 import zelisline.ub.storefront.api.dto.ShopperShopsRequest;
 import zelisline.ub.storefront.application.ShopperIdentifyService;
+import zelisline.ub.tenancy.api.dto.PublicSignInDestinationResponse;
 import zelisline.ub.tenancy.api.dto.PublicShopsSearchResponse;
 
 /**
@@ -51,5 +52,11 @@ public class ShopperIdentifyController {
     public List<PublicShopsSearchResponse> shops(
             @Valid @RequestBody ShopperShopsRequest body) {
         return shopperIdentifyService.shops(body.phone(), body.phoneVerificationToken());
+    }
+
+    @PostMapping("/destinations")
+    public List<PublicSignInDestinationResponse> destinations(
+            @Valid @RequestBody ShopperShopsRequest body) {
+        return shopperIdentifyService.destinations(body.phone(), body.phoneVerificationToken());
     }
 }

@@ -15,6 +15,7 @@ public final class RestockDigestDtos {
             String runId,
             String itemId,
             String itemName,
+            String variantName,
             String itemSku,
             String itemTypeId,
             String itemTypeName,
@@ -125,6 +126,7 @@ public final class RestockDigestDtos {
     public record RestockPrepItem(
             String itemId,
             String itemName,
+            String variantName,
             String itemSku,
             String itemTypeId,
             String itemTypeName,

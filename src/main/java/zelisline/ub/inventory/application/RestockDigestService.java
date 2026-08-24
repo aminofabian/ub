@@ -26,6 +26,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.application.PackageVariantStockResolver;
+import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.ItemType;
 import zelisline.ub.catalog.repository.ItemRepository;
@@ -312,7 +313,8 @@ public class RestockDigestService {
                     ItemType type = item == null ? null : types.get(item.getItemTypeId());
                     return new RestockDigestDtos.RestockPrepItem(
                             s.getItemId(),
-                            item != null && item.getName() != null ? item.getName() : "",
+                            itemDisplayName(item),
+                            itemOptionLabel(item),
                             item != null ? item.getSku() : null,
                             item != null ? item.getItemTypeId() : null,
                             type != null ? type.getLabel() : UNCATEGORISED,
@@ -465,6 +467,21 @@ public class RestockDigestService {
             return dept;
         }
         return "Tonight's list";
+    }
+
+    private static String itemDisplayName(Item item) {
+        if (item == null) {
+            return "";
+        }
+        String name = ProductDisplayName.forItem(item);
+        return name.isBlank() ? "" : name;
+    }
+
+    private static String itemOptionLabel(Item item) {
+        if (item == null) {
+            return null;
+        }
+        return blankToNull(ProductDisplayName.optionLabel(item));
     }
 
     private static String blankToNull(String value) {
@@ -750,8 +767,8 @@ public class RestockDigestService {
         }
         return loadItems(businessId, itemIds).entrySet().stream()
                 .collect(Collectors.toMap(Map.Entry::getKey, e -> {
-                    String name = e.getValue().getName();
-                    return name != null ? name : e.getKey();
+                    String name = ProductDisplayName.forItem(e.getValue());
+                    return !name.isBlank() ? name : e.getKey();
                 }));
     }
 
@@ -1113,7 +1130,8 @@ public class RestockDigestService {
                 r.getId(),
                 r.getRunId(),
                 r.getItemId(),
-                item != null ? item.getName() : "",
+                itemDisplayName(item),
+                itemOptionLabel(item),
                 item != null ? item.getSku() : null,
                 item != null ? item.getItemTypeId() : null,
                 itemType != null && itemType.getLabel() != null && !itemType.getLabel().isBlank()

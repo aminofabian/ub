@@ -1,5 +1,7 @@
 package zelisline.ub.marketplace.application;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -20,6 +22,8 @@ import zelisline.ub.messaging.application.CustomerMessageDispatcher;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
 import zelisline.ub.notifications.SupplierPortalNotificationTypes;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
+import zelisline.ub.purchasing.domain.PurchaseOrderLine;
+import zelisline.ub.purchasing.repository.PurchaseOrderLineRepository;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
@@ -38,6 +42,7 @@ public class SupplierPortalEventNotifyService {
     private final BusinessRepository businessRepository;
     private final BusinessCreditMessagingSettingsService messagingSettingsService;
     private final CustomerMessageDispatcher customerMessageDispatcher;
+    private final PurchaseOrderLineRepository purchaseOrderLineRepository;
 
     @Value("${app.public.frontend-base-url:http://localhost:3000}")
     private String frontendBaseUrl;
@@ -121,9 +126,10 @@ public class SupplierPortalEventNotifyService {
             String shopName = businessRepository.findById(businessId)
                     .map(Business::getName)
                     .orElse("A shop");
-            String title = "New purchase order";
-            String body = shopName + " sent PO " + poNumber + ".";
-            String actionUrl = "/supplier-portal/orders";
+            PoSummary summary = summarizePo(purchaseOrderId);
+            String title = "Order received";
+            String body = buildPoReceivedBody(shopName, poNumber, summary);
+            String actionUrl = buildOrdersActionUrl(purchaseOrderId);
 
             List<SupplierUser> users = supplierUserRepository.findByMarketplaceSupplierIdAndActiveTrue(
                     marketplaceSupplierId);
@@ -148,14 +154,20 @@ public class SupplierPortalEventNotifyService {
                         actionUrl);
             }
             if (anySms) {
-                sendPoSms(businessId, marketplaceSupplierId, shopName, poNumber);
+                sendPoSms(businessId, marketplaceSupplierId, shopName, poNumber, purchaseOrderId);
             }
         } catch (Exception ex) {
             log.warn("supplier portal PO notify failed poId={} msg={}", purchaseOrderId, ex.getMessage());
         }
     }
 
-    private void sendPoSms(String businessId, String marketplaceSupplierId, String shopName, String poNumber) {
+    private void sendPoSms(
+            String businessId,
+            String marketplaceSupplierId,
+            String shopName,
+            String poNumber,
+            String purchaseOrderId
+    ) {
         MarketplaceSupplier marketplace = marketplaceSupplierRepository.findById(marketplaceSupplierId).orElse(null);
         if (marketplace == null) {
             return;
@@ -174,7 +186,7 @@ public class SupplierPortalEventNotifyService {
         if (phone == null) {
             return;
         }
-        String portalUrl = trimSlash(frontendBaseUrl) + "/supplier-portal/orders";
+        String portalUrl = trimSlash(frontendBaseUrl) + buildOrdersActionUrl(purchaseOrderId);
         String message = shopName + " sent purchase order " + poNumber
                 + ". Open " + portalUrl + " to respond.";
         if (message.length() > 320) {
@@ -184,10 +196,70 @@ public class SupplierPortalEventNotifyService {
         customerMessageDispatcher.deliver(messaging, phone, message);
     }
 
+    static String buildOrdersActionUrl(String purchaseOrderId) {
+        if (purchaseOrderId == null || purchaseOrderId.isBlank()) {
+            return "/supplier-portal/orders";
+        }
+        return "/supplier-portal/orders?po=" + purchaseOrderId.trim();
+    }
+
+    static String buildPoReceivedBody(String shopName, String poNumber, PoSummary summary) {
+        StringBuilder body = new StringBuilder();
+        body.append(shopName == null || shopName.isBlank() ? "A shop" : shopName.trim());
+        body.append(" sent ").append(poNumber == null ? "a purchase order" : poNumber.trim());
+        if (summary != null && summary.lineCount() > 0) {
+            body.append(" · ").append(summary.lineCount())
+                    .append(summary.lineCount() == 1 ? " line" : " lines");
+        }
+        if (summary != null && summary.total() != null && summary.total().signum() > 0) {
+            body.append(" · Ksh ").append(formatMoneyPlain(summary.total()));
+        }
+        body.append(".");
+        return body.toString();
+    }
+
+    private PoSummary summarizePo(String purchaseOrderId) {
+        if (purchaseOrderId == null || purchaseOrderId.isBlank()) {
+            return PoSummary.empty();
+        }
+        try {
+            List<PurchaseOrderLine> lines = purchaseOrderLineRepository
+                    .findByPurchaseOrderIdOrderBySortOrderAscIdAsc(purchaseOrderId);
+            if (lines.isEmpty()) {
+                return PoSummary.empty();
+            }
+            BigDecimal total = BigDecimal.ZERO;
+            for (PurchaseOrderLine line : lines) {
+                if (line.getQtyOrdered() == null || line.getUnitEstimatedCost() == null) {
+                    continue;
+                }
+                total = total.add(line.getQtyOrdered().multiply(line.getUnitEstimatedCost()));
+            }
+            return new PoSummary(lines.size(), total.setScale(2, RoundingMode.HALF_UP));
+        } catch (Exception ex) {
+            log.debug("PO summary skipped poId={} msg={}", purchaseOrderId, ex.getMessage());
+            return PoSummary.empty();
+        }
+    }
+
+    static String formatMoneyPlain(BigDecimal amount) {
+        if (amount == null) {
+            return "0";
+        }
+        return amount.setScale(2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
+    }
+
     private static String trimSlash(String base) {
         if (base == null || base.isBlank()) {
             return "https://kiosk.ke";
         }
         return base.endsWith("/") ? base.substring(0, base.length() - 1) : base;
+    }
+
+    /** Package-visible for unit tests around alert copy. */
+    record PoSummary(int lineCount, BigDecimal total) {
+        static PoSummary empty() {
+            return new PoSummary(0, null);
+        }
     }
 }

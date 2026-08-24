@@ -16,6 +16,8 @@ public final class RestockDigestDtos {
             String itemId,
             String itemName,
             String itemSku,
+            String itemTypeId,
+            String itemTypeName,
             String supplierId,
             String supplierName,
             String target,
@@ -124,6 +126,8 @@ public final class RestockDigestDtos {
             String itemId,
             String itemName,
             String itemSku,
+            String itemTypeId,
+            String itemTypeName,
             String target,
             BigDecimal onHand,
             BigDecimal par,
@@ -143,4 +147,6 @@ public final class RestockDigestDtos {
             String currency,
             List<RestockPrepItem> items
     ) {}
+
+    public record RestockDigestPdfFile(String filename, byte[] body) {}
 }

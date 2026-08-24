@@ -247,6 +247,7 @@ class RestockDigestIT {
 
         JsonNode line = run.get("suggestions").get(0);
         assertThat(line.get("itemId").asText()).isEqualTo(itemId);
+        assertThat(line.get("itemTypeName").asText()).isNotBlank();
         assertThat(line.get("target").asText()).isEqualTo("po");
         assertThat(line.get("supplierId").asText()).isEqualTo(supplierId);
         assertThat(line.get("reasonCode").asText()).contains("BELOW_MIN");
@@ -271,6 +272,50 @@ class RestockDigestIT {
         String firstId = generate().get("id").asText();
         String secondId = generate().get("id").asText();
         assertThat(secondId).isEqualTo(firstId);
+    }
+
+    @Test
+    void groupPdf_returnsPdfForSupplierAndDepartment() throws Exception {
+        JsonNode run = generate();
+        String runId = run.get("id").asText();
+        String deptId = run.get("suggestions").get(0).get("itemTypeId").asText();
+
+        MvcResult supplierPdf = mockMvc.perform(get("/api/v1/inventory/restock/runs/" + runId + "/pdf")
+                        .param("supplierId", supplierId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(supplierPdf.getResponse().getContentType()).isEqualTo("application/pdf");
+        assertThat(supplierPdf.getResponse().getContentAsByteArray())
+                .startsWith("%PDF".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+
+        MvcResult deptPdf = mockMvc.perform(get("/api/v1/inventory/restock/runs/" + runId + "/pdf")
+                        .param("departmentId", deptId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(deptPdf.getResponse().getContentAsByteArray())
+                .startsWith("%PDF".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+    }
+
+    @Test
+    void groupPdf_uncategorisedSentinel_isNotAServerError() throws Exception {
+        JsonNode run = generate();
+        String runId = run.get("id").asText();
+        // Seeded items have a department, so the uncategorised aisle is empty — 404,
+        // never 500 (the live bug was departmentId=__none__ exploding).
+        for (String sentinel : List.of("uncategorised", "__none__")) {
+            mockMvc.perform(get("/api/v1/inventory/restock/runs/" + runId + "/pdf")
+                            .param("departmentId", sentinel)
+                            .header("X-Tenant-Id", TENANT)
+                            .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                            .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                    .andExpect(status().isNotFound());
+        }
     }
 
     @Test

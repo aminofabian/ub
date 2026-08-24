@@ -4,7 +4,10 @@ import java.time.LocalDate;
 import java.util.List;
 
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -23,6 +26,7 @@ import zelisline.ub.identity.application.RequestPermissionService;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.AcceptRestockRunRequest;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.AcceptRestockRunResponse;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.RestockActiveRunSummary;
+import zelisline.ub.inventory.api.dto.RestockDigestDtos.RestockDigestPdfFile;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.RestockPrepResponse;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.RestockRunListRow;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.RestockRunResponse;
@@ -114,6 +118,26 @@ public class RestockDigestController {
         CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         return restockDigestService.getRun(businessId, runId.trim());
+    }
+
+    /** Closing-sheet PDF for one department, supplier, or pad group. */
+    @GetMapping("/runs/{runId}/pdf")
+    @PreAuthorize("hasPermission(null, 'purchasing.path_a.read') or hasPermission(null, 'order_pad.read')")
+    public ResponseEntity<byte[]> groupPdf(
+            @PathVariable String runId,
+            @RequestParam(required = false) String departmentId,
+            @RequestParam(required = false) String supplierId,
+            @RequestParam(required = false, defaultValue = "false") boolean pad,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        RestockDigestPdfFile file = restockDigestService.renderGroupPdf(
+                businessId, runId.trim(), departmentId, supplierId, pad);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + file.filename() + "\"")
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(file.body());
     }
 
     /** Accept pending lines into draft POs + order pad. Idempotent per line. */

@@ -5,12 +5,14 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -25,13 +27,19 @@ import org.springframework.web.server.ResponseStatusException;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.domain.ItemType;
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.AcceptRestockRunRequest;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.AcceptRestockRunResponse;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.CreatedPurchaseOrderRef;
+import zelisline.ub.inventory.api.dto.RestockDigestDtos.RestockDigestPdfFile;
 import zelisline.ub.inventory.api.dto.RestockDigestDtos.SkippedAcceptLine;
+import zelisline.ub.inventory.restock.RestockDigestPdfLine;
+import zelisline.ub.inventory.restock.RestockDigestPdfRenderer;
+import zelisline.ub.inventory.restock.RestockDigestPdfSnapshot;
 import zelisline.ub.inventory.domain.OrderPadItem;
 import zelisline.ub.inventory.domain.RestockRun;
 import zelisline.ub.inventory.domain.RestockSuggestion;
@@ -73,12 +81,19 @@ public class RestockDigestService {
     private static final int VELOCITY_7D = 7;
     /** Minimum accepted lines before par learning engages for an item. */
     private static final int MIN_ACCEPT_HISTORY = 3;
+    private static final DateTimeFormatter PDF_DATE =
+            DateTimeFormatter.ofPattern("EEE d MMM yyyy", Locale.ENGLISH);
+    private static final String UNCATEGORISED = "Uncategorised";
+    /** Query value for items with no department. Also accept the old {@code __none__} sentinel. */
+    static final String UNCATEGORISED_KEY = "uncategorised";
+    private static final String LEGACY_UNCATEGORISED_KEY = "__none__";
 
     private final RestockRunRepository restockRunRepository;
     private final RestockSuggestionRepository restockSuggestionRepository;
     private final BranchRepository branchRepository;
     private final BusinessRepository businessRepository;
     private final ItemRepository itemRepository;
+    private final ItemTypeRepository itemTypeRepository;
     private final InventoryBatchRepository inventoryBatchRepository;
     private final PackageVariantStockResolver packageVariantStockResolver;
     private final MvSalesDailyRepository mvSalesDailyRepository;
@@ -111,7 +126,7 @@ public class RestockDigestService {
         RestockRun existing = restockRunRepository.findByBranchIdAndRunDate(branchId, effectiveDate)
                 .orElse(null);
         if (existing != null) {
-            return toRunResponse(businessId, existing, loadSuggestions(existing.getId()), business, branch);
+            return toRunResponse(businessId, existing, loadSuggestions(businessId, existing.getId()), business, branch);
         }
 
         // Windows are anchored on the run date (not "now") so a manual run for an
@@ -205,11 +220,11 @@ public class RestockDigestService {
             RestockRun winner = restockRunRepository.findByBranchIdAndRunDate(branchId, effectiveDate)
                     .orElseThrow(() -> new ResponseStatusException(
                             HttpStatus.CONFLICT, "Restock run already exists for this branch and date"));
-            return toRunResponse(businessId, winner, loadSuggestions(winner.getId()), business, branch);
+            return toRunResponse(businessId, winner, loadSuggestions(businessId, winner.getId()), business, branch);
         }
         // A fresh run supersedes the prior one: expire it if it still has pending lines.
         expirePriorRuns(businessId, branchId, effectiveDate);
-        return toRunResponse(businessId, run, loadSuggestions(run.getId()), business, branch);
+        return toRunResponse(businessId, run, loadSuggestions(businessId, run.getId()), business, branch);
     }
 
     private void expirePriorRuns(String businessId, String branchId, LocalDate runDate) {
@@ -260,7 +275,7 @@ public class RestockDigestService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Run not found"));
         Business business = requireBusiness(businessId);
         Branch branch = requireBranch(businessId, run.getBranchId());
-        return toRunResponse(businessId, run, loadSuggestions(run.getId()), business, branch);
+        return toRunResponse(businessId, run, loadSuggestions(businessId, run.getId()), business, branch);
     }
 
     /** Latest run for the branch — empty summary when none exists or it's no longer actionable. */
@@ -290,13 +305,17 @@ public class RestockDigestService {
                 .map(RestockSuggestion::getItemId)
                 .collect(Collectors.toSet());
         Map<String, Item> items = loadItems(businessId, itemIds);
+        Map<String, ItemType> types = loadItemTypes(businessId, items);
         List<RestockDigestDtos.RestockPrepItem> itemsOut = rows.stream()
                 .map(s -> {
                     Item item = items.get(s.getItemId());
+                    ItemType type = item == null ? null : types.get(item.getItemTypeId());
                     return new RestockDigestDtos.RestockPrepItem(
                             s.getItemId(),
                             item != null && item.getName() != null ? item.getName() : "",
                             item != null ? item.getSku() : null,
+                            item != null ? item.getItemTypeId() : null,
+                            type != null ? type.getLabel() : UNCATEGORISED,
                             s.getTarget(),
                             s.getOnHand(),
                             s.getPar(),
@@ -325,7 +344,142 @@ public class RestockDigestService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No restock run yet"));
         Business business = requireBusiness(businessId);
         Branch branch = requireBranch(businessId, run.getBranchId());
-        return toRunResponse(businessId, run, loadSuggestions(run.getId()), business, branch);
+        return toRunResponse(businessId, run, loadSuggestions(businessId, run.getId()), business, branch);
+    }
+
+    /**
+     * Closing-sheet PDF for one group on a run. Filter by department, supplier,
+     * and/or pad-only. Dismissed and snoozed lines are omitted so the sheet is
+     * the orderable list.
+     */
+    @Transactional(readOnly = true)
+    public RestockDigestPdfFile renderGroupPdf(
+            String businessId,
+            String runId,
+            String departmentId,
+            String supplierId,
+            boolean padOnly
+    ) {
+        RestockRun run = requireRun(businessId, runId);
+        Business business = requireBusiness(businessId);
+        Branch branch = requireBranch(businessId, run.getBranchId());
+        List<RestockDigestDtos.RestockSuggestionResponse> suggestions =
+                loadSuggestions(businessId, run.getId());
+
+        String deptFilter = blankToNull(departmentId);
+        String supplierFilter = blankToNull(supplierId);
+        List<RestockDigestDtos.RestockSuggestionResponse> lines = suggestions.stream()
+                .filter(s -> !"dismissed".equals(s.status()) && !"snoozed".equals(s.status()))
+                .filter(s -> matchesDepartment(deptFilter, s.itemTypeId()))
+                .filter(s -> supplierFilter == null || supplierFilter.equals(s.supplierId()))
+                .filter(s -> !padOnly || InventoryConstants.DIGEST_TARGET_PAD.equals(s.target()))
+                .toList();
+        if (lines.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No lines in this group");
+        }
+
+        String groupTitle = groupTitle(lines, deptFilter, supplierFilter, padOnly);
+        String groupHint = lines.size() + (lines.size() == 1 ? " item" : " items");
+        BigDecimal subtotal = BigDecimal.ZERO;
+        List<RestockDigestPdfLine> pdfLines = new ArrayList<>();
+        for (RestockDigestDtos.RestockSuggestionResponse s : lines) {
+            BigDecimal qty = s.acceptedQty() != null ? s.acceptedQty() : s.suggestedQty();
+            BigDecimal lineTotal = qty != null && s.unitCost() != null
+                    ? qty.multiply(s.unitCost())
+                    : null;
+            if (lineTotal != null) {
+                subtotal = subtotal.add(lineTotal);
+            }
+            pdfLines.add(new RestockDigestPdfLine(
+                    s.itemName(),
+                    s.itemSku(),
+                    s.itemTypeName(),
+                    s.supplierName(),
+                    s.onHand(),
+                    s.par(),
+                    qty,
+                    s.unitCost(),
+                    lineTotal,
+                    s.evidence()));
+        }
+
+        String currency = run.getCurrency() != null ? run.getCurrency() : "KES";
+        RestockDigestPdfSnapshot snapshot = new RestockDigestPdfSnapshot(
+                business.getName(),
+                branch.getName(),
+                run.getRunDate().format(PDF_DATE),
+                groupTitle,
+                groupHint,
+                currency,
+                pdfLines,
+                subtotal.setScale(2, RoundingMode.HALF_UP));
+
+        String filename = "restock-"
+                + run.getRunDate()
+                + "-"
+                + slug(groupTitle)
+                + ".pdf";
+        try {
+            return new RestockDigestPdfFile(filename, RestockDigestPdfRenderer.render(snapshot));
+        } catch (RuntimeException ex) {
+            throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR, "Could not build this PDF", ex);
+        }
+    }
+
+    private static boolean matchesDepartment(String deptFilter, String itemTypeId) {
+        if (deptFilter == null) {
+            return true;
+        }
+        if (isUncategorisedKey(deptFilter)) {
+            return itemTypeId == null || itemTypeId.isBlank();
+        }
+        return deptFilter.equals(itemTypeId);
+    }
+
+    private static boolean isUncategorisedKey(String key) {
+        return UNCATEGORISED_KEY.equalsIgnoreCase(key) || LEGACY_UNCATEGORISED_KEY.equals(key);
+    }
+
+    private static String groupTitle(
+            List<RestockDigestDtos.RestockSuggestionResponse> lines,
+            String departmentId,
+            String supplierId,
+            boolean padOnly
+    ) {
+        String dept = lines.get(0).itemTypeName();
+        if (dept == null || dept.isBlank()) {
+            dept = UNCATEGORISED;
+        }
+        if (padOnly) {
+            return departmentId != null ? dept + " - Needs a supplier" : "Needs a supplier";
+        }
+        if (supplierId != null) {
+            String supplier = lines.get(0).supplierName();
+            if (supplier == null || supplier.isBlank()) {
+                supplier = "Supplier";
+            }
+            return departmentId != null ? dept + " - " + supplier : supplier;
+        }
+        if (departmentId != null) {
+            return dept;
+        }
+        return "Tonight's list";
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
+    }
+
+    private static String slug(String value) {
+        if (value == null || value.isBlank()) {
+            return "group";
+        }
+        String s = value.toLowerCase(Locale.ENGLISH).replaceAll("[^a-z0-9]+", "-").replaceAll("(^-|-)$", "");
+        return s.isBlank() ? "group" : s;
     }
 
     // ---------------------------------------------------------------- accept flow
@@ -401,7 +555,7 @@ public class RestockDigestService {
         }
 
         return new AcceptRestockRunResponse(
-                toRunResponse(businessId, run, loadSuggestions(runId), business, branch),
+                toRunResponse(businessId, run, loadSuggestions(businessId, runId), business, branch),
                 createdPos,
                 padCreated,
                 skipped);
@@ -474,7 +628,7 @@ public class RestockDigestService {
                     .orElse(null);
             String poNumber;
             if (poId == null) {
-                String notes = "Restock digest " + run.getRunDate() + " — " + branch.getName();
+                String notes = "Restock digest " + run.getRunDate() + " - " + branch.getName();
                 PathAPurchaseOrderDetailResponse po = pathAPurchaseService.createPurchaseOrder(
                         businessId,
                         new CreatePathAPurchaseOrderRequest(supplierId, run.getBranchId(), null, null, notes));
@@ -682,7 +836,7 @@ public class RestockDigestService {
         RestockRun run = requireRun(businessId, runId);
         Business business = requireBusiness(businessId);
         Branch branch = requireBranch(businessId, run.getBranchId());
-        return toRunResponse(businessId, run, loadSuggestions(runId), business, branch);
+        return toRunResponse(businessId, run, loadSuggestions(businessId, runId), business, branch);
     }
 
     private static String normalizeMode(String mode) {
@@ -900,7 +1054,7 @@ public class RestockDigestService {
         run.setEstTotal(total.setScale(4, RoundingMode.HALF_UP));
     }
 
-    private List<RestockDigestDtos.RestockSuggestionResponse> loadSuggestions(String runId) {
+    private List<RestockDigestDtos.RestockSuggestionResponse> loadSuggestions(String businessId, String runId) {
         List<RestockSuggestion> rows = restockSuggestionRepository.findByRunIdOrderBySuggestedQtyDescIdAsc(runId);
         if (rows.isEmpty()) {
             return List.of();
@@ -908,6 +1062,7 @@ public class RestockDigestService {
         Set<String> itemIds = rows.stream().map(RestockSuggestion::getItemId).collect(Collectors.toSet());
         Map<String, Item> items = itemRepository.findAllById(itemIds).stream()
                 .collect(Collectors.toMap(Item::getId, i -> i, (a, b) -> a));
+        Map<String, ItemType> types = loadItemTypes(businessId, items);
         Set<String> supplierIds = rows.stream()
                 .map(RestockSuggestion::getSupplierId)
                 .filter(id -> id != null && !id.isBlank())
@@ -917,11 +1072,28 @@ public class RestockDigestService {
                 : supplierRepository.findAllById(supplierIds).stream()
                         .collect(Collectors.toMap(Supplier::getId, Supplier::getName, (a, b) -> a));
         return rows.stream()
-                .map(r -> toSuggestionResponse(
-                        r,
-                        items.get(r.getItemId()),
-                        supplierName(supplierNames, r.getSupplierId())))
+                .map(r -> {
+                    Item item = items.get(r.getItemId());
+                    ItemType type = item == null || item.getItemTypeId() == null
+                            ? null
+                            : types.get(item.getItemTypeId());
+                    return toSuggestionResponse(
+                            r, item, type, supplierName(supplierNames, r.getSupplierId()));
+                })
                 .toList();
+    }
+
+    private Map<String, ItemType> loadItemTypes(String businessId, Map<String, Item> items) {
+        Set<String> typeIds = items.values().stream()
+                .map(Item::getItemTypeId)
+                .filter(id -> id != null && !id.isBlank())
+                .collect(Collectors.toSet());
+        if (typeIds.isEmpty()) {
+            return Map.of();
+        }
+        return itemTypeRepository.findAllById(typeIds).stream()
+                .filter(t -> businessId.equals(t.getBusinessId()))
+                .collect(Collectors.toMap(ItemType::getId, t -> t, (a, b) -> a));
     }
 
     private static String supplierName(Map<String, String> names, String supplierId) {
@@ -934,6 +1106,7 @@ public class RestockDigestService {
     private RestockDigestDtos.RestockSuggestionResponse toSuggestionResponse(
             RestockSuggestion r,
             Item item,
+            ItemType itemType,
             String supplierName
     ) {
         return new RestockDigestDtos.RestockSuggestionResponse(
@@ -942,6 +1115,10 @@ public class RestockDigestService {
                 r.getItemId(),
                 item != null ? item.getName() : "",
                 item != null ? item.getSku() : null,
+                item != null ? item.getItemTypeId() : null,
+                itemType != null && itemType.getLabel() != null && !itemType.getLabel().isBlank()
+                        ? itemType.getLabel()
+                        : UNCATEGORISED,
                 r.getSupplierId(),
                 supplierName,
                 r.getTarget(),

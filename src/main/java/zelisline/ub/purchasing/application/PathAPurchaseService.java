@@ -161,6 +161,9 @@ public class PathAPurchaseService {
         po.setExpectedDate(req.expectedDate());
         po.setNotes(blankToNull(req.notes()));
         po.setStatus(PurchasingConstants.PO_DRAFT);
+        if (po.getSource() == null || po.getSource().isBlank()) {
+            po.setSource(PurchasingConstants.PO_SOURCE_MANUAL);
+        }
         String num = blankToNull(req.poNumber());
         po.setPoNumber(num != null ? num : "PO-" + id.replace("-", "").substring(0, 8).toUpperCase());
         try {

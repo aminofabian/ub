@@ -5,7 +5,6 @@ import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
 
 import zelisline.ub.support.domain.SupportConversation;
 
@@ -13,23 +12,17 @@ public interface SupportConversationRepository extends JpaRepository<SupportConv
 
     Optional<SupportConversation> findByBusinessId(String businessId);
 
-    List<SupportConversation> findByStatusOrderByLastMessageAtDesc(String status);
-
-    List<SupportConversation> findAllByOrderByLastMessageAtDesc();
-
-    /** Platform inbox rows with an unread count of tenant messages per conversation. */
+    /** Newest activity first; conversations with no messages sort by creation. */
     @Query("""
-            SELECT c
-            FROM SupportConversation c
-            WHERE (:status IS NULL OR c.status = :status)
+            SELECT c FROM SupportConversation c
+            WHERE c.status = :status
             ORDER BY COALESCE(c.lastMessageAt, c.createdAt) DESC
             """)
-    List<SupportConversation> listForAdmin(@Param("status") String status);
+    List<SupportConversation> findByStatusOrderByLastMessageAtDesc(String status);
 
     @Query("""
-            SELECT COUNT(c)
-            FROM SupportConversation c
-            WHERE c.status = :status
+            SELECT c FROM SupportConversation c
+            ORDER BY COALESCE(c.lastMessageAt, c.createdAt) DESC
             """)
-    long countByStatus(@Param("status") String status);
+    List<SupportConversation> findAllByOrderByLastMessageAtDesc();
 }

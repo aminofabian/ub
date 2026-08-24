@@ -45,6 +45,7 @@ import zelisline.ub.platform.security.JwtAuthenticationFilter;
 import zelisline.ub.platform.security.JwtTokenService;
 import zelisline.ub.platform.security.LoginIpRateLimiter;
 import zelisline.ub.platform.security.LoginRateLimitFilter;
+import zelisline.ub.platform.security.MetricsBearerTokenFilter;
 import zelisline.ub.platform.security.RefreshIpRateLimiter;
 import zelisline.ub.platform.security.RefreshRateLimitFilter;
 import zelisline.ub.platform.security.TestAuthenticationFilter;
@@ -102,6 +103,7 @@ public class SecurityConfig {
             JwtAuthenticationFilter jwtAuthenticationFilter,
             ApiKeyAuthenticationFilter apiKeyAuthenticationFilter,
             ApiKeyRateLimitFilter apiKeyRateLimitFilter,
+            MetricsBearerTokenFilter metricsBearerTokenFilter,
             ObjectProvider<TestAuthenticationFilter> testAuthenticationFilter
     ) throws Exception {
         http
@@ -132,6 +134,11 @@ public class SecurityConfig {
                                 "/actuator/health/**",
                                 "/actuator/info"
                         ).permitAll()
+
+                        // Micrometer metrics + Prometheus scrape: super-admin JWT, or the
+                        // app.actuator.prometheus-token bearer secret (MetricsBearerTokenFilter).
+                        .requestMatchers("/actuator/metrics/**", "/actuator/prometheus")
+                            .hasRole("SUPER_ADMIN")
 
                         .requestMatchers(
                                 "/api/v1/openapi",
@@ -185,6 +192,7 @@ public class SecurityConfig {
         http.addFilterAfter(jwtAuthenticationFilter, RefreshRateLimitFilter.class);
         http.addFilterAfter(apiKeyAuthenticationFilter, JwtAuthenticationFilter.class);
         http.addFilterAfter(apiKeyRateLimitFilter, ApiKeyAuthenticationFilter.class);
+        http.addFilterBefore(metricsBearerTokenFilter, JwtAuthenticationFilter.class);
         testAuthenticationFilter.ifAvailable(filter ->
                 http.addFilterAfter(filter, ApiKeyRateLimitFilter.class));
 

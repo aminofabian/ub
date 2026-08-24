@@ -4,6 +4,7 @@ public record SuperAdminLoginResponse(
         String accessToken,
         String superAdminId,
         String email,
-        String name
+        String name,
+        String phone
 ) {
 }

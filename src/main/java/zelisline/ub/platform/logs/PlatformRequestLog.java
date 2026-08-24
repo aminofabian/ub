@@ -59,4 +59,8 @@ public class PlatformRequestLog {
 
     @Column(name = "ip", length = 64)
     private String ip;
+
+    /** Load-test run id (e.g. {@code lt-…}) when the request came from the load-test console. */
+    @Column(name = "load_test_run_id", length = 36)
+    private String loadTestRunId;
 }

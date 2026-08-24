@@ -15,6 +15,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -45,6 +46,7 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
     private final RealtimeTicketService ticketService;
     private final MeterRegistry meterRegistry;
     private final NotificationRepository notificationRepository;
+    private final ObjectProvider<SupportTypingListener> typingListenerProvider;
     private final ObjectMapper objectMapper;
 
     private final Map<String, Instant> lastPong = new ConcurrentHashMap<>();
@@ -61,11 +63,13 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
     });
 
     public RealtimeWebSocketHandler(SessionRegistry sessionRegistry, RealtimeTicketService ticketService,
-                                    MeterRegistry meterRegistry, NotificationRepository notificationRepository) {
+                                    MeterRegistry meterRegistry, NotificationRepository notificationRepository,
+                                    ObjectProvider<SupportTypingListener> typingListenerProvider) {
         this.sessionRegistry = sessionRegistry;
         this.ticketService = ticketService;
         this.meterRegistry = meterRegistry;
         this.notificationRepository = notificationRepository;
+        this.typingListenerProvider = typingListenerProvider;
         this.objectMapper = new ObjectMapper();
     }
 
@@ -94,7 +98,9 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
         RealtimeSession meta = new RealtimeSession(
                 ticketRecord.userId(),
                 ticketRecord.businessId(),
-                "",
+                // Platform-scope tickets (super-admin console) carry the SUPER_ADMIN role
+                // so support-chat fan-out can target them.
+                RealtimeScopes.PLATFORM.equals(ticketRecord.businessId()) ? "SUPER_ADMIN" : "",
                 ticketRecord.branchId(),
                 ticketRecord.allowedChannels()
         );
@@ -153,6 +159,7 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
             case "pong" -> handlePong(sessionId);
             case "reauth" -> handleReauth(session, frame);
             case "catch-up" -> handleCatchUp(session, frame);
+            case "typing" -> handleTyping(session, frame);
             default -> sendError(session, 4400, "Unknown operation: " + op);
         }
     }
@@ -295,6 +302,23 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
 
     private void handlePong(String sessionId) {
         lastPong.put(sessionId, Instant.now());
+    }
+
+    /**
+     * Typing presence for the support chat. The frame is forwarded to
+     * {@link SupportTypingListener} (implemented in the support package) which
+     * broadcasts it to the other side's sessions.
+     */
+    private void handleTyping(WebSocketSession session, JsonNode frame) {
+        RealtimeSession meta = sessionRegistry.getMeta(session.getId());
+        if (meta == null) {
+            sendError(session, 4401, "Session not found");
+            return;
+        }
+        String conversationId = frame.has("conversationId") ? frame.get("conversationId").asText() : null;
+        boolean typing = !frame.has("typing") || frame.get("typing").asBoolean(true);
+        typingListenerProvider.ifAvailable(listener ->
+                listener.onTyping(meta.userId(), meta.businessId(), meta.roleId(), conversationId, typing));
     }
 
     private void handleReauth(WebSocketSession session, JsonNode frame) {
@@ -466,7 +490,7 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
         sessionRegistry.unregister(sessionId);
     }
 
-    static String escapeJson(String s) {
+    public static String escapeJson(String s) {
         if (s == null) return "";
         return s.replace("\\", "\\\\")
                 .replace("\"", "\\\"")

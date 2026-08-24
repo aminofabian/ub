@@ -67,18 +67,33 @@ class PlatformRequestLogRepositoryIT {
         save("10", "GET", "/api/v1/airtime/quote", RequestLogCategory.AIRTIME, 200, true, 12);
         save("11", "POST", "/api/v1/airtime/orders", RequestLogCategory.AIRTIME, 500, false, 300);
 
-        assertThat(repository.findAll(PlatformRequestLogRepository.matches(null, null, null, null), PageRequest.of(0, 50)))
+        assertThat(repository.findAll(PlatformRequestLogRepository.matches(null, null, null, null, null), PageRequest.of(0, 50)))
                 .hasSize(2);
-        assertThat(repository.findAll(PlatformRequestLogRepository.matches(RequestLogCategory.AIRTIME, null, null, null), PageRequest.of(0, 50)))
+        assertThat(repository.findAll(PlatformRequestLogRepository.matches(RequestLogCategory.AIRTIME, null, null, null, null), PageRequest.of(0, 50)))
                 .hasSize(2);
-        assertThat(repository.findAll(PlatformRequestLogRepository.matches(RequestLogCategory.AIRTIME, Boolean.TRUE, null, null), PageRequest.of(0, 50)))
+        assertThat(repository.findAll(PlatformRequestLogRepository.matches(RequestLogCategory.AIRTIME, Boolean.TRUE, null, null, null), PageRequest.of(0, 50)))
                 .hasSize(1);
-        assertThat(repository.findAll(PlatformRequestLogRepository.matches(null, Boolean.FALSE, null, null), PageRequest.of(0, 50)))
+        assertThat(repository.findAll(PlatformRequestLogRepository.matches(null, Boolean.FALSE, null, null, null), PageRequest.of(0, 50)))
                 .hasSize(1);
-        assertThat(repository.findAll(PlatformRequestLogRepository.matches(null, null, null, "203.0.113.5"), PageRequest.of(0, 50)))
+        assertThat(repository.findAll(PlatformRequestLogRepository.matches(null, null, null, "203.0.113.5", null), PageRequest.of(0, 50)))
                 .isEmpty();
-        assertThat(repository.findAll(PlatformRequestLogRepository.matches(null, Boolean.FALSE, null, "10.0.0.9"), PageRequest.of(0, 50)))
+        assertThat(repository.findAll(PlatformRequestLogRepository.matches(null, Boolean.FALSE, null, "10.0.0.9", null), PageRequest.of(0, 50)))
                 .hasSize(1);
+    }
+
+    @Test
+    void searchFiltersLoadTestTraffic() {
+        save("30", "GET", "/api/v1/super-admin/me", RequestLogCategory.OTHER, 200, true, 4, "lt-1750000000000-1");
+        save("31", "GET", "/api/v1/super-admin/me", RequestLogCategory.OTHER, 200, true, 4, "lt-1750000000000-2");
+        save("32", "GET", "/api/v1/airtime/quote", RequestLogCategory.AIRTIME, 200, true, 12);
+
+        // "*" = any load-test traffic; a value = one specific run.
+        assertThat(repository.findAll(PlatformRequestLogRepository.matches(null, null, null, null, "*"), PageRequest.of(0, 50)))
+                .extracting(row -> row.getId().trim())
+                .containsExactlyInAnyOrder("30", "31");
+        assertThat(repository.findAll(PlatformRequestLogRepository.matches(null, null, null, null, "lt-1750000000000-1"), PageRequest.of(0, 50)))
+                .extracting(row -> row.getId().trim())
+                .containsExactly("30");
     }
 
     @Test
@@ -100,6 +115,12 @@ class PlatformRequestLogRepositoryIT {
 
     private void save(String id, String method, String path,
             RequestLogCategory category, int status, boolean success, long durationMs) {
+        save(id, method, path, category, status, success, durationMs, (String) null);
+    }
+
+    private void save(String id, String method, String path,
+            RequestLogCategory category, int status, boolean success, long durationMs,
+            String loadTestRunId) {
         PlatformRequestLog row = new PlatformRequestLog();
         row.setId(id);
         row.setLoggedAt(Instant.now());
@@ -111,6 +132,7 @@ class PlatformRequestLogRepositoryIT {
         row.setSuccess(success);
         row.setDurationMs(durationMs);
         row.setIp("10.0.0.9");
+        row.setLoadTestRunId(loadTestRunId);
         repository.save(row);
     }
 

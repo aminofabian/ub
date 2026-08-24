@@ -50,9 +50,13 @@ public interface PlatformRequestLogRepository
     /**
      * Dynamic filter for the live feed — only the predicates the caller
      * supplied are added, so no nullable-parameter SQL is generated.
+     *
+     * @param loadTestRunId {@code null} = no filter; {@code "*"} = load-test
+     *                      traffic only (column not null); otherwise an exact
+     *                      load-test run id
      */
     static Specification<PlatformRequestLog> matches(
-            RequestLogCategory category, Boolean success, Instant since, String ip) {
+            RequestLogCategory category, Boolean success, Instant since, String ip, String loadTestRunId) {
         return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
             if (category != null) {
@@ -67,6 +71,13 @@ public interface PlatformRequestLogRepository
             if (ip != null && !ip.isBlank()) {
                 String pattern = "%" + ip.trim().toLowerCase() + "%";
                 predicates.add(cb.like(cb.lower(root.get("ip")), pattern));
+            }
+            if (loadTestRunId != null && !loadTestRunId.isBlank()) {
+                if ("*".equals(loadTestRunId)) {
+                    predicates.add(cb.isNotNull(root.get("loadTestRunId")));
+                } else {
+                    predicates.add(cb.equal(root.get("loadTestRunId"), loadTestRunId));
+                }
             }
             return cb.and(predicates.toArray(new Predicate[0]));
         };

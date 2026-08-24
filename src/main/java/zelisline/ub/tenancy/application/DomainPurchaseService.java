@@ -13,6 +13,7 @@ import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,6 +29,7 @@ import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.payments.domain.GatewayStkPushStatuses;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.StkPushContextType;
+import zelisline.ub.platform.adoption.DomainPurchasedEvent;
 import zelisline.ub.platform.application.PlatformDomainSettingsService;
 import zelisline.ub.tenancy.api.dto.CreateDomainOrderRequest;
 import zelisline.ub.tenancy.api.dto.DomainOrderResponse;
@@ -68,6 +70,7 @@ public class DomainPurchaseService {
     private final PaymentGatewayStkService paymentGatewayStkService;
     private final GatewayStkPushService gatewayStkPushService;
     private final ObjectMapper objectMapper;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional(readOnly = true)
     public DomainSearchResponse search(String businessId, String rawQuery) {
@@ -168,6 +171,10 @@ public class DomainPurchaseService {
         if (saved.getStatus() == DomainOrderStatus.REGISTERING) {
             attemptResellerRegister(saved);
             saved = domainOrderRepository.save(saved);
+        }
+        if (saved.getStatus() == DomainOrderStatus.REGISTERING) {
+            // Billing stub path: purchase happened immediately at order creation.
+            eventPublisher.publishEvent(new DomainPurchasedEvent(saved.getBusinessId(), saved.getFqdn()));
         }
         return toResponse(saved);
     }
@@ -331,6 +338,7 @@ public class DomainPurchaseService {
         }
         attemptResellerRegister(order);
         DomainOrder saved = domainOrderRepository.save(order);
+        eventPublisher.publishEvent(new DomainPurchasedEvent(saved.getBusinessId(), saved.getFqdn()));
         return toResponse(saved);
     }
 

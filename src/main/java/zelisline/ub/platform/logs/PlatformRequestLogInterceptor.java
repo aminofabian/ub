@@ -30,6 +30,9 @@ public class PlatformRequestLogInterceptor implements HandlerInterceptor {
     private static final String START_ATTR =
             PlatformRequestLogInterceptor.class.getName() + ".startNanos";
 
+    /** Header the load-test console sets on its self-test requests. */
+    public static final String LOAD_TEST_HEADER = "X-Palmart-Load-Test";
+
     private final PlatformRequestLogRepository repository;
     private final RequestLogClassifier classifier;
 
@@ -86,6 +89,7 @@ public class PlatformRequestLogInterceptor implements HandlerInterceptor {
             row.setSuccess(status >= 200 && status < 400);
             row.setDurationMs((System.nanoTime() - started) / 1_000_000);
             row.setIp(clientIp(request));
+            row.setLoadTestRunId(loadTestRunId(request));
 
             repository.save(row);
         } catch (Exception e) {
@@ -103,5 +107,14 @@ public class PlatformRequestLogInterceptor implements HandlerInterceptor {
         }
         String remote = request.getRemoteAddr();
         return remote == null ? null : remote;
+    }
+
+    private static String loadTestRunId(HttpServletRequest request) {
+        String value = request.getHeader(LOAD_TEST_HEADER);
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.length() > 36 ? trimmed.substring(0, 36) : trimmed;
     }
 }

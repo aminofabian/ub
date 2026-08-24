@@ -19,6 +19,7 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 import org.springframework.web.socket.server.HandshakeInterceptor;
 
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.beans.factory.ObjectProvider;
 import zelisline.ub.notifications.repository.NotificationRepository;
 
 /**
@@ -40,6 +41,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
     private final SessionRegistry sessionRegistry;
     private final MeterRegistry meterRegistry;
     private final NotificationRepository notificationRepository;
+    private final ObjectProvider<SupportTypingListener> typingListenerProvider;
     private final int maxConnectionsPerUser;
     private final int maxConnectionsPerBusiness;
 
@@ -48,6 +50,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
             SessionRegistry sessionRegistry,
             MeterRegistry meterRegistry,
             NotificationRepository notificationRepository,
+            ObjectProvider<SupportTypingListener> typingListenerProvider,
             @Value("${app.realtime.max-connections-per-user:5}") int maxConnectionsPerUser,
             @Value("${app.realtime.max-connections-per-business:50}") int maxConnectionsPerBusiness
     ) {
@@ -55,6 +58,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
         this.sessionRegistry = sessionRegistry;
         this.meterRegistry = meterRegistry;
         this.notificationRepository = notificationRepository;
+        this.typingListenerProvider = typingListenerProvider;
         this.maxConnectionsPerUser = maxConnectionsPerUser;
         this.maxConnectionsPerBusiness = maxConnectionsPerBusiness;
     }
@@ -68,7 +72,8 @@ public class WebSocketConfig implements WebSocketConfigurer {
 
     @Bean
     public RealtimeWebSocketHandler realtimeWebSocketHandler() {
-        return new RealtimeWebSocketHandler(sessionRegistry, ticketService, meterRegistry, notificationRepository);
+        return new RealtimeWebSocketHandler(sessionRegistry, ticketService, meterRegistry,
+                notificationRepository, typingListenerProvider);
     }
 
     @Bean

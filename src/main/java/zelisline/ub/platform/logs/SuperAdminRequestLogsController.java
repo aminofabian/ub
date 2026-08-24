@@ -47,7 +47,8 @@ public class SuperAdminRequestLogsController {
             int status,
             boolean success,
             long durationMs,
-            String ip) {}
+            String ip,
+            String loadTestRunId) {}
 
     public record CategorySummary(
             RequestLogCategory category,
@@ -73,13 +74,14 @@ public class SuperAdminRequestLogsController {
             @RequestParam(required = false) Boolean success,
             @RequestParam(required = false) Integer sinceMinutes,
             @RequestParam(required = false) String ip,
+            @RequestParam(required = false) String loadTestRunId,
             @RequestParam(defaultValue = "100") int limit) {
         int capped = Math.max(1, Math.min(limit, 500));
         Instant since = sinceMinutes != null && sinceMinutes > 0
                 ? Instant.now().minus(Duration.ofMinutes(sinceMinutes))
                 : null;
         List<PlatformRequestLog> rows = repository.findAll(
-                PlatformRequestLogRepository.matches(category, success, since, ip),
+                PlatformRequestLogRepository.matches(category, success, since, ip, loadTestRunId),
                 PageRequest.of(0, capped)).getContent();
         Map<String, String> tenantNames = resolveTenantNames(rows);
         return rows.stream().map(p -> toRow(p, tenantNames.get(p.getBusinessId()))).toList();
@@ -161,7 +163,8 @@ public class SuperAdminRequestLogsController {
                 p.getStatus(),
                 p.isSuccess(),
                 p.getDurationMs(),
-                p.getIp());
+                p.getIp(),
+                p.getLoadTestRunId());
     }
 
     private Map<String, String> resolveTenantNames(List<PlatformRequestLog> rows) {
@@ -170,7 +173,9 @@ public class SuperAdminRequestLogsController {
                 .filter(id -> id != null && !id.isBlank())
                 .collect(java.util.stream.Collectors.toSet());
         if (ids.isEmpty()) {
-            return Map.of();
+            // HashMap (not Map.of): rows with a null businessId (super-admin,
+            // webhooks, load-test traffic) must resolve to null, not NPE.
+            return new java.util.HashMap<>();
         }
         return businessRepository.findNamesByIds(ids).stream()
                 .collect(java.util.stream.Collectors.toMap(

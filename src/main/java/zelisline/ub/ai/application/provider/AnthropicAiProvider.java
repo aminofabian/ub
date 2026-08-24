@@ -96,13 +96,28 @@ public class AnthropicAiProvider implements AiProvider {
                     .body(json)
                     .asString();
         } catch (Exception ex) {
-            log.warn("SokoMind Anthropic request failed: {}", ex.getMessage());
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "AI provider unreachable");
+            log.warn("SokoMind Anthropic request to {} failed", url, ex);
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "AI provider 'anthropic' unreachable at " + url + " — "
+                            + failureSummary(ex)
+                            + ". Check that the server can reach the provider host (egress/firewall).");
         }
 
         if (response.getStatus() < 200 || response.getStatus() >= 300) {
-            log.warn("SokoMind Anthropic HTTP {}: {}", response.getStatus(), truncate(response.getBody()));
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "AI provider returned an error");
+            String body = truncate(response.getBody());
+            log.warn("SokoMind Anthropic HTTP {} from {}: {}", response.getStatus(), url, body);
+            int status = response.getStatus();
+            String hint = switch (status) {
+                case 400 -> " — the provider rejected the request (invalid model name?)";
+                case 401, 403 -> " — the API key looks wrong";
+                case 429 -> " — rate limited, try again later";
+                default -> "";
+            };
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "AI provider 'anthropic' returned HTTP " + status + hint
+                            + (body.isEmpty() ? "" : ": " + body));
         }
 
         return parse(response.getBody(), model);
@@ -149,6 +164,14 @@ public class AnthropicAiProvider implements AiProvider {
             log.warn("SokoMind Anthropic parse failed: {}", ex.getMessage());
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "AI provider response unreadable");
         }
+    }
+
+    private static String failureSummary(Exception ex) {
+        String msg = ex.getMessage();
+        if (msg == null || msg.isBlank()) {
+            return ex.getClass().getSimpleName();
+        }
+        return ex.getClass().getSimpleName() + ": " + msg;
     }
 
     private static String firstNonBlank(String a, String b) {

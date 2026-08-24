@@ -165,6 +165,38 @@ public class SessionRegistry {
     }
 
     /**
+     * Find all sessions of a business that subscribed to a channel.
+     * Used for support-chat fan-out (every tenant user on the thread).
+     */
+    public Set<String> findSessionsByBusinessChannel(String businessId, String channel) {
+        Set<String> result = ConcurrentHashMap.newKeySet();
+        for (Map.Entry<String, RealtimeSession> entry : sessionMeta.entrySet()) {
+            RealtimeSession meta = entry.getValue();
+            if (businessId.equals(meta.businessId())
+                    && sessionSubscriptions.getOrDefault(entry.getKey(), Set.of()).contains(channel)) {
+                result.add(entry.getKey());
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Find all platform (super-admin) sessions subscribed to a channel.
+     * Super-admin tickets mint with a {@code SUPER_ADMIN} role and the platform scope.
+     */
+    public Set<String> findPlatformAdminSessions(String channel) {
+        Set<String> result = ConcurrentHashMap.newKeySet();
+        for (Map.Entry<String, RealtimeSession> entry : sessionMeta.entrySet()) {
+            RealtimeSession meta = entry.getValue();
+            if ("SUPER_ADMIN".equals(meta.roleId())
+                    && sessionSubscriptions.getOrDefault(entry.getKey(), Set.of()).contains(channel)) {
+                result.add(entry.getKey());
+            }
+        }
+        return result;
+    }
+
+    /**
      * Find all session IDs for a given business.
      * Used for business-wide notification fan-out when no specific user is targeted.
      */

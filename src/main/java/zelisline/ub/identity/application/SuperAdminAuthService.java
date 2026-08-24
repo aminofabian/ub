@@ -65,7 +65,7 @@ public class SuperAdminAuthService {
         String jti = UUID.randomUUID().toString();
         String access = jwtTokenService.createSuperAdminAccessToken(admin.getId(), jti);
         publishSuperAdminEvent(admin, AuditEventTypes.LOGIN_SUCCEEDED, null);
-        return new SuperAdminLoginResponse(access, admin.getId(), admin.getEmail(), admin.getName());
+        return new SuperAdminLoginResponse(access, admin.getId(), admin.getEmail(), admin.getName(), admin.getPhone());
     }
 
     /**
@@ -83,7 +83,7 @@ public class SuperAdminAuthService {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Account is temporarily locked");
         }
         String access = jwtTokenService.createSuperAdminAccessToken(admin.getId(), UUID.randomUUID().toString());
-        return new SuperAdminLoginResponse(access, admin.getId(), admin.getEmail(), admin.getName());
+        return new SuperAdminLoginResponse(access, admin.getId(), admin.getEmail(), admin.getName(), admin.getPhone());
     }
 
     private void publishSuperAdminEvent(SuperAdmin admin, String eventType, String reason) {

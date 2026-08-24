@@ -34,6 +34,10 @@ public class SuperAdmin {
     @Column(name = "name", nullable = false)
     private String name;
 
+    /** Platform ops SMS recipient (e.g. tenant adoption alerts). Nullable until set. */
+    @Column(name = "phone", length = 32)
+    private String phone;
+
     @Column(name = "password_hash", nullable = false)
     private String passwordHash;
 

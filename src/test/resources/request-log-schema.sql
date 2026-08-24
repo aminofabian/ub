@@ -15,5 +15,6 @@ CREATE TABLE platform_request_log (
   status         INT          NOT NULL,
   success        BOOLEAN      NOT NULL,
   duration_ms    BIGINT       NOT NULL,
-  ip             VARCHAR(64)  NULL
+  ip             VARCHAR(64)  NULL,
+  load_test_run_id CHAR(36)   NULL
 );

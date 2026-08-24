@@ -65,14 +65,23 @@ public class OpenAiCompatibleAiProvider implements AiProvider {
                 String base = firstNonBlank(
                         config.deepseekBaseUrl(),
                         "https://api.deepseek.com/chat/completions");
+                if (base.toLowerCase().contains("rapidapi.com")) {
+                    throw new ResponseStatusException(
+                            HttpStatus.BAD_GATEWAY,
+                            "DeepSeek base URL points at the RapidAPI proxy (" + base
+                                    + ") but the primary provider is 'deepseek' (direct). "
+                                    + "Use https://api.deepseek.com/chat/completions in "
+                                    + "Super Admin → Platform → SokoMind.");
+                }
                 url = base.endsWith("/chat/completions")
                         ? base
                         : base.endsWith("/")
                                 ? base + "chat/completions"
                                 : base + "/chat/completions";
-                if (model == null || model.isBlank()) {
-                    model = config.deepseekModel();
-                }
+                // api.deepseek.com only accepts deepseek-chat / deepseek-reasoner;
+                // the default model name (DeepSeek-V3-0324) is a RapidAPI-era name.
+                model = directDeepseekModel(
+                        model == null || model.isBlank() ? config.deepseekModel() : model);
             }
             case PlatformSokoMindSettings.PROVIDER_RAPIDAPI_DEEPSEEK -> {
                 // RapidAPI proxy — x-rapidapi-key + x-rapidapi-host, its own key.
@@ -136,14 +145,20 @@ public class OpenAiCompatibleAiProvider implements AiProvider {
         try {
             response = post.body(json).asString();
         } catch (Exception ex) {
-            log.warn("SokoMind OpenAI-compatible request failed: {}", ex.getMessage());
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "AI provider unreachable");
+            log.warn("SokoMind OpenAI-compatible request to {} failed", url, ex);
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "AI provider '" + provider + "' unreachable at " + url + " — "
+                            + failureSummary(ex)
+                            + ". Check that the server can reach the provider host (egress/firewall).");
         }
 
         if (response.getStatus() < 200 || response.getStatus() >= 300) {
-            log.warn("SokoMind OpenAI-compatible HTTP {}: {}", response.getStatus(), truncate(response.getBody()));
+            String body = truncate(response.getBody());
+            log.warn("SokoMind OpenAI-compatible HTTP {} from {}: {}", response.getStatus(), url, body);
             int status = response.getStatus();
             String hint = switch (status) {
+                case 400 -> " — the provider rejected the request (invalid model name?)";
                 case 401, 403 -> " — the API key looks wrong";
                 case 429 -> " — rate limited, try again later";
                 default -> "";
@@ -151,7 +166,10 @@ public class OpenAiCompatibleAiProvider implements AiProvider {
             throw new ResponseStatusException(
                     HttpStatus.BAD_GATEWAY,
                     "AI provider '" + provider + "' returned HTTP " + status + hint
-                            + ". Check the key in Super Admin → Platform → SokoMind.");
+                            + (body.isEmpty() ? "" : ": " + body)
+                            + (status == 401 || status == 403
+                                    ? ". Check the key in Super Admin → Platform → SokoMind."
+                                    : ""));
         }
 
         return parse(response.getBody(), provider, model);
@@ -189,6 +207,29 @@ public class OpenAiCompatibleAiProvider implements AiProvider {
             log.warn("SokoMind OpenAI-compatible parse failed: {}", ex.getMessage());
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "AI provider response unreadable");
         }
+    }
+
+    /**
+     * api.deepseek.com only accepts deepseek-chat / deepseek-reasoner. The shared
+     * DeepSeek model field defaults to the RapidAPI-era name, so map it for direct calls.
+     */
+    private static String directDeepseekModel(String configured) {
+        if (configured == null || configured.isBlank()) {
+            return "deepseek-chat";
+        }
+        if ("DeepSeek-V3-0324".equalsIgnoreCase(configured)
+                || "DeepSeek-V3".equalsIgnoreCase(configured)) {
+            return "deepseek-chat";
+        }
+        return configured;
+    }
+
+    private static String failureSummary(Exception ex) {
+        String msg = ex.getMessage();
+        if (msg == null || msg.isBlank()) {
+            return ex.getClass().getSimpleName();
+        }
+        return ex.getClass().getSimpleName() + ": " + msg;
     }
 
     private static String firstNonBlank(String a, String b) {

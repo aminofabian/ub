@@ -24,6 +24,7 @@ import zelisline.ub.payments.domain.KioskPayLedgerEntryTypes;
 import zelisline.ub.payments.domain.PlatformKioskPaySettings;
 import zelisline.ub.payments.repository.KioskPayAccountRepository;
 import zelisline.ub.payments.repository.KioskPayLedgerEntryRepository;
+import zelisline.ub.platform.adoption.KioskPayActivatedEvent;
 import zelisline.ub.platform.realtime.RealtimeBridge;
 
 /**
@@ -66,6 +67,7 @@ public class KioskPayWalletService {
         if (body.storefrontEnabled() != null) {
             account.setStorefrontEnabled(body.storefrontEnabled());
         }
+        String previousStatus = account.getStatus();
         if (Boolean.TRUE.equals(body.activate())) {
             if (!settings.isEnabled()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -84,7 +86,12 @@ public class KioskPayWalletService {
             account.setStatus(KioskPayAccountStatuses.OFF);
         }
 
-        return toResponse(accountRepository.save(account), settings, businessId);
+        KioskPayAccount saved = accountRepository.save(account);
+        if (KioskPayAccountStatuses.ACTIVE.equals(saved.getStatus())
+                && !KioskPayAccountStatuses.ACTIVE.equals(previousStatus)) {
+            eventPublisher.publishEvent(new KioskPayActivatedEvent(businessId));
+        }
+        return toResponse(saved, settings, businessId);
     }
 
     @Transactional(readOnly = true)

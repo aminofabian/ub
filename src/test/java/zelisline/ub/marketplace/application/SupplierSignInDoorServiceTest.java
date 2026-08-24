@@ -44,6 +44,24 @@ class SupplierSignInDoorServiceTest {
                 identityIndexRepository,
                 supplierContactRepository,
                 supplierRepository);
+        Mockito.when(supplierUserRepository.findActiveByPhoneVariants(
+                        Mockito.anyString(), Mockito.anyString(), Mockito.anyString()))
+                .thenReturn(List.of());
+        Mockito.when(marketplaceSupplierRepository.findByContactPhoneVariants(
+                        Mockito.anyString(), Mockito.anyString(), Mockito.anyString()))
+                .thenReturn(List.of());
+        Mockito.when(identityIndexRepository.findMarketplaceByPhoneVariants(
+                        Mockito.anyString(), Mockito.anyString(), Mockito.anyString()))
+                .thenReturn(List.of());
+        Mockito.when(identityIndexRepository.findTenantByPhoneVariants(
+                        Mockito.anyString(), Mockito.anyString(), Mockito.anyString()))
+                .thenReturn(List.of());
+        Mockito.when(supplierContactRepository.findByPhoneVariants(
+                        Mockito.anyString(), Mockito.anyString(), Mockito.anyString()))
+                .thenReturn(List.of());
+        Mockito.when(supplierRepository.findActiveByPayoutPhoneVariants(
+                        Mockito.anyString(), Mockito.anyString(), Mockito.anyString()))
+                .thenReturn(List.of());
     }
 
     @Test
@@ -140,6 +158,9 @@ class SupplierSignInDoorServiceTest {
         assertThat(door.claimed()).isFalse();
         assertThat(door.name()).isEqualTo("Kimani Wholesalers");
     }
+
+    @Test
+    void verifiedPhoneOnAShopsSupplierIndexOffersTheClaim() {
         SupplierIdentityIndex row = new SupplierIdentityIndex();
         row.setSupplierId("loc-1");
         Mockito.when(identityIndexRepository.findTenantByPhoneVariants(

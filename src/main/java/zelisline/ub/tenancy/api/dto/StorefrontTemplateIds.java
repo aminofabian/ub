@@ -16,6 +16,7 @@ public final class StorefrontTemplateIds {
             "boutique-shelf",
             "spirits-cellar",
             "beauty-edit",
+            "scent-story",
             "oxide",
             "tint-lab",
             "milk-run",

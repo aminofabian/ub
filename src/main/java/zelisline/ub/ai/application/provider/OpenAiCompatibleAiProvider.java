@@ -62,9 +62,9 @@ public class OpenAiCompatibleAiProvider implements AiProvider {
             case PlatformSokoMindSettings.PROVIDER_DEEPSEEK -> {
                 // Direct DeepSeek API — Bearer auth against api.deepseek.com.
                 apiKey = config.deepseekApiKey();
-                String base = firstNonBlank(
+                String base = ensureScheme(firstNonBlank(
                         config.deepseekBaseUrl(),
-                        "https://api.deepseek.com/chat/completions");
+                        "https://api.deepseek.com/chat/completions"));
                 if (base.toLowerCase().contains("rapidapi.com")) {
                     throw new ResponseStatusException(
                             HttpStatus.BAD_GATEWAY,
@@ -86,9 +86,9 @@ public class OpenAiCompatibleAiProvider implements AiProvider {
             case PlatformSokoMindSettings.PROVIDER_RAPIDAPI_DEEPSEEK -> {
                 // RapidAPI proxy — x-rapidapi-key + x-rapidapi-host, its own key.
                 apiKey = config.rapidapiDeepseekApiKey();
-                String host = firstNonBlank(
+                String host = stripScheme(firstNonBlank(
                         config.deepseekHost(),
-                        "deepseek-v31.p.rapidapi.com");
+                        "deepseek-v31.p.rapidapi.com"));
                 rapidHost = host;
                 url = "https://" + host + "/chat/completions";
                 if (model == null || model.isBlank()) {
@@ -97,7 +97,7 @@ public class OpenAiCompatibleAiProvider implements AiProvider {
             }
             default -> {
                 apiKey = config.openaiApiKey();
-                String base = firstNonBlank(config.openaiBaseUrl(), "https://api.openai.com/v1");
+                String base = ensureScheme(firstNonBlank(config.openaiBaseUrl(), "https://api.openai.com/v1"));
                 url = base.endsWith("/")
                         ? base + "chat/completions"
                         : base + "/chat/completions";
@@ -150,7 +150,9 @@ public class OpenAiCompatibleAiProvider implements AiProvider {
                     HttpStatus.BAD_GATEWAY,
                     "AI provider '" + provider + "' unreachable at " + url + " — "
                             + failureSummary(ex)
-                            + ". Check that the server can reach the provider host (egress/firewall).");
+                            + (isUrlProblem(ex)
+                                    ? " The configured base URL is invalid — fix it in Super Admin → Platform → SokoMind."
+                                    : " Check that the server can reach the provider host (egress/firewall)."));
         }
 
         if (response.getStatus() < 200 || response.getStatus() >= 300) {
@@ -224,12 +226,61 @@ public class OpenAiCompatibleAiProvider implements AiProvider {
         return configured;
     }
 
-    private static String failureSummary(Exception ex) {
-        String msg = ex.getMessage();
-        if (msg == null || msg.isBlank()) {
-            return ex.getClass().getSimpleName();
+    /** Prepend https:// when a stored base URL is missing its scheme. */
+    private static String ensureScheme(String value) {
+        if (value == null || value.isBlank()) {
+            return value;
         }
-        return ex.getClass().getSimpleName() + ": " + msg;
+        String trimmed = value.trim();
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            return trimmed;
+        }
+        return "https://" + trimmed;
+    }
+
+    /** Host fields must be scheme-less; drop any scheme a user pasted in. */
+    private static String stripScheme(String host) {
+        if (host == null) {
+            return null;
+        }
+        return host.trim().replaceFirst("^https?://", "");
+    }
+
+    private static String failureSummary(Exception ex) {
+        StringBuilder sb = new StringBuilder();
+        Throwable cur = ex;
+        while (cur != null) {
+            if (sb.length() > 0) {
+                sb.append(" → ");
+            }
+            sb.append(cur.getClass().getSimpleName());
+            String msg = cur.getMessage();
+            if (msg != null && !msg.isBlank()) {
+                sb.append(": ").append(msg);
+            }
+            if (sb.length() > 400) {
+                break;
+            }
+            cur = cur.getCause();
+        }
+        return sb.toString();
+    }
+
+    /** True when the failure is a malformed URL rather than a network problem. */
+    private static boolean isUrlProblem(Throwable t) {
+        Throwable cur = t;
+        while (cur != null) {
+            String name = cur.getClass().getSimpleName();
+            if ("ClientProtocolException".equals(name) || "URISyntaxException".equals(name)) {
+                return true;
+            }
+            String msg = cur.getMessage();
+            if (msg != null && (msg.contains("valid host") || msg.contains("no protocol"))) {
+                return true;
+            }
+            cur = cur.getCause();
+        }
+        return false;
     }
 
     private static String firstNonBlank(String a, String b) {

@@ -84,7 +84,7 @@ public class PlatformSokoMindSettingsService {
             row.setOpenaiApiKeyEnc(encryptOrClear(body.openaiApiKey()));
         }
         if (body.openaiBaseUrl() != null) {
-            row.setOpenaiBaseUrl(blankToNull(body.openaiBaseUrl()));
+            row.setOpenaiBaseUrl(normalizeUrl(blankToNull(body.openaiBaseUrl())));
         }
         if (body.openaiMiniModel() != null) {
             row.setOpenaiMiniModel(blankToNull(body.openaiMiniModel()));
@@ -100,7 +100,7 @@ public class PlatformSokoMindSettingsService {
             row.setAnthropicApiKeyEnc(encryptOrClear(body.anthropicApiKey()));
         }
         if (body.anthropicBaseUrl() != null) {
-            row.setAnthropicBaseUrl(blankToNull(body.anthropicBaseUrl()));
+            row.setAnthropicBaseUrl(normalizeUrl(blankToNull(body.anthropicBaseUrl())));
         }
         if (body.anthropicMiniModel() != null) {
             row.setAnthropicMiniModel(blankToNull(body.anthropicMiniModel()));
@@ -116,10 +116,10 @@ public class PlatformSokoMindSettingsService {
             row.setRapidapiDeepseekApiKeyEnc(encryptOrClear(body.rapidapiDeepseekApiKey()));
         }
         if (body.deepseekBaseUrl() != null) {
-            row.setDeepseekBaseUrl(blankToNull(body.deepseekBaseUrl()));
+            row.setDeepseekBaseUrl(normalizeUrl(blankToNull(body.deepseekBaseUrl())));
         }
         if (body.deepseekHost() != null) {
-            row.setDeepseekHost(blankToNull(body.deepseekHost()));
+            row.setDeepseekHost(stripScheme(blankToNull(body.deepseekHost())));
         }
         if (body.deepseekModel() != null) {
             row.setDeepseekModel(blankToNull(body.deepseekModel()));
@@ -388,6 +388,25 @@ public class PlatformSokoMindSettingsService {
         }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /** Prepend https:// when a base URL was saved without its scheme. */
+    private static String normalizeUrl(String value) {
+        if (value == null) {
+            return null;
+        }
+        if (value.startsWith("http://") || value.startsWith("https://")) {
+            return value;
+        }
+        return "https://" + value;
+    }
+
+    /** Host fields must be scheme-less; drop any scheme a user pasted in. */
+    private static String stripScheme(String host) {
+        if (host == null) {
+            return null;
+        }
+        return host.replaceFirst("^https?://", "");
     }
 
     private static String trimToNull(String value) {

@@ -84,7 +84,7 @@ public class AnthropicAiProvider implements AiProvider {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "AI request body", ex);
         }
 
-        String base = firstNonBlank(config.anthropicBaseUrl(), "https://api.anthropic.com");
+        String base = ensureScheme(firstNonBlank(config.anthropicBaseUrl(), "https://api.anthropic.com"));
         String url = base.endsWith("/") ? base + "v1/messages" : base + "/v1/messages";
 
         HttpResponse<String> response;
@@ -101,7 +101,9 @@ public class AnthropicAiProvider implements AiProvider {
                     HttpStatus.BAD_GATEWAY,
                     "AI provider 'anthropic' unreachable at " + url + " — "
                             + failureSummary(ex)
-                            + ". Check that the server can reach the provider host (egress/firewall).");
+                            + (isUrlProblem(ex)
+                                    ? " The configured base URL is invalid — fix it in Super Admin → Platform → SokoMind."
+                                    : " Check that the server can reach the provider host (egress/firewall)."));
         }
 
         if (response.getStatus() < 200 || response.getStatus() >= 300) {
@@ -166,12 +168,53 @@ public class AnthropicAiProvider implements AiProvider {
         }
     }
 
-    private static String failureSummary(Exception ex) {
-        String msg = ex.getMessage();
-        if (msg == null || msg.isBlank()) {
-            return ex.getClass().getSimpleName();
+    /** Prepend https:// when a stored base URL is missing its scheme. */
+    private static String ensureScheme(String value) {
+        if (value == null || value.isBlank()) {
+            return value;
         }
-        return ex.getClass().getSimpleName() + ": " + msg;
+        String trimmed = value.trim();
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            return trimmed;
+        }
+        return "https://" + trimmed;
+    }
+
+    private static String failureSummary(Exception ex) {
+        StringBuilder sb = new StringBuilder();
+        Throwable cur = ex;
+        while (cur != null) {
+            if (sb.length() > 0) {
+                sb.append(" → ");
+            }
+            sb.append(cur.getClass().getSimpleName());
+            String msg = cur.getMessage();
+            if (msg != null && !msg.isBlank()) {
+                sb.append(": ").append(msg);
+            }
+            if (sb.length() > 400) {
+                break;
+            }
+            cur = cur.getCause();
+        }
+        return sb.toString();
+    }
+
+    /** True when the failure is a malformed URL rather than a network problem. */
+    private static boolean isUrlProblem(Throwable t) {
+        Throwable cur = t;
+        while (cur != null) {
+            String name = cur.getClass().getSimpleName();
+            if ("ClientProtocolException".equals(name) || "URISyntaxException".equals(name)) {
+                return true;
+            }
+            String msg = cur.getMessage();
+            if (msg != null && (msg.contains("valid host") || msg.contains("no protocol"))) {
+                return true;
+            }
+            cur = cur.getCause();
+        }
+        return false;
     }
 
     private static String firstNonBlank(String a, String b) {

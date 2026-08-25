@@ -195,6 +195,27 @@ public class SupportService {
         return toDetail(conversation, displayName(conversation), staffUnread(conversation));
     }
 
+    /**
+     * Opens (or creates) the platform TENANT thread for a business so a super-admin can
+     * message the shop without waiting for the tenant to start the chat first.
+     */
+    @Transactional
+    public SupportConversationDetailDto ensureTenantThreadForAdmin(
+            String businessId, String adminUserId, String adminName
+    ) {
+        if (businessId == null || businessId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "businessId is required");
+        }
+        String trimmed = businessId.trim();
+        businessRepository.findByIdAndDeletedAtIsNull(trimmed)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
+        String actorName = adminName == null || adminName.isBlank() ? "Kiosk Support" : adminName.trim();
+        SupportConversation conversation = ensureConversation(
+                trimmed, adminUserId, actorName, "Started by Kiosk Support");
+        reopenIfResolved(conversation);
+        return toDetail(conversation, displayName(conversation), staffUnread(conversation));
+    }
+
     @Transactional
     public SupportMessageDto sendAdminMessage(
             String conversationId, String adminUserId, String adminName, String body

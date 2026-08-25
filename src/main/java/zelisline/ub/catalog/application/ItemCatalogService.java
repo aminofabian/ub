@@ -729,6 +729,7 @@ public class ItemCatalogService {
         if (patch.sku() != null) {
             String next = patch.sku().trim();
             if (!next.isEmpty() && !next.equals(item.getSku())) {
+                reclaimSkuFromSoftDeletedTombstone(businessId, next);
                 if (itemRepository.existsByBusinessIdAndSku(businessId, next)) {
                     throw new ResponseStatusException(HttpStatus.CONFLICT, "SKU already in use");
                 }
@@ -957,6 +958,38 @@ public class ItemCatalogService {
         item.setDeletedAt(java.time.Instant.now());
         item.setBarcode(null);
         item.setActive(false);
+        // Vacate SKU — uq_items_business_sku is not filtered by deleted_at, so a later
+        // import/create with the same SKU would otherwise conflict with the tombstone.
+        vacateSkuOnSoftDelete(item);
+    }
+
+    private static void vacateSkuOnSoftDelete(Item item) {
+        String sku = item.getSku();
+        if (sku == null || sku.isBlank()) {
+            return;
+        }
+        if (sku.startsWith("del-")) {
+            return;
+        }
+        item.setSku("del-" + item.getId());
+    }
+
+    /**
+     * Soft-deleted rows still occupy the business-wide SKU unique index. Before creating
+     * an item with an explicit SKU, rename any tombstone that still holds it.
+     */
+    private void reclaimSkuFromSoftDeletedTombstone(String businessId, String sku) {
+        if (sku == null || sku.isBlank()) {
+            return;
+        }
+        itemRepository.findByBusinessIdAndSku(businessId, sku).ifPresent(existing -> {
+            if (existing.getDeletedAt() == null) {
+                return;
+            }
+            vacateSkuOnSoftDelete(existing);
+            existing.setBarcode(null);
+            itemRepository.saveAndFlush(existing);
+        });
     }
 
     @Transactional
@@ -990,6 +1023,7 @@ public class ItemCatalogService {
         } else {
             sku = rawSku;
         }
+        reclaimSkuFromSoftDeletedTombstone(businessId, sku);
         if (itemRepository.existsByBusinessIdAndSku(businessId, sku)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "SKU already in use");
         }
@@ -1437,6 +1471,7 @@ public class ItemCatalogService {
         } else {
             sku = rawSku;
         }
+        reclaimSkuFromSoftDeletedTombstone(businessId, sku);
         if (itemRepository.existsByBusinessIdAndSku(businessId, sku)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "SKU already in use");
         }

@@ -62,6 +62,21 @@ public class SuperAdminSupportController {
         return detail;
     }
 
+    /**
+     * Ensure a TENANT support thread exists for this business and return it (creates +
+     * reopens if needed). Used when a super-admin starts chat from the business page.
+     */
+    @PostMapping("/tenants/{businessId}/thread")
+    public SupportConversationDetailDto ensureTenantThread(@PathVariable String businessId) {
+        SuperAdmin admin = requireSuperAdmin();
+        SupportConversationDetailDto detail = supportService.ensureTenantThreadForAdmin(
+                businessId, admin.getId(), admin.getName());
+        if (detail.conversation() != null) {
+            supportService.markAdminRead(detail.conversation().id());
+        }
+        return detail;
+    }
+
     @PostMapping("/conversations/{id}/messages")
     @ResponseStatus(HttpStatus.CREATED)
     public SupportMessageDto send(@PathVariable String id, @Valid @RequestBody SendSupportMessageRequest body) {

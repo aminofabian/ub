@@ -76,4 +76,22 @@ public interface SupportConversationRepository extends JpaRepository<SupportConv
             ORDER BY COALESCE(c.lastMessageAt, c.createdAt) DESC
             """)
     List<SupportConversation> findAllByOrderByLastMessageAtDesc();
+
+    long countByStatusAndConversationType(String status, String conversationType);
+
+    /**
+     * Open platform-facing threads where the last activity is newer than the
+     * admin's last read (or never read) — i.e. waiting on a super-admin reply.
+     */
+    @Query("""
+            SELECT COUNT(c) FROM SupportConversation c
+             WHERE c.status = :status
+               AND c.conversationType IN :types
+               AND c.lastMessageAt IS NOT NULL
+               AND (c.adminLastReadAt IS NULL OR c.lastMessageAt > c.adminLastReadAt)
+            """)
+    long countWaitingOnAdmin(
+            @Param("status") String status,
+            @Param("types") List<String> types
+    );
 }

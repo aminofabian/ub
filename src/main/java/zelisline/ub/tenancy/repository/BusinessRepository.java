@@ -46,6 +46,14 @@ public interface BusinessRepository extends JpaRepository<Business, String> {
 
     Page<Business> findByDeletedAtIsNull(Pageable pageable);
 
+    long countByDeletedAtIsNull();
+
+    long countByDeletedAtIsNullAndActiveTrue();
+
+    long countByDeletedAtIsNullAndCreatedAtGreaterThanEqual(java.time.Instant since);
+
+    java.util.List<Business> findTop12ByDeletedAtIsNullOrderByCreatedAtDesc();
+
     /** Name lookup for the platform request log — resolves tenant names from ids in bulk. */
     @Query("select b.id as id, b.name as name from Business b where b.id in :ids")
     java.util.List<BusinessNameRow> findNamesByIds(@Param("ids") java.util.Collection<String> ids);

@@ -14,6 +14,8 @@ public interface KioskPayAccountRepository extends JpaRepository<KioskPayAccount
 
     Optional<KioskPayAccount> findByBusinessId(String businessId);
 
+    long countByStatus(String status);
+
     /**
      * Serializes balance-affecting operations per business (withdraw request flow).
      * The row must already exist (see {@code getOrCreate}).

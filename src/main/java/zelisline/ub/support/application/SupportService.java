@@ -269,11 +269,17 @@ public class SupportService {
                 // rotates so only the active device holds a working token.
                 adoptedToken = adoptOrRefresh(conversation, guestId, guestName, phone, presentedToken);
             } else if (guestId.equals(conversation.getGuestId())) {
-                if (!guestTokens.matches(presentedToken, conversation.getGuestTokenHash())) {
+                if (guestTokens.matches(presentedToken, conversation.getGuestTokenHash())) {
+                    refreshGuestIdentity(conversation, guestName, phone);
+                } else if (phone != null) {
+                    // Stale or lost token, but the visitor presents their phone:
+                    // attach it and hand back a fresh secret (recovers pre-phone
+                    // threads and rotated-out devices without fragmenting).
+                    adoptedToken = adoptConversation(conversation, guestId, guestName, phone);
+                } else {
                     throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
                             "Guest token missing or no longer valid — please start a fresh conversation");
                 }
-                refreshGuestIdentity(conversation, guestName, phone);
             } else {
                 throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No conversation yet");
             }
@@ -345,10 +351,16 @@ public class SupportService {
         if (!guestId.equals(conversation.getGuestId())) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No conversation yet");
         }
-        if (!guestTokens.matches(token, conversation.getGuestTokenHash())) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid guest token");
+        if (guestTokens.matches(token, conversation.getGuestTokenHash())) {
+            refreshGuestIdentity(conversation, null, phone);
+            return guestPayload(conversation, null);
         }
-        return guestPayload(conversation, null);
+        if (phone != null) {
+            // Same device, rotated-out secret — the phone re-identifies and
+            // the server hands back a fresh token.
+            return guestPayload(conversation, adoptConversation(conversation, guestId, null, phone));
+        }
+        throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid guest token");
     }
 
     /** Whether the token opens at least one thread owned by this guest (ticket mint). */

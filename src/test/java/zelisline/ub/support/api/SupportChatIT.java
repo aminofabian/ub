@@ -579,6 +579,52 @@ class SupportChatIT {
     }
 
     @Test
+    void staleTokenRecoversViaPhoneWithoutFragmenting() throws Exception {
+        // A thread created before the phone feature existed (no phone attached).
+        MvcResult created = mockMvc.perform(post("/api/v1/public/support/threads")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"type":"VISITOR","guestId":"legacy-device","body":"Old message"}
+                                """))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String threadId = objectMapper.readTree(created.getResponse().getContentAsString())
+                .path("conversation").get("id").asText();
+
+        // Same device returns with a stale/lost token but presents its phone:
+        // the server attaches the phone and rotates a fresh secret — SAME thread.
+        MvcResult recovered = mockMvc.perform(post("/api/v1/public/support/threads")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"type":"VISITOR","guestId":"legacy-device","guestName":"Njeri","body":"Hello again"}
+                                """)
+                        .header("X-Guest-Token", "stale-token")
+                        .header("X-Guest-Phone", "0700000000"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.conversation.id").value(threadId))
+                .andExpect(jsonPath("$.conversation.guestPhone").value("0700000000"))
+                .andExpect(jsonPath("$.token").isNotEmpty())
+                .andReturn();
+        String freshToken = objectMapper.readTree(recovered.getResponse().getContentAsString())
+                .get("token").asText();
+
+        // The fresh token works; the stale one is dead.
+        mockMvc.perform(get("/api/v1/public/support/threads/me")
+                        .param("type", "VISITOR")
+                        .param("guestId", "legacy-device")
+                        .header("X-Guest-Token", freshToken)
+                        .header("X-Guest-Phone", "0700000000"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.messages.length()").value(2));
+        mockMvc.perform(get("/api/v1/public/support/threads/me")
+                        .param("type", "VISITOR")
+                        .param("guestId", "legacy-device")
+                        .header("X-Guest-Token", "stale-token")
+                        .header("X-Guest-Phone", "0700000000"))
+                .andExpect(status().isOk()); // phone re-identifies again — never locked out
+    }
+
+    @Test
     void presenceSnapshotListsEveryThreadWithOnlineFlag() throws Exception {
         mockMvc.perform(post("/api/v1/support/conversation/messages")
                         .contentType(APPLICATION_JSON)

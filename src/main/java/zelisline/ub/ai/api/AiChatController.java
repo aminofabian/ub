@@ -19,10 +19,13 @@ import zelisline.ub.ai.api.dto.AiFeedbackRequest;
 import zelisline.ub.ai.api.dto.AiRouteGuideResponse;
 import zelisline.ub.ai.api.dto.AiStatusResponse;
 import zelisline.ub.ai.api.dto.PriceRadarResponse;
+import zelisline.ub.ai.api.dto.ProductPolishRequest;
+import zelisline.ub.ai.api.dto.ProductPolishResponse;
 import zelisline.ub.ai.api.dto.StorefrontDesignSuggestRequest;
 import zelisline.ub.ai.api.dto.StorefrontDesignSuggestResponse;
 import zelisline.ub.ai.application.GuideChatService;
 import zelisline.ub.ai.application.PriceRadarService;
+import zelisline.ub.ai.application.ProductPolishService;
 import zelisline.ub.ai.application.RouteGuideCatalog;
 import zelisline.ub.ai.application.StorefrontDesignAiService;
 import zelisline.ub.platform.security.CurrentTenantUser;
@@ -39,6 +42,7 @@ public class AiChatController {
     private final RouteGuideCatalog routeGuideCatalog;
     private final PriceRadarService priceRadarService;
     private final StorefrontDesignAiService storefrontDesignAiService;
+    private final ProductPolishService productPolishService;
 
     @GetMapping("/status")
     @PreAuthorize("isAuthenticated()")
@@ -85,6 +89,17 @@ public class AiChatController {
         TenantPrincipal user = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         return guideChatService.chat(businessId, user.userId(), user.branchId(), body);
+    }
+
+    @PostMapping("/product-polish")
+    @PreAuthorize("isAuthenticated()")
+    public ProductPolishResponse polish(
+            @Valid @RequestBody ProductPolishRequest body,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal user = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return productPolishService.polish(businessId, user.userId(), body);
     }
 
     @PostMapping("/feedback")

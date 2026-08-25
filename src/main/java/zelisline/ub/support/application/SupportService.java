@@ -145,6 +145,7 @@ public class SupportService {
     ) {
         SupportConversation conversation = requireStorefrontOwned(conversationId, businessId);
         String userName = resolveUserName(businessId, userId);
+        reopenIfResolved(conversation);
         return persistMessage(conversation, SupportMessage.SENDER_TENANT, userId, userName, body);
     }
 
@@ -192,6 +193,7 @@ public class SupportService {
     ) {
         SupportConversation conversation = conversationRepository.findById(conversationId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation not found"));
+        reopenIfResolved(conversation);
         return persistMessage(conversation, SupportMessage.SENDER_SUPER_ADMIN, adminUserId, adminName, body);
     }
 

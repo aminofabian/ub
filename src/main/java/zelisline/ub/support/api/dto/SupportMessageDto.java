@@ -9,6 +9,8 @@ public record SupportMessageDto(
         String senderUserId,
         String senderName,
         String body,
+        String messageKind,
+        SupportOrderCardDto orderCard,
         SupportAttachmentDto attachment,
         Instant readAt,
         Instant createdAt

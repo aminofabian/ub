@@ -1,6 +1,7 @@
 package zelisline.ub.support.application;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -14,7 +15,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.storefront.WebOrderCodes;
+import zelisline.ub.storefront.domain.WebOrder;
+import zelisline.ub.storefront.domain.WebOrderLine;
 import zelisline.ub.support.api.dto.CreateSupportConversationRequest;
 import zelisline.ub.support.api.dto.GuestThreadDto;
 import zelisline.ub.support.api.dto.SendSupportMessageRequest;
@@ -22,6 +28,7 @@ import zelisline.ub.support.api.dto.SupportAttachmentDto;
 import zelisline.ub.support.api.dto.SupportConversationDetailDto;
 import zelisline.ub.support.api.dto.SupportConversationDto;
 import zelisline.ub.support.api.dto.SupportMessageDto;
+import zelisline.ub.support.api.dto.SupportOrderCardDto;
 import zelisline.ub.support.domain.SupportConversation;
 import zelisline.ub.support.domain.SupportMessage;
 import zelisline.ub.support.repository.SupportConversationRepository;
@@ -75,6 +82,7 @@ public class SupportService {
     private final UserRepository userRepository;
     private final GuestSupportTokenService guestTokens;
     private final ApplicationEventPublisher eventPublisher;
+    private final ObjectMapper objectMapper;
 
     public SupportService(
             SupportConversationRepository conversationRepository,
@@ -82,7 +90,8 @@ public class SupportService {
             BusinessRepository businessRepository,
             UserRepository userRepository,
             GuestSupportTokenService guestTokens,
-            ApplicationEventPublisher eventPublisher
+            ApplicationEventPublisher eventPublisher,
+            ObjectMapper objectMapper
     ) {
         this.conversationRepository = conversationRepository;
         this.messageRepository = messageRepository;
@@ -90,11 +99,172 @@ public class SupportService {
         this.userRepository = userRepository;
         this.guestTokens = guestTokens;
         this.eventPublisher = eventPublisher;
+        this.objectMapper = objectMapper;
     }
 
     public Optional<SupportConversation> findByBusinessId(String businessId) {
         return conversationRepository.findByConversationTypeAndBusinessId(
                 SupportConversation.TYPE_TENANT, businessId);
+    }
+
+    /**
+     * Posts a structured order card into the storefront buyer↔tenant support thread
+     * so staff see the purchase in chat (not only in Web Orders).
+     * Best-effort: never throws to the checkout path.
+     */
+    @Transactional
+    public void postStorefrontOrderCard(WebOrder order, List<WebOrderLine> lines, String branchName) {
+        if (order == null || order.getBusinessId() == null || order.getBusinessId().isBlank()) {
+            return;
+        }
+        try {
+            SupportConversation conversation = ensureStorefrontThreadForOrder(order);
+            reopenIfResolved(conversation);
+
+            SupportOrderCardDto card = toOrderCard(order, lines, branchName);
+            String payloadJson = objectMapper.writeValueAsString(card);
+            String preview = orderCardPreview(card);
+
+            SupportMessage message = new SupportMessage();
+            message.setConversationId(conversation.getId());
+            message.setSenderType(SupportMessage.SENDER_GUEST);
+            message.setSenderUserId(conversation.getGuestId());
+            message.setSenderName(trimTo(order.getCustomerName(), 191));
+            message.setBody(preview);
+            message.setMessageKind(SupportMessage.KIND_ORDER_CARD);
+            message.setPayloadJson(payloadJson);
+            messageRepository.save(message);
+
+            conversation.touchLastMessage(message.getCreatedAt(), preview);
+            // Buyer "sent" it — staff still needs to read; do not mark tenant read.
+            conversationRepository.save(conversation);
+
+            eventPublisher.publishEvent(new SupportEvents.SupportMessageSentEvent(
+                    conversation.getBusinessId(), conversation.getId(), message.getId(),
+                    message.getSenderType(), message.getSenderUserId(), message.getSenderName(),
+                    message.getBody(),
+                    SupportMessage.KIND_ORDER_CARD,
+                    card,
+                    null,
+                    message.getCreatedAt(),
+                    conversation.getConversationType(), conversation.getGuestId()));
+        } catch (Exception ex) {
+            log.warn("Failed to post storefront order {} into support chat: {}",
+                    order.getId(), ex.toString());
+        }
+    }
+
+    private SupportConversation ensureStorefrontThreadForOrder(WebOrder order) {
+        String businessId = order.getBusinessId().trim();
+        String phone = normalizePhone(order.getCustomerPhone());
+        String name = trimTo(order.getCustomerName(), 120);
+
+        SupportConversation conversation = null;
+        if (phone != null) {
+            conversation = conversationRepository
+                    .findByConversationTypeAndBusinessIdAndGuestPhone(
+                            SupportConversation.TYPE_STOREFRONT, businessId, phone)
+                    .orElse(null);
+        }
+        if (conversation != null) {
+            if (name != null && !name.isBlank()) {
+                conversation.setGuestName(name);
+                conversation.setCreatedByName(trimTo(name, 191));
+            }
+            if (phone != null) {
+                conversation.setGuestPhone(phone);
+            }
+            return conversationRepository.save(conversation);
+        }
+
+        String guestId = phone != null
+                ? ("buyer-phone-" + phone.replaceAll("[^0-9]", ""))
+                : ("buyer-order-" + order.getId());
+        if (guestId.length() > 64) {
+            guestId = guestId.substring(0, 64);
+        }
+
+        conversation = conversationRepository
+                .findByConversationTypeAndBusinessIdAndGuestId(
+                        SupportConversation.TYPE_STOREFRONT, businessId, guestId)
+                .orElse(null);
+        if (conversation != null) {
+            if (phone != null) {
+                conversation.setGuestPhone(phone);
+            }
+            if (name != null) {
+                conversation.setGuestName(name);
+                conversation.setCreatedByName(trimTo(name, 191));
+            }
+            return conversationRepository.save(conversation);
+        }
+
+        SupportConversation fresh = new SupportConversation();
+        fresh.setBusinessId(businessId);
+        fresh.setConversationType(SupportConversation.TYPE_STOREFRONT);
+        fresh.setGuestId(guestId);
+        fresh.setGuestName(name);
+        fresh.setGuestPhone(phone);
+        fresh.setStatus(SupportConversation.STATUS_OPEN);
+        fresh.setCreatedBy(guestId);
+        fresh.setCreatedByName(trimTo(name, 191));
+        fresh.setSubject("Storefront order");
+        String token = guestTokens.mintToken();
+        fresh.setGuestTokenHash(guestTokens.hash(token));
+        try {
+            return conversationRepository.saveAndFlush(fresh);
+        } catch (DataIntegrityViolationException ex) {
+            // Race — reload by phone/guest id.
+            if (phone != null) {
+                return conversationRepository
+                        .findByConversationTypeAndBusinessIdAndGuestPhone(
+                                SupportConversation.TYPE_STOREFRONT, businessId, phone)
+                        .orElseThrow(() -> ex);
+            }
+            return conversationRepository
+                    .findByConversationTypeAndBusinessIdAndGuestId(
+                            SupportConversation.TYPE_STOREFRONT, businessId, guestId)
+                    .orElseThrow(() -> ex);
+        }
+    }
+
+    private static SupportOrderCardDto toOrderCard(WebOrder order, List<WebOrderLine> lines, String branchName) {
+        List<SupportOrderCardDto.Line> cardLines = new ArrayList<>();
+        if (lines != null) {
+            for (WebOrderLine line : lines) {
+                if (line == null) {
+                    continue;
+                }
+                cardLines.add(new SupportOrderCardDto.Line(
+                        line.getItemName(),
+                        line.getVariantName(),
+                        line.getQuantity(),
+                        line.getLineTotal()));
+            }
+        }
+        return new SupportOrderCardDto(
+                order.getId(),
+                WebOrderCodes.code(order.getId()),
+                order.getStatus(),
+                order.getCurrency(),
+                order.getGrandTotal(),
+                order.getCustomerName(),
+                order.getCustomerPhone(),
+                branchName,
+                order.getChannel(),
+                cardLines,
+                cardLines.size());
+    }
+
+    private static String orderCardPreview(SupportOrderCardDto card) {
+        String code = card.orderCode() == null || card.orderCode().isBlank() ? "order" : card.orderCode();
+        String currency = card.currency() == null ? "" : card.currency().trim();
+        String total = card.grandTotal() == null ? "" : card.grandTotal().toPlainString();
+        String money = (currency + " " + total).trim();
+        if (money.isEmpty()) {
+            return "🛒 New online order " + code;
+        }
+        return "🛒 New online order " + code + " · " + money;
     }
 
     // ── Tenant side (TENANT thread) ─────────────────────────────────────────
@@ -600,6 +770,8 @@ public class SupportService {
         eventPublisher.publishEvent(new SupportEvents.SupportMessageSentEvent(
                 conversation.getBusinessId(), conversation.getId(), message.getId(),
                 senderType, senderUserId, senderName, message.getBody(),
+                SupportMessage.KIND_TEXT,
+                null,
                 toAttachmentDto(message),
                 message.getCreatedAt(),
                 conversation.getConversationType(), conversation.getGuestId()));
@@ -805,7 +977,7 @@ public class SupportService {
         List<SupportMessageDto> messages = messageRepository
                 .findByConversationIdOrderByCreatedAtAsc(conversation.getId())
                 .stream()
-                .map(SupportService::toMessageDto)
+                .map(this::toMessageDto)
                 .toList();
         return new SupportConversationDetailDto(
                 toAdminDto(conversation, displayName, unreadCount),
@@ -881,7 +1053,7 @@ public class SupportService {
         return trimmed.length() > max ? trimmed.substring(0, max) : trimmed;
     }
 
-    private static SupportMessageDto toMessageDto(SupportMessage message) {
+    private SupportMessageDto toMessageDto(SupportMessage message) {
         return new SupportMessageDto(
                 message.getId(),
                 message.getConversationId(),
@@ -889,10 +1061,29 @@ public class SupportService {
                 message.getSenderUserId(),
                 message.getSenderName(),
                 message.getBody(),
+                message.getMessageKind() == null || message.getMessageKind().isBlank()
+                        ? SupportMessage.KIND_TEXT
+                        : message.getMessageKind(),
+                parseOrderCard(message),
                 toAttachmentDto(message),
                 message.getReadAt(),
                 message.getCreatedAt()
         );
+    }
+
+    private SupportOrderCardDto parseOrderCard(SupportMessage message) {
+        if (message.getPayloadJson() == null || message.getPayloadJson().isBlank()) {
+            return null;
+        }
+        if (!SupportMessage.KIND_ORDER_CARD.equals(message.getMessageKind())) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(message.getPayloadJson(), SupportOrderCardDto.class);
+        } catch (Exception ex) {
+            log.debug("Could not parse order card payload for message {}: {}", message.getId(), ex.toString());
+            return null;
+        }
     }
 
     private static SupportAttachmentDto toAttachmentDto(SupportMessage message) {

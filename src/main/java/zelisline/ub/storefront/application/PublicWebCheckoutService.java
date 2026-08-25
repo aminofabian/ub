@@ -59,6 +59,7 @@ public class PublicWebCheckoutService {
     private final StorefrontSettingsService storefrontSettingsService;
     private final zelisline.ub.notifications.application.NotificationOutboxService notificationOutboxService;
     private final ApplicationEventPublisher eventPublisher;
+    private final zelisline.ub.support.application.SupportService supportService;
 
     public PublicWebCheckoutService(
             PublicWebCartService publicWebCartService,
@@ -74,7 +75,8 @@ public class PublicWebCheckoutService {
             NotificationService notificationService,
             StorefrontSettingsService storefrontSettingsService,
             zelisline.ub.notifications.application.NotificationOutboxService notificationOutboxService,
-            ApplicationEventPublisher eventPublisher
+            ApplicationEventPublisher eventPublisher,
+            zelisline.ub.support.application.SupportService supportService
     ) {
         this.publicWebCartService = publicWebCartService;
         this.inventoryBatchPickerService = inventoryBatchPickerService;
@@ -90,6 +92,7 @@ public class PublicWebCheckoutService {
         this.storefrontSettingsService = storefrontSettingsService;
         this.notificationOutboxService = notificationOutboxService;
         this.eventPublisher = eventPublisher;
+        this.supportService = supportService;
     }
 
     @Transactional
@@ -201,6 +204,15 @@ public class PublicWebCheckoutService {
                         order.getCustomerPhone(),
                         order.getGrandTotal(),
                         order.getCurrency()));
+
+        try {
+            List<WebOrderLine> chatLines =
+                    webOrderLineRepository.findByOrderIdOrderByLineIndexAsc(order.getId());
+            supportService.postStorefrontOrderCard(
+                    order, chatLines, elig.ctx().catalogBranch().getName());
+        } catch (Exception e) {
+            log.warn("Failed to post order {} into tenant support chat: {}", order.getId(), e.getMessage());
+        }
 
         webCartRepository.deleteById(elig.cart().getId());
 

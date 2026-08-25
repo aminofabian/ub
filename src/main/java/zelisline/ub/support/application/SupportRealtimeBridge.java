@@ -9,10 +9,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import zelisline.ub.platform.realtime.RealtimeScopes;
 import zelisline.ub.platform.realtime.RealtimeWebSocketHandler;
 import zelisline.ub.platform.realtime.SessionRegistry;
+import zelisline.ub.support.api.dto.SupportAttachmentDto;
+import zelisline.ub.support.api.dto.SupportOrderCardDto;
 import zelisline.ub.support.domain.SupportConversation;
+import zelisline.ub.support.domain.SupportMessage;
 
 /**
  * Fans support-chat events out to the right WebSocket sessions after commit.
@@ -39,18 +44,28 @@ public class SupportRealtimeBridge {
 
     private final SessionRegistry sessionRegistry;
     private final RealtimeWebSocketHandler handler;
+    private final ObjectMapper objectMapper;
 
-    public SupportRealtimeBridge(SessionRegistry sessionRegistry, RealtimeWebSocketHandler handler) {
+    public SupportRealtimeBridge(
+            SessionRegistry sessionRegistry,
+            RealtimeWebSocketHandler handler,
+            ObjectMapper objectMapper
+    ) {
         this.sessionRegistry = sessionRegistry;
         this.handler = handler;
+        this.objectMapper = objectMapper;
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onMessageSent(SupportEvents.SupportMessageSentEvent event) {
         String eventId = UUID.randomUUID().toString();
         String attachmentJson = attachmentJson(event.attachment());
+        String orderCardJson = toJsonOrNull(event.orderCard());
+        String kind = event.messageKind() == null || event.messageKind().isBlank()
+                ? SupportMessage.KIND_TEXT
+                : event.messageKind();
         String payload = """
-                {"conversationId":"%s","messageId":"%s","senderType":"%s","senderUserId":"%s","senderName":"%s","body":"%s","attachment":%s,"createdAt":"%s","conversationType":"%s"}
+                {"conversationId":"%s","messageId":"%s","senderType":"%s","senderUserId":"%s","senderName":"%s","body":"%s","messageKind":"%s","orderCard":%s,"attachment":%s,"createdAt":"%s","conversationType":"%s"}
                 """.formatted(
                 RealtimeWebSocketHandler.escapeJson(event.conversationId()),
                 RealtimeWebSocketHandler.escapeJson(event.messageId()),
@@ -58,6 +73,8 @@ public class SupportRealtimeBridge {
                 RealtimeWebSocketHandler.escapeJson(event.senderUserId()),
                 RealtimeWebSocketHandler.escapeJson(event.senderName()),
                 RealtimeWebSocketHandler.escapeJson(event.body()),
+                RealtimeWebSocketHandler.escapeJson(kind),
+                orderCardJson,
                 attachmentJson,
                 event.createdAt().toString(),
                 RealtimeWebSocketHandler.escapeJson(event.conversationType()));
@@ -66,7 +83,19 @@ public class SupportRealtimeBridge {
                 "support.message", eventId, payload);
     }
 
-    private static String attachmentJson(zelisline.ub.support.api.dto.SupportAttachmentDto attachment) {
+    private String toJsonOrNull(SupportOrderCardDto orderCard) {
+        if (orderCard == null) {
+            return "null";
+        }
+        try {
+            return objectMapper.writeValueAsString(orderCard);
+        } catch (Exception e) {
+            log.warn("Failed to serialize support order card for realtime: {}", e.toString());
+            return "null";
+        }
+    }
+
+    private static String attachmentJson(SupportAttachmentDto attachment) {
         if (attachment == null || attachment.url() == null || attachment.url().isBlank()) {
             return "null";
         }

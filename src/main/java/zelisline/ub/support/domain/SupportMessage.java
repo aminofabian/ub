@@ -22,6 +22,10 @@ public class SupportMessage {
     public static final String SENDER_SUPER_ADMIN = "SUPER_ADMIN";
     public static final String SENDER_GUEST = "GUEST";
 
+    public static final String KIND_TEXT = "TEXT";
+    /** Storefront purchase posted into the buyer↔tenant thread. */
+    public static final String KIND_ORDER_CARD = "ORDER_CARD";
+
     @Id
     @Column(name = "id", nullable = false, length = 36)
     private String id;
@@ -40,6 +44,12 @@ public class SupportMessage {
 
     @Column(name = "body", nullable = false, columnDefinition = "TEXT")
     private String body;
+
+    @Column(name = "message_kind", nullable = false, length = 32)
+    private String messageKind = KIND_TEXT;
+
+    @Column(name = "payload_json", columnDefinition = "MEDIUMTEXT")
+    private String payloadJson;
 
     @Column(name = "attachment_url", length = 1024)
     private String attachmentUrl;

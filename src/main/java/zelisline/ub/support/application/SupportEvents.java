@@ -3,6 +3,7 @@ package zelisline.ub.support.application;
 import java.time.Instant;
 
 import zelisline.ub.support.api.dto.SupportAttachmentDto;
+import zelisline.ub.support.api.dto.SupportOrderCardDto;
 
 /**
  * Domain events published by {@link SupportService} after successful writes.
@@ -25,6 +26,8 @@ public final class SupportEvents {
             String senderUserId,
             String senderName,
             String body,
+            String messageKind,
+            SupportOrderCardDto orderCard,
             SupportAttachmentDto attachment,
             Instant createdAt,
             String conversationType,

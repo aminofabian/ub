@@ -113,6 +113,7 @@ public class CsvImportApplicationService {
             Boolean stocked = parseNullableTriBool(col(c, "is_stocked"));
             Boolean sellable = parseNullableTriBool(col(c, "is_sellable"));
             BigDecimal reorder = parsePositiveQty(col(c, "reorder_level"));
+            BigDecimal buyingPrice = parseMoney(col(c, "buying_price"));
 
             CreateItemRequest req = new CreateItemRequest(
                     sku,
@@ -130,7 +131,7 @@ public class CsvImportApplicationService {
                     null,
                     null,
                     null,
-                    null,
+                    buyingPrice,
                     null,
                     null,
                     reorder,
@@ -324,6 +325,10 @@ public class CsvImportApplicationService {
             BigDecimal sell = parseMoney(col(c, "selling_price"));
             if (sell != null && sell.compareTo(BigDecimal.ZERO) <= 0) {
                 errors.add(new CsvImportLineError(line, "selling_price must be > 0 when provided"));
+            }
+            BigDecimal buy = parseMoney(col(c, "buying_price"));
+            if (buy != null && buy.compareTo(BigDecimal.ZERO) < 0) {
+                errors.add(new CsvImportLineError(line, "buying_price must be >= 0 when provided"));
             }
         }
         return errors;

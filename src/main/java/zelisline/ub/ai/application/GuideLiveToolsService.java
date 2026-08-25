@@ -55,20 +55,26 @@ public class GuideLiveToolsService {
         String skillNorm = skill == null ? "" : skill.toLowerCase(Locale.ROOT);
         String msg = userMessage == null ? "" : userMessage.toLowerCase(Locale.ROOT);
 
+        // Customer receivables pages: "owe" here means customers owe the shop — never fetch supplier AP.
+        boolean onReceivables = surfaceIs(surf, "customers") || surfaceIs(surf, "credits");
+
         boolean wantPulse = skillNorm.equals("morning_briefing")
                 || surfaceIs(surf, "business")
                 || surfaceIs(surf, "analytics")
+                || surfaceIs(surf, "sales")
+                || surfaceIs(surf, "shifts")
                 || mentions(msg, "today", "revenue", "profit", "margin", "pulse", "morning", "sales", "how am i", "performing");
         boolean wantAp = skillNorm.equals("morning_briefing")
                 || surfaceIs(surf, "suppliers")
                 || surfaceIs(surf, "purchasing")
-                || mentions(msg, "owe", "payable", "aging", "supplier", "ap ", "balance", "overdue");
+                || (mentions(msg, "owe", "payable", "aging", "supplier", "ap ", "balance", "overdue") && !onReceivables);
         boolean wantStock = skillNorm.equals("morning_briefing")
                 || surfaceIs(surf, "inventory")
                 || surfaceIs(surf, "stock")
                 || mentions(msg, "stock", "restock", "expir", "low stock", "out of stock", "stockout");
         boolean wantInbox = skillNorm.equals("draft_message")
                 || surfaceIs(surf, "message")
+                || surfaceIs(surf, "messages")
                 || surfaceIs(surf, "inbox")
                 || mentions(msg, "draft", "reply", "message", "sms", "whatsapp", "email", "write");
 

@@ -147,7 +147,9 @@ public class CsvImportController {
 
     /**
      * Legacy product JSON export: array of objects or {@code { "products": [...] }}.
-     * When rows carry {@code current_stock} &gt; 0, pass {@code branchId} for opening-balance posting.
+     * When rows carry stock &gt; 0 ({@code current_stock} / aliases), pass {@code branchId} for opening-balance
+     * posting (otherwise the first active branch is used). Buying/shelf prices on the product row are applied
+     * when present; re-import updates prices for existing SKUs.
      */
     @PostMapping(value = "/legacy-products", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("hasPermission(null, 'integrations.imports.manage')")

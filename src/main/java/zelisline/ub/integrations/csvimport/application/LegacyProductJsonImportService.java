@@ -40,6 +40,7 @@ import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.application.CatalogTaxonomyService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.domain.Aisle;
+import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.ItemType;
 import zelisline.ub.catalog.repository.AisleRepository;
 import zelisline.ub.catalog.repository.CategoryRepository;
@@ -49,14 +50,21 @@ import zelisline.ub.integrations.csvimport.api.dto.CsvImportLineError;
 import zelisline.ub.integrations.csvimport.api.dto.CsvImportResponse;
 import zelisline.ub.inventory.api.dto.PostOpeningBalanceRequest;
 import zelisline.ub.inventory.application.InventoryLedgerService;
+import zelisline.ub.pricing.PricingConstants;
+import zelisline.ub.pricing.api.dto.PostBuyingPriceRequest;
 import zelisline.ub.pricing.api.dto.PostSellingPriceRequest;
 import zelisline.ub.pricing.application.PricingService;
+import zelisline.ub.suppliers.SupplierCodes;
+import zelisline.ub.suppliers.repository.SupplierRepository;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.repository.BranchRepository;
 
 /**
- * Imports a legacy JSON export (array or {@code { "products": [...] }}) into catalog + selling prices
- * + optional opening stock on a branch.
+ * Imports a legacy JSON export (array or {@code { "products": [...] }}) into catalog + buying/selling
+ * prices + optional opening stock on a branch.
+ *
+ * <p>Re-importing the same export updates prices (and opening stock only when on-hand is still zero)
+ * for rows that already exist by legacy id or SKU.
  */
 @Service
 @RequiredArgsConstructor
@@ -65,6 +73,7 @@ public class LegacyProductJsonImportService {
     private static final Pattern UUID_REGEX = Pattern.compile(
             "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
     private static final BigDecimal QTY_EPS = new BigDecimal("0.00005");
+    private static final BigDecimal MIN_UNIT_COST = new BigDecimal("0.0001");
 
     /** Matches {@code DECIMAL(14,4)} on {@code items} and inventory quantity columns. */
     private static final BigDecimal MAX_QTY_14_4 = new BigDecimal("9999999999.9999");
@@ -102,6 +111,7 @@ public class LegacyProductJsonImportService {
     private final PricingService pricingService;
     private final InventoryLedgerService inventoryLedgerService;
     private final BranchRepository branchRepository;
+    private final SupplierRepository supplierRepository;
 
     public CsvImportResponse dryRun(String businessId, byte[] jsonBytes, String branchIdOrNull) {
         catalogBootstrapService.seedDefaultItemTypesIfMissing(businessId);
@@ -110,8 +120,9 @@ public class LegacyProductJsonImportService {
             return new CsvImportResponse(true, 0, parsed.globalErrors(), null);
         }
         PreparedImport prepared = prepareLegacyImport(businessId, parsed.rows());
+        String branchId = resolveBranchForOpeningStock(businessId, branchIdOrNull, prepared.normalized());
         List<CsvImportLineError> errors =
-                validateRows(businessId, prepared.normalized(), branchIdOrNull, prepared.categoryRemap());
+                validateRows(businessId, prepared.normalized(), branchId, prepared.categoryRemap());
         return new CsvImportResponse(true, parsed.rows().size(), errors, null);
     }
 
@@ -128,8 +139,9 @@ public class LegacyProductJsonImportService {
             return new CsvImportResponse(false, 0, parsed.globalErrors(), null);
         }
         PreparedImport prepared = prepareLegacyImport(businessId, parsed.rows());
+        String branchId = resolveBranchForOpeningStock(businessId, branchIdOrNull, prepared.normalized());
         List<CsvImportLineError> errors =
-                validateRows(businessId, prepared.normalized(), branchIdOrNull, prepared.categoryRemap());
+                validateRows(businessId, prepared.normalized(), branchId, prepared.categoryRemap());
         if (!errors.isEmpty()) {
             return new CsvImportResponse(false, parsed.rows().size(), errors, null);
         }
@@ -138,6 +150,7 @@ public class LegacyProductJsonImportService {
         Map<String, String> legacyIdToNewItemId = new HashMap<>();
         Map<String, String> aisleCodeToId = new HashMap<>();
         Map<String, String> categoryRemap = prepared.categoryRemap();
+        String unassignedSupplierId = resolveUnassignedSupplierId(businessId);
         int committed = 0;
 
         List<NormalizedRow> roots = new ArrayList<>();
@@ -153,13 +166,22 @@ public class LegacyProductJsonImportService {
 
         for (NormalizedRow n : roots) {
             LegacyRow r = n.row();
-            String itemTypeId = resolveItemTypeId(businessId, r.itemTypeRaw());
-            String aisleId = resolveOrCreateAisle(businessId, r, aisleCodeToId);
-            CreateItemRequest req = toCreateItemRequest(n, itemTypeId, aisleId, categoryRemap);
-            ItemResponse created = itemCatalogService.createItem(businessId, req, null, actorUserId).body();
-            legacyIdToNewItemId.put(r.legacyId(), created.id());
-            persistLegacyImportSourceId(businessId, created.id(), r.legacyId());
-            finishRow(businessId, r, created.id(), priceEffective, branchIdOrNull, actorUserId);
+            Optional<Item> existing = findExistingItem(businessId, r, n.sku());
+            String itemId;
+            if (existing.isPresent()) {
+                itemId = existing.get().getId();
+                persistLegacyImportSourceId(businessId, itemId, r.legacyId());
+                patchBuyingOnItem(businessId, itemId, r);
+            } else {
+                String itemTypeId = resolveItemTypeId(businessId, r.itemTypeRaw());
+                String aisleId = resolveOrCreateAisle(businessId, r, aisleCodeToId);
+                CreateItemRequest req = toCreateItemRequest(n, itemTypeId, aisleId, categoryRemap);
+                ItemResponse created = itemCatalogService.createItem(businessId, req, null, actorUserId).body();
+                itemId = created.id();
+                persistLegacyImportSourceId(businessId, itemId, r.legacyId());
+            }
+            legacyIdToNewItemId.put(r.legacyId(), itemId);
+            finishRow(businessId, r, itemId, priceEffective, branchId, actorUserId, unassignedSupplierId);
             committed++;
         }
 
@@ -176,40 +198,50 @@ public class LegacyProductJsonImportService {
                 if (resolvedParent == null) {
                     continue;
                 }
-                String variantName = r.variantName() != null && !r.variantName().isBlank()
-                        ? r.variantName().trim()
-                        : "Variant";
-                CreateVariantRequest vr = new CreateVariantRequest(
-                        nullIfBlank(n.sku()),
-                        variantName,
-                        nullIfBlank(n.barcode()),
-                        null,
-                        null,
-                nullIfBlank(effectiveCategoryId(r, categoryRemap)),
-                resolveOrCreateAisle(businessId, r, aisleCodeToId),
-                safeDbUnitType(r.unitType()),
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        sanitizeQty14_4(r.minStockLevel()),
-                        null,
-                        null,
-                        imageKeyOrNull(r.imageUrl()),
-                        null,
-                        null
-                );
-                ItemResponse created = itemCatalogService.createVariant(businessId, resolvedParent, vr, actorUserId);
-                legacyIdToNewItemId.put(r.legacyId(), created.id());
-                persistLegacyImportSourceId(businessId, created.id(), r.legacyId());
-                patchPostVariant(businessId, r, created.id());
-                finishRow(businessId, r, created.id(), priceEffective, branchIdOrNull, actorUserId);
+                Optional<Item> existing = findExistingItem(businessId, r, n.sku());
+                String itemId;
+                if (existing.isPresent()) {
+                    itemId = existing.get().getId();
+                    persistLegacyImportSourceId(businessId, itemId, r.legacyId());
+                    patchBuyingOnItem(businessId, itemId, r);
+                    patchPostVariant(businessId, r, itemId);
+                } else {
+                    String variantName = r.variantName() != null && !r.variantName().isBlank()
+                            ? r.variantName().trim()
+                            : "Variant";
+                    CreateVariantRequest vr = new CreateVariantRequest(
+                            nullIfBlank(n.sku()),
+                            variantName,
+                            nullIfBlank(n.barcode()),
+                            null,
+                            null,
+                            nullIfBlank(effectiveCategoryId(r, categoryRemap)),
+                            resolveOrCreateAisle(businessId, r, aisleCodeToId),
+                            safeDbUnitType(r.unitType()),
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            sanitizeMoney14_2(r.buyPrice()),
+                            null,
+                            sanitizeQty14_4(r.minStockLevel()),
+                            null,
+                            null,
+                            imageKeyOrNull(r.imageUrl()),
+                            null,
+                            null
+                    );
+                    ItemResponse created = itemCatalogService.createVariant(businessId, resolvedParent, vr, actorUserId);
+                    itemId = created.id();
+                    persistLegacyImportSourceId(businessId, itemId, r.legacyId());
+                    patchPostVariant(businessId, r, itemId);
+                }
+                legacyIdToNewItemId.put(r.legacyId(), itemId);
+                finishRow(businessId, r, itemId, priceEffective, branchId, actorUserId, unassignedSupplierId);
                 it.remove();
                 committed++;
             }
@@ -377,7 +409,7 @@ public class LegacyProductJsonImportService {
                         sanitizeQty14_4(r.packagingUnitQty()),
                         sanitizeBundleQty(r.bundleQty()),
                         sanitizeMoney14_2(r.bundlePrice()),
-                        null, // buyingPrice
+                        sanitizeMoney14_2(r.buyPrice()),
                         safeBundleName(r.bundleName()),
                         null, // minStockLevel
                         null, // reorderLevel
@@ -401,7 +433,8 @@ public class LegacyProductJsonImportService {
             String newItemId,
             LocalDate priceEffective,
             String branchIdOrNull,
-            String actorUserId
+            String actorUserId,
+            String unassignedSupplierId
     ) {
         if (r.active() != null && !r.active()) {
             itemCatalogService.patchItem(
@@ -427,23 +460,111 @@ public class LegacyProductJsonImportService {
                     actorUserId
             );
         }
+        BigDecimal buy = sanitizeMoney14_2(r.buyPrice());
+        if (buy != null && buy.compareTo(MIN_UNIT_COST) >= 0) {
+            patchBuyingOnItem(businessId, newItemId, r);
+            if (unassignedSupplierId != null && !unassignedSupplierId.isBlank()) {
+                pricingService.setBuyingPrice(
+                        businessId,
+                        new PostBuyingPriceRequest(
+                                newItemId,
+                                unassignedSupplierId,
+                                buy.setScale(4, RoundingMode.HALF_UP),
+                                priceEffective,
+                                PricingConstants.BUYING_SOURCE_LEGACY_JSON,
+                                "legacy json product import"),
+                        actorUserId);
+            }
+        }
         BigDecimal stock = sanitizeQty14_4(r.stockQty());
         if (branchIdOrNull != null
                 && !branchIdOrNull.isBlank()
                 && stock != null
                 && stock.compareTo(QTY_EPS) > 0) {
-            BigDecimal unitCost = openingUnitCost(sell);
-            inventoryLedgerService.recordOpeningBalance(
-                    businessId,
-                    new PostOpeningBalanceRequest(
-                            branchIdOrNull.trim(),
-                            newItemId,
-                            stock,
-                            unitCost,
-                            "legacy json import opening stock"),
-                    actorUserId
-            );
+            BigDecimal onHand = itemRepository
+                    .findByIdAndBusinessIdAndDeletedAtIsNull(newItemId, businessId)
+                    .map(Item::getCurrentStock)
+                    .orElse(BigDecimal.ZERO);
+            if (onHand == null || onHand.compareTo(QTY_EPS) <= 0) {
+                BigDecimal unitCost = buy != null && buy.compareTo(MIN_UNIT_COST) >= 0
+                        ? buy.setScale(4, RoundingMode.HALF_UP)
+                        : openingUnitCost(sell);
+                inventoryLedgerService.recordOpeningBalance(
+                        businessId,
+                        new PostOpeningBalanceRequest(
+                                branchIdOrNull.trim(),
+                                newItemId,
+                                stock,
+                                unitCost,
+                                "legacy json import opening stock"),
+                        actorUserId
+                );
+            }
         }
+    }
+
+    private void patchBuyingOnItem(String businessId, String itemId, LegacyRow r) {
+        BigDecimal buy = sanitizeMoney14_2(r.buyPrice());
+        if (buy == null || buy.compareTo(MIN_UNIT_COST) < 0) {
+            return;
+        }
+        itemCatalogService.patchItem(
+                businessId,
+                itemId,
+                new PatchItemRequest(
+                        null, null, null, null, null, null, null, null, null, null,
+                        null, null, null, null, null, null, null,
+                        buy,
+                        null, null, null, null, null, null, null, null, null, null, null, null, null));
+    }
+
+    private Optional<Item> findExistingItem(String businessId, LegacyRow r, String sku) {
+        String lid = canonicalExportUuid(r.legacyId());
+        if (lid != null) {
+            Optional<Item> byLegacy =
+                    itemRepository.findByBusinessIdAndLegacyImportSourceIdAndDeletedAtIsNull(businessId, lid);
+            if (byLegacy.isPresent()) {
+                return byLegacy;
+            }
+        }
+        if (sku != null && !sku.isBlank()) {
+            return itemRepository.findByBusinessIdAndSkuAndDeletedAtIsNull(businessId, sku.trim());
+        }
+        return Optional.empty();
+    }
+
+    private String resolveBranchForOpeningStock(
+            String businessId,
+            String branchIdOrNull,
+            List<NormalizedRow> rows
+    ) {
+        if (branchIdOrNull != null && !branchIdOrNull.isBlank()) {
+            return branchIdOrNull.trim();
+        }
+        boolean needsBranch = false;
+        for (NormalizedRow n : rows) {
+            BigDecimal stock = sanitizeQty14_4(n.row().stockQty());
+            if (stock != null && stock.compareTo(QTY_EPS) > 0) {
+                needsBranch = true;
+                break;
+            }
+        }
+        if (!needsBranch) {
+            return null;
+        }
+        return branchRepository
+                .findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(businessId)
+                .stream()
+                .findFirst()
+                .map(Branch::getId)
+                .orElse(null);
+    }
+
+    private String resolveUnassignedSupplierId(String businessId) {
+        return supplierRepository
+                .findByBusinessIdAndCodeAndDeletedAtIsNull(businessId, SupplierCodes.SYSTEM_UNASSIGNED)
+                .map(s -> s.getId())
+                .orElse(null);
     }
 
     private static BigDecimal openingUnitCost(BigDecimal sellPrice) {
@@ -517,7 +638,7 @@ public class LegacyProductJsonImportService {
                 sanitizeQty14_4(r.packagingUnitQty()),
                 sanitizeBundleQty(r.bundleQty()),
                 sanitizeMoney14_2(r.bundlePrice()),
-                null,
+                sanitizeMoney14_2(r.buyPrice()),
                 safeBundleName(r.bundleName()),
                 sanitizeQty14_4(r.minStockLevel()),
                 null,
@@ -632,6 +753,7 @@ public class LegacyProductJsonImportService {
                 }
             }
             String sku = n.sku();
+            Optional<Item> existingForRow = findExistingItem(businessId, r, sku);
             if (sku == null || sku.isBlank()) {
                 errors.add(new CsvImportLineError(line, "resolved sku is empty (internal import error)"));
             } else {
@@ -639,9 +761,7 @@ public class LegacyProductJsonImportService {
                 if (!seenSku.add(skuKey)) {
                     errors.add(new CsvImportLineError(line, "duplicate sku in file: " + sku));
                 }
-                if (itemRepository.existsByBusinessIdAndSkuAndDeletedAtIsNull(businessId, sku.trim())) {
-                    errors.add(new CsvImportLineError(line, "sku already exists: " + sku));
-                }
+                // Existing SKU is an update (prices/stock), not an error.
             }
             String barcode = n.barcode();
             if (barcode != null && !barcode.isBlank()) {
@@ -649,10 +769,13 @@ public class LegacyProductJsonImportService {
                 if (!seenBarcode.add(bcKey)) {
                     errors.add(new CsvImportLineError(line, "duplicate barcode in file: " + barcode));
                 }
-                itemRepository.findByBusinessIdAndBarcodeAndDeletedAtIsNull(businessId, barcode.trim()).ifPresent(clash ->
+                itemRepository.findByBusinessIdAndBarcodeAndDeletedAtIsNull(businessId, barcode.trim()).ifPresent(clash -> {
+                    if (existingForRow.isEmpty() || !existingForRow.get().getId().equals(clash.getId())) {
                         errors.add(new CsvImportLineError(
                                 line,
-                                "barcode already used by sku " + clash.getSku())));
+                                "barcode already used by sku " + clash.getSku()));
+                    }
+                });
             }
 
             String pit = r.parentItemId();
@@ -896,6 +1019,7 @@ public class LegacyProductJsonImportService {
             BigDecimal stockQty,
             BigDecimal minStockLevel,
             BigDecimal sellPrice,
+            BigDecimal buyPrice,
             String imageUrl,
             String packagingUnitName,
             BigDecimal packagingUnitQty,
@@ -926,9 +1050,58 @@ public class LegacyProductJsonImportService {
                     text(n, "variant_name"),
                     text(n, "unit_type"),
                     text(n, "item_type"),
-                    decimal(n, "current_stock"),
-                    decimal(n, "min_stock_level"),
-                    decimal(n, "current_sell_price"),
+                    decimalAny(
+                            n,
+                            "current_stock",
+                            "currentStock",
+                            "stock",
+                            "quantity",
+                            "qty",
+                            "stock_qty",
+                            "stockQty",
+                            "stock_quantity",
+                            "stockQuantity",
+                            "on_hand",
+                            "onHand",
+                            "quantity_on_hand",
+                            "quantityOnHand",
+                            "available_stock",
+                            "availableStock"),
+                    decimalAny(n, "min_stock_level", "minStockLevel", "min_stock", "minStock"),
+                    decimalAny(
+                            n,
+                            "current_sell_price",
+                            "currentSellPrice",
+                            "current_selling_price",
+                            "currentSellingPrice",
+                            "selling_price",
+                            "sellingPrice",
+                            "sell_price",
+                            "sellPrice",
+                            "shelf_price",
+                            "shelfPrice",
+                            "retail_price",
+                            "retailPrice",
+                            "price"),
+                    decimalAny(
+                            n,
+                            "current_buying_price",
+                            "currentBuyingPrice",
+                            "current_buy_price",
+                            "currentBuyPrice",
+                            "buying_price",
+                            "buyingPrice",
+                            "buy_price",
+                            "buyPrice",
+                            "cost_price",
+                            "costPrice",
+                            "unit_cost",
+                            "unitCost",
+                            "purchase_price",
+                            "purchasePrice",
+                            "default_cost_price",
+                            "defaultCostPrice",
+                            "cost"),
                     text(n, "image_url"),
                     text(n, "packaging_unit_name"),
                     decimal(n, "packaging_unit_qty"),
@@ -1101,6 +1274,16 @@ public class LegacyProductJsonImportService {
             }
         } catch (NumberFormatException ignored) {
             return null;
+        }
+        return null;
+    }
+
+    private static BigDecimal decimalAny(JsonNode n, String... fields) {
+        for (String f : fields) {
+            BigDecimal v = decimal(n, f);
+            if (v != null) {
+                return v;
+            }
         }
         return null;
     }

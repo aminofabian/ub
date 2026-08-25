@@ -14,6 +14,7 @@ public final class CsvImportFormats {
             "unit_type",
             "is_stocked",
             "is_sellable",
+            "buying_price",
             "selling_price",
             "reorder_level"
     };

@@ -70,16 +70,17 @@ public class CsvExportApplicationService {
 
         return writeCsv(CsvImportFormats.ITEM_HEADERS, printer -> {
             for (Item item : items) {
-                printer.printRecord(
-                        nullToEmpty(item.getSku()),
-                        nullToEmpty(item.getName()),
-                        nullToEmpty(typeKeyById.get(item.getItemTypeId())),
-                        nullToEmpty(item.getBarcode()),
-                        nullToEmpty(item.getUnitType()),
-                        bool(item.isStocked()),
-                        bool(item.isSellable()),
-                        decimal(sellByItemId.get(item.getId()), MONEY_SCALE),
-                        decimal(item.getReorderLevel(), QTY_SCALE));
+                    printer.printRecord(
+                            nullToEmpty(item.getSku()),
+                            nullToEmpty(item.getName()),
+                            nullToEmpty(typeKeyById.get(item.getItemTypeId())),
+                            nullToEmpty(item.getBarcode()),
+                            nullToEmpty(item.getUnitType()),
+                            bool(item.isStocked()),
+                            bool(item.isSellable()),
+                            decimal(item.getBuyingPrice(), MONEY_SCALE),
+                            decimal(sellByItemId.get(item.getId()), MONEY_SCALE),
+                            decimal(item.getReorderLevel(), QTY_SCALE));
             }
         });
     }

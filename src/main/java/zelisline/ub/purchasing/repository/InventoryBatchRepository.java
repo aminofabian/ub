@@ -183,6 +183,27 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
             @Param("status") String status
     );
 
+    /**
+     * Physical on-hand qty and extension value (qty × unit cost) per item at a branch.
+     * Used for CSV opening-stock export (weighted-average unit cost = value / qty).
+     */
+    @Query("""
+            select b.itemId,
+                   coalesce(sum(b.quantityRemaining), 0),
+                   coalesce(sum(b.quantityRemaining * b.unitCost), 0)
+             from InventoryBatch b
+             where b.businessId = :businessId
+               and b.branchId = :branchId
+               and b.status = :status
+               and b.quantityRemaining > 0
+             group by b.itemId
+            """)
+    List<Object[]> sumQtyAndExtensionByItemAtBranch(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("status") String status
+    );
+
     @Query("""
             select b.itemId, coalesce(sum(b.quantityRemaining), 0)
              from InventoryBatch b

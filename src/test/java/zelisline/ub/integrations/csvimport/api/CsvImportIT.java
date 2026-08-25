@@ -138,6 +138,87 @@ class CsvImportIT {
     }
 
     @Test
+    void exportItems_matchesTemplateHeaderAndIncludesImportedRows() throws Exception {
+        uploadItems("""
+                sku,name,item_type_key,barcode,unit_type,is_stocked,is_sellable,selling_price,reorder_level
+                SKU-EXP-1,Export One,goods,1234567890123,each,true,true,99.50,5
+                """, false);
+
+        mockMvc.perform(get("/api/v1/integrations/imports/exports/items")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, user.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE))
+                .andExpect(status().isOk())
+                .andExpect(result -> {
+                    String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
+                    assertThat(body).contains(
+                            "sku,name,item_type_key,barcode,unit_type,is_stocked,is_sellable,selling_price,reorder_level");
+                    assertThat(body).contains("SKU-EXP-1");
+                    assertThat(body).contains("Export One");
+                    assertThat(body).contains("99.50");
+                });
+    }
+
+    @Test
+    void exportSuppliers_includesCommittedSupplier() throws Exception {
+        uploadSuppliers("""
+                name,code,supplier_type,vat_pin,status,notes
+                Export Vendor,EV1,distributor,P123,active,hello
+                """, false);
+
+        mockMvc.perform(get("/api/v1/integrations/imports/exports/suppliers")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, user.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE))
+                .andExpect(status().isOk())
+                .andExpect(result -> {
+                    String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
+                    assertThat(body).contains("name,code,supplier_type,vat_pin,status,notes");
+                    assertThat(body).contains("Export Vendor");
+                    assertThat(body).contains("EV1");
+                });
+    }
+
+    @Test
+    void exportOpeningStock_includesOnHandAfterImport() throws Exception {
+        uploadItems("""
+                sku,name,item_type_key,is_stocked
+                SKU-OS-1,Opening Export,goods,true
+                """, false);
+
+        MockMultipartFile openingFile = new MockMultipartFile(
+                "file",
+                "opening.csv",
+                "text/csv",
+                """
+                        branch_name,sku,quantity,unit_cost
+                        Main,SKU-OS-1,7,2.25
+                        """.getBytes(StandardCharsets.UTF_8));
+        mockMvc.perform(multipart("/api/v1/integrations/imports/opening-stock")
+                        .file(openingFile)
+                        .param("dryRun", "false")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, user.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE)
+                        .contentType(MULTIPART_FORM_DATA))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/integrations/imports/exports/opening-stock")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, user.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE))
+                .andExpect(status().isOk())
+                .andExpect(result -> {
+                    String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
+                    assertThat(body).contains("branch_name,sku,quantity,unit_cost,notes");
+                    assertThat(body).contains("Main");
+                    assertThat(body).contains("SKU-OS-1");
+                    assertThat(body).contains("7.0000");
+                    assertThat(body).contains("2.25");
+                });
+    }
+
+    @Test
     void itemsDryRun_duplicateSkuInFile_returnsErrors() throws Exception {
         String csv = """
                 sku,name,item_type_key

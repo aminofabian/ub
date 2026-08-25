@@ -21,6 +21,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.integrations.csvimport.api.dto.CreateImportJobResponse;
 import zelisline.ub.integrations.csvimport.api.dto.CsvImportResponse;
 import zelisline.ub.integrations.csvimport.api.dto.ImportJobResponse;
+import zelisline.ub.integrations.csvimport.application.CsvExportApplicationService;
 import zelisline.ub.integrations.csvimport.application.CsvImportApplicationService;
 import zelisline.ub.integrations.csvimport.application.ImportJobEnqueueService;
 import zelisline.ub.integrations.csvimport.application.LegacyBuyingPriceJsonImportService;
@@ -28,6 +29,7 @@ import zelisline.ub.integrations.csvimport.application.LegacyProductJsonImportSe
 import zelisline.ub.integrations.csvimport.application.LegacySellingPriceJsonImportService;
 import zelisline.ub.integrations.csvimport.application.LegacySupplierJsonImportService;
 import zelisline.ub.integrations.csvimport.domain.ImportJob;
+import zelisline.ub.integrations.csvimport.support.CsvImportFormats;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
@@ -36,14 +38,8 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 @RequiredArgsConstructor
 public class CsvImportController {
 
-    private static final String ITEM_TEMPLATE_HEADER =
-            "sku,name,item_type_key,barcode,unit_type,is_stocked,is_sellable,selling_price,reorder_level";
-    private static final String SUPPLIER_TEMPLATE_HEADER =
-            "name,code,supplier_type,vat_pin,status,notes";
-    private static final String OPENING_TEMPLATE_HEADER =
-            "branch_name,sku,quantity,unit_cost,notes";
-
     private final CsvImportApplicationService csvImportApplicationService;
+    private final CsvExportApplicationService csvExportApplicationService;
     private final LegacyProductJsonImportService legacyProductJsonImportService;
     private final LegacySupplierJsonImportService legacySupplierJsonImportService;
     private final LegacyBuyingPriceJsonImportService legacyBuyingPriceJsonImportService;
@@ -53,19 +49,45 @@ public class CsvImportController {
     @GetMapping(value = "/templates/items", produces = "text/csv")
     @PreAuthorize("hasPermission(null, 'integrations.imports.manage')")
     public ResponseEntity<String> templateItems() {
-        return csvAttachment("items-import-template.csv", ITEM_TEMPLATE_HEADER + "\n");
+        return csvAttachment("items-import-template.csv", CsvImportFormats.ITEM_TEMPLATE_HEADER + "\n");
     }
 
     @GetMapping(value = "/templates/suppliers", produces = "text/csv")
     @PreAuthorize("hasPermission(null, 'integrations.imports.manage')")
     public ResponseEntity<String> templateSuppliers() {
-        return csvAttachment("suppliers-import-template.csv", SUPPLIER_TEMPLATE_HEADER + "\n");
+        return csvAttachment("suppliers-import-template.csv", CsvImportFormats.SUPPLIER_TEMPLATE_HEADER + "\n");
     }
 
     @GetMapping(value = "/templates/opening-stock", produces = "text/csv")
     @PreAuthorize("hasPermission(null, 'integrations.imports.manage')")
     public ResponseEntity<String> templateOpeningStock() {
-        return csvAttachment("opening-stock-import-template.csv", OPENING_TEMPLATE_HEADER + "\n");
+        return csvAttachment(
+                "opening-stock-import-template.csv",
+                CsvImportFormats.OPENING_STOCK_TEMPLATE_HEADER + "\n");
+    }
+
+    @GetMapping(value = "/exports/items", produces = "text/csv")
+    @PreAuthorize("hasPermission(null, 'integrations.imports.manage')")
+    public ResponseEntity<byte[]> exportItems(HttpServletRequest http) {
+        return csvBytesAttachment(
+                "items-export.csv",
+                csvExportApplicationService.exportItems(resolveBusinessId(http)));
+    }
+
+    @GetMapping(value = "/exports/suppliers", produces = "text/csv")
+    @PreAuthorize("hasPermission(null, 'integrations.imports.manage')")
+    public ResponseEntity<byte[]> exportSuppliers(HttpServletRequest http) {
+        return csvBytesAttachment(
+                "suppliers-export.csv",
+                csvExportApplicationService.exportSuppliers(resolveBusinessId(http)));
+    }
+
+    @GetMapping(value = "/exports/opening-stock", produces = "text/csv")
+    @PreAuthorize("hasPermission(null, 'integrations.imports.manage')")
+    public ResponseEntity<byte[]> exportOpeningStock(HttpServletRequest http) {
+        return csvBytesAttachment(
+                "opening-stock-export.csv",
+                csvExportApplicationService.exportOpeningStock(resolveBusinessId(http)));
     }
 
     @PostMapping(value = "/items", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -276,6 +298,13 @@ public class CsvImportController {
     }
 
     private static ResponseEntity<String> csvAttachment(String filename, String body) {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .contentType(MediaType.parseMediaType("text/csv; charset=UTF-8"))
+                .body(body);
+    }
+
+    private static ResponseEntity<byte[]> csvBytesAttachment(String filename, byte[] body) {
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
                 .contentType(MediaType.parseMediaType("text/csv; charset=UTF-8"))

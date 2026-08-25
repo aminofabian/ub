@@ -51,6 +51,14 @@ public interface SellingPriceRepository extends JpaRepository<SellingPrice, Stri
             @Param("itemIds") Collection<String> itemIds
     );
 
+    @Query("""
+            select sp from SellingPrice sp
+             where sp.businessId = :businessId
+               and sp.branchId is null
+               and sp.effectiveTo is null
+            """)
+    List<SellingPrice> findOpenEndedBusinessWide(@Param("businessId") String businessId);
+
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             update SellingPrice sp

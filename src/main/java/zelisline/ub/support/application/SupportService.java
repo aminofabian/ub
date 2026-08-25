@@ -247,12 +247,14 @@ public class SupportService {
         String phone = normalizePhone(guestPhone);
 
         SupportConversation conversation = null;
+        boolean foundByPhone = false;
         String adoptedToken = null;
 
         if (phone != null) {
             conversation = conversationRepository
                     .findByConversationTypeAndBusinessIdAndGuestPhone(type, businessId, phone)
                     .orElse(null);
+            foundByPhone = conversation != null;
         }
         if (conversation == null) {
             conversation = conversationRepository
@@ -261,15 +263,19 @@ public class SupportService {
         }
 
         if (conversation != null) {
-            if (guestId.equals(conversation.getGuestId())) {
+            if (foundByPhone) {
+                // The phone is the credential: a returning visitor (or a device
+                // with a rotated-out secret) always gets back in; the secret
+                // rotates so only the active device holds a working token.
+                adoptedToken = adoptOrRefresh(conversation, guestId, guestName, phone, presentedToken);
+            } else if (guestId.equals(conversation.getGuestId())) {
                 if (!guestTokens.matches(presentedToken, conversation.getGuestTokenHash())) {
                     throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
                             "Guest token missing or no longer valid — please start a fresh conversation");
                 }
                 refreshGuestIdentity(conversation, guestName, phone);
             } else {
-                // A different device claims this phone — adopt the thread.
-                adoptedToken = adoptConversation(conversation, guestId, guestName, phone);
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No conversation yet");
             }
             if (body != null && !body.isBlank()) {
                 reopenIfResolved(conversation);
@@ -314,11 +320,12 @@ public class SupportService {
         String phone = normalizePhone(guestPhone);
 
         SupportConversation conversation = null;
-        String adoptedToken = null;
+        boolean foundByPhone = false;
         if (phone != null) {
             conversation = conversationRepository
                     .findByConversationTypeAndBusinessIdAndGuestPhone(type, businessId, phone)
                     .orElse(null);
+            foundByPhone = conversation != null;
         }
         if (conversation == null) {
             conversation = conversationRepository
@@ -329,16 +336,19 @@ public class SupportService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No conversation yet");
         }
 
-        if (guestId.equals(conversation.getGuestId())) {
-            if (!guestTokens.matches(token, conversation.getGuestTokenHash())) {
-                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid guest token");
-            }
-            refreshGuestIdentity(conversation, null, phone);
-        } else {
-            // Returning visitor from a new device: re-claim via the phone.
-            adoptedToken = adoptConversation(conversation, guestId, null, phone);
+        if (foundByPhone) {
+            // Phone re-validates the visitor even when their token was rotated
+            // out by another device — hand back a fresh secret.
+            return guestPayload(conversation,
+                    adoptOrRefresh(conversation, guestId, null, phone, token));
         }
-        return guestPayload(conversation, adoptedToken);
+        if (!guestId.equals(conversation.getGuestId())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No conversation yet");
+        }
+        if (!guestTokens.matches(token, conversation.getGuestTokenHash())) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid guest token");
+        }
+        return guestPayload(conversation, null);
     }
 
     /** Whether the token opens at least one thread owned by this guest (ticket mint). */
@@ -416,6 +426,23 @@ public class SupportService {
         if (changed) {
             conversationRepository.save(conversation);
         }
+    }
+
+    /**
+     * Resolve a thread that was found via the visitor's phone. A valid token on
+     * the owning device is a no-op; anything else (new device, rotated-out
+     * token) re-claims the thread and rotates the secret.
+     */
+    private String adoptOrRefresh(
+            SupportConversation conversation, String guestId,
+            String guestName, String phone, String presentedToken
+    ) {
+        if (guestId.equals(conversation.getGuestId())
+                && guestTokens.matches(presentedToken, conversation.getGuestTokenHash())) {
+            refreshGuestIdentity(conversation, guestName, phone);
+            return null; // same device, token still valid — nothing to rotate
+        }
+        return adoptConversation(conversation, guestId, guestName, phone);
     }
 
     /** A new device claims this thread via its phone — adopt it and rotate the secret. */

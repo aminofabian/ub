@@ -308,6 +308,7 @@ public class SecurityConfig {
                 "X-Tenant-Host",
                 "X-Guest-Id",
                 "X-Guest-Token",
+                "X-Guest-Phone",
                 "X-Page-Unlock",
                 TestAuthenticationFilter.HEADER_USER_ID,
                 TestAuthenticationFilter.HEADER_ROLE_ID

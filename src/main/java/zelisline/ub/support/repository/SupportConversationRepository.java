@@ -18,6 +18,10 @@ public interface SupportConversationRepository extends JpaRepository<SupportConv
     Optional<SupportConversation> findByConversationTypeAndBusinessIdAndGuestId(
             String conversationType, String businessId, String guestId);
 
+    /** The thread a returning visitor claims via their phone. */
+    Optional<SupportConversation> findByConversationTypeAndBusinessIdAndGuestPhone(
+            String conversationType, String businessId, String guestPhone);
+
     /** Every thread a guest owns across businesses (token check on ticket mint). */
     List<SupportConversation> findByGuestId(String guestId);
 

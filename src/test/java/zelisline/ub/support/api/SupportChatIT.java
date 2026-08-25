@@ -518,6 +518,67 @@ class SupportChatIT {
     }
 
     @Test
+    void returningVisitorResumesSameThreadViaPhone() throws Exception {
+        // First visit: guest identifies with name + phone.
+        MvcResult first = mockMvc.perform(post("/api/v1/public/support/threads")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"type":"STOREFRONT","businessSlug":"support-shop-a","guestId":"device-a","guestName":"Njeri","body":"First hello"}
+                                """)
+                        .header("X-Guest-Phone", "0712345678"))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String firstId = objectMapper.readTree(first.getResponse().getContentAsString())
+                .path("conversation").get("id").asText();
+        String firstToken = objectMapper.readTree(first.getResponse().getContentAsString())
+                .get("token").asText();
+
+        // Second visit from a NEW device, same phone → resumes the same thread.
+        MvcResult second = mockMvc.perform(post("/api/v1/public/support/threads")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"type":"STOREFRONT","businessSlug":"support-shop-a","guestId":"device-b","guestName":"Njeri","body":"Hello again from another phone"}
+                                """)
+                        .header("X-Guest-Phone", "0712345678"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.conversation.id").value(firstId))
+                .andExpect(jsonPath("$.conversation.guestPhone").value("0712345678"))
+                .andReturn();
+        String rotatedToken = objectMapper.readTree(second.getResponse().getContentAsString())
+                .get("token").asText();
+
+        // The new device owns the thread now; the old token is rotated out.
+        mockMvc.perform(get("/api/v1/public/support/threads/me")
+                        .param("type", "STOREFRONT")
+                        .param("businessSlug", "support-shop-a")
+                        .param("guestId", "device-b")
+                        .header("X-Guest-Token", rotatedToken)
+                        .header("X-Guest-Phone", "0712345678"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conversation.id").value(firstId))
+                .andExpect(jsonPath("$.messages.length()").value(2));
+
+        // Without the phone, the rotated-out device is locked out.
+        mockMvc.perform(get("/api/v1/public/support/threads/me")
+                        .param("type", "STOREFRONT")
+                        .param("businessSlug", "support-shop-a")
+                        .param("guestId", "device-a")
+                        .header("X-Guest-Token", firstToken))
+                .andExpect(status().isNotFound());
+
+        // With the phone, the old device re-claims the SAME thread (no fragment).
+        mockMvc.perform(get("/api/v1/public/support/threads/me")
+                        .param("type", "STOREFRONT")
+                        .param("businessSlug", "support-shop-a")
+                        .param("guestId", "device-a")
+                        .header("X-Guest-Token", firstToken)
+                        .header("X-Guest-Phone", "0712345678"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conversation.id").value(firstId))
+                .andExpect(jsonPath("$.token").isNotEmpty());
+    }
+
+    @Test
     void presenceSnapshotListsEveryThreadWithOnlineFlag() throws Exception {
         mockMvc.perform(post("/api/v1/support/conversation/messages")
                         .contentType(APPLICATION_JSON)

@@ -228,51 +228,78 @@ public class SupportService {
     // ── Guest side (VISITOR / STOREFRONT threads) ──────────────────────────
 
     /**
-     * Start or resume a guest thread. When the guest's thread already exists the
-     * presented token must match; when it doesn't, a thread is created and a
-     * fresh token minted (returned once, then held client-side).
+     * Start or resume a guest thread. The phone is the identity anchor:
+     * <ul>
+     *   <li>phone matches an existing thread → the visitor resumes it (one
+     *       continuous conversation per person, even from a new browser);</li>
+     *   <li>otherwise a thread for this guestId+token resumes;</li>
+     *   <li>otherwise a new thread is created and a fresh token minted.</li>
+     * </ul>
+     * A different device claiming an existing phone thread adopts it and
+     * rotates the secret, so the previous device must re-identify itself.
      */
     @Transactional
     public GuestThreadDto guestStartOrResume(
-            String type, String businessId, String guestId, String guestName, String body, String presentedToken
+            String type, String businessId, String guestId, String guestName,
+            String guestPhone, String body, String presentedToken
     ) {
         requireGuestType(type);
-        Optional<SupportConversation> existing =
-                conversationRepository.findByConversationTypeAndBusinessIdAndGuestId(type, businessId, guestId);
-        if (existing.isPresent()) {
-            SupportConversation conversation = existing.get();
-            if (!guestTokens.matches(presentedToken, conversation.getGuestTokenHash())) {
-                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
-                        "Guest token missing or no longer valid — please start a fresh conversation");
+        String phone = normalizePhone(guestPhone);
+
+        SupportConversation conversation = null;
+        String adoptedToken = null;
+
+        if (phone != null) {
+            conversation = conversationRepository
+                    .findByConversationTypeAndBusinessIdAndGuestPhone(type, businessId, phone)
+                    .orElse(null);
+        }
+        if (conversation == null) {
+            conversation = conversationRepository
+                    .findByConversationTypeAndBusinessIdAndGuestId(type, businessId, guestId)
+                    .orElse(null);
+        }
+
+        if (conversation != null) {
+            if (guestId.equals(conversation.getGuestId())) {
+                if (!guestTokens.matches(presentedToken, conversation.getGuestTokenHash())) {
+                    throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
+                            "Guest token missing or no longer valid — please start a fresh conversation");
+                }
+                refreshGuestIdentity(conversation, guestName, phone);
+            } else {
+                // A different device claims this phone — adopt the thread.
+                adoptedToken = adoptConversation(conversation, guestId, guestName, phone);
             }
             if (body != null && !body.isBlank()) {
                 reopenIfResolved(conversation);
                 persistMessage(conversation, SupportMessage.SENDER_GUEST, guestId, guestName, body);
             }
-            return guestPayload(conversation, null);
+            return guestPayload(conversation, adoptedToken);
         }
 
-        SupportConversation conversation = new SupportConversation();
-        conversation.setBusinessId(businessId);
-        conversation.setConversationType(type);
-        conversation.setGuestId(guestId);
-        conversation.setGuestName(trimTo(guestName, 120));
-        conversation.setStatus(SupportConversation.STATUS_OPEN);
-        conversation.setCreatedBy(guestId);
-        conversation.setCreatedByName(trimTo(guestName, 191));
+        SupportConversation fresh = new SupportConversation();
+        fresh.setBusinessId(businessId);
+        fresh.setConversationType(type);
+        fresh.setGuestId(guestId);
+        fresh.setGuestName(trimTo(guestName, 120));
+        fresh.setGuestPhone(phone);
+        fresh.setStatus(SupportConversation.STATUS_OPEN);
+        fresh.setCreatedBy(guestId);
+        fresh.setCreatedByName(trimTo(guestName, 191));
         String token = guestTokens.mintToken();
-        conversation.setGuestTokenHash(guestTokens.hash(token));
+        fresh.setGuestTokenHash(guestTokens.hash(token));
         try {
-            conversationRepository.saveAndFlush(conversation);
+            conversationRepository.saveAndFlush(fresh);
         } catch (DataIntegrityViolationException ex) {
             // Two tabs raced to create — the unique guest-thread key wins.
-            return guestStartOrResume(type, businessId, guestId, guestName, body, presentedToken);
+            return guestStartOrResume(type, businessId, guestId, guestName, guestPhone, body, presentedToken);
         }
         if (body != null && !body.isBlank()) {
-            persistMessage(conversation, SupportMessage.SENDER_GUEST, guestId, guestName, body);
+            persistMessage(fresh, SupportMessage.SENDER_GUEST, guestId, guestName, body);
         }
         log.debug("Support guest thread created: type={} business={} guest={}", type, businessId, guestId);
-        return guestPayload(conversation, token);
+        return guestPayload(fresh, token);
     }
 
     public GuestThreadDto guestDetail(String conversationId, String guestId, String token) {
@@ -280,15 +307,38 @@ public class SupportService {
     }
 
     /** Resume an existing guest thread — never creates one (unlike POST /threads). */
-    public GuestThreadDto guestResume(String type, String businessId, String guestId, String token) {
+    public GuestThreadDto guestResume(
+            String type, String businessId, String guestId, String guestPhone, String token
+    ) {
         requireGuestType(type);
-        SupportConversation conversation = conversationRepository
-                .findByConversationTypeAndBusinessIdAndGuestId(type, businessId, guestId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No conversation yet"));
-        if (!guestTokens.matches(token, conversation.getGuestTokenHash())) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid guest token");
+        String phone = normalizePhone(guestPhone);
+
+        SupportConversation conversation = null;
+        String adoptedToken = null;
+        if (phone != null) {
+            conversation = conversationRepository
+                    .findByConversationTypeAndBusinessIdAndGuestPhone(type, businessId, phone)
+                    .orElse(null);
         }
-        return guestPayload(conversation, null);
+        if (conversation == null) {
+            conversation = conversationRepository
+                    .findByConversationTypeAndBusinessIdAndGuestId(type, businessId, guestId)
+                    .orElse(null);
+        }
+        if (conversation == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No conversation yet");
+        }
+
+        if (guestId.equals(conversation.getGuestId())) {
+            if (!guestTokens.matches(token, conversation.getGuestTokenHash())) {
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid guest token");
+            }
+            refreshGuestIdentity(conversation, null, phone);
+        } else {
+            // Returning visitor from a new device: re-claim via the phone.
+            adoptedToken = adoptConversation(conversation, guestId, null, phone);
+        }
+        return guestPayload(conversation, adoptedToken);
     }
 
     /** Whether the token opens at least one thread owned by this guest (ticket mint). */
@@ -349,6 +399,52 @@ public class SupportService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Guest conversations must be VISITOR or STOREFRONT");
         }
+    }
+
+    /** Keep the visitor's latest name/phone on the thread they resumed. */
+    private void refreshGuestIdentity(SupportConversation conversation, String guestName, String phone) {
+        boolean changed = false;
+        if (phone != null && !phone.equals(conversation.getGuestPhone())) {
+            conversation.setGuestPhone(phone);
+            changed = true;
+        }
+        if (guestName != null && !guestName.isBlank()
+                && !guestName.trim().equals(conversation.getGuestName())) {
+            conversation.setGuestName(trimTo(guestName, 120));
+            changed = true;
+        }
+        if (changed) {
+            conversationRepository.save(conversation);
+        }
+    }
+
+    /** A new device claims this thread via its phone — adopt it and rotate the secret. */
+    private String adoptConversation(SupportConversation conversation, String guestId, String guestName, String phone) {
+        conversation.setGuestId(guestId);
+        if (guestName != null && !guestName.isBlank()) {
+            conversation.setGuestName(trimTo(guestName, 120));
+        }
+        if (phone != null && !phone.equals(conversation.getGuestPhone())) {
+            conversation.setGuestPhone(phone);
+        }
+        String token = guestTokens.mintToken();
+        conversation.setGuestTokenHash(guestTokens.hash(token));
+        conversationRepository.save(conversation);
+        log.debug("Support guest thread adopted by new device: conversation={} guest={}",
+                conversation.getId(), guestId);
+        return token;
+    }
+
+    private static String normalizePhone(String phone) {
+        if (phone == null) {
+            return null;
+        }
+        String trimmed = phone.trim();
+        if (trimmed.isBlank()) {
+            return null;
+        }
+        String digits = trimmed.replaceAll("[^0-9+]", "");
+        return digits.length() >= 9 && digits.length() <= 16 ? digits : null;
     }
 
     private void reopenIfResolved(SupportConversation conversation) {
@@ -549,6 +645,7 @@ public class SupportService {
                 conversation.getConversationType(),
                 conversation.getGuestId(),
                 conversation.getGuestName(),
+                conversation.getGuestPhone(),
                 conversation.getStatus(),
                 conversation.getSubject(),
                 conversation.getCreatedByName(),

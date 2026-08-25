@@ -51,6 +51,7 @@ public class PublicSupportController {
 
     public static final String HEADER_GUEST_ID = "X-Guest-Id";
     public static final String HEADER_GUEST_TOKEN = "X-Guest-Token";
+    public static final String HEADER_GUEST_PHONE = "X-Guest-Phone";
 
     private final SupportService supportService;
     private final BusinessRepository businessRepository;
@@ -61,11 +62,12 @@ public class PublicSupportController {
     @ResponseStatus(HttpStatus.CREATED)
     public GuestThreadDto startOrResume(
             @Valid @RequestBody StartGuestThreadRequest body,
-            @RequestHeader(value = HEADER_GUEST_TOKEN, required = false) String token
+            @RequestHeader(value = HEADER_GUEST_TOKEN, required = false) String token,
+            @RequestHeader(value = HEADER_GUEST_PHONE, required = false) String guestPhone
     ) {
         String businessId = resolveBusinessId(body.type(), body.businessSlug());
         return supportService.guestStartOrResume(
-                body.type(), businessId, body.guestId(), body.guestName(), body.body(), token);
+                body.type(), businessId, body.guestId(), body.guestName(), guestPhone, body.body(), token);
     }
 
     @GetMapping("/threads/me")
@@ -73,10 +75,11 @@ public class PublicSupportController {
             @RequestParam String type,
             @RequestParam(required = false) String businessSlug,
             @RequestParam String guestId,
-            @RequestHeader(value = HEADER_GUEST_TOKEN, required = false) String token
+            @RequestHeader(value = HEADER_GUEST_TOKEN, required = false) String token,
+            @RequestHeader(value = HEADER_GUEST_PHONE, required = false) String guestPhone
     ) {
         String businessId = resolveBusinessId(type, businessSlug);
-        return supportService.guestResume(type, businessId, guestId, token);
+        return supportService.guestResume(type, businessId, guestId, guestPhone, token);
     }
 
     @PostMapping("/threads/{id}/messages")

@@ -10,6 +10,7 @@ public record SupportConversationDto(
         String conversationType,
         String guestId,
         String guestName,
+        String guestPhone,
         String status,
         String subject,
         String createdByName,

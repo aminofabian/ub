@@ -45,6 +45,10 @@ public class SupportConversation {
     @Column(name = "guest_name", length = 120)
     private String guestName;
 
+    /** Identity anchor for returning visitors — one thread per phone. */
+    @Column(name = "guest_phone", length = 32)
+    private String guestPhone;
+
     @Column(name = "guest_token_hash", length = 64)
     private String guestTokenHash;
 

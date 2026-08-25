@@ -2,6 +2,8 @@ package zelisline.ub.support.application;
 
 import java.time.Instant;
 
+import zelisline.ub.support.api.dto.SupportAttachmentDto;
+
 /**
  * Domain events published by {@link SupportService} after successful writes.
  * {@link SupportRealtimeBridge} fans them out over the realtime WebSocket.
@@ -23,6 +25,7 @@ public final class SupportEvents {
             String senderUserId,
             String senderName,
             String body,
+            SupportAttachmentDto attachment,
             Instant createdAt,
             String conversationType,
             String guestId

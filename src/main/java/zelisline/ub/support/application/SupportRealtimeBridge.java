@@ -48,8 +48,9 @@ public class SupportRealtimeBridge {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onMessageSent(SupportEvents.SupportMessageSentEvent event) {
         String eventId = UUID.randomUUID().toString();
+        String attachmentJson = attachmentJson(event.attachment());
         String payload = """
-                {"conversationId":"%s","messageId":"%s","senderType":"%s","senderUserId":"%s","senderName":"%s","body":"%s","createdAt":"%s","conversationType":"%s"}
+                {"conversationId":"%s","messageId":"%s","senderType":"%s","senderUserId":"%s","senderName":"%s","body":"%s","attachment":%s,"createdAt":"%s","conversationType":"%s"}
                 """.formatted(
                 RealtimeWebSocketHandler.escapeJson(event.conversationId()),
                 RealtimeWebSocketHandler.escapeJson(event.messageId()),
@@ -57,11 +58,31 @@ public class SupportRealtimeBridge {
                 RealtimeWebSocketHandler.escapeJson(event.senderUserId()),
                 RealtimeWebSocketHandler.escapeJson(event.senderName()),
                 RealtimeWebSocketHandler.escapeJson(event.body()),
+                attachmentJson,
                 event.createdAt().toString(),
                 RealtimeWebSocketHandler.escapeJson(event.conversationType()));
 
         fanOut(event.businessId(), event.conversationType(), event.guestId(),
                 "support.message", eventId, payload);
+    }
+
+    private static String attachmentJson(zelisline.ub.support.api.dto.SupportAttachmentDto attachment) {
+        if (attachment == null || attachment.url() == null || attachment.url().isBlank()) {
+            return "null";
+        }
+        return """
+                {"url":"%s","publicId":"%s","fileName":"%s","contentType":"%s","bytes":%s}
+                """.formatted(
+                RealtimeWebSocketHandler.escapeJson(nullToEmpty(attachment.url())),
+                RealtimeWebSocketHandler.escapeJson(nullToEmpty(attachment.publicId())),
+                RealtimeWebSocketHandler.escapeJson(nullToEmpty(attachment.fileName())),
+                RealtimeWebSocketHandler.escapeJson(nullToEmpty(attachment.contentType())),
+                attachment.bytes() == null ? "null" : attachment.bytes().toString()
+        ).trim();
+    }
+
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)

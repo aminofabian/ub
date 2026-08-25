@@ -3,6 +3,7 @@ package zelisline.ub.support.application;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,6 +18,7 @@ import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.support.api.dto.CreateSupportConversationRequest;
 import zelisline.ub.support.api.dto.GuestThreadDto;
 import zelisline.ub.support.api.dto.SendSupportMessageRequest;
+import zelisline.ub.support.api.dto.SupportAttachmentDto;
 import zelisline.ub.support.api.dto.SupportConversationDetailDto;
 import zelisline.ub.support.api.dto.SupportConversationDto;
 import zelisline.ub.support.api.dto.SupportMessageDto;
@@ -49,6 +51,23 @@ public class SupportService {
     private static final Logger log = LoggerFactory.getLogger(SupportService.class);
 
     public static final String GUEST_CHANNEL_PREFIX = "support.guest:";
+
+    private static final long MAX_ATTACHMENT_BYTES = 15L * 1024L * 1024L;
+    private static final Set<String> ALLOWED_ATTACHMENT_CONTENT_TYPES = Set.of(
+            "image/png",
+            "image/jpeg",
+            "image/jpg",
+            "image/webp",
+            "image/gif",
+            "application/pdf",
+            "text/csv",
+            "text/plain",
+            "application/csv",
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    );
 
     private final SupportConversationRepository conversationRepository;
     private final SupportMessageRepository messageRepository;
@@ -97,11 +116,13 @@ public class SupportService {
     }
 
     @Transactional
-    public SupportMessageDto sendTenantMessage(String businessId, String userId, String body) {
+    public SupportMessageDto sendTenantMessage(
+            String businessId, String userId, SendSupportMessageRequest request
+    ) {
         String userName = resolveUserName(businessId, userId);
         SupportConversation conversation = ensureConversation(businessId, userId, userName, null);
         reopenIfResolved(conversation);
-        return persistMessage(conversation, SupportMessage.SENDER_TENANT, userId, userName, body);
+        return persistMessage(conversation, SupportMessage.SENDER_TENANT, userId, userName, request);
     }
 
     @Transactional
@@ -141,12 +162,12 @@ public class SupportService {
 
     @Transactional
     public SupportMessageDto sendStorefrontStaffMessage(
-            String conversationId, String businessId, String userId, String body
+            String conversationId, String businessId, String userId, SendSupportMessageRequest request
     ) {
         SupportConversation conversation = requireStorefrontOwned(conversationId, businessId);
         String userName = resolveUserName(businessId, userId);
         reopenIfResolved(conversation);
-        return persistMessage(conversation, SupportMessage.SENDER_TENANT, userId, userName, body);
+        return persistMessage(conversation, SupportMessage.SENDER_TENANT, userId, userName, request);
     }
 
     @Transactional
@@ -218,11 +239,11 @@ public class SupportService {
 
     @Transactional
     public SupportMessageDto sendAdminMessage(
-            String conversationId, String adminUserId, String adminName, String body
+            String conversationId, String adminUserId, String adminName, SendSupportMessageRequest request
     ) {
         SupportConversation conversation = requirePlatformStaffed(conversationId);
         reopenIfResolved(conversation);
-        return persistMessage(conversation, SupportMessage.SENDER_SUPER_ADMIN, adminUserId, adminName, body);
+        return persistMessage(conversation, SupportMessage.SENDER_SUPER_ADMIN, adminUserId, adminName, request);
     }
 
     /** Marks the platform's side read and broadcasts read receipts to the tenant/guest. */
@@ -404,11 +425,12 @@ public class SupportService {
 
     @Transactional
     public SupportMessageDto sendGuestMessage(
-            String conversationId, String guestId, String token, String guestName, String body
+            String conversationId, String guestId, String token, SendSupportMessageRequest request
     ) {
         SupportConversation conversation = requireGuestThread(conversationId, guestId, token);
         reopenIfResolved(conversation);
-        return persistMessage(conversation, SupportMessage.SENDER_GUEST, guestId, guestName, body);
+        String guestName = request.guestName();
+        return persistMessage(conversation, SupportMessage.SENDER_GUEST, guestId, guestName, request);
     }
 
     @Transactional
@@ -452,6 +474,11 @@ public class SupportService {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid guest token");
         }
         return conversation;
+    }
+
+    /** Validates guest ownership without sending a message (e.g. Cloudinary signature). */
+    public void requireGuestThreadAccess(String conversationId, String guestId, String token) {
+        requireGuestThread(conversationId, guestId, token);
     }
 
     private void requireGuestType(String type) {
@@ -540,24 +567,109 @@ public class SupportService {
             SupportConversation conversation, String senderType,
             String senderUserId, String senderName, String body
     ) {
+        return persistMessage(conversation, senderType, senderUserId, senderName,
+                new SendSupportMessageRequest(body, null, null));
+    }
+
+    private SupportMessageDto persistMessage(
+            SupportConversation conversation, String senderType,
+            String senderUserId, String senderName, SendSupportMessageRequest request
+    ) {
+        SupportAttachmentDto attachment = normalizeAttachment(request == null ? null : request.attachment());
+        String body = normalizeBody(request == null ? null : request.body(), attachment);
+
         SupportMessage message = new SupportMessage();
         message.setConversationId(conversation.getId());
         message.setSenderType(senderType);
         message.setSenderUserId(senderUserId);
         message.setSenderName(senderName);
         message.setBody(body);
+        if (attachment != null) {
+            message.setAttachmentUrl(attachment.url());
+            message.setAttachmentPublicId(blankToNull(attachment.publicId()));
+            message.setAttachmentFileName(blankToNull(attachment.fileName()));
+            message.setAttachmentContentType(blankToNull(attachment.contentType()));
+            message.setAttachmentBytes(attachment.bytes());
+        }
         messageRepository.save(message);
 
-        conversation.touchLastMessage(message.getCreatedAt(), previewOf(body));
+        conversation.touchLastMessage(message.getCreatedAt(), previewOf(body, attachment));
         touchOwnRead(conversation, senderType);
         conversationRepository.save(conversation);
 
         eventPublisher.publishEvent(new SupportEvents.SupportMessageSentEvent(
                 conversation.getBusinessId(), conversation.getId(), message.getId(),
-                senderType, senderUserId, senderName, message.getBody(), message.getCreatedAt(),
+                senderType, senderUserId, senderName, message.getBody(),
+                toAttachmentDto(message),
+                message.getCreatedAt(),
                 conversation.getConversationType(), conversation.getGuestId()));
 
         return toMessageDto(message);
+    }
+
+    private static String normalizeBody(String raw, SupportAttachmentDto attachment) {
+        String body = raw == null ? "" : raw.trim();
+        if (body.isEmpty() && attachment == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Message body or attachment is required");
+        }
+        if (body.length() > 4000) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Message body is too long");
+        }
+        return body;
+    }
+
+    private static SupportAttachmentDto normalizeAttachment(SupportAttachmentDto raw) {
+        if (raw == null) {
+            return null;
+        }
+        String url = raw.url() == null ? "" : raw.url().trim();
+        if (url.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Attachment url is required");
+        }
+        if (!isAllowedCloudinaryUrl(url)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Attachment must be a Cloudinary HTTPS URL");
+        }
+        if (url.length() > 1024) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Attachment url is too long");
+        }
+        Long bytes = raw.bytes();
+        if (bytes != null && (bytes < 0 || bytes > MAX_ATTACHMENT_BYTES)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Attachment is too large");
+        }
+        String contentType = blankToNull(raw.contentType());
+        if (contentType != null && !isAllowedAttachmentContentType(contentType)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Attachment type is not allowed");
+        }
+        return new SupportAttachmentDto(
+                url,
+                blankToNull(raw.publicId()),
+                blankToNull(raw.fileName()),
+                contentType,
+                bytes
+        );
+    }
+
+    private static boolean isAllowedCloudinaryUrl(String url) {
+        String lower = url.toLowerCase();
+        return lower.startsWith("https://res.cloudinary.com/")
+                || (lower.startsWith("https://") && lower.contains(".cloudinary.com/"));
+    }
+
+    private static boolean isAllowedAttachmentContentType(String contentType) {
+        String ct = contentType.trim().toLowerCase();
+        int sc = ct.indexOf(';');
+        if (sc > 0) {
+            ct = ct.substring(0, sc).trim();
+        }
+        return ALLOWED_ATTACHMENT_CONTENT_TYPES.contains(ct);
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     /** The reader's own side always sees their latest message as read. */
@@ -777,16 +889,37 @@ public class SupportService {
                 message.getSenderUserId(),
                 message.getSenderName(),
                 message.getBody(),
+                toAttachmentDto(message),
                 message.getReadAt(),
                 message.getCreatedAt()
         );
     }
 
-    private static String previewOf(String body) {
-        if (body == null) {
+    private static SupportAttachmentDto toAttachmentDto(SupportMessage message) {
+        if (message.getAttachmentUrl() == null || message.getAttachmentUrl().isBlank()) {
             return null;
         }
-        String flat = body.replaceAll("\\s+", " ").trim();
-        return flat.length() > 140 ? flat.substring(0, 140) + "…" : flat;
+        return new SupportAttachmentDto(
+                message.getAttachmentUrl(),
+                message.getAttachmentPublicId(),
+                message.getAttachmentFileName(),
+                message.getAttachmentContentType(),
+                message.getAttachmentBytes()
+        );
+    }
+
+    private static String previewOf(String body, SupportAttachmentDto attachment) {
+        String flat = body == null ? "" : body.replaceAll("\\s+", " ").trim();
+        if (!flat.isEmpty()) {
+            return flat.length() > 140 ? flat.substring(0, 140) + "…" : flat;
+        }
+        if (attachment != null) {
+            String name = attachment.fileName();
+            if (name != null && !name.isBlank()) {
+                return "📎 " + name.trim();
+            }
+            return "📎 Attachment";
+        }
+        return null;
     }
 }

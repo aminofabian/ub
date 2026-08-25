@@ -70,7 +70,7 @@ public class SupportController {
     ) {
         TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
-        return supportService.sendTenantMessage(businessId, principal.userId(), body.body());
+        return supportService.sendTenantMessage(businessId, principal.userId(), body);
     }
 
     @PostMapping("/conversation/read")
@@ -139,8 +139,7 @@ public class SupportController {
     ) {
         TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
-        return supportService.sendStorefrontStaffMessage(id, businessId, principal.userId(),
-                body.body());
+        return supportService.sendStorefrontStaffMessage(id, businessId, principal.userId(), body);
     }
 
     @PostMapping("/storefront/conversations/{id}/read")

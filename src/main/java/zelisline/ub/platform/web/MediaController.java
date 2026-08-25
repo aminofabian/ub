@@ -28,18 +28,25 @@ public class MediaController {
         if (!signatureService.isConfigured()) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Cloudinary is not configured on this server");
         }
-        var result = signatureService.signUpload(request.folder());
-        return new CloudinarySignatureResponse(
-                result.cloudName(),
-                result.apiKey(),
-                result.timestamp(),
-                result.signature(),
-                result.folder()
-        );
+        try {
+            var result = signatureService.signUpload(request.folder(), request.resourceType());
+            return new CloudinarySignatureResponse(
+                    result.cloudName(),
+                    result.apiKey(),
+                    result.timestamp(),
+                    result.signature(),
+                    result.folder(),
+                    result.resourceType()
+            );
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+        }
     }
 
     public record CloudinarySignatureRequest(
-            @NotBlank @Size(max = 512) String folder
+            @NotBlank @Size(max = 512) String folder,
+            /** {@code image} (default), {@code auto}, or {@code raw}. */
+            @Size(max = 16) String resourceType
     ) {
     }
 
@@ -48,7 +55,8 @@ public class MediaController {
             String apiKey,
             long timestamp,
             String signature,
-            String folder
+            String folder,
+            String resourceType
     ) {
     }
 }

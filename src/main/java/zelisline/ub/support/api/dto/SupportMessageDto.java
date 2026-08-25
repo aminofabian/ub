@@ -9,6 +9,7 @@ public record SupportMessageDto(
         String senderUserId,
         String senderName,
         String body,
+        SupportAttachmentDto attachment,
         Instant readAt,
         Instant createdAt
 ) {}

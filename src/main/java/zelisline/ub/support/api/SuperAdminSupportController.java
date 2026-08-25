@@ -81,7 +81,7 @@ public class SuperAdminSupportController {
     @ResponseStatus(HttpStatus.CREATED)
     public SupportMessageDto send(@PathVariable String id, @Valid @RequestBody SendSupportMessageRequest body) {
         SuperAdmin admin = requireSuperAdmin();
-        return supportService.sendAdminMessage(id, admin.getId(), admin.getName(), body.body());
+        return supportService.sendAdminMessage(id, admin.getId(), admin.getName(), body);
     }
 
     @PostMapping("/conversations/{id}/read")

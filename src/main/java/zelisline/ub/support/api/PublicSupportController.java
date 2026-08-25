@@ -21,6 +21,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.platform.media.CloudinarySignatureService;
 import zelisline.ub.platform.realtime.RealtimeScopes;
 import zelisline.ub.platform.realtime.RealtimeTicketController;
 import zelisline.ub.platform.realtime.RealtimeTicketService;
@@ -57,6 +58,7 @@ public class PublicSupportController {
     private final BusinessRepository businessRepository;
     private final RealtimeTicketService ticketService;
     private final RealtimeTicketController tenantTicketController;
+    private final CloudinarySignatureService cloudinarySignatureService;
 
     @PostMapping("/threads")
     @ResponseStatus(HttpStatus.CREATED)
@@ -90,7 +92,30 @@ public class PublicSupportController {
             @RequestHeader(HEADER_GUEST_ID) String guestId,
             @RequestHeader(HEADER_GUEST_TOKEN) String token
     ) {
-        return supportService.sendGuestMessage(id, guestId, token, body.guestName(), body.body());
+        return supportService.sendGuestMessage(id, guestId, token, body);
+    }
+
+    /** Signed Cloudinary upload for an authenticated guest thread (auto = images + docs). */
+    @PostMapping("/threads/{id}/cloudinary-signature")
+    public Map<String, Object> cloudinarySignature(
+            @PathVariable String id,
+            @RequestHeader(HEADER_GUEST_ID) String guestId,
+            @RequestHeader(HEADER_GUEST_TOKEN) String token
+    ) {
+        if (!cloudinarySignatureService.isConfigured()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Cloudinary is not configured on this server");
+        }
+        supportService.requireGuestThreadAccess(id, guestId, token);
+        var result = cloudinarySignatureService.signUpload(
+                "ub/support/" + id.trim(), CloudinarySignatureService.RESOURCE_AUTO);
+        return Map.of(
+                "cloudName", result.cloudName(),
+                "apiKey", result.apiKey(),
+                "timestamp", result.timestamp(),
+                "signature", result.signature(),
+                "folder", result.folder() == null ? "" : result.folder(),
+                "resourceType", result.resourceType()
+        );
     }
 
     @PostMapping("/threads/{id}/read")

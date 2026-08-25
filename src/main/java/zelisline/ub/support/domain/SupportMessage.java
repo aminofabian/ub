@@ -41,6 +41,21 @@ public class SupportMessage {
     @Column(name = "body", nullable = false, columnDefinition = "TEXT")
     private String body;
 
+    @Column(name = "attachment_url", length = 1024)
+    private String attachmentUrl;
+
+    @Column(name = "attachment_public_id", length = 512)
+    private String attachmentPublicId;
+
+    @Column(name = "attachment_file_name", length = 255)
+    private String attachmentFileName;
+
+    @Column(name = "attachment_content_type", length = 128)
+    private String attachmentContentType;
+
+    @Column(name = "attachment_bytes")
+    private Long attachmentBytes;
+
     @Column(name = "read_at")
     private Instant readAt;
 

@@ -17,6 +17,7 @@ public final class RestockDigestDtos {
             String itemName,
             String variantName,
             String itemSku,
+            String thumbnailUrl,
             String itemTypeId,
             String itemTypeName,
             String supplierId,

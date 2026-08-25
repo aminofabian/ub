@@ -25,6 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.domain.Item;
@@ -94,6 +95,7 @@ public class RestockDigestService {
     private final BranchRepository branchRepository;
     private final BusinessRepository businessRepository;
     private final ItemRepository itemRepository;
+    private final ItemCatalogService itemCatalogService;
     private final ItemTypeRepository itemTypeRepository;
     private final InventoryBatchRepository inventoryBatchRepository;
     private final PackageVariantStockResolver packageVariantStockResolver;
@@ -1088,6 +1090,7 @@ public class RestockDigestService {
                 ? Map.of()
                 : supplierRepository.findAllById(supplierIds).stream()
                         .collect(Collectors.toMap(Supplier::getId, Supplier::getName, (a, b) -> a));
+        Map<String, String> thumbs = itemCatalogService.resolveThumbnailUrls(businessId, itemIds);
         return rows.stream()
                 .map(r -> {
                     Item item = items.get(r.getItemId());
@@ -1095,7 +1098,11 @@ public class RestockDigestService {
                             ? null
                             : types.get(item.getItemTypeId());
                     return toSuggestionResponse(
-                            r, item, type, supplierName(supplierNames, r.getSupplierId()));
+                            r,
+                            item,
+                            type,
+                            supplierName(supplierNames, r.getSupplierId()),
+                            thumbs.get(r.getItemId()));
                 })
                 .toList();
     }
@@ -1124,7 +1131,8 @@ public class RestockDigestService {
             RestockSuggestion r,
             Item item,
             ItemType itemType,
-            String supplierName
+            String supplierName,
+            String thumbnailUrl
     ) {
         return new RestockDigestDtos.RestockSuggestionResponse(
                 r.getId(),
@@ -1133,6 +1141,7 @@ public class RestockDigestService {
                 itemDisplayName(item),
                 itemOptionLabel(item),
                 item != null ? item.getSku() : null,
+                thumbnailUrl,
                 item != null ? item.getItemTypeId() : null,
                 itemType != null && itemType.getLabel() != null && !itemType.getLabel().isBlank()
                         ? itemType.getLabel()

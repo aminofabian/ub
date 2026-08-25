@@ -782,4 +782,16 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("businessId") String businessId,
             @Param("catalogBranchId") String catalogBranchId
     );
+
+    /** Active SKUs grouped by their category — used by the AI guide to say how many products each category holds. */
+    @Query("""
+            select i.categoryId, count(i) from Item i
+             where i.businessId = :businessId
+               and i.deletedAt is null
+               and i.active = true
+               and i.categoryId is not null
+               and i.categoryId <> ''
+             group by i.categoryId
+            """)
+    List<Object[]> countActiveItemsByCategory(@Param("businessId") String businessId);
 }

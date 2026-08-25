@@ -105,8 +105,9 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
                 ticketRecord.userId(),
                 ticketRecord.businessId(),
                 // Platform-scope tickets (super-admin console) carry the SUPER_ADMIN role
-                // so support-chat fan-out can target them.
-                RealtimeScopes.PLATFORM.equals(ticketRecord.businessId()) ? "SUPER_ADMIN" : "",
+                // so support-chat fan-out can target them. Guest-scope tickets (anonymous
+                // visitors/buyers) carry the GUEST role.
+                roleFor(ticketRecord),
                 ticketRecord.branchId(),
                 ticketRecord.allowedChannels()
         );
@@ -324,7 +325,12 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
         lastPong.put(sessionId, Instant.now());
         // Heartbeat pong is proof of a live browser — refresh the "last seen" clock.
         RealtimeSession meta = sessionRegistry.getMeta(sessionId);
-        if (meta != null && !RealtimeScopes.PLATFORM.equals(meta.businessId())) {
+        if (meta == null) {
+            return;
+        }
+        if (RealtimeScopes.GUEST.equals(meta.businessId())) {
+            sessionRegistry.touchBusiness(meta.userId());
+        } else if (!RealtimeScopes.PLATFORM.equals(meta.businessId())) {
             sessionRegistry.touchBusiness(meta.businessId());
         }
     }
@@ -527,6 +533,16 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
                 .replace("\n", "\\n")
                 .replace("\r", "\\r")
                 .replace("\t", "\\t");
+    }
+
+    private static String roleFor(TicketRecord record) {
+        if (RealtimeScopes.PLATFORM.equals(record.businessId())) {
+            return "SUPER_ADMIN";
+        }
+        if (RealtimeScopes.GUEST.equals(record.businessId())) {
+            return "GUEST";
+        }
+        return "";
     }
 
     private record QueuedFrame(String frame, String priority) {}

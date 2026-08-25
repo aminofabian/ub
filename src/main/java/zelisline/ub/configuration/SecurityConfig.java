@@ -41,6 +41,8 @@ import zelisline.ub.platform.security.PublicCreditClaimRateLimitFilter;
 import zelisline.ub.platform.security.PublicCreditClaimRateLimiter;
 import zelisline.ub.platform.security.PublicStorefrontIpRateLimiter;
 import zelisline.ub.platform.security.PublicStorefrontRateLimitFilter;
+import zelisline.ub.platform.security.PublicSupportRateLimitFilter;
+import zelisline.ub.platform.security.PublicSupportRateLimiter;
 import zelisline.ub.platform.security.JwtAuthenticationFilter;
 import zelisline.ub.platform.security.JwtTokenService;
 import zelisline.ub.platform.security.LoginIpRateLimiter;
@@ -98,6 +100,7 @@ public class SecurityConfig {
             PublicStorefrontRateLimitFilter publicStorefrontRateLimitFilter,
             PublicCreditClaimRateLimitFilter publicCreditClaimRateLimitFilter,
             PublicContactMessageRateLimitFilter publicContactMessageRateLimitFilter,
+            PublicSupportRateLimitFilter publicSupportRateLimitFilter,
             LoginRateLimitFilter loginRateLimitFilter,
             RefreshRateLimitFilter refreshRateLimitFilter,
             JwtAuthenticationFilter jwtAuthenticationFilter,
@@ -187,6 +190,7 @@ public class SecurityConfig {
         http.addFilterAfter(publicStorefrontRateLimitFilter, DomainBusinessResolverFilter.class);
         http.addFilterAfter(publicCreditClaimRateLimitFilter, PublicStorefrontRateLimitFilter.class);
         http.addFilterAfter(publicContactMessageRateLimitFilter, PublicCreditClaimRateLimitFilter.class);
+        http.addFilterAfter(publicSupportRateLimitFilter, PublicContactMessageRateLimitFilter.class);
         http.addFilterAfter(loginRateLimitFilter, PublicContactMessageRateLimitFilter.class);
         http.addFilterAfter(refreshRateLimitFilter, LoginRateLimitFilter.class);
         http.addFilterAfter(jwtAuthenticationFilter, RefreshRateLimitFilter.class);
@@ -218,6 +222,13 @@ public class SecurityConfig {
             PublicContactMessageRateLimiter publicContactMessageRateLimiter
     ) {
         return new PublicContactMessageRateLimitFilter(publicContactMessageRateLimiter);
+    }
+
+    @Bean
+    public PublicSupportRateLimitFilter publicSupportRateLimitFilter(
+            PublicSupportRateLimiter publicSupportRateLimiter
+    ) {
+        return new PublicSupportRateLimitFilter(publicSupportRateLimiter);
     }
 
     @Bean
@@ -295,6 +306,8 @@ public class SecurityConfig {
                 "X-Request-Id",
                 "X-Tenant-Id",
                 "X-Tenant-Host",
+                "X-Guest-Id",
+                "X-Guest-Token",
                 "X-Page-Unlock",
                 TestAuthenticationFilter.HEADER_USER_ID,
                 TestAuthenticationFilter.HEADER_ROLE_ID

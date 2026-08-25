@@ -20,6 +20,7 @@ public class SupportMessage {
 
     public static final String SENDER_TENANT = "TENANT";
     public static final String SENDER_SUPER_ADMIN = "SUPER_ADMIN";
+    public static final String SENDER_GUEST = "GUEST";
 
     @Id
     @Column(name = "id", nullable = false, length = 36)

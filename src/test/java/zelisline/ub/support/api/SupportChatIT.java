@@ -299,6 +299,179 @@ class SupportChatIT {
                 .andExpect(status().isForbidden());
     }
 
+    // ── Visitor chat (kiosk.ke guest → super-admin) ────────────────────────
+
+    @Test
+    void visitorGuestThreadLifecycleWithTokenAuth() throws Exception {
+        MvcResult created = mockMvc.perform(post("/api/v1/public/support/threads")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"type":"VISITOR","guestId":"guest-visitor-1","guestName":"Wanjiru","body":"Hi, I need help with billing."}
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.token").isNotEmpty())
+                .andExpect(jsonPath("$.conversation.conversationType").value("VISITOR"))
+                .andExpect(jsonPath("$.messages[0].body").value("Hi, I need help with billing."))
+                .andReturn();
+        String conversationId = objectMapper.readTree(created.getResponse().getContentAsString())
+                .path("conversation").get("id").asText();
+        String token = objectMapper.readTree(created.getResponse().getContentAsString())
+                .get("token").asText();
+
+        // Resume with the token.
+        mockMvc.perform(get("/api/v1/public/support/threads/me")
+                        .param("type", "VISITOR")
+                        .param("guestId", "guest-visitor-1")
+                        .header("X-Guest-Token", token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conversation.id").value(conversationId));
+
+        // A wrong token is rejected.
+        mockMvc.perform(get("/api/v1/public/support/threads/me")
+                        .param("type", "VISITOR")
+                        .param("guestId", "guest-visitor-1")
+                        .header("X-Guest-Token", "definitely-wrong"))
+                .andExpect(status().isUnauthorized());
+
+        // The guest sends another message.
+        mockMvc.perform(post("/api/v1/public/support/threads/" + conversationId + "/messages")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"body\":\"It's about my invoice #102.\"}")
+                        .header("X-Guest-Id", "guest-visitor-1")
+                        .header("X-Guest-Token", token))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.senderType").value("GUEST"));
+
+        // The super-admin sees the visitor thread and can reply.
+        mockMvc.perform(get("/api/v1/super-admin/support/conversations?type=VISITOR")
+                        .header("Authorization", "Bearer " + saToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conversations[0].guestName").value("Wanjiru"))
+                .andExpect(jsonPath("$.conversations[0].conversationType").value("VISITOR"));
+
+        mockMvc.perform(post("/api/v1/super-admin/support/conversations/" + conversationId + "/messages")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"body\":\"On it — checking the invoice now.\"}")
+                        .header("Authorization", "Bearer " + saToken))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.senderType").value("SUPER_ADMIN"));
+
+        // The guest picks up the reply on resume.
+        mockMvc.perform(get("/api/v1/public/support/threads/me")
+                        .param("type", "VISITOR")
+                        .param("guestId", "guest-visitor-1")
+                        .header("X-Guest-Token", token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.messages.length()").value(3))
+                .andExpect(jsonPath("$.messages[2].senderType").value("SUPER_ADMIN"));
+    }
+
+    @Test
+    void guestCannotReadAnotherGuestsThread() throws Exception {
+        MvcResult created = mockMvc.perform(post("/api/v1/public/support/threads")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"type":"VISITOR","guestId":"guest-a","body":"Private question"}
+                                """))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String conversationId = objectMapper.readTree(created.getResponse().getContentAsString())
+                .path("conversation").get("id").asText();
+
+        // Another guest cannot send into it — the thread is invisible to them.
+        mockMvc.perform(post("/api/v1/public/support/threads/" + conversationId + "/messages")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"body\":\"let me in\"}")
+                        .header("X-Guest-Id", "guest-b")
+                        .header("X-Guest-Token", "guessed-token"))
+                .andExpect(status().isNotFound());
+
+        // The thread owner with a wrong token is rejected too (401, not 404).
+        mockMvc.perform(post("/api/v1/public/support/threads/" + conversationId + "/messages")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"body\":\"trying with a stale token\"}")
+                        .header("X-Guest-Id", "guest-a")
+                        .header("X-Guest-Token", "stale-token"))
+                .andExpect(status().isUnauthorized());
+
+        // A guest with no thread gets a clean 404 on resume.
+        mockMvc.perform(get("/api/v1/public/support/threads/me")
+                        .param("type", "VISITOR")
+                        .param("guestId", "guest-b")
+                        .header("X-Guest-Token", "whatever"))
+                .andExpect(status().isNotFound());
+    }
+
+    // ── Storefront chat (buyer → tenant staff) ─────────────────────────────
+
+    @Test
+    void storefrontBuyerThreadIsVisibleOnlyToTheirTenant() throws Exception {
+        MvcResult created = mockMvc.perform(post("/api/v1/public/support/threads")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"type":"STOREFRONT","businessSlug":"support-shop-a","guestId":"buyer-1","guestName":"Njeri","body":"Is this item still in stock?"}
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.conversation.businessId").value(TENANT_A))
+                .andExpect(jsonPath("$.conversation.conversationType").value("STOREFRONT"))
+                .andReturn();
+        String conversationId = objectMapper.readTree(created.getResponse().getContentAsString())
+                .path("conversation").get("id").asText();
+        String token = objectMapper.readTree(created.getResponse().getContentAsString())
+                .get("token").asText();
+
+        // Tenant A's staff sees the buyer thread.
+        mockMvc.perform(get("/api/v1/support/storefront/conversations")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header("X-Test-User-Id", userIdFor(TENANT_A))
+                        .header("X-Test-Role-Id", ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conversations.length()").value(1))
+                .andExpect(jsonPath("$.conversations[0].guestName").value("Njeri"))
+                .andExpect(jsonPath("$.unread").value(1));
+
+        // Tenant B cannot see it.
+        mockMvc.perform(get("/api/v1/support/storefront/conversations")
+                        .header("X-Tenant-Id", TENANT_B)
+                        .header("X-Test-User-Id", userIdFor(TENANT_B))
+                        .header("X-Test-Role-Id", ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conversations.length()").value(0));
+
+        mockMvc.perform(get("/api/v1/support/storefront/conversations/" + conversationId)
+                        .header("X-Tenant-Id", TENANT_B)
+                        .header("X-Test-User-Id", userIdFor(TENANT_B))
+                        .header("X-Test-Role-Id", ROLE_OWNER))
+                .andExpect(status().isNotFound());
+
+        // Tenant A opens the thread (marks the buyer's message read) and replies.
+        mockMvc.perform(get("/api/v1/support/storefront/conversations/" + conversationId)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header("X-Test-User-Id", userIdFor(TENANT_A))
+                        .header("X-Test-Role-Id", ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conversation.id").value(conversationId));
+
+        mockMvc.perform(post("/api/v1/support/storefront/conversations/" + conversationId + "/messages")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"body\":\"Yes — 3 left on the shelf.\"}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header("X-Test-User-Id", userIdFor(TENANT_A))
+                        .header("X-Test-Role-Id", ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.senderType").value("TENANT"));
+
+        // The buyer sees the reply on resume.
+        mockMvc.perform(get("/api/v1/public/support/threads/me")
+                        .param("type", "STOREFRONT")
+                        .param("businessSlug", "support-shop-a")
+                        .param("guestId", "buyer-1")
+                        .header("X-Guest-Token", token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.messages.length()").value(2))
+                .andExpect(jsonPath("$.messages[1].senderType").value("TENANT"));
+    }
+
     @Test
     void presenceSnapshotListsEveryThreadWithOnlineFlag() throws Exception {
         mockMvc.perform(post("/api/v1/support/conversation/messages")

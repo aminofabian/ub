@@ -129,7 +129,10 @@ public class WebSocketConfig implements WebSocketConfigurer {
                 }
 
                 int businessSessions = sessionRegistry.activeOpenSessionCountForBusiness(record.businessId());
-                if (businessSessions >= maxConnectionsPerBusiness) {
+                // Guests share the "guest" business marker — the per-user cap above is
+                // their real limit; a business-wide cap would count every visitor together.
+                if (!RealtimeScopes.GUEST.equals(record.businessId())
+                        && businessSessions >= maxConnectionsPerBusiness) {
                     response.setStatusCode(HttpStatus.TOO_MANY_REQUESTS);
                     meterRegistry.counter("realtime.tickets.rejected", "reason", "business_limit").increment();
                     log.warn("WS handshake rejected: business connection limit reached business={} count={} max={}",

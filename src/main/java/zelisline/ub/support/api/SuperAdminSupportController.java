@@ -45,9 +45,10 @@ public class SuperAdminSupportController {
 
     @GetMapping("/conversations")
     public Map<String, Object> conversations(
-            @RequestParam(required = false) String status
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String type
     ) {
-        List<SupportConversationDto> conversations = supportService.listForAdmin(status);
+        List<SupportConversationDto> conversations = supportService.listForAdmin(status, type);
         return Map.of(
                 "conversations", conversations,
                 "total", conversations.size(),
@@ -91,14 +92,21 @@ public class SuperAdminSupportController {
         return Map.of("count", supportService.adminUnreadCount());
     }
 
-    /** Live tenant presence: businessId → {online, lastSeenAt} for every thread. */
+    /** Live presence: tenant threads keyed by businessId, visitor threads keyed by guestId. */
     @GetMapping("/presence")
     public Map<String, Object> presence() {
-        List<SupportConversationDto> conversations = supportService.listForAdmin(null);
-        List<String> businessIds = conversations.stream()
+        List<SupportConversationDto> tenants = supportService.listForAdmin(null, "TENANT");
+        List<SupportConversationDto> visitors = supportService.listForAdmin(null, "VISITOR");
+        List<String> businessIds = tenants.stream()
                 .map(SupportConversationDto::businessId)
                 .toList();
-        return Map.of("presence", supportPresenceService.snapshot(businessIds));
+        List<String> guestIds = visitors.stream()
+                .map(SupportConversationDto::guestId)
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        return Map.of(
+                "presence", supportPresenceService.snapshot(businessIds),
+                "guestPresence", supportPresenceService.guestSnapshot(guestIds));
     }
 
     private SuperAdmin requireSuperAdmin() {

@@ -73,7 +73,7 @@ public class RealtimeTicketController {
      * BFF for WebSocket upgrades, so the ticket must tell the client which API host
      * to open — derived from {@code API_PUBLIC_BASE_URL} on the Java API.
      */
-    String resolveWebSocketUrl(HttpServletRequest request) {
+    public String resolveWebSocketUrl(HttpServletRequest request) {
         String base = publicApiBaseUrl;
         if (base.isBlank()) {
             int port = request.getServerPort();

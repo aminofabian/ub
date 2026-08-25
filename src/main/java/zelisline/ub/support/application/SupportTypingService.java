@@ -7,15 +7,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import zelisline.ub.platform.realtime.RealtimeScopes;
 import zelisline.ub.platform.realtime.RealtimeWebSocketHandler;
 import zelisline.ub.platform.realtime.SessionRegistry;
 import zelisline.ub.platform.realtime.SupportTypingListener;
 import zelisline.ub.support.domain.SupportConversation;
 
 /**
- * Broadcasts typing presence for the support chat. Tenant sessions broadcast to
- * the platform's admin sessions (and the rest of their own business so
- * multi-tab mirrors). Super-admin sessions broadcast to the tenant's business.
+ * Broadcasts typing presence for the support chat. Delivery mirrors
+ * {@link SupportRealtimeBridge}: staff sockets on the {@code support} channel,
+ * guest sockets on their own {@code support.guest:<guestId>} channel.
  */
 @Service
 public class SupportTypingService implements SupportTypingListener {
@@ -41,48 +42,63 @@ public class SupportTypingService implements SupportTypingListener {
 
     @Override
     public void onTyping(String userId, String businessId, String roleId, String conversationId, boolean typing) {
-        boolean admin = "SUPER_ADMIN".equals(roleId);
         String resolvedConversationId = conversationId;
-        String targetBusinessId = businessId;
-
-        if (admin) {
-            // The admin's session business scope is "platform"; resolve the real
-            // tenant from the conversation they are typing in.
-            if (conversationId == null || conversationId.isBlank()) {
-                return;
-            }
-            SupportConversation conversation = supportService.getConversationForTyping(conversationId);
-            if (conversation == null) {
-                return;
-            }
-            targetBusinessId = conversation.getBusinessId();
-            resolvedConversationId = conversation.getId();
-        } else if (resolvedConversationId == null || resolvedConversationId.isBlank()) {
-            // Tenant session: resolve their single conversation.
-            SupportConversation conversation = supportService.findByBusinessId(businessId).orElse(null);
-            if (conversation == null) {
-                return;
-            }
-            resolvedConversationId = conversation.getId();
+        SupportConversation conversation = resolvedConversationId == null || resolvedConversationId.isBlank()
+                ? supportService.findByBusinessId(businessId).orElse(null)
+                : supportService.getConversationForTyping(resolvedConversationId);
+        if (conversation == null) {
+            return;
         }
+        resolvedConversationId = conversation.getId();
+
+        String type = conversation.getConversationType();
+        boolean staff = SupportConversation.TYPE_STOREFRONT.equals(type)
+                ? businessId.equals(conversation.getBusinessId()) // any tenant user staffs buyer chats
+                : "SUPER_ADMIN".equals(roleId);
 
         String payload = """
                 {"conversationId":"%s","typing":%b,"fromAdmin":%b,"userId":"%s"}
                 """.formatted(
                 RealtimeWebSocketHandler.escapeJson(resolvedConversationId),
                 typing,
-                admin,
+                staff,
                 RealtimeWebSocketHandler.escapeJson(userId));
 
         String eventId = UUID.randomUUID().toString();
-        Set<String> adminSessions = sessionRegistry.findPlatformAdminSessions(CHANNEL);
+        Set<String> adminSessions = Set.of();
+        Set<String> tenantSessions = Set.of();
+        Set<String> guestSessions = Set.of();
+
+        if (SupportConversation.TYPE_VISITOR.equals(type)) {
+            adminSessions = sessionRegistry.findPlatformAdminSessions(CHANNEL);
+            guestSessions = guestSessions(conversation.getGuestId());
+        } else if (SupportConversation.TYPE_STOREFRONT.equals(type)) {
+            tenantSessions = sessionRegistry.findSessionsByBusinessChannel(
+                    conversation.getBusinessId(), CHANNEL);
+            guestSessions = guestSessions(conversation.getGuestId());
+        } else {
+            adminSessions = sessionRegistry.findPlatformAdminSessions(CHANNEL);
+            tenantSessions = sessionRegistry.findSessionsByBusinessChannel(
+                    conversation.getBusinessId(), CHANNEL);
+        }
+
         for (String sessionId : adminSessions) {
             handler.sendFrame(sessionId, "support.typing", eventId, PRIORITY, null, payload);
         }
-        Set<String> tenantSessions = sessionRegistry.findSessionsByBusinessChannel(targetBusinessId, CHANNEL);
         for (String sessionId : tenantSessions) {
             handler.sendFrame(sessionId, "support.typing", eventId, PRIORITY, null, payload);
         }
-        log.debug("Support typing: admin={} conversation={} typing={}", admin, resolvedConversationId, typing);
+        for (String sessionId : guestSessions) {
+            handler.sendFrame(sessionId, "support.typing", eventId, PRIORITY, null, payload);
+        }
+        log.debug("Support typing: staff={} conversation={} typing={}", staff, resolvedConversationId, typing);
+    }
+
+    private Set<String> guestSessions(String guestId) {
+        if (guestId == null || guestId.isBlank()) {
+            return Set.of();
+        }
+        return sessionRegistry.findSessionsByBusinessChannel(
+                RealtimeScopes.GUEST, SupportService.GUEST_CHANNEL_PREFIX + guestId);
     }
 }

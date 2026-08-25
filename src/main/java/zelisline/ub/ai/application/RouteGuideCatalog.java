@@ -68,6 +68,66 @@ public class RouteGuideCatalog {
                             "How does sell-price suggest work?",
                             "Can I pull an image from the global catalog?"));
         }
+        if (matches(path, surf, "/purchasing/ap-aging", "purchasing.ap", "ap", "aging")) {
+            return guide(
+                    "purchasing.ap",
+                    "AP aging",
+                    "Open balances on posted supplier invoices, bucketed by how long they are past due. Shows the total the shop owes suppliers plus any prepayments.",
+                    List.of(
+                            "Total open AP is what the shop still owes suppliers across all invoices.",
+                            "Buckets count days past due — Current means the bill is not late yet.",
+                            "Set an as-of date or a supplier ID, then Refresh, to narrow the view.",
+                            "Settle bills from the Supplies page (Pay open) or the supplier profile — not on this page."),
+                    List.of(
+                            "Explain the buckets to me",
+                            "Who do I owe money to?",
+                            "How do I pay a supplier?",
+                            "Draft a polite payment reminder SMS"));
+        }
+        if (matches(path, surf, "/purchasing/record-payment", "purchasing.pay", "pay", "record-payment")) {
+            return guide(
+                    "purchasing.pay",
+                    "Pay open",
+                    "Record supplier payments against open supply bills. This screen opens the Supplies list filtered to unpaid bills.",
+                    List.of(
+                            "Open bills are supplier receipts that are not fully paid yet.",
+                            "Pay settles one bill; Pay all clears every open bill for that supplier.",
+                            "Deposit prepays a supplier wallet; the credit applies to later supplies.",
+                            "AP aging shows the same balances bucketed by how late they are."),
+                    List.of(
+                            "How do I pay a supplier?",
+                            "What is a deposit / prepayment?",
+                            "Draft a polite payment reminder SMS"));
+        }
+        if (matches(path, surf, "/purchasing/intelligence", "purchasing.intel", "intelligence", "intel")) {
+            return guide(
+                    "purchasing.intel",
+                    "Supplier intelligence",
+                    "Spend, margin, and risk across suppliers — who you buy from most, at what margin, and where the exposure sits.",
+                    List.of(
+                            "Charts run off locked purchase and sale history for the selected branch.",
+                            "Use the date range and filters to narrow to a supplier or period.",
+                            "Drill out to AP aging for open balances, or Suppliers for the directory."),
+                    List.of(
+                            "Which supplier gives the best margin?",
+                            "How much do I spend per supplier?",
+                            "Where do I see open balances?"));
+        }
+        if (matches(path, surf, "/supplies", "purchasing.supplies", "supplies", "receiving")) {
+            return guide(
+                    "purchasing.supplies",
+                    "Receive supplies",
+                    "Record stock deliveries from suppliers — stock rises and a bill is created in one step. Also where you pay open bills.",
+                    List.of(
+                            "New supply records the delivery: stock goes up and the bill is created together.",
+                            "Pay settles a bill; Pay all clears everything open for that supplier.",
+                            "Deposit prepays a supplier wallet; the credit applies to later supplies.",
+                            "Filter chips (Today, 7 days, 30 days, All, Unpaid) shrink the list."),
+                    List.of(
+                            "How do I record a delivery?",
+                            "How do I pay a bill?",
+                            "What is a deposit / prepayment?"));
+        }
         if (matches(path, surf, "/suppliers", "suppliers", "ap")) {
             return guide(
                     "suppliers.ap",
@@ -174,7 +234,9 @@ public class RouteGuideCatalog {
             return true;
         }
         for (String token : surfaceTokens) {
-            if (surface.contains(token)) {
+            // Exact surface or a dotted descendant (e.g. "suppliers.ap" matches "suppliers").
+            // Never substring-contains: "app.general" must not match the "ap" token.
+            if (surface.equals(token) || surface.startsWith(token + ".")) {
                 return true;
             }
         }

@@ -56,19 +56,20 @@ public class GuideLiveToolsService {
         String msg = userMessage == null ? "" : userMessage.toLowerCase(Locale.ROOT);
 
         boolean wantPulse = skillNorm.equals("morning_briefing")
-                || surf.contains("business")
-                || surf.contains("analytics")
+                || surfaceIs(surf, "business")
+                || surfaceIs(surf, "analytics")
                 || mentions(msg, "today", "revenue", "profit", "margin", "pulse", "morning", "sales", "how am i", "performing");
         boolean wantAp = skillNorm.equals("morning_briefing")
-                || surf.contains("supplier")
-                || surf.contains("ap")
+                || surfaceIs(surf, "suppliers")
+                || surfaceIs(surf, "purchasing")
                 || mentions(msg, "owe", "payable", "aging", "supplier", "ap ", "balance", "overdue");
         boolean wantStock = skillNorm.equals("morning_briefing")
-                || surf.contains("inventory")
-                || surf.contains("stock")
+                || surfaceIs(surf, "inventory")
+                || surfaceIs(surf, "stock")
                 || mentions(msg, "stock", "restock", "expir", "low stock", "out of stock", "stockout");
         boolean wantInbox = skillNorm.equals("draft_message")
-                || surf.contains("message")
+                || surfaceIs(surf, "message")
+                || surfaceIs(surf, "inbox")
                 || mentions(msg, "draft", "reply", "message", "sms", "whatsapp", "email", "write");
 
         // Owner summary already includes pulse + AP; prefer one call when either is needed.
@@ -239,6 +240,10 @@ public class GuideLiveToolsService {
                         .append('\n');
             }
         }
+    }
+
+    private static boolean surfaceIs(String surface, String token) {
+        return surface.equals(token) || surface.startsWith(token + ".");
     }
 
     private static boolean mentions(String msg, String... needles) {

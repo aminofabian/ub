@@ -140,8 +140,8 @@ class CsvImportIT {
     @Test
     void exportItems_matchesTemplateHeaderAndIncludesImportedRows() throws Exception {
         uploadItems("""
-                sku,name,item_type_key,barcode,unit_type,is_stocked,is_sellable,buying_price,selling_price,reorder_level
-                SKU-EXP-1,Export One,goods,1234567890123,each,true,true,40.00,99.50,5
+                sku,name,item_type_key,barcode,unit_type,is_stocked,is_sellable,category_name,brand,size,buying_price,selling_price,on_hand,min_stock_level,reorder_level
+                SKU-EXP-1,Export One,goods,1234567890123,each,true,true,Drinks,Afia,1L,40.00,99.50,12,2,5
                 """, false);
 
         mockMvc.perform(get("/api/v1/integrations/imports/exports/items")
@@ -152,11 +152,12 @@ class CsvImportIT {
                 .andExpect(result -> {
                     String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
                     assertThat(body).contains(
-                            "sku,name,item_type_key,barcode,unit_type,is_stocked,is_sellable,buying_price,selling_price,reorder_level");
+                            "sku,name,item_type_key,barcode,unit_type,is_stocked,is_sellable,category_name,brand,size,buying_price,selling_price,on_hand,min_stock_level,reorder_level");
                     assertThat(body).contains("SKU-EXP-1");
                     assertThat(body).contains("Export One");
                     assertThat(body).contains("40.00");
                     assertThat(body).contains("99.50");
+                    assertThat(body).contains("12.0000");
                 });
     }
 

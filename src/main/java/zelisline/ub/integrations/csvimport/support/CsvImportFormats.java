@@ -3,6 +3,9 @@ package zelisline.ub.integrations.csvimport.support;
 /**
  * Shared CSV column headers for import templates and matching exports.
  * Keep these in sync — export must round-trip into import.
+ *
+ * <p>For items, only {@code sku} and {@code name} are required on import. Every
+ * other column may be omitted from the file or left blank.
  */
 public final class CsvImportFormats {
 
@@ -14,8 +17,13 @@ public final class CsvImportFormats {
             "unit_type",
             "is_stocked",
             "is_sellable",
+            "category_name",
+            "brand",
+            "size",
             "buying_price",
             "selling_price",
+            "on_hand",
+            "min_stock_level",
             "reorder_level"
     };
 

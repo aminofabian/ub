@@ -23,8 +23,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.ItemType;
+import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.integrations.csvimport.support.CsvImportFormats;
@@ -50,6 +52,7 @@ public class CsvExportApplicationService {
 
     private final ItemRepository itemRepository;
     private final ItemTypeRepository itemTypeRepository;
+    private final CategoryRepository categoryRepository;
     private final SupplierRepository supplierRepository;
     private final BranchRepository branchRepository;
     private final SellingPriceRepository sellingPriceRepository;
@@ -66,21 +69,31 @@ public class CsvExportApplicationService {
         Map<String, String> typeKeyById = itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(businessId).stream()
                 .collect(Collectors.toMap(ItemType::getId, ItemType::getTypeKey, (a, b) -> a));
 
+        Map<String, String> categoryNameById = categoryRepository.findByBusinessIdOrderByPositionAsc(businessId).stream()
+                .collect(Collectors.toMap(Category::getId, Category::getName, (a, b) -> a));
+
         Map<String, BigDecimal> sellByItemId = latestBusinessWideSellPriceByItem(businessId);
 
         return writeCsv(CsvImportFormats.ITEM_HEADERS, printer -> {
             for (Item item : items) {
-                    printer.printRecord(
-                            nullToEmpty(item.getSku()),
-                            nullToEmpty(item.getName()),
-                            nullToEmpty(typeKeyById.get(item.getItemTypeId())),
-                            nullToEmpty(item.getBarcode()),
-                            nullToEmpty(item.getUnitType()),
-                            bool(item.isStocked()),
-                            bool(item.isSellable()),
-                            decimal(item.getBuyingPrice(), MONEY_SCALE),
-                            decimal(sellByItemId.get(item.getId()), MONEY_SCALE),
-                            decimal(item.getReorderLevel(), QTY_SCALE));
+                printer.printRecord(
+                        nullToEmpty(item.getSku()),
+                        nullToEmpty(item.getName()),
+                        nullToEmpty(typeKeyById.get(item.getItemTypeId())),
+                        nullToEmpty(item.getBarcode()),
+                        nullToEmpty(item.getUnitType()),
+                        bool(item.isStocked()),
+                        bool(item.isSellable()),
+                        nullToEmpty(item.getCategoryId() == null
+                                ? null
+                                : categoryNameById.get(item.getCategoryId())),
+                        nullToEmpty(item.getBrand()),
+                        nullToEmpty(item.getSize()),
+                        decimal(item.getBuyingPrice(), MONEY_SCALE),
+                        decimal(sellByItemId.get(item.getId()), MONEY_SCALE),
+                        decimal(item.getCurrentStock(), QTY_SCALE),
+                        decimal(item.getMinStockLevel(), QTY_SCALE),
+                        decimal(item.getReorderLevel(), QTY_SCALE));
             }
         });
     }

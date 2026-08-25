@@ -21,11 +21,15 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.api.dto.CreateCategoryRequest;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
+import zelisline.ub.catalog.application.CatalogTaxonomyService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.application.ItemCreateResult;
+import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.integrations.csvimport.api.dto.CsvImportLineError;
@@ -51,13 +55,16 @@ import zelisline.ub.tenancy.repository.BranchRepository;
 public class CsvImportApplicationService {
 
     private static final BigDecimal QTY_EPS = new BigDecimal("0.00005");
+    private static final BigDecimal MIN_UNIT_COST = new BigDecimal("0.0001");
     private static final Pattern UUID_REGEX = Pattern.compile(
             "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
 
     private final CatalogBootstrapService catalogBootstrapService;
+    private final CatalogTaxonomyService catalogTaxonomyService;
     private final ItemCatalogService itemCatalogService;
     private final ItemRepository itemRepository;
     private final ItemTypeRepository itemTypeRepository;
+    private final CategoryRepository categoryRepository;
     private final SupplierService supplierService;
     private final SupplierRepository supplierRepository;
     private final BranchRepository branchRepository;
@@ -97,6 +104,18 @@ public class CsvImportApplicationService {
             return new CsvImportResponse(false, rows.size(), errors, null);
         }
         LocalDate priceEffective = LocalDate.now(ZoneOffset.UTC);
+        String defaultBranchId = branchRepository
+                .findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(businessId)
+                .stream()
+                .findFirst()
+                .map(Branch::getId)
+                .orElse(null);
+        Map<String, String> categoryIdByNameLower = new java.util.HashMap<>();
+        for (Category cat : categoryRepository.findByBusinessIdOrderByPositionAsc(businessId)) {
+            if (cat.getName() != null && !cat.getName().isBlank()) {
+                categoryIdByNameLower.putIfAbsent(cat.getName().trim().toLowerCase(Locale.ROOT), cat.getId());
+            }
+        }
         int n = 0;
         for (SourceRow sr : rows) {
             Map<String, String> c = sr.columns();
@@ -113,7 +132,11 @@ public class CsvImportApplicationService {
             Boolean stocked = parseNullableTriBool(col(c, "is_stocked"));
             Boolean sellable = parseNullableTriBool(col(c, "is_sellable"));
             BigDecimal reorder = parsePositiveQty(col(c, "reorder_level"));
-            BigDecimal buyingPrice = parseMoney(col(c, "buying_price"));
+            BigDecimal minStock = parsePositiveQty(col(c, "min_stock_level"));
+            BigDecimal buyingPrice = parseMoney(firstPresent(c, "buying_price", "buy_price", "cost_price", "unit_cost"));
+            String brand = blankToNull(col(c, "brand"));
+            String size = blankToNull(col(c, "size"));
+            String categoryId = resolveOrCreateCategoryId(businessId, col(c, "category_name").trim(), categoryIdByNameLower);
 
             CreateItemRequest req = new CreateItemRequest(
                     sku,
@@ -121,7 +144,7 @@ public class CsvImportApplicationService {
                     name,
                     null,
                     itemTypeId,
-                    null,
+                    categoryId,
                     null,
                     unitTypeOrNull,
                     null,
@@ -133,20 +156,44 @@ public class CsvImportApplicationService {
                     null,
                     buyingPrice,
                     null,
-                    null,
+                    minStock,
                     reorder,
                     null,
                     null,
                     null,
-                    null, null, null, null);
+                    null,
+                    brand,
+                    size,
+                    null);
             ItemCreateResult created = itemCatalogService.createItem(businessId, req, null, actorUserId);
             String itemId = created.body().id();
 
-            BigDecimal sellPrice = parseMoney(col(c, "selling_price"));
+            BigDecimal sellPrice = parseMoney(firstPresent(c, "selling_price", "sell_price", "shelf_price", "price"));
             if (sellPrice != null && sellPrice.compareTo(BigDecimal.ZERO) > 0) {
                 pricingService.setSellingPrice(
                         businessId,
                         new PostSellingPriceRequest(itemId, null, sellPrice, priceEffective, "csv import"),
+                        actorUserId
+                );
+            }
+
+            BigDecimal onHand = parsePositiveQty(firstPresent(
+                    c, "on_hand", "stock", "quantity", "current_stock", "stock_qty"));
+            if (onHand != null
+                    && onHand.compareTo(QTY_EPS) > 0
+                    && defaultBranchId != null
+                    && !defaultBranchId.isBlank()) {
+                BigDecimal unitCost = buyingPrice != null && buyingPrice.compareTo(MIN_UNIT_COST) >= 0
+                        ? buyingPrice.setScale(4, RoundingMode.HALF_UP)
+                        : new BigDecimal("0.01");
+                inventoryLedgerService.recordOpeningBalance(
+                        businessId,
+                        new PostOpeningBalanceRequest(
+                                defaultBranchId,
+                                itemId,
+                                onHand,
+                                unitCost,
+                                "csv items import on_hand"),
                         actorUserId
                 );
             }
@@ -322,13 +369,28 @@ public class CsvImportApplicationService {
             if (reorder == null && !col(c, "reorder_level").trim().isEmpty()) {
                 errors.add(new CsvImportLineError(line, "invalid reorder_level"));
             }
-            BigDecimal sell = parseMoney(col(c, "selling_price"));
+            BigDecimal minStock = parsePositiveQty(col(c, "min_stock_level"));
+            if (minStock == null && !col(c, "min_stock_level").trim().isEmpty()) {
+                errors.add(new CsvImportLineError(line, "invalid min_stock_level"));
+            }
+            BigDecimal sell = parseMoney(firstPresent(c, "selling_price", "sell_price", "shelf_price", "price"));
             if (sell != null && sell.compareTo(BigDecimal.ZERO) <= 0) {
                 errors.add(new CsvImportLineError(line, "selling_price must be > 0 when provided"));
+            } else if (sell == null
+                    && !firstPresent(c, "selling_price", "sell_price", "shelf_price", "price").isEmpty()) {
+                errors.add(new CsvImportLineError(line, "invalid selling_price"));
             }
-            BigDecimal buy = parseMoney(col(c, "buying_price"));
+            BigDecimal buy = parseMoney(firstPresent(c, "buying_price", "buy_price", "cost_price", "unit_cost"));
             if (buy != null && buy.compareTo(BigDecimal.ZERO) < 0) {
                 errors.add(new CsvImportLineError(line, "buying_price must be >= 0 when provided"));
+            } else if (buy == null
+                    && !firstPresent(c, "buying_price", "buy_price", "cost_price", "unit_cost").isEmpty()) {
+                errors.add(new CsvImportLineError(line, "invalid buying_price"));
+            }
+            String onHandRaw = firstPresent(c, "on_hand", "stock", "quantity", "current_stock", "stock_qty");
+            BigDecimal onHand = parsePositiveQty(onHandRaw);
+            if (onHand == null && !onHandRaw.isEmpty()) {
+                errors.add(new CsvImportLineError(line, "invalid on_hand"));
             }
         }
         return errors;
@@ -433,6 +495,26 @@ public class CsvImportApplicationService {
         }
     }
 
+    private String resolveOrCreateCategoryId(
+            String businessId,
+            String categoryName,
+            Map<String, String> categoryIdByNameLower
+    ) {
+        if (categoryName == null || categoryName.isBlank()) {
+            return null;
+        }
+        String key = categoryName.trim().toLowerCase(Locale.ROOT);
+        String existing = categoryIdByNameLower.get(key);
+        if (existing != null) {
+            return existing;
+        }
+        var created = catalogTaxonomyService.createCategory(
+                businessId,
+                new CreateCategoryRequest(categoryName.trim(), null, null, null, null, null, null));
+        categoryIdByNameLower.put(key, created.id());
+        return created.id();
+    }
+
     private static String itemTypeKey(Map<String, String> cols) {
         String raw = col(cols, "item_type_key").trim().toLowerCase(Locale.ROOT);
         return raw.isEmpty() ? "goods" : raw;
@@ -440,6 +522,24 @@ public class CsvImportApplicationService {
 
     private static String col(Map<String, String> cols, String key) {
         return cols.getOrDefault(key, "");
+    }
+
+    /** First non-blank among alias keys (columns may be omitted entirely). */
+    private static String firstPresent(Map<String, String> cols, String... keys) {
+        for (String key : keys) {
+            String v = col(cols, key).trim();
+            if (!v.isEmpty()) {
+                return v;
+            }
+        }
+        return "";
+    }
+
+    private static String blankToNull(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        return raw.trim();
     }
 
     private static Boolean parseNullableTriBool(String raw) {

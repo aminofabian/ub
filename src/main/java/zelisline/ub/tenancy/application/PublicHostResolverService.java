@@ -165,10 +165,12 @@ public class PublicHostResolverService {
      * @param rawHost     the host the visitor is currently on (used only for
      *                    logging/idempotency, not for domain mapping)
      * @param countryCode optional ISO country; omit/blank → Kenya; must be self-serve enabled
+     * @param requestedSlug optional shop handle; omit/blank → derived from name
      * @return full resolve response for the newly created tenant
      */
     @Transactional
-    public PublicHostResolveResponse onboardBusiness(String name, String rawHost, String countryCode) {
+    public PublicHostResolveResponse onboardBusiness(
+            String name, String rawHost, String countryCode, String requestedSlug) {
         String lookup = TenantHostParsing.hostnameOnly(rawHost);
         if (lookup == null) {
             throw new ResponseStatusException(
@@ -177,14 +179,19 @@ public class PublicHostResolverService {
 
         RegionProfile region = regionDefaults.requireSelfServe(countryCode);
 
-        String slug = nameToSlug(name);
+        boolean slugChosen = requestedSlug != null && !requestedSlug.isBlank();
+        String slug = slugChosen ? nameToSlug(requestedSlug) : nameToSlug(name);
         if (slug.isBlank()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST, "Could not generate a valid slug from the provided name");
         }
 
-        // Ensure slug uniqueness
         if (businessRepository.existsBySlugAndDeletedAtIsNull(slug)) {
+            if (slugChosen) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "That shop address is already taken. Try a different one.");
+            }
             slug = slug + "-" + java.util.UUID.randomUUID().toString().substring(0, 6);
         }
 

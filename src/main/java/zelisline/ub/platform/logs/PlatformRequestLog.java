@@ -63,4 +63,29 @@ public class PlatformRequestLog {
     /** Load-test run id (e.g. {@code lt-…}) when the request came from the load-test console. */
     @Column(name = "load_test_run_id", length = 36)
     private String loadTestRunId;
+
+    @Column(name = "error_title", length = 255)
+    private String errorTitle;
+
+    @Column(name = "error_detail", columnDefinition = "MEDIUMTEXT")
+    private String errorDetail;
+
+    @Column(name = "error_type", length = 255)
+    private String errorType;
+
+    @Column(name = "exception_class", length = 255)
+    private String exceptionClass;
+
+    @Column(name = "exception_chain", columnDefinition = "MEDIUMTEXT")
+    private String exceptionChain;
+
+    @Column(name = "stack_summary", columnDefinition = "MEDIUMTEXT")
+    private String stackSummary;
+
+    @Column(name = "user_agent", length = 512)
+    private String userAgent;
+
+    /** Safe request meta JSON (content-type, accept, origin, referer, problem JSON). */
+    @Column(name = "request_meta", columnDefinition = "MEDIUMTEXT")
+    private String requestMeta;
 }

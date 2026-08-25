@@ -45,6 +45,86 @@ public interface SaleRepository extends JpaRepository<Sale, String> {
      */
     boolean existsByBusinessIdAndReceiptNo(String businessId, Long receiptNo);
 
+    @Query(
+            value = """
+                    SELECT COUNT(*),
+                           COALESCE(SUM(s.grand_total), 0)
+                      FROM sales s
+                     WHERE s.business_id = :businessId
+                       AND s.status = 'completed'
+                       AND s.voided_at IS NULL
+                       AND s.sold_at >= :since
+                       AND s.sold_at < :until
+                    """,
+            nativeQuery = true
+    )
+    List<Object[]> aggregateSalesBetween(
+            @Param("businessId") String businessId,
+            @Param("since") java.time.Instant since,
+            @Param("until") java.time.Instant until
+    );
+
+    @Query(
+            value = """
+                    SELECT COUNT(*),
+                           COALESCE(SUM(s.grand_total), 0)
+                      FROM sales s
+                     WHERE s.business_id = :businessId
+                       AND s.status = 'completed'
+                       AND s.voided_at IS NULL
+                    """,
+            nativeQuery = true
+    )
+    List<Object[]> aggregateSalesAllTime(@Param("businessId") String businessId);
+
+    @Query(
+            value = """
+                    SELECT COALESCE(SUM(si.quantity), 0)
+                      FROM sale_items si
+                      INNER JOIN sales s ON s.id = si.sale_id
+                     WHERE s.business_id = :businessId
+                       AND s.status = 'completed'
+                       AND s.voided_at IS NULL
+                       AND si.line_kind = 'ITEM'
+                       AND si.item_id IS NOT NULL
+                       AND s.sold_at >= :since
+                       AND s.sold_at < :until
+                    """,
+            nativeQuery = true
+    )
+    java.math.BigDecimal unitsSoldBetween(
+            @Param("businessId") String businessId,
+            @Param("since") java.time.Instant since,
+            @Param("until") java.time.Instant until
+    );
+
+    @Query(
+            value = """
+                    SELECT COALESCE(SUM(si.quantity), 0)
+                      FROM sale_items si
+                      INNER JOIN sales s ON s.id = si.sale_id
+                     WHERE s.business_id = :businessId
+                       AND s.status = 'completed'
+                       AND s.voided_at IS NULL
+                       AND si.line_kind = 'ITEM'
+                       AND si.item_id IS NOT NULL
+                    """,
+            nativeQuery = true
+    )
+    java.math.BigDecimal unitsSoldAllTime(@Param("businessId") String businessId);
+
+    @Query(
+            value = """
+                    SELECT MAX(s.sold_at)
+                      FROM sales s
+                     WHERE s.business_id = :businessId
+                       AND s.status = 'completed'
+                       AND s.voided_at IS NULL
+                    """,
+            nativeQuery = true
+    )
+    java.time.Instant findLastSaleAt(@Param("businessId") String businessId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select s from Sale s where s.id = :id and s.businessId = :businessId")
     Optional<Sale> findByIdAndBusinessIdForUpdate(@Param("id") String id, @Param("businessId") String businessId);

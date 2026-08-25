@@ -132,7 +132,7 @@ public class PublicHostResolveController {
     public ResponseEntity<PublicHostResolveResponse> onboard(
             @Valid @RequestBody OnboardBusinessRequest request) {
         PublicHostResolveResponse body = publicHostResolverService.onboardBusiness(
-                request.name(), request.host(), request.countryCode());
+                request.name(), request.host(), request.countryCode(), request.slug());
         return ResponseEntity.status(HttpStatus.CREATED).body(body);
     }
 }

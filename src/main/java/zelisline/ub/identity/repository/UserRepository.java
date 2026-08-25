@@ -46,6 +46,9 @@ public interface UserRepository extends JpaRepository<User, String> {
     /** Full staff list for a tenant — used by the desktop sync snapshot. */
     List<User> findByBusinessIdAndDeletedAtIsNull(String businessId);
 
+    @Query("select max(u.lastLoginAt) from User u where u.businessId = :businessId and u.deletedAt is null")
+    Instant findMaxLastLoginAt(@Param("businessId") String businessId);
+
     /** Users of a specific role (e.g. the storefront `buyer` role) for cleanup. */
     List<User> findByBusinessIdAndRoleIdAndDeletedAtIsNull(String businessId, String roleId);
 

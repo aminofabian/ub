@@ -11,12 +11,17 @@ import jakarta.validation.constraints.Size;
  *
  * <p>{@code countryCode} is optional; omit or blank → Kenya defaults.
  * Must be in the self-serve allow-list when provided.
+ *
+ * <p>{@code slug} is optional; omit or blank → derived from {@code name}.
+ * When provided, it must be unique — we do not auto-suffix a visitor-chosen handle.
  */
 public record OnboardBusinessRequest(
         @NotBlank @Size(max = 255) String name,
         @NotBlank @Size(max = 255) String host,
         @Pattern(regexp = "|[A-Za-z]{2}")
         @Size(max = 2)
-        String countryCode
+        String countryCode,
+        @Size(max = 63)
+        String slug
 ) {
 }

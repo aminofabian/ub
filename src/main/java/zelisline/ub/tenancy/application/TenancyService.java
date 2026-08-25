@@ -84,6 +84,9 @@ public class TenancyService {
     private final ItemRepository itemRepository;
     private final ShiftRepository shiftRepository;
     private final SaleRepository saleRepository;
+    private final zelisline.ub.storefront.repository.WebOrderRepository webOrderRepository;
+    private final zelisline.ub.payments.repository.PaymentGatewayConfigRepository paymentGatewayConfigRepository;
+    private final zelisline.ub.payments.repository.KioskPayAccountRepository kioskPayAccountRepository;
     private final GlobalCatalogResolver globalCatalogResolver;
     private final RegionDefaults regionDefaults;
     private final RegionCatalogAuditService regionCatalogAuditService;
@@ -1145,42 +1148,140 @@ public class TenancyService {
     public SaBusinessStatsResponse getBusinessStats(String businessId) {
         requireBusiness(businessId);
 
-        // User counts
         long totalUsers = userRepository.countByBusinessIdAndDeletedAtIsNull(businessId);
         long activeUsers = userRepository.pageByBusinessFiltered(
                 businessId, "active", null, null, Pageable.unpaged()
         ).getTotalElements();
 
-        // Product count — count by SKUs for the business
-        long totalProducts = itemRepository.findSkusByBusinessIdActive(businessId).size();
+        long totalProducts = itemRepository.countByBusinessIdAndDeletedAtIsNullAndActiveTrue(businessId);
+        long webPublished = itemRepository.countByBusinessIdAndDeletedAtIsNullAndActiveTrueAndWebPublishedTrue(businessId);
 
-        // Branch count
         long totalBranches = branchRepository.findByBusinessIdAndDeletedAtIsNull(businessId, Pageable.unpaged())
                 .getTotalElements();
 
-        // Sales today / this month — use the materialized view or simply default to zero
-        // when no dedicated super-admin sales query is wired yet.
-        long totalSalesToday = 0L;
-        BigDecimal revenueToday = BigDecimal.ZERO;
-        long totalSalesThisMonth = 0L;
-        BigDecimal revenueThisMonth = BigDecimal.ZERO;
-
-        // Open shifts — count open shifts across all branches
         long openShifts = shiftRepository.findByBusinessIdFiltered(
                 businessId, null, "open", Pageable.unpaged()
         ).getTotalElements();
+
+        Instant now = Instant.now();
+        Instant startOfToday = java.time.LocalDate.now(java.time.ZoneOffset.UTC)
+                .atStartOfDay().toInstant(java.time.ZoneOffset.UTC);
+        Instant since7d = now.minusSeconds(7L * 24 * 3600);
+        Instant since30d = now.minusSeconds(30L * 24 * 3600);
+
+        Object[] today = firstAgg(saleRepository.aggregateSalesBetween(businessId, startOfToday, now));
+        Object[] week = firstAgg(saleRepository.aggregateSalesBetween(businessId, since7d, now));
+        Object[] month = firstAgg(saleRepository.aggregateSalesBetween(businessId, since30d, now));
+        Object[] all = firstAgg(saleRepository.aggregateSalesAllTime(businessId));
+
+        BigDecimal unitsToday = nz(saleRepository.unitsSoldBetween(businessId, startOfToday, now));
+        BigDecimal units30 = nz(saleRepository.unitsSoldBetween(businessId, since30d, now));
+        BigDecimal unitsAll = nz(saleRepository.unitsSoldAllTime(businessId));
+
+        Instant lastSaleAt = saleRepository.findLastSaleAt(businessId);
+        Instant lastLoginAt = userRepository.findMaxLastLoginAt(businessId);
+
+        Object[] sf30 = firstAgg(webOrderRepository.aggregatePaidBetween(businessId, since30d, now));
+        Object[] sfAll = firstAgg(webOrderRepository.aggregatePaidAllTime(businessId));
+
+        List<SaBusinessStatsResponse.PaymentMethodRow> methods = paymentGatewayConfigRepository
+                .findByBusinessId(businessId)
+                .stream()
+                .map(cfg -> new SaBusinessStatsResponse.PaymentMethodRow(
+                        cfg.getGatewayType() == null ? "" : cfg.getGatewayType().name(),
+                        cfg.getLabel(),
+                        cfg.getStatus() == null ? "" : cfg.getStatus().name(),
+                        cfg.isDefault()
+                ))
+                .toList();
+
+        var kiosk = kioskPayAccountRepository.findByBusinessId(businessId).orElse(null);
+        boolean kioskActive = kiosk != null && kiosk.isActive();
+        String kioskStatus = kiosk == null ? "OFF" : kiosk.getStatus();
+
+        String onboarding = businessOnboardingSettingsService
+                .readFromSettingsJson(businessRepository.findSettingsJsonById(businessId).orElse(null))
+                .status();
 
         return new SaBusinessStatsResponse(
                 totalUsers,
                 activeUsers,
                 totalProducts,
+                webPublished,
                 totalBranches,
-                totalSalesToday,
-                revenueToday,
-                totalSalesThisMonth,
-                revenueThisMonth,
-                openShifts
+                openShifts,
+                new SaBusinessStatsResponse.SalesPulse(
+                        toLong(today[0]),
+                        toBd(today[1]),
+                        unitsToday,
+                        toLong(week[0]),
+                        toBd(week[1]),
+                        toLong(month[0]),
+                        toBd(month[1]),
+                        units30,
+                        toLong(all[0]),
+                        toBd(all[1]),
+                        unitsAll
+                ),
+                new SaBusinessStatsResponse.StorefrontPulse(
+                        toLong(sf30[0]),
+                        toBd(sf30[1]),
+                        toLong(sfAll[0]),
+                        toBd(sfAll[1])
+                ),
+                methods,
+                kioskActive,
+                kioskStatus,
+                onboarding,
+                lastLoginAt == null ? null : lastLoginAt.toString(),
+                lastSaleAt == null ? null : lastSaleAt.toString()
         );
+    }
+
+    private static Object[] firstAgg(List<Object[]> rows) {
+        if (rows == null || rows.isEmpty() || rows.get(0) == null) {
+            return new Object[] {0L, BigDecimal.ZERO};
+        }
+        Object first = rows.get(0);
+        if (first instanceof Object[] arr) {
+            return arr.length >= 2 ? arr : new Object[] {arr.length > 0 ? arr[0] : 0L, BigDecimal.ZERO};
+        }
+        return new Object[] {first, rows.size() > 1 ? rows.get(1) : BigDecimal.ZERO};
+    }
+
+    private static BigDecimal nz(BigDecimal v) {
+        return v == null ? BigDecimal.ZERO : v;
+    }
+
+    private static BigDecimal toBd(Object raw) {
+        if (raw == null) {
+            return BigDecimal.ZERO;
+        }
+        if (raw instanceof BigDecimal bd) {
+            return bd;
+        }
+        if (raw instanceof Number n) {
+            return BigDecimal.valueOf(n.doubleValue());
+        }
+        try {
+            return new BigDecimal(raw.toString());
+        } catch (NumberFormatException ex) {
+            return BigDecimal.ZERO;
+        }
+    }
+
+    private static long toLong(Object raw) {
+        if (raw == null) {
+            return 0L;
+        }
+        if (raw instanceof Number n) {
+            return n.longValue();
+        }
+        try {
+            return Long.parseLong(raw.toString());
+        } catch (NumberFormatException ex) {
+            return 0L;
+        }
     }
 
     private String resolvePrimaryHostname(

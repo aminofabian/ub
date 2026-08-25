@@ -1,12 +1,16 @@
 package zelisline.ub.platform.logs;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.web.servlet.HandlerInterceptor;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -32,6 +36,8 @@ public class PlatformRequestLogInterceptor implements HandlerInterceptor {
 
     /** Header the load-test console sets on its self-test requests. */
     public static final String LOAD_TEST_HEADER = "X-Palmart-Load-Test";
+
+    private static final ObjectMapper META_MAPPER = new ObjectMapper();
 
     private final PlatformRequestLogRepository repository;
     private final RequestLogClassifier classifier;
@@ -85,11 +91,20 @@ public class PlatformRequestLogInterceptor implements HandlerInterceptor {
             row.setCorrelationId(correlationId == null || correlationId.isBlank() ? null : correlationId);
 
             int status = response.getStatus();
+            // Unhandled exceptions can leave status 200 until the container rewrites it.
+            if (ex != null && status < 400) {
+                status = 500;
+            }
             row.setStatus(status);
             row.setSuccess(status >= 200 && status < 400);
             row.setDurationMs((System.nanoTime() - started) / 1_000_000);
             row.setIp(clientIp(request));
             row.setLoadTestRunId(loadTestRunId(request));
+            row.setUserAgent(clipHeader(request.getHeader("User-Agent"), 512));
+
+            if (!row.isSuccess()) {
+                applyFailureDetail(row, request, ex);
+            }
 
             repository.save(row);
         } catch (Exception e) {
@@ -97,6 +112,90 @@ public class PlatformRequestLogInterceptor implements HandlerInterceptor {
             log.warn("Failed to record platform request log for {} {}: {}",
                     request.getMethod(), request.getRequestURI(), e.getMessage());
         }
+    }
+
+    private static void applyFailureDetail(PlatformRequestLog row, HttpServletRequest request, Exception ex) {
+        // Prefer Problem+JSON captured by GlobalExceptionHandler (ex is usually null there).
+        String title = attr(request, PlatformRequestLogErrorCapture.ATTR_TITLE);
+        String detail = attr(request, PlatformRequestLogErrorCapture.ATTR_DETAIL);
+        String type = attr(request, PlatformRequestLogErrorCapture.ATTR_TYPE);
+        String exceptionClass = attr(request, PlatformRequestLogErrorCapture.ATTR_EXCEPTION_CLASS);
+        String exceptionChain = attr(request, PlatformRequestLogErrorCapture.ATTR_EXCEPTION_CHAIN);
+        String stack = attr(request, PlatformRequestLogErrorCapture.ATTR_STACK);
+        String problemJson = attr(request, PlatformRequestLogErrorCapture.ATTR_PROBLEM_JSON);
+
+        if (ex != null) {
+            PlatformRequestLogErrorCapture.capture(request, null, ex);
+            if (title == null) {
+                title = attr(request, PlatformRequestLogErrorCapture.ATTR_TITLE);
+            }
+            if (detail == null) {
+                detail = attr(request, PlatformRequestLogErrorCapture.ATTR_DETAIL);
+            }
+            if (exceptionClass == null) {
+                exceptionClass = attr(request, PlatformRequestLogErrorCapture.ATTR_EXCEPTION_CLASS);
+            }
+            if (exceptionChain == null) {
+                exceptionChain = attr(request, PlatformRequestLogErrorCapture.ATTR_EXCEPTION_CHAIN);
+            }
+            if (stack == null) {
+                stack = attr(request, PlatformRequestLogErrorCapture.ATTR_STACK);
+            }
+        }
+
+        if (title == null || title.isBlank()) {
+            title = "HTTP " + row.getStatus();
+        }
+        if (detail == null || detail.isBlank()) {
+            detail = switch (row.getStatus()) {
+                case 400 -> "Bad request";
+                case 401 -> "Unauthorized";
+                case 403 -> "Forbidden";
+                case 404 -> "Not found";
+                case 409 -> "Conflict";
+                case 422 -> "Unprocessable entity";
+                case 429 -> "Too many requests";
+                case 500 -> "Internal server error";
+                case 502 -> "Bad gateway";
+                case 503 -> "Service unavailable";
+                default -> "Request failed with status " + row.getStatus();
+            };
+        }
+
+        row.setErrorTitle(PlatformRequestLogErrorCapture.clip(title, 255));
+        row.setErrorDetail(PlatformRequestLogErrorCapture.clip(detail, 12_000));
+        row.setErrorType(PlatformRequestLogErrorCapture.clip(type, 255));
+        row.setExceptionClass(PlatformRequestLogErrorCapture.clip(exceptionClass, 255));
+        row.setExceptionChain(PlatformRequestLogErrorCapture.clip(exceptionChain, 4_000));
+        row.setStackSummary(PlatformRequestLogErrorCapture.clip(stack, 16_000));
+
+        try {
+            Map<String, Object> meta = new LinkedHashMap<>();
+            meta.put("contentType", request.getContentType());
+            meta.put("accept", request.getHeader("Accept"));
+            meta.put("origin", request.getHeader("Origin"));
+            meta.put("referer", request.getHeader("Referer"));
+            meta.put("query", request.getQueryString());
+            if (problemJson != null && !problemJson.isBlank()) {
+                meta.put("problemJson", problemJson);
+            }
+            row.setRequestMeta(PlatformRequestLogErrorCapture.clip(
+                    META_MAPPER.writeValueAsString(meta), 8_000));
+        } catch (Exception ignored) {
+            // Best-effort.
+        }
+    }
+
+    private static String attr(HttpServletRequest request, String key) {
+        Object value = request.getAttribute(key);
+        return value instanceof String s && !s.isBlank() ? s : null;
+    }
+
+    private static String clipHeader(String value, int max) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return PlatformRequestLogErrorCapture.clip(value.trim(), max);
     }
 
     private static String clientIp(HttpServletRequest request) {

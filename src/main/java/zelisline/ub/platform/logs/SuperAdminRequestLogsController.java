@@ -48,7 +48,15 @@ public class SuperAdminRequestLogsController {
             boolean success,
             long durationMs,
             String ip,
-            String loadTestRunId) {}
+            String loadTestRunId,
+            String errorTitle,
+            String errorDetail,
+            String errorType,
+            String exceptionClass,
+            String exceptionChain,
+            String stackSummary,
+            String userAgent,
+            String requestMeta) {}
 
     public record CategorySummary(
             RequestLogCategory category,
@@ -164,7 +172,15 @@ public class SuperAdminRequestLogsController {
                 p.isSuccess(),
                 p.getDurationMs(),
                 p.getIp(),
-                p.getLoadTestRunId());
+                p.getLoadTestRunId(),
+                p.getErrorTitle(),
+                p.getErrorDetail(),
+                p.getErrorType(),
+                p.getExceptionClass(),
+                p.getExceptionChain(),
+                p.getStackSummary(),
+                p.getUserAgent(),
+                p.getRequestMeta());
     }
 
     private Map<String, String> resolveTenantNames(List<PlatformRequestLog> rows) {

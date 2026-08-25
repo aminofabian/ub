@@ -36,6 +36,7 @@ import zelisline.ub.audit.application.AuditEventPublisher;
 import zelisline.ub.audit.domain.AuditEventActorType;
 import zelisline.ub.audit.domain.AuditEventCategory;
 import zelisline.ub.audit.domain.AuditEventSeverity;
+import zelisline.ub.platform.logs.PlatformRequestLogErrorCapture;
 import zelisline.ub.platform.persistence.DataIntegrityProblems;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.TenantRequestIds;
@@ -272,6 +273,7 @@ public class GlobalExceptionHandler {
         body.setTitle("Database not ready");
         body.setType(URI.create(PROBLEM_BASE + "schema-mismatch"));
         body.setDetail(schemaMismatchDetail(ex));
+        PlatformRequestLogErrorCapture.capture(request, body, ex);
         return problem(body, HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
@@ -294,6 +296,7 @@ public class GlobalExceptionHandler {
             body.setTitle("Database not ready");
             body.setType(URI.create(PROBLEM_BASE + "schema-mismatch"));
             body.setDetail(schemaMismatchDetail(ex));
+            PlatformRequestLogErrorCapture.capture(request, body, ex);
             return problem(body, HttpStatus.INTERNAL_SERVER_ERROR);
         }
         log.error("Unhandled exception (correlationId={})", correlationId, ex);
@@ -302,6 +305,7 @@ public class GlobalExceptionHandler {
         body.setTitle("Internal server error");
         body.setType(URI.create(PROBLEM_BASE + "internal-error"));
         body.setDetail("Unexpected server error. Retry, or sign in if your account was already created.");
+        PlatformRequestLogErrorCapture.capture(request, body, ex);
         return problem(body, HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
@@ -352,6 +356,7 @@ public class GlobalExceptionHandler {
     }
 
     private ResponseEntity<ProblemDetail> problem(ProblemDetail body, HttpStatusCode status) {
+        PlatformRequestLogErrorCapture.capture(body, null);
         return ResponseEntity.status(status)
                 .contentType(MediaType.APPLICATION_PROBLEM_JSON)
                 .body(body);

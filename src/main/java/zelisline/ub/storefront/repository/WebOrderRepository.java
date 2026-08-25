@@ -113,4 +113,27 @@ public interface WebOrderRepository extends JpaRepository<WebOrder, String> {
             @Param("businessId") String businessId,
             @Param("branchId") String branchId,
             @Param("since") Instant since);
+
+    @Query("""
+            select COUNT(*),
+                   COALESCE(SUM(w.grandTotal), 0)
+              from WebOrder w
+             where w.businessId = :businessId
+               and w.paidAt is not null
+               and w.paidAt >= :since
+               and w.paidAt < :until
+            """)
+    List<Object[]> aggregatePaidBetween(
+            @Param("businessId") String businessId,
+            @Param("since") Instant since,
+            @Param("until") Instant until);
+
+    @Query("""
+            select COUNT(*),
+                   COALESCE(SUM(w.grandTotal), 0)
+              from WebOrder w
+             where w.businessId = :businessId
+               and w.paidAt is not null
+            """)
+    List<Object[]> aggregatePaidAllTime(@Param("businessId") String businessId);
 }

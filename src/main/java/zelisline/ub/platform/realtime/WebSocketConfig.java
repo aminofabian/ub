@@ -42,6 +42,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
     private final MeterRegistry meterRegistry;
     private final NotificationRepository notificationRepository;
     private final ObjectProvider<SupportTypingListener> typingListenerProvider;
+    private final ObjectProvider<SupportPresenceListener> presenceListenerProvider;
     private final int maxConnectionsPerUser;
     private final int maxConnectionsPerBusiness;
 
@@ -51,6 +52,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
             MeterRegistry meterRegistry,
             NotificationRepository notificationRepository,
             ObjectProvider<SupportTypingListener> typingListenerProvider,
+            ObjectProvider<SupportPresenceListener> presenceListenerProvider,
             @Value("${app.realtime.max-connections-per-user:5}") int maxConnectionsPerUser,
             @Value("${app.realtime.max-connections-per-business:50}") int maxConnectionsPerBusiness
     ) {
@@ -59,6 +61,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
         this.meterRegistry = meterRegistry;
         this.notificationRepository = notificationRepository;
         this.typingListenerProvider = typingListenerProvider;
+        this.presenceListenerProvider = presenceListenerProvider;
         this.maxConnectionsPerUser = maxConnectionsPerUser;
         this.maxConnectionsPerBusiness = maxConnectionsPerBusiness;
     }
@@ -73,7 +76,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
     @Bean
     public RealtimeWebSocketHandler realtimeWebSocketHandler() {
         return new RealtimeWebSocketHandler(sessionRegistry, ticketService, meterRegistry,
-                notificationRepository, typingListenerProvider);
+                notificationRepository, typingListenerProvider, presenceListenerProvider);
     }
 
     @Bean

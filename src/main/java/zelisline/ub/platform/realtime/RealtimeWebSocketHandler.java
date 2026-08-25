@@ -40,13 +40,17 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
     private static final int HEARTBEAT_TIMEOUT_SECONDS = 10;
     private static final int MAX_INBOUND_FRAME_BYTES = 2048;
     static final int MAX_OUTBOUND_QUEUE = 256;
-    private static final int CLIENT_FRAME_RATE_PER_SECOND = 20;
+    private static final int CLIENT_FRAME_RATE_PER_SECOND = 30;
+
+    /** Channel name used by the tenant/super-admin support chat (see SupportRealtimeBridge). */
+    private static final String SUPPORT_CHANNEL = "support";
 
     private final SessionRegistry sessionRegistry;
     private final RealtimeTicketService ticketService;
     private final MeterRegistry meterRegistry;
     private final NotificationRepository notificationRepository;
     private final ObjectProvider<SupportTypingListener> typingListenerProvider;
+    private final ObjectProvider<SupportPresenceListener> presenceListenerProvider;
     private final ObjectMapper objectMapper;
 
     private final Map<String, Instant> lastPong = new ConcurrentHashMap<>();
@@ -63,13 +67,15 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
     });
 
     public RealtimeWebSocketHandler(SessionRegistry sessionRegistry, RealtimeTicketService ticketService,
-                                    MeterRegistry meterRegistry, NotificationRepository notificationRepository,
-                                    ObjectProvider<SupportTypingListener> typingListenerProvider) {
+            MeterRegistry meterRegistry, NotificationRepository notificationRepository,
+            ObjectProvider<SupportTypingListener> typingListenerProvider,
+            ObjectProvider<SupportPresenceListener> presenceListenerProvider) {
         this.sessionRegistry = sessionRegistry;
         this.ticketService = ticketService;
         this.meterRegistry = meterRegistry;
         this.notificationRepository = notificationRepository;
         this.typingListenerProvider = typingListenerProvider;
+        this.presenceListenerProvider = presenceListenerProvider;
         this.objectMapper = new ObjectMapper();
     }
 
@@ -107,6 +113,12 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
 
         sessionRegistry.register(sessionId, session, meta, ticketRecord.allowedChannels());
         outboundQueues.put(sessionId, new LinkedBlockingQueue<>(MAX_OUTBOUND_QUEUE));
+
+        // A support-capable session just came up — recompute tenant presence.
+        if (meta.allowedChannels().contains(SUPPORT_CHANNEL)) {
+            presenceListenerProvider.ifAvailable(listener ->
+                    listener.onChannelActivity(meta.businessId(), SUPPORT_CHANNEL));
+        }
 
         lastPong.put(sessionId, Instant.now());
         ScheduledFuture<?> heartbeat = heartbeatExecutor.scheduleWithFixedDelay(
@@ -287,6 +299,8 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
 
         Set<String> subs = sessionRegistry.getSubscriptions(sessionId);
         subs.add(channel);
+        presenceListenerProvider.ifAvailable(listener ->
+                listener.onChannelActivity(meta.businessId(), channel));
         log.debug("WS subscribed: sessionId={} channel={}", sessionId, channel);
     }
 
@@ -294,14 +308,25 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
         String sessionId = session.getId();
         String channel = frame.has("channel") ? frame.get("channel").asText() : null;
         if (channel != null) {
+            RealtimeSession meta = sessionRegistry.getMeta(sessionId);
             Set<String> subs = sessionRegistry.getSubscriptions(sessionId);
+            boolean had = subs.contains(channel);
             subs.remove(channel);
+            if (had && meta != null) {
+                presenceListenerProvider.ifAvailable(listener ->
+                        listener.onChannelActivity(meta.businessId(), channel));
+            }
             log.debug("WS unsubscribed: sessionId={} channel={}", sessionId, channel);
         }
     }
 
     private void handlePong(String sessionId) {
         lastPong.put(sessionId, Instant.now());
+        // Heartbeat pong is proof of a live browser — refresh the "last seen" clock.
+        RealtimeSession meta = sessionRegistry.getMeta(sessionId);
+        if (meta != null && !RealtimeScopes.PLATFORM.equals(meta.businessId())) {
+            sessionRegistry.touchBusiness(meta.businessId());
+        }
     }
 
     /**
@@ -479,6 +504,7 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void cleanup(String sessionId) {
+        RealtimeSession meta = sessionRegistry.getMeta(sessionId);
         lastPong.remove(sessionId);
         frameRateWindow.remove(sessionId);
         frameRateCounter.remove(sessionId);
@@ -488,6 +514,10 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
             heartbeat.cancel(false);
         }
         sessionRegistry.unregister(sessionId);
+        if (meta != null && meta.allowedChannels().contains(SUPPORT_CHANNEL)) {
+            presenceListenerProvider.ifAvailable(listener ->
+                    listener.onChannelActivity(meta.businessId(), SUPPORT_CHANNEL));
+        }
     }
 
     public static String escapeJson(String s) {

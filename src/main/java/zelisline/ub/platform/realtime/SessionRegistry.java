@@ -1,5 +1,6 @@
 package zelisline.ub.platform.realtime;
 
+import java.time.Instant;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -25,6 +26,8 @@ public class SessionRegistry {
     private final ConcurrentHashMap<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, RealtimeSession> sessionMeta = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Set<String>> sessionSubscriptions = new ConcurrentHashMap<>();
+    /** Last activity time per business, for presence "last seen" labels. */
+    private final ConcurrentHashMap<String, Instant> lastSeenByBusiness = new ConcurrentHashMap<>();
 
     /**
      * Register a newly opened WebSocket session.
@@ -41,6 +44,7 @@ public class SessionRegistry {
         if (channels != null) {
             sessionSubscriptions.get(sessionId).addAll(channels);
         }
+        lastSeenByBusiness.put(meta.businessId(), Instant.now());
         log.debug("WS session registered: id={} user={} business={}", sessionId, meta.userId(), meta.businessId());
     }
 
@@ -162,6 +166,18 @@ public class SessionRegistry {
             }
         }
         return count;
+    }
+
+    /** Record that a business had live activity right now (heartbeat pong). */
+    public void touchBusiness(String businessId) {
+        if (businessId != null && !businessId.isBlank()) {
+            lastSeenByBusiness.put(businessId, Instant.now());
+        }
+    }
+
+    /** Last recorded activity for a business, or null when never seen on this instance. */
+    public Instant lastSeenForBusiness(String businessId) {
+        return lastSeenByBusiness.get(businessId);
     }
 
     /**

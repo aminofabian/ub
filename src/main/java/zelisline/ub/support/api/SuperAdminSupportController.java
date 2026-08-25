@@ -25,6 +25,7 @@ import zelisline.ub.support.api.dto.SendSupportMessageRequest;
 import zelisline.ub.support.api.dto.SupportConversationDetailDto;
 import zelisline.ub.support.api.dto.SupportConversationDto;
 import zelisline.ub.support.api.dto.SupportMessageDto;
+import zelisline.ub.support.application.SupportPresenceService;
 import zelisline.ub.support.application.SupportService;
 
 /**
@@ -40,6 +41,7 @@ public class SuperAdminSupportController {
 
     private final SupportService supportService;
     private final SuperAdminRepository superAdminRepository;
+    private final SupportPresenceService supportPresenceService;
 
     @GetMapping("/conversations")
     public Map<String, Object> conversations(
@@ -87,6 +89,16 @@ public class SuperAdminSupportController {
     @GetMapping("/unread-count")
     public Map<String, Object> unreadCount() {
         return Map.of("count", supportService.adminUnreadCount());
+    }
+
+    /** Live tenant presence: businessId → {online, lastSeenAt} for every thread. */
+    @GetMapping("/presence")
+    public Map<String, Object> presence() {
+        List<SupportConversationDto> conversations = supportService.listForAdmin(null);
+        List<String> businessIds = conversations.stream()
+                .map(SupportConversationDto::businessId)
+                .toList();
+        return Map.of("presence", supportPresenceService.snapshot(businessIds));
     }
 
     private SuperAdmin requireSuperAdmin() {

@@ -299,6 +299,25 @@ class SupportChatIT {
                 .andExpect(status().isForbidden());
     }
 
+    @Test
+    void presenceSnapshotListsEveryThreadWithOnlineFlag() throws Exception {
+        mockMvc.perform(post("/api/v1/support/conversation/messages")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"body\":\"We're online now\"}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header("X-Test-User-Id", userIdFor(TENANT_A))
+                        .header("X-Test-Role-Id", ROLE_OWNER))
+                .andExpect(status().isCreated());
+
+        // No WebSocket sessions in this test — every tenant is offline.
+        mockMvc.perform(get("/api/v1/super-admin/support/presence")
+                        .header("Authorization", "Bearer " + saToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.presence." + TENANT_A + ".online").value(false))
+                .andExpect(jsonPath("$.presence." + TENANT_A + ".lastSeenAt").isEmpty())
+                .andExpect(jsonPath("$.presence." + TENANT_B).doesNotExist());
+    }
+
     private void seedShop(String tenantId, String slug) {
         Business b = new Business();
         b.setId(tenantId);

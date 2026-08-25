@@ -826,7 +826,7 @@ public class ItemCatalogService {
                     businessId, itemId, patch.bundlePrice(), actorUserId);
         }
         if (patch.buyingPrice() != null) {
-            item.setBuyingPrice(patch.buyingPrice());
+            item.setBuyingPrice(sanitizeMoney14_2(patch.buyingPrice()));
         }
         if (patch.bundleName() != null) {
             item.setBundleName(blankToNull(patch.bundleName()));
@@ -1059,10 +1059,10 @@ public class ItemCatalogService {
             child.setStocked(false);
             child.setBundleQty(request.bundleQty() != null ? request.bundleQty() : 1);
             if (request.bundlePrice() != null) {
-                child.setBundlePrice(request.bundlePrice());
+                child.setBundlePrice(sanitizeMoney14_2(request.bundlePrice()));
             }
             if (request.buyingPrice() != null) {
-                child.setBuyingPrice(request.buyingPrice());
+                child.setBuyingPrice(sanitizeMoney14_2(request.buyingPrice()));
             }
             if (request.bundleName() != null) {
                 child.setBundleName(blankToNull(request.bundleName()));
@@ -1073,8 +1073,8 @@ public class ItemCatalogService {
             child.setPackagingUnitQty(parent.getPackagingUnitQty());
             child.setBundleQty(parent.getBundleQty());
             child.setBundlePrice(parent.getBundlePrice());
-            child.setBuyingPrice(
-                    request.buyingPrice() != null ? request.buyingPrice() : parent.getBuyingPrice());
+            child.setBuyingPrice(sanitizeMoney14_2(
+                    request.buyingPrice() != null ? request.buyingPrice() : parent.getBuyingPrice()));
             child.setBundleName(parent.getBundleName());
         }
         if (request.minStockLevel() != null) {
@@ -1505,8 +1505,8 @@ public class ItemCatalogService {
         item.setPackagingUnitName(blankToNull(request.packagingUnitName()));
         item.setPackagingUnitQty(request.packagingUnitQty());
         item.setBundleQty(request.bundleQty());
-        item.setBundlePrice(request.bundlePrice());
-        item.setBuyingPrice(request.buyingPrice());
+        item.setBundlePrice(sanitizeMoney14_2(request.bundlePrice()));
+        item.setBuyingPrice(sanitizeMoney14_2(request.buyingPrice()));
         item.setBundleName(blankToNull(request.bundleName()));
         item.setMinStockLevel(request.minStockLevel());
         item.setReorderLevel(request.reorderLevel());
@@ -1887,6 +1887,22 @@ public class ItemCatalogService {
             return null;
         }
         return s.trim();
+    }
+
+    /** Fits {@code items.buying_price} / {@code bundle_price} {@code DECIMAL(14,2)}. */
+    private static BigDecimal sanitizeMoney14_2(BigDecimal v) {
+        if (v == null) {
+            return null;
+        }
+        BigDecimal x = v;
+        if (x.signum() < 0) {
+            return null;
+        }
+        BigDecimal max = new BigDecimal("999999999999.99");
+        if (x.compareTo(max) > 0) {
+            x = max;
+        }
+        return x.setScale(2, java.math.RoundingMode.HALF_UP);
     }
 
     /** Broad {@code LIKE} token for SQL candidate fetch (longest query token). */

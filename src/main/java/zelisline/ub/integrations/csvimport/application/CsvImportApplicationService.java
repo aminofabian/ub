@@ -56,8 +56,11 @@ public class CsvImportApplicationService {
 
     private static final BigDecimal QTY_EPS = new BigDecimal("0.00005");
     private static final BigDecimal MIN_UNIT_COST = new BigDecimal("0.0001");
+    /** Matches {@code items.buying_price} / common money columns {@code DECIMAL(14,2)}. */
+    private static final BigDecimal MAX_MONEY_14_2 = new BigDecimal("999999999999.99");
     private static final Pattern UUID_REGEX = Pattern.compile(
             "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+    private static final Pattern MONEY_NOISE = Pattern.compile("[,\\s]|kes|ksh|usd|\\$", Pattern.CASE_INSENSITIVE);
 
     private final CatalogBootstrapService catalogBootstrapService;
     private final CatalogTaxonomyService catalogTaxonomyService;
@@ -133,7 +136,9 @@ public class CsvImportApplicationService {
             Boolean sellable = parseNullableTriBool(col(c, "is_sellable"));
             BigDecimal reorder = parsePositiveQty(col(c, "reorder_level"));
             BigDecimal minStock = parsePositiveQty(col(c, "min_stock_level"));
-            BigDecimal buyingPrice = parseMoney(firstPresent(c, "buying_price", "buy_price", "cost_price", "unit_cost"));
+            // Optional — never fail the row on a bad cost; sanitize into DECIMAL(14,2) or skip.
+            BigDecimal buyingPrice = sanitizeMoney14_2(
+                    parseMoney(firstPresent(c, "buying_price", "buy_price", "cost_price", "unit_cost")));
             String brand = blankToNull(col(c, "brand"));
             String size = blankToNull(col(c, "size"));
             String categoryId = resolveOrCreateCategoryId(businessId, col(c, "category_name").trim(), categoryIdByNameLower);
@@ -168,8 +173,9 @@ public class CsvImportApplicationService {
             ItemCreateResult created = itemCatalogService.createItem(businessId, req, null, actorUserId);
             String itemId = created.body().id();
 
-            BigDecimal sellPrice = parseMoney(firstPresent(c, "selling_price", "sell_price", "shelf_price", "price"));
-            if (sellPrice != null && sellPrice.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal sellPrice = sanitizeMoney14_2(
+                    parseMoney(firstPresent(c, "selling_price", "sell_price", "shelf_price", "price")));
+            if (sellPrice != null && sellPrice.compareTo(new BigDecimal("0.01")) >= 0) {
                 pricingService.setSellingPrice(
                         businessId,
                         new PostSellingPriceRequest(itemId, null, sellPrice, priceEffective, "csv import"),
@@ -373,19 +379,22 @@ public class CsvImportApplicationService {
             if (minStock == null && !col(c, "min_stock_level").trim().isEmpty()) {
                 errors.add(new CsvImportLineError(line, "invalid min_stock_level"));
             }
-            BigDecimal sell = parseMoney(firstPresent(c, "selling_price", "sell_price", "shelf_price", "price"));
-            if (sell != null && sell.compareTo(BigDecimal.ZERO) <= 0) {
-                errors.add(new CsvImportLineError(line, "selling_price must be > 0 when provided"));
-            } else if (sell == null
-                    && !firstPresent(c, "selling_price", "sell_price", "shelf_price", "price").isEmpty()) {
+            BigDecimal sell = sanitizeMoney14_2(
+                    parseMoney(firstPresent(c, "selling_price", "sell_price", "shelf_price", "price")));
+            String sellRaw = firstPresent(c, "selling_price", "sell_price", "shelf_price", "price");
+            if (!sellRaw.isEmpty() && sell == null) {
                 errors.add(new CsvImportLineError(line, "invalid selling_price"));
+            } else if (sell != null && sell.compareTo(new BigDecimal("0.01")) < 0) {
+                errors.add(new CsvImportLineError(line, "selling_price must be >= 0.01 when set"));
             }
-            BigDecimal buy = parseMoney(firstPresent(c, "buying_price", "buy_price", "cost_price", "unit_cost"));
-            if (buy != null && buy.compareTo(BigDecimal.ZERO) < 0) {
-                errors.add(new CsvImportLineError(line, "buying_price must be >= 0 when provided"));
-            } else if (buy == null
-                    && !firstPresent(c, "buying_price", "buy_price", "cost_price", "unit_cost").isEmpty()) {
-                errors.add(new CsvImportLineError(line, "invalid buying_price"));
+            BigDecimal buy = sanitizeMoney14_2(
+                    parseMoney(firstPresent(c, "buying_price", "buy_price", "cost_price", "unit_cost")));
+            String buyRaw = firstPresent(c, "buying_price", "buy_price", "cost_price", "unit_cost");
+            if (!buyRaw.isEmpty() && buy == null) {
+                // Optional field: warn via line error only when the cell is unparseable garbage.
+                errors.add(new CsvImportLineError(
+                        line,
+                        "invalid buying_price (use a number up to 999999999999.99, or leave blank)"));
             }
             String onHandRaw = firstPresent(c, "on_hand", "stock", "quantity", "current_stock", "stock_qty");
             BigDecimal onHand = parsePositiveQty(onHandRaw);
@@ -559,19 +568,40 @@ public class CsvImportApplicationService {
             return null;
         }
         try {
-            BigDecimal v = new BigDecimal(raw.trim()).setScale(4, RoundingMode.HALF_UP);
-            return v;
+            String cleaned = MONEY_NOISE.matcher(raw.trim()).replaceAll("");
+            if (cleaned.isEmpty()) {
+                return null;
+            }
+            return new BigDecimal(cleaned);
         } catch (NumberFormatException e) {
             return null;
         }
     }
 
-    private static BigDecimal parseRequiredMoney(String raw) {
-        BigDecimal v = parseMoney(raw);
+    /**
+     * Fits {@code DECIMAL(14,2)} on {@code items.buying_price} / sell money columns.
+     * Negatives and overflows become {@code null} so optional import cells never blow up inserts.
+     */
+    private static BigDecimal sanitizeMoney14_2(BigDecimal v) {
         if (v == null) {
             return null;
         }
-        return v.compareTo(BigDecimal.ZERO) > 0 ? v.setScale(4, RoundingMode.HALF_UP) : null;
+        BigDecimal x = v;
+        if (x.signum() < 0) {
+            return null;
+        }
+        if (x.compareTo(MAX_MONEY_14_2) > 0) {
+            x = MAX_MONEY_14_2;
+        }
+        return x.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private static BigDecimal parseRequiredMoney(String raw) {
+        BigDecimal v = sanitizeMoney14_2(parseMoney(raw));
+        if (v == null) {
+            return null;
+        }
+        return v.compareTo(BigDecimal.ZERO) > 0 ? v : null;
     }
 
     private static BigDecimal parseRequiredQty(String raw) {

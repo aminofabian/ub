@@ -58,6 +58,8 @@ public class CsvImportApplicationService {
     private static final BigDecimal MIN_UNIT_COST = new BigDecimal("0.0001");
     /** Matches {@code items.buying_price} / common money columns {@code DECIMAL(14,2)}. */
     private static final BigDecimal MAX_MONEY_14_2 = new BigDecimal("999999999999.99");
+    /** Matches {@code inventory_batches.unit_cost} {@code DECIMAL(14,4)}. */
+    private static final BigDecimal MAX_UNIT_COST_14_4 = new BigDecimal("9999999999.9999");
     private static final Pattern UUID_REGEX = Pattern.compile(
             "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
     private static final Pattern MONEY_NOISE = Pattern.compile("[,\\s]|kes|ksh|usd|\\$", Pattern.CASE_INSENSITIVE);
@@ -189,9 +191,10 @@ public class CsvImportApplicationService {
                     && onHand.compareTo(QTY_EPS) > 0
                     && defaultBranchId != null
                     && !defaultBranchId.isBlank()) {
-                BigDecimal unitCost = buyingPrice != null && buyingPrice.compareTo(MIN_UNIT_COST) >= 0
-                        ? buyingPrice.setScale(4, RoundingMode.HALF_UP)
-                        : new BigDecimal("0.01");
+                BigDecimal unitCost = sanitizeUnitCost14_4(
+                        buyingPrice != null && buyingPrice.compareTo(MIN_UNIT_COST) >= 0
+                                ? buyingPrice
+                                : new BigDecimal("0.01"));
                 inventoryLedgerService.recordOpeningBalance(
                         businessId,
                         new PostOpeningBalanceRequest(
@@ -311,7 +314,7 @@ public class CsvImportApplicationService {
             Item item = itemRepository.findByBusinessIdAndSkuAndDeletedAtIsNull(businessId, col(c, "sku").trim())
                     .orElseThrow();
             BigDecimal qty = parseRequiredQty(col(c, "quantity"));
-            BigDecimal unitCost = parseRequiredMoney(col(c, "unit_cost"));
+            BigDecimal unitCost = sanitizeUnitCost14_4(parseRequiredMoney(col(c, "unit_cost")));
             String notesRaw = col(c, "notes").trim();
             inventoryLedgerService.recordOpeningBalance(
                     businessId,
@@ -594,6 +597,22 @@ public class CsvImportApplicationService {
             x = MAX_MONEY_14_2;
         }
         return x.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /** Fits {@code inventory_batches.unit_cost} {@code DECIMAL(14,4)}. */
+    private static BigDecimal sanitizeUnitCost14_4(BigDecimal v) {
+        BigDecimal x = v == null ? MIN_UNIT_COST : v;
+        if (x.signum() < 0) {
+            x = MIN_UNIT_COST;
+        }
+        if (x.compareTo(MAX_UNIT_COST_14_4) > 0) {
+            x = MAX_UNIT_COST_14_4;
+        }
+        x = x.setScale(4, RoundingMode.HALF_UP);
+        if (x.compareTo(MIN_UNIT_COST) < 0) {
+            return MIN_UNIT_COST;
+        }
+        return x;
     }
 
     private static BigDecimal parseRequiredMoney(String raw) {

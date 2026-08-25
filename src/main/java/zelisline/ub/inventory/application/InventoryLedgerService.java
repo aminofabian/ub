@@ -48,6 +48,8 @@ public class InventoryLedgerService {
 
     private static final BigDecimal TOLERANCE = new BigDecimal("0.01");
     private static final int QTY_SCALE = 4;
+    /** Matches {@code inventory_batches.unit_cost} {@code DECIMAL(14,4)}. */
+    private static final BigDecimal MAX_UNIT_COST_14_4 = new BigDecimal("9999999999.9999");
 
     private final BatchNumberGenerator batchNumberGenerator;
 
@@ -424,8 +426,8 @@ public class InventoryLedgerService {
         b.setSourceId(sourceId);
         b.setInitialQuantity(quantity);
         b.setQuantityRemaining(quantity);
-        BigDecimal cost = unitCost != null ? unitCost : BigDecimal.ZERO;
-        b.setUnitCost(cost.setScale(QTY_SCALE, RoundingMode.HALF_UP));
+        BigDecimal cost = sanitizeUnitCost14_4(unitCost);
+        b.setUnitCost(cost);
         b.setReceivedAt(Instant.now());
         inventoryBatchRepository.save(b);
         return b;
@@ -452,7 +454,7 @@ public class InventoryLedgerService {
         sm.setReferenceType(InventoryConstants.REF_OPERATION);
         sm.setReferenceId(operationId);
         sm.setQuantityDelta(quantityDelta);
-        sm.setUnitCost(unitCost);
+        sm.setUnitCost(sanitizeUnitCost14_4(unitCost));
         sm.setNotes(notes);
         sm.setCreatedBy(userId);
         stockMovementRepository.save(sm);
@@ -551,5 +553,17 @@ public class InventoryLedgerService {
             return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
         }
         return qty.multiply(unitCost).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /** Fits {@code inventory_batches.unit_cost} / movement unit cost {@code DECIMAL(14,4)}. */
+    private static BigDecimal sanitizeUnitCost14_4(BigDecimal unitCost) {
+        BigDecimal x = unitCost == null ? BigDecimal.ZERO : unitCost;
+        if (x.signum() < 0) {
+            x = BigDecimal.ZERO;
+        }
+        if (x.compareTo(MAX_UNIT_COST_14_4) > 0) {
+            x = MAX_UNIT_COST_14_4;
+        }
+        return x.setScale(QTY_SCALE, RoundingMode.HALF_UP);
     }
 }

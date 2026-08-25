@@ -487,7 +487,7 @@ public class LegacyProductJsonImportService {
                     .orElse(BigDecimal.ZERO);
             if (onHand == null || onHand.compareTo(QTY_EPS) <= 0) {
                 BigDecimal unitCost = buy != null && buy.compareTo(MIN_UNIT_COST) >= 0
-                        ? buy.setScale(4, RoundingMode.HALF_UP)
+                        ? buy.min(MAX_QTY_14_4).setScale(4, RoundingMode.HALF_UP)
                         : openingUnitCost(sell);
                 inventoryLedgerService.recordOpeningBalance(
                         businessId,
@@ -573,7 +573,7 @@ public class LegacyProductJsonImportService {
             if (v.compareTo(new BigDecimal("0.01")) < 0) {
                 return new BigDecimal("0.01");
             }
-            return v;
+            return v.min(MAX_QTY_14_4);
         }
         return new BigDecimal("0.01");
     }

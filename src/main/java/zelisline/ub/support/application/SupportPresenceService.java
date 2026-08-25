@@ -80,6 +80,16 @@ public class SupportPresenceService implements SupportPresenceListener {
         return false;
     }
 
+    /** Tenants with any open realtime socket (dashboard / till), not only support. */
+    public int countLoggedInTenants() {
+        return sessionRegistry.countDistinctOnlineTenantBusinesses();
+    }
+
+    /** Guests with an open visitor/buyer socket. */
+    public int countOnlineGuests() {
+        return sessionRegistry.countDistinctOnlineGuests();
+    }
+
     /**
      * Presence snapshot for a set of businesses (the super-admin inbox on load
      * and on periodic sync, so presence survives page loads and socket gaps).

@@ -149,6 +149,54 @@ public class SessionRegistry {
         return sessions.size();
     }
 
+    /**
+     * Distinct tenant businesses with at least one open WebSocket (dashboard /
+     * till / support). Excludes platform super-admin and anonymous guest scopes.
+     */
+    public int countDistinctOnlineTenantBusinesses() {
+        java.util.HashSet<String> ids = new java.util.HashSet<>();
+        for (Map.Entry<String, RealtimeSession> entry : sessionMeta.entrySet()) {
+            RealtimeSession meta = entry.getValue();
+            if (meta == null) {
+                continue;
+            }
+            if ("SUPER_ADMIN".equals(meta.roleId())) {
+                continue;
+            }
+            String businessId = meta.businessId();
+            if (businessId == null
+                    || businessId.isBlank()
+                    || RealtimeScopes.PLATFORM.equals(businessId)
+                    || RealtimeScopes.GUEST.equals(businessId)) {
+                continue;
+            }
+            WebSocketSession session = sessions.get(entry.getKey());
+            if (session != null && session.isOpen()) {
+                ids.add(businessId);
+            }
+        }
+        return ids.size();
+    }
+
+    /**
+     * Distinct guest principals with at least one open guest-scoped socket.
+     * Used for the SA support inbox "visitors online" counter.
+     */
+    public int countDistinctOnlineGuests() {
+        java.util.HashSet<String> guests = new java.util.HashSet<>();
+        for (Map.Entry<String, RealtimeSession> entry : sessionMeta.entrySet()) {
+            RealtimeSession meta = entry.getValue();
+            if (meta == null || !RealtimeScopes.GUEST.equals(meta.businessId())) {
+                continue;
+            }
+            WebSocketSession session = sessions.get(entry.getKey());
+            if (session != null && session.isOpen() && meta.userId() != null && !meta.userId().isBlank()) {
+                guests.add(meta.userId());
+            }
+        }
+        return guests.size();
+    }
+
     public int activeSessionCountForBusiness(String businessId) {
         return activeOpenSessionCountForBusiness(businessId);
     }

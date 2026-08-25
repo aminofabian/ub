@@ -119,9 +119,21 @@ public class SuperAdminSupportController {
                 .map(SupportConversationDto::guestId)
                 .filter(java.util.Objects::nonNull)
                 .toList();
+        Map<String, Object> tenantPresence = supportPresenceService.snapshot(businessIds);
+        Map<String, Object> guestPresence = supportPresenceService.guestSnapshot(guestIds);
+        long tenantsOnSupport = tenantPresence.values().stream()
+                .filter(v -> v instanceof Map<?, ?> m && Boolean.TRUE.equals(m.get("online")))
+                .count();
+        long visitorsOnSupport = guestPresence.values().stream()
+                .filter(v -> v instanceof Map<?, ?> m && Boolean.TRUE.equals(m.get("online")))
+                .count();
         return Map.of(
-                "presence", supportPresenceService.snapshot(businessIds),
-                "guestPresence", supportPresenceService.guestSnapshot(guestIds));
+                "presence", tenantPresence,
+                "guestPresence", guestPresence,
+                "tenantsOnline", supportPresenceService.countLoggedInTenants(),
+                "visitorsOnline", supportPresenceService.countOnlineGuests(),
+                "tenantsOnSupport", tenantsOnSupport,
+                "visitorsOnSupport", visitorsOnSupport);
     }
 
     private SuperAdmin requireSuperAdmin() {

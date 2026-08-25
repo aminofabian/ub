@@ -473,6 +473,51 @@ class SupportChatIT {
     }
 
     @Test
+    void sameBusinessHostsPlatformAndBuyerAndVisitorThreadsTogether() throws Exception {
+        // A production tenant already has its platform thread…
+        mockMvc.perform(post("/api/v1/support/conversation/messages")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"body\":\"Hello platform\"}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header("X-Test-User-Id", userIdFor(TENANT_A))
+                        .header("X-Test-Role-Id", ROLE_OWNER))
+                .andExpect(status().isCreated());
+
+        // …yet different buyers can each start a chat with the same shop…
+        mockMvc.perform(post("/api/v1/public/support/threads")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"type":"STOREFRONT","businessSlug":"support-shop-a","guestId":"buyer-x","body":"In stock?"}
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.conversation.businessId").value(TENANT_A));
+        mockMvc.perform(post("/api/v1/public/support/threads")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"type":"STOREFRONT","businessSlug":"support-shop-a","guestId":"buyer-y","body":"Open now?"}
+                                """))
+                .andExpect(status().isCreated());
+
+        // …and any number of visitors can talk to the platform concurrently.
+        mockMvc.perform(post("/api/v1/public/support/threads")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"type\":\"VISITOR\",\"guestId\":\"visitor-1\",\"body\":\"Hi\"}"))
+                .andExpect(status().isCreated());
+        mockMvc.perform(post("/api/v1/public/support/threads")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"type\":\"VISITOR\",\"guestId\":\"visitor-2\",\"body\":\"Hello\"}"))
+                .andExpect(status().isCreated());
+
+        // The tenant sees their own platform thread plus both buyer threads.
+        mockMvc.perform(get("/api/v1/support/storefront/conversations")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header("X-Test-User-Id", userIdFor(TENANT_A))
+                        .header("X-Test-Role-Id", ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conversations.length()").value(2));
+    }
+
+    @Test
     void presenceSnapshotListsEveryThreadWithOnlineFlag() throws Exception {
         mockMvc.perform(post("/api/v1/support/conversation/messages")
                         .contentType(APPLICATION_JSON)

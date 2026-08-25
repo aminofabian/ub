@@ -297,6 +297,29 @@ class GlobalCatalogIT {
     }
 
     @Test
+    void lookupMatchesSpacedQueryToCompactProductName() throws Exception {
+        GlobalProduct seed = globalProductRepository.findById(globalProductId).orElseThrow();
+        GlobalProduct blueband = new GlobalProduct();
+        blueband.setCatalogId(seed.getCatalogId());
+        blueband.setGlobalCategoryId(seed.getGlobalCategoryId());
+        blueband.setName("Blueband 100g");
+        blueband.setBrand("Blueband");
+        blueband.setSize("100g");
+        blueband.setUnitType("each");
+        blueband.setStatus("published");
+        blueband.setSortOrder(1);
+        globalProductRepository.save(blueband);
+
+        mockMvc.perform(get("/api/v1/global-catalog/lookup")
+                        .param("q", "Blue ba")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.name=='Blueband 100g')]").exists());
+    }
+
+    @Test
     void listProductsReturnsPublishedProducts() throws Exception {
         mockMvc.perform(get("/api/v1/global-catalog/products")
                         .header("X-Tenant-Id", TENANT_A)

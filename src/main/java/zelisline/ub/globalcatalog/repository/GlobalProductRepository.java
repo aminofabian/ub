@@ -77,18 +77,4 @@ public interface GlobalProductRepository extends JpaRepository<GlobalProduct, St
             @Param("catalogId") String catalogId,
             @Param("status") String status,
             @Param("ids") List<String> ids);
-
-    @Query("""
-            select gp from GlobalProduct gp
-             where gp.catalogId = :catalogId
-               and gp.status = :status
-               and (gp.barcode = :barcode or lower(gp.name) like lower(concat('%', :q, '%')))
-             order by gp.sortOrder asc, gp.name asc
-            """)
-    List<GlobalProduct> lookup(
-            @Param("catalogId") String catalogId,
-            @Param("status") String status,
-            @Param("barcode") String barcode,
-            @Param("q") String q,
-            Pageable pageable);
 }

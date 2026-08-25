@@ -26,6 +26,7 @@ import org.springframework.web.server.ResponseStatusException;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.api.dto.CreateVariantRequest;
+import zelisline.ub.catalog.application.CatalogSearchSupport;
 import zelisline.ub.catalog.application.CatalogTaxonomyService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.domain.Category;
@@ -70,6 +71,8 @@ public class GlobalCatalogService {
     private static final String BATCH_SKU_PLACEHOLDER = "__batch_reserved__";
 
     private static final String STATUS_PUBLISHED = GlobalProductStatus.PUBLISHED;
+    private static final int LOOKUP_LIMIT = 20;
+    private static final Collection<String> NO_CATEGORY_FILTER = List.of("__no_category_filter__");
 
     private final GlobalCatalogRepository globalCatalogRepository;
     private final GlobalCategoryRepository globalCategoryRepository;
@@ -221,22 +224,102 @@ public class GlobalCatalogService {
     @Transactional(readOnly = true)
     public List<GlobalProductResponse> lookup(String businessId, String barcode, String q) {
         GlobalCatalog catalog = resolveCatalog(businessId);
-        if ((barcode == null || barcode.isBlank()) && (q == null || q.isBlank())) {
+        String barcodeNorm = blankToNull(barcode);
+        String query = blankToNull(q);
+        if (barcodeNorm == null && query == null) {
             return List.of();
         }
-        List<GlobalProduct> products = globalProductRepository.lookup(
-                catalog.getId(),
-                STATUS_PUBLISHED,
-                blankToNull(barcode),
-                blankToNull(q),
-                PageRequest.of(0, 20)
-        );
+
+        LinkedHashMap<String, GlobalProduct> ordered = new LinkedHashMap<>();
+        if (barcodeNorm != null) {
+            for (GlobalProduct gp : fetchPublishedCandidates(
+                    catalog.getId(), null, barcodeNorm, PageRequest.of(0, LOOKUP_LIMIT))) {
+                ordered.put(gp.getId(), gp);
+            }
+        }
+        if (query != null && !CatalogSearchSupport.isBlankQuery(query)) {
+            for (GlobalProduct gp : fetchRankedByQuery(catalog.getId(), query)) {
+                ordered.putIfAbsent(gp.getId(), gp);
+            }
+        } else if (query != null) {
+            for (GlobalProduct gp : fetchPublishedCandidates(
+                    catalog.getId(), query, null, PageRequest.of(0, LOOKUP_LIMIT))) {
+                ordered.putIfAbsent(gp.getId(), gp);
+            }
+        }
+
+        List<GlobalProduct> products = ordered.values().stream().limit(LOOKUP_LIMIT).toList();
         TenantCatalogMatchIndex matchIndex = tenantCatalogMatchIndex(businessId);
         Map<String, List<GlobalProductImage>> imagesByProduct = imagesByProductId(products);
         return products.stream()
                 .map(gp -> toProductResponse(
                         gp, matchIndex, imagesByProduct.getOrDefault(gp.getId(), List.of())))
                 .toList();
+    }
+
+    private List<GlobalProduct> fetchRankedByQuery(String catalogId, String query) {
+        String first = CatalogSearchSupport.candidateToken(query);
+        List<GlobalProduct> ranked = rankGlobalHits(
+                fetchPublishedCandidates(
+                        catalogId,
+                        first,
+                        null,
+                        PageRequest.of(0, CatalogSearchSupport.CANDIDATE_FETCH_SIZE)),
+                query);
+        if (!ranked.isEmpty()) {
+            return ranked;
+        }
+        LinkedHashSet<String> tried = new LinkedHashSet<>();
+        if (first != null) {
+            tried.add(first);
+        }
+        for (String token : CatalogSearchSupport.dbCandidateTokens(query)) {
+            if (!tried.add(token)) {
+                continue;
+            }
+            ranked = rankGlobalHits(
+                    fetchPublishedCandidates(
+                            catalogId,
+                            token,
+                            null,
+                            PageRequest.of(0, CatalogSearchSupport.CANDIDATE_FETCH_SIZE)),
+                    query);
+            if (!ranked.isEmpty()) {
+                return ranked;
+            }
+        }
+        return List.of();
+    }
+
+    private List<GlobalProduct> fetchPublishedCandidates(
+            String catalogId,
+            String q,
+            String barcode,
+            Pageable pageable
+    ) {
+        return globalProductRepository.search(
+                catalogId,
+                STATUS_PUBLISHED,
+                NO_CATEGORY_FILTER,
+                true,
+                q,
+                barcode,
+                pageable
+        ).getContent();
+    }
+
+    private static List<GlobalProduct> rankGlobalHits(List<GlobalProduct> candidates, String query) {
+        return CatalogSearchSupport.rankAndFilter(
+                candidates,
+                gp -> CatalogSearchSupport.SearchableText.of(
+                        gp.getName(),
+                        gp.getVariantName(),
+                        gp.getSkuTemplate(),
+                        gp.getBarcode(),
+                        gp.getDescription(),
+                        gp.getBrand(),
+                        gp.getSize()),
+                query);
     }
 
     @Transactional(readOnly = true)

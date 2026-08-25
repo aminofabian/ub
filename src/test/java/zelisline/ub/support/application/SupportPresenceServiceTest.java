@@ -25,6 +25,7 @@ import org.springframework.web.socket.WebSocketSession;
 import zelisline.ub.platform.realtime.RealtimeSession;
 import zelisline.ub.platform.realtime.RealtimeWebSocketHandler;
 import zelisline.ub.platform.realtime.SessionRegistry;
+import zelisline.ub.support.repository.SupportConversationRepository;
 
 class SupportPresenceServiceTest {
 
@@ -36,7 +37,9 @@ class SupportPresenceServiceTest {
     void setUp() {
         sessionRegistry = new SessionRegistry();
         handler = mock(RealtimeWebSocketHandler.class);
-        presenceService = new SupportPresenceService(sessionRegistry, handler);
+        SupportConversationRepository conversations = mock(SupportConversationRepository.class);
+        when(conversations.findByGuestId(anyString())).thenReturn(List.of());
+        presenceService = new SupportPresenceService(sessionRegistry, handler, conversations);
         // One platform (super-admin) session subscribed to support — the broadcast target.
         sessionRegistry.register("admin-1", openSession(),
                 new RealtimeSession("sa-1", "platform", "SUPER_ADMIN", null, Set.of("support")),

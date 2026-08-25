@@ -24,8 +24,10 @@ import zelisline.ub.support.domain.SupportConversation;
  *   <li>{@code VISITOR} — the super-admin console plus the guest's own sockets
  *       (channel {@code support.guest:<guestId>}).</li>
  *   <li>{@code STOREFRONT} — the tenant's business sessions plus the buyer's own
- *       sockets on their guest channel.</li>
+ *       sockets on their guest channel. Never the super-admin inbox.</li>
  * </ul>
+ * Guest-owned threads with a missing/blank type are treated like STOREFRONT so
+ * they cannot accidentally fan out to platform admins.
  */
 @Service
 public class SupportRealtimeBridge {
@@ -94,13 +96,20 @@ public class SupportRealtimeBridge {
         Set<String> adminSessions = Set.of();
         Set<String> guestSessions = Set.of();
 
-        if (SupportConversation.TYPE_STOREFRONT.equals(conversationType)) {
-            // Storefront buyers talk to the tenant's staff in their own dashboard.
-            tenantSessions = sessionRegistry.findSessionsByBusinessChannel(businessId, CHANNEL);
-            guestSessions = guestSessions(guestId);
-        } else if (SupportConversation.TYPE_VISITOR.equals(conversationType)) {
+        String normalizedType = conversationType == null ? "" : conversationType.trim();
+        boolean guestOwned = guestId != null && !guestId.isBlank();
+
+        if (SupportConversation.TYPE_VISITOR.equals(normalizedType)) {
             // kiosk.ke visitors talk to the platform team.
             adminSessions = sessionRegistry.findPlatformAdminSessions(CHANNEL);
+            guestSessions = guestSessions(guestId);
+        } else if (SupportConversation.TYPE_STOREFRONT.equals(normalizedType)
+                || (guestOwned && !SupportConversation.TYPE_TENANT.equals(normalizedType))) {
+            // Storefront buyers (and any other guest-owned thread that is not an
+            // explicit VISITOR) talk to the tenant's staff — never the platform inbox.
+            // The guestOwned fallback stops a missing/blank conversationType from
+            // falling through into the classic tenant↔admin fan-out.
+            tenantSessions = sessionRegistry.findSessionsByBusinessChannel(businessId, CHANNEL);
             guestSessions = guestSessions(guestId);
         } else {
             // Classic tenant <-> super-admin thread.
@@ -119,7 +128,7 @@ public class SupportRealtimeBridge {
         }
         if (!tenantSessions.isEmpty() || !adminSessions.isEmpty() || !guestSessions.isEmpty()) {
             log.debug("Support fan-out {}: business={} type={} tenantSessions={} adminSessions={} guestSessions={}",
-                    type, businessId, conversationType,
+                    type, businessId, normalizedType,
                     tenantSessions.size(), adminSessions.size(), guestSessions.size());
         }
     }

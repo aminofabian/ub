@@ -69,10 +69,12 @@ public class SupportTypingService implements SupportTypingListener {
         Set<String> tenantSessions = Set.of();
         Set<String> guestSessions = Set.of();
 
+        boolean guestOwned = conversation.getGuestId() != null && !conversation.getGuestId().isBlank();
         if (SupportConversation.TYPE_VISITOR.equals(type)) {
             adminSessions = sessionRegistry.findPlatformAdminSessions(CHANNEL);
             guestSessions = guestSessions(conversation.getGuestId());
-        } else if (SupportConversation.TYPE_STOREFRONT.equals(type)) {
+        } else if (SupportConversation.TYPE_STOREFRONT.equals(type)
+                || (guestOwned && !SupportConversation.TYPE_TENANT.equals(type))) {
             tenantSessions = sessionRegistry.findSessionsByBusinessChannel(
                     conversation.getBusinessId(), CHANNEL);
             guestSessions = guestSessions(conversation.getGuestId());

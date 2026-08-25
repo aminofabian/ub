@@ -171,6 +171,15 @@ public class SupportService {
         String conversationType = type == null || type.isBlank()
                 ? SupportConversation.TYPE_TENANT
                 : type.toUpperCase();
+        if (SupportConversation.TYPE_STOREFRONT.equals(conversationType)) {
+            // Storefront buyer threads belong to the tenant staff inbox only.
+            return List.of();
+        }
+        if (!SupportConversation.TYPE_TENANT.equals(conversationType)
+                && !SupportConversation.TYPE_VISITOR.equals(conversationType)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "type must be TENANT or VISITOR");
+        }
         List<SupportConversation> rows;
         if (status == null || status.isBlank() || "ALL".equalsIgnoreCase(status)) {
             rows = conversationRepository.findAllByConversationTypeOrderByLastMessageAtDesc(conversationType);
@@ -182,8 +191,7 @@ public class SupportService {
     }
 
     public SupportConversationDetailDto adminDetail(String conversationId) {
-        SupportConversation conversation = conversationRepository.findById(conversationId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation not found"));
+        SupportConversation conversation = requirePlatformStaffed(conversationId);
         return toDetail(conversation, displayName(conversation), staffUnread(conversation));
     }
 
@@ -191,8 +199,7 @@ public class SupportService {
     public SupportMessageDto sendAdminMessage(
             String conversationId, String adminUserId, String adminName, String body
     ) {
-        SupportConversation conversation = conversationRepository.findById(conversationId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation not found"));
+        SupportConversation conversation = requirePlatformStaffed(conversationId);
         reopenIfResolved(conversation);
         return persistMessage(conversation, SupportMessage.SENDER_SUPER_ADMIN, adminUserId, adminName, body);
     }
@@ -200,16 +207,12 @@ public class SupportService {
     /** Marks the platform's side read and broadcasts read receipts to the tenant/guest. */
     @Transactional
     public boolean markAdminRead(String conversationId) {
-        SupportConversation conversation = conversationRepository.findById(conversationId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation not found"));
-        return markStaffRead(conversation);
+        return markStaffRead(requirePlatformStaffed(conversationId));
     }
 
     @Transactional
     public boolean setAdminStatus(String conversationId, String status) {
-        SupportConversation conversation = conversationRepository.findById(conversationId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation not found"));
-        return applyStatus(conversation, status, null);
+        return applyStatus(requirePlatformStaffed(conversationId), status, null);
     }
 
     public long adminUnreadCount() {
@@ -399,6 +402,19 @@ public class SupportService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation not found"));
         if (!SupportConversation.TYPE_STOREFRONT.equals(conversation.getConversationType())
                 || !businessId.equals(conversation.getBusinessId())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation not found");
+        }
+        return conversation;
+    }
+
+    /**
+     * Super-admin only staffs TENANT and VISITOR threads. Storefront buyer chats
+     * are invisible here — they belong to the tenant's own inbox.
+     */
+    private SupportConversation requirePlatformStaffed(String conversationId) {
+        SupportConversation conversation = conversationRepository.findById(conversationId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation not found"));
+        if (SupportConversation.TYPE_STOREFRONT.equals(conversation.getConversationType())) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation not found");
         }
         return conversation;

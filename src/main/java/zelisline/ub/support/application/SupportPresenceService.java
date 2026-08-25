@@ -16,6 +16,8 @@ import zelisline.ub.platform.realtime.RealtimeScopes;
 import zelisline.ub.platform.realtime.RealtimeWebSocketHandler;
 import zelisline.ub.platform.realtime.SessionRegistry;
 import zelisline.ub.platform.realtime.SupportPresenceListener;
+import zelisline.ub.support.domain.SupportConversation;
+import zelisline.ub.support.repository.SupportConversationRepository;
 
 /**
  * Tracks which tenants are live on the support channel and broadcasts
@@ -37,13 +39,19 @@ public class SupportPresenceService implements SupportPresenceListener {
 
     private final SessionRegistry sessionRegistry;
     private final RealtimeWebSocketHandler handler;
+    private final SupportConversationRepository conversationRepository;
 
     /** Last broadcast online-state per business — unchanged states are not re-broadcast. */
     private final Map<String, Boolean> lastBroadcastOnline = new ConcurrentHashMap<>();
 
-    public SupportPresenceService(SessionRegistry sessionRegistry, RealtimeWebSocketHandler handler) {
+    public SupportPresenceService(
+            SessionRegistry sessionRegistry,
+            RealtimeWebSocketHandler handler,
+            SupportConversationRepository conversationRepository
+    ) {
         this.sessionRegistry = sessionRegistry;
         this.handler = handler;
+        this.conversationRepository = conversationRepository;
     }
 
     @Override
@@ -124,6 +132,14 @@ public class SupportPresenceService implements SupportPresenceListener {
     }
 
     private void broadcastGuestIfChanged(String guestId) {
+        // Only platform VISITOR threads belong in the super-admin inbox. A shared
+        // browser guestId is also used for storefront buyers — those must not
+        // light up presence (or look like "visitor online") for the SA console.
+        boolean hasVisitorThread = conversationRepository.findByGuestId(guestId).stream()
+                .anyMatch(c -> SupportConversation.TYPE_VISITOR.equals(c.getConversationType()));
+        if (!hasVisitorThread) {
+            return;
+        }
         boolean online = isGuestOnline(guestId);
         Boolean previous = lastBroadcastOnline.put(guestId, online);
         if (previous != null && previous == online) {

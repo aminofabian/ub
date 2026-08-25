@@ -470,6 +470,19 @@ class SupportChatIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.messages.length()").value(2))
                 .andExpect(jsonPath("$.messages[1].senderType").value("TENANT"));
+
+        // Super-admin must not see or open storefront buyer threads.
+        mockMvc.perform(get("/api/v1/super-admin/support/conversations?type=TENANT")
+                        .header("Authorization", "Bearer " + saToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conversations[?(@.id=='" + conversationId + "')]").isEmpty());
+        mockMvc.perform(get("/api/v1/super-admin/support/conversations?type=VISITOR")
+                        .header("Authorization", "Bearer " + saToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conversations[?(@.id=='" + conversationId + "')]").isEmpty());
+        mockMvc.perform(get("/api/v1/super-admin/support/conversations/" + conversationId)
+                        .header("Authorization", "Bearer " + saToken))
+                .andExpect(status().isNotFound());
     }
 
     @Test

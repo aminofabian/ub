@@ -16,11 +16,39 @@ class StorefrontSettingsServiceFeatureFlagTest {
     private final BranchRepository branchRepository = mock(BranchRepository.class);
     private final StorefrontSettingsService service = new StorefrontSettingsService(objectMapper, branchRepository);
 
+    private static FeatureFlagsPatchRequest flags(
+            Boolean butcher,
+            Boolean priceEdit,
+            Boolean createProduct,
+            Boolean weighed,
+            Boolean addPhoto,
+            Boolean orderPad,
+            Boolean orderConfirm,
+            Boolean catalogHybrid,
+            Boolean shiftPrefill,
+            zelisline.ub.tenancy.api.dto.PosTillListenFeatureFlagsPatch tillListen,
+            zelisline.ub.tenancy.api.dto.HubAlertsFeatureFlagsPatch hubAlerts
+    ) {
+        return new FeatureFlagsPatchRequest(
+                null,
+                butcher,
+                priceEdit,
+                createProduct,
+                weighed,
+                addPhoto,
+                orderPad,
+                orderConfirm,
+                catalogHybrid,
+                shiftPrefill,
+                tillListen,
+                hubAlerts);
+    }
+
     @Test
     void mergeFeatureFlags_enablesButcherPos() throws Exception {
         String merged = service.mergeFeatureFlags(
                 "{}",
-                new FeatureFlagsPatchRequest(null, true, null, null, null, null, null, null, null, null, null));
+                flags(true, null, null, null, null, null, null, null, null, null, null));
 
         assertThat(objectMapper.readTree(merged).path("featureFlags").path("butcher_pos.enabled").asBoolean())
                 .isTrue();
@@ -30,7 +58,7 @@ class StorefrontSettingsServiceFeatureFlagTest {
     void mergeFeatureFlags_disablesButcherPos() throws Exception {
         String merged = service.mergeFeatureFlags(
                 "{\"featureFlags\":{\"butcher_pos.enabled\":true}}",
-                new FeatureFlagsPatchRequest(null, false, null, null, null, null, null, null, null, null, null));
+                flags(false, null, null, null, null, null, null, null, null, null, null));
 
         assertThat(objectMapper.readTree(merged).path("featureFlags").path("butcher_pos.enabled").asBoolean())
                 .isFalse();
@@ -40,7 +68,7 @@ class StorefrontSettingsServiceFeatureFlagTest {
     void mergeFeatureFlags_preservesExistingFlags() throws Exception {
         String merged = service.mergeFeatureFlags(
                 "{\"featureFlags\":{\"pos_drafts.enabled\":true}}",
-                new FeatureFlagsPatchRequest(null, true, null, null, null, null, null, null, null, null, null));
+                flags(true, null, null, null, null, null, null, null, null, null, null));
 
         assertThat(objectMapper.readTree(merged).path("featureFlags").path("butcher_pos.enabled").asBoolean())
                 .isTrue();
@@ -52,7 +80,7 @@ class StorefrontSettingsServiceFeatureFlagTest {
     void mergeFeatureFlags_enablesCashierCapabilities() throws Exception {
         String merged = service.mergeFeatureFlags(
                 "{}",
-                new FeatureFlagsPatchRequest(null, null, true, true, true, true, true, true, null, null, null));
+                flags(null, true, true, true, true, true, true, null, null, null, null));
 
         assertThat(objectMapper.readTree(merged).path("featureFlags").path("pos.cashier_price_edit").asBoolean())
                 .isTrue();
@@ -69,10 +97,20 @@ class StorefrontSettingsServiceFeatureFlagTest {
     }
 
     @Test
+    void mergeFeatureFlags_enablesCatalogHybrid() throws Exception {
+        String merged = service.mergeFeatureFlags(
+                "{}",
+                flags(null, null, null, null, null, null, null, true, null, null, null));
+
+        assertThat(objectMapper.readTree(merged).path("featureFlags").path("pos.catalog_hybrid").asBoolean())
+                .isTrue();
+    }
+
+    @Test
     void mergeFeatureFlags_enablesShiftPrefillOpeningFromLastClose() throws Exception {
         String merged = service.mergeFeatureFlags(
                 "{}",
-                new FeatureFlagsPatchRequest(null, null, null, null, null, null, null, null, true, null, null));
+                flags(null, null, null, null, null, null, null, null, true, null, null));
 
         assertThat(objectMapper.readTree(merged)
                         .path("featureFlags")
@@ -85,7 +123,7 @@ class StorefrontSettingsServiceFeatureFlagTest {
     void mergeFeatureFlags_enablesHubAlerts() throws Exception {
         String merged = service.mergeFeatureFlags(
                 "{}",
-                new FeatureFlagsPatchRequest(
+                flags(
                         null,
                         null,
                         null,

@@ -18,6 +18,11 @@ public record FeatureFlagsPatchRequest(
         Boolean posCashierOrderPad,
         /** Show Confirm orders on the cashier till (default on when absent). */
         Boolean posCashierOrderConfirm,
+        /**
+         * Search-first hybrid POS catalog (list results + frequent chips).
+         * Absent / false keeps the classic product grid.
+         */
+        Boolean posCatalogHybrid,
         /** Prefill opening float denominations from the previous night's closing count. */
         Boolean shiftsPrefillOpeningFromLastClose,
         /** When M-Pesa till listening starts (POS + storefront). */

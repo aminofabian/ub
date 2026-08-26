@@ -87,6 +87,12 @@ public class FeatureFlagService {
     public static final String FLAG_POS_SCAN_TO_CART = "pos.scan_to_cart";
 
     /**
+     * Hybrid POS catalog: search-first list results + frequent chips instead of
+     * a picture grid. Absent / false keeps the classic visual grid (default).
+     */
+    public static final String FLAG_POS_CATALOG_HYBRID = "pos.catalog_hybrid";
+
+    /**
      * Listen for Buy Goods till payments when the cashier opens checkout / pay.
      * Absent defaults to enabled.
      */

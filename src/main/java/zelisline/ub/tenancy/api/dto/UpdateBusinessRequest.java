@@ -13,6 +13,7 @@ public record UpdateBusinessRequest(
         @Valid ProfilePatchRequest profile,
         @Valid FeatureFlagsPatchRequest featureFlags,
         @Valid HubAlertsPatchRequest hubAlerts,
+        @Valid MetaCapiPatchRequest metaCapi,
         /**
          * Published global catalog code override. Null = unchanged; blank = clear
          * override and fall back to country/default resolution.

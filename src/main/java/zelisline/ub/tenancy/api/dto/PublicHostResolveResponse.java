@@ -42,6 +42,11 @@ public record PublicHostResolveResponse(
          * Short area/locality labels derived from onboarding + active branches
          * (e.g. {@code Westlands}) for SEO snippets.
          */
-        List<String> branchLocalities
+        List<String> branchLocalities,
+        /**
+         * Secret-free Meta pixel config (enabled + pixel id only). Always present;
+         * {@code enabled} is false when the tenant hasn't configured the integration.
+         */
+        MetaPixelPublicConfig metaPixel
 ) {
 }

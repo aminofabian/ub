@@ -34,6 +34,18 @@ public record MarketplaceSupplierDetailResponse(
     ) {
     }
 
+    public record MarketplacePackOptionPreview(
+            String id,
+            String label,
+            String packUnit,
+            BigDecimal unitsPerPack,
+            /** Price for ONE pack; null = ask. */
+            BigDecimal unitPrice,
+            /** Derived unitPrice / unitsPerPack for display; null when unitPrice is null. */
+            BigDecimal eachPrice
+    ) {
+    }
+
     public record MarketplaceCatalogProductPreview(
             String id,
             String name,
@@ -55,7 +67,9 @@ public record MarketplaceSupplierDetailResponse(
             /** Display name of the parent product when this row is a variant. */
             String parentItemName,
             /** Thumbnail for the parent product (or this item when it is the parent). */
-            String parentImageUrl
+            String parentImageUrl,
+            /** Purchasable pack shapes; empty means unit-only. */
+            List<MarketplacePackOptionPreview> packs
     ) {
     }
 }

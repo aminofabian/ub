@@ -30,7 +30,9 @@ import zelisline.ub.inventory.application.BatchNumberGenerator;
 import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.IdempotencyKey;
+import zelisline.ub.catalog.domain.ItemPackOption;
 import zelisline.ub.catalog.repository.IdempotencyKeyRepository;
+import zelisline.ub.catalog.repository.ItemPackOptionRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.finance.LedgerAccountCodes;
 import zelisline.ub.finance.application.LedgerAccountResolver;
@@ -92,6 +94,7 @@ public class PathBPurchaseService {
     private final LedgerPostingPort ledgerPostingPort;
     private final LedgerAccountResolver ledgerAccountResolver;
     private final ItemRepository itemRepository;
+    private final ItemPackOptionRepository itemPackOptionRepository;
     private final SupplierRepository supplierRepository;
     private final SupplierProductRepository supplierProductRepository;
     private final BranchRepository branchRepository;
@@ -191,7 +194,9 @@ public class PathBPurchaseService {
         line.setDescriptionText(req.description().trim());
         line.setAmountMoney(req.amountMoney().setScale(2, RoundingMode.HALF_UP));
         line.setSuggestedItemId(blankToNull(req.suggestedItemId()));
+        line.setPackOptionId(blankToNull(req.packOptionId()));
         applyDraftLineFields(line, req);
+        applyPackOptionExpansion(businessId, line);
         line.setLineStatus(PurchasingConstants.LINE_PENDING);
         lineRepository.save(line);
         return toLineResponse(line);
@@ -217,7 +222,9 @@ public class PathBPurchaseService {
         line.setDescriptionText(req.description().trim());
         line.setAmountMoney(req.amountMoney().setScale(2, RoundingMode.HALF_UP));
         line.setSuggestedItemId(blankToNull(req.suggestedItemId()));
+        line.setPackOptionId(blankToNull(req.packOptionId()));
         applyDraftLineFields(line, req);
+        applyPackOptionExpansion(businessId, line);
         lineRepository.save(line);
         return toLineResponse(line);
     }
@@ -701,6 +708,36 @@ public class PathBPurchaseService {
         line.setDraftExpiryDate(req.draftExpiryDate());
     }
 
+    /**
+     * When the line names a saved pack option, {@code draftQty} is the pack count;
+     * expand authoritatively to stock units + unit cost (packPrice / unitsPerPack).
+     * Unit and custom-pack lines keep the client-supplied draft values untouched.
+     */
+    private void applyPackOptionExpansion(String businessId, RawPurchaseLine line) {
+        String packOptionId = line.getPackOptionId();
+        if (packOptionId == null) {
+            return;
+        }
+        String itemId = line.getSuggestedItemId();
+        if (itemId == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "packOptionId requires suggestedItemId");
+        }
+        ItemPackOption option = itemPackOptionRepository
+                .findByIdAndBusinessIdAndItemId(packOptionId, businessId, itemId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Pack option does not belong to this item"));
+        if (line.getDraftQty() != null) {
+            line.setDraftQty(line.getDraftQty()
+                    .multiply(option.getUnitsPerPack())
+                    .setScale(UNIT_SCALE, RoundingMode.HALF_UP));
+        }
+        if (option.getDefaultPackPrice() != null) {
+            line.setDraftUnitCost(option.getDefaultPackPrice()
+                    .divide(option.getUnitsPerPack(), UNIT_SCALE, RoundingMode.HALF_UP));
+        }
+    }
+
     private static BigDecimal scaleNullable(BigDecimal value, int scale) {
         if (value == null) {
             return null;
@@ -719,7 +756,8 @@ public class PathBPurchaseService {
                 l.getDraftQty(),
                 l.getDraftUnitCost(),
                 l.getDraftSellPrice(),
-                l.getDraftExpiryDate()
+                l.getDraftExpiryDate(),
+                l.getPackOptionId()
         );
     }
 

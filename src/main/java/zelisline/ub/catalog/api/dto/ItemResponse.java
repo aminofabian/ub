@@ -48,6 +48,8 @@ public record ItemResponse(
          */
         BigDecimal stockQty,
         /** Parent/base on-hand in base units when {@code packageVariant} and branch stock was requested. */
-        BigDecimal baseStockQty
+        BigDecimal baseStockQty,
+        /** Purchasable pack shapes (12 / 18 / 48 …). Empty means unit-only. */
+        List<ItemPackOptionResponse> packs
 ) {
 }

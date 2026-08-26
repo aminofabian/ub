@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.math.BigDecimal;
@@ -30,6 +31,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.application.ItemCatalogService;
+import zelisline.ub.catalog.domain.ItemPackOption;
+import zelisline.ub.catalog.repository.ItemPackOptionRepository;
 import zelisline.ub.catalog.repository.IdempotencyKeyRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
@@ -100,6 +103,8 @@ class PathBPurchaseIT {
     @Autowired
     private ItemRepository itemRepository;
     @Autowired
+    private ItemPackOptionRepository itemPackOptionRepository;
+    @Autowired
     private SupplierRepository supplierRepository;
     @Autowired
     private SupplierContactRepository supplierContactRepository;
@@ -157,6 +162,7 @@ class PathBPurchaseIT {
         supplierProductRepository.deleteAll();
         supplierContactRepository.deleteAll();
         supplierRepository.deleteAll();
+        itemPackOptionRepository.deleteAll();
         itemRepository.deleteAll();
         itemTypeRepository.deleteAll();
         ledgerAccountRepository.deleteAll();
@@ -515,6 +521,66 @@ class PathBPurchaseIT {
         mockMvc.perform(post("/api/v1/purchasing/path-b/sessions/" + sessionId + "/post")
                         .contentType(APPLICATION_JSON)
                         .content(postBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void addLineWithPackOption_expandsStockQtyAndUnitCost() throws Exception {
+        ItemPackOption option = new ItemPackOption();
+        option.setBusinessId(TENANT);
+        option.setItemId(itemId);
+        option.setPackUnit("pack");
+        option.setUnitsPerPack(new java.math.BigDecimal("12"));
+        option.setDefaultPackPrice(new java.math.BigDecimal("120.00"));
+        itemPackOptionRepository.save(option);
+
+        String sessionId = createSession();
+        String body = """
+                {"description":"Mandazi (pack of 12)","amountMoney":240.00,
+                 "suggestedItemId":"%s","draftQty":2,"draftUnitCost":9,"packOptionId":"%s"}
+                """.formatted(itemId, option.getId());
+
+        mockMvc.perform(post("/api/v1/purchasing/path-b/sessions/" + sessionId + "/lines")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.packOptionId").value(option.getId()))
+                .andExpect(jsonPath("$.draftQty").value(24))
+                .andExpect(jsonPath("$.draftUnitCost").value(10.0));
+    }
+
+    @Test
+    void addLineWithForeignPackOption_rejects() throws Exception {
+        String otherItemId = itemCatalogService.createItem(
+                TENANT,
+                new CreateItemRequest(
+                        "SKU-POT", null, "Potatoes", null, goodsTypeId, null, null, null,
+                        false, true, true,
+                        null, null, null, null, null, null, null, null, null, null, null, null, null, null, null),
+                null
+        ).body().id();
+        ItemPackOption foreign = new ItemPackOption();
+        foreign.setBusinessId(TENANT);
+        foreign.setItemId(otherItemId);
+        foreign.setPackUnit("pack");
+        foreign.setUnitsPerPack(new java.math.BigDecimal("24"));
+        itemPackOptionRepository.save(foreign);
+
+        String sessionId = createSession();
+        String body = """
+                {"description":"Tomatoes","amountMoney":50.00,
+                 "suggestedItemId":"%s","draftQty":2,"draftUnitCost":25,"packOptionId":"%s"}
+                """.formatted(itemId, foreign.getId());
+
+        mockMvc.perform(post("/api/v1/purchasing/path-b/sessions/" + sessionId + "/lines")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
                         .header("X-Tenant-Id", TENANT)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))

@@ -2,6 +2,7 @@ package zelisline.ub.suppliers.api.dto;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 
 public record ItemSupplierLinkResponse(
         String id,
@@ -17,6 +18,19 @@ public record ItemSupplierLinkResponse(
         Instant lastPurchaseAt,
         long version,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        /** Offered pack shapes for this link (item defaults merged with link offers). */
+        List<ItemPackOfferPreview> packs
 ) {
+    public record ItemPackOfferPreview(
+            String id,
+            String label,
+            String packUnit,
+            BigDecimal unitsPerPack,
+            /** Price for ONE pack; null = ask. */
+            BigDecimal unitPrice,
+            /** Derived unitPrice / unitsPerPack for display; null when unitPrice is null. */
+            BigDecimal eachPrice
+    ) {
+    }
 }

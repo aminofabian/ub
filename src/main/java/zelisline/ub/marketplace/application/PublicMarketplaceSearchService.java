@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -31,6 +32,7 @@ import zelisline.ub.marketplace.api.dto.MarketplaceSupplierDetailResponse;
 import zelisline.ub.marketplace.api.dto.PublicMarketplaceProductSearchRow;
 import zelisline.ub.marketplace.api.dto.PublicMarketplaceSupplierSearchRow;
 import zelisline.ub.suppliers.SupplierCodes;
+import zelisline.ub.suppliers.application.SupplierPackOfferResolver;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierContact;
 import zelisline.ub.suppliers.domain.SupplierProduct;
@@ -55,6 +57,7 @@ public class PublicMarketplaceSearchService {
     private final SupplierRepository supplierRepository;
     private final SupplierProductRepository supplierProductRepository;
     private final SupplierContactRepository supplierContactRepository;
+    private final SupplierPackOfferResolver supplierPackOfferResolver;
     private final ItemRepository itemRepository;
     private final ItemImageRepository itemImageRepository;
     private final CategoryRepository categoryRepository;
@@ -208,6 +211,8 @@ public class PublicMarketplaceSearchService {
         List<SupplierProduct> links =
                 supplierProductRepository.listActivePublicForSupplier(supplier.getId());
         Map<String, Item> itemsById = loadItems(links.stream().map(SupplierProduct::getItemId).toList());
+        Map<String, List<SupplierPackOfferResolver.ResolvedPack>> packsByLinkId = supplierPackOfferResolver
+                .resolveByLink(links.stream().collect(Collectors.toMap(SupplierProduct::getId, SupplierProduct::getItemId)));
         List<String> parentIds = itemsById.values().stream()
                 .map(Item::getVariantOfItemId)
                 .filter(Objects::nonNull)
@@ -272,7 +277,10 @@ public class PublicMarketplaceSearchService {
                     item.getId(),
                     variantOfItemId,
                     parentItemName,
-                    parentImageUrl));
+                    parentImageUrl,
+                    packsByLinkId.getOrDefault(link.getId(), List.of()).stream()
+                            .map(PublicMarketplaceSearchService::toPackOptionPreview)
+                            .toList()));
         }
 
         List<SupplierContact> contactRows = supplierContactRepository
@@ -442,6 +450,18 @@ public class PublicMarketplaceSearchService {
             out.put(businessId, ListingLocation.of(labels));
         }
         return out;
+    }
+
+    private static MarketplaceSupplierDetailResponse.MarketplacePackOptionPreview toPackOptionPreview(
+            SupplierPackOfferResolver.ResolvedPack pack
+    ) {
+        return new MarketplaceSupplierDetailResponse.MarketplacePackOptionPreview(
+                pack.optionId(),
+                pack.label(),
+                pack.packUnit(),
+                pack.unitsPerPack(),
+                pack.unitPrice(),
+                pack.eachPrice());
     }
 
     private Map<String, Item> loadItems(Collection<String> itemIds) {

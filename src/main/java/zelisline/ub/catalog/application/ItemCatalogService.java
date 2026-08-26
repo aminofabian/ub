@@ -48,6 +48,7 @@ import zelisline.ub.sales.application.VariableWeightBarcodeService;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.api.dto.CreateVariantRequest;
 import zelisline.ub.catalog.api.dto.ItemImageResponse;
+import zelisline.ub.catalog.api.dto.ItemPackOptionResponse;
 import zelisline.ub.catalog.api.dto.ItemResponse;
 import zelisline.ub.catalog.api.dto.ItemSummaryResponse;
 import zelisline.ub.catalog.api.dto.PatchItemRequest;
@@ -61,6 +62,7 @@ import zelisline.ub.catalog.repository.AisleRepository;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.IdempotencyKeyRepository;
 import zelisline.ub.catalog.repository.ItemImageRepository;
+import zelisline.ub.catalog.repository.ItemPackOptionRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.catalog.application.ItemWeightValidation;
@@ -87,6 +89,7 @@ public class ItemCatalogService {
 
     private final ItemRepository itemRepository;
     private final ItemImageRepository itemImageRepository;
+    private final ItemPackOptionRepository itemPackOptionRepository;
     private final CategoryRepository categoryRepository;
     private final AisleRepository aisleRepository;
     private final ItemTypeRepository itemTypeRepository;
@@ -1710,8 +1713,15 @@ public class ItemCatalogService {
                 i.getBrand(),
                 i.getSize(),
                 stockQty,
-                baseStockQty
+                baseStockQty,
+                loadPackOptionResponses(i.getId())
         );
+    }
+
+    private List<ItemPackOptionResponse> loadPackOptionResponses(String itemId) {
+        return itemPackOptionRepository.findByItemIdAndActiveTrueOrderBySortOrderAscIdAsc(itemId).stream()
+                .map(ItemPackOptionResponse::from)
+                .toList();
     }
 
     private List<ItemImageResponse> loadImageResponses(String itemId) {

@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import zelisline.ub.tenancy.api.dto.OnboardingSettingsResponse;
+import zelisline.ub.tenancy.api.dto.MetaPixelPublicConfig;
 import zelisline.ub.tenancy.api.dto.PublicHostResolveResponse;
 import zelisline.ub.tenancy.api.dto.StorefrontSettingsResponse;
 import zelisline.ub.tenancy.api.dto.TenantConfigBundle;
@@ -44,6 +45,7 @@ public class PublicHostResolverService {
     private final BusinessRepository businessRepository;
     private final BranchRepository branchRepository;
     private final StorefrontSettingsService storefrontSettingsService;
+    private final MetaCapiSettingsService metaCapiSettingsService;
     private final CatalogBootstrapService catalogBootstrapService;
     private final LedgerBootstrapService ledgerBootstrapService;
     private final BusinessOnboardingSettingsService businessOnboardingSettingsService;
@@ -57,6 +59,7 @@ public class PublicHostResolverService {
             BusinessRepository businessRepository,
             BranchRepository branchRepository,
             StorefrontSettingsService storefrontSettingsService,
+            MetaCapiSettingsService metaCapiSettingsService,
             CatalogBootstrapService catalogBootstrapService,
             LedgerBootstrapService ledgerBootstrapService,
             BusinessOnboardingSettingsService businessOnboardingSettingsService,
@@ -68,6 +71,7 @@ public class PublicHostResolverService {
         this.businessRepository = businessRepository;
         this.branchRepository = branchRepository;
         this.storefrontSettingsService = storefrontSettingsService;
+        this.metaCapiSettingsService = metaCapiSettingsService;
         this.catalogBootstrapService = catalogBootstrapService;
         this.ledgerBootstrapService = ledgerBootstrapService;
         this.businessOnboardingSettingsService = businessOnboardingSettingsService;
@@ -286,6 +290,8 @@ public class PublicHostResolverService {
         String countryCode = business.getCountryCode() != null && !business.getCountryCode().isBlank()
                 ? business.getCountryCode().trim().toUpperCase(Locale.ROOT)
                 : null;
+        MetaPixelPublicConfig metaPixel =
+                metaCapiSettingsService.readPublicPixelConfig(business.getSettings());
         return new PublicHostResolveResponse(
                 business.getId(),
                 business.getName(),
@@ -301,7 +307,8 @@ public class PublicHostResolverService {
                 storefront.designJson(),
                 Instant.now(),
                 countryCode,
-                localities.isEmpty() ? List.of() : localities
+                localities.isEmpty() ? List.of() : localities,
+                metaPixel
         );
     }
 }

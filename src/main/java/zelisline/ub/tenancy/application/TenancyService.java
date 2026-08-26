@@ -39,6 +39,7 @@ import zelisline.ub.tenancy.api.dto.CreateBranchRequest;
 import zelisline.ub.tenancy.api.dto.CreateBusinessRequest;
 import zelisline.ub.tenancy.api.dto.DomainResponse;
 import zelisline.ub.tenancy.api.dto.InventorySettingsResponse;
+import zelisline.ub.tenancy.api.dto.MetaCapiSettingsResponse;
 import zelisline.ub.tenancy.api.dto.OnboardingPatchRequest;
 import zelisline.ub.tenancy.api.dto.OnboardingSettingsResponse;
 import zelisline.ub.tenancy.api.dto.PatchBranchRequest;
@@ -73,6 +74,7 @@ public class TenancyService {
     private final StorefrontSettingsService storefrontSettingsService;
     private final BusinessInventorySettingsService businessInventorySettingsService;
     private final BusinessHubAlertsSettingsService businessHubAlertsSettingsService;
+    private final MetaCapiSettingsService metaCapiSettingsService;
     private final BusinessProfileSettingsService businessProfileSettingsService;
     private final BusinessOnboardingSettingsService businessOnboardingSettingsService;
     private final BusinessMobileSettingsService businessMobileSettingsService;
@@ -461,6 +463,14 @@ public class TenancyService {
                 businessHubAlertsSettingsService.merge(
                     business.getSettings(),
                     request.hubAlerts()
+                )
+            );
+        }
+        if (request.metaCapi() != null) {
+            business.setSettings(
+                metaCapiSettingsService.merge(
+                    business.getSettings(),
+                    request.metaCapi()
                 )
             );
         }
@@ -857,6 +867,10 @@ public class TenancyService {
             businessHubAlertsSettingsService.readFromSettingsJson(
                 business.getSettings()
             );
+        MetaCapiSettingsResponse metaCapi =
+            metaCapiSettingsService.readFromSettingsJson(
+                business.getSettings()
+            );
         ProfileSettingsResponse profile =
             businessProfileSettingsService.readFromSettingsJson(
                 business.getSettings()
@@ -894,6 +908,7 @@ public class TenancyService {
             bundle.branding(),
             bundle.featureFlags(),
             hubAlerts,
+            metaCapi,
             primaryDomain,
             globalCatalogResolver.readOverrideCode(business.getSettings())
         );

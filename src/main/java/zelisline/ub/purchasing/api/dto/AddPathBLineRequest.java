@@ -17,6 +17,9 @@ public record AddPathBLineRequest(
         @Positive BigDecimal draftQty,
         @Positive BigDecimal draftUnitCost,
         @DecimalMin("0.01") BigDecimal draftSellPrice,
-        LocalDate draftExpiryDate
+        LocalDate draftExpiryDate,
+        /** Saved item pack option. When set, {@code draftQty} is the number of packs
+         *  and the server expands it to stock units + unit cost authoritatively. */
+        @Size(max = 36) String packOptionId
 ) {
 }

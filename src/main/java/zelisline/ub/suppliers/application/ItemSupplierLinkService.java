@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -44,6 +45,7 @@ public class ItemSupplierLinkService {
     private final InventoryBatchRepository inventoryBatchRepository;
     private final BranchRepository branchRepository;
     private final ItemCatalogService itemCatalogService;
+    private final SupplierPackOfferResolver supplierPackOfferResolver;
 
     @Transactional(readOnly = true)
     public java.util.List<ItemSupplierLinkResponse> listLinks(String businessId, String itemId) {
@@ -118,6 +120,8 @@ public class ItemSupplierLinkService {
         Map<String, BigDecimal> stockByItemId = branchStockByItemId;
         Map<String, String> thumbnailByItemId =
                 itemCatalogService.resolveThumbnailUrls(businessId, itemsById.keySet());
+        Map<String, List<SupplierPackOfferResolver.ResolvedPack>> packsByLinkId = supplierPackOfferResolver
+                .resolveByLink(links.stream().collect(Collectors.toMap(SupplierProduct::getId, SupplierProduct::getItemId)));
         return links.stream()
                 .map(sp -> {
                     Item item = itemsById.get(sp.getItemId());
@@ -136,7 +140,9 @@ public class ItemSupplierLinkService {
                         stock = item.getCurrentStock();
                     }
                     String thumbnailUrl = resolveLinkThumbnail(item, parent, thumbnailByItemId);
-                    return toSupplierItemLinkResponse(sp, item, parent, stock, thumbnailUrl);
+                    return toSupplierItemLinkResponse(
+                            sp, item, parent, stock, thumbnailUrl,
+                            packsByLinkId.getOrDefault(sp.getId(), List.of()));
                 })
                 .toList();
     }
@@ -257,8 +263,14 @@ public class ItemSupplierLinkService {
         }
     }
 
-    private static ItemSupplierLinkResponse toLinkResponse(SupplierProduct sp, Supplier supplier) {
+    private ItemSupplierLinkResponse toLinkResponse(SupplierProduct sp, Supplier supplier) {
         String name = supplier != null ? supplier.getName() : "";
+        List<ItemSupplierLinkResponse.ItemPackOfferPreview> packs = supplierPackOfferResolver
+                .resolveByLink(Map.of(sp.getId(), sp.getItemId()))
+                .getOrDefault(sp.getId(), List.of())
+                .stream()
+                .map(ItemSupplierLinkService::toPackOfferPreview)
+                .toList();
         return new ItemSupplierLinkResponse(
                 sp.getId(),
                 sp.getSupplierId(),
@@ -273,8 +285,21 @@ public class ItemSupplierLinkService {
                 sp.getLastPurchaseAt(),
                 sp.getVersion(),
                 sp.getCreatedAt(),
-                sp.getUpdatedAt()
+                sp.getUpdatedAt(),
+                packs
         );
+    }
+
+    private static ItemSupplierLinkResponse.ItemPackOfferPreview toPackOfferPreview(
+            SupplierPackOfferResolver.ResolvedPack pack
+    ) {
+        return new ItemSupplierLinkResponse.ItemPackOfferPreview(
+                pack.optionId(),
+                pack.label(),
+                pack.packUnit(),
+                pack.unitsPerPack(),
+                pack.unitPrice(),
+                pack.eachPrice());
     }
 
     /**
@@ -335,12 +360,13 @@ public class ItemSupplierLinkService {
         return null;
     }
 
-    private static SupplierItemLinkResponse toSupplierItemLinkResponse(
+    private SupplierItemLinkResponse toSupplierItemLinkResponse(
             SupplierProduct sp,
             Item item,
             Item parent,
             BigDecimal stock,
-            String thumbnailUrl
+            String thumbnailUrl,
+            List<SupplierPackOfferResolver.ResolvedPack> packs
     ) {
         String itemName = supplierLinkItemDisplayName(item, parent);
         String sku = item != null ? item.getSku() : "";
@@ -384,7 +410,8 @@ public class ItemSupplierLinkService {
                 packageVariant,
                 sp.getVersion(),
                 sp.getCreatedAt(),
-                sp.getUpdatedAt()
+                sp.getUpdatedAt(),
+                packs.stream().map(ItemSupplierLinkService::toPackOfferPreview).toList()
         );
     }
 

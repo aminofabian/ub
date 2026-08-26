@@ -13,6 +13,7 @@ public record PathBLineResponse(
         BigDecimal draftQty,
         BigDecimal draftUnitCost,
         BigDecimal draftSellPrice,
-        LocalDate draftExpiryDate
+        LocalDate draftExpiryDate,
+        String packOptionId
 ) {
 }

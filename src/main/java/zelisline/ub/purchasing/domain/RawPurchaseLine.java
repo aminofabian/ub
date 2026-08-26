@@ -51,6 +51,10 @@ public class RawPurchaseLine {
     @Column(name = "draft_expiry_date")
     private LocalDate draftExpiryDate;
 
+    /** Saved item pack option the buyer received in (null = unit / custom pack). */
+    @Column(name = "pack_option_id", length = 36)
+    private String packOptionId;
+
     @Column(name = "line_status", nullable = false, length = 16)
     private String lineStatus;
 

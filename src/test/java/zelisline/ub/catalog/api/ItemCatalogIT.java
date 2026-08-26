@@ -481,6 +481,16 @@ class ItemCatalogIT {
                         .content("{\"sku\":\"SKU-TREE-V\",\"variantName\":\"Zebra option\"}"))
                 .andExpect(status().isCreated());
 
+        // Sellable/stocked bases (e.g. Eggs with tray/piece options) stay real SKUs in
+        // search; only a non-sellable, non-stocked parent is squashed into its variants.
+        mockMvc.perform(patch("/api/v1/items/" + parent)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"isSellable\":false,\"isStocked\":false}"))
+                .andExpect(status().isOk());
+
         mockMvc.perform(get("/api/v1/items")
                         .param("catalogScope", "ALL")
                         .param("search", "Tree parent alpha")

@@ -10,7 +10,9 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -239,7 +241,8 @@ public class PublicStorefrontCatalogService {
         PublicStorefrontContext ctx = storefrontContextService.requireForSlug(slug);
         Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(idOrSku, ctx.business().getId())
                 .orElseGet(() -> itemRepository.findByBusinessIdAndSkuAndDeletedAtIsNull(ctx.business().getId(), idOrSku)
-                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found")));
+                        .orElseGet(() -> findPublishedByNameSlug(ctx.business().getId(), idOrSku)
+                                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found"))));
         if (!item.isWebPublished() || !item.isActive()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found");
         }
@@ -695,6 +698,38 @@ public class PublicStorefrontCatalogService {
             return null;
         }
         return s.trim();
+    }
+
+    /**
+     * Resolve a Shopify-style name handle (e.g. {@code almond-seeds-50g}) to a
+     * published catalog item. Matches slugified {@code name} or {@code sku}.
+     */
+    private Optional<Item> findPublishedByNameSlug(String businessId, String handle) {
+        String normalized = slugifyHandle(handle);
+        if (normalized.isBlank()) {
+            return Optional.empty();
+        }
+        String token = normalized.split("-", 2)[0];
+        if (token.isBlank()) {
+            return Optional.empty();
+        }
+        List<Item> candidates = itemRepository.findWebPublishedActiveByBusinessIdAndNameContaining(
+                businessId, token);
+        return candidates.stream()
+                .filter(i -> slugifyHandle(i.getName()).equals(normalized)
+                        || slugifyHandle(i.getSku()).equals(normalized))
+                .findFirst();
+    }
+
+    private static String slugifyHandle(String text) {
+        if (text == null) {
+            return "";
+        }
+        return text.trim()
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9]+", "-")
+                .replaceAll("-{2,}", "-")
+                .replaceAll("^-|-$", "");
     }
 
     private Map<String, Long> countStorefrontItemsByCategory(PublicStorefrontContext ctx) {

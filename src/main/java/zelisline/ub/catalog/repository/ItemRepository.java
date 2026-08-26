@@ -706,6 +706,19 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                and i.deletedAt is null
                and i.active = true
                and i.webPublished = true
+               and lower(i.name) like lower(concat('%', :token, '%'))
+            """)
+    List<Item> findWebPublishedActiveByBusinessIdAndNameContaining(
+            @Param("businessId") String businessId,
+            @Param("token") String token
+    );
+
+    @Query("""
+            select i from Item i
+             where i.businessId = :businessId
+               and i.deletedAt is null
+               and i.active = true
+               and i.webPublished = true
                and (:catUnset = true or i.categoryId in :categoryIds)
                and (:deptUnset = true or i.itemTypeId = :departmentId)
                and (:q is null or :q = ''

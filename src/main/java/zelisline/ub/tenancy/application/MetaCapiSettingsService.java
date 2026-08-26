@@ -69,6 +69,46 @@ public class MetaCapiSettingsService {
     }
 
     /**
+     * Internal config used by the CAPI delivery pipeline. Includes the encrypted
+     * access token — never expose this beyond server-side delivery code.
+     */
+    public MetaCapiRuntimeConfig readRuntimeConfig(String settingsJson) {
+        JsonNode metaCapi = namespace(settingsJson);
+        if (metaCapi == null || !metaCapi.isObject()) {
+            return MetaCapiRuntimeConfig.disabled();
+        }
+        return new MetaCapiRuntimeConfig(
+                Boolean.TRUE.equals(boolOrNull(metaCapi.path(KEY_ENABLED))),
+                textOrNull(metaCapi.path(KEY_PIXEL_ID)),
+                textOrNull(metaCapi.path(KEY_ACCESS_TOKEN_ENC)),
+                textOrNull(metaCapi.path(KEY_TEST_EVENT_CODE))
+        );
+    }
+
+    /**
+     * Server-side-only view of the tenant's CAPI configuration: ready only when
+     * enabled with both a pixel id and a stored (encrypted) access token.
+     */
+    public record MetaCapiRuntimeConfig(
+            boolean enabled,
+            String pixelId,
+            String accessTokenEnc,
+            String testEventCode
+    ) {
+        public static MetaCapiRuntimeConfig disabled() {
+            return new MetaCapiRuntimeConfig(false, null, null, null);
+        }
+
+        public boolean ready() {
+            return enabled && pixelId != null && hasToken();
+        }
+
+        public boolean hasToken() {
+            return accessTokenEnc != null && !accessTokenEnc.isBlank();
+        }
+    }
+
+    /**
      * PATCH-merge the {@code metaCapi} namespace without touching sibling
      * namespaces. {@code null} patch fields leave values unchanged; blank values
      * clear them. A non-blank {@code accessToken} is encrypted at rest.

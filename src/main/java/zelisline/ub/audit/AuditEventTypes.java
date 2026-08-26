@@ -167,6 +167,11 @@ public final class AuditEventTypes {
     public static final String BACKUP_FAILED = "backup.failed";
     public static final String SYSTEM_EXCEPTION = "system.exception";
 
+    // Meta Conversions API
+    public static final String META_CAPI_DELIVERY_SENT = "meta_capi.delivery.sent";
+    public static final String META_CAPI_DELIVERY_FAILED = "meta_capi.delivery.failed";
+    public static final String META_CAPI_DELIVERY_SKIPPED = "meta_capi.delivery.skipped";
+
     // Onboarding / regional catalog funnel
     public static final String ONBOARDING_COUNTRY_SELECTED = "onboarding.country_selected";
     public static final String ONBOARDING_VERTICAL_SELECTED = "onboarding.vertical_selected";

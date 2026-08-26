@@ -20,6 +20,7 @@ public final class NotificationTypes {
     public static final String PEAK_HOURS = "insights.peak_hours";
     public static final String TOP_PRODUCTS = "insights.top_products";
     public static final String RESTOCK_DIGEST = "inventory.restock_digest";
+    public static final String ACCOUNT_WELCOME = "account.welcome";
 
     private NotificationTypes() {
     }

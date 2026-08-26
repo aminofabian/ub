@@ -145,6 +145,10 @@ class AuthRegistrationIT {
 
         ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
         verify(notificationService).sendEmailVerificationEmail(anyString(), anyString(), bodyCaptor.capture());
+        verify(notificationService).sendWelcomeEmail(
+                org.mockito.ArgumentMatchers.eq("new@example.com"),
+                org.mockito.ArgumentMatchers.contains("Welcome to Kiosk"),
+                anyString());
         String rawToken = extractToken(bodyCaptor.getValue());
 
         mockMvc.perform(post("/api/v1/auth/verify-email")

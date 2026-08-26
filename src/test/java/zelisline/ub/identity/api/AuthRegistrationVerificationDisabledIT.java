@@ -100,6 +100,10 @@ class AuthRegistrationVerificationDisabledIT {
                 .andExpect(jsonPath("$.status").value("active"));
 
         verify(notificationService, never()).sendEmailVerificationEmail(anyString(), anyString(), anyString());
+        verify(notificationService).sendWelcomeEmail(
+                org.mockito.ArgumentMatchers.eq("direct@example.com"),
+                org.mockito.ArgumentMatchers.contains("Welcome to Kiosk"),
+                anyString());
 
         assertThat(
                 userRepository

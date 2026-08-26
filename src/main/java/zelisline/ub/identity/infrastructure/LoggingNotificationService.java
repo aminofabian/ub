@@ -66,6 +66,11 @@ public class LoggingNotificationService implements NotificationService {
     }
 
     @Override
+    public void sendWelcomeEmail(String toEmail, String subject, String htmlBody) {
+        sendOrLogHtml(toEmail, subject, htmlBody, "welcome", "Kiosk");
+    }
+
+    @Override
     public void sendOrderConfirmationHtml(
             String toEmail, String subject, String htmlBody, String fromDisplayName) {
         sendOrLogHtml(toEmail, subject, htmlBody, "order confirmation", fromDisplayName);

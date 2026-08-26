@@ -13,6 +13,9 @@ public interface NotificationService {
     /** {@code htmlBody} is a complete HTML document (inline CSS). */
     void sendEmailVerificationEmail(String toEmail, String subject, String htmlBody);
 
+    /** Sent immediately after self-service signup. From display name is Kiosk. */
+    void sendWelcomeEmail(String toEmail, String subject, String htmlBody);
+
     /**
      * @param fromDisplayName tenant store name for the From header (e.g. {@code Palmart});
      *                        may be null to keep the provider default

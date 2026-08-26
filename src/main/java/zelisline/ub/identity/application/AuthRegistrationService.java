@@ -6,6 +6,8 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 
 import org.slf4j.Logger;
@@ -17,6 +19,9 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -34,6 +39,8 @@ import zelisline.ub.identity.domain.UserStatus;
 import zelisline.ub.identity.repository.EmailVerificationTokenRepository;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.notifications.NotificationCategories;
+import zelisline.ub.notifications.NotificationTypes;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 import zelisline.ub.tenancy.application.PublicHostResolverService;
 import zelisline.ub.tenancy.repository.BusinessRepository;
@@ -60,11 +67,14 @@ public class AuthRegistrationService {
     private final PasswordEncoder passwordEncoder;
     private final EmailVerificationTokenRepository emailVerificationTokenRepository;
     private final NotificationService notificationService;
+    private final zelisline.ub.notifications.application.NotificationService inAppNotificationService;
     private final EmailVerificationEmailRenderer emailVerificationEmailRenderer;
+    private final WelcomeEmailRenderer welcomeEmailRenderer;
     private final PublicHostResolverService publicHostResolverService;
     private final FrontendAuthLinkBuilder frontendAuthLinkBuilder;
     private final AuthService authService;
     private final Environment environment;
+    private final ObjectMapper objectMapper;
 
     @Value("${app.auth.self-signup-enabled:true}")
     private boolean selfSignupEnabled;
@@ -115,6 +125,7 @@ public class AuthRegistrationService {
         if (isEmailVerificationRequired()) {
             user.setStatus(UserStatus.INVITED);
             User saved = userRepository.save(user);
+            sendWelcome(saved, businessId);
             String link = issueVerificationEmail(saved, http);
             return new RegisterResponse(
                     saved.getId(),
@@ -124,7 +135,46 @@ public class AuthRegistrationService {
         }
         user.setStatus(UserStatus.ACTIVE);
         User saved = userRepository.save(user);
+        sendWelcome(saved, businessId);
         return new RegisterResponse(saved.getId(), saved.getEmail(), UserStatus.ACTIVE.wire(), null);
+    }
+
+    /** Email + in-app inbox — both fire immediately after account creation. */
+    private void sendWelcome(User user, String businessId) {
+        String businessName = businessRepository.findByIdAndDeletedAtIsNull(businessId)
+                .map(b -> b.getName())
+                .orElse(null);
+        String subject = welcomeEmailRenderer.renderSubject();
+        String htmlBody = welcomeEmailRenderer.renderHtml(user.getName(), businessName);
+        notificationService.sendWelcomeEmail(user.getEmail(), subject, htmlBody);
+        pushWelcomeInApp(user, businessId, businessName);
+    }
+
+    private void pushWelcomeInApp(User user, String businessId, String businessName) {
+        String name = WelcomeEmailRenderer.displayName(user.getName());
+        String business = WelcomeEmailRenderer.displayBusiness(businessName);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("title", "Welcome to Kiosk!");
+        payload.put("body", welcomeEmailRenderer.renderPlainText(user.getName(), businessName));
+        payload.put("actionUrl", "/business");
+        payload.put("name", name);
+        payload.put("businessName", business);
+        payload.put("supportPhone", WelcomeEmailRenderer.SUPPORT_PHONE);
+        payload.put("supportEmail", WelcomeEmailRenderer.SUPPORT_EMAIL);
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(payload);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException(e);
+        }
+        inAppNotificationService.tryInsertDedupeForUser(
+                businessId,
+                user.getId(),
+                NotificationTypes.ACCOUNT_WELCOME,
+                "welcome:" + user.getId(),
+                NotificationCategories.ENGAGEMENT,
+                "MEDIUM",
+                json);
     }
 
     /**

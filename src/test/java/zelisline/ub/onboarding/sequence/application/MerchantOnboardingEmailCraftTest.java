@@ -26,7 +26,7 @@ class MerchantOnboardingEmailCraftTest {
                 shot,
                 null);
         assertThat(html)
-                .contains("new-supply-drawer.svg")
+                .contains("m3-money-loop.png")
                 .contains("See how")
                 .contains("complete-supplier-flow")
                 .contains("Post a supply");

@@ -18,7 +18,7 @@ public class MerchantOnboardingEventListener {
 
     private final MerchantOnboardingSequenceService sequenceService;
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onSaleCompleted(RealtimeBridge.SaleCompletedEvent event) {
         if (event == null || event.businessId() == null) {
             return;

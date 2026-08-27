@@ -87,25 +87,33 @@ public final class MerchantOnboardingEmailCraft {
     }
 
     /**
-     * Default static help screenshot (relative to public host). Empty when no asset fits.
-     * Prefer real /help/*.svg already shipped in the frontend public folder.
+     * Default static help screenshot (relative to public host).
+     * Interim SVGs live under {@code /help/onboarding/}; replace with Njeri PNG storyboard
+     * via {@code app.onboarding.sequence.shot.<step>} when capture lands.
      */
     public static Shot defaultShot(MerchantOnboardingStep step) {
         if (step == null) {
             return null;
         }
         return switch (step) {
-            case M1_FILL_SHELF -> new Shot("/help/add-product-drawer.svg", "Add a product from the catalog");
+            case M1_FILL_SHELF -> new Shot(
+                    "/help/onboarding/m1-fill-shelf.png", "Fill your shelf from the Global catalog");
             case M2_SIZES, N1_LOOKALIKE -> new Shot(
-                    "/help/add-product-group-drawer.svg", "Create a product family with variants");
-            case M3_MONEY_LOOP -> new Shot("/help/new-supply-drawer.svg", "Post a supply so stock rises");
+                    "/help/onboarding/m2-sizes.jpg", "Create a product family with variants");
+            case M3_MONEY_LOOP -> new Shot(
+                    "/help/onboarding/m3-money-loop.png", "Post a supply so stock rises");
             case M4_FIRST_SALE, N2_CLOSE_SHIFT -> new Shot(
-                    "/help/welcome-dashboard.svg", "Your hub after the first sale");
-            case M4_FALLBACK -> new Shot("/help/add-product-drawer.svg", "Stock the shelf to start selling");
-            case M5_GO_LIVE -> new Shot("/help/welcome-dashboard.svg", "Publish your online store");
-            case M6_TEAM -> new Shot("/help/invite-user-drawer.svg", "Invite staff with a PIN");
-            case W_WEEK_CHECKIN -> new Shot("/help/welcome-dashboard.svg", "Your week on Kiosk");
-            case N4_WEB_ORDER -> new Shot("/help/welcome-dashboard.svg", "Fulfil a web order");
+                    "/help/onboarding/m4-first-sale.png", "First sale — close the shift tonight");
+            case M4_FALLBACK -> new Shot(
+                    "/help/onboarding/m4-fallback.png", "Stock the shelf to start selling");
+            case M5_GO_LIVE -> new Shot(
+                    "/help/onboarding/m5-go-live.png", "Publish your online store");
+            case M6_TEAM -> new Shot(
+                    "/help/onboarding/m6-team.png", "Invite staff with a PIN");
+            case W_WEEK_CHECKIN -> new Shot(
+                    "/help/onboarding/w-week-checkin.png", "Your week on Kiosk");
+            case N4_WEB_ORDER -> new Shot(
+                    "/help/onboarding/m5-go-live.png", "Fulfil a web order");
             case M0_WELCOME -> null;
         };
     }

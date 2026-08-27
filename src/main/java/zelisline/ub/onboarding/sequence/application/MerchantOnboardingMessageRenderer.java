@@ -254,6 +254,10 @@ public class MerchantOnboardingMessageRenderer {
                 long products = snap == null ? 0 : snap.sellableSkuCount();
                 long suppliers = snap == null ? 0 : snap.supplierCount();
                 long sales = snap == null ? 0 : snap.saleCount();
+                String thanks = sales > 0
+                        ? "Asante — one week in, here's what you've built"
+                        : "One week in, here's what you've built";
+                String waThanks = sales > 0 ? "Asante, " + safeName : "Week 1 done, " + safeName;
                 yield message(
                         step,
                         "Week 1 on Kiosk: " + products + " products, " + sales + " sales",
@@ -261,7 +265,7 @@ public class MerchantOnboardingMessageRenderer {
                         """
                                 Hi %s,
 
-                                One week in, here's what you've built: %d products on the shelf, %d supplier%s, %d sales at the till.
+                                %s: %d products on the shelf, %d supplier%s, %d sales at the till.
 
                                 This week: keep the loop turning — restock what moved, try the online shop, and if there's a step you skipped, we'll walk it with you.
 
@@ -269,6 +273,7 @@ public class MerchantOnboardingMessageRenderer {
                                 Call or WhatsApp 0714 282 874 anytime — free help, real humans.
                                 """.formatted(
                                 safeName,
+                                thanks,
                                 products,
                                 suppliers,
                                 suppliers == 1 ? "" : "s",
@@ -278,7 +283,7 @@ public class MerchantOnboardingMessageRenderer {
                         "/business",
                         "Your week 1",
                         products + " products · " + sales + " sales — see what’s next.",
-                        "Week 1 done, " + safeName + ": " + products + " products, " + sales
+                        waThanks + ": " + products + " products, " + sales
                                 + " sales. Next: keep restocking what moved. Reply here for help anytime. — Kiosk",
                         help);
             }

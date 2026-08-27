@@ -30,7 +30,7 @@ class MerchantOnboardingMessageRendererTest {
         assertThat(msg.ctaPath()).isEqualTo("/products/catalog");
         assertThat(msg.htmlBody()).contains("<!DOCTYPE html>");
         assertThat(msg.innerBodyHtml())
-                .contains("add-product-drawer.svg")
+                .contains("m1-fill-shelf.png")
                 .contains("See how")
                 .contains("how-to-add-products");
         assertThat(msg.inAppTitle()).contains("shelf");
@@ -139,6 +139,21 @@ class MerchantOnboardingMessageRendererTest {
                 null);
         assertThat(msg.innerBodyHtml())
                 .contains("https://cdn.example/m1.png")
-                .doesNotContain("add-product-drawer.svg");
+                .doesNotContain("m1-fill-shelf.png");
+    }
+
+    @Test
+    void weekCheckinUsesAsanteWhenThereWereSales() {
+        var snap = new MerchantOnboardingGateService.Snapshot(
+                12, 10, 2, 5, true, true, false, true, "completed", null, false, false, false,
+                java.time.ZoneId.of("Africa/Nairobi"));
+        var msg = renderer().render(
+                MerchantOnboardingStep.W_WEEK_CHECKIN,
+                "Jane",
+                "Njeri Fresh Mart",
+                "https://njerifresh.kiosk.ke",
+                snap);
+        assertThat(msg.plainBody()).contains("Asante");
+        assertThat(msg.whatsAppBody()).startsWith("Asante, Jane");
     }
 }

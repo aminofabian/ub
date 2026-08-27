@@ -77,6 +77,7 @@ public class AuthRegistrationService {
     private final ObjectMapper objectMapper;
     private final zelisline.ub.onboarding.sequence.application.MerchantOnboardingSequenceService
             onboardingSequenceService;
+    private final zelisline.ub.support.application.SupportService supportService;
 
     @Value("${app.auth.self-signup-enabled:true}")
     private boolean selfSignupEnabled;
@@ -154,10 +155,12 @@ public class AuthRegistrationService {
         notificationService.sendWelcomeEmail(user.getEmail(), subject, htmlBody);
         if (isSequenceOwnerRole(role)) {
             pushWelcomeInApp(user, businessId, businessName);
+            pushWelcomeSupportChat(user, businessId, businessName);
             onboardingSequenceService.enrollAfterWelcome(businessId, user.getId());
         } else if (isTenantOperatorRole(role)) {
             // Staff operators get welcome in-app; week-1 sequence belongs to owner/admin only.
             pushWelcomeInApp(user, businessId, businessName);
+            pushWelcomeSupportChat(user, businessId, businessName);
         }
     }
 
@@ -185,7 +188,9 @@ public class AuthRegistrationService {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("title", "Welcome to Kiosk!");
         payload.put("body", welcomeEmailRenderer.renderPlainText(user.getName(), businessName));
-        payload.put("actionUrl", "/business");
+        // Open Support — /business is usually already the post-signup screen, so
+        // router.push("/business") looked like a dead click.
+        payload.put("actionUrl", "/support");
         payload.put("name", name);
         payload.put("businessName", business);
         payload.put("supportPhone", WelcomeEmailRenderer.SUPPORT_PHONE);
@@ -205,6 +210,13 @@ public class AuthRegistrationService {
                 NotificationCategories.ENGAGEMENT,
                 "MEDIUM",
                 json);
+    }
+
+    private void pushWelcomeSupportChat(User user, String businessId, String businessName) {
+        supportService.postPlatformWelcome(
+                businessId,
+                user.getId(),
+                welcomeEmailRenderer.renderSupportChat(user.getName(), businessName));
     }
 
     /**

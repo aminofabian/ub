@@ -68,6 +68,23 @@ public class WelcomeEmailRenderer {
                 """.formatted(name, business, help, SUPPORT_PHONE, SUPPORT_EMAIL).strip();
     }
 
+    /** Shorter welcome for the tenant↔platform support thread (chat, not email). */
+    public String renderSupportChat(String recipientName, String businessName) {
+        String name = displayName(recipientName);
+        String business = displayBusiness(businessName);
+        return """
+                Hi %s,
+
+                Welcome to Kiosk — we’re excited to have %s on board!
+
+                Setup, themes, your domain, M-Pesa, and custom work are free help from a real human. Reply here anytime, call %s, or email %s.
+
+                Welcome aboard!
+
+                — Kiosk Team
+                """.formatted(name, business, SUPPORT_PHONE, SUPPORT_EMAIL).strip();
+    }
+
     public String renderHtml(String recipientName, String businessName) {
         String name = escape(displayName(recipientName));
         String business = escape(displayBusiness(businessName));

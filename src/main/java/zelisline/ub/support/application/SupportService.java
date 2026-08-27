@@ -59,6 +59,12 @@ public class SupportService {
 
     public static final String GUEST_CHANNEL_PREFIX = "support.guest:";
 
+    /**
+     * Synthetic sender id for automated platform messages (not a real user row).
+     * Column is NOT NULL / CHAR(36) but is not an FK.
+     */
+    public static final String PLATFORM_BOT_USER_ID = "aaaaaaaa-0000-4000-8000-000000000001";
+
     private static final long MAX_ATTACHMENT_BYTES = 15L * 1024L * 1024L;
     private static final Set<String> ALLOWED_ATTACHMENT_CONTENT_TYPES = Set.of(
             "image/png",
@@ -105,6 +111,44 @@ public class SupportService {
     public Optional<SupportConversation> findByBusinessId(String businessId) {
         return conversationRepository.findByConversationTypeAndBusinessId(
                 SupportConversation.TYPE_TENANT, businessId);
+    }
+
+    /**
+     * Opens the tenant↔platform support thread (if needed) and posts the signup
+     * welcome as a Kiosk message so merchants see it in Support — not only the bell.
+     * Best-effort: never throws to the registration path. Skips when the thread
+     * already has messages (idempotent on retries / re-invites).
+     */
+    @Transactional
+    public void postPlatformWelcome(String businessId, String createdByUserId, String body) {
+        if (businessId == null || businessId.isBlank() || body == null || body.isBlank()) {
+            return;
+        }
+        try {
+            String trimmed = businessId.trim();
+            businessRepository.findByIdAndDeletedAtIsNull(trimmed)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
+            SupportConversation conversation = ensureConversation(
+                    trimmed,
+                    createdByUserId != null && !createdByUserId.isBlank()
+                            ? createdByUserId.trim()
+                            : PLATFORM_BOT_USER_ID,
+                    "Kiosk",
+                    "Welcome to Kiosk");
+            if (messageRepository.countByConversationId(conversation.getId()) > 0) {
+                return;
+            }
+            reopenIfResolved(conversation);
+            persistMessage(
+                    conversation,
+                    SupportMessage.SENDER_SUPER_ADMIN,
+                    PLATFORM_BOT_USER_ID,
+                    "Kiosk",
+                    body.trim());
+        } catch (Exception ex) {
+            log.warn("Failed to post platform welcome into support chat for business {}: {}",
+                    businessId, ex.toString());
+        }
     }
 
     /**

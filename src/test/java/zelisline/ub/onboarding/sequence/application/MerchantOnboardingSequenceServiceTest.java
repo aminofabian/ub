@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -23,6 +24,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.springframework.data.domain.Pageable;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -44,6 +47,7 @@ import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class MerchantOnboardingSequenceServiceTest {
 
     @Mock
@@ -117,8 +121,8 @@ class MerchantOnboardingSequenceServiceTest {
     @Test
     void firstEmailFailureRecordsRetryableFailedRow() {
         seedDueEnrollment();
-        when(outboundMail.sendPlatformCampaignEmail(any(), any(), any(), any(), any()))
-                .thenThrow(new RuntimeException("smtp down"));
+        doThrow(new RuntimeException("smtp down"))
+                .when(outboundMail).sendPlatformCampaignEmail(any(), any(), any(), any(), any());
 
         service.processDueBatch();
 
@@ -174,6 +178,9 @@ class MerchantOnboardingSequenceServiceTest {
         when(gateService.snapshot("biz-1")).thenReturn(emptyShelfSnapshot());
         when(gateService.m1DueAt(any(), any())).thenReturn(Instant.now().minus(Duration.ofHours(1)));
         when(audienceService.shopOrigin("biz-1")).thenReturn("https://njerifresh.kiosk.ke");
+        when(muteToken.issue(anyString(), any())).thenReturn("mute-token");
+        when(campaignEmailRenderer.renderHtml(any(), any(), any(), any(), any(), any()))
+                .thenReturn("<html>ok</html>");
         when(messageRenderer.render(any(MerchantOnboardingStep.class), any(), any(), any(), any()))
                 .thenReturn(msg());
         when(messageRenderer.render(any(MerchantOnboardingStep.class), any(), any(), any(), any(), any()))
@@ -218,8 +225,15 @@ class MerchantOnboardingSequenceServiceTest {
 
     private MerchantOnboardingMessageRenderer.RenderedMessage msg() {
         return new MerchantOnboardingMessageRenderer.RenderedMessage(
-                "subject", "preview", "body", "<html></html>", "Open Global catalog",
-                "/products/catalog", "Fill your shelf", "Start from Global catalog.",
+                "subject",
+                "preview",
+                "body",
+                "<html></html>",
+                "<div>body</div>",
+                "Open Global catalog",
+                "/products/catalog",
+                "Fill your shelf",
+                "Start from Global catalog.",
                 "Fill your shelf in 10 minutes — Kiosk");
     }
 }

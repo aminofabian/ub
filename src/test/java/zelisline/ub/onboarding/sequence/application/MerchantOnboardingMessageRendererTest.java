@@ -98,6 +98,35 @@ class MerchantOnboardingMessageRendererTest {
     }
 
     @Test
+    void m2IncludesWrongRightContrastTable() {
+        var msg = renderer().render(
+                MerchantOnboardingStep.M2_SIZES,
+                "Jane",
+                "Njeri Fresh Mart",
+                "https://njerifresh.kiosk.ke",
+                null);
+        assertThat(msg.innerBodyHtml())
+                .contains("Wrong")
+                .contains("Right")
+                .contains("Coca-Cola")
+                .contains("FEF2F2")
+                .contains("F0FDF4");
+        assertThat(msg.plainBody()).contains("Wrong:").contains("Right:");
+    }
+
+    @Test
+    void m5CtaGoesToStorefrontSettings() {
+        var msg = renderer().render(
+                MerchantOnboardingStep.M5_GO_LIVE,
+                "Jane",
+                "Njeri Fresh Mart",
+                "https://njerifresh.kiosk.ke",
+                null);
+        assertThat(msg.ctaPath()).isEqualTo("/business/settings");
+        assertThat(msg.plainBody()).contains("/business/settings").contains("/business/design");
+    }
+
+    @Test
     void shotOverrideReplacesDefaultImage() {
         MockEnvironment env = new MockEnvironment();
         env.setProperty("app.onboarding.sequence.shot.m1", "https://cdn.example/m1.png");

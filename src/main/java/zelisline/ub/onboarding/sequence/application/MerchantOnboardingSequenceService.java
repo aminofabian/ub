@@ -48,13 +48,12 @@ public class MerchantOnboardingSequenceService {
     private static final Logger log = LoggerFactory.getLogger(MerchantOnboardingSequenceService.class);
     private static final String FROM_DISPLAY = "Kiosk";
     private static final int PAGE_SIZE = 100;
-    private static final int MAX_EMAIL_RETRIES = 2;
-    private static final Duration EMAIL_RETRY_DELAY = Duration.ofHours(6);
+    private static final int MAX_WHATSAPP_PER_ENROLLMENT = 3;
     /** First web order WA only when total is at least this (major currency units). */
     private static final BigDecimal NOTABLE_WEB_ORDER_TOTAL = new BigDecimal("1000");
     /** Email send failures retry within 6h, max 2 re-attempts (brief §10). */
     private static final int MAX_EMAIL_RETRIES = 2;
-    private static final Duration EMAIL_RETRY_DELAY = Duration.ofHours(3);
+    private static final Duration EMAIL_RETRY_DELAY = Duration.ofHours(6);
 
     private final MerchantOnboardingEnrollmentRepository enrollmentRepository;
     private final MerchantOnboardingSendRepository sendRepository;
@@ -424,10 +423,12 @@ public class MerchantOnboardingSequenceService {
                 shopUrl,
                 snap,
                 muteUrl);
-        String ctaUrl = shopUrl + rendered.ctaPath();
+        String ctaUrl = shopUrl.replaceAll("/$", "") + rendered.ctaPath();
         String html = campaignEmailRenderer.renderHtml(
                 rendered.subject(),
-                MerchantOnboardingMessageRenderer.toHtmlParagraphs(rendered.plainBody()),
+                rendered.innerBodyHtml() != null
+                        ? rendered.innerBodyHtml()
+                        : MerchantOnboardingMessageRenderer.toHtmlParagraphs(rendered.plainBody()),
                 rendered.ctaLabel(),
                 ctaUrl,
                 shopUrl,

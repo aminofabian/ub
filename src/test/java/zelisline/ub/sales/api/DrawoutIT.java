@@ -216,6 +216,50 @@ class DrawoutIT {
     }
 
     @Test
+    void closeShift_includesPendingDrawoutInExpectedAndVariance() throws Exception {
+        String shiftId = openShift("1000.00");
+        postDrawout(shiftId, "750.00", cashier);
+        assertThat(expectedCash(shiftId)).isEqualByComparingTo("250.00");
+
+        MvcResult closed = mockMvc.perform(post("/api/v1/shifts/%s/close".formatted(shiftId))
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"countedClosingCash\":250.00}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode json = objectMapper.readTree(closed.getResponse().getContentAsString());
+        assertThat(json.get("expectedClosingCash").decimalValue()).isEqualByComparingTo("250.00");
+        assertThat(json.get("closingVariance").decimalValue()).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    void closeShift_appliesLegacyPendingDrawoutThatNeverLeftTheTill() throws Exception {
+        String shiftId = openShift("1000.00");
+        JsonNode created = postDrawout(shiftId, "750.00", cashier);
+
+        var shift = shiftRepository.findById(shiftId).orElseThrow();
+        shift.setExpectedClosingCash(new BigDecimal("1000.00"));
+        shiftRepository.save(shift);
+        var drawout = cashDrawoutRepository.findById(created.get("id").asText()).orElseThrow();
+        drawout.setAppliedToTill(false);
+        cashDrawoutRepository.save(drawout);
+
+        MvcResult closed = mockMvc.perform(post("/api/v1/shifts/%s/close".formatted(shiftId))
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"countedClosingCash\":250.00}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode json = objectMapper.readTree(closed.getResponse().getContentAsString());
+        assertThat(json.get("expectedClosingCash").decimalValue()).isEqualByComparingTo("250.00");
+        assertThat(json.get("closingVariance").decimalValue()).isEqualByComparingTo("0.00");
+    }
+
+    @Test
     void cashierCannotApprovePendingDrawout() throws Exception {
         String shiftId = openShift("1000.00");
         JsonNode created = postDrawout(shiftId, "750.00", cashier);

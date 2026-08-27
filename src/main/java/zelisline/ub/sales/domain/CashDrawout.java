@@ -83,6 +83,10 @@ public class CashDrawout {
     @Column(name = "expires_at")
     private Instant expiresAt;
 
+    /** True once this drawout has reduced {@code shifts.expected_closing_cash}. */
+    @Column(name = "applied_to_till", nullable = false)
+    private boolean appliedToTill;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

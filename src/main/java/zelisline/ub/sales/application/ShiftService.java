@@ -81,6 +81,7 @@ public class ShiftService {
     private final BranchResolutionService branchResolutionService;
     private final CashDrawerSummaryService cashDrawerSummaryService;
     private final CashDrawerLedgerService cashDrawerLedgerService;
+    private final DrawoutService drawoutService;
     private final LedgerPostingPort ledgerPostingPort;
     private final LedgerAccountResolver ledgerAccountResolver;
     private final ApplicationEventPublisher eventPublisher;
@@ -284,6 +285,8 @@ public class ShiftService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Shift is not open");
         }
         assertCanCloseShift(s, userId, roleId);
+
+        drawoutService.applyUnappliedLiveDrawouts(s);
 
         String branchName = getBranchName(businessId, s.getBranchId());
 

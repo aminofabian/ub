@@ -136,7 +136,8 @@ public class DrawoutService {
 
         // Cash left the drawer when the cashier recorded the drawout — pending
         // or approved. Reject / expire restores it.
-        applyDrawerOut(shift, request.amount(), drawout.getId(), userId);
+        applyDrawerOut(shift, drawout, userId);
+        cashDrawoutRepository.save(drawout);
         shiftRepository.save(shift);
 
         // Record audit log
@@ -224,6 +225,7 @@ public class DrawoutService {
         Shift shift = shiftRepository.findByIdAndBusinessId(drawout.getShiftId(), businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shift not found"));
         restoreDrawer(shift, drawout, userId);
+        cashDrawoutRepository.save(drawout);
         shiftRepository.save(shift);
 
         // Record audit log
@@ -262,17 +264,9 @@ public class DrawoutService {
         drawout.setVoidedAt(Instant.now());
         cashDrawoutRepository.save(drawout);
 
-        // Add amount back to expected closing cash
-        shift.setExpectedClosingCash(shift.getExpectedClosingCash()
-                .add(drawout.getAmount())
-                .setScale(2, RoundingMode.HALF_UP));
+        restoreDrawer(shift, drawout, userId);
+        cashDrawoutRepository.save(drawout);
         shiftRepository.save(shift);
-
-        // Ledger reversal for the voided drawout (money returns to the drawer).
-        cashDrawerLedgerService.recordAmount(
-                drawout.getShiftId(), CashDrawerLedgerService.EVENT_DRAWOUT_REVERSAL,
-                CashDrawerLedgerService.REF_DRAWOUT, drawout.getId(),
-                drawout.getAmount(), CashDrawerLedgerService.CONFIDENCE_INFERRED, userId, null);
 
         // Record audit log
         String auditMeta = String.format(
@@ -497,17 +491,53 @@ public class DrawoutService {
                 || SalesConstants.DRAWOUT_CATEGORY_OTHER.equals(category);
     }
 
-    private void applyDrawerOut(Shift shift, BigDecimal amount, String drawoutId, String userId) {
+    /**
+     * Pending and approved drawouts that never reduced expected cash (legacy
+     * pending rows, or a close that raced initiate). Idempotent via
+     * {@code appliedToTill}.
+     */
+    public void applyUnappliedLiveDrawouts(Shift shift) {
+        if (shift == null || shift.getId() == null) {
+            return;
+        }
+        List<CashDrawout> live = new ArrayList<>();
+        live.addAll(cashDrawoutRepository.findByShiftIdAndStatusOrderByCreatedAtDesc(
+                shift.getId(), SalesConstants.DRAWOUT_STATUS_PENDING_APPROVAL));
+        live.addAll(cashDrawoutRepository.findByShiftIdAndStatusOrderByCreatedAtDesc(
+                shift.getId(), SalesConstants.DRAWOUT_STATUS_APPROVED));
+        boolean changed = false;
+        for (CashDrawout drawout : live) {
+            if (drawout.isAppliedToTill()) {
+                continue;
+            }
+            applyDrawerOut(shift, drawout, drawout.getInitiatedBy());
+            cashDrawoutRepository.save(drawout);
+            changed = true;
+        }
+        if (changed) {
+            syncClosedVariance(shift);
+        }
+    }
+
+    private void applyDrawerOut(Shift shift, CashDrawout drawout, String userId) {
+        if (drawout.isAppliedToTill()) {
+            return;
+        }
         shift.setExpectedClosingCash(shift.getExpectedClosingCash()
-                .subtract(amount)
+                .subtract(drawout.getAmount())
                 .setScale(2, RoundingMode.HALF_UP));
         cashDrawerLedgerService.recordAmount(
                 shift.getId(), CashDrawerLedgerService.EVENT_DRAWOUT,
-                CashDrawerLedgerService.REF_DRAWOUT, drawoutId,
-                amount.negate(), CashDrawerLedgerService.CONFIDENCE_INFERRED, userId, null);
+                CashDrawerLedgerService.REF_DRAWOUT, drawout.getId(),
+                drawout.getAmount().negate(), CashDrawerLedgerService.CONFIDENCE_INFERRED, userId, null);
+        drawout.setAppliedToTill(true);
+        syncClosedVariance(shift);
     }
 
     private void restoreDrawer(Shift shift, CashDrawout drawout, String userId) {
+        if (!drawout.isAppliedToTill()) {
+            return;
+        }
         shift.setExpectedClosingCash(shift.getExpectedClosingCash()
                 .add(drawout.getAmount())
                 .setScale(2, RoundingMode.HALF_UP));
@@ -515,16 +545,30 @@ public class DrawoutService {
                 drawout.getShiftId(), CashDrawerLedgerService.EVENT_DRAWOUT_REVERSAL,
                 CashDrawerLedgerService.REF_DRAWOUT, drawout.getId(),
                 drawout.getAmount(), CashDrawerLedgerService.CONFIDENCE_INFERRED, userId, null);
+        drawout.setAppliedToTill(false);
+        syncClosedVariance(shift);
+    }
+
+    private void syncClosedVariance(Shift shift) {
+        if (shift == null || !SalesConstants.SHIFT_STATUS_CLOSED.equals(shift.getStatus())) {
+            return;
+        }
+        if (shift.getCountedClosingCash() == null || shift.getExpectedClosingCash() == null) {
+            return;
+        }
+        shift.setClosingVariance(shift.getCountedClosingCash()
+                .subtract(shift.getExpectedClosingCash())
+                .setScale(2, RoundingMode.HALF_UP));
     }
 
     private void expirePendingDrawout(String businessId, CashDrawout drawout, String userId) {
         drawout.setStatus(SalesConstants.DRAWOUT_STATUS_EXPIRED);
-        cashDrawoutRepository.save(drawout);
         Shift shift = shiftRepository.findByIdAndBusinessId(drawout.getShiftId(), businessId).orElse(null);
         if (shift != null) {
             restoreDrawer(shift, drawout, userId);
             shiftRepository.save(shift);
         }
+        cashDrawoutRepository.save(drawout);
         recordAudit(drawout.getShiftId(), SalesConstants.AUDIT_DRAWOUT_EXPIRED, userId,
                 "{\"reason\":\"Auto-expired\",\"originalAmount\":\"" + drawout.getAmount() + "\"}", null);
     }

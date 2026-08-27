@@ -36,7 +36,10 @@ public class NotificationsController {
     public List<NotificationResponse> list(HttpServletRequest request) {
         CurrentTenantUser.require(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
-        return notificationService.list(businessId).stream().map(NotificationsController::toDto).toList();
+        List<Notification> rows = CurrentTenantUser.optionalHuman(request)
+                .map(tp -> notificationService.listStaffInbox(businessId, tp.userId()))
+                .orElseGet(() -> notificationService.list(businessId));
+        return rows.stream().map(NotificationsController::toDto).toList();
     }
 
     @PostMapping("/{id}/read")

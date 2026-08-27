@@ -15,6 +15,8 @@ import zelisline.ub.suppliers.domain.Supplier;
 
 public interface SupplierRepository extends JpaRepository<Supplier, String> {
 
+    long countByBusinessIdAndDeletedAtIsNull(String businessId);
+
     @Query("""
             select s from Supplier s
              where s.businessId = :businessId

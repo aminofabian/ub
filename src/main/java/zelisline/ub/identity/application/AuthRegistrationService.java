@@ -75,6 +75,8 @@ public class AuthRegistrationService {
     private final AuthService authService;
     private final Environment environment;
     private final ObjectMapper objectMapper;
+    private final zelisline.ub.onboarding.sequence.application.MerchantOnboardingSequenceService
+            onboardingSequenceService;
 
     @Value("${app.auth.self-signup-enabled:true}")
     private boolean selfSignupEnabled;
@@ -125,7 +127,7 @@ public class AuthRegistrationService {
         if (isEmailVerificationRequired()) {
             user.setStatus(UserStatus.INVITED);
             User saved = userRepository.save(user);
-            sendWelcome(saved, businessId);
+            sendWelcome(saved, businessId, role);
             String link = issueVerificationEmail(saved, http);
             return new RegisterResponse(
                     saved.getId(),
@@ -135,19 +137,46 @@ public class AuthRegistrationService {
         }
         user.setStatus(UserStatus.ACTIVE);
         User saved = userRepository.save(user);
-        sendWelcome(saved, businessId);
+        sendWelcome(saved, businessId, role);
         return new RegisterResponse(saved.getId(), saved.getEmail(), UserStatus.ACTIVE.wire(), null);
     }
 
-    /** Email + in-app inbox — both fire immediately after account creation. */
-    private void sendWelcome(User user, String businessId) {
+    /**
+     * Email for every signup. In-app welcome is tenant operators only
+     * (owners / staff) — not storefront buyers.
+     */
+    private void sendWelcome(User user, String businessId, Role role) {
         String businessName = businessRepository.findByIdAndDeletedAtIsNull(businessId)
                 .map(b -> b.getName())
                 .orElse(null);
         String subject = welcomeEmailRenderer.renderSubject();
         String htmlBody = welcomeEmailRenderer.renderHtml(user.getName(), businessName);
         notificationService.sendWelcomeEmail(user.getEmail(), subject, htmlBody);
-        pushWelcomeInApp(user, businessId, businessName);
+        if (isSequenceOwnerRole(role)) {
+            pushWelcomeInApp(user, businessId, businessName);
+            onboardingSequenceService.enrollAfterWelcome(businessId, user.getId());
+        } else if (isTenantOperatorRole(role)) {
+            // Staff operators get welcome in-app; week-1 sequence belongs to owner/admin only.
+            pushWelcomeInApp(user, businessId, businessName);
+        }
+    }
+
+    /** Owner / admin signup only — invited cashiers don't get the week-1 sequence. */
+    private boolean isSequenceOwnerRole(Role role) {
+        if (role == null || role.getRoleKey() == null) {
+            return false;
+        }
+        String key = role.getRoleKey().trim().toLowerCase();
+        return IdentityService.OWNER_ROLE_KEY.equalsIgnoreCase(key) || "admin".equals(key);
+    }
+
+    /** Store buyers use the shopper inbox; tenant staff use the business bell. */
+    private boolean isTenantOperatorRole(Role role) {
+        if (role == null || role.getRoleKey() == null) {
+            return false;
+        }
+        String key = role.getRoleKey().trim().toLowerCase();
+        return !signupRoleKey.trim().equalsIgnoreCase(key);
     }
 
     private void pushWelcomeInApp(User user, String businessId, String businessName) {
@@ -167,9 +196,10 @@ public class AuthRegistrationService {
         } catch (JsonProcessingException e) {
             throw new IllegalStateException(e);
         }
-        inAppNotificationService.tryInsertDedupeForUser(
+        // Business-wide (userId null) so it lands in the tenant staff inbox,
+        // not the storefront shopper notification panel.
+        inAppNotificationService.tryInsertDedupe(
                 businessId,
-                user.getId(),
                 NotificationTypes.ACCOUNT_WELCOME,
                 "welcome:" + user.getId(),
                 NotificationCategories.ENGAGEMENT,

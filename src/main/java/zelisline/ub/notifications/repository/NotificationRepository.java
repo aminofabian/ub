@@ -22,6 +22,17 @@ public interface NotificationRepository extends JpaRepository<Notification, Stri
 
     boolean existsByBusinessIdAndDedupeKey(String businessId, String dedupeKey);
 
+    /** Staff inbox: business-wide alerts plus rows targeted at this user. */
+    @Query("""
+        select n from Notification n
+         where n.businessId = :businessId
+           and (n.userId is null or n.userId = :userId)
+         order by n.createdAt desc
+        """)
+    List<Notification> findStaffInbox(
+            @Param("businessId") String businessId,
+            @Param("userId") String userId);
+
     @Query("""
         select count(n) from Notification n
          where n.businessId = :businessId

@@ -148,4 +148,6 @@ public interface SaleRepository extends JpaRepository<Sale, String> {
     Optional<Long> nextReceiptNo(@Param("businessId") String businessId);
 
     boolean existsByBusinessId(String businessId);
+
+    boolean existsByBusinessIdAndStatusAndVoidedAtIsNull(String businessId, String status);
 }

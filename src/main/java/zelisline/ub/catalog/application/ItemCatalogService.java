@@ -16,6 +16,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -107,6 +108,8 @@ public class ItemCatalogService {
     private final SaleItemRepository saleItemRepository;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
+    private final ObjectProvider<zelisline.ub.onboarding.sequence.application.MerchantOnboardingSequenceService>
+            onboardingSequence;
 
     @Transactional(readOnly = true)
     public Page<ItemSummaryResponse> listItems(
@@ -607,7 +610,19 @@ public class ItemCatalogService {
         }
         supplierLinkProvisioner.afterItemChanged(businessId, item);
         publishItemEvent(businessId, item, actorUserId, AuditEventTypes.ITEM_CREATED, null);
+        notifyOnboardingCatalogChanged(businessId);
         return new ItemCreateResult(HttpStatus.CREATED.value(), toResponse(item, List.of(), null, null));
+    }
+
+    private void notifyOnboardingCatalogChanged(String businessId) {
+        try {
+            var seq = onboardingSequence.getIfAvailable();
+            if (seq != null) {
+                seq.onCatalogChanged(businessId);
+            }
+        } catch (RuntimeException ex) {
+            log.debug("onboarding catalog hook skipped businessId={}", businessId, ex);
+        }
     }
 
     private ItemCreateResult createItemIdempotent(String businessId, CreateItemRequest request, String keyRaw, String actorUserId) {
@@ -651,6 +666,7 @@ public class ItemCatalogService {
             ItemResponse body = toResponse(item, List.of(), null, null);
             persistIdempotency(businessId, keyHash, bodyHash, HttpStatus.CREATED.value(), body);
             publishItemEvent(businessId, item, actorUserId, AuditEventTypes.ITEM_CREATED, null);
+            notifyOnboardingCatalogChanged(businessId);
             return new ItemCreateResult(HttpStatus.CREATED.value(), body);
         }
     }

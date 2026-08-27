@@ -752,7 +752,11 @@ public class RealtimeBridge {
             case "credit_sale.reminder", "order.received", "order.payment_received",
                  "order.confirmed", "order.dispatched", "order.delivered",
                  "storefront.order.placed", "storefront.order.paid", "stock.low",
-                 "sales.daily_digest", "inventory.restock_digest", "account.welcome" -> true;
+                 "sales.daily_digest", "inventory.restock_digest", "account.welcome",
+                 "onboarding.fill_shelf", "onboarding.sizes_right", "onboarding.money_loop",
+                 "onboarding.first_sale", "onboarding.go_live", "onboarding.team_rhythm",
+                 "onboarding.week_checkin", "onboarding.reengage", "onboarding.lookalike",
+                 "onboarding.close_shift", "onboarding.web_order" -> true;
             default -> false;
         };
     }

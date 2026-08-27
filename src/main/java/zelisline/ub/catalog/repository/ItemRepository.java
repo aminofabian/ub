@@ -26,6 +26,10 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     long countByBusinessIdAndDeletedAtIsNullAndActiveTrueAndWebPublishedTrue(String businessId);
 
+    long countByBusinessIdAndDeletedAtIsNullAndActiveTrueAndSellableTrue(String businessId);
+
+    long countByBusinessIdAndDeletedAtIsNullAndActiveTrueAndGlobalProductSourceIdIsNotNull(String businessId);
+
     List<Item> findByGlobalProductSourceIdAndDeletedAtIsNull(String globalProductSourceId);
 
     /**

@@ -30,11 +30,26 @@ public class PlatformCampaignEmailRenderer {
             String continueUrl,
             String shopUrl
     ) {
+        return renderHtml(subject, bodyHtml, ctaLabel, continueUrl, shopUrl, null);
+    }
+
+    public String renderHtml(
+            String subject,
+            String bodyHtml,
+            String ctaLabel,
+            String continueUrl,
+            String shopUrl,
+            String preheader
+    ) {
         String title = PlatformEmailMarkdown.escape(subject == null || subject.isBlank() ? "Kiosk" : subject);
         String cta = PlatformEmailMarkdown.escape(
                 ctaLabel == null || ctaLabel.isBlank() ? "Continue setup" : ctaLabel);
         String link = PlatformEmailMarkdown.escape(continueUrl);
         String shop = PlatformEmailMarkdown.escape(shopUrl == null ? "" : shopUrl);
+        String prehead = (preheader == null || preheader.isBlank())
+                ? ""
+                : "<div style=\"display:none;max-height:0;overflow:hidden;mso-hide:all;\">"
+                        + PlatformEmailMarkdown.escape(preheader) + "&nbsp;&zwnj;</div>";
 
         return """
                 <!DOCTYPE html>
@@ -48,6 +63,7 @@ public class PlatformCampaignEmailRenderer {
                 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
                 </head>
                 <body style="margin:0;padding:0;background-color:%s;font-family:%s;-webkit-font-smoothing:antialiased;">
+                %s
                 <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="background-color:%s;padding:40px 16px 56px;">
                   <tr>
                     <td align="center">
@@ -118,6 +134,7 @@ public class PlatformCampaignEmailRenderer {
                 title,
                 PAGE_BG,
                 FONT_SANS,
+                prehead,
                 PAGE_BG,
                 CARD_BG,
                 BORDER,

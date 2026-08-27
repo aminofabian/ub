@@ -22,6 +22,8 @@ public record OnboardingAnswersDto(
         @Size(max = 64) String landingTemplateId,
         @Size(max = 255) String displayName,
         @Size(max = 32) String primaryColor,
-        @Size(max = 32) String accentColor
+        @Size(max = 32) String accentColor,
+        /** How they plan to stock: {@code new}, {@code spreadsheet}, or {@code other_pos}. */
+        @Pattern(regexp = "new|spreadsheet|other_pos") String productSource
 ) {
 }

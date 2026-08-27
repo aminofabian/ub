@@ -27,6 +27,12 @@ public class NotificationService {
         return notificationRepository.findByBusinessIdOrderByCreatedAtDesc(businessId);
     }
 
+    /** Tenant staff bell: business-wide + current-user rows (excludes other shoppers). */
+    @Transactional(readOnly = true)
+    public List<Notification> listStaffInbox(String businessId, String userId) {
+        return notificationRepository.findStaffInbox(businessId, userId);
+    }
+
     @Transactional(readOnly = true)
     public List<Notification> listForUser(String businessId, String userId, int limit) {
         int cap = Math.min(Math.max(limit, 1), 100);

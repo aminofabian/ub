@@ -206,4 +206,7 @@ public interface ShiftRepository extends JpaRepository<Shift, String> {
             @Param("status") String status,
             Pageable pageable
     );
+
+    /** Whether a shift with the given status has ever existed for this business. */
+    boolean existsByBusinessIdAndStatus(String businessId, String status);
 }

@@ -50,6 +50,8 @@ public interface SupplierInvoiceRepository extends JpaRepository<SupplierInvoice
 
     List<SupplierInvoice> findByBusinessIdAndStatus(String businessId, String status);
 
+    boolean existsByBusinessIdAndStatus(String businessId, String status);
+
     /**
      * Posted supplier invoices for the supplies board (Path B direct receive and Path A GRN bills).
      */

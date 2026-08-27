@@ -92,6 +92,7 @@ public class BusinessOpsAlertSettingsService {
             case SUPPLY_POSTED -> s.isAlertSupply();
             case CREDIT_PAYMENT -> s.isAlertCreditPayment();
             case RESTOCK_DIGEST -> s.isAlertRestockDigest();
+            case ONBOARDING -> true; // master switch + verified phone only
         };
     }
 
@@ -114,6 +115,7 @@ public class BusinessOpsAlertSettingsService {
             case SUPPLY_POSTED -> s.isAlertSupply();
             case CREDIT_PAYMENT -> s.isAlertCreditPayment();
             case RESTOCK_DIGEST -> s.isAlertRestockDigest();
+            case ONBOARDING -> true;
         };
         if (!typeOn) {
             return "event_type_disabled:" + type;

@@ -6,5 +6,7 @@ public enum OpsAlertType {
     SHIFT_CLOSED,
     SUPPLY_POSTED,
     CREDIT_PAYMENT,
-    RESTOCK_DIGEST
+    RESTOCK_DIGEST,
+    /** Merchant onboarding sequence (M4 congrats / re-engage / week check-in). */
+    ONBOARDING
 }

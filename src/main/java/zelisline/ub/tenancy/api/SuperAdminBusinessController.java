@@ -25,6 +25,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.identity.api.dto.SaImpersonateRequest;
 import zelisline.ub.identity.api.dto.SaImpersonateResponse;
 import zelisline.ub.identity.application.SuperAdminImpersonationService;
+import zelisline.ub.onboarding.sequence.application.MerchantOnboardingSequenceService;
 import zelisline.ub.tenancy.api.dto.BusinessResponse;
 import zelisline.ub.tenancy.api.dto.CreateBusinessRequest;
 import zelisline.ub.tenancy.api.dto.DomainResponse;
@@ -45,6 +46,7 @@ public class SuperAdminBusinessController {
     private final TenancyService tenancyService;
     private final BusinessDeletionService businessDeletionService;
     private final SuperAdminImpersonationService superAdminImpersonationService;
+    private final MerchantOnboardingSequenceService onboardingSequenceService;
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -74,6 +76,17 @@ public class SuperAdminBusinessController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteBusiness(@PathVariable String businessId) {
         businessDeletionService.deleteBusinessAndUsers(businessId);
+    }
+
+    /**
+     * Push welcome chat + teaching onboarding tips (chat, in-app, email) to this tenant now.
+     */
+    @PostMapping("/{businessId}/onboarding-sequence/send-all")
+    public MerchantOnboardingSequenceService.ForceSendResult sendOnboardingSequence(
+            @PathVariable String businessId
+    ) {
+        requireSuperAdminId();
+        return onboardingSequenceService.forceSendAllToTenant(businessId);
     }
 
     // ── Impersonation ────────────────────────────────────────────────────

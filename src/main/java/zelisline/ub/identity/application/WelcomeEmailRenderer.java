@@ -42,13 +42,11 @@ public class WelcomeEmailRenderer {
 
     /** Plain labels for the support-chat welcome card (no emoji noise in the bubble). */
     private static final String[] HELP_ITEMS_CHAT = {
-            "Setting up your online store",
-            "Custom themes & website designs",
-            "Custom domains",
-            "M-Pesa integration",
-            "Custom features and adjustments",
-            "Product and inventory setup",
-            "General guidance on using Kiosk",
+            "Getting the online store live",
+            "Themes and custom domains",
+            "M-Pesa on the till",
+            "Products and inventory",
+            "Custom tweaks when something’s missing",
     };
 
     public String renderSubject() {

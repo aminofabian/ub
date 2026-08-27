@@ -84,7 +84,7 @@ public class SuperAdminSupportController {
     @PostMapping("/tenants/{businessId}/welcome")
     public Map<String, Object> ensureWelcome(@PathVariable String businessId) {
         requireSuperAdmin();
-        boolean posted = supportService.ensurePlatformWelcomeForBusiness(businessId);
+        boolean posted = supportService.ensurePlatformWelcomeForBusiness(businessId, true);
         return Map.of(
                 "posted", posted,
                 "businessId", businessId.trim());

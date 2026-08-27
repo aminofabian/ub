@@ -77,6 +77,8 @@ class MerchantOnboardingSequenceServiceTest {
     @Mock
     private BusinessOpsAlertSettingsService opsAlertSettings;
     @Mock
+    private zelisline.ub.support.application.SupportService supportService;
+    @Mock
     private ObjectMapper objectMapper;
 
     @InjectMocks

@@ -18,6 +18,8 @@ public interface SupportMessageRepository extends JpaRepository<SupportMessage, 
 
     long countByConversationIdAndMessageKind(String conversationId, String messageKind);
 
+    void deleteByConversationIdAndMessageKind(String conversationId, String messageKind);
+
     long countByConversationIdAndSenderTypeAndCreatedAtAfter(
             String conversationId, String senderType, Instant createdAtAfter);
 

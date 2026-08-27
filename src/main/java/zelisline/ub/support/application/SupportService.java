@@ -190,6 +190,14 @@ public class SupportService {
      */
     @Transactional
     public boolean ensurePlatformWelcomeForBusiness(String businessId) {
+        return ensurePlatformWelcomeForBusiness(businessId, false);
+    }
+
+    /**
+     * @param replaceExisting when true, remove any prior welcome card and post a fresh one
+     */
+    @Transactional
+    public boolean ensurePlatformWelcomeForBusiness(String businessId, boolean replaceExisting) {
         if (businessId == null || businessId.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "businessId is required");
         }
@@ -207,14 +215,75 @@ public class SupportService {
                 zelisline.ub.identity.application.WelcomeEmailRenderer.SUPPORT_PHONE,
                 zelisline.ub.identity.application.WelcomeEmailRenderer.SUPPORT_EMAIL,
                 java.util.List.of(
-                        "Setting up your online store",
-                        "Custom themes & website designs",
-                        "Custom domains",
-                        "M-Pesa integration",
-                        "Custom features and adjustments",
-                        "Product and inventory setup",
-                        "General guidance on using Kiosk"));
+                        "Getting the online store live",
+                        "Themes and custom domains",
+                        "M-Pesa on the till",
+                        "Products and inventory",
+                        "Custom tweaks when something’s missing"));
+        if (replaceExisting) {
+            SupportConversation conversation = ensureConversation(
+                    trimmed, createdBy, "Kiosk", "Welcome to Kiosk");
+            messageRepository.deleteByConversationIdAndMessageKind(
+                    conversation.getId(), SupportMessage.KIND_WELCOME_CARD);
+        }
         return postPlatformWelcome(trimmed, createdBy, card);
+    }
+
+    /**
+     * Posts a short onboarding tip into the tenant↔platform chat (plain Kiosk message).
+     * Best-effort for SA force-send; never throws to the caller path.
+     */
+    @Transactional
+    public boolean postPlatformOnboardingTip(
+            String businessId, String title, String body, String ctaPath
+    ) {
+        if (businessId == null || businessId.isBlank()) {
+            return false;
+        }
+        String tipTitle = title == null ? "" : title.trim();
+        String tipBody = body == null ? "" : body.trim();
+        if (tipTitle.isEmpty() && tipBody.isEmpty()) {
+            return false;
+        }
+        try {
+            String trimmed = businessId.trim();
+            businessRepository.findByIdAndDeletedAtIsNull(trimmed)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
+            SupportConversation conversation = ensureConversation(
+                    trimmed, PLATFORM_BOT_USER_ID, "Kiosk", "Kiosk tips");
+            reopenIfResolved(conversation);
+
+            StringBuilder text = new StringBuilder();
+            if (!tipTitle.isEmpty()) {
+                text.append(tipTitle.trim());
+            }
+            if (!tipBody.isEmpty()) {
+                if (!text.isEmpty()) {
+                    text.append("\n\n");
+                }
+                text.append(tipBody);
+            }
+            String path = ctaPath == null ? "" : ctaPath.trim();
+            if (!path.isEmpty()) {
+                text.append("\n\n→ ").append(path.startsWith("/") ? path : "/" + path);
+            }
+            String messageBody = text.toString().trim();
+            if (messageBody.length() > 4000) {
+                messageBody = messageBody.substring(0, 3997) + "…";
+            }
+
+            persistMessage(
+                    conversation,
+                    SupportMessage.SENDER_SUPER_ADMIN,
+                    PLATFORM_BOT_USER_ID,
+                    "Kiosk",
+                    messageBody);
+            return true;
+        } catch (Exception ex) {
+            log.warn("Failed to post onboarding tip into support chat for business {}: {}",
+                    businessId, ex.toString());
+            return false;
+        }
     }
 
     private static String blankToDisplay(String value, String fallback) {
@@ -228,7 +297,7 @@ public class SupportService {
         String business = card.businessName() == null || card.businessName().isBlank()
                 ? "your business"
                 : card.businessName().trim();
-        return "Welcome to Kiosk — excited to have " + business + " on board.";
+        return "Karibu — " + business + " is on Kiosk. Reply here anytime.";
     }
 
     /**

@@ -5,10 +5,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,6 +39,7 @@ import zelisline.ub.opsalerts.application.TenantOpsAlertDispatcher;
 import zelisline.ub.opsalerts.domain.OpsAlertType;
 import zelisline.ub.platform.email.application.PlatformCampaignEmailRenderer;
 import zelisline.ub.platform.email.application.PlatformEmailAudienceService;
+import zelisline.ub.support.application.SupportService;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.domain.TenantStatus;
 import zelisline.ub.tenancy.repository.BusinessRepository;
@@ -68,6 +71,7 @@ public class MerchantOnboardingSequenceService {
     private final PlatformEmailAudienceService audienceService;
     private final TenantOpsAlertDispatcher opsAlertDispatcher;
     private final BusinessOpsAlertSettingsService opsAlertSettings;
+    private final SupportService supportService;
     private final ObjectMapper objectMapper;
 
     @Value("${app.public.api-base-url:http://localhost:5050}")
@@ -92,6 +96,141 @@ public class MerchantOnboardingSequenceService {
         recordOutcome(businessId, MerchantOnboardingStep.M0_WELCOME, MerchantOnboardingSend.CHANNEL_IN_APP,
                 MerchantOnboardingSend.STATUS_SENT, null);
         log.info("onboarding sequence enrolled businessId={} ownerUserId={}", businessId, ownerUserId);
+    }
+
+    /** Teaching steps SA can push in one click (excludes sale/event nudges). */
+    private static final List<MerchantOnboardingStep> FORCE_SEND_STEPS = List.of(
+            MerchantOnboardingStep.M1_FILL_SHELF,
+            MerchantOnboardingStep.M2_SIZES,
+            MerchantOnboardingStep.M3_MONEY_LOOP,
+            MerchantOnboardingStep.M5_GO_LIVE,
+            MerchantOnboardingStep.M6_TEAM,
+            MerchantOnboardingStep.W_WEEK_CHECKIN);
+
+    public record ForceSendResult(
+            boolean welcomePosted,
+            List<String> chatTipsPosted,
+            List<String> inAppSent,
+            List<String> emailsSent,
+            List<String> skipped
+    ) {
+    }
+
+    /**
+     * Super-admin: push the welcome chat card + teaching sequence to a tenant now.
+     * Posts tips into support chat, fires in-app notifications, and emails the owner.
+     * Does not send WhatsApp. Skips gates (demo / repair path).
+     */
+    @Transactional
+    public ForceSendResult forceSendAllToTenant(String businessId) {
+        if (businessId == null || businessId.isBlank()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "businessId is required");
+        }
+        String trimmed = businessId.trim();
+        Business business = businessRepository.findByIdAndDeletedAtIsNull(trimmed)
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "Business not found"));
+
+        Optional<User> owner = resolveOwner(trimmed);
+        String ownerId = owner.map(User::getId).orElse(null);
+        if (!enrollmentRepository.existsById(trimmed) && ownerId != null) {
+            enrollAfterWelcome(trimmed, ownerId);
+        }
+
+        boolean welcomePosted = supportService.ensurePlatformWelcomeForBusiness(trimmed, true);
+
+        MerchantOnboardingGateService.Snapshot snap = gateService.snapshot(trimmed);
+        String forceToken = UUID.randomUUID().toString().substring(0, 8);
+        List<String> chatTips = new ArrayList<>();
+        List<String> inApp = new ArrayList<>();
+        List<String> emails = new ArrayList<>();
+        List<String> skipped = new ArrayList<>();
+
+        for (MerchantOnboardingStep step : FORCE_SEND_STEPS) {
+            try {
+                var rendered = messageRenderer.render(
+                        step,
+                        owner.map(User::getName).orElse(null),
+                        business.getName(),
+                        audienceService.shopOrigin(trimmed),
+                        snap);
+                boolean tipOk = supportService.postPlatformOnboardingTip(
+                        trimmed,
+                        rendered.inAppTitle(),
+                        rendered.inAppBody(),
+                        rendered.ctaPath());
+                if (tipOk) {
+                    chatTips.add(step.key());
+                }
+                forceSendInApp(trimmed, step, rendered, forceToken);
+                inApp.add(step.key());
+                if (forceDeliverEmail(trimmed, step, snap, owner.orElse(null), business)) {
+                    emails.add(step.key());
+                } else {
+                    skipped.add(step.key() + ":email");
+                }
+            } catch (RuntimeException ex) {
+                log.warn("force-send step failed businessId={} step={}", trimmed, step.key(), ex);
+                skipped.add(step.key() + ":error");
+            }
+        }
+
+        log.info(
+                "onboarding force-send businessId={} welcome={} tips={} inApp={} email={}",
+                trimmed, welcomePosted, chatTips.size(), inApp.size(), emails.size());
+        return new ForceSendResult(welcomePosted, chatTips, inApp, emails, skipped);
+    }
+
+    private void forceSendInApp(
+            String businessId,
+            MerchantOnboardingStep step,
+            MerchantOnboardingMessageRenderer.RenderedMessage rendered,
+            String forceToken
+    ) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("title", rendered.inAppTitle());
+        payload.put("body", rendered.inAppBody());
+        payload.put("actionUrl", rendered.ctaPath());
+        payload.put("step", step.key());
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(payload);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException(e);
+        }
+        inAppNotifications.tryInsertDedupe(
+                businessId,
+                step.notificationType(),
+                "onboarding:force:" + forceToken + ":" + step.key() + ":" + businessId,
+                NotificationCategories.ENGAGEMENT,
+                "MEDIUM",
+                json);
+        // Mark scheduled path as handled so the hourly tick does not double-send later.
+        if (!alreadyHandled(businessId, step, MerchantOnboardingSend.CHANNEL_IN_APP)) {
+            recordOutcome(businessId, step, MerchantOnboardingSend.CHANNEL_IN_APP,
+                    MerchantOnboardingSend.STATUS_SENT, "force_send");
+        }
+    }
+
+    private boolean forceDeliverEmail(
+            String businessId,
+            MerchantOnboardingStep step,
+            MerchantOnboardingGateService.Snapshot snap,
+            User owner,
+            Business business
+    ) {
+        if (owner == null || owner.getEmail() == null || owner.getEmail().isBlank()) {
+            return false;
+        }
+        sendRepository.findByBusinessIdAndStepKeyAndChannel(
+                        businessId, step.key(), MerchantOnboardingSend.CHANNEL_EMAIL)
+                .ifPresent(sendRepository::delete);
+        deliverEmailOnly(businessId, step, snap);
+        return sendRepository.findByBusinessIdAndStepKeyAndChannel(
+                        businessId, step.key(), MerchantOnboardingSend.CHANNEL_EMAIL)
+                .map(r -> MerchantOnboardingSend.STATUS_SENT.equals(r.getStatus()))
+                .orElse(false);
     }
 
     @Transactional

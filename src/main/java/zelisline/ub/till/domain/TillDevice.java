@@ -34,6 +34,10 @@ public class TillDevice {
     @Column(name = "label", nullable = false, length = 80)
     private String label;
 
+    /** shelf (tile POS) or ledger (spreadsheet till). */
+    @Column(name = "cashier_template", nullable = false, length = 16)
+    private String cashierTemplate;
+
     @Column(name = "registered_by", nullable = false, length = 36)
     private String registeredBy;
 
@@ -57,6 +61,9 @@ public class TillDevice {
         }
         if (updatedAt == null) {
             updatedAt = now;
+        }
+        if (cashierTemplate == null || cashierTemplate.isBlank()) {
+            cashierTemplate = "shelf";
         }
     }
 

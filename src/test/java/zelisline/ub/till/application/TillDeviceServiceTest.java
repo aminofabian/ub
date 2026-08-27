@@ -46,4 +46,25 @@ class TillDeviceServiceTest {
     void resolveLabelUsesProvided() {
         assertEquals("Counter 2", TillDeviceService.resolveLabel(" Counter 2 ", "unused-key-xx"));
     }
+
+    @Test
+    void resolveCashierTemplateDefaultsShelf() {
+        assertEquals("shelf", TillDeviceService.resolveCashierTemplate(null));
+        assertEquals("shelf", TillDeviceService.resolveCashierTemplate("  "));
+        assertEquals("shelf", TillDeviceService.resolveCashierTemplate("SHELF"));
+    }
+
+    @Test
+    void resolveCashierTemplateAcceptsLedger() {
+        assertEquals("ledger", TillDeviceService.resolveCashierTemplate(" Ledger "));
+    }
+
+    @Test
+    void resolveCashierTemplateRejectsUnknown() {
+        ResponseStatusException ex = assertThrows(
+                ResponseStatusException.class,
+                () -> TillDeviceService.resolveCashierTemplate("kiosk")
+        );
+        assertTrue(ex.getReason() != null && ex.getReason().contains("cashierTemplate"));
+    }
 }

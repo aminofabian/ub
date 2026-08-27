@@ -12,6 +12,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.tenancy.repository.BranchRepository;
+import zelisline.ub.till.api.dto.PatchTillDeviceRequest;
 import zelisline.ub.till.api.dto.RegisterTillDeviceRequest;
 import zelisline.ub.till.api.dto.TillDeviceListResponse;
 import zelisline.ub.till.api.dto.TillDeviceResponse;
@@ -63,6 +64,11 @@ public class TillDeviceService {
         row.setBranchId(branchId);
         row.setDeviceKey(deviceKey);
         row.setLabel(label);
+        if (request.cashierTemplate() != null && !request.cashierTemplate().isBlank()) {
+            row.setCashierTemplate(resolveCashierTemplate(request.cashierTemplate()));
+        } else if (isNew || row.getCashierTemplate() == null || row.getCashierTemplate().isBlank()) {
+            row.setCashierTemplate("shelf");
+        }
         row.setRegisteredBy(userId);
         if (isNew || wasRevoked) {
             row.setRegisteredAt(Instant.now());
@@ -90,6 +96,55 @@ public class TillDeviceService {
                         businessId, branchId);
 
         return new TillDeviceListResponse(rows.stream().map(this::toResponse).toList());
+    }
+
+    @Transactional(readOnly = true)
+    public TillDeviceResponse findMe(
+            String businessId,
+            String branchId,
+            String headerDeviceKey
+    ) {
+        String deviceKey = resolveDeviceKey(null, headerDeviceKey);
+        branchRepository
+                .findByIdAndBusinessIdAndDeletedAtIsNull(branchId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Branch not found"));
+        TillDevice row = tillDeviceRepository
+                .findByBusinessIdAndBranchIdAndDeviceKeyAndRevokedAtIsNull(businessId, branchId, deviceKey)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Till device not registered"));
+        return toResponse(row);
+    }
+
+    @Transactional
+    public TillDeviceResponse patch(
+            String businessId,
+            String id,
+            PatchTillDeviceRequest request
+    ) {
+        TillDevice row = tillDeviceRepository
+                .findByIdAndBusinessId(id.trim(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Till device not found"));
+        if (row.getRevokedAt() != null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Till device not found");
+        }
+        if (request.cashierTemplate() != null && !request.cashierTemplate().isBlank()) {
+            row.setCashierTemplate(resolveCashierTemplate(request.cashierTemplate()));
+        }
+        row.setUpdatedAt(Instant.now());
+        return toResponse(tillDeviceRepository.save(row));
+    }
+
+    @Transactional
+    public TillDeviceResponse patchMe(
+            String businessId,
+            String branchId,
+            String headerDeviceKey,
+            PatchTillDeviceRequest request
+    ) {
+        String deviceKey = resolveDeviceKey(null, headerDeviceKey);
+        TillDevice row = tillDeviceRepository
+                .findByBusinessIdAndBranchIdAndDeviceKeyAndRevokedAtIsNull(businessId, branchId, deviceKey)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Till device not registered"));
+        return patch(businessId, row.getId(), request);
     }
 
     @Transactional
@@ -149,12 +204,31 @@ public class TillDeviceService {
         return "Till " + shortId.toLowerCase(Locale.ROOT);
     }
 
+    static String resolveCashierTemplate(String raw) {
+        String value = raw != null ? raw.trim().toLowerCase(Locale.ROOT) : "";
+        if (value.isEmpty() || "shelf".equals(value)) {
+            return "shelf";
+        }
+        if ("ledger".equals(value)) {
+            return "ledger";
+        }
+        throw new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "cashierTemplate must be shelf or ledger"
+        );
+    }
+
     private TillDeviceResponse toResponse(TillDevice entity) {
+        String template = entity.getCashierTemplate();
+        if (template == null || template.isBlank()) {
+            template = "shelf";
+        }
         return new TillDeviceResponse(
                 entity.getId(),
                 entity.getBranchId(),
                 entity.getDeviceKey(),
                 entity.getLabel(),
+                template,
                 entity.getRegisteredBy(),
                 entity.getRegisteredAt(),
                 entity.getRevokedAt()

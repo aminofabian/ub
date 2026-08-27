@@ -7,6 +7,7 @@ public record TillDeviceResponse(
         String branchId,
         String deviceKey,
         String label,
+        String cashierTemplate,
         String registeredBy,
         Instant registeredAt,
         Instant revokedAt

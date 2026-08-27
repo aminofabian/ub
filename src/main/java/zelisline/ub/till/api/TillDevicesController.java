@@ -6,6 +6,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -21,6 +22,7 @@ import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 import zelisline.ub.tenancy.application.BranchResolutionService;
+import zelisline.ub.till.api.dto.PatchTillDeviceRequest;
 import zelisline.ub.till.api.dto.RegisterTillDeviceRequest;
 import zelisline.ub.till.api.dto.TillDeviceListResponse;
 import zelisline.ub.till.api.dto.TillDeviceResponse;
@@ -68,6 +70,47 @@ public class TillDevicesController {
         String validatedBranch = branchResolutionService.requireBranchForLockedRole(
                 principal.roleId(), principal.branchId(), branchId);
         return tillDeviceService.list(businessId, validatedBranch, includeRevoked);
+    }
+
+    @GetMapping("/me")
+    @PreAuthorize("isAuthenticated()")
+    public TillDeviceResponse me(
+            @RequestParam String branchId,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.requireMatchingTenant(request, principal.businessId());
+        String validatedBranch = branchResolutionService.requireBranchForLockedRole(
+                principal.roleId(), principal.branchId(), branchId);
+        String headerDeviceKey = request.getHeader(TillDeviceService.TILL_DEVICE_HEADER);
+        return tillDeviceService.findMe(businessId, validatedBranch, headerDeviceKey);
+    }
+
+    @PatchMapping("/me")
+    @PreAuthorize("hasPermission(null, 'business.manage_settings')")
+    public TillDeviceResponse patchMe(
+            @RequestParam String branchId,
+            @Valid @RequestBody PatchTillDeviceRequest body,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.requireMatchingTenant(request, principal.businessId());
+        String validatedBranch = branchResolutionService.requireBranchForLockedRole(
+                principal.roleId(), principal.branchId(), branchId);
+        String headerDeviceKey = request.getHeader(TillDeviceService.TILL_DEVICE_HEADER);
+        return tillDeviceService.patchMe(businessId, validatedBranch, headerDeviceKey, body);
+    }
+
+    @PatchMapping("/{id}")
+    @PreAuthorize("hasPermission(null, 'business.manage_settings')")
+    public TillDeviceResponse patch(
+            @PathVariable("id") String id,
+            @Valid @RequestBody PatchTillDeviceRequest body,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.requireMatchingTenant(request, principal.businessId());
+        return tillDeviceService.patch(businessId, id, body);
     }
 
     @DeleteMapping("/{id}")

@@ -28,6 +28,11 @@ public interface TillDeviceRepository extends JpaRepository<TillDevice, String> 
 
     Optional<TillDevice> findByIdAndBusinessId(String id, String businessId);
 
+    Optional<TillDevice> findByBusinessIdAndBranchIdAndDeviceKeyAndRevokedAtIsNull(
+            String businessId,
+            String branchId,
+            String deviceKey);
+
     boolean existsByBusinessIdAndBranchIdAndRevokedAtIsNull(String businessId, String branchId);
 
     boolean existsByBusinessIdAndBranchIdAndDeviceKeyAndRevokedAtIsNull(

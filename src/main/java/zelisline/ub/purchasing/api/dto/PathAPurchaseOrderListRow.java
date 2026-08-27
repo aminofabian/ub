@@ -1,6 +1,7 @@
 package zelisline.ub.purchasing.api.dto;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 
 public record PathAPurchaseOrderListRow(
@@ -12,6 +13,7 @@ public record PathAPurchaseOrderListRow(
         String status,
         int lineCount,
         BigDecimal totalOrdered,
-        BigDecimal totalReceived
+        BigDecimal totalReceived,
+        Instant createdAt
 ) {
 }

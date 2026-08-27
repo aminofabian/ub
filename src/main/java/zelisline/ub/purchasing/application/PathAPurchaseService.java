@@ -42,6 +42,7 @@ import zelisline.ub.purchasing.api.dto.AddPathAPurchaseOrderLineRequest;
 import zelisline.ub.purchasing.api.dto.CreatePathAPurchaseOrderRequest;
 import zelisline.ub.purchasing.api.dto.PathAPurchaseOrderDetailResponse;
 import zelisline.ub.purchasing.api.dto.PathAPurchaseOrderLineResponse;
+import zelisline.ub.purchasing.api.dto.UpdatePathAPurchaseOrderLineRequest;
 import zelisline.ub.purchasing.api.dto.PathAPurchaseOrderListRow;
 import zelisline.ub.purchasing.api.dto.PostGoodsReceiptLineInput;
 import zelisline.ub.purchasing.api.dto.PostGoodsReceiptRequest;
@@ -144,7 +145,8 @@ public class PathAPurchaseService {
                 po.getStatus(),
                 lines.size(),
                 totalOrdered.setScale(4, RoundingMode.HALF_UP),
-                totalReceived.setScale(4, RoundingMode.HALF_UP)
+                totalReceived.setScale(4, RoundingMode.HALF_UP),
+                po.getCreatedAt()
         );
     }
 
@@ -181,7 +183,7 @@ public class PathAPurchaseService {
             AddPathAPurchaseOrderLineRequest req
     ) {
         PurchaseOrder po = loadPo(businessId, purchaseOrderId);
-        assertPoDraft(po);
+        assertPoLineEditable(po);
         itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(req.itemId(), businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
         PurchaseOrderLine line = new PurchaseOrderLine();
@@ -191,6 +193,33 @@ public class PathAPurchaseService {
         line.setQtyOrdered(req.qtyOrdered().setScale(UNIT_SCALE, RoundingMode.HALF_UP));
         line.setUnitEstimatedCost(req.unitEstimatedCost().setScale(UNIT_SCALE, RoundingMode.HALF_UP));
         line.setQtyReceived(BigDecimal.ZERO);
+        purchaseOrderLineRepository.save(line);
+        return lineResponse(line);
+    }
+
+    @Transactional
+    public PathAPurchaseOrderLineResponse updatePurchaseOrderLine(
+            String businessId,
+            String purchaseOrderId,
+            String lineId,
+            UpdatePathAPurchaseOrderLineRequest req
+    ) {
+        PurchaseOrder po = loadPo(businessId, purchaseOrderId);
+        assertPoLineEditable(po);
+        PurchaseOrderLine line = purchaseOrderLineRepository.findById(lineId)
+                .filter(l -> purchaseOrderId.equals(l.getPurchaseOrderId()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Line not found"));
+        if (req.qtyOrdered() != null) {
+            if (line.getQtyReceived().compareTo(req.qtyOrdered()) > 0) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Ordered quantity cannot be less than already received");
+            }
+            line.setQtyOrdered(req.qtyOrdered().setScale(UNIT_SCALE, RoundingMode.HALF_UP));
+        }
+        if (req.unitEstimatedCost() != null) {
+            line.setUnitEstimatedCost(req.unitEstimatedCost().setScale(UNIT_SCALE, RoundingMode.HALF_UP));
+        }
         purchaseOrderLineRepository.save(line);
         return lineResponse(line);
     }
@@ -674,6 +703,12 @@ public class PathAPurchaseService {
         }
     }
 
+    private static void assertPoLineEditable(PurchaseOrder po) {
+        if (PurchasingConstants.PO_CANCELLED.equals(po.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Purchase order is not editable");
+        }
+    }
+
     private void assertSupplierInBusiness(String businessId, String supplierId) {
         supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(supplierId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Supplier not found"));
@@ -701,6 +736,7 @@ public class PathAPurchaseService {
                 po.getSentToSupplierAt(),
                 po.getSupplierResponseAt(),
                 po.getDeliveryStatus() == null ? PurchasingConstants.DELIVERY_NOT_SHIPPED : po.getDeliveryStatus(),
+                po.getCreatedAt(),
                 lines
         );
     }

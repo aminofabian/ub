@@ -5,6 +5,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -29,6 +30,7 @@ import zelisline.ub.purchasing.api.dto.PostGoodsReceiptRequest;
 import zelisline.ub.purchasing.api.dto.PostGoodsReceiptResponse;
 import zelisline.ub.purchasing.api.dto.PostGrnSupplierInvoiceRequest;
 import zelisline.ub.purchasing.api.dto.PostGrnSupplierInvoiceResponse;
+import zelisline.ub.purchasing.api.dto.UpdatePathAPurchaseOrderLineRequest;
 import zelisline.ub.purchasing.api.dto.PathAPurchaseOrderSupplierResponse;
 import zelisline.ub.purchasing.application.PathAPurchaseService;
 import zelisline.ub.marketplace.application.MarketplacePurchaseOrderService;
@@ -94,6 +96,23 @@ public class PathAPurchasingController {
         return pathAPurchaseService.addPurchaseOrderLine(
                 TenantRequestIds.resolveBusinessId(request),
                 purchaseOrderId,
+                body
+        );
+    }
+
+    @PatchMapping("/purchase-orders/{purchaseOrderId}/lines/{lineId}")
+    @PreAuthorize("hasPermission(null, 'purchasing.path_a.write')")
+    public PathAPurchaseOrderLineResponse updateLine(
+            @PathVariable String purchaseOrderId,
+            @PathVariable String lineId,
+            @Valid @RequestBody UpdatePathAPurchaseOrderLineRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return pathAPurchaseService.updatePurchaseOrderLine(
+                TenantRequestIds.resolveBusinessId(request),
+                purchaseOrderId,
+                lineId,
                 body
         );
     }

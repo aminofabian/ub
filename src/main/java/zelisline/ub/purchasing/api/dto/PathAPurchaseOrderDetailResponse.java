@@ -16,6 +16,7 @@ public record PathAPurchaseOrderDetailResponse(
         Instant sentToSupplierAt,
         Instant supplierResponseAt,
         String deliveryStatus,
+        Instant createdAt,
         List<PathAPurchaseOrderLineResponse> lines
 ) {
 }

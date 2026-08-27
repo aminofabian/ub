@@ -157,9 +157,11 @@ public class MerchantOnboardingSequenceService {
                         snap);
                 boolean tipOk = supportService.postPlatformOnboardingTip(
                         trimmed,
-                        rendered.inAppTitle(),
-                        rendered.inAppBody(),
-                        rendered.ctaPath());
+                        null,
+                        rendered.chatBody() != null && !rendered.chatBody().isBlank()
+                                ? rendered.chatBody()
+                                : rendered.inAppBody(),
+                        null);
                 if (tipOk) {
                     chatTips.add(step.key());
                 }

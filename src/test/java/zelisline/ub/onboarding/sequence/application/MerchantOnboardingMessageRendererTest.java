@@ -25,15 +25,20 @@ class MerchantOnboardingMessageRendererTest {
                 null);
         assertThat(msg.subject()).contains("fill your shelf");
         assertThat(msg.plainBody()).contains("Global catalog");
+        assertThat(msg.plainBody()).contains("The problem");
+        assertThat(msg.plainBody()).contains("How it works");
         assertThat(msg.plainBody()).contains("See how");
         assertThat(msg.plainBody()).contains("/help/merchants/inventory/how-to-add-products");
         assertThat(msg.ctaPath()).isEqualTo("/products/catalog");
         assertThat(msg.htmlBody()).contains("<!DOCTYPE html>");
         assertThat(msg.innerBodyHtml())
                 .contains("m1-fill-shelf.png")
+                .contains("On your screen")
                 .contains("See how")
-                .contains("how-to-add-products");
+                .contains("how-to-add-products")
+                .contains("The problem");
         assertThat(msg.inAppTitle()).contains("shelf");
+        assertThat(msg.chatBody()).contains("How to do it");
     }
 
     @Test
@@ -63,7 +68,7 @@ class MerchantOnboardingMessageRendererTest {
                 "https://njerifresh.kiosk.ke",
                 snap);
         assertThat(msg.ctaPath()).isEqualTo("/products/catalog");
-        assertThat(msg.plainBody()).contains("Open the Global catalog");
+        assertThat(msg.plainBody()).contains("Global catalog");
         assertThat(msg.whatsAppBody()).contains("Global catalog");
     }
 
@@ -110,8 +115,16 @@ class MerchantOnboardingMessageRendererTest {
                 .contains("Right")
                 .contains("Coca-Cola")
                 .contains("FEF2F2")
-                .contains("F0FDF4");
-        assertThat(msg.plainBody()).contains("Wrong:").contains("Right:");
+                .contains("F0FDF4")
+                .contains("The problem")
+                .contains("How it works")
+                .contains("On your screen");
+        assertThat(msg.plainBody())
+                .contains("The problem")
+                .contains("How it works")
+                .contains("family")
+                .contains("variants");
+        assertThat(msg.chatBody()).contains("How to do it");
     }
 
     @Test

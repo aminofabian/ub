@@ -66,6 +66,35 @@ public class TenantOpsAlertListener {
 
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onDrawoutInitiated(RealtimeBridge.DrawoutInitiatedEvent event) {
+        try {
+            log.info("Ops alert event drawout business={} drawout={}", event.businessId(), event.drawoutId());
+            String shop = dispatcher.shopName(event.businessId());
+            String branch = dispatcher.branchName(event.businessId(), event.branchId());
+            String currency = dispatcher.currency(event.businessId());
+            String statusLine = event.pendingApproval()
+                    ? "Needs your approval"
+                    : "Already applied to the till";
+            String message = shop + " — cash drawout\n"
+                    + "Branch: " + branch + "\n"
+                    + "Amount: " + TenantOpsAlertDispatcher.formatMoney(event.amount(), currency) + "\n"
+                    + "By: " + safe(event.initiatedByName()) + "\n"
+                    + "For: " + safe(event.description()) + "\n"
+                    + "Recipient: " + safe(event.recipientName()) + "\n"
+                    + statusLine;
+            if (event.pendingApproval() && event.reviewUrl() != null && !event.reviewUrl().isBlank()) {
+                message += "\nApprove: " + event.reviewUrl();
+            } else if (event.reviewUrl() != null && !event.reviewUrl().isBlank()) {
+                message += "\nReview: " + event.reviewUrl();
+            }
+            dispatcher.dispatch(event.businessId(), OpsAlertType.DRAWOUT, message);
+        } catch (Exception ex) {
+            log.warn("Ops alert drawout failed drawout={}", event != null ? event.drawoutId() : null, ex);
+        }
+    }
+
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onShiftClosed(RealtimeBridge.ShiftClosedEvent event) {
         try {
             log.info("Ops alert event shift_closed business={} shift={}", event.businessId(), event.shiftId());

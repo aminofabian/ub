@@ -137,6 +137,19 @@ public class DrawoutController {
         );
     }
 
+    @GetMapping("/api/v1/drawouts/{drawoutId}")
+    @PreAuthorize("hasPermission(null, 'shifts.read')")
+    public DrawoutResponse getDrawout(
+            @PathVariable String drawoutId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return drawoutService.getDrawout(
+                TenantRequestIds.resolveBusinessId(request),
+                drawoutId
+        );
+    }
+
     // ========================================================================
     // LIST PENDING DRAWOUTS
     // GET /api/v1/drawouts/pending

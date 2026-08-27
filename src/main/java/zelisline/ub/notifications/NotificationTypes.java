@@ -32,6 +32,8 @@ public final class NotificationTypes {
     public static final String ONBOARDING_LOOKALIKE = "onboarding.lookalike";
     public static final String ONBOARDING_CLOSE_SHIFT = "onboarding.close_shift";
     public static final String ONBOARDING_WEB_ORDER = "onboarding.web_order";
+    public static final String DRAWOUT_APPROVAL_REQUESTED = "drawout.approval_requested";
+    public static final String DRAWOUT_RECORDED = "drawout.recorded";
 
     private NotificationTypes() {
     }

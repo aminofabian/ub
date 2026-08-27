@@ -88,7 +88,7 @@ public class BusinessOpsAlertSettingsService {
         }
         return switch (type) {
             case WEB_ORDER -> s.isAlertWebOrder();
-            case SHIFT_OPENED, SHIFT_CLOSED -> s.isAlertShift();
+            case SHIFT_OPENED, SHIFT_CLOSED, DRAWOUT -> s.isAlertShift();
             case SUPPLY_POSTED -> s.isAlertSupply();
             case CREDIT_PAYMENT -> s.isAlertCreditPayment();
             case RESTOCK_DIGEST -> s.isAlertRestockDigest();
@@ -111,7 +111,7 @@ public class BusinessOpsAlertSettingsService {
         }
         boolean typeOn = switch (type) {
             case WEB_ORDER -> s.isAlertWebOrder();
-            case SHIFT_OPENED, SHIFT_CLOSED -> s.isAlertShift();
+            case SHIFT_OPENED, SHIFT_CLOSED, DRAWOUT -> s.isAlertShift();
             case SUPPLY_POSTED -> s.isAlertSupply();
             case CREDIT_PAYMENT -> s.isAlertCreditPayment();
             case RESTOCK_DIGEST -> s.isAlertRestockDigest();

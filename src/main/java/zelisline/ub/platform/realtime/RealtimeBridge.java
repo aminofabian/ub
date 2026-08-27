@@ -907,6 +907,19 @@ public class RealtimeBridge {
             String closedBy, java.math.BigDecimal expectedCash,
             java.math.BigDecimal countedCash, java.math.BigDecimal variance) {}
 
+    public record DrawoutInitiatedEvent(
+            String businessId,
+            String branchId,
+            String shiftId,
+            String drawoutId,
+            java.math.BigDecimal amount,
+            String category,
+            String description,
+            String recipientName,
+            String initiatedByName,
+            boolean pendingApproval,
+            String reviewUrl) {}
+
     public record StockAdjustedEvent(
             String businessId, String branchId, String itemId, String itemName,
             String adjustmentType, java.math.BigDecimal quantityDelta) {}

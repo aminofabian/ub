@@ -60,6 +60,9 @@ public class DrawoutService {
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
     private final CashDrawerLedgerService cashDrawerLedgerService;
+    private final DrawoutApprovalNotifier drawoutApprovalNotifier;
+    private final DrawoutApprovalToken drawoutApprovalToken;
+    private final zelisline.ub.tenancy.repository.BusinessRepository businessRepository;
 
     // ========================================================================
     // INITIATE DRAWOUT
@@ -123,14 +126,6 @@ public class DrawoutService {
             drawout.setStatus(SalesConstants.DRAWOUT_STATUS_APPROVED);
             drawout.setApprovedBy(userId);
             drawout.setApprovedAt(Instant.now());
-
-            // Deduct from expected closing cash
-            shift.setExpectedClosingCash(shift.getExpectedClosingCash()
-                    .subtract(request.amount())
-                    .setScale(2, RoundingMode.HALF_UP));
-            shiftRepository.save(shift);
-
-            // Record expense
             recordDrawoutExpense(shiftId, request.amount(), request.description(), userId);
         } else {
             drawout.setStatus(SalesConstants.DRAWOUT_STATUS_PENDING_APPROVAL);
@@ -139,13 +134,10 @@ public class DrawoutService {
 
         cashDrawoutRepository.save(drawout);
 
-        if (tier == SalesConstants.APPROVAL_TIER_1) {
-            // Ledger movement for the self-approved drawout (money leaves the drawer).
-            cashDrawerLedgerService.recordAmount(
-                    shiftId, CashDrawerLedgerService.EVENT_DRAWOUT,
-                    CashDrawerLedgerService.REF_DRAWOUT, drawout.getId(),
-                    request.amount().negate(), CashDrawerLedgerService.CONFIDENCE_INFERRED, userId, null);
-        }
+        // Cash left the drawer when the cashier recorded the drawout — pending
+        // or approved. Reject / expire restores it.
+        applyDrawerOut(shift, request.amount(), drawout.getId(), userId);
+        shiftRepository.save(shift);
 
         // Record audit log
         String auditMeta = String.format(
@@ -154,6 +146,8 @@ public class DrawoutService {
                 drawout.getApprovalTier(), drawout.getStatus());
         recordAudit(shiftId, SalesConstants.AUDIT_DRAWOUT_INITIATED, userId, auditMeta, null);
         publishDrawoutEvent(businessId, shift, drawout, userId, AuditEventTypes.DRAWOUT_INITIATED, null);
+        drawoutApprovalNotifier.notifyInitiated(
+                businessId, shift, drawout, getUserName(businessId, userId));
 
         return toDrawoutResponse(drawout, businessId);
     }
@@ -171,37 +165,27 @@ public class DrawoutService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Drawout is not pending approval");
         }
 
-        // Check expiry
+        // Check expiry — put the cash back; the cashier should return it to the till.
         if (drawout.getExpiresAt() != null && Instant.now().isAfter(drawout.getExpiresAt())) {
-            drawout.setStatus(SalesConstants.DRAWOUT_STATUS_EXPIRED);
-            cashDrawoutRepository.save(drawout);
-            recordAudit(drawout.getShiftId(), SalesConstants.AUDIT_DRAWOUT_EXPIRED, userId,
-                    "{\"reason\":\"Auto-expired\",\"originalAmount\":\"" + drawout.getAmount() + "\"}", null);
+            expirePendingDrawout(businessId, drawout, userId);
             throw new ResponseStatusException(HttpStatus.GONE, "Drawout has expired");
         }
 
         Shift shift = shiftRepository.findByIdAndBusinessId(drawout.getShiftId(), businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shift not found"));
 
-        // Update drawout
+        // Update drawout — expected cash was already reduced at initiate.
         drawout.setStatus(SalesConstants.DRAWOUT_STATUS_APPROVED);
         drawout.setApprovedBy(userId);
         drawout.setApprovedAt(Instant.now());
         cashDrawoutRepository.save(drawout);
 
-        // Deduct from expected closing cash
-        shift.setExpectedClosingCash(shift.getExpectedClosingCash()
-                .subtract(drawout.getAmount())
-                .setScale(2, RoundingMode.HALF_UP));
-        shiftRepository.save(shift);
-
-        // Ledger movement for the approved drawout (money leaves the drawer).
+        // Idempotent ledger write (covers pre-fix pending rows that never posted).
         cashDrawerLedgerService.recordAmount(
                 drawout.getShiftId(), CashDrawerLedgerService.EVENT_DRAWOUT,
                 CashDrawerLedgerService.REF_DRAWOUT, drawout.getId(),
                 drawout.getAmount().negate(), CashDrawerLedgerService.CONFIDENCE_INFERRED, userId, null);
 
-        // Record expense
         recordDrawoutExpense(drawout.getShiftId(), drawout.getAmount(), drawout.getDescription(), userId);
 
         // Record audit log
@@ -227,17 +211,27 @@ public class DrawoutService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Drawout is not pending approval");
         }
 
+        if (drawout.getExpiresAt() != null && Instant.now().isAfter(drawout.getExpiresAt())) {
+            expirePendingDrawout(businessId, drawout, userId);
+            throw new ResponseStatusException(HttpStatus.GONE, "Drawout has expired");
+        }
+
         drawout.setStatus(SalesConstants.DRAWOUT_STATUS_REJECTED);
         drawout.setRejectedBy(userId);
         drawout.setRejectionReason(request.rejectionReason());
         cashDrawoutRepository.save(drawout);
+
+        Shift shift = shiftRepository.findByIdAndBusinessId(drawout.getShiftId(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shift not found"));
+        restoreDrawer(shift, drawout, userId);
+        shiftRepository.save(shift);
 
         // Record audit log
         String auditMeta = String.format(
                 "{\"rejectionReason\":\"%s\",\"amount\":\"%s\"}",
                 request.rejectionReason(), drawout.getAmount());
         recordAudit(drawout.getShiftId(), SalesConstants.AUDIT_DRAWOUT_REJECTED, userId, auditMeta, null);
-        publishDrawoutEvent(businessId, null, drawout, userId, AuditEventTypes.DRAWOUT_REJECTED, request.rejectionReason());
+        publishDrawoutEvent(businessId, shift, drawout, userId, AuditEventTypes.DRAWOUT_REJECTED, request.rejectionReason());
 
         return toDrawoutResponse(drawout, businessId);
     }
@@ -304,6 +298,87 @@ public class DrawoutService {
                 .stream()
                 .map(d -> toDrawoutResponse(d, businessId))
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public DrawoutResponse getDrawout(String businessId, String drawoutId) {
+        CashDrawout drawout = cashDrawoutRepository.findById(drawoutId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Drawout not found"));
+        shiftRepository.findByIdAndBusinessId(drawout.getShiftId(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Drawout not found"));
+        return toDrawoutResponse(drawout, businessId);
+    }
+
+    @Transactional(readOnly = true)
+    public zelisline.ub.sales.api.dto.PublicDrawoutReviewResponse reviewByToken(String token) {
+        CashDrawout drawout = requireDrawoutFromToken(token);
+        Shift shift = shiftRepository.findById(drawout.getShiftId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shift not found"));
+        String shopName = businessRepository.findById(shift.getBusinessId())
+                .map(zelisline.ub.tenancy.domain.Business::getName)
+                .orElse("Shop");
+        String currency = businessRepository.findById(shift.getBusinessId())
+                .map(zelisline.ub.tenancy.domain.Business::getCurrency)
+                .filter(c -> c != null && !c.isBlank())
+                .orElse("KES");
+        boolean canApprove = SalesConstants.DRAWOUT_STATUS_PENDING_APPROVAL.equals(drawout.getStatus())
+                && (drawout.getExpiresAt() == null || Instant.now().isBefore(drawout.getExpiresAt()));
+        return new zelisline.ub.sales.api.dto.PublicDrawoutReviewResponse(
+                drawout.getId(),
+                drawout.getShiftId(),
+                drawout.getStatus(),
+                drawout.getCategory(),
+                drawout.getAmount(),
+                currency,
+                drawout.getDescription(),
+                drawout.getRecipientName(),
+                getUserName(shift.getBusinessId(), drawout.getInitiatedBy()),
+                shopName,
+                drawout.getCreatedAt(),
+                drawout.getExpiresAt(),
+                canApprove);
+    }
+
+    @Transactional
+    public DrawoutResponse approveByToken(String token) {
+        CashDrawout drawout = requireDrawoutFromToken(token);
+        Shift shift = shiftRepository.findById(drawout.getShiftId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shift not found"));
+        String actorId = drawoutApprovalNotifier.resolveLinkActorUserId(shift.getBusinessId());
+        if (actorId == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "No owner is available to approve this drawout");
+        }
+        return approveDrawout(
+                shift.getBusinessId(),
+                drawout.getId(),
+                new zelisline.ub.sales.api.dto.ApproveDrawoutRequest("LINK"),
+                actorId);
+    }
+
+    @Transactional
+    public DrawoutResponse rejectByToken(String token, String reason) {
+        CashDrawout drawout = requireDrawoutFromToken(token);
+        Shift shift = shiftRepository.findById(drawout.getShiftId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shift not found"));
+        String actorId = drawoutApprovalNotifier.resolveLinkActorUserId(shift.getBusinessId());
+        if (actorId == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "No owner is available to reject this drawout");
+        }
+        String rejection = reason != null && !reason.isBlank() ? reason.trim() : "Rejected from approval link";
+        return rejectDrawout(
+                shift.getBusinessId(),
+                drawout.getId(),
+                new zelisline.ub.sales.api.dto.RejectDrawoutRequest(rejection),
+                actorId);
+    }
+
+    private CashDrawout requireDrawoutFromToken(String token) {
+        String drawoutId = drawoutApprovalToken.verifyDrawoutId(token);
+        if (drawoutId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "This approval link is invalid or expired");
+        }
+        return cashDrawoutRepository.findById(drawoutId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Drawout not found"));
     }
 
     // ========================================================================
@@ -420,6 +495,38 @@ public class DrawoutService {
                 || SalesConstants.DRAWOUT_CATEGORY_SUPPLIER_PAYMENT.equals(category)
                 || SalesConstants.DRAWOUT_CATEGORY_RECURRING.equals(category)
                 || SalesConstants.DRAWOUT_CATEGORY_OTHER.equals(category);
+    }
+
+    private void applyDrawerOut(Shift shift, BigDecimal amount, String drawoutId, String userId) {
+        shift.setExpectedClosingCash(shift.getExpectedClosingCash()
+                .subtract(amount)
+                .setScale(2, RoundingMode.HALF_UP));
+        cashDrawerLedgerService.recordAmount(
+                shift.getId(), CashDrawerLedgerService.EVENT_DRAWOUT,
+                CashDrawerLedgerService.REF_DRAWOUT, drawoutId,
+                amount.negate(), CashDrawerLedgerService.CONFIDENCE_INFERRED, userId, null);
+    }
+
+    private void restoreDrawer(Shift shift, CashDrawout drawout, String userId) {
+        shift.setExpectedClosingCash(shift.getExpectedClosingCash()
+                .add(drawout.getAmount())
+                .setScale(2, RoundingMode.HALF_UP));
+        cashDrawerLedgerService.recordAmount(
+                drawout.getShiftId(), CashDrawerLedgerService.EVENT_DRAWOUT_REVERSAL,
+                CashDrawerLedgerService.REF_DRAWOUT, drawout.getId(),
+                drawout.getAmount(), CashDrawerLedgerService.CONFIDENCE_INFERRED, userId, null);
+    }
+
+    private void expirePendingDrawout(String businessId, CashDrawout drawout, String userId) {
+        drawout.setStatus(SalesConstants.DRAWOUT_STATUS_EXPIRED);
+        cashDrawoutRepository.save(drawout);
+        Shift shift = shiftRepository.findByIdAndBusinessId(drawout.getShiftId(), businessId).orElse(null);
+        if (shift != null) {
+            restoreDrawer(shift, drawout, userId);
+            shiftRepository.save(shift);
+        }
+        recordAudit(drawout.getShiftId(), SalesConstants.AUDIT_DRAWOUT_EXPIRED, userId,
+                "{\"reason\":\"Auto-expired\",\"originalAmount\":\"" + drawout.getAmount() + "\"}", null);
     }
 
     private void recordDrawoutExpense(String shiftId, BigDecimal amount, String description, String userId) {

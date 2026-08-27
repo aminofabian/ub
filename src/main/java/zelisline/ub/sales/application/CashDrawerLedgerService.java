@@ -148,6 +148,11 @@ public class CashDrawerLedgerService {
             recordAmount(shiftId, EVENT_DRAWOUT, REF_DRAWOUT, drawout.getId(),
                     drawout.getAmount().negate(), CONFIDENCE_INFERRED, drawout.getApprovedBy(), null);
         }
+        for (CashDrawout drawout : cashDrawoutRepository.findByShiftIdAndStatusOrderByCreatedAtDesc(
+                shiftId, SalesConstants.DRAWOUT_STATUS_PENDING_APPROVAL)) {
+            recordAmount(shiftId, EVENT_DRAWOUT, REF_DRAWOUT, drawout.getId(),
+                    drawout.getAmount().negate(), CONFIDENCE_INFERRED, drawout.getInitiatedBy(), null);
+        }
     }
 
     private void replaySale(Sale sale) {

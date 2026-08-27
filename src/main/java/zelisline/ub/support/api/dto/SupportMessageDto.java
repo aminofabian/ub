@@ -11,6 +11,7 @@ public record SupportMessageDto(
         String body,
         String messageKind,
         SupportOrderCardDto orderCard,
+        SupportWelcomeCardDto welcomeCard,
         SupportAttachmentDto attachment,
         Instant readAt,
         Instant createdAt

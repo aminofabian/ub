@@ -17,6 +17,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.storefront.WebOrderCodes;
 import zelisline.ub.storefront.domain.WebOrder;
@@ -29,6 +30,7 @@ import zelisline.ub.support.api.dto.SupportConversationDetailDto;
 import zelisline.ub.support.api.dto.SupportConversationDto;
 import zelisline.ub.support.api.dto.SupportMessageDto;
 import zelisline.ub.support.api.dto.SupportOrderCardDto;
+import zelisline.ub.support.api.dto.SupportWelcomeCardDto;
 import zelisline.ub.support.domain.SupportConversation;
 import zelisline.ub.support.domain.SupportMessage;
 import zelisline.ub.support.repository.SupportConversationRepository;
@@ -114,15 +116,19 @@ public class SupportService {
     }
 
     /**
-     * Opens the tenant↔platform support thread (if needed) and posts the signup
-     * welcome as a Kiosk message so merchants see it in Support — not only the bell.
-     * Best-effort: never throws to the registration path. Skips when the thread
-     * already has messages (idempotent on retries / re-invites).
+     * Opens the tenant↔platform support thread (if needed) and posts a structured
+     * welcome card as a Kiosk message so merchants see it in the chat drawer.
+     * Best-effort: never throws to the registration path.
+     * Idempotent — skips when a {@code WELCOME_CARD} already exists on the thread.
+     *
+     * @return {@code true} when a card was posted
      */
     @Transactional
-    public void postPlatformWelcome(String businessId, String createdByUserId, String body) {
-        if (businessId == null || businessId.isBlank() || body == null || body.isBlank()) {
-            return;
+    public boolean postPlatformWelcome(
+            String businessId, String createdByUserId, SupportWelcomeCardDto card
+    ) {
+        if (businessId == null || businessId.isBlank() || card == null) {
+            return false;
         }
         try {
             String trimmed = businessId.trim();
@@ -135,20 +141,94 @@ public class SupportService {
                             : PLATFORM_BOT_USER_ID,
                     "Kiosk",
                     "Welcome to Kiosk");
-            if (messageRepository.countByConversationId(conversation.getId()) > 0) {
-                return;
+            if (messageRepository.countByConversationIdAndMessageKind(
+                    conversation.getId(), SupportMessage.KIND_WELCOME_CARD) > 0) {
+                return false;
             }
             reopenIfResolved(conversation);
-            persistMessage(
-                    conversation,
-                    SupportMessage.SENDER_SUPER_ADMIN,
-                    PLATFORM_BOT_USER_ID,
-                    "Kiosk",
-                    body.trim());
+
+            String payloadJson = objectMapper.writeValueAsString(card);
+            String preview = welcomeCardPreview(card);
+
+            SupportMessage message = new SupportMessage();
+            message.setConversationId(conversation.getId());
+            message.setSenderType(SupportMessage.SENDER_SUPER_ADMIN);
+            message.setSenderUserId(PLATFORM_BOT_USER_ID);
+            message.setSenderName("Kiosk");
+            message.setBody(preview);
+            message.setMessageKind(SupportMessage.KIND_WELCOME_CARD);
+            message.setPayloadJson(payloadJson);
+            messageRepository.save(message);
+
+            conversation.touchLastMessage(message.getCreatedAt(), preview);
+            touchOwnRead(conversation, SupportMessage.SENDER_SUPER_ADMIN);
+            conversationRepository.save(conversation);
+
+            eventPublisher.publishEvent(new SupportEvents.SupportMessageSentEvent(
+                    conversation.getBusinessId(), conversation.getId(), message.getId(),
+                    message.getSenderType(), message.getSenderUserId(), message.getSenderName(),
+                    message.getBody(),
+                    SupportMessage.KIND_WELCOME_CARD,
+                    null,
+                    card,
+                    null,
+                    message.getCreatedAt(),
+                    conversation.getConversationType(), conversation.getGuestId()));
+            return true;
         } catch (Exception ex) {
             log.warn("Failed to post platform welcome into support chat for business {}: {}",
                     businessId, ex.toString());
+            return false;
         }
+    }
+
+    /**
+     * Backfill / repair path: resolve the business + a staff name and post the
+     * welcome card when missing. Used by super-admin after older signups.
+     *
+     * @return {@code true} when a card was posted
+     */
+    @Transactional
+    public boolean ensurePlatformWelcomeForBusiness(String businessId) {
+        if (businessId == null || businessId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "businessId is required");
+        }
+        String trimmed = businessId.trim();
+        Business business = businessRepository.findByIdAndDeletedAtIsNull(trimmed)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
+        User staff = userRepository.findByBusinessIdAndDeletedAtIsNull(trimmed).stream()
+                .findFirst()
+                .orElse(null);
+        String recipientName = staff != null ? staff.getName() : null;
+        String createdBy = staff != null ? staff.getId() : PLATFORM_BOT_USER_ID;
+        SupportWelcomeCardDto card = new SupportWelcomeCardDto(
+                blankToDisplay(recipientName, "there"),
+                blankToDisplay(business.getName(), "your business"),
+                zelisline.ub.identity.application.WelcomeEmailRenderer.SUPPORT_PHONE,
+                zelisline.ub.identity.application.WelcomeEmailRenderer.SUPPORT_EMAIL,
+                java.util.List.of(
+                        "Setting up your online store",
+                        "Custom themes & website designs",
+                        "Custom domains",
+                        "M-Pesa integration",
+                        "Custom features and adjustments",
+                        "Product and inventory setup",
+                        "General guidance on using Kiosk"));
+        return postPlatformWelcome(trimmed, createdBy, card);
+    }
+
+    private static String blankToDisplay(String value, String fallback) {
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        return value.trim();
+    }
+
+    private static String welcomeCardPreview(SupportWelcomeCardDto card) {
+        String business = card.businessName() == null || card.businessName().isBlank()
+                ? "your business"
+                : card.businessName().trim();
+        return "Welcome to Kiosk — excited to have " + business + " on board.";
     }
 
     /**
@@ -189,6 +269,7 @@ public class SupportService {
                     message.getBody(),
                     SupportMessage.KIND_ORDER_CARD,
                     card,
+                    null,
                     null,
                     message.getCreatedAt(),
                     conversation.getConversationType(), conversation.getGuestId()));
@@ -816,6 +897,7 @@ public class SupportService {
                 senderType, senderUserId, senderName, message.getBody(),
                 SupportMessage.KIND_TEXT,
                 null,
+                null,
                 toAttachmentDto(message),
                 message.getCreatedAt(),
                 conversation.getConversationType(), conversation.getGuestId()));
@@ -1109,6 +1191,7 @@ public class SupportService {
                         ? SupportMessage.KIND_TEXT
                         : message.getMessageKind(),
                 parseOrderCard(message),
+                parseWelcomeCard(message),
                 toAttachmentDto(message),
                 message.getReadAt(),
                 message.getCreatedAt()
@@ -1126,6 +1209,21 @@ public class SupportService {
             return objectMapper.readValue(message.getPayloadJson(), SupportOrderCardDto.class);
         } catch (Exception ex) {
             log.debug("Could not parse order card payload for message {}: {}", message.getId(), ex.toString());
+            return null;
+        }
+    }
+
+    private SupportWelcomeCardDto parseWelcomeCard(SupportMessage message) {
+        if (message.getPayloadJson() == null || message.getPayloadJson().isBlank()) {
+            return null;
+        }
+        if (!SupportMessage.KIND_WELCOME_CARD.equals(message.getMessageKind())) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(message.getPayloadJson(), SupportWelcomeCardDto.class);
+        } catch (Exception ex) {
+            log.debug("Could not parse welcome card payload for message {}: {}", message.getId(), ex.toString());
             return null;
         }
     }

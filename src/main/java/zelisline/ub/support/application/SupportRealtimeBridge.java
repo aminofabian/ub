@@ -16,6 +16,7 @@ import zelisline.ub.platform.realtime.RealtimeWebSocketHandler;
 import zelisline.ub.platform.realtime.SessionRegistry;
 import zelisline.ub.support.api.dto.SupportAttachmentDto;
 import zelisline.ub.support.api.dto.SupportOrderCardDto;
+import zelisline.ub.support.api.dto.SupportWelcomeCardDto;
 import zelisline.ub.support.domain.SupportConversation;
 import zelisline.ub.support.domain.SupportMessage;
 
@@ -61,11 +62,12 @@ public class SupportRealtimeBridge {
         String eventId = UUID.randomUUID().toString();
         String attachmentJson = attachmentJson(event.attachment());
         String orderCardJson = toJsonOrNull(event.orderCard());
+        String welcomeCardJson = toJsonOrNull(event.welcomeCard());
         String kind = event.messageKind() == null || event.messageKind().isBlank()
                 ? SupportMessage.KIND_TEXT
                 : event.messageKind();
         String payload = """
-                {"conversationId":"%s","messageId":"%s","senderType":"%s","senderUserId":"%s","senderName":"%s","body":"%s","messageKind":"%s","orderCard":%s,"attachment":%s,"createdAt":"%s","conversationType":"%s"}
+                {"conversationId":"%s","messageId":"%s","senderType":"%s","senderUserId":"%s","senderName":"%s","body":"%s","messageKind":"%s","orderCard":%s,"welcomeCard":%s,"attachment":%s,"createdAt":"%s","conversationType":"%s"}
                 """.formatted(
                 RealtimeWebSocketHandler.escapeJson(event.conversationId()),
                 RealtimeWebSocketHandler.escapeJson(event.messageId()),
@@ -75,6 +77,7 @@ public class SupportRealtimeBridge {
                 RealtimeWebSocketHandler.escapeJson(event.body()),
                 RealtimeWebSocketHandler.escapeJson(kind),
                 orderCardJson,
+                welcomeCardJson,
                 attachmentJson,
                 event.createdAt().toString(),
                 RealtimeWebSocketHandler.escapeJson(event.conversationType()));
@@ -91,6 +94,18 @@ public class SupportRealtimeBridge {
             return objectMapper.writeValueAsString(orderCard);
         } catch (Exception e) {
             log.warn("Failed to serialize support order card for realtime: {}", e.toString());
+            return "null";
+        }
+    }
+
+    private String toJsonOrNull(SupportWelcomeCardDto welcomeCard) {
+        if (welcomeCard == null) {
+            return "null";
+        }
+        try {
+            return objectMapper.writeValueAsString(welcomeCard);
+        } catch (Exception e) {
+            log.warn("Failed to serialize support welcome card for realtime: {}", e.toString());
             return "null";
         }
     }

@@ -25,6 +25,8 @@ public class SupportMessage {
     public static final String KIND_TEXT = "TEXT";
     /** Storefront purchase posted into the buyer↔tenant thread. */
     public static final String KIND_ORDER_CARD = "ORDER_CARD";
+    /** Platform welcome posted into the tenant↔Kiosk thread on signup. */
+    public static final String KIND_WELCOME_CARD = "WELCOME_CARD";
 
     @Id
     @Column(name = "id", nullable = false, length = 36)

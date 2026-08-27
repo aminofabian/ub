@@ -1,6 +1,11 @@
 package zelisline.ub.identity.application;
 
+import java.util.Arrays;
+import java.util.List;
+
 import org.springframework.stereotype.Component;
+
+import zelisline.ub.support.api.dto.SupportWelcomeCardDto;
 
 /**
  * Automatic welcome email sent immediately after self-service signup.
@@ -22,8 +27,8 @@ public class WelcomeEmailRenderer {
             "'Cormorant Garamond', Georgia, 'Times New Roman', serif";
 
     static final String SUBJECT = "Welcome to Kiosk! \uD83C\uDF89";
-    static final String SUPPORT_PHONE = "0714 282 874";
-    static final String SUPPORT_EMAIL = "admin@kiosk.ke";
+    public static final String SUPPORT_PHONE = "0714 282 874";
+    public static final String SUPPORT_EMAIL = "admin@kiosk.ke";
 
     private static final String[] HELP_ITEMS = {
             "\uD83D\uDECD\uFE0F Setting up your online store",
@@ -33,6 +38,17 @@ public class WelcomeEmailRenderer {
             "\u2699\uFE0F Custom features and adjustments",
             "\uD83D\uDCE6 Product and inventory setup",
             "\uD83D\uDCA1 General guidance on using Kiosk",
+    };
+
+    /** Plain labels for the support-chat welcome card (no emoji noise in the bubble). */
+    private static final String[] HELP_ITEMS_CHAT = {
+            "Setting up your online store",
+            "Custom themes & website designs",
+            "Custom domains",
+            "M-Pesa integration",
+            "Custom features and adjustments",
+            "Product and inventory setup",
+            "General guidance on using Kiosk",
     };
 
     public String renderSubject() {
@@ -68,21 +84,14 @@ public class WelcomeEmailRenderer {
                 """.formatted(name, business, help, SUPPORT_PHONE, SUPPORT_EMAIL).strip();
     }
 
-    /** Shorter welcome for the tenant↔platform support thread (chat, not email). */
-    public String renderSupportChat(String recipientName, String businessName) {
-        String name = displayName(recipientName);
-        String business = displayBusiness(businessName);
-        return """
-                Hi %s,
-
-                Welcome to Kiosk — we’re excited to have %s on board!
-
-                Setup, themes, your domain, M-Pesa, and custom work are free help from a real human. Reply here anytime, call %s, or email %s.
-
-                Welcome aboard!
-
-                — Kiosk Team
-                """.formatted(name, business, SUPPORT_PHONE, SUPPORT_EMAIL).strip();
+    /** Structured welcome for the tenant↔platform support thread (chat card). */
+    public SupportWelcomeCardDto toWelcomeCard(String recipientName, String businessName) {
+        return new SupportWelcomeCardDto(
+                displayName(recipientName),
+                displayBusiness(businessName),
+                SUPPORT_PHONE,
+                SUPPORT_EMAIL,
+                List.copyOf(Arrays.asList(HELP_ITEMS_CHAT)));
     }
 
     public String renderHtml(String recipientName, String businessName) {

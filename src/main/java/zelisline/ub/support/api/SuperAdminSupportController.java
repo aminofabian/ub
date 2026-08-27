@@ -77,6 +77,19 @@ public class SuperAdminSupportController {
         return detail;
     }
 
+    /**
+     * Backfill the structured signup welcome card into a tenant's support thread
+     * when missing (older signups that only got email / in-app).
+     */
+    @PostMapping("/tenants/{businessId}/welcome")
+    public Map<String, Object> ensureWelcome(@PathVariable String businessId) {
+        requireSuperAdmin();
+        boolean posted = supportService.ensurePlatformWelcomeForBusiness(businessId);
+        return Map.of(
+                "posted", posted,
+                "businessId", businessId.trim());
+    }
+
     @PostMapping("/conversations/{id}/messages")
     @ResponseStatus(HttpStatus.CREATED)
     public SupportMessageDto send(@PathVariable String id, @Valid @RequestBody SendSupportMessageRequest body) {

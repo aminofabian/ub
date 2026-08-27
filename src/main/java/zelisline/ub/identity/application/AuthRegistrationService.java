@@ -188,9 +188,8 @@ public class AuthRegistrationService {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("title", "Welcome to Kiosk!");
         payload.put("body", welcomeEmailRenderer.renderPlainText(user.getName(), businessName));
-        // Open Support — /business is usually already the post-signup screen, so
-        // router.push("/business") looked like a dead click.
-        payload.put("actionUrl", "/support");
+        // Open the floating Support chat — not /business (often already open) or /support page.
+        payload.put("actionUrl", "kiosk:support-chat");
         payload.put("name", name);
         payload.put("businessName", business);
         payload.put("supportPhone", WelcomeEmailRenderer.SUPPORT_PHONE);
@@ -216,7 +215,7 @@ public class AuthRegistrationService {
         supportService.postPlatformWelcome(
                 businessId,
                 user.getId(),
-                welcomeEmailRenderer.renderSupportChat(user.getName(), businessName));
+                welcomeEmailRenderer.toWelcomeCard(user.getName(), businessName));
     }
 
     /**

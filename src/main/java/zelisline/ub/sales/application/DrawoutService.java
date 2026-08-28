@@ -23,6 +23,7 @@ import zelisline.ub.audit.domain.AuditEventActorType;
 import zelisline.ub.audit.domain.AuditEventCategory;
 import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.identity.domain.User;
+import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.ApproveDrawoutRequest;
@@ -41,6 +42,7 @@ import zelisline.ub.sales.repository.RecurringDrawoutItemRepository;
 import zelisline.ub.sales.repository.ShiftAuditLogRepository;
 import zelisline.ub.sales.repository.ShiftExpenseRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
+import zelisline.ub.tenancy.application.FeatureFlagService;
 
 @Service
 @RequiredArgsConstructor
@@ -50,6 +52,8 @@ public class DrawoutService {
     private static final BigDecimal DEFAULT_TIER_2_MAX = new BigDecimal("2000.00");
     private static final BigDecimal DEFAULT_TIER_3_MAX = new BigDecimal("10000.00");
     private static final int PENDING_EXPIRY_MINUTES = 30;
+    private static final String CASHIER_ROLE = "cashier";
+    private static final String BUTCHER_CASHIER_ROLE = "butcher_cashier";
 
     private final CashDrawoutRepository cashDrawoutRepository;
     private final RecurringDrawoutItemRepository recurringDrawoutItemRepository;
@@ -57,6 +61,8 @@ public class DrawoutService {
     private final ShiftExpenseRepository shiftExpenseRepository;
     private final ShiftAuditLogRepository shiftAuditLogRepository;
     private final UserRepository userRepository;
+    private final RoleRepository roleRepository;
+    private final FeatureFlagService featureFlagService;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
     private final CashDrawerLedgerService cashDrawerLedgerService;
@@ -72,6 +78,8 @@ public class DrawoutService {
     public DrawoutResponse initiateDrawout(String businessId, String shiftId, CreateDrawoutRequest request, String userId) {
         Shift shift = shiftRepository.findByIdAndBusinessId(shiftId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shift not found"));
+
+        assertCashierMayInitiateDrawout(businessId, userId);
 
         if (!SalesConstants.SHIFT_STATUS_OPEN.equals(shift.getStatus())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Drawouts can only be created on an open shift");
@@ -625,6 +633,33 @@ public class DrawoutService {
         return userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(userId, businessId)
                 .map(User::getName)
                 .orElse("Unknown User");
+    }
+
+    /**
+     * Cashiers and butcher cashiers may only record drawouts when till settings
+     * enable {@code pos.cashier_drawout}. Owners, admins, and managers are unchanged.
+     */
+    private void assertCashierMayInitiateDrawout(String businessId, String userId) {
+        if (userId == null || userId.isBlank()) {
+            return;
+        }
+        String roleId = userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(userId, businessId)
+                .map(User::getRoleId)
+                .orElse(null);
+        if (roleId == null || roleId.isBlank()) {
+            return;
+        }
+        String roleKey = roleRepository.findById(roleId.trim())
+                .map(role -> role.getRoleKey() == null ? "" : role.getRoleKey().trim().toLowerCase())
+                .orElse("");
+        if (!CASHIER_ROLE.equals(roleKey) && !BUTCHER_CASHIER_ROLE.equals(roleKey)) {
+            return;
+        }
+        if (!featureFlagService.isEnabled(businessId, FeatureFlagService.FLAG_POS_CASHIER_DRAWOUT)) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Drawouts from cashier are not enabled");
+        }
     }
 
     // ========================================================================

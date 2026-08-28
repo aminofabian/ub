@@ -18,6 +18,8 @@ public record FeatureFlagsPatchRequest(
         Boolean posCashierOrderPad,
         /** Show Confirm orders on the cashier till (default on when absent). */
         Boolean posCashierOrderConfirm,
+        /** Allow cashiers to record cash drawouts from an open till. */
+        Boolean posCashierDrawout,
         /**
          * Search-first hybrid POS catalog (list results + frequent chips).
          * Absent / false keeps the classic product grid.

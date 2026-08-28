@@ -80,6 +80,12 @@ public class FeatureFlagService {
      */
     public static final String FLAG_POS_CASHIER_ORDER_CONFIRM = "pos.cashier_order_confirm";
 
+    /**
+     * Allow cashiers (and butcher cashiers) to record cash drawouts from an open till.
+     * Absent / false keeps drawout for owners, admins, and managers only.
+     */
+    public static final String FLAG_POS_CASHIER_DRAWOUT = "pos.cashier_drawout";
+
     /** Auto-add scanned barcodes straight to cart when the barcode resolves to
      * exactly one sellable product. When off, scanned barcodes fill the search
      * box (cashier must tap the hit). Independent of pos_drafts.enabled so

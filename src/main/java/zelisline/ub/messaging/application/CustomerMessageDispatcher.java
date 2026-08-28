@@ -136,17 +136,7 @@ public class CustomerMessageDispatcher {
         }
         if (send.authFailure()) {
             return new DeliveryResult(
-                    lookup,
-                    "whatsapp",
-                    "failed",
-                    "whatsapp_failed:" + send.detail()
-                            + " [source=" + nullToNone(messaging.metaAccessTokenSource())
-                            + " token=" + messaging.metaAccessTokenFingerprint()
-                            + " phone_id=" + nullToNone(messaging.metaPhoneNumberId())
-                            + "]. If source=tenant, clear the Credit tab Meta token."
-                            + " If source=env, remove WHATSAPP_META_ACCESS_TOKEN from the server."
-                            + " If source=platform, paste a fresh permanent System User token in"
-                            + " Super Admin → Platform integrations (must match this phone number ID).");
+                    lookup, "whatsapp", "failed", metaAuthFailureDetail(send, messaging));
         }
         String prefix = send.skipped() ? "whatsapp_skipped:" : "whatsapp_failed:";
         return new DeliveryResult(lookup, "whatsapp", "failed", prefix + send.detail());
@@ -172,17 +162,7 @@ public class CustomerMessageDispatcher {
         DeliveryResult failed;
         if (send.authFailure()) {
             failed = new DeliveryResult(
-                    lookup,
-                    "whatsapp",
-                    "failed",
-                    "whatsapp_failed:" + send.detail()
-                            + " [source=" + nullToNone(messaging.metaAccessTokenSource())
-                            + " token=" + messaging.metaAccessTokenFingerprint()
-                            + " phone_id=" + nullToNone(messaging.metaPhoneNumberId())
-                            + "]. If source=tenant, clear the Credit tab Meta token."
-                            + " If source=env, remove WHATSAPP_META_ACCESS_TOKEN from the server."
-                            + " If source=platform, paste a fresh permanent System User token in"
-                            + " Super Admin → Platform integrations (must match this phone number ID).");
+                    lookup, "whatsapp", "failed", metaAuthFailureDetail(send, messaging));
         } else {
             String prefix = send.skipped() ? "whatsapp_skipped:" : "whatsapp_failed:";
             failed = new DeliveryResult(lookup, "whatsapp", "failed", prefix + send.detail());
@@ -473,7 +453,7 @@ public class CustomerMessageDispatcher {
         String waPrefix = send.skipped() ? "whatsapp_skipped:" : "whatsapp_failed:";
         String waDetail = waPrefix + send.detail();
         if (send.authFailure()) {
-            waDetail += " (Meta access token rejected)";
+            waDetail += metaAuthFailureNote(send);
         }
         return failWhatsAppOrSms(messaging, e164, smsMessage, lookup, waDetail, send.authFailure());
     }
@@ -493,7 +473,7 @@ public class CustomerMessageDispatcher {
         String waPrefix = send.skipped() ? "whatsapp_skipped:" : "whatsapp_failed:";
         String waDetail = waPrefix + send.detail();
         if (send.authFailure()) {
-            waDetail += " (Meta access token rejected)";
+            waDetail += metaAuthFailureNote(send);
         }
         return failWhatsAppOrSms(messaging, e164, message, lookup, waDetail, send.authFailure());
     }
@@ -535,7 +515,7 @@ public class CustomerMessageDispatcher {
         String prefix = send.skipped() ? "whatsapp_skipped:" : "whatsapp_failed:";
         trail.append(prefix).append(kind).append(':').append(send.detail());
         if (send.authFailure()) {
-            trail.append(" (Meta access token rejected)");
+            trail.append(metaAuthFailureNote(send));
         }
     }
 
@@ -545,6 +525,36 @@ public class CustomerMessageDispatcher {
             String outcome,
             String detail
     ) {
+    }
+
+    private static String metaAuthFailureDetail(
+            MetaWhatsAppMessagingClient.SendResult send,
+            TenantMessagingConfig messaging
+    ) {
+        StringBuilder sb = new StringBuilder("whatsapp_failed:").append(send.detail());
+        sb.append(" [source=").append(nullToNone(messaging.metaAccessTokenSource()))
+                .append(" token=").append(messaging.metaAccessTokenFingerprint())
+                .append(" phone_id=").append(nullToNone(messaging.metaPhoneNumberId()))
+                .append(']');
+        if (send.permissionBlocked()) {
+            sb.append(". Graph code 200: assign the System User full control on this WABA and phone,")
+                    .append(" generate a token with whatsapp_business_messaging + whatsapp_business_management,")
+                    .append(" then update Super Admin → Platform integrations.")
+                    .append(" If the Meta app itself is restricted, check App Quality / Account Quality.");
+        } else {
+            sb.append(". If source=tenant, clear the Credit tab Meta token.")
+                    .append(" If source=env, remove WHATSAPP_META_ACCESS_TOKEN from the server.")
+                    .append(" If source=platform, paste a fresh permanent System User token in")
+                    .append(" Super Admin → Platform integrations (must match this phone number ID).");
+        }
+        return sb.toString();
+    }
+
+    private static String metaAuthFailureNote(MetaWhatsAppMessagingClient.SendResult send) {
+        if (send.permissionBlocked()) {
+            return " (Meta API access blocked — WABA role or app restriction)";
+        }
+        return " (Meta access token rejected)";
     }
 
     private static String nullToNone(String value) {

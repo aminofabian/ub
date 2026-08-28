@@ -290,6 +290,22 @@ public class MetaWhatsAppMessagingClient {
                 || d.contains("131009");
     }
 
+    /**
+     * Graph permission / app-access block (code 200). Token may decode fine, but Meta
+     * will not let this app or system user call WhatsApp Cloud API.
+     */
+    public static boolean looksLikePermissionBlocked(String detail) {
+        if (detail == null || detail.isBlank()) {
+            return false;
+        }
+        String d = detail.toLowerCase(Locale.ROOT);
+        return d.contains("api access blocked")
+                || d.contains("permissions error")
+                || d.contains("[code=200]")
+                || d.contains("[code=200 ")
+                || d.contains("permission is either not granted");
+    }
+
     /** Meta paused the template (low quality) or paced it — typically 3h / 6h. */
     static boolean looksLikeTemplatePaused(String detail) {
         if (detail == null || detail.isBlank()) {
@@ -405,7 +421,14 @@ public class MetaWhatsAppMessagingClient {
         }
 
         public boolean authFailure() {
-            return httpStatus != null && (httpStatus == 401 || httpStatus == 403);
+            if (httpStatus != null && (httpStatus == 401 || httpStatus == 403)) {
+                return true;
+            }
+            return permissionBlocked();
+        }
+
+        public boolean permissionBlocked() {
+            return looksLikePermissionBlocked(detail);
         }
 
         public boolean templatePaused() {

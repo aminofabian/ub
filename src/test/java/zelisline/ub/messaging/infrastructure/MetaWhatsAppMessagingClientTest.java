@@ -57,4 +57,17 @@ class MetaWhatsAppMessagingClientTest {
         assertTrue(detail.contains("132001"));
         assertTrue(detail.contains("Template name"));
     }
+
+    @Test
+    void apiAccessBlockedIsPermissionFailureNotRetryableTemplate() {
+        String detail = MetaWhatsAppMessagingClient.formatHttpFailure(
+                400,
+                "{\"error\":{\"message\":\"API access blocked.\",\"type\":\"OAuthException\",\"code\":200}}");
+        assertEquals("http_400: OAuthException — API access blocked. [code=200]", detail);
+        assertTrue(MetaWhatsAppMessagingClient.looksLikePermissionBlocked(detail));
+        assertFalse(MetaWhatsAppMessagingClient.looksLikeRetryableTemplateError(detail));
+        var send = MetaWhatsAppMessagingClient.SendResult.failed(detail, 400);
+        assertTrue(send.permissionBlocked());
+        assertTrue(send.authFailure());
+    }
 }

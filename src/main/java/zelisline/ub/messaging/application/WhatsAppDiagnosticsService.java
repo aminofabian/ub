@@ -12,6 +12,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.api.dto.WhatsAppDiagnosticsResponse;
 import zelisline.ub.credits.application.BusinessCreditMessagingSettingsService;
 import zelisline.ub.messaging.infrastructure.MetaWhatsAppDiagnosticsClient;
+import zelisline.ub.messaging.infrastructure.MetaWhatsAppMessagingClient;
 
 /**
  * Answers "why don't cold numbers receive WhatsApp anymore?".
@@ -53,6 +54,14 @@ public class WhatsAppDiagnosticsService {
         var phone = diagnosticsClient.fetchPhoneHealth(messaging);
         if (phone.error() != null) {
             findings.add("Could not read phone number health from Meta: " + phone.error());
+            if (MetaWhatsAppMessagingClient.looksLikePermissionBlocked(phone.error())) {
+                findings.add("Meta blocked API access (Graph code 200). The System User behind"
+                        + " this token is not assigned to the WhatsApp Business Account / phone,"
+                        + " or the Meta app is restricted. Assign full control, regenerate a token"
+                        + " with whatsapp_business_messaging and whatsapp_business_management,"
+                        + " then update Super Admin → Platform integrations. Check App Quality"
+                        + " if the app itself is disabled.");
+            }
         }
         if ("RED".equalsIgnoreCase(phone.qualityRating())) {
             findings.add("Phone quality rating is RED — Meta heavily restricts business-initiated"

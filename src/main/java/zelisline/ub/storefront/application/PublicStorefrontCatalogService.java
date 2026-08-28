@@ -112,7 +112,7 @@ public class PublicStorefrontCatalogService {
             String cursor,
             int limit
     ) {
-        PublicStorefrontContext ctx = storefrontContextService.requireForSlug(slug);
+        PublicStorefrontContext ctx = storefrontContextService.requireCatalogForSlug(slug);
         int sz = clampLimit(limit);
         String qq = blankToNull(q);
         String cat = blankToNull(categoryId);
@@ -320,7 +320,7 @@ public class PublicStorefrontCatalogService {
 
     @Transactional(readOnly = true)
     public PublicCategoryListResponse listPublishedCategories(String slug) {
-        PublicStorefrontContext ctx = storefrontContextService.requireForSlug(slug);
+        PublicStorefrontContext ctx = storefrontContextService.requireCatalogForSlug(slug);
         List<String> assigned = itemRepository.findDistinctWebPublishedCategoryIds(ctx.business().getId());
         if (assigned.isEmpty()) {
             return new PublicCategoryListResponse(List.of());
@@ -379,7 +379,7 @@ public class PublicStorefrontCatalogService {
 
     @Transactional(readOnly = true)
     public PublicDepartmentListResponse listPublishedDepartments(String slug) {
-        PublicStorefrontContext ctx = storefrontContextService.requireForSlug(slug);
+        PublicStorefrontContext ctx = storefrontContextService.requireCatalogForSlug(slug);
         return new PublicDepartmentListResponse(listPublishedTypes(ctx));
     }
 

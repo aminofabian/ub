@@ -388,7 +388,25 @@ class PublicStorefrontCatalogIT {
     }
 
     @Test
-    void disabledStorefront_returns404() throws Exception {
+    void disabledStorefront_catalogTeaserStillListsItems() throws Exception {
+        Business b = businessRepository.findById(TENANT).orElseThrow();
+        b.setSettings(
+                "{\"storefront\":{\"enabled\":false,\"catalogBranchId\":\"%s\"}}".formatted(branchId));
+        businessRepository.save(b);
+
+        mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/catalog/items"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].id").value(publishedItemId));
+        mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/catalog/categories"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.categories[0].name").value("Beverages"));
+        mockMvc.perform(get("/api/v1/public/businesses/" + SLUG + "/storefront"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void disabledStorefrontWithoutCatalogBranch_returns404() throws Exception {
         Business b = businessRepository.findById(TENANT).orElseThrow();
         b.setSettings("{\"storefront\":{\"enabled\":false}}");
         businessRepository.save(b);

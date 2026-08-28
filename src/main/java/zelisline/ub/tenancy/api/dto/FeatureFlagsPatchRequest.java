@@ -30,6 +30,8 @@ public record FeatureFlagsPatchRequest(
         /** When M-Pesa till listening starts (POS + storefront). */
         @Valid PosTillListenFeatureFlagsPatch tillListen,
         /** Business hub live beeps on /business. */
-        @Valid HubAlertsFeatureFlagsPatch hubAlerts
+        @Valid HubAlertsFeatureFlagsPatch hubAlerts,
+        /** Which cashiers may draw out when {@code posCashierDrawout} is on. */
+        @Valid CashierDrawoutAccessPatch posCashierDrawoutAccess
 ) {
 }

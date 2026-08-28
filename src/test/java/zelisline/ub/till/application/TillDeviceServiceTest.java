@@ -48,6 +48,13 @@ class TillDeviceServiceTest {
     }
 
     @Test
+    void resolveLabelIgnoresRawDeviceUuid() {
+        String key = "04dd48d2-575f-4bb6-ad01-3a21efeb2260";
+        assertEquals("Till 04dd48d2", TillDeviceService.resolveLabel(key, key));
+        assertEquals("Till 04dd48d2", TillDeviceService.resolveLabel(key, "other-device-key-01"));
+    }
+
+    @Test
     void resolveCashierTemplateDefaultsShelf() {
         assertEquals("shelf", TillDeviceService.resolveCashierTemplate(null));
         assertEquals("shelf", TillDeviceService.resolveCashierTemplate("  "));

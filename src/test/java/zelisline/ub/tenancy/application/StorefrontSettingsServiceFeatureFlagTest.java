@@ -43,7 +43,8 @@ class StorefrontSettingsServiceFeatureFlagTest {
                 catalogHybrid,
                 shiftPrefill,
                 tillListen,
-                hubAlerts);
+                hubAlerts,
+                null);
     }
 
     @Test
@@ -157,5 +158,38 @@ class StorefrontSettingsServiceFeatureFlagTest {
     void mergeFeatureFlags_nullPatch_returnsCurrentSettings() {
         String current = "{\"featureFlags\":{}}";
         assertThat(service.mergeFeatureFlags(current, null)).isEqualTo(current);
+    }
+
+    @Test
+    void mergeFeatureFlags_savesCashierDrawoutAllowlist() throws Exception {
+        String merged = service.mergeFeatureFlags(
+                "{}",
+                new FeatureFlagsPatchRequest(
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        true,
+                        null,
+                        null,
+                        null,
+                        null,
+                        new zelisline.ub.tenancy.api.dto.CashierDrawoutAccessPatch(
+                                "selected",
+                                java.util.List.of("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))));
+
+        var tree = objectMapper.readTree(merged);
+        assertThat(tree.path("featureFlags").path("pos.cashier_drawout").asBoolean()).isTrue();
+        assertThat(tree.path("cashierDrawout").path("scope").asText()).isEqualTo("selected");
+        assertThat(tree.path("cashierDrawout").path("userIds").get(0).asText())
+                .isEqualTo("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        assertThat(service.readCashierDrawoutAccess(merged).allowsUser(
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")).isTrue();
+        assertThat(service.readCashierDrawoutAccess(merged).allowsUser(
+                "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")).isFalse();
     }
 }

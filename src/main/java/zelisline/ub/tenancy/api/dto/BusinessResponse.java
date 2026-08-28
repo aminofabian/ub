@@ -19,6 +19,7 @@ public record BusinessResponse(
         OnboardingSettingsResponse onboarding,
         TenantBrandingDto branding,
         java.util.Map<String, Boolean> featureFlags,
+        CashierDrawoutAccessResponse cashierDrawout,
         HubAlertsSettingsResponse hubAlerts,
         MetaCapiSettingsResponse metaCapi,
         // Hostname of the active primary domain mapping, if any. Used by the

@@ -102,7 +102,8 @@ public class ShiftsController {
                 shiftId,
                 body,
                 user.userId(),
-                user.roleId()
+                user.roleId(),
+                request.getHeader(TillDeviceService.TILL_DEVICE_HEADER)
         );
     }
 

@@ -196,12 +196,19 @@ public class TillDeviceService {
 
     static String resolveLabel(String rawLabel, String deviceKey) {
         String label = rawLabel != null ? rawLabel.trim() : "";
-        if (!label.isEmpty()) {
+        if (!label.isEmpty()
+                && !label.equalsIgnoreCase(deviceKey)
+                && !isRawDeviceId(label)) {
             return label.length() > 80 ? label.substring(0, 80) : label;
         }
         String compact = deviceKey.replace("-", "");
         String shortId = compact.length() > 8 ? compact.substring(0, 8) : compact;
         return "Till " + shortId.toLowerCase(Locale.ROOT);
+    }
+
+    private static boolean isRawDeviceId(String value) {
+        return value.matches("(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+                || value.matches("(?i)[0-9a-f]{32}");
     }
 
     static String resolveCashierTemplate(String raw) {

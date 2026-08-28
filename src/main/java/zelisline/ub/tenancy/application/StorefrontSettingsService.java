@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -15,6 +16,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.tenancy.api.dto.BrandingPatchRequest;
+import zelisline.ub.tenancy.api.dto.CashierDrawoutAccessPatch;
+import zelisline.ub.tenancy.api.dto.CashierDrawoutAccessResponse;
 import zelisline.ub.tenancy.api.dto.DeliveryAreaDefaults;
 import zelisline.ub.tenancy.api.dto.DeliveryAreaDto;
 import zelisline.ub.tenancy.api.dto.FeatureFlagsPatchRequest;
@@ -41,6 +44,7 @@ public class StorefrontSettingsService {
     private static final String KEY_BRANDING = "branding";
     private static final String KEY_AUTH = "authConfig";
     private static final String KEY_FEATURES = "featureFlags";
+    private static final String KEY_CASHIER_DRAWOUT = "cashierDrawout";
 
     private static final List<String> SUPPORTED_AUTH_METHODS = List.of(
         "password",
@@ -136,6 +140,37 @@ public class StorefrontSettingsService {
             );
         } catch (Exception e) {
             return TenantConfigBundle.defaults(fallbackDisplayName);
+        }
+    }
+
+    /**
+     * Who among till cashiers may record drawouts. Missing settings default to
+     * all cashiers (when the {@code pos.cashier_drawout} flag is also on).
+     */
+    public CashierDrawoutAccessResponse readCashierDrawoutAccess(String settingsJson) {
+        if (settingsJson == null || settingsJson.isBlank()) {
+            return CashierDrawoutAccessResponse.allCashiers();
+        }
+        try {
+            JsonNode root = parseSettingsDocument(settingsJson);
+            if (!root.isObject()) {
+                return CashierDrawoutAccessResponse.allCashiers();
+            }
+            JsonNode node = root.path(KEY_CASHIER_DRAWOUT);
+            if (node.isMissingNode() || !node.isObject()) {
+                return CashierDrawoutAccessResponse.allCashiers();
+            }
+            String rawScope = textOrNull(node.get("scope"));
+            boolean selected = rawScope != null
+                    && CashierDrawoutAccessResponse.SCOPE_SELECTED.equalsIgnoreCase(rawScope.trim());
+            return new CashierDrawoutAccessResponse(
+                    selected
+                            ? CashierDrawoutAccessResponse.SCOPE_SELECTED
+                            : CashierDrawoutAccessResponse.SCOPE_ALL,
+                    readStringList(node.get("userIds"))
+            );
+        } catch (Exception e) {
+            return CashierDrawoutAccessResponse.allCashiers();
         }
     }
 
@@ -653,7 +688,8 @@ public class StorefrontSettingsService {
                         && patch.posCatalogHybrid() == null
                         && patch.shiftsPrefillOpeningFromLastClose() == null
                         && patch.tillListen() == null
-                        && patch.hubAlerts() == null)) {
+                        && patch.hubAlerts() == null
+                        && patch.posCashierDrawoutAccess() == null)) {
             return currentSettings;
         }
         ObjectNode root = parseRoot(currentSettings);
@@ -714,6 +750,7 @@ public class StorefrontSettingsService {
             applyHubAlertsFlags(flags, patch.hubAlerts());
         }
         root.set(KEY_FEATURES, flags);
+        applyCashierDrawoutAccess(root, patch.posCashierDrawoutAccess());
         return writeRoot(root);
     }
 
@@ -733,6 +770,50 @@ public class StorefrontSettingsService {
     ) {
         putFlagIfPresent(flags, FeatureFlagService.FLAG_HUB_ALERTS_BEEP_ON_SALE, patch.beepOnSale());
         putFlagIfPresent(flags, FeatureFlagService.FLAG_HUB_ALERTS_BEEP_ON_SUPPLY, patch.beepOnSupply());
+    }
+
+    private void applyCashierDrawoutAccess(ObjectNode root, CashierDrawoutAccessPatch patch) {
+        if (patch == null || (patch.scope() == null && patch.userIds() == null)) {
+            return;
+        }
+        ObjectNode node;
+        if (root.has(KEY_CASHIER_DRAWOUT) && root.get(KEY_CASHIER_DRAWOUT).isObject()) {
+            node = (ObjectNode) root.get(KEY_CASHIER_DRAWOUT).deepCopy();
+        } else {
+            node = objectMapper.createObjectNode();
+            node.put("scope", CashierDrawoutAccessResponse.SCOPE_ALL);
+            node.set("userIds", objectMapper.createArrayNode());
+        }
+        if (patch.scope() != null) {
+            String scope = patch.scope().trim().toLowerCase();
+            node.put(
+                    "scope",
+                    CashierDrawoutAccessResponse.SCOPE_SELECTED.equals(scope)
+                            ? CashierDrawoutAccessResponse.SCOPE_SELECTED
+                            : CashierDrawoutAccessResponse.SCOPE_ALL
+            );
+        }
+        if (patch.userIds() != null) {
+            ArrayNode arr = objectMapper.createArrayNode();
+            LinkedHashSet<String> seen = new LinkedHashSet<>();
+            for (String raw : patch.userIds()) {
+                if (raw == null) {
+                    continue;
+                }
+                String id = raw.trim();
+                if (id.isEmpty() || !seen.add(id)) {
+                    continue;
+                }
+                try {
+                    UUID.fromString(id);
+                } catch (IllegalArgumentException ex) {
+                    continue;
+                }
+                arr.add(id);
+            }
+            node.set("userIds", arr);
+        }
+        root.set(KEY_CASHIER_DRAWOUT, node);
     }
 
     private ObjectNode copyFeatureFlags(ObjectNode root) {

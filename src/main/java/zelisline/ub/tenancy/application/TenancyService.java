@@ -907,6 +907,7 @@ public class TenancyService {
             onboarding,
             bundle.branding(),
             bundle.featureFlags(),
+            storefrontSettingsService.readCashierDrawoutAccess(business.getSettings()),
             hubAlerts,
             metaCapi,
             primaryDomain,

@@ -268,7 +268,7 @@ public class ShiftService {
             PostCloseShiftRequest req,
             String userId
     ) {
-        return closeShift(businessId, shiftId, req, userId, null);
+        return closeShift(businessId, shiftId, req, userId, null, null);
     }
 
     @Transactional
@@ -279,12 +279,24 @@ public class ShiftService {
             String userId,
             String roleId
     ) {
+        return closeShift(businessId, shiftId, req, userId, roleId, null);
+    }
+
+    @Transactional
+    public ShiftResponse closeShift(
+            String businessId,
+            String shiftId,
+            PostCloseShiftRequest req,
+            String userId,
+            String roleId,
+            String tillDeviceHeader
+    ) {
         Shift s = shiftRepository.findByIdAndBusinessIdForUpdate(shiftId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shift not found"));
         if (!SalesConstants.SHIFT_STATUS_OPEN.equals(s.getStatus())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Shift is not open");
         }
-        assertCanCloseShift(s, userId, roleId);
+        assertCanCloseShift(s, userId, roleId, tillDeviceHeader);
 
         drawoutService.applyUnappliedLiveDrawouts(s);
 
@@ -720,16 +732,34 @@ public class ShiftService {
     // DTO CONVERSION
     // ========================================================================
 
-    private void assertCanCloseShift(Shift s, String userId, String roleId) {
-        if (s.getOpenedBy().equals(userId)) {
+    /**
+     * Cashiers may close the drawer bound to this register — the same open shift
+     * {@code GET /shifts/current} would return for their till header. That includes
+     * a colleague's shift on this device, and the legacy shared-branch drawer.
+     * They may not close a different till. Managers and admins may close any shift.
+     */
+    private void assertCanCloseShift(
+            Shift s,
+            String userId,
+            String roleId,
+            String tillDeviceHeader
+    ) {
+        if (userId != null && userId.equals(s.getOpenedBy())) {
             return;
         }
-        // Branch-locked cashiers may only close shifts they opened; managers/admins may close any.
-        if (branchResolutionService.isBranchLockedRole(roleId)) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "Only the cashier who opened this shift can close it. Ask a manager to close it.");
+        if (!branchResolutionService.isBranchLockedRole(roleId)) {
+            return;
         }
+        boolean thisRegister = openShiftResolver
+                .findOpen(s.getBusinessId(), s.getBranchId(), tillDeviceHeader)
+                .map(found -> found.getId().equals(s.getId()))
+                .orElse(false);
+        if (thisRegister) {
+            return;
+        }
+        throw new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "Only the cashier on this register can close this shift. Ask a manager to close it.");
     }
 
     private String resolveTillLabel(Shift s) {
@@ -740,11 +770,25 @@ public class ShiftService {
         return tillDeviceRepository
                 .findByBusinessIdAndBranchIdAndDeviceKey(s.getBusinessId(), s.getBranchId(), key)
                 .map(t -> t.getLabel())
-                .orElseGet(() -> {
-                    String compact = key.replace("-", "");
-                    String shortId = compact.length() > 8 ? compact.substring(0, 8) : compact;
-                    return "Till " + shortId;
-                });
+                .filter(lab -> lab != null && !lab.isBlank() && !isRawTillDeviceId(lab)
+                        && !lab.equalsIgnoreCase(key))
+                .orElseGet(() -> shortTillName(key));
+    }
+
+    /** Device UUIDs are not till names — they crowd cashier chrome. */
+    static boolean isRawTillDeviceId(String value) {
+        if (value == null) {
+            return false;
+        }
+        String t = value.trim();
+        return t.matches("(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+                || t.matches("(?i)[0-9a-f]{32}");
+    }
+
+    static String shortTillName(String deviceKey) {
+        String compact = deviceKey.replace("-", "");
+        String shortId = compact.length() > 8 ? compact.substring(0, 8) : compact;
+        return "Till " + shortId;
     }
 
     private ShiftResponse toDto(Shift s, String branchName, String currentUserId,

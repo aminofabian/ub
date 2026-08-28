@@ -217,4 +217,29 @@ public class FeatureFlagService {
     public boolean isMultiBranchEnabled(String businessId) {
         return isEnabled(businessId, FLAG_MULTI_BRANCH);
     }
+
+    /**
+     * Owners/admins/managers always may. Till cashiers need {@code pos.cashier_drawout}
+     * and, when scope is {@code selected}, to be on the allow list.
+     */
+    public boolean cashierMayRecordDrawout(String businessId, String userId, String roleKey) {
+        String key = roleKey == null ? "" : roleKey.trim().toLowerCase();
+        if (!"cashier".equals(key) && !"butcher_cashier".equals(key)) {
+            return true;
+        }
+        return businessRepository.findById(businessId)
+                .map(business -> {
+                    if (!Boolean.TRUE.equals(
+                            storefrontSettingsService
+                                    .readTenantConfig(business.getSettings(), "")
+                                    .featureFlags()
+                                    .get(FLAG_POS_CASHIER_DRAWOUT))) {
+                        return false;
+                    }
+                    return storefrontSettingsService
+                            .readCashierDrawoutAccess(business.getSettings())
+                            .allowsUser(userId);
+                })
+                .orElse(false);
+    }
 }

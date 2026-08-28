@@ -655,7 +655,7 @@ public class DrawoutService {
         if (!CASHIER_ROLE.equals(roleKey) && !BUTCHER_CASHIER_ROLE.equals(roleKey)) {
             return;
         }
-        if (!featureFlagService.isEnabled(businessId, FeatureFlagService.FLAG_POS_CASHIER_DRAWOUT)) {
+        if (!featureFlagService.cashierMayRecordDrawout(businessId, userId, roleKey)) {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
                     "Drawouts from cashier are not enabled");

@@ -29,6 +29,7 @@ public final class StorefrontTemplateIds {
 
     public static final Set<String> LANDING_TEMPLATES = Set.of(
             "coming-soon-editorial",
+            "coming-soon-shop",
             "neighborhood-board",
             "fresh-market",
             "butchery-cut",

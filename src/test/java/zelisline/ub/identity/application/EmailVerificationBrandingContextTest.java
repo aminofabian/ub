@@ -39,6 +39,7 @@ class EmailVerificationBrandingContextTest {
                         null,
                         null,
                         null,
+                        null,
                         null),
                 new TenantAuthConfigDto(
                         java.util.List.of("password"),

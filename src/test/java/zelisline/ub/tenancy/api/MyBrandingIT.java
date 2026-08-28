@@ -121,12 +121,14 @@ class MyBrandingIT {
                         .contentType(APPLICATION_JSON)
                         .content("""
                                 {"displayName":"Sunny Online",
-                                 "primaryColor":"#0F766E","accentColor":"#F59E0B"}
+                                 "primaryColor":"#0F766E","accentColor":"#F59E0B",
+                                 "logoScale":1.5}
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.branding.displayName").value("Sunny Online"))
                 .andExpect(jsonPath("$.branding.primaryColor").value("#0F766E"))
-                .andExpect(jsonPath("$.branding.accentColor").value("#F59E0B"));
+                .andExpect(jsonPath("$.branding.accentColor").value("#F59E0B"))
+                .andExpect(jsonPath("$.branding.logoScale").value(1.5));
 
         mockMvc.perform(get("/api/v1/businesses/me")
                         .header("X-Tenant-Id", TENANT)
@@ -134,7 +136,8 @@ class MyBrandingIT {
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.branding.displayName").value("Sunny Online"))
-                .andExpect(jsonPath("$.branding.primaryColor").value("#0F766E"));
+                .andExpect(jsonPath("$.branding.primaryColor").value("#0F766E"))
+                .andExpect(jsonPath("$.branding.logoScale").value(1.5));
     }
 
     @Test

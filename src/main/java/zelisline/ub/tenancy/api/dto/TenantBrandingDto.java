@@ -21,11 +21,18 @@ public record TenantBrandingDto(
     String ogImage,
     String metaKeywords,
 
-    List<String> heroBannerUrls
+    List<String> heroBannerUrls,
+
+    /**
+     * Header mark size relative to the theme default. {@code 1} is unchanged;
+     * merchants drag this on the Branding preview until the logo sits right.
+     */
+    Double logoScale
 ) {
     public static TenantBrandingDto defaults(String displayName) {
         return new TenantBrandingDto(
             displayName,
+            null,
             null,
             null,
             null,

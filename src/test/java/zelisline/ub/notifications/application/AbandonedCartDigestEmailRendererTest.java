@@ -26,6 +26,7 @@ class AbandonedCartDigestEmailRendererTest {
                 null,
                 null,
                 null,
+                null,
                 null);
 
         List<AbandonedCartDigestEmailRenderer.ItemPreview> items = List.of(
@@ -73,6 +74,7 @@ class AbandonedCartDigestEmailRendererTest {
     void subjectUsesTenantWordmark() {
         TenantBrandingDto branding = new TenantBrandingDto(
                 "Palmart | Groceries in [Area]",
+                null,
                 null,
                 null,
                 null,

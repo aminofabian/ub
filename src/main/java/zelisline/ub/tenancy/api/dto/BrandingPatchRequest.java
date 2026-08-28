@@ -35,5 +35,7 @@ public record BrandingPatchRequest(
     @Size(max = 255) String ogImagePublicId,
     @Size(max = 500) String metaKeywords,
 
-    List<@Size(max = 1024) String> heroBannerUrls
+    List<@Size(max = 1024) String> heroBannerUrls,
+
+    Double logoScale
 ) {}

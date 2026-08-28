@@ -157,7 +157,8 @@ public class StorefrontSettingsService {
             textOrNull(node.get("metaDescription")),
             textOrNull(node.get("ogImage")),
             textOrNull(node.get("metaKeywords")),
-            readBannerUrls(node.get("heroBanners"))
+            readBannerUrls(node.get("heroBanners")),
+            clampLogoScale(doubleOrNull(node.get("logoScale")))
         );
     }
 
@@ -533,6 +534,15 @@ public class StorefrontSettingsService {
             branding.remove("ogImagePublicId");
         }
         putOrRemoveString(branding, "metaKeywords", patch.metaKeywords());
+
+        if (patch.logoScale() != null) {
+            Double clamped = clampLogoScale(patch.logoScale());
+            if (clamped == null) {
+                branding.remove("logoScale");
+            } else {
+                branding.put("logoScale", clamped);
+            }
+        }
 
         // Hero banner URLs – reorder via full list (preserves existing publicIds)
         if (patch.heroBannerUrls() != null) {
@@ -1096,6 +1106,33 @@ public class StorefrontSettingsService {
         }
         String s = node.asText().trim();
         return s.isEmpty() ? null : s;
+    }
+
+    private static Double doubleOrNull(JsonNode node) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return null;
+        }
+        if (node.isNumber()) {
+            return node.asDouble();
+        }
+        if (node.isTextual()) {
+            try {
+                return Double.parseDouble(node.asText().trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /** Header logo scale: 0.5–2.5, two decimals. {@code null} means theme default (1). */
+    private static Double clampLogoScale(Double raw) {
+        if (raw == null || !Double.isFinite(raw)) {
+            return null;
+        }
+        double stepped = Math.round(raw / 0.05) * 0.05;
+        double clamped = Math.min(2.5, Math.max(0.5, stepped));
+        return Math.round(clamped * 100.0) / 100.0;
     }
 
     /**

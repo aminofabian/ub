@@ -30,6 +30,7 @@ class OrderConfirmationEmailRendererTest {
                 null,
                 null,
                 null,
+                null,
                 null);
 
         String html = renderer.renderHtml(
@@ -50,6 +51,7 @@ class OrderConfirmationEmailRendererTest {
                 null,
                 null,
                 "#1B4332",
+                null,
                 null,
                 null,
                 null,

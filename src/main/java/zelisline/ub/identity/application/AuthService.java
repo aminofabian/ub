@@ -72,8 +72,8 @@ public class AuthService {
      * proactive refresh, etc.).
      *
      * <p>The grace window covers exactly that case: if the presented refresh
-     * token was rotated within the last {@value} seconds <em>and</em> its
-     * successor session is still active, we treat the second request as a
+     * token was rotated within the last N seconds ({@code app.auth.refresh-rotation-grace-seconds})
+     * <em>and</em> its successor session is still active, we treat the second request as a
      * benign duplicate and return {@code 401} <em>without</em> cascading the
      * revoke. The first caller already received a fresh access+refresh pair,
      * so the duplicate caller can simply read the new tokens from shared
@@ -83,7 +83,8 @@ public class AuthService {
      * triggers the cascade because either (a) the time delta exceeds the
      * window, or (b) the successor has already been rotated again itself.
      */
-    private static final long REFRESH_ROTATION_GRACE_SECONDS = 60;
+    @Value("${app.auth.refresh-rotation-grace-seconds:120}")
+    private long refreshRotationGraceSeconds;
 
     /** RFC 9457 {@code detail} when user status is {@link UserStatus#INVITED}. */
     public static final String LOGIN_EMAIL_NOT_VERIFIED_DETAIL =
@@ -322,7 +323,7 @@ public class AuthService {
     /**
      * Returns true when the just-presented (already-revoked) refresh token was
      * rotated within the grace window <em>and</em> its successor session is
-     * still active. See {@link #REFRESH_ROTATION_GRACE_SECONDS}.
+     * still active. See {@code app.auth.refresh-rotation-grace-seconds}.
      */
     private boolean isWithinRotationGrace(UserSession revoked) {
         Instant revokedAt = revoked.getRevokedAt();
@@ -330,7 +331,7 @@ public class AuthService {
         if (revokedAt == null || successorId == null || successorId.isBlank()) {
             return false;
         }
-        if (revokedAt.plusSeconds(REFRESH_ROTATION_GRACE_SECONDS).isBefore(Instant.now())) {
+        if (revokedAt.plusSeconds(refreshRotationGraceSeconds).isBefore(Instant.now())) {
             return false;
         }
         return userSessionRepository.findById(successorId)

@@ -27,7 +27,7 @@ public class UserSessionActivity {
 
     public UserSessionActivity(
             UserSessionRepository userSessionRepository,
-            @Value("${app.auth.idle-timeout-hours:12}") long idleTimeoutHours
+            @Value("${app.auth.idle-timeout-hours:24}") long idleTimeoutHours
     ) {
         this.userSessionRepository = userSessionRepository;
         this.idleTimeoutHours = Math.max(1, idleTimeoutHours);

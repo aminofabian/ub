@@ -8,7 +8,6 @@ import java.util.List;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
-import org.springframework.http.ProblemDetail;
 import org.springframework.lang.NonNull;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -31,6 +30,7 @@ import zelisline.ub.audit.domain.AuditEventActorType;
 import zelisline.ub.audit.domain.AuditEventCategory;
 import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.identity.application.UserSessionActivity;
+import zelisline.ub.platform.logs.PlatformRequestLogErrorCapture;
 import zelisline.ub.identity.domain.SuperAdmin;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.domain.UserSession;
@@ -102,14 +102,20 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         try {
             claims = jwtTokenService.parseAndValidate(token);
         } catch (JwtException | IllegalArgumentException ex) {
-            publishSecurityEvent(request, null, AuditEventTypes.LOGIN_FAILED, "Invalid or expired access token");
-            writeProblem(response, HttpStatus.UNAUTHORIZED, "Invalid or expired access token", "unauthorized", "token_expired");
+            // Expected during silent refresh — no audit row (would flood login.failed).
+            writeProblem(
+                    request,
+                    response,
+                    HttpStatus.UNAUTHORIZED,
+                    "Invalid or expired access token",
+                    "unauthorized",
+                    "token_expired");
             return;
         }
 
         String kind = claims.get(JwtTokenService.CLAIM_PRINCIPAL_KIND, String.class);
         if (JwtTokenService.PRINCIPAL_SUPER_ADMIN.equals(kind)) {
-            if (!authenticateSuperAdmin(claims, response)) {
+            if (!authenticateSuperAdmin(request, claims, response)) {
                 return;
             }
             try {
@@ -120,7 +126,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
         if (JwtTokenService.PRINCIPAL_SUPPLIER.equals(kind)) {
-            if (!authenticateSupplier(claims, response)) {
+            if (!authenticateSupplier(request, claims, response)) {
                 return;
             }
             try {
@@ -133,7 +139,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         String claimTenant = claims.get(JwtTokenService.CLAIM_BUSINESS_ID, String.class);
         if (claimTenant == null || claimTenant.isBlank()) {
-            writeProblem(response, HttpStatus.UNAUTHORIZED, "Invalid token claims", "unauthorized");
+            writeProblem(request, response, HttpStatus.UNAUTHORIZED, "Invalid token claims", "unauthorized");
             return;
         }
 
@@ -142,9 +148,18 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         // authoritative through the claim instead of failing the request.
         String hostTenant = TenantRequestIds.resolveBusinessIdOrNull(request);
         if (hostTenant != null && !hostTenant.equals(claimTenant)) {
-            publishSecurityEvent(request, hostTenant, AuditEventTypes.LOGIN_FAILED, "Token tenant mismatch");
-            writeProblem(response, HttpStatus.FORBIDDEN,
-                    "Token tenant does not match resolved host tenant", "forbidden");
+            publishSecurityEvent(
+                    request,
+                    hostTenant,
+                    AuditEventTypes.SESSION_TENANT_MISMATCH,
+                    AuditEventSeverity.WARN,
+                    "Token tenant mismatch");
+            writeProblem(
+                    request,
+                    response,
+                    HttpStatus.FORBIDDEN,
+                    "Token tenant does not match resolved host tenant",
+                    "forbidden");
             return;
         }
         final String resolvedTenant = claimTenant;
@@ -156,14 +171,24 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         String jti = claims.getId();
         if (jti == null || jti.isBlank()) {
-            publishSecurityEvent(request, resolvedTenant, AuditEventTypes.LOGIN_FAILED, "Session is no longer active");
-            writeProblem(response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
+            publishSecurityEvent(
+                    request,
+                    resolvedTenant,
+                    AuditEventTypes.SESSION_REVOKED,
+                    AuditEventSeverity.INFO,
+                    "Session is no longer active");
+            writeProblem(request, response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
             return;
         }
         var sessionOpt = userSessionRepository.findByAccessTokenJtiAndRevokedAtIsNull(jti);
         if (sessionOpt.isEmpty()) {
-            publishSecurityEvent(request, resolvedTenant, AuditEventTypes.LOGIN_FAILED, "Session is no longer active");
-            writeProblem(response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
+            publishSecurityEvent(
+                    request,
+                    resolvedTenant,
+                    AuditEventTypes.SESSION_REVOKED,
+                    AuditEventSeverity.INFO,
+                    "Session is no longer active");
+            writeProblem(request, response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
             return;
         }
         UserSession session = sessionOpt.get();
@@ -172,9 +197,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         try {
             if (userSessionActivity.revokeIfIdle(session)) {
                 publishSecurityEvent(
-                        request, resolvedTenant, AuditEventTypes.LOGIN_FAILED,
+                        request,
+                        resolvedTenant,
+                        AuditEventTypes.SESSION_IDLE_EXPIRED,
+                        AuditEventSeverity.INFO,
                         SESSION_IDLE_EXPIRED_TITLE);
                 writeProblem(
+                        request,
                         response,
                         HttpStatus.UNAUTHORIZED,
                         SESSION_IDLE_EXPIRED_TITLE,
@@ -188,24 +217,44 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String userId = claims.getSubject();
         User user = userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(userId, resolvedTenant).orElse(null);
         if (user == null || user.getDeletedAt() != null) {
-            publishSecurityEvent(request, resolvedTenant, AuditEventTypes.LOGIN_FAILED, "User not found");
-            writeProblem(response, HttpStatus.UNAUTHORIZED, "User not found", "unauthorized");
+            publishSecurityEvent(
+                    request,
+                    resolvedTenant,
+                    AuditEventTypes.SESSION_ACCESS_DENIED,
+                    AuditEventSeverity.WARN,
+                    "User not found");
+            writeProblem(request, response, HttpStatus.UNAUTHORIZED, "User not found", "unauthorized");
             return;
         }
         if (user.statusAsEnum() != UserStatus.ACTIVE) {
-            publishSecurityEvent(request, resolvedTenant, AuditEventTypes.LOGIN_FAILED, "Account is not active");
-            writeProblem(response, HttpStatus.UNAUTHORIZED, "Account is not active", "unauthorized");
+            publishSecurityEvent(
+                    request,
+                    resolvedTenant,
+                    AuditEventTypes.SESSION_ACCESS_DENIED,
+                    AuditEventSeverity.WARN,
+                    "Account is not active");
+            writeProblem(request, response, HttpStatus.UNAUTHORIZED, "Account is not active", "unauthorized");
             return;
         }
         if (user.getLockedUntil() != null && user.getLockedUntil().isAfter(Instant.now())) {
-            publishSecurityEvent(request, resolvedTenant, AuditEventTypes.LOGIN_FAILED, "Account is temporarily locked");
-            writeProblem(response, HttpStatus.UNAUTHORIZED, "Account is temporarily locked", "unauthorized");
+            publishSecurityEvent(
+                    request,
+                    resolvedTenant,
+                    AuditEventTypes.SESSION_ACCESS_DENIED,
+                    AuditEventSeverity.WARN,
+                    "Account is temporarily locked");
+            writeProblem(
+                    request,
+                    response,
+                    HttpStatus.UNAUTHORIZED,
+                    "Account is temporarily locked",
+                    "unauthorized");
             return;
         }
 
         String roleId = claims.get(JwtTokenService.CLAIM_ROLE, String.class);
         if (roleId == null || roleId.isBlank()) {
-            writeProblem(response, HttpStatus.UNAUTHORIZED, "Invalid token claims", "unauthorized");
+            writeProblem(request, response, HttpStatus.UNAUTHORIZED, "Invalid token claims", "unauthorized");
             return;
         }
         String branchId = claims.get(JwtTokenService.CLAIM_BRANCH_ID, String.class);
@@ -227,9 +276,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
     }
 
-    private void publishSecurityEvent(HttpServletRequest request, String businessId, String eventType, String reason) {
+    private void publishSecurityEvent(
+            HttpServletRequest request,
+            String businessId,
+            String eventType,
+            AuditEventSeverity severity,
+            String reason) {
         try {
-            auditEventPublisher.publishSynchronous(auditEventBuilder.builder(AuditEventCategory.SECURITY, eventType, AuditEventSeverity.WARN)
+            auditEventPublisher.publishSynchronous(auditEventBuilder.builder(
+                            AuditEventCategory.SECURITY, eventType, severity)
                     .businessId(businessId == null ? "unknown" : businessId)
                     .actor(null, AuditEventActorType.ANONYMOUS)
                     .ipAddress(ClientIpResolver.resolve(request))
@@ -249,19 +304,27 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         return value.trim();
     }
 
-    private boolean authenticateSuperAdmin(Claims claims, HttpServletResponse response) throws IOException {
+    private boolean authenticateSuperAdmin(
+            HttpServletRequest request,
+            Claims claims,
+            HttpServletResponse response) throws IOException {
         String id = claims.getSubject();
         if (id == null || id.isBlank()) {
-            writeProblem(response, HttpStatus.UNAUTHORIZED, "Invalid token claims", "unauthorized");
+            writeProblem(request, response, HttpStatus.UNAUTHORIZED, "Invalid token claims", "unauthorized");
             return false;
         }
         SuperAdmin admin = superAdminRepository.findById(id).orElse(null);
         if (admin == null || !admin.isActive()) {
-            writeProblem(response, HttpStatus.UNAUTHORIZED, "Account is not active", "unauthorized");
+            writeProblem(request, response, HttpStatus.UNAUTHORIZED, "Account is not active", "unauthorized");
             return false;
         }
         if (admin.getLockedUntil() != null && admin.getLockedUntil().isAfter(Instant.now())) {
-            writeProblem(response, HttpStatus.UNAUTHORIZED, "Account is temporarily locked", "unauthorized");
+            writeProblem(
+                    request,
+                    response,
+                    HttpStatus.UNAUTHORIZED,
+                    "Account is temporarily locked",
+                    "unauthorized");
             return false;
         }
         var authentication = new UsernamePasswordAuthenticationToken(
@@ -273,23 +336,26 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         return true;
     }
 
-    private boolean authenticateSupplier(Claims claims, HttpServletResponse response) throws IOException {
+    private boolean authenticateSupplier(
+            HttpServletRequest request,
+            Claims claims,
+            HttpServletResponse response) throws IOException {
         String id = claims.getSubject();
         String marketplaceSupplierId = claims.get(JwtTokenService.CLAIM_MARKETPLACE_SUPPLIER_ID, String.class);
         String roleKey = claims.get(JwtTokenService.CLAIM_SUPPLIER_ROLE, String.class);
         String jti = claims.getId();
         if (id == null || id.isBlank() || marketplaceSupplierId == null || marketplaceSupplierId.isBlank()) {
-            writeProblem(response, HttpStatus.UNAUTHORIZED, "Invalid token claims", "unauthorized");
+            writeProblem(request, response, HttpStatus.UNAUTHORIZED, "Invalid token claims", "unauthorized");
             return false;
         }
         if (jti == null || jti.isBlank()) {
-            writeProblem(response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
+            writeProblem(request, response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
             return false;
         }
         try {
             var sessionRow = supplierUserSessionRepository.findByAccessTokenJti(jti);
             if (sessionRow.isPresent() && sessionRow.get().getRevokedAt() != null) {
-                writeProblem(response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
+                writeProblem(request, response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
                 return false;
             }
             // Missing row: legacy token or Flyway V172 not applied — allow.
@@ -298,11 +364,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
         SupplierUser user = supplierUserRepository.findByIdAndMarketplaceSupplierId(id, marketplaceSupplierId).orElse(null);
         if (user == null || !user.isActive()) {
-            writeProblem(response, HttpStatus.UNAUTHORIZED, "Account is not active", "unauthorized");
+            writeProblem(request, response, HttpStatus.UNAUTHORIZED, "Account is not active", "unauthorized");
             return false;
         }
         if (user.getLockedUntil() != null && user.getLockedUntil().isAfter(Instant.now())) {
-            writeProblem(response, HttpStatus.UNAUTHORIZED, "Account is temporarily locked", "unauthorized");
+            writeProblem(
+                    request,
+                    response,
+                    HttpStatus.UNAUTHORIZED,
+                    "Account is temporarily locked",
+                    "unauthorized");
             return false;
         }
         // Force-logout cutoff: rejects tokens minted before revoke-all even when
@@ -310,7 +381,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (user.getSessionsRevokedAt() != null) {
             Instant issuedAt = claims.getIssuedAt() == null ? null : claims.getIssuedAt().toInstant();
             if (issuedAt == null || issuedAt.isBefore(user.getSessionsRevokedAt())) {
-                writeProblem(response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
+                writeProblem(request, response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
                 return false;
             }
         }
@@ -331,23 +402,57 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         return true;
     }
 
-    private void writeProblem(HttpServletResponse response, HttpStatus status, String title, String slug)
+    private void writeProblem(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            HttpStatus status,
+            String title,
+            String slug)
             throws IOException {
-        writeProblem(response, status, title, slug, null);
+        writeProblem(request, response, status, title, slug, null);
     }
 
-    private void writeProblem(HttpServletResponse response, HttpStatus status, String title, String slug, String code)
+    private void writeProblem(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            HttpStatus status,
+            String title,
+            String slug,
+            String code)
             throws IOException {
         java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
-        body.put("type", URI.create(PROBLEM_BASE + slug).toString());
+        URI type = URI.create(PROBLEM_BASE + slug);
+        body.put("type", type.toString());
         body.put("title", title);
         body.put("status", status.value());
         if (code != null) {
             body.put("code", code);
         }
+        captureProblemForRequestLog(request, status, title, type, body);
         response.setStatus(status.value());
         response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
         response.setCharacterEncoding("UTF-8");
         response.getWriter().write(objectMapper.writeValueAsString(body));
+    }
+
+    private void captureProblemForRequestLog(
+            HttpServletRequest request,
+            HttpStatus status,
+            String title,
+            URI type,
+            java.util.Map<String, Object> body) {
+        if (request == null) {
+            return;
+        }
+        try {
+            request.setAttribute(PlatformRequestLogErrorCapture.ATTR_TITLE, title);
+            request.setAttribute(PlatformRequestLogErrorCapture.ATTR_TYPE, type.toString());
+            request.setAttribute(
+                    PlatformRequestLogErrorCapture.ATTR_PROBLEM_JSON,
+                    PlatformRequestLogErrorCapture.clip(objectMapper.writeValueAsString(body), 12_000));
+            request.setAttribute(PlatformRequestLogErrorCapture.ATTR_DETAIL, title);
+        } catch (Exception ignored) {
+            // Best-effort — platform logs must never break auth.
+        }
     }
 }

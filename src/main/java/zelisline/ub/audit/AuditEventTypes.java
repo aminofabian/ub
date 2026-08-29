@@ -13,6 +13,16 @@ public final class AuditEventTypes {
     // Security & access
     public static final String LOGIN_SUCCEEDED = "login.succeeded";
     public static final String LOGIN_FAILED = "login.failed";
+    /** Routine access-JWT expiry while the client is expected to refresh. */
+    public static final String SESSION_TOKEN_EXPIRED = "session.token_expired";
+    /** Sliding inactivity window elapsed ({@code app.auth.idle-timeout-hours}). */
+    public static final String SESSION_IDLE_EXPIRED = "session.idle_expired";
+    /** Session row revoked, rotated away, or refresh reuse outside grace. */
+    public static final String SESSION_REVOKED = "session.revoked";
+    /** JWT tenant claim does not match resolved host tenant. */
+    public static final String SESSION_TENANT_MISMATCH = "session.tenant_mismatch";
+    /** Deactivated, locked, or missing user still presenting a prior token. */
+    public static final String SESSION_ACCESS_DENIED = "session.access_denied";
     public static final String LOGOUT = "logout";
     public static final String LOGOUT_ALL = "logout.all";
     /** Admin signed another user out of every device from the users console. */

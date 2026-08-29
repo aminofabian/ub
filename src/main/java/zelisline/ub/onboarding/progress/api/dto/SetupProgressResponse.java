@@ -11,6 +11,7 @@ public record SetupProgressResponse(
         boolean shopReady,
         String currentStepKey,
         Instant snoozedUntil,
-        List<SetupProgressStepDto> steps
+        List<SetupProgressStepDto> steps,
+        SetupProgressRewardDto reward
 ) {
 }

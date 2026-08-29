@@ -69,6 +69,8 @@ public class IdentityService {
     private final UserSessionRepository userSessionRepository;
     private final PasswordEncoder passwordEncoder;
     private final CredentialEncryptionService credentialEncryptionService;
+    private final ObjectProvider<zelisline.ub.onboarding.progress.application.SetupProgressInvalidatePublisher>
+            setupProgressInvalidate;
 
     // ---------- Users -------------------------------------------------------
 
@@ -113,6 +115,10 @@ public class IdentityService {
         }
 
         User saved = userRepository.save(user);
+        var progress = setupProgressInvalidate.getIfAvailable();
+        if (progress != null) {
+            progress.invalidate(businessId);
+        }
         return toResponse(saved, role);
     }
 

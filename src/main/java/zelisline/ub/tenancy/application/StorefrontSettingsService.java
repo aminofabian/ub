@@ -23,6 +23,7 @@ import zelisline.ub.tenancy.api.dto.DeliveryAreaDto;
 import zelisline.ub.tenancy.api.dto.FeatureFlagsPatchRequest;
 import zelisline.ub.tenancy.api.dto.HubAlertsFeatureFlagsPatch;
 import zelisline.ub.tenancy.api.dto.LandingContentDto;
+import zelisline.ub.tenancy.api.dto.LandingHighlightDto;
 import zelisline.ub.tenancy.api.dto.PosDraftsFeatureFlagsPatch;
 import zelisline.ub.tenancy.api.dto.PosTillListenFeatureFlagsPatch;
 import zelisline.ub.tenancy.api.dto.StorefrontPatchRequest;
@@ -970,14 +971,7 @@ public class StorefrontSettingsService {
         }
         if (patch.landingContent() != null) {
             LandingContentDto content = patch.landingContent();
-            boolean allEmpty =
-                isBlank(content.headline())
-                    && isBlank(content.subheadline())
-                    && isBlank(content.phone())
-                    && isBlank(content.whatsapp())
-                    && isBlank(content.hours())
-                    && isBlank(content.address())
-                    && isBlank(content.ctaLabel());
+            boolean allEmpty = landingContentEmpty(content);
             if (allEmpty) {
                 storefront.remove("landingContent");
             } else {
@@ -989,6 +983,31 @@ public class StorefrontSettingsService {
                 putTextIfPresent(node, "hours", content.hours());
                 putTextIfPresent(node, "address", content.address());
                 putTextIfPresent(node, "ctaLabel", content.ctaLabel());
+                putTextIfPresent(node, "vitrineImageUrl", content.vitrineImageUrl());
+                putTextIfPresent(node, "storyImageUrl", content.storyImageUrl());
+                putTextIfPresent(node, "visitImageUrl", content.visitImageUrl());
+                putTextIfPresent(node, "storyTitle", content.storyTitle());
+                putTextIfPresent(node, "storyBody", content.storyBody());
+                putTextIfPresent(node, "storyQuote", content.storyQuote());
+                putTextIfPresent(node, "carryTitle", content.carryTitle());
+                putTextIfPresent(node, "carryLead", content.carryLead());
+                putTextIfPresent(node, "visitTitle", content.visitTitle());
+                putTextIfPresent(node, "holdAtCounterNote", content.holdAtCounterNote());
+                putTextIfPresent(node, "contactTitle", content.contactTitle());
+                putTextIfPresent(node, "contactBody", content.contactBody());
+                putTextIfPresent(node, "secondaryCtaLabel", content.secondaryCtaLabel());
+                putTextIfPresent(node, "navStoryLabel", content.navStoryLabel());
+                putTextIfPresent(node, "navCarryLabel", content.navCarryLabel());
+                putTextIfPresent(node, "navVisitLabel", content.navVisitLabel());
+                putTextIfPresent(node, "navContactLabel", content.navContactLabel());
+                putLandingHighlightsIfPresent(node, content.highlights());
+                putTextIfPresent(node, "posterTagline", content.posterTagline());
+                putTextIfPresent(node, "posterEditionText", content.posterEditionText());
+                putTextIfPresent(node, "posterSpineText", content.posterSpineText());
+                putTextIfPresent(node, "posterBadgeLabel", content.posterBadgeLabel());
+                putTextIfPresent(node, "posterContactLead", content.posterContactLead());
+                putTextIfPresent(node, "posterSecondaryImageUrl", content.posterSecondaryImageUrl());
+                putTextIfPresent(node, "posterTone", content.posterTone());
                 storefront.set("landingContent", node);
             }
         }
@@ -1280,26 +1299,151 @@ public class StorefrontSettingsService {
         String hours = textOrNull(node.get("hours"));
         String address = textOrNull(node.get("address"));
         String ctaLabel = textOrNull(node.get("ctaLabel"));
-        if (
-            headline == null
-                && subheadline == null
-                && phone == null
-                && whatsapp == null
-                && hours == null
-                && address == null
-                && ctaLabel == null
-        ) {
-            return null;
+        String vitrineImageUrl = textOrNull(node.get("vitrineImageUrl"));
+        String storyImageUrl = textOrNull(node.get("storyImageUrl"));
+        String visitImageUrl = textOrNull(node.get("visitImageUrl"));
+        String storyTitle = textOrNull(node.get("storyTitle"));
+        String storyBody = textOrNull(node.get("storyBody"));
+        String storyQuote = textOrNull(node.get("storyQuote"));
+        String carryTitle = textOrNull(node.get("carryTitle"));
+        String carryLead = textOrNull(node.get("carryLead"));
+        String visitTitle = textOrNull(node.get("visitTitle"));
+        String holdAtCounterNote = textOrNull(node.get("holdAtCounterNote"));
+        String contactTitle = textOrNull(node.get("contactTitle"));
+        String contactBody = textOrNull(node.get("contactBody"));
+        String secondaryCtaLabel = textOrNull(node.get("secondaryCtaLabel"));
+        String navStoryLabel = textOrNull(node.get("navStoryLabel"));
+        String navCarryLabel = textOrNull(node.get("navCarryLabel"));
+        String navVisitLabel = textOrNull(node.get("navVisitLabel"));
+        String navContactLabel = textOrNull(node.get("navContactLabel"));
+        List<LandingHighlightDto> highlights = readLandingHighlights(node.get("highlights"));
+        String posterTagline = textOrNull(node.get("posterTagline"));
+        String posterEditionText = textOrNull(node.get("posterEditionText"));
+        String posterSpineText = textOrNull(node.get("posterSpineText"));
+        String posterBadgeLabel = textOrNull(node.get("posterBadgeLabel"));
+        String posterContactLead = textOrNull(node.get("posterContactLead"));
+        String posterSecondaryImageUrl = textOrNull(node.get("posterSecondaryImageUrl"));
+        String posterTone = textOrNull(node.get("posterTone"));
+        LandingContentDto dto =
+            new LandingContentDto(
+                headline,
+                subheadline,
+                phone,
+                whatsapp,
+                hours,
+                address,
+                ctaLabel,
+                vitrineImageUrl,
+                storyImageUrl,
+                visitImageUrl,
+                storyTitle,
+                storyBody,
+                storyQuote,
+                carryTitle,
+                carryLead,
+                visitTitle,
+                holdAtCounterNote,
+                contactTitle,
+                contactBody,
+                secondaryCtaLabel,
+                navStoryLabel,
+                navCarryLabel,
+                navVisitLabel,
+                navContactLabel,
+                highlights.isEmpty() ? null : highlights,
+                posterTagline,
+                posterEditionText,
+                posterSpineText,
+                posterBadgeLabel,
+                posterContactLead,
+                posterSecondaryImageUrl,
+                posterTone
+            );
+        return landingContentEmpty(dto) ? null : dto;
+    }
+
+    private static boolean landingContentEmpty(LandingContentDto content) {
+        if (content == null) {
+            return true;
         }
-        return new LandingContentDto(
-            headline,
-            subheadline,
-            phone,
-            whatsapp,
-            hours,
-            address,
-            ctaLabel
-        );
+        return isBlank(content.headline())
+            && isBlank(content.subheadline())
+            && isBlank(content.phone())
+            && isBlank(content.whatsapp())
+            && isBlank(content.hours())
+            && isBlank(content.address())
+            && isBlank(content.ctaLabel())
+            && isBlank(content.vitrineImageUrl())
+            && isBlank(content.storyImageUrl())
+            && isBlank(content.visitImageUrl())
+            && isBlank(content.storyTitle())
+            && isBlank(content.storyBody())
+            && isBlank(content.storyQuote())
+            && isBlank(content.carryTitle())
+            && isBlank(content.carryLead())
+            && isBlank(content.visitTitle())
+            && isBlank(content.holdAtCounterNote())
+            && isBlank(content.contactTitle())
+            && isBlank(content.contactBody())
+            && isBlank(content.secondaryCtaLabel())
+            && isBlank(content.navStoryLabel())
+            && isBlank(content.navCarryLabel())
+            && isBlank(content.navVisitLabel())
+            && isBlank(content.navContactLabel())
+            && (content.highlights() == null || content.highlights().isEmpty())
+            && isBlank(content.posterTagline())
+            && isBlank(content.posterEditionText())
+            && isBlank(content.posterSpineText())
+            && isBlank(content.posterBadgeLabel())
+            && isBlank(content.posterContactLead())
+            && isBlank(content.posterSecondaryImageUrl())
+            && isBlank(content.posterTone());
+    }
+
+    private static List<LandingHighlightDto> readLandingHighlights(JsonNode arrayNode) {
+        if (arrayNode == null || !arrayNode.isArray()) {
+            return List.of();
+        }
+        List<LandingHighlightDto> out = new ArrayList<>();
+        for (JsonNode n : arrayNode) {
+            if (n == null || !n.isObject()) {
+                continue;
+            }
+            String title = textOrNull(n.get("title"));
+            if (title == null) {
+                continue;
+            }
+            out.add(
+                new LandingHighlightDto(
+                    title,
+                    textOrNull(n.get("note")),
+                    textOrNull(n.get("imageUrl"))
+                )
+            );
+        }
+        return out;
+    }
+
+    private static void putLandingHighlightsIfPresent(
+        ObjectNode node,
+        List<LandingHighlightDto> highlights
+    ) {
+        if (highlights == null || highlights.isEmpty()) {
+            return;
+        }
+        ArrayNode array = node.putArray("highlights");
+        for (LandingHighlightDto highlight : highlights) {
+            if (highlight == null || isBlank(highlight.title())) {
+                continue;
+            }
+            ObjectNode item = array.addObject();
+            putTextIfPresent(item, "title", highlight.title());
+            putTextIfPresent(item, "note", highlight.note());
+            putTextIfPresent(item, "imageUrl", highlight.imageUrl());
+        }
+        if (array.isEmpty()) {
+            node.remove("highlights");
+        }
     }
 
     private static List<String> readFeaturedIds(JsonNode arrayNode) {

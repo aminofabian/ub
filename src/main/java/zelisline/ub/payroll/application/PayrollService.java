@@ -29,6 +29,7 @@ import zelisline.ub.payroll.api.dto.PayAllRunRequest;
 import zelisline.ub.payroll.api.dto.PayAllRunResponse;
 import zelisline.ub.payroll.api.dto.PayRunRequest;
 import zelisline.ub.payroll.api.dto.PayrollAdvanceLedgerRowResponse;
+import zelisline.ub.payroll.api.dto.PayrollArrearPeriodResponse;
 import zelisline.ub.payroll.api.dto.PayrollCalendarMonthResponse;
 import zelisline.ub.payroll.api.dto.PayrollCalendarResponse;
 import zelisline.ub.payroll.api.dto.PayrollRunRowResponse;
@@ -85,6 +86,7 @@ public class PayrollService {
     private final ExpenseService expenseService;
 
     private static final BigDecimal ZERO_MONEY = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+    private static final int MAX_ARREAR_MONTHS = 12;
 
     @Transactional
     public List<SalaryResponse> listSalaries(String businessId, String userId) {
@@ -244,9 +246,25 @@ public class PayrollService {
                     : ZERO_MONEY;
 
             BigDecimal outstanding = outstandingTotal(businessId, profile.getId());
-            BigDecimal scheduled = scheduledDeductionTotal(businessId, profile.getId());
-            BigDecimal suggestedNet = base
-                    .subtract(statutoryTotal)
+
+            List<PayrollArrearPeriodResponse> arrearPeriods = findArrearPeriods(
+                    businessId, profile.getId(), year, month, statutory
+            );
+            BigDecimal arrearsBaseTotal = arrearPeriods.stream()
+                    .map(PayrollArrearPeriodResponse::baseSalary)
+                    .reduce(ZERO_MONEY, BigDecimal::add);
+            BigDecimal arrearsStatutoryTotal = arrearPeriods.stream()
+                    .map(PayrollArrearPeriodResponse::statutoryTotal)
+                    .reduce(ZERO_MONEY, BigDecimal::add);
+
+            BigDecimal combinedBase = base.add(arrearsBaseTotal);
+            BigDecimal combinedStatutory = statutoryTotal.add(arrearsStatutoryTotal);
+            BigDecimal availableForAdvances = combinedBase.subtract(combinedStatutory).max(ZERO_MONEY);
+            BigDecimal scheduled = allocatedAdvanceDeduction(
+                    businessId, profile.getId(), availableForAdvances
+            );
+            BigDecimal suggestedNet = combinedBase
+                    .subtract(combinedStatutory)
                     .subtract(scheduled)
                     .max(ZERO_MONEY);
 
@@ -266,12 +284,15 @@ public class PayrollService {
                     branchName,
                     user.getBranchId(),
                     base,
+                    arrearsBaseTotal,
+                    arrearPeriods,
                     outstanding,
                     statutoryTotal,
                     statutoryBreakdown != null ? statutoryBreakdown.paye() : ZERO_MONEY,
                     statutoryBreakdown != null ? statutoryBreakdown.nssf() : ZERO_MONEY,
                     statutoryBreakdown != null ? statutoryBreakdown.shif() : ZERO_MONEY,
                     statutoryBreakdown != null ? statutoryBreakdown.housingLevy() : ZERO_MONEY,
+                    arrearsStatutoryTotal,
                     scheduled,
                     suggestedNet,
                     existing.isPresent(),
@@ -309,6 +330,38 @@ public class PayrollService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Payslip already exists for this period");
         }
 
+        boolean includeArrears = body.includeArrears() == null || Boolean.TRUE.equals(body.includeArrears());
+        boolean applyStatutory = Boolean.TRUE.equals(body.applyStatutory());
+        List<PayrollArrearPeriodResponse> arrearPeriods = includeArrears
+                ? findArrearPeriods(businessId, profile.getId(), year, month, applyStatutory)
+                : List.of();
+
+        User user = userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(userId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+        String display = displayName(profile, user);
+
+        BigDecimal other = body.otherDeductions() == null
+                ? ZERO_MONEY
+                : money(body.otherDeductions());
+        if (other.signum() < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "otherDeductions cannot be negative");
+        }
+
+        for (PayrollArrearPeriodResponse arrear : arrearPeriods) {
+            persistArrearPayslip(
+                    businessId,
+                    profile.getId(),
+                    user,
+                    display,
+                    arrear,
+                    body.note(),
+                    actorId,
+                    false,
+                    null,
+                    null
+            );
+        }
+
         LocalDate asOf = LocalDate.of(year, month, 1).withDayOfMonth(
                 LocalDate.of(year, month, 1).lengthOfMonth()
         );
@@ -319,14 +372,7 @@ public class PayrollService {
                         "No salary effective for this period"
                 ));
 
-        BigDecimal other = body.otherDeductions() == null
-                ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP)
-                : money(body.otherDeductions());
-        if (other.signum() < 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "otherDeductions cannot be negative");
-        }
-
-        StatutoryBreakdown statutoryBreakdown = Boolean.TRUE.equals(body.applyStatutory())
+        StatutoryBreakdown statutoryBreakdown = applyStatutory
                 ? KenyaPayrollStatutoryCalculator.calculate(base)
                 : null;
         BigDecimal paye = statutoryBreakdown != null ? statutoryBreakdown.paye() : ZERO_MONEY;
@@ -335,7 +381,19 @@ public class PayrollService {
         BigDecimal housing = statutoryBreakdown != null ? statutoryBreakdown.housingLevy() : ZERO_MONEY;
         BigDecimal statutoryTotal = statutoryBreakdown != null ? statutoryBreakdown.total() : ZERO_MONEY;
 
-        BigDecimal availableForAdvances = base.subtract(statutoryTotal).subtract(other).max(ZERO_MONEY);
+        BigDecimal arrearsBaseTotal = arrearPeriods.stream()
+                .map(PayrollArrearPeriodResponse::baseSalary)
+                .reduce(ZERO_MONEY, BigDecimal::add);
+        BigDecimal arrearsStatutoryTotal = arrearPeriods.stream()
+                .map(PayrollArrearPeriodResponse::statutoryTotal)
+                .reduce(ZERO_MONEY, BigDecimal::add);
+        BigDecimal arrearNetTotal = arrearPeriods.stream()
+                .map(PayrollArrearPeriodResponse::netBeforeAdvances)
+                .reduce(ZERO_MONEY, BigDecimal::add);
+
+        BigDecimal combinedBase = base.add(arrearsBaseTotal);
+        BigDecimal combinedStatutory = statutoryTotal.add(arrearsStatutoryTotal);
+        BigDecimal availableForAdvances = combinedBase.subtract(combinedStatutory).subtract(other).max(ZERO_MONEY);
         if (body.advancesToDeduct() != null) {
             BigDecimal cap = money(body.advancesToDeduct());
             if (cap.signum() < 0) {
@@ -366,10 +424,7 @@ public class PayrollService {
         BigDecimal deducted = AdvanceRepaymentAllocator.totalAllocated(allocations);
 
         BigDecimal net = base.subtract(statutoryTotal).subtract(deducted).subtract(other).max(ZERO_MONEY);
-
-        User user = userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(userId, businessId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
-        String display = displayName(profile, user);
+        BigDecimal totalDisbursement = arrearNetTotal.add(net);
 
         Payslip payslip = new Payslip();
         payslip.setBusinessId(businessId);
@@ -385,22 +440,26 @@ public class PayrollService {
         payslip.setHousingLevyDeducted(housing);
         payslip.setNetPaid(net);
         payslip.setPaidAt(Instant.now());
-        payslip.setNote(blankToNull(body.note()));
+        String payslipNote = buildPayslipNote(body.note(), arrearPeriods);
+        payslip.setNote(payslipNote);
         payslip.setCreatedBy(actorId);
         payslipRepository.save(payslip);
 
-        if (Boolean.TRUE.equals(body.postExpense()) && net.signum() > 0) {
+        if (Boolean.TRUE.equals(body.postExpense()) && totalDisbursement.signum() > 0) {
             String paymentMethod = normalizePaymentMethod(body.paymentMethod());
             String expenseBranch = blankToNull(body.branchId()) != null
                     ? body.branchId().trim()
                     : user.getBranchId();
+            String expenseLabel = arrearPeriods.isEmpty()
+                    ? "Salary — " + display + " — " + month + "/" + year
+                    : "Salary — " + display + " — " + month + "/" + year + " (+ arrears)";
             var expense = expenseService.recordExpense(
                     businessId,
                     new PostExpenseRequest(
                             LocalDate.now(),
-                            "Salary — " + display + " — " + month + "/" + year,
+                            expenseLabel,
                             FinanceConstants.EXPENSE_CATEGORY_FIXED,
-                            net,
+                            totalDisbursement,
                             paymentMethod,
                             false,
                             expenseBranch,
@@ -633,6 +692,7 @@ public class PayrollService {
                         body.postExpense(),
                         body.paymentMethod(),
                         body.branchId(),
+                        null,
                         null
                 ), actorId);
                 paid++;
@@ -657,6 +717,28 @@ public class PayrollService {
                 .map(a -> AdvanceRepaymentPlanner.capForPayRun(a, advanceBalance(a), false))
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
                 .setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /** Scheduled deduction after pay-pool cap and oldest-first allocation. */
+    private BigDecimal allocatedAdvanceDeduction(
+            String businessId,
+            String staffProfileId,
+            BigDecimal pool
+    ) {
+        List<SalaryAdvance> outstandingAdvances = salaryAdvanceRepository
+                .findByBusinessIdAndStaffProfileIdAndStatusOrderByAdvancedOnAscCreatedAtAsc(
+                        businessId, staffProfileId, AdvanceStatus.OUTSTANDING
+                );
+        List<AdvanceBalance> balances = outstandingAdvances.stream()
+                .map(a -> {
+                    BigDecimal balance = advanceBalance(a);
+                    BigDecimal cap = AdvanceRepaymentPlanner.capForPayRun(a, balance, false);
+                    return new AdvanceBalance(a.getId(), balance, cap);
+                })
+                .toList();
+        return AdvanceRepaymentAllocator.totalAllocated(
+                AdvanceRepaymentAllocator.allocate(pool, balances)
+        );
     }
 
     private BigDecimal outstandingTotal(String businessId, String staffProfileId) {
@@ -714,6 +796,148 @@ public class PayrollService {
         if (year < 2000 || year > 2100 || month < 1 || month > 12) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid year/month");
         }
+    }
+
+    /**
+     * Consecutive unpaid months immediately before {@code targetYear}/{@code targetMonth}.
+     * Stops at the first paid month, missing salary, or {@link #MAX_ARREAR_MONTHS} cap.
+     */
+    private List<PayrollArrearPeriodResponse> findArrearPeriods(
+            String businessId,
+            String staffProfileId,
+            int targetYear,
+            int targetMonth,
+            boolean statutory
+    ) {
+        List<PayrollArrearPeriodResponse> arrears = new ArrayList<>();
+        int year = targetYear;
+        int month = targetMonth;
+
+        while (arrears.size() < MAX_ARREAR_MONTHS) {
+            int[] prev = previousPeriod(year, month);
+            year = prev[0];
+            month = prev[1];
+
+            if (payslipRepository.findByBusinessIdAndStaffProfileIdAndPeriodYearAndPeriodMonth(
+                    businessId, staffProfileId, year, month
+            ).isPresent()) {
+                break;
+            }
+
+            LocalDate asOf = LocalDate.of(year, month, 1).withDayOfMonth(
+                    LocalDate.of(year, month, 1).lengthOfMonth()
+            );
+            BigDecimal base = salaryRepository.findCurrent(businessId, staffProfileId, asOf)
+                    .map(Salary::getAmount)
+                    .orElse(ZERO_MONEY);
+            if (base.signum() <= 0) {
+                break;
+            }
+
+            StatutoryBreakdown statutoryBreakdown = statutory
+                    ? KenyaPayrollStatutoryCalculator.calculate(base)
+                    : null;
+            BigDecimal statutoryTotal = statutoryBreakdown != null
+                    ? statutoryBreakdown.total()
+                    : ZERO_MONEY;
+            BigDecimal netBeforeAdvances = base.subtract(statutoryTotal).max(ZERO_MONEY);
+
+            arrears.add(0, new PayrollArrearPeriodResponse(
+                    year,
+                    month,
+                    base,
+                    statutoryTotal,
+                    statutoryBreakdown != null ? statutoryBreakdown.paye() : ZERO_MONEY,
+                    statutoryBreakdown != null ? statutoryBreakdown.nssf() : ZERO_MONEY,
+                    statutoryBreakdown != null ? statutoryBreakdown.shif() : ZERO_MONEY,
+                    statutoryBreakdown != null ? statutoryBreakdown.housingLevy() : ZERO_MONEY,
+                    netBeforeAdvances
+            ));
+        }
+
+        return arrears;
+    }
+
+    private void persistArrearPayslip(
+            String businessId,
+            String staffProfileId,
+            User user,
+            String display,
+            PayrollArrearPeriodResponse arrear,
+            String note,
+            String actorId,
+            boolean postExpense,
+            String paymentMethod,
+            String branchId
+    ) {
+        if (payslipRepository.findByBusinessIdAndStaffProfileIdAndPeriodYearAndPeriodMonth(
+                businessId, staffProfileId, arrear.year(), arrear.month()
+        ).isPresent()) {
+            return;
+        }
+
+        Payslip payslip = new Payslip();
+        payslip.setBusinessId(businessId);
+        payslip.setStaffProfileId(staffProfileId);
+        payslip.setPeriodYear(arrear.year());
+        payslip.setPeriodMonth(arrear.month());
+        payslip.setBaseSalary(arrear.baseSalary());
+        payslip.setAdvancesDeducted(ZERO_MONEY);
+        payslip.setOtherDeductions(ZERO_MONEY);
+        payslip.setPayeDeducted(arrear.payeSuggested());
+        payslip.setNssfDeducted(arrear.nssfSuggested());
+        payslip.setShifDeducted(arrear.shifSuggested());
+        payslip.setHousingLevyDeducted(arrear.housingLevySuggested());
+        payslip.setNetPaid(arrear.netBeforeAdvances());
+        payslip.setPaidAt(Instant.now());
+        payslip.setNote(blankToNull(note != null ? note : "Arrears catch-up"));
+        payslip.setCreatedBy(actorId);
+        payslipRepository.save(payslip);
+
+        if (postExpense && arrear.netBeforeAdvances().signum() > 0) {
+            String method = normalizePaymentMethod(paymentMethod);
+            String expenseBranch = blankToNull(branchId) != null ? branchId.trim() : user.getBranchId();
+            var expense = expenseService.recordExpense(
+                    businessId,
+                    new PostExpenseRequest(
+                            LocalDate.now(),
+                            "Salary arrears — " + display + " — " + arrear.month() + "/" + arrear.year(),
+                            FinanceConstants.EXPENSE_CATEGORY_FIXED,
+                            arrear.netBeforeAdvances(),
+                            method,
+                            false,
+                            expenseBranch,
+                            null,
+                            null,
+                            payslip.getPaidAt()
+                    ),
+                    actorId,
+                    "payroll-" + payslip.getId()
+            );
+            payslip.setExpenseId(expense.id());
+            payslip.setPaymentMethod(method);
+            payslipRepository.save(payslip);
+        }
+    }
+
+    private static String buildPayslipNote(String note, List<PayrollArrearPeriodResponse> arrearPeriods) {
+        String base = blankToNull(note);
+        if (arrearPeriods.isEmpty()) {
+            return base;
+        }
+        String arrearLabel = arrearPeriods.stream()
+                .map(a -> a.month() + "/" + a.year())
+                .collect(Collectors.joining(", "));
+        String suffix = "Includes arrears: " + arrearLabel;
+        return base == null ? suffix : base + " · " + suffix;
+    }
+
+    /** Returns {@code [year, month]} for the calendar month before the given period. */
+    private static int[] previousPeriod(int year, int month) {
+        if (month == 1) {
+            return new int[] { year - 1, 12 };
+        }
+        return new int[] { year, month - 1 };
     }
 
     private static BigDecimal money(BigDecimal value) {

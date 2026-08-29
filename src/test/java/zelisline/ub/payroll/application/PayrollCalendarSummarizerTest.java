@@ -88,6 +88,7 @@ class PayrollCalendarSummarizerTest {
     }
 
     private static PayrollRunRowResponse row(boolean paid, String base, String status) {
+        BigDecimal amount = new BigDecimal(base);
         return new PayrollRunRowResponse(
                 "user-1",
                 "profile-1",
@@ -96,7 +97,9 @@ class PayrollCalendarSummarizerTest {
                 status,
                 "Main",
                 "branch-1",
-                new BigDecimal(base),
+                amount,
+                BigDecimal.ZERO,
+                List.of(),
                 BigDecimal.ZERO,
                 BigDecimal.ZERO,
                 BigDecimal.ZERO,
@@ -104,7 +107,8 @@ class PayrollCalendarSummarizerTest {
                 BigDecimal.ZERO,
                 BigDecimal.ZERO,
                 BigDecimal.ZERO,
-                new BigDecimal(base),
+                BigDecimal.ZERO,
+                amount,
                 paid,
                 paid ? "payslip-1" : null,
                 null

@@ -17,6 +17,8 @@ public record PayRunRequest(
         @Size(max = 32) String paymentMethod,
         @Size(max = 36) String branchId,
         /** Cap advance deductions this run (cannot exceed available pool after statutory/other). */
-        BigDecimal advancesToDeduct
+        BigDecimal advancesToDeduct,
+        /** When true (default), pay consecutive unpaid prior months before the selected period. */
+        Boolean includeArrears
 ) {
 }

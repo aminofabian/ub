@@ -12,6 +12,7 @@ import org.springframework.web.server.ResponseStatusException;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.application.BusinessCreditMessagingSettingsService;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
+import zelisline.ub.messaging.domain.SmsSendReason;
 import zelisline.ub.opsalerts.api.dto.OpsAlertSettingsResponse;
 import zelisline.ub.opsalerts.api.dto.UpdateOpsAlertSettingsRequest;
 import zelisline.ub.opsalerts.domain.BusinessOpsAlertSettings;
@@ -148,7 +149,8 @@ public class BusinessOpsAlertSettingsService {
     }
 
     private OpsAlertSettingsResponse toResponse(BusinessOpsAlertSettings s) {
-        TenantMessagingConfig messaging = messagingSettingsService.resolvePlatformForContactReply();
+        TenantMessagingConfig messaging =
+                messagingSettingsService.resolveForTest(s.getBusinessId(), SmsSendReason.OTP);
         boolean messagingReady = messaging.secretsReadable()
                 && (messaging.metaWhatsAppConfigured() || messaging.smsConfigured());
         String phone = s.getPhone();

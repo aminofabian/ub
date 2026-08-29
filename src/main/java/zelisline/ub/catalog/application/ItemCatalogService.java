@@ -630,7 +630,7 @@ public class ItemCatalogService {
     }
 
     private void assertCanAddProduct(String businessId) {
-        var guard = planLimitGuard.getIfAvailable();
+        var guard = planLimitGuard != null ? planLimitGuard.getIfAvailable() : null;
         if (guard != null) {
             guard.assertCanAddProduct(businessId);
         }

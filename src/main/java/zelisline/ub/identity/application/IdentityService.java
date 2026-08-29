@@ -89,7 +89,7 @@ public class IdentityService {
 
         Role role = requireRoleAssignableToTenant(businessId, request.roleId());
         if (!SubscriptionPlanFit.BUYER_ROLE_KEY.equalsIgnoreCase(role.getRoleKey())) {
-            var guard = planLimitGuard.getIfAvailable();
+            var guard = planLimitGuard != null ? planLimitGuard.getIfAvailable() : null;
             if (guard != null) {
                 guard.assertCanAddUser(businessId);
             }
@@ -124,7 +124,7 @@ public class IdentityService {
         }
 
         User saved = userRepository.save(user);
-        var progress = setupProgressInvalidate.getIfAvailable();
+        var progress = setupProgressInvalidate != null ? setupProgressInvalidate.getIfAvailable() : null;
         if (progress != null) {
             progress.invalidate(businessId);
         }

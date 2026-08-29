@@ -117,6 +117,10 @@ public class TenancyService {
                 Locale.ROOT
             )
         );
+        Instant now = Instant.now();
+        business.setCurrentPeriodEnd(
+                zelisline.ub.billing.application.SubscriptionBillingService.initialPeriodEndForTier(
+                        business.getSubscriptionTier(), now));
         business.setSettings("{}");
         Business saved = businessRepository.save(business);
         saved.setSettings(

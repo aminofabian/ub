@@ -10,6 +10,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.tenancy.api.dto.CatalogPatchRequest;
+import zelisline.ub.tenancy.api.dto.CatalogSettingsResponse;
 import zelisline.ub.tenancy.api.dto.CreditTabsPatchRequest;
 import zelisline.ub.tenancy.api.dto.CreditTabsSettingsResponse;
 import zelisline.ub.tenancy.api.dto.InventoryPatchRequest;
@@ -32,6 +34,9 @@ public class BusinessInventorySettingsService {
     private static final String KEY_STOCK_LEVELS = "stockLevels";
     private static final String KEY_SUPPLIERS = "suppliers";
     private static final String KEY_RECEIVE_STOCK = "receiveStock";
+    private static final String KEY_CATALOG = "catalog";
+    private static final String KEY_PRESERVE_PRODUCT_NAME_CASING =
+            "preserveProductNameCasing";
     private static final String KEY_CREDIT_TABS = "creditTabs";
     private static final String KEY_SHOW_SYSTEM_STOCK =
             "showSystemStockToStockManager";
@@ -98,7 +103,8 @@ public class BusinessInventorySettingsService {
                     readStockLevels(inventory),
                     readSuppliers(inventory),
                     readReceiveStock(inventory),
-                    readCreditTabs(inventory)
+                    readCreditTabs(inventory),
+                    readCatalog(inventory)
             );
         } catch (Exception e) {
             return InventorySettingsResponse.defaults();
@@ -115,6 +121,7 @@ public class BusinessInventorySettingsService {
                     && patch.suppliers() == null
                     && patch.receiveStock() == null
                     && patch.creditTabs() == null
+                    && patch.catalog() == null
         ) {
             return currentSettings;
         }
@@ -144,6 +151,11 @@ public class BusinessInventorySettingsService {
             ObjectNode creditTabs = copyNamespace(inventory, KEY_CREDIT_TABS);
             applyCreditTabsPatch(creditTabs, patch.creditTabs());
             inventory.set(KEY_CREDIT_TABS, creditTabs);
+        }
+        if (patch.catalog() != null) {
+            ObjectNode catalog = copyNamespace(inventory, KEY_CATALOG);
+            applyCatalogPatch(catalog, patch.catalog());
+            inventory.set(KEY_CATALOG, catalog);
         }
         root.set(KEY_INVENTORY, inventory);
         return writeRoot(root);
@@ -302,6 +314,19 @@ public class BusinessInventorySettingsService {
         );
     }
 
+    private static CatalogSettingsResponse readCatalog(JsonNode inventoryNode) {
+        if (inventoryNode.isMissingNode() || !inventoryNode.isObject()) {
+            return CatalogSettingsResponse.defaults();
+        }
+        JsonNode catalog = inventoryNode.path(KEY_CATALOG);
+        if (catalog.isMissingNode() || !catalog.isObject()) {
+            return CatalogSettingsResponse.defaults();
+        }
+        return new CatalogSettingsResponse(
+                catalog.path(KEY_PRESERVE_PRODUCT_NAME_CASING).asBoolean(true)
+        );
+    }
+
     private static void applyStockLevelsPatch(
             ObjectNode stockLevels,
             StockLevelsPatchRequest patch
@@ -433,6 +458,18 @@ public class BusinessInventorySettingsService {
             creditTabs.put(
                     KEY_ALLOW_CASHIER_SEARCH_CUSTOMERS_BY_NAME,
                     patch.allowCashierSearchCustomersByName()
+            );
+        }
+    }
+
+    private static void applyCatalogPatch(
+            ObjectNode catalog,
+            CatalogPatchRequest patch
+    ) {
+        if (patch.preserveProductNameCasing() != null) {
+            catalog.put(
+                    KEY_PRESERVE_PRODUCT_NAME_CASING,
+                    patch.preserveProductNameCasing()
             );
         }
     }

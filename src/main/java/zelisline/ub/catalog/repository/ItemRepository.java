@@ -30,6 +30,15 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     long countByBusinessIdAndDeletedAtIsNullAndActiveTrueAndGlobalProductSourceIdIsNotNull(String businessId);
 
+    @Query("""
+            SELECT COUNT(i) > 0 FROM Item i
+            WHERE i.businessId = :businessId
+              AND i.deletedAt IS NULL
+              AND i.active = TRUE
+              AND i.variantOfItemId IS NOT NULL
+            """)
+    boolean existsActiveVariantByBusinessId(@Param("businessId") String businessId);
+
     List<Item> findByGlobalProductSourceIdAndDeletedAtIsNull(String globalProductSourceId);
 
     /**

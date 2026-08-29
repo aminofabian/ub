@@ -5,6 +5,8 @@ import java.util.List;
 import org.springframework.stereotype.Component;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.messaging.application.SmsCreditsDepletedException;
+import zelisline.ub.messaging.domain.SmsSendReason;
 import zelisline.ub.messaging.infrastructure.MetaWhatsAppMessagingClient;
 import zelisline.ub.messaging.infrastructure.RapidApiWhatsAppLookupClient;
 import zelisline.ub.messaging.infrastructure.SmsMessagingClient;
@@ -171,6 +173,25 @@ public class CustomerMessageDispatcher {
     }
 
     /**
+     * SMS send that converts a depleted balance into a non-fatal block for non-OTP
+     * flows (WhatsApp can still deliver), while OTP keeps the 402 hard-stop.
+     */
+    private SmsMessagingClient.SendResult guardedSmsSend(
+            TenantMessagingConfig cfg,
+            String e164,
+            String body
+    ) {
+        try {
+            return smsMessagingClient.sendText(cfg, e164, body);
+        } catch (SmsCreditsDepletedException ex) {
+            if (cfg.smsReason() == SmsSendReason.OTP) {
+                throw ex;
+            }
+            return SmsMessagingClient.SendResult.blocked(ex.getMessage());
+        }
+    }
+
+    /**
      * After a WhatsApp miss, try SMS with the same (or preview) body.
      */
     private DeliveryResult withSmsFallback(
@@ -183,7 +204,7 @@ public class CustomerMessageDispatcher {
             return prior;
         }
         String e164 = "+" + phoneDigits;
-        var sms = smsMessagingClient.sendText(messaging, e164, smsMessage);
+        var sms = guardedSmsSend(messaging, e164, smsMessage);
         String waDetail = prior.detail() != null ? prior.detail() : "whatsapp_failed";
         if (sms.sent() || sms.stub()) {
             return new DeliveryResult(
@@ -212,7 +233,7 @@ public class CustomerMessageDispatcher {
                     "skipped",
                     "SMS provider is not configured (set Sozuri or Africa's Talking in admin).");
         }
-        var sms = smsMessagingClient.sendText(messaging, e164, message);
+        var sms = guardedSmsSend(messaging, e164, message);
         String channel = sms.channel();
         String outcome = sms.sent() ? "sent" : (sms.stub() ? "stub" : "failed");
         return new DeliveryResult(lookup, channel, outcome, sms.detail());
@@ -257,10 +278,14 @@ public class CustomerMessageDispatcher {
         StringBuilder detail = new StringBuilder();
 
         // SMS first — this is what the customer can actually read for OTPs.
-        var sms = smsMessagingClient.sendText(messaging, e164, message);
+        // When SMS credits are depleted, OTP sends hard-block with 402 (guard throws);
+        // other reasons skip SMS and still try WhatsApp.
+        var sms = guardedSmsSend(messaging, e164, message);
         smsOk = sms.sent() || sms.stub();
         if (smsOk) {
             detail.append(sms.channel()).append(':').append(sms.sent() ? "sent" : "stub");
+        } else if (sms.blocked()) {
+            detail.append("sms_credits_depleted");
         } else {
             detail.append("sms_failed:").append(sms.detail());
         }
@@ -278,7 +303,16 @@ public class CustomerMessageDispatcher {
         }
 
         if (!smsOk) {
-            // Do not report WhatsApp-only success for OTPs.
+            // OTP flows never reach here (guardedSmsSend throws 402); for other reasons
+            // a delivered WhatsApp leg is still a useful outcome — report it as sent
+            // with the SMS depletion called out in the detail.
+            if (waOk) {
+                return new DeliveryResult(
+                        lookup,
+                        "whatsapp",
+                        "sent",
+                        detail.toString());
+            }
             return new DeliveryResult(
                     lookup,
                     "sms",
@@ -379,7 +413,7 @@ public class CustomerMessageDispatcher {
         // Credit-sale exception: always send SMS when configured so the customer gets a
         // receipt even during Meta pauses / outside the 24h window.
         if (messaging.smsConfigured()) {
-            var sms = smsMessagingClient.sendText(messaging, e164, itemizedMessage);
+            var sms = guardedSmsSend(messaging, e164, itemizedMessage);
             boolean smsOk = sms.sent() || sms.stub();
             StringBuilder detail = new StringBuilder();
             if (templateDelivered || freeFormAccepted) {
@@ -400,7 +434,12 @@ public class CustomerMessageDispatcher {
                         sms.sent() ? "sent" : "stub",
                         detail.toString());
             }
-            detail.append("; sms_failed:").append(sms.detail());
+            detail.append("; ");
+            if (sms.blocked()) {
+                detail.append("sms_credits_depleted");
+            } else {
+                detail.append("sms_failed:").append(sms.detail());
+            }
             if (templateDelivered) {
                 // Template API accept is still the best WhatsApp signal we have.
                 return new DeliveryResult(lookup, "whatsapp", "sent", detail.toString());
@@ -505,7 +544,7 @@ public class CustomerMessageDispatcher {
                                     : ". SMS fallback is not configured."));
         }
 
-        var sms = smsMessagingClient.sendText(messaging, e164, smsMessage);
+        var sms = guardedSmsSend(messaging, e164, smsMessage);
         String channel = sms.sent() || sms.stub() ? sms.channel() : "sms";
         String outcome = sms.sent() ? "sent" : (sms.stub() ? "stub" : "failed");
         String detail = waDetail + "; sms:" + sms.detail();

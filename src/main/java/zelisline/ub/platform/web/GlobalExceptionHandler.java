@@ -36,6 +36,7 @@ import zelisline.ub.audit.application.AuditEventPublisher;
 import zelisline.ub.audit.domain.AuditEventActorType;
 import zelisline.ub.audit.domain.AuditEventCategory;
 import zelisline.ub.audit.domain.AuditEventSeverity;
+import zelisline.ub.messaging.application.SmsCreditsDepletedException;
 import zelisline.ub.platform.logs.PlatformRequestLogErrorCapture;
 import zelisline.ub.platform.persistence.DataIntegrityProblems;
 import zelisline.ub.platform.security.CurrentTenantUser;
@@ -134,6 +135,21 @@ public class GlobalExceptionHandler {
         body.setDetail(reason);
         body.setType(URI.create(PROBLEM_BASE + slug(reasonOrDefault(status))));
         return problem(body, status);
+    }
+
+    /** SMS balance at zero — HTTP 402 with the fields the header chip needs. */
+    @ExceptionHandler(SmsCreditsDepletedException.class)
+    public ResponseEntity<ProblemDetail> handleSmsCreditsDepleted(SmsCreditsDepletedException ex) {
+        log.warn("SMS credits depleted: {}", ex.getMessage());
+        ProblemDetail body = ProblemDetail.forStatus(HttpStatus.PAYMENT_REQUIRED);
+        body.setTitle("SMS credits depleted");
+        body.setDetail(ex.getMessage());
+        body.setType(URI.create(PROBLEM_BASE + "sms-credits-depleted"));
+        body.setProperty("available", ex.getAvailable());
+        body.setProperty("includedRemaining", ex.getIncludedRemaining());
+        body.setProperty("purchasedBalance", ex.getPurchasedBalance());
+        body.setProperty("unitPriceKes", ex.getUnitPriceKes());
+        return problem(body, HttpStatus.PAYMENT_REQUIRED);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

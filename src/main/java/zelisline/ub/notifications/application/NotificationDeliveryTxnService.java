@@ -17,6 +17,7 @@ import zelisline.ub.credits.application.BusinessCreditMessagingSettingsService;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
+import zelisline.ub.messaging.domain.SmsSendReason;
 import zelisline.ub.messaging.infrastructure.MetaWhatsAppMessagingClient;
 import zelisline.ub.messaging.infrastructure.SmsMessagingClient;
 import zelisline.ub.notifications.NotificationTypes;
@@ -202,7 +203,8 @@ public class NotificationDeliveryTxnService {
             markSkipped(delivery, "no_target_user");
             return true;
         }
-        TenantMessagingConfig messaging = messagingSettingsService.resolveForDispatch(notification.getBusinessId());
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForDispatch(
+                notification.getBusinessId(), SmsSendReason.NOTIFICATION);
         if (!messaging.enabled()) {
             markSkipped(delivery, "messaging_disabled");
             return true;

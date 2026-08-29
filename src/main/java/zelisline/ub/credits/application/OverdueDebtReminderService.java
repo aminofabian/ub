@@ -30,6 +30,7 @@ import zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse;
 import zelisline.ub.messaging.application.CustomerMessageDispatcher;
 import zelisline.ub.messaging.application.CustomerTabPaymentUrl;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
+import zelisline.ub.messaging.domain.SmsSendReason;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
@@ -219,7 +220,8 @@ public class OverdueDebtReminderService {
     }
 
     DispatchOutcome dispatch(CreditAccount account) {
-        TenantMessagingConfig messaging = messagingSettingsService.resolveForDispatch(account.getBusinessId());
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForDispatch(
+                account.getBusinessId(), SmsSendReason.CREDIT_REMINDER);
         if (!messaging.enabled()) {
             return new DispatchOutcome("none", "skipped", "messaging_disabled");
         }

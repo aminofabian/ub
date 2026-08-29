@@ -18,6 +18,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import zelisline.ub.notifications.domain.Notification;
 import zelisline.ub.notifications.repository.NotificationRepository;
 import zelisline.ub.notifications.application.NotificationPreferenceService;
+import zelisline.ub.onboarding.progress.application.SetupProgressUpdatedEvent;
 
 /**
  * Bridges committed business events to WebSocket fan-out.
@@ -89,6 +90,30 @@ public class RealtimeBridge {
             log.debug("Notification fan-out (business-wide): type={} business={} sessions={}",
                     notification.getType(), businessId, allSessions.size());
         }
+    }
+
+    /**
+     * Fan-out setup_progress.updated to all notification-channel sessions for the business.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onSetupProgressUpdated(SetupProgressUpdatedEvent event) {
+        if (event == null || event.businessId() == null || event.businessId().isBlank()) {
+            return;
+        }
+        String eventId = UUID.randomUUID().toString();
+        var dataMap = new LinkedHashMap<String, String>();
+        dataMap.put("businessId", event.businessId());
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) {
+            return;
+        }
+
+        Set<String> sessionIds = sessionRegistry.findSessionsByBusinessChannel(
+                event.businessId(), "notifications");
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "setup_progress.updated", eventId, "LOW", Instant.now(), payloadJson);
+        }
+        log.debug("Setup progress updated: business={} sessions={}", event.businessId(), sessionIds.size());
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -207,6 +232,31 @@ public class RealtimeBridge {
             handler.sendFrame(sid, "kiosk_pay.balance.updated", eventId, "MEDIUM", Instant.now(), payloadJson);
         }
         log.debug("Kiosk Pay balance updated: business={} reason={} sessions={}",
+                event.businessId(), event.reason(), sessionIds.size());
+    }
+
+    /**
+     * SMS credit balance jumped (top-up paid / SA grant) — every staff session
+     * for the business refreshes its header chip.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onSmsCreditsUpdated(SmsCreditsUpdatedEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        var dataMap = new LinkedHashMap<String, Object>();
+        dataMap.put("businessId", event.businessId() != null ? event.businessId() : "");
+        dataMap.put("available", event.available());
+        dataMap.put("includedRemaining", event.includedRemaining());
+        dataMap.put("purchasedBalance", event.purchasedBalance());
+        dataMap.put("reason", event.reason() != null ? event.reason() : "");
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) {
+            return;
+        }
+        Set<String> sessionIds = sessionRegistry.findAllSessionsForBusiness(event.businessId());
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "sms_credits.balance.updated", eventId, "MEDIUM", Instant.now(), payloadJson);
+        }
+        log.debug("SMS credits updated: business={} reason={} sessions={}",
                 event.businessId(), event.reason(), sessionIds.size());
     }
 
@@ -852,6 +902,14 @@ public class RealtimeBridge {
             BigDecimal pendingBalance,
             String currency,
             String status,
+            String reason) {}
+
+    /** SMS credit balance jumped (top-up paid or SA grant) — refresh the header chip. */
+    public record SmsCreditsUpdatedEvent(
+            String businessId,
+            int available,
+            int includedRemaining,
+            int purchasedBalance,
             String reason) {}
 
     /** Airtime order moved on (submitted / delivered / failed). */

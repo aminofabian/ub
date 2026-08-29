@@ -14,7 +14,7 @@ import org.springframework.test.context.TestPropertySource;
 import zelisline.ub.tenancy.domain.Business;
 
 /**
- * Slice 1 invariant pinned by §1.5 of {@code docs/PHASE_1_PLAN.md}:
+ * Slice 1 invariant pinned by §1.5 of {@code docs/plans/PHASE_1_PLAN.md}:
  * "{@code businesses.slug} is unique across the platform".
  */
 @DataJpaTest

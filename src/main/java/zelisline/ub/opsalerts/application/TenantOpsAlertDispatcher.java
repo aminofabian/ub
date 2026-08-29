@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.application.BusinessCreditMessagingSettingsService;
 import zelisline.ub.messaging.application.CustomerMessageDispatcher;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
+import zelisline.ub.messaging.domain.SmsSendReason;
 import zelisline.ub.opsalerts.api.dto.OpsAlertTestSendResponse;
 import zelisline.ub.opsalerts.domain.BusinessOpsAlertSettings;
 import zelisline.ub.opsalerts.domain.OpsAlertType;
@@ -54,7 +55,8 @@ public class TenantOpsAlertDispatcher {
             return;
         }
 
-        TenantMessagingConfig messaging = messagingSettingsService.resolveForPlatformOwnerMessaging();
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForTest(
+                businessId, SmsSendReason.OPS_ALERT);
         if (!messaging.secretsReadable()) {
             log.info("Skip ops alert {} — messaging secrets unreadable business={}", type, businessId);
             return;
@@ -85,7 +87,8 @@ public class TenantOpsAlertDispatcher {
                     HttpStatus.BAD_REQUEST, "Verify a phone number first, or pass a phone to test");
         }
 
-        TenantMessagingConfig messaging = messagingSettingsService.resolveForPlatformOwnerMessaging();
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForTest(
+                businessId, SmsSendReason.OPS_ALERT);
         if (!messaging.secretsReadable()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,

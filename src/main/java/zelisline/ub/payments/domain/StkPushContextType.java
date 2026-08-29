@@ -15,5 +15,9 @@ public enum StkPushContextType {
     /** Storefront airtime purchase awaiting the shopper's payment before dispatch. */
     AIRTIME_ORDER,
     /** Merchant funding their own Kiosk Pay wallet (airtime float). */
-    KIOSK_PAY_TOPUP
+    KIOSK_PAY_TOPUP,
+    /** Tenant buying SMS credit top-ups via platform M-Pesa STK. */
+    SMS_CREDIT_PURCHASE,
+    /** Subscription renewal via platform M-Pesa STK. */
+    SUBSCRIPTION_RENEWAL
 }

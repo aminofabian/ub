@@ -181,7 +181,8 @@ public class AuthController {
         if (!refreshTokenCookieSupport.isEnabled()) {
             return ResponseEntity.ok(tokens);
         }
-        LoginResponse body = new LoginResponse(tokens.accessToken(), null, tokens.user());
+        LoginResponse body = new LoginResponse(
+                tokens.accessToken(), null, tokens.user(), tokens.billing());
         return ResponseEntity.ok()
                 .headers(refreshTokenCookieSupport.cookieHeaders(tokens.refreshToken()))
                 .body(body);

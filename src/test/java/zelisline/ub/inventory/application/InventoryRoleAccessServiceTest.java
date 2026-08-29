@@ -14,6 +14,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.repository.RoleRepository;
+import zelisline.ub.tenancy.api.dto.CatalogSettingsResponse;
 import zelisline.ub.tenancy.api.dto.InventorySettingsResponse;
 import zelisline.ub.tenancy.api.dto.StocktakeSettingsResponse;
 import zelisline.ub.tenancy.application.BusinessInventorySettingsService;
@@ -100,7 +101,8 @@ class InventoryRoleAccessServiceTest {
                         null,
                         null,
                         null,
-                        null
+                        null,
+                        CatalogSettingsResponse.defaults()
                 ));
     }
 }

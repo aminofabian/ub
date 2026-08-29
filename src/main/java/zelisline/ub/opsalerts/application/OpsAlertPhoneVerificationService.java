@@ -77,7 +77,7 @@ public class OpsAlertPhoneVerificationService {
         challenge.setLastSentAt(now);
         verificationRepository.save(challenge);
 
-        TenantMessagingConfig messaging = messagingSettingsService.resolveForPlatformOwnerMessaging();
+        TenantMessagingConfig messaging = messagingSettingsService.resolvePlatformForContactReply();
         if (!messaging.secretsReadable()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,

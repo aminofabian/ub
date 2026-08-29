@@ -57,7 +57,7 @@ import zelisline.ub.tenancy.repository.DomainMappingRepository;
 /**
  * HTTP security wiring for the Kiosk POS modular monolith.
  *
- * <p>Aligned with {@code docs/ARCHITECTURE_REVIEW.md} and {@code docs/README.md}:
+ * <p>Aligned with {@code docs/architecture/ARCHITECTURE_REVIEW.md} and {@code docs/backend/README.md}:
  * stateless JWT auth, multi-tenant via JWT-driven RLS (set in a downstream filter),
  * and a small public surface (auth, health, OpenAPI in non-prod, payment webhooks).
  *

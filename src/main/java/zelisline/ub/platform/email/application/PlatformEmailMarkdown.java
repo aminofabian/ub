@@ -100,7 +100,7 @@ public final class PlatformEmailMarkdown {
         return out;
     }
 
-    static String escape(String s) {
+    public static String escape(String s) {
         if (s == null) {
             return "";
         }

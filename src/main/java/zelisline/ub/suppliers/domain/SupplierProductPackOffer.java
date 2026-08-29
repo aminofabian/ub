@@ -16,7 +16,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 /**
- * Per-link offer of an {@code ItemPackOption} (docs/MULTI_PACK_OPTIONS_SCOPE.md §5.2).
+ * Per-link offer of an {@code ItemPackOption} (docs/scopes/MULTI_PACK_OPTIONS_SCOPE.md §5.2).
  *
  * <p>Merge rule: an active offer row overrides the pack price for that link; an offer
  * row with {@code active = false} opts the link out of that pack shape. Absence of a row

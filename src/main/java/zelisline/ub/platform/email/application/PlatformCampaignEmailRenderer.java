@@ -9,18 +9,18 @@ import org.springframework.stereotype.Component;
 @Component
 public class PlatformCampaignEmailRenderer {
 
-    static final String GREEN = "#28A745";
-    static final String PAGE_BG = "#F4F5F4";
-    static final String CARD_BG = "#FFFFFF";
-    static final String BORDER = "#E8EAE8";
-    static final String TEXT = "#14201A";
-    static final String MUTED = "#5C6B63";
-    static final String HAIRLINE = "#EEF0EE";
-    static final String FONT_SANS =
+    public static final String GREEN = "#28A745";
+    public static final String PAGE_BG = "#F4F5F4";
+    public static final String CARD_BG = "#FFFFFF";
+    public static final String BORDER = "#E8EAE8";
+    public static final String TEXT = "#14201A";
+    public static final String MUTED = "#5C6B63";
+    public static final String HAIRLINE = "#EEF0EE";
+    public static final String FONT_SANS =
             "'DM Sans', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
-    static final String FONT_SERIF =
+    public static final String FONT_SERIF =
             "'Cormorant Garamond', Georgia, 'Times New Roman', serif";
-    static final String FONT_MONO =
+    public static final String FONT_MONO =
             "'SF Mono', Menlo, Consolas, 'Courier New', monospace";
 
     public String renderHtml(

@@ -149,7 +149,8 @@ class CustomerPhoneVerificationApiIT {
         owner = user("owner@otp.test", TENANT, ROLE_OWNER);
         userRepository.save(owner);
 
-        when(messagingSettingsService.resolveForTest(TENANT)).thenReturn(testMessagingConfig());
+        when(messagingSettingsService.resolveForTest(TENANT, zelisline.ub.messaging.domain.SmsSendReason.OTP))
+                .thenReturn(testMessagingConfig());
         messageCaptor = ArgumentCaptor.forClass(String.class);
         when(customerMessageDispatcher.deliverBothChannels(any(), anyString(), messageCaptor.capture()))
                 .thenReturn(new CustomerMessageDispatcher.DeliveryResult(
@@ -323,6 +324,8 @@ class CustomerPhoneVerificationApiIT {
                 null,
                 null,
                 true,
+                null,
+                null,
                 null);
     }
 

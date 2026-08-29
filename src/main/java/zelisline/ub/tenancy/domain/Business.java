@@ -5,6 +5,8 @@ import java.util.UUID;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import zelisline.ub.billing.domain.SubscriptionBillingStatus;
+import zelisline.ub.billing.domain.SuspensionReason;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
@@ -46,6 +48,26 @@ public class Business {
     private String subscriptionTier = "starter";
 
     @Enumerated(EnumType.STRING)
+    @Column(name = "subscription_billing_status", nullable = false, length = 16)
+    private SubscriptionBillingStatus subscriptionBillingStatus = SubscriptionBillingStatus.ACTIVE;
+
+    @Column(name = "current_period_end")
+    private Instant currentPeriodEnd;
+
+    @Column(name = "grace_started_at")
+    private Instant graceStartedAt;
+
+    @Column(name = "grace_ends_at")
+    private Instant graceEndsAt;
+
+    @Column(name = "billing_suspended_at")
+    private Instant billingSuspendedAt;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "suspension_reason", length = 32)
+    private SuspensionReason suspensionReason;
+
+    @Enumerated(EnumType.STRING)
     @Column(name = "tenant_status", nullable = false, length = 16)
     private TenantStatus tenantStatus = TenantStatus.ACTIVE;
 
@@ -76,6 +98,9 @@ public class Business {
         }
         if (tenantStatus == null) {
             tenantStatus = TenantStatus.ACTIVE;
+        }
+        if (subscriptionBillingStatus == null) {
+            subscriptionBillingStatus = SubscriptionBillingStatus.ACTIVE;
         }
         slug = normalize(slug);
         currency = normalizeCode(currency, "KES");

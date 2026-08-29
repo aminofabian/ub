@@ -12,10 +12,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import kong.unirest.HttpResponse;
 import kong.unirest.Unirest;
+import zelisline.ub.messaging.application.SmsCreditGuard;
+import zelisline.ub.messaging.application.SmsCreditsDepletedException;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
+import zelisline.ub.messaging.domain.SmsSendReason;
 
 /**
  * SMS fallback for credit tab reminders (Africa's Talking, Sozuri, or TextSMS.co.ke).
+ * Metered at this single choke point: every real tenant-scoped send consumes one
+ * credit via {@link SmsCreditGuard} (SMS_CREDITS_SCOPE.md §8). Stub sends and
+ * platform-scoped sends (no business id) are free.
  */
 @Component
 public class SmsMessagingClient {
@@ -25,11 +31,30 @@ public class SmsMessagingClient {
     private static final String DEFAULT_TEXTSMS_URL = "https://sms.textsms.co.ke/api/services/sendsms/";
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final SmsCreditGuard smsCreditGuard;
+
+    public SmsMessagingClient(SmsCreditGuard smsCreditGuard) {
+        this.smsCreditGuard = smsCreditGuard;
+    }
 
     /**
      * @param toE164 recipient with leading + (e.g. +254712345678)
      */
     public SendResult sendText(TenantMessagingConfig cfg, String toE164, String body) {
+        return sendText(cfg, toE164, body, null, null);
+    }
+
+    /**
+     * Metered send. {@code reason}/{@code referenceId} classify the ledger entry;
+     * when null the config's default reason (or {@code general}) is used.
+     */
+    public SendResult sendText(
+            TenantMessagingConfig cfg,
+            String toE164,
+            String body,
+            SmsSendReason reason,
+            String referenceId
+    ) {
         if (!cfg.smsConfigured()) {
             log.info("SMS stub (provider={}): to={} message={}",
                     cfg.smsProvider(),
@@ -37,13 +62,26 @@ public class SmsMessagingClient {
                     truncate(body));
             return SendResult.stubLogged();
         }
+        String businessId = cfg.businessId();
+        if (businessId != null && !businessId.isBlank()) {
+            SmsSendReason effectiveReason = reason != null ? reason : cfg.smsReason();
+            // Deduct-on-success: block at zero before the provider call, then consume
+            // one credit only after the provider accepts (scope §8, §19 #2).
+            smsCreditGuard.checkBeforeSend(businessId, effectiveReason, referenceId);
+        }
+        SendResult result;
         if ("sozuri".equalsIgnoreCase(cfg.smsProvider())) {
-            return sendSozuri(toE164, body, cfg);
+            result = sendSozuri(toE164, body, cfg);
+        } else if ("textsms".equalsIgnoreCase(cfg.smsProvider())) {
+            result = sendTextSms(toE164, body, cfg);
+        } else {
+            result = sendAfricasTalking(toE164, body, cfg);
         }
-        if ("textsms".equalsIgnoreCase(cfg.smsProvider())) {
-            return sendTextSms(toE164, body, cfg);
+        if (result.sent() && businessId != null && !businessId.isBlank()) {
+            smsCreditGuard.debitOnSuccess(businessId,
+                    reason != null ? reason : cfg.smsReason(), referenceId);
         }
-        return sendAfricasTalking(toE164, body, cfg);
+        return result;
     }
 
     private SendResult sendAfricasTalking(String toE164, String body, TenantMessagingConfig cfg) {
@@ -186,17 +224,22 @@ public class SmsMessagingClient {
         return s.length() > 120 ? s.substring(0, 120) + "…" : s;
     }
 
-    public record SendResult(boolean sent, boolean stub, String channel, String detail) {
+    public record SendResult(boolean sent, boolean stub, boolean blocked, String channel, String detail) {
         public static SendResult sent(String channel) {
-            return new SendResult(true, false, channel, "sent");
+            return new SendResult(true, false, false, channel, "sent");
         }
 
         public static SendResult stubLogged() {
-            return new SendResult(false, true, "sms_stub", "logged");
+            return new SendResult(false, true, false, "sms_stub", "logged");
+        }
+
+        /** SMS credits depleted — provider was never called. */
+        public static SendResult blocked(String detail) {
+            return new SendResult(false, false, true, "sms_blocked", detail);
         }
 
         public static SendResult failed(String detail) {
-            return new SendResult(false, false, "sms", detail);
+            return new SendResult(false, false, false, "sms", detail);
         }
     }
 }

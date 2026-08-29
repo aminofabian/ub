@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -58,6 +59,8 @@ public class SupplierService {
     private final BusinessSupplierConnectionRepository connectionRepository;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
+    private final ObjectProvider<zelisline.ub.onboarding.progress.application.SetupProgressInvalidatePublisher>
+            setupProgressInvalidate;
 
     @Transactional(readOnly = true)
     public Page<SupplierResponse> listSuppliers(String businessId, String searchRaw, String statusRaw, Pageable pageable) {
@@ -144,6 +147,10 @@ public class SupplierService {
 
         supplierIdentityIndexService.upsertTenantSupplier(s, s.getPayoutPhone(), null);
         publishSupplierEvent(businessId, s, actorUserId, AuditEventTypes.SUPPLIER_CREATED, null);
+        var progress = setupProgressInvalidate.getIfAvailable();
+        if (progress != null) {
+            progress.invalidate(businessId);
+        }
         return toResponse(s);
     }
 

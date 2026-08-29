@@ -22,6 +22,7 @@ import zelisline.ub.credits.domain.KenyanPhoneForms;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
+import zelisline.ub.messaging.domain.SmsSendReason;
 import zelisline.ub.messaging.infrastructure.SmsMessagingClient;
 import zelisline.ub.payroll.api.dto.StaffSmsBulkSendRequest;
 import zelisline.ub.payroll.api.dto.StaffSmsBulkSendResponse;
@@ -158,7 +159,8 @@ public class StaffSmsMessageService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Staff has no phone number on file");
         }
         String body = render(request.templateKey(), request.bodyOverride(), ctx);
-        TenantMessagingConfig cfg = messagingSettingsService.resolveForDispatch(businessId);
+        TenantMessagingConfig cfg = messagingSettingsService.resolveForDispatch(
+                businessId, SmsSendReason.PAYROLL);
         SmsMessagingClient.SendResult result = smsMessagingClient.sendText(cfg, ctx.phoneE164(), body);
         return new StaffSmsSendResponse(
                 result.sent() || result.stub(),
@@ -175,7 +177,8 @@ public class StaffSmsMessageService {
         int skipped = 0;
         List<StaffSmsBulkSendResponse.StaffSmsBulkFailure> failures = new ArrayList<>();
 
-        for (String userId : request.userIds()) {
+        for (int i = 0; i < request.userIds().size(); i++) {
+            String userId = request.userIds().get(i);
             try {
                 StaffSmsSendResponse one = send(
                         businessId,
@@ -199,6 +202,16 @@ public class StaffSmsMessageService {
                         displayNameSafe(businessId, userId),
                         ex.getReason() != null ? ex.getReason() : ex.getMessage()
                 ));
+            } catch (zelisline.ub.messaging.application.SmsCreditsDepletedException ex) {
+                // Depleted mid-bulk — the remaining recipients cannot be sent; stop.
+                int remaining = request.userIds().size() - i - 1;
+                skipped += 1 + remaining;
+                failures.add(new StaffSmsBulkSendResponse.StaffSmsBulkFailure(
+                        userId,
+                        displayNameSafe(businessId, userId),
+                        ex.getMessage()
+                ));
+                break;
             }
         }
 

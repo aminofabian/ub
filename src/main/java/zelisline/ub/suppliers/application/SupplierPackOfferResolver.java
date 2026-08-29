@@ -19,7 +19,7 @@ import zelisline.ub.suppliers.repository.SupplierProductPackOfferRepository;
 
 /**
  * Single source of truth for merging item pack options with per-link offer rows
- * (docs/MULTI_PACK_OPTIONS_SCOPE.md §5.2): an active offer overrides the pack price,
+ * (docs/scopes/MULTI_PACK_OPTIONS_SCOPE.md §5.2): an active offer overrides the pack price,
  * an inactive offer opts the shape out, and missing rows fall back to the item default.
  * Consumed by the public stall payload and the supplier link responses.
  */

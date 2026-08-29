@@ -28,6 +28,8 @@ import zelisline.ub.credits.repository.CreditSaleReminderDispatchRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.messaging.application.TenantMessagingConfig;
+import zelisline.ub.messaging.domain.SmsSendReason;
 import zelisline.ub.notifications.application.NotificationService;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.tenancy.domain.Business;
@@ -56,7 +58,8 @@ public class CreditSaleReminderService {
 
     @Transactional
     public void dispatch(CreditSaleReminderEvent event) {
-        TenantMessagingConfig messaging = messagingSettingsService.resolveForDispatch(event.businessId());
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForDispatch(
+                event.businessId(), SmsSendReason.CREDIT_REMINDER);
         if (!messaging.enabled()) {
             String skipReason = messaging.secretsReadError() != null && !messaging.secretsReadError().isBlank()
                     ? "secrets_unreadable"

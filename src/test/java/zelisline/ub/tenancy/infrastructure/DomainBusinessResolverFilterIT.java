@@ -30,7 +30,7 @@ import zelisline.ub.tenancy.repository.DomainMappingRepository;
 
 /**
  * Slice 1 DoD: "host-based resolution returns 404 on unknown host" — see
- * {@code docs/PHASE_1_PLAN.md} §1.6.
+ * {@code docs/plans/PHASE_1_PLAN.md} §1.6.
  *
  * <p>The resolver filter sits before authentication, so an unmapped host must
  * respond with {@code 404 application/problem+json} carrying the

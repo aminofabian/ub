@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -44,6 +45,8 @@ public class ItemSupplierLinkService {
     private final PackageVariantStockResolver packageVariantStockResolver;
     private final InventoryBatchRepository inventoryBatchRepository;
     private final BranchRepository branchRepository;
+    private final ObjectProvider<zelisline.ub.onboarding.progress.application.SetupProgressInvalidatePublisher>
+            setupProgressInvalidate;
     private final ItemCatalogService itemCatalogService;
     private final SupplierPackOfferResolver supplierPackOfferResolver;
 
@@ -170,6 +173,7 @@ public class ItemSupplierLinkService {
             }
             primaryService.normalizeAfterChange(businessId, itemId);
             maybeReactivateItem(item);
+            notifySetupProgressChanged(businessId);
             return toLinkResponse(created, supplier);
         }
         if (sp.getDeletedAt() == null && sp.isActive()) {
@@ -190,7 +194,15 @@ public class ItemSupplierLinkService {
         supplierProductRepository.save(sp);
         primaryService.normalizeAfterChange(businessId, itemId);
         maybeReactivateItem(item);
+        notifySetupProgressChanged(businessId);
         return toLinkResponse(sp, supplier);
+    }
+
+    private void notifySetupProgressChanged(String businessId) {
+        var progress = setupProgressInvalidate.getIfAvailable();
+        if (progress != null) {
+            progress.invalidate(businessId);
+        }
     }
 
     @Transactional

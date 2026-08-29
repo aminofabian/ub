@@ -20,6 +20,7 @@ import zelisline.ub.credits.repository.CustomerPhoneVerificationRepository;
 import zelisline.ub.identity.application.TokenHasher;
 import zelisline.ub.messaging.application.CustomerMessageDispatcher;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
+import zelisline.ub.messaging.domain.SmsSendReason;
 
 @Service
 @RequiredArgsConstructor
@@ -100,7 +101,7 @@ public class CustomerPhoneVerificationService {
         challenge.setLastSentAt(now);
         verificationRepository.save(challenge);
 
-        TenantMessagingConfig messaging = messagingSettingsService.resolveForTest(businessId);
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForTest(businessId, SmsSendReason.OTP);
         if (!messaging.secretsReadable()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,

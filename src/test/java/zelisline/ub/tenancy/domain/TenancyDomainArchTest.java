@@ -8,7 +8,7 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
 /**
  * Slice 1 DoD: "{@code tenancy.domain} has zero Spring imports" — see
- * {@code docs/PHASE_1_PLAN.md} §1.6.
+ * {@code docs/plans/PHASE_1_PLAN.md} §1.6.
  *
  * <p>Domain types must remain framework-agnostic so they can be reused across
  * Phase 2+ modules without dragging Spring into the dependency closure.

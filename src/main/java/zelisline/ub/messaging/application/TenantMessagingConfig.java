@@ -1,7 +1,12 @@
 package zelisline.ub.messaging.application;
 
+import zelisline.ub.messaging.domain.SmsSendReason;
+
 /**
  * Resolved per-tenant messaging credentials for credit tab sale reminders.
+ * <p>{@code businessId} is null for platform-scoped sends (super-admin replies,
+ * supplier-portal invites, test SMS) which are exempt from SMS credit metering.
+ * {@code smsReason} classifies the tenant's sends on the credit ledger.
  */
 public record TenantMessagingConfig(
         boolean enabled,
@@ -28,7 +33,9 @@ public record TenantMessagingConfig(
         String smsTextsmsShortcode,
         String smsTextsmsApiUrl,
         boolean secretsReadable,
-        String secretsReadError
+        String secretsReadError,
+        String businessId,
+        SmsSendReason smsReason
 ) {
     public boolean rapidApiConfigured() {
         return rapidApiKey != null && !rapidApiKey.isBlank()

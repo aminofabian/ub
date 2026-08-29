@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import zelisline.ub.billing.domain.SubscriptionBillingStatus;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.domain.TenantStatus;
 
@@ -63,4 +64,55 @@ public interface BusinessRepository extends JpaRepository<Business, String> {
 
         String getName();
     }
+
+    @Query("""
+        select b from Business b
+         where b.deletedAt is null
+           and b.subscriptionBillingStatus = :status
+           and b.currentPeriodEnd is not null
+           and b.currentPeriodEnd <= :now
+        """)
+    java.util.List<Business> findDueForPeriodExpiry(
+            @Param("status") SubscriptionBillingStatus status,
+            @Param("now") java.time.Instant now);
+
+    @Query("""
+        select b from Business b
+         where b.deletedAt is null
+           and b.subscriptionBillingStatus = :grace
+           and b.graceEndsAt is not null
+           and b.graceEndsAt <= :now
+        """)
+    java.util.List<Business> findDueForGraceEnd(
+            @Param("grace") SubscriptionBillingStatus grace,
+            @Param("now") java.time.Instant now);
+
+    @Query("""
+        select b from Business b
+         where b.deletedAt is null
+           and b.subscriptionBillingStatus = zelisline.ub.billing.domain.SubscriptionBillingStatus.ACTIVE
+           and b.currentPeriodEnd is not null
+           and b.currentPeriodEnd >= :windowStart
+           and b.currentPeriodEnd < :windowEnd
+           and lower(b.subscriptionTier) <> 'free'
+        """)
+    java.util.List<Business> findDueForPreExpiryReminder(
+            @Param("windowStart") java.time.Instant windowStart,
+            @Param("windowEnd") java.time.Instant windowEnd);
+
+    @Query("""
+        select count(b) from Business b
+         where b.deletedAt is null
+           and b.subscriptionBillingStatus = :status
+           and lower(b.subscriptionTier) <> 'free'
+        """)
+    long countPaidTierByBillingStatus(@Param("status") SubscriptionBillingStatus status);
+
+    @Query("""
+        select b from Business b
+         where b.deletedAt is null
+           and b.subscriptionBillingStatus = :status
+           and lower(b.subscriptionTier) <> 'free'
+        """)
+    java.util.List<Business> findPaidTierByBillingStatus(@Param("status") SubscriptionBillingStatus status);
 }

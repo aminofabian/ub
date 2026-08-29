@@ -2,6 +2,7 @@ package zelisline.ub.opsalerts.application;
 
 import java.time.Instant;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -23,6 +24,8 @@ public class BusinessOpsAlertSettingsService {
 
     private final BusinessOpsAlertSettingsRepository settingsRepository;
     private final BusinessCreditMessagingSettingsService messagingSettingsService;
+    private final ObjectProvider<zelisline.ub.onboarding.progress.application.SetupProgressInvalidatePublisher>
+            setupProgressInvalidate;
 
     @Transactional
     public OpsAlertSettingsResponse getForAdmin(String businessId) {
@@ -63,7 +66,12 @@ public class BusinessOpsAlertSettingsService {
         s.setPhoneVerifiedAt(Instant.now());
         // Verifying a number means the owner wants alerts — turn the master switch on.
         s.setEnabled(true);
-        return settingsRepository.save(s);
+        BusinessOpsAlertSettings saved = settingsRepository.save(s);
+        var progress = setupProgressInvalidate.getIfAvailable();
+        if (progress != null) {
+            progress.invalidate(businessId);
+        }
+        return saved;
     }
 
     @Transactional
@@ -140,7 +148,7 @@ public class BusinessOpsAlertSettingsService {
     }
 
     private OpsAlertSettingsResponse toResponse(BusinessOpsAlertSettings s) {
-        TenantMessagingConfig messaging = messagingSettingsService.resolveForPlatformOwnerMessaging();
+        TenantMessagingConfig messaging = messagingSettingsService.resolvePlatformForContactReply();
         boolean messagingReady = messaging.secretsReadable()
                 && (messaging.metaWhatsAppConfigured() || messaging.smsConfigured());
         String phone = s.getPhone();

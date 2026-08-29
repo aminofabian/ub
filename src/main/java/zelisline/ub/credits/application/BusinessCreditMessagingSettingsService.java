@@ -12,6 +12,7 @@ import zelisline.ub.credits.api.dto.UpdateCreditSaleReminderSettingsRequest;
 import zelisline.ub.credits.domain.BusinessCreditSettings;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
 import zelisline.ub.messaging.config.MessagingProperties;
+import zelisline.ub.messaging.domain.SmsSendReason;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
 import zelisline.ub.platform.application.PlatformIntegrationSettingsService;
 import zelisline.ub.platform.application.ResolvedMetaWhatsAppConfig;
@@ -40,6 +41,11 @@ public class BusinessCreditMessagingSettingsService {
 
     @Transactional(readOnly = true)
     public TenantMessagingConfig resolveForDispatch(String businessId) {
+        return resolveForDispatch(businessId, null);
+    }
+
+    @Transactional(readOnly = true)
+    public TenantMessagingConfig resolveForDispatch(String businessId, SmsSendReason reason) {
         BusinessCreditSettings s = businessCreditSettingsService.resolveForBusiness(businessId);
         SecretRead read = readSecrets(s);
         if (!read.readable()) {
@@ -48,7 +54,7 @@ public class BusinessCreditMessagingSettingsService {
         if (!s.isCreditSaleReminderEnabled()) {
             return disabledConfig(null);
         }
-        return buildConfig(s, true);
+        return buildConfig(s, true, businessId, reason);
     }
 
     /**
@@ -58,21 +64,17 @@ public class BusinessCreditMessagingSettingsService {
      */
     @Transactional(readOnly = true)
     public TenantMessagingConfig resolveForTest(String businessId) {
+        return resolveForTest(businessId, null);
+    }
+
+    @Transactional(readOnly = true)
+    public TenantMessagingConfig resolveForTest(String businessId, SmsSendReason reason) {
         BusinessCreditSettings s = businessCreditSettingsService.resolveForBusiness(businessId);
         SecretRead read = readSecrets(s);
         if (!read.readable()) {
             return disabledConfig(read.errorMessage());
         }
-        return buildConfig(s, true);
-    }
-
-    /**
-     * Platform SMS/WhatsApp for owner-facing alerts (ops alerts, adoption SMS).
-     * Per-tenant credit-tab SMS overrides must not block platform delivery.
-     */
-    @Transactional(readOnly = true)
-    public TenantMessagingConfig resolveForPlatformOwnerMessaging() {
-        return resolvePlatformForContactReply();
+        return buildConfig(s, true, businessId, reason);
     }
 
     /**
@@ -116,10 +118,17 @@ public class BusinessCreditMessagingSettingsService {
                 trimToNull(platformTextSms.shortcode()),
                 firstNonBlank(platformTextSms.apiUrl(), "https://sms.textsms.co.ke/api/services/sendsms/"),
                 true,
+                null,
+                null,
                 null);
     }
 
-    private TenantMessagingConfig buildConfig(BusinessCreditSettings s, boolean enabled) {
+    private TenantMessagingConfig buildConfig(
+            BusinessCreditSettings s,
+            boolean enabled,
+            String businessId,
+            SmsSendReason reason
+    ) {
         var env = messagingProperties;
         ResolvedRapidApiWhatsappConfig platformWa =
                 platformIntegrationSettingsService.resolveRapidApiWhatsapp();
@@ -191,15 +200,54 @@ public class BusinessCreditMessagingSettingsService {
                         platformTextSms.apiUrl(),
                         "https://sms.textsms.co.ke/api/services/sendsms/"),
                 true,
-                null);
-        if (tenant.smsConfigured()) {
-            return tenant;
-        }
+                null,
+                businessId,
+                reason);
+        // Super-admin platform integrations win for SMS and WhatsApp on every tenant.
+        // Per-tenant credit-tab overrides must not block global credentials.
         TenantMessagingConfig platform = resolvePlatformForContactReply();
+        TenantMessagingConfig resolved = tenant;
         if (platform.smsConfigured()) {
-            return mergePlatformSms(tenant, platform);
+            resolved = mergePlatformSms(resolved, platform);
         }
-        return tenant;
+        if (platform.metaWhatsAppConfigured()) {
+            resolved = mergePlatformMeta(resolved, platform);
+        }
+        return resolved;
+    }
+
+    private static TenantMessagingConfig mergePlatformMeta(
+            TenantMessagingConfig tenant,
+            TenantMessagingConfig platform
+    ) {
+        return new TenantMessagingConfig(
+                tenant.enabled(),
+                tenant.paymentAccountUrl(),
+                tenant.rapidApiKey(),
+                tenant.rapidApiHost(),
+                tenant.rapidApiLookupUrl(),
+                tenant.rapidApiPhoneField(),
+                tenant.rapidApiPhoneDigitsOnly(),
+                platform.metaAccessToken(),
+                platform.metaPhoneNumberId(),
+                platform.metaGraphVersion(),
+                platform.metaAccessTokenSource(),
+                tenant.smsProvider(),
+                tenant.smsUsername(),
+                tenant.smsApiKey(),
+                tenant.smsSozuriProject(),
+                tenant.smsSozuriApiKey(),
+                tenant.smsSozuriFrom(),
+                tenant.smsSozuriType(),
+                tenant.smsSozuriApiUrl(),
+                tenant.smsTextsmsPartnerId(),
+                tenant.smsTextsmsApiKey(),
+                tenant.smsTextsmsShortcode(),
+                tenant.smsTextsmsApiUrl(),
+                tenant.secretsReadable(),
+                tenant.secretsReadError(),
+                tenant.businessId(),
+                tenant.smsReason());
     }
 
     private static TenantMessagingConfig mergePlatformSms(
@@ -231,7 +279,9 @@ public class BusinessCreditMessagingSettingsService {
                 platform.smsTextsmsShortcode(),
                 platform.smsTextsmsApiUrl(),
                 tenant.secretsReadable(),
-                tenant.secretsReadError());
+                tenant.secretsReadError(),
+                tenant.businessId(),
+                tenant.smsReason());
     }
 
     @Transactional
@@ -448,7 +498,7 @@ public class BusinessCreditMessagingSettingsService {
         return new TenantMessagingConfig(
                 false, "", null, null, null, null, false, null, null, null, "none", "none",
                 null, null, null, null, null, null, null, null, null, null, null,
-                readError == null, readError);
+                readError == null, readError, null, null);
     }
 
     private static String firstNonBlank(String... values) {

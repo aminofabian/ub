@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -26,6 +27,7 @@ import zelisline.ub.audit.application.AuditEventPublisher;
 import zelisline.ub.audit.domain.AuditEventActorType;
 import zelisline.ub.audit.domain.AuditEventCategory;
 import zelisline.ub.audit.domain.AuditEventSeverity;
+import zelisline.ub.identity.api.dto.AuthBillingGateResponse;
 import zelisline.ub.identity.api.dto.AuthUserResponse;
 import zelisline.ub.identity.api.dto.LoginPinRequest;
 import zelisline.ub.identity.api.dto.LoginRequest;
@@ -122,6 +124,7 @@ public class AuthService {
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
     private final TillDeviceService tillDeviceService;
+    private final ObjectProvider<zelisline.ub.billing.application.SubscriptionRenewalService> subscriptionRenewalService;
 
     @Value("${app.jwt.access-ttl-minutes:60}")
     private long accessTtlMinutes;
@@ -147,7 +150,9 @@ public class AuthService {
             throw invalidCredentials();
         }
         recordLoginSuccess(user);
-        LoginResponse response = issueNewSessionWithSession(user, http).tokens();
+        LoginResponse response = attachBillingGate(
+                issueNewSessionWithSession(user, http).tokens(),
+                user.getBusinessId());
         publishLoginEvent(user, http, response, AuditEventTypes.LOGIN_SUCCEEDED, null, null, "password");
         return response;
     }
@@ -163,7 +168,9 @@ public class AuthService {
     public LoginResponse issueSessionForUser(User user, HttpServletRequest http, String loginMethod) {
         assertCanAuthenticate(user);
         recordLoginSuccess(user);
-        LoginResponse response = issueNewSessionWithSession(user, http).tokens();
+        LoginResponse response = attachBillingGate(
+                issueNewSessionWithSession(user, http).tokens(),
+                user.getBusinessId());
         String method = loginMethod == null || loginMethod.isBlank() ? "session" : loginMethod.trim();
         publishLoginEvent(user, http, response, AuditEventTypes.LOGIN_SUCCEEDED, null, null, method);
         return response;
@@ -193,7 +200,9 @@ public class AuthService {
             throw ex;
         }
         recordLoginSuccess(user);
-        LoginResponse response = issueNewSessionWithSession(user, http).tokens();
+        LoginResponse response = attachBillingGate(
+                issueNewSessionWithSession(user, http).tokens(),
+                user.getBusinessId());
         publishLoginEvent(user, http, response, AuditEventTypes.LOGIN_SUCCEEDED, null, tillDeviceKey, "pin");
         return response;
     }
@@ -250,7 +259,9 @@ public class AuthService {
         }
 
         recordLoginSuccess(user);
-        LoginResponse response = reissueAccessOnSession(session, user, http);
+        LoginResponse response = attachBillingGate(
+                reissueAccessOnSession(session, user, http),
+                user.getBusinessId());
         publishLoginEvent(user, http, response, AuditEventTypes.LOGIN_SUCCEEDED, null, tillDeviceKey, "pin_unlock");
         return response;
     }
@@ -294,7 +305,7 @@ public class AuthService {
         old.setRotatedToId(neu.session().getId());
         userSessionRepository.save(old);
 
-        return neu.tokens();
+        return attachBillingGate(neu.tokens(), user.getBusinessId());
     }
 
     /**
@@ -559,7 +570,7 @@ public class AuthService {
                 user.getBranchId(),
                 jti
         );
-        LoginResponse response = new LoginResponse(access, refreshRaw, toAuthUser(user));
+        LoginResponse response = new LoginResponse(access, refreshRaw, toAuthUser(user), null);
         return new SessionBundle(response, session);
     }
 
@@ -588,7 +599,26 @@ public class AuthService {
                 user.getBranchId(),
                 jti
         );
-        return new LoginResponse(access, null, toAuthUser(user));
+        return new LoginResponse(access, null, toAuthUser(user), null);
+    }
+
+    private LoginResponse attachBillingGate(LoginResponse response, String businessId) {
+        if (response == null || businessId == null || businessId.isBlank()) {
+            return response;
+        }
+        var renewal = subscriptionRenewalService.getIfAvailable();
+        if (renewal == null) {
+            return response;
+        }
+        AuthBillingGateResponse gate = renewal.authGate(businessId);
+        if (gate == null) {
+            return response;
+        }
+        return new LoginResponse(
+                response.accessToken(),
+                response.refreshToken(),
+                response.user(),
+                gate);
     }
 
     private void recordLoginFailure(User user, HttpServletRequest http, String eventType, String reason) {

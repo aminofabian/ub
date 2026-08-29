@@ -190,4 +190,17 @@ public final class AuditEventTypes {
     public static final String BUSINESS_REGION_CHANGED = "business.region_changed";
 
     public static final String PLATFORM_EMAIL_CAMPAIGN_SENT = "platform.email_campaign.sent";
+
+    // SMS credits & quotas
+    public static final String SMS_CREDITS_PURCHASED = "sms_credits.purchased";
+    public static final String SMS_CREDITS_GRANTED = "sms_credits.granted";
+    public static final String SMS_CREDITS_CYCLE_RESET = "sms_credits.cycle_reset";
+
+    // Subscription billing
+    public static final String SUBSCRIPTION_ENTERED_GRACE = "subscription.entered_grace";
+    public static final String SUBSCRIPTION_SUSPENDED = "subscription.suspended";
+    public static final String SUBSCRIPTION_RENEWED = "subscription.renewed";
+    public static final String SUBSCRIPTION_EXTENDED = "subscription.extended";
+    public static final String SUBSCRIPTION_CAMPAIGN_SENT = "subscription.campaign_sent";
+    public static final String SUBSCRIPTION_PRE_EXPIRY_SENT = "subscription.pre_expiry_sent";
 }

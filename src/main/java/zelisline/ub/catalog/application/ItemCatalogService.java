@@ -110,6 +110,8 @@ public class ItemCatalogService {
     private final AuditEventBuilder auditEventBuilder;
     private final ObjectProvider<zelisline.ub.onboarding.sequence.application.MerchantOnboardingSequenceService>
             onboardingSequence;
+    private final ObjectProvider<zelisline.ub.onboarding.progress.application.SetupProgressInvalidatePublisher>
+            setupProgressInvalidate;
 
     @Transactional(readOnly = true)
     public Page<ItemSummaryResponse> listItems(
@@ -629,6 +631,10 @@ public class ItemCatalogService {
             var seq = onboardingSequence.getIfAvailable();
             if (seq != null) {
                 seq.onCatalogChanged(businessId);
+            }
+            var progress = setupProgressInvalidate.getIfAvailable();
+            if (progress != null) {
+                progress.invalidate(businessId);
             }
         } catch (RuntimeException ex) {
             log.debug("onboarding catalog hook skipped businessId={}", businessId, ex);

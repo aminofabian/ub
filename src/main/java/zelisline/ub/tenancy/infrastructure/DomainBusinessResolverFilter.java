@@ -31,7 +31,7 @@ import zelisline.ub.tenancy.repository.DomainMappingRepository;
  * Spring Security and authentication run.
  *
  * <p>Aligns with the {@code DomainBusinessResolverFilter} stage in
- * {@code docs/PHASE_1_PLAN.md} §1.4. On unknown hosts a {@code 404
+ * {@code docs/plans/PHASE_1_PLAN.md} §1.4. On unknown hosts a {@code 404
  * application/problem+json} with type {@code urn:problem:tenant-not-found} is
  * returned — a {@code 401} would leak tenant existence.
  *
@@ -173,6 +173,11 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
             TenantStatus status = businessRepository.findTenantStatusById(businessId)
                     .orElse(TenantStatus.ACTIVE);
             if (status != TenantStatus.ACTIVE) {
+                if (isBillingRecoveryPath(request)) {
+                    request.setAttribute(TenantRequestAttributes.BUSINESS_ID, businessId);
+                    filterChain.doFilter(request, response);
+                    return;
+                }
                 logger.warn("[DomainResolver] tenant not active: host={} businessId={} status={}", lookupHost, businessId, status);
                 writeTenantNotActive(response, status);
                 return;
@@ -195,6 +200,17 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
     private static boolean hasExplicitTenantId(HttpServletRequest request) {
         String value = request.getHeader(X_TENANT_ID_HEADER);
         return value != null && !value.isBlank();
+    }
+
+    /** Auth + subscription renewal while billing-suspended (SUBSCRIPTION_BILLING_SCOPE.md §8). */
+    private static boolean isBillingRecoveryPath(HttpServletRequest request) {
+        String path = request.getRequestURI();
+        if (path == null) {
+            return false;
+        }
+        return path.startsWith("/api/v1/auth/")
+                || path.startsWith("/api/v1/subscription/")
+                || "/api/v1/me".equals(path);
     }
 
     /**

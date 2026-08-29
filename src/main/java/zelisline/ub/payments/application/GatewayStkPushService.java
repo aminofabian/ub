@@ -111,6 +111,8 @@ public class GatewayStkPushService {
     private final ObjectProvider<KioskPayWalletService> kioskPayWalletService;
     private final ObjectProvider<zelisline.ub.airtime.application.AirtimeSaleService> airtimeSaleService;
     private final InboundTillPaymentService inboundTillPaymentService;
+    private final ObjectProvider<zelisline.ub.messaging.application.SmsCreditPurchaseService> smsCreditPurchaseService;
+    private final ObjectProvider<zelisline.ub.billing.application.SubscriptionRenewalService> subscriptionRenewalService;
     /** Own proxy, so gateway polling can open a transaction only to write the result. */
     private final ObjectProvider<GatewayStkPushService> self;
     private final AuditEventPublisher auditEventPublisher;
@@ -371,10 +373,24 @@ public class GatewayStkPushService {
                     parsed.reference().trim(),
                     GatewayStkPushStatuses.PENDING,
                     StkPushContextType.DOMAIN_ORDER);
+            if (push.isEmpty()) {
+                push = pushRepository.findFirstByMerchantReferenceAndStatusAndContextType(
+                        parsed.reference().trim(),
+                        GatewayStkPushStatuses.PENDING,
+                        StkPushContextType.SMS_CREDIT_PURCHASE);
+            }
+            if (push.isEmpty()) {
+                push = pushRepository.findFirstByMerchantReferenceAndStatusAndContextType(
+                        parsed.reference().trim(),
+                        GatewayStkPushStatuses.PENDING,
+                        StkPushContextType.SUBSCRIPTION_RENEWAL);
+            }
         }
         if (push.isEmpty()
-                || push.get().getContextType() != StkPushContextType.DOMAIN_ORDER) {
-            log.warn("KopoKopo platform webhook: no DOMAIN_ORDER push checkout={} ref={}",
+                || (push.get().getContextType() != StkPushContextType.DOMAIN_ORDER
+                && push.get().getContextType() != StkPushContextType.SMS_CREDIT_PURCHASE
+                && push.get().getContextType() != StkPushContextType.SUBSCRIPTION_RENEWAL)) {
+            log.warn("KopoKopo platform webhook: no platform STK push checkout={} ref={}",
                     parsed.gatewayCheckoutId(), parsed.reference());
             return true;
         }
@@ -954,6 +970,8 @@ public class GatewayStkPushService {
             case DOMAIN_ORDER -> confirmDomainOrder(push);
             case AIRTIME_ORDER -> confirmAirtimeOrder(push);
             case KIOSK_PAY_TOPUP -> confirmKioskPayTopUp(push);
+            case SMS_CREDIT_PURCHASE -> confirmSmsCreditPurchase(push);
+            case SUBSCRIPTION_RENEWAL -> confirmSubscriptionRenewal(push);
             default -> log.warn("Unknown STK context type: {}", push.getContextType());
         }
     }
@@ -969,6 +987,37 @@ public class GatewayStkPushService {
             return;
         }
         airtime.markPaidAndDispatch(push.getContextId());
+    }
+
+    /** Tenant bought SMS credits — credit the purchased balance (idempotent). */
+    private void confirmSmsCreditPurchase(GatewayStkPush push) {
+        if (push.getContextId() == null) {
+            return;
+        }
+        var purchases = smsCreditPurchaseService.getIfAvailable();
+        if (purchases == null) {
+            log.warn("SMS credits purchase {} paid but the purchase module is unavailable", push.getContextId());
+            return;
+        }
+        purchases.markPaid(
+                push.getContextId(),
+                push.getGatewayCheckoutId(),
+                push.getGatewayTransactionId());
+    }
+
+    private void confirmSubscriptionRenewal(GatewayStkPush push) {
+        if (push.getContextId() == null) {
+            return;
+        }
+        var renewals = subscriptionRenewalService.getIfAvailable();
+        if (renewals == null) {
+            log.warn("Subscription renewal {} paid but billing module is unavailable", push.getContextId());
+            return;
+        }
+        renewals.markPaid(
+                push.getContextId(),
+                push.getGatewayCheckoutId(),
+                push.getGatewayTransactionId());
     }
 
     /**
@@ -1064,6 +1113,26 @@ public class GatewayStkPushService {
                 }
             } catch (Exception e) {
                 log.warn("Failed to cancel unpaid airtime order {}", push.getContextId(), e);
+            }
+        }
+        if (push.getContextType() == StkPushContextType.SMS_CREDIT_PURCHASE && push.getContextId() != null) {
+            try {
+                var purchases = smsCreditPurchaseService.getIfAvailable();
+                if (purchases != null) {
+                    purchases.markFailed(push.getBusinessId(), push.getContextId(), reason);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to mark SMS credits purchase failed {}", push.getContextId(), e);
+            }
+        }
+        if (push.getContextType() == StkPushContextType.SUBSCRIPTION_RENEWAL && push.getContextId() != null) {
+            try {
+                var renewals = subscriptionRenewalService.getIfAvailable();
+                if (renewals != null) {
+                    renewals.markFailed(push.getBusinessId(), push.getContextId(), reason);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to mark subscription renewal failed {}", push.getContextId(), e);
             }
         }
         publishStkRealtime(push, false, reason);

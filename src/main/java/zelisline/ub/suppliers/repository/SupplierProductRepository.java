@@ -99,6 +99,16 @@ public interface SupplierProductRepository extends JpaRepository<SupplierProduct
     List<SupplierProduct> findByItemIdAndDeletedAtIsNull(String itemId);
 
     @Query("""
+            SELECT COUNT(sp) FROM SupplierProduct sp
+            JOIN Supplier s ON s.id = sp.supplierId
+            WHERE s.businessId = :businessId
+              AND sp.deletedAt IS NULL
+              AND sp.active = TRUE
+              AND s.deletedAt IS NULL
+            """)
+    long countActiveLinksForBusiness(@Param("businessId") String businessId);
+
+    @Query("""
             SELECT sp FROM SupplierProduct sp
             JOIN Supplier s ON s.id = sp.supplierId
             JOIN Item i ON i.id = sp.itemId

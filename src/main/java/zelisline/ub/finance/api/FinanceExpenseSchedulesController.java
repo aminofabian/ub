@@ -12,15 +12,20 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.finance.api.dto.ExpenseCalendarResponse;
+import zelisline.ub.finance.api.dto.ExpenseScheduleOccurrenceResponse;
 import zelisline.ub.finance.api.dto.ExpenseScheduleResponse;
 import zelisline.ub.finance.api.dto.PatchExpenseScheduleRequest;
+import zelisline.ub.finance.api.dto.PostExpenseOccurrenceRequest;
 import zelisline.ub.finance.api.dto.PostExpenseScheduleRequest;
+import zelisline.ub.finance.application.ExpenseScheduleOccurrenceService;
 import zelisline.ub.finance.application.ExpenseScheduleService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.TenantRequestIds;
@@ -32,6 +37,7 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class FinanceExpenseSchedulesController {
 
     private final ExpenseScheduleService expenseScheduleService;
+    private final ExpenseScheduleOccurrenceService occurrenceService;
 
     @PostMapping
     @PreAuthorize("hasPermission(null, 'finance.expenses.write')")
@@ -72,5 +78,92 @@ public class FinanceExpenseSchedulesController {
         CurrentTenantUser.requireHuman(request);
         return expenseScheduleService.listActive(TenantRequestIds.resolveBusinessId(request));
     }
-}
 
+    @GetMapping("/occurrences")
+    @PreAuthorize("hasPermission(null, 'finance.expenses.read')")
+    public List<ExpenseScheduleOccurrenceResponse> listOccurrences(
+            @RequestParam int year,
+            @RequestParam int month,
+            @RequestParam(required = false) String branchId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return occurrenceService.listForMonth(
+                TenantRequestIds.resolveBusinessId(request),
+                year,
+                month,
+                branchId
+        );
+    }
+
+    @GetMapping("/calendar")
+    @PreAuthorize("hasPermission(null, 'finance.expenses.read')")
+    public ExpenseCalendarResponse calendar(
+            @RequestParam int year,
+            @RequestParam(required = false) String branchId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return occurrenceService.calendarYear(
+                TenantRequestIds.resolveBusinessId(request),
+                year,
+                branchId
+        );
+    }
+
+    @PostMapping("/occurrences/{occurrenceId}/post")
+    @PreAuthorize("hasPermission(null, 'finance.expenses.write')")
+    public ExpenseScheduleOccurrenceResponse postOccurrence(
+            @PathVariable String occurrenceId,
+            HttpServletRequest request
+    ) {
+        var user = CurrentTenantUser.requireHuman(request);
+        return occurrenceService.postById(
+                TenantRequestIds.resolveBusinessId(request),
+                occurrenceId,
+                user.userId()
+        );
+    }
+
+    @PostMapping("/occurrences/post")
+    @PreAuthorize("hasPermission(null, 'finance.expenses.write')")
+    public ExpenseScheduleOccurrenceResponse postOccurrenceByDate(
+            @Valid @RequestBody PostExpenseOccurrenceRequest body,
+            HttpServletRequest request
+    ) {
+        var user = CurrentTenantUser.requireHuman(request);
+        return occurrenceService.postByScheduleDate(
+                TenantRequestIds.resolveBusinessId(request),
+                body.scheduleId(),
+                body.occurrenceDate(),
+                user.userId()
+        );
+    }
+
+    @PostMapping("/occurrences/{occurrenceId}/skip")
+    @PreAuthorize("hasPermission(null, 'finance.expenses.write')")
+    public ExpenseScheduleOccurrenceResponse skipOccurrence(
+            @PathVariable String occurrenceId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return occurrenceService.skipById(
+                TenantRequestIds.resolveBusinessId(request),
+                occurrenceId
+        );
+    }
+
+    @PostMapping("/occurrences/skip")
+    @PreAuthorize("hasPermission(null, 'finance.expenses.write')")
+    public ExpenseScheduleOccurrenceResponse skipOccurrenceByDate(
+            @Valid @RequestBody PostExpenseOccurrenceRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return occurrenceService.skipByScheduleDate(
+                TenantRequestIds.resolveBusinessId(request),
+                body.scheduleId(),
+                body.occurrenceDate()
+        );
+    }
+}

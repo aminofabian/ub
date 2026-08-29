@@ -1,6 +1,7 @@
 package zelisline.ub.finance.repository;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -11,6 +12,13 @@ public interface ExpenseScheduleOccurrenceRepository extends JpaRepository<Expen
 
     Optional<ExpenseScheduleOccurrence> findByScheduleIdAndOccurrenceDate(String scheduleId, LocalDate occurrenceDate);
 
+    Optional<ExpenseScheduleOccurrence> findByIdAndBusinessId(String id, String businessId);
+
+    List<ExpenseScheduleOccurrence> findByBusinessIdAndOccurrenceDateBetween(
+            String businessId,
+            LocalDate start,
+            LocalDate end
+    );
+
     long countByScheduleId(String scheduleId);
 }
-

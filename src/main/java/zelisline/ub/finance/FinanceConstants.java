@@ -15,6 +15,12 @@ public final class FinanceConstants {
     public static final String EXPENSE_FREQUENCY_WEEKLY = "weekly";
     public static final String EXPENSE_FREQUENCY_MONTHLY = "monthly";
 
+    public static final String OCCURRENCE_STATUS_POSTED = "posted";
+    public static final String OCCURRENCE_STATUS_FAILED = "failed";
+    public static final String OCCURRENCE_STATUS_SKIPPED = "skipped";
+    public static final String OCCURRENCE_STATUS_DUE = "due";
+    public static final String OCCURRENCE_STATUS_UPCOMING = "upcoming";
+
     private FinanceConstants() {
     }
 }

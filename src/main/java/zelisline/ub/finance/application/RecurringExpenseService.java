@@ -7,8 +7,10 @@ import java.time.ZoneId;
 import java.util.List;
 
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.finance.FinanceConstants;
@@ -72,7 +74,7 @@ public class RecurringExpenseService {
             if (schedule.getEndDate() != null && cursor.isAfter(schedule.getEndDate())) {
                 break;
             }
-            if (isDueOn(schedule, cursor) && ensureOccurrenceAndPost(schedule, cursor)) {
+            if (isDueOn(schedule, cursor) && ensureOccurrenceAndPost(schedule, cursor, schedule.getCreatedBy())) {
                 posted++;
             }
             schedule.setLastGeneratedOn(cursor);
@@ -82,15 +84,94 @@ public class RecurringExpenseService {
         return posted;
     }
 
-    private boolean ensureOccurrenceAndPost(ExpenseSchedule schedule, LocalDate date) {
-        if (occurrenceRepository.findByScheduleIdAndOccurrenceDate(schedule.getId(), date).isPresent()) {
-            return false;
+    @Transactional
+    public ExpenseScheduleOccurrence postOccurrenceForDate(
+            ExpenseSchedule schedule,
+            LocalDate date,
+            String userId
+    ) {
+        ExpenseScheduleOccurrence occ = occurrenceRepository
+                .findByScheduleIdAndOccurrenceDate(schedule.getId(), date)
+                .orElse(null);
+        if (occ == null) {
+            ensureOccurrenceAndPost(schedule, date, userId);
+            occ = occurrenceRepository.findByScheduleIdAndOccurrenceDate(schedule.getId(), date)
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.CONFLICT,
+                            "Could not post occurrence"
+                    ));
+        } else {
+            occ = postExistingOccurrence(schedule, occ, userId);
         }
+        advanceLastGeneratedOn(schedule, date);
+        expenseScheduleRepository.save(schedule);
+        return occ;
+    }
+
+    @Transactional
+    public ExpenseScheduleOccurrence postExistingOccurrence(
+            ExpenseSchedule schedule,
+            ExpenseScheduleOccurrence occ,
+            String userId
+    ) {
+        if (FinanceConstants.OCCURRENCE_STATUS_POSTED.equals(occ.getStatus()) && occ.getExpenseId() != null) {
+            return occ;
+        }
+        if (FinanceConstants.OCCURRENCE_STATUS_SKIPPED.equals(occ.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Occurrence was skipped");
+        }
+        try {
+            Expense expense = expenseService.createRecurringExpense(
+                    schedule.getBusinessId(),
+                    new PostExpenseRequest(
+                            occ.getOccurrenceDate(),
+                            schedule.getName(),
+                            schedule.getCategoryType(),
+                            schedule.getAmount(),
+                            schedule.getPaymentMethod(),
+                            schedule.isIncludeInCashDrawer(),
+                            schedule.getBranchId(),
+                            schedule.getReceiptS3Key(),
+                            schedule.getExpenseLedgerAccountId(),
+                            Instant.now()
+                    ),
+                    userId
+            );
+            occ.setExpenseId(expense.getId());
+            occ.setPostedAt(Instant.now());
+            occ.setStatus(FinanceConstants.OCCURRENCE_STATUS_POSTED);
+            occ.setFailureReason(null);
+            ExpenseScheduleOccurrence saved = occurrenceRepository.save(occ);
+            advanceLastGeneratedOn(schedule, occ.getOccurrenceDate());
+            expenseScheduleRepository.save(schedule);
+            return saved;
+        } catch (RuntimeException ex) {
+            occ.setStatus(FinanceConstants.OCCURRENCE_STATUS_FAILED);
+            occ.setFailureReason(limit(ex.getMessage(), 1000));
+            return occurrenceRepository.save(occ);
+        }
+    }
+
+    private boolean ensureOccurrenceAndPost(ExpenseSchedule schedule, LocalDate date, String userId) {
+        ExpenseScheduleOccurrence existing = occurrenceRepository
+                .findByScheduleIdAndOccurrenceDate(schedule.getId(), date)
+                .orElse(null);
+        if (existing != null) {
+            if (FinanceConstants.OCCURRENCE_STATUS_POSTED.equals(existing.getStatus())) {
+                return false;
+            }
+            if (FinanceConstants.OCCURRENCE_STATUS_SKIPPED.equals(existing.getStatus())) {
+                return false;
+            }
+            postExistingOccurrence(schedule, existing, userId);
+            return FinanceConstants.OCCURRENCE_STATUS_POSTED.equals(existing.getStatus());
+        }
+
         ExpenseScheduleOccurrence occ = new ExpenseScheduleOccurrence();
         occ.setScheduleId(schedule.getId());
         occ.setBusinessId(schedule.getBusinessId());
         occ.setOccurrenceDate(date);
-        occ.setStatus("posted");
+        occ.setStatus(FinanceConstants.OCCURRENCE_STATUS_POSTED);
         try {
             occurrenceRepository.save(occ);
         } catch (DataIntegrityViolationException e) {
@@ -112,18 +193,24 @@ public class RecurringExpenseService {
                             schedule.getExpenseLedgerAccountId(),
                             Instant.now()
                     ),
-                    schedule.getCreatedBy()
+                    userId
             );
             occ.setExpenseId(expense.getId());
             occ.setPostedAt(Instant.now());
-            occ.setStatus("posted");
+            occ.setStatus(FinanceConstants.OCCURRENCE_STATUS_POSTED);
             occurrenceRepository.save(occ);
             return true;
         } catch (RuntimeException ex) {
-            occ.setStatus("failed");
+            occ.setStatus(FinanceConstants.OCCURRENCE_STATUS_FAILED);
             occ.setFailureReason(limit(ex.getMessage(), 1000));
             occurrenceRepository.save(occ);
             return false;
+        }
+    }
+
+    private void advanceLastGeneratedOn(ExpenseSchedule schedule, LocalDate date) {
+        if (schedule.getLastGeneratedOn() == null || date.isAfter(schedule.getLastGeneratedOn())) {
+            schedule.setLastGeneratedOn(date);
         }
     }
 
@@ -174,4 +261,3 @@ public class RecurringExpenseService {
         return input.substring(0, max);
     }
 }
-

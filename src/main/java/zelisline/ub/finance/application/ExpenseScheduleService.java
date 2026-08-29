@@ -59,6 +59,18 @@ public class ExpenseScheduleService {
     public ExpenseScheduleResponse update(String businessId, String scheduleId, PatchExpenseScheduleRequest req) {
         ExpenseSchedule s = expenseScheduleRepository.findByIdAndBusinessId(scheduleId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Expense schedule not found"));
+        if (req.name() != null) {
+            s.setName(requireName(req.name()));
+        }
+        if (req.amount() != null) {
+            s.setAmount(requireAmount(req.amount()));
+        }
+        if (req.paymentMethod() != null) {
+            s.setPaymentMethod(requirePaymentMethod(req.paymentMethod()));
+        }
+        if (req.frequency() != null) {
+            s.setFrequency(requireFrequency(req.frequency()));
+        }
         if (req.endDate() != null) {
             if (req.endDate().isBefore(s.getStartDate())) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "endDate cannot be before startDate");
@@ -67,6 +79,18 @@ public class ExpenseScheduleService {
         }
         if (req.active() != null) {
             s.setActive(req.active());
+        }
+        if (req.includeInCashDrawer() != null) {
+            s.setIncludeInCashDrawer(req.includeInCashDrawer());
+        }
+        if (req.branchId() != null) {
+            s.setBranchId(validateBranch(businessId, req.branchId()));
+        }
+        if (req.receiptS3Key() != null) {
+            s.setReceiptS3Key(blankToNull(req.receiptS3Key()));
+        }
+        if (req.expenseLedgerAccountId() != null) {
+            s.setExpenseLedgerAccountId(resolveExpenseLedger(businessId, req.expenseLedgerAccountId()).getId());
         }
         return toDto(expenseScheduleRepository.save(s));
     }

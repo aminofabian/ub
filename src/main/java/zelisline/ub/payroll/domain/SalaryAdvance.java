@@ -33,6 +33,9 @@ public class SalaryAdvance {
     @Column(name = "amount", nullable = false, precision = 14, scale = 2)
     private BigDecimal amount;
 
+    @Column(name = "amount_repaid", nullable = false, precision = 14, scale = 2)
+    private BigDecimal amountRepaid = BigDecimal.ZERO;
+
     @Column(name = "advanced_on", nullable = false)
     private LocalDate advancedOn;
 
@@ -62,6 +65,9 @@ public class SalaryAdvance {
         }
         if (status == null || status.isBlank()) {
             status = AdvanceStatus.OUTSTANDING;
+        }
+        if (amountRepaid == null) {
+            amountRepaid = BigDecimal.ZERO;
         }
         if (createdAt == null) {
             createdAt = now;

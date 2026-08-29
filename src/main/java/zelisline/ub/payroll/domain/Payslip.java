@@ -44,6 +44,18 @@ public class Payslip {
     @Column(name = "other_deductions", nullable = false, precision = 14, scale = 2)
     private BigDecimal otherDeductions = BigDecimal.ZERO;
 
+    @Column(name = "paye_deducted", nullable = false, precision = 14, scale = 2)
+    private BigDecimal payeDeducted = BigDecimal.ZERO;
+
+    @Column(name = "nssf_deducted", nullable = false, precision = 14, scale = 2)
+    private BigDecimal nssfDeducted = BigDecimal.ZERO;
+
+    @Column(name = "shif_deducted", nullable = false, precision = 14, scale = 2)
+    private BigDecimal shifDeducted = BigDecimal.ZERO;
+
+    @Column(name = "housing_levy_deducted", nullable = false, precision = 14, scale = 2)
+    private BigDecimal housingLevyDeducted = BigDecimal.ZERO;
+
     @Column(name = "net_paid", nullable = false, precision = 14, scale = 2)
     private BigDecimal netPaid;
 
@@ -53,9 +65,12 @@ public class Payslip {
     @Column(name = "note", length = 500)
     private String note;
 
-    /** GL / expense hook — unused in MVP. */
+    /** GL expense created when payroll is posted to finance. */
     @Column(name = "expense_id", length = 36)
     private String expenseId;
+
+    @Column(name = "payment_method", length = 32)
+    private String paymentMethod;
 
     @Column(name = "created_by", nullable = false, length = 36)
     private String createdBy;
@@ -77,6 +92,18 @@ public class Payslip {
         }
         if (otherDeductions == null) {
             otherDeductions = BigDecimal.ZERO;
+        }
+        if (payeDeducted == null) {
+            payeDeducted = BigDecimal.ZERO;
+        }
+        if (nssfDeducted == null) {
+            nssfDeducted = BigDecimal.ZERO;
+        }
+        if (shifDeducted == null) {
+            shifDeducted = BigDecimal.ZERO;
+        }
+        if (housingLevyDeducted == null) {
+            housingLevyDeducted = BigDecimal.ZERO;
         }
         if (createdAt == null) {
             createdAt = now;

@@ -3,11 +3,9 @@ package zelisline.ub.payroll.api.dto;
 import java.math.BigDecimal;
 import java.time.Instant;
 
-public record PayslipResponse(
+/** Payslip row scoped to the authenticated staff member only. */
+public record StaffPaySelfPayslipRow(
         String id,
-        String staffProfileId,
-        String userId,
-        String displayName,
         int periodYear,
         int periodMonth,
         BigDecimal baseSalary,
@@ -20,7 +18,6 @@ public record PayslipResponse(
         BigDecimal netPaid,
         Instant paidAt,
         String note,
-        String expenseId,
         String paymentMethod
 ) {
 }

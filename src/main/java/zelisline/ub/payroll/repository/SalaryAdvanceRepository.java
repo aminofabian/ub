@@ -18,4 +18,11 @@ public interface SalaryAdvanceRepository extends JpaRepository<SalaryAdvance, St
             String staffProfileId,
             String status
     );
+
+    List<SalaryAdvance> findByBusinessIdOrderByAdvancedOnDescCreatedAtDesc(String businessId);
+
+    List<SalaryAdvance> findByBusinessIdAndStatusOrderByAdvancedOnDescCreatedAtDesc(
+            String businessId,
+            String status
+    );
 }

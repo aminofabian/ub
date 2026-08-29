@@ -299,4 +299,9 @@ public class StaffProfileService {
     public Optional<StaffProfile> findByUser(String businessId, String userId) {
         return staffProfileRepository.findByBusinessIdAndUserId(businessId, userId);
     }
+
+    @Transactional(readOnly = true)
+    public List<StaffProfile> findProfilesByBusiness(String businessId) {
+        return staffProfileRepository.findByBusinessIdOrderByDisplayNameAsc(businessId);
+    }
 }

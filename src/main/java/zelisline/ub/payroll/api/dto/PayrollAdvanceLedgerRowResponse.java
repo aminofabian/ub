@@ -4,10 +4,13 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 
-public record SalaryAdvanceResponse(
+/** One row in the shop-wide salary advance ledger. */
+public record PayrollAdvanceLedgerRowResponse(
         String id,
         String staffProfileId,
         String userId,
+        String displayName,
+        String branchName,
         BigDecimal amount,
         BigDecimal amountRepaid,
         BigDecimal balanceOutstanding,

@@ -26,4 +26,9 @@ public interface PayslipRepository extends JpaRepository<Payslip, String> {
             int periodYear,
             int periodMonth
     );
+
+    List<Payslip> findByBusinessIdAndPeriodYearOrderByPeriodMonthAsc(
+            String businessId,
+            int periodYear
+    );
 }

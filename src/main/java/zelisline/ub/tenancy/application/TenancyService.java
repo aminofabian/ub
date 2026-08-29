@@ -11,6 +11,7 @@ import java.util.stream.Collectors;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -95,6 +96,8 @@ public class TenancyService {
     private final ReservedHostnameGuard reservedHostnameGuard;
     private final VercelProjectDomainClient vercelProjectDomainClient;
     private final ObjectMapper objectMapper;
+    private final ObjectProvider<zelisline.ub.onboarding.progress.application.SetupProgressInvalidatePublisher>
+            setupProgressInvalidate;
 
     @Transactional
     public BusinessResponse createBusiness(CreateBusinessRequest request) {
@@ -437,6 +440,12 @@ public class TenancyService {
                 request.storefront()
             );
             business.setSettings(merged);
+            if (request.storefront().enabled() != null) {
+                var progress = setupProgressInvalidate.getIfAvailable();
+                if (progress != null) {
+                    progress.invalidate(businessId);
+                }
+            }
         }
         if (request.inventory() != null) {
             business.setSettings(

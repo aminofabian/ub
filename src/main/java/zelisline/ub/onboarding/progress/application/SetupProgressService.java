@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -13,8 +14,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.messaging.application.SmsCreditService;
 import zelisline.ub.onboarding.progress.api.dto.SetupProgressResponse;
+import zelisline.ub.onboarding.progress.api.dto.SetupProgressRewardDto;
 import zelisline.ub.onboarding.progress.api.dto.SetupProgressStepDto;
 import zelisline.ub.onboarding.progress.api.dto.SetupProgressSubMilestoneDto;
 import zelisline.ub.onboarding.sequence.application.MerchantOnboardingGateService;
@@ -27,8 +32,12 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
 @RequiredArgsConstructor
 public class SetupProgressService {
 
+    private static final Logger log = LoggerFactory.getLogger(SetupProgressService.class);
+
     private static final int DISMISS_MIN_PERCENT = 80;
     private static final int DEFAULT_SNOOZE_HOURS = 24;
+    /** One-time SMS credit bonus when required setup steps complete. */
+    static final int SETUP_COMPLETE_SMS_BONUS = 25;
 
     private final MerchantOnboardingGateService gateService;
     private final BusinessRepository businessRepository;
@@ -37,12 +46,13 @@ public class SetupProgressService {
     private final ItemRepository itemRepository;
     private final SetupProgressSettingsService setupProgressSettingsService;
     private final ObjectMapper objectMapper;
+    private final ObjectProvider<SmsCreditService> smsCreditService;
 
-    @Transactional(readOnly = true)
+    @Transactional
     public SetupProgressResponse getForBusiness(String businessId) {
         Business business = businessRepository.findByIdAndDeletedAtIsNull(businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
-        return build(business, Instant.now());
+        return build(business, Instant.now(), true);
     }
 
     @Transactional
@@ -53,14 +63,14 @@ public class SetupProgressService {
         Instant until = Instant.now().plusSeconds(h * 3600L);
         business.setSettings(setupProgressSettingsService.snooze(business.getSettings(), until));
         businessRepository.save(business);
-        return build(business, Instant.now());
+        return build(business, Instant.now(), false);
     }
 
     @Transactional
     public SetupProgressResponse dismiss(String businessId) {
         Business business = businessRepository.findByIdAndDeletedAtIsNull(businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
-        SetupProgressResponse current = build(business, Instant.now());
+        SetupProgressResponse current = build(business, Instant.now(), false);
         if (current.percentComplete() < DISMISS_MIN_PERCENT && !current.shopReady()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
@@ -68,13 +78,14 @@ public class SetupProgressService {
         }
         business.setSettings(setupProgressSettingsService.dismiss(business.getSettings(), Instant.now()));
         businessRepository.save(business);
-        return build(business, Instant.now());
+        return build(business, Instant.now(), false);
     }
 
-    private SetupProgressResponse build(Business business, Instant now) {
+    private SetupProgressResponse build(Business business, Instant now, boolean mayGrantReward) {
         String businessId = business.getId();
         var snap = gateService.snapshot(businessId);
-        var prefs = setupProgressSettingsService.read(business.getSettings());
+        SetupProgressSettingsService.SetupProgressPrefs prefs =
+                setupProgressSettingsService.read(business.getSettings());
         boolean phoneVerified = opsAlertSettingsService.resolveForBusiness(businessId).hasVerifiedPhone();
         long supplierLinks = supplierProductRepository.countActiveLinksForBusiness(businessId);
         boolean hasVariant = itemRepository.existsActiveVariantByBusinessId(businessId);
@@ -101,6 +112,17 @@ public class SetupProgressService {
         int maxPoints = defs.stream().mapToInt(StepDef::maxPoints).sum();
         int percent = maxPoints <= 0 ? 0 : Math.min(100, Math.round(earnedPoints * 100f / maxPoints));
         boolean shopReady = shopCreated && stocked && supplierDone && phoneDone && saleDone;
+
+        SetupProgressRewardDto reward = null;
+        if (shopReady) {
+            reward = maybeGrantReward(business, prefs, now, mayGrantReward);
+            prefs = setupProgressSettingsService.read(business.getSettings());
+        } else if (prefs.rewardGranted()) {
+            reward = new SetupProgressRewardDto(
+                    prefs.rewardSmsCredits() != null ? prefs.rewardSmsCredits() : SETUP_COMPLETE_SMS_BONUS,
+                    prefs.rewardGrantedAt(),
+                    false);
+        }
 
         String currentKey = defs.stream()
                 .filter(s -> !s.done())
@@ -144,7 +166,43 @@ public class SetupProgressService {
                 shopReady,
                 currentKey,
                 prefs.snoozedUntil(),
-                steps);
+                steps,
+                reward);
+    }
+
+    private SetupProgressRewardDto maybeGrantReward(
+            Business business,
+            SetupProgressSettingsService.SetupProgressPrefs prefs,
+            Instant now,
+            boolean mayGrant) {
+        if (prefs.rewardGranted()) {
+            return new SetupProgressRewardDto(
+                    prefs.rewardSmsCredits() != null ? prefs.rewardSmsCredits() : SETUP_COMPLETE_SMS_BONUS,
+                    prefs.rewardGrantedAt(),
+                    false);
+        }
+        if (!mayGrant) {
+            return null;
+        }
+        SmsCreditService credits = smsCreditService.getIfAvailable();
+        if (credits == null) {
+            log.debug("SMS credit service unavailable; skipping setup reward businessId={}", business.getId());
+            return null;
+        }
+        try {
+            credits.grant(
+                    business.getId(),
+                    SETUP_COMPLETE_SMS_BONUS,
+                    "setup_complete_bonus",
+                    null);
+            business.setSettings(setupProgressSettingsService.markRewardGranted(
+                    business.getSettings(), now, SETUP_COMPLETE_SMS_BONUS));
+            businessRepository.save(business);
+            return new SetupProgressRewardDto(SETUP_COMPLETE_SMS_BONUS, now, true);
+        } catch (RuntimeException ex) {
+            log.warn("setup completion SMS grant failed businessId={}", business.getId(), ex);
+            return null;
+        }
     }
 
     private boolean readStorefrontEnabled(String settingsJson) {

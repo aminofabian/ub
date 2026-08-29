@@ -8,10 +8,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.messaging.application.SmsCreditService;
 import zelisline.ub.onboarding.sequence.application.MerchantOnboardingGateService;
 import zelisline.ub.opsalerts.application.BusinessOpsAlertSettingsService;
 import zelisline.ub.opsalerts.domain.BusinessOpsAlertSettings;
@@ -32,6 +34,8 @@ class SetupProgressServiceTest {
     private SupplierProductRepository supplierProductRepository;
     @Mock
     private ItemRepository itemRepository;
+    @Mock
+    private ObjectProvider<SmsCreditService> smsCreditService;
 
     private SetupProgressService service;
 
@@ -44,7 +48,8 @@ class SetupProgressServiceTest {
                 supplierProductRepository,
                 itemRepository,
                 new SetupProgressSettingsService(new ObjectMapper()),
-                new ObjectMapper());
+                new ObjectMapper(),
+                smsCreditService);
     }
 
     @Test
@@ -102,11 +107,39 @@ class SetupProgressServiceTest {
         when(opsAlertSettingsService.resolveForBusiness("biz-1")).thenReturn(verifiedPhone());
         when(supplierProductRepository.countActiveLinksForBusiness("biz-1")).thenReturn(2L);
         when(itemRepository.existsActiveVariantByBusinessId("biz-1")).thenReturn(false);
+        when(smsCreditService.getIfAvailable()).thenReturn(null);
 
         var response = service.getForBusiness("biz-1");
 
         assertThat(response.shopReady()).isTrue();
         assertThat(response.visible()).isFalse();
+    }
+
+    @Test
+    void grantsSmsBonusOnceWhenShopBecomesReady() {
+        Business business = business("biz-1", "{}");
+        SmsCreditService credits = org.mockito.Mockito.mock(SmsCreditService.class);
+        when(businessRepository.findByIdAndDeletedAtIsNull("biz-1")).thenReturn(java.util.Optional.of(business));
+        when(gateService.snapshot("biz-1")).thenReturn(snapshot(true, 5, 0, 1, true, true, true));
+        when(opsAlertSettingsService.resolveForBusiness("biz-1")).thenReturn(verifiedPhone());
+        when(supplierProductRepository.countActiveLinksForBusiness("biz-1")).thenReturn(2L);
+        when(itemRepository.existsActiveVariantByBusinessId("biz-1")).thenReturn(false);
+        when(smsCreditService.getIfAvailable()).thenReturn(credits);
+        when(credits.grant(
+                org.mockito.ArgumentMatchers.eq("biz-1"),
+                org.mockito.ArgumentMatchers.eq(25),
+                org.mockito.ArgumentMatchers.eq("setup_complete_bonus"),
+                org.mockito.ArgumentMatchers.isNull()))
+                .thenReturn(25);
+        when(businessRepository.save(business)).thenReturn(business);
+
+        var response = service.getForBusiness("biz-1");
+
+        assertThat(response.shopReady()).isTrue();
+        assertThat(response.reward()).isNotNull();
+        assertThat(response.reward().justGranted()).isTrue();
+        assertThat(response.reward().smsCredits()).isEqualTo(25);
+        assertThat(business.getSettings()).contains("rewardGrantedAt");
     }
 
     private static Business business(String id, String settings) {

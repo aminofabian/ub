@@ -24,7 +24,8 @@ public final class StorefrontTemplateIds {
             "chem-lab",
             "print-atelier",
             "blank-drop",
-            "pastry-case"
+            "pastry-case",
+            "comilmart"
     );
 
     public static final Set<String> LANDING_TEMPLATES = Set.of(

@@ -113,6 +113,12 @@ public class CustomerPhoneVerificationService {
                     HttpStatus.BAD_REQUEST,
                     "WhatsApp or SMS must be configured to send a verification code");
         }
+        if (!messaging.smsConfigured()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "SMS must be configured to send verification codes. Set Sozuri or TextSMS under"
+                            + " Super Admin → Platform integrations, or under Customers → messaging settings.");
+        }
 
         String message = "Your Palmart verification code is " + code + ". Valid for 10 minutes.";
         CustomerMessageDispatcher.DeliveryResult delivery =
@@ -120,7 +126,7 @@ public class CustomerPhoneVerificationService {
         if (!"sent".equals(delivery.outcome()) && !"stub".equals(delivery.outcome())) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_GATEWAY,
-                    "Could not send verification code (" + delivery.channel() + ")");
+                    CustomerMessageDispatcher.verificationFailureMessage(delivery));
         }
 
         return new SendCustomerPhoneVerificationResponse(

@@ -281,7 +281,7 @@ public class CustomerMessageDispatcher {
             // Do not report WhatsApp-only success for OTPs.
             return new DeliveryResult(
                     lookup,
-                    channelLabel(waOk, false),
+                    "sms",
                     "failed",
                     detail.toString());
         }
@@ -291,6 +291,14 @@ public class CustomerMessageDispatcher {
                 channelLabel(waOk, true),
                 sms.sent() ? "sent" : "stub",
                 detail.toString());
+    }
+
+    /** Admin/operator-facing message when OTP delivery fails. */
+    public static String verificationFailureMessage(DeliveryResult delivery) {
+        if (delivery.detail() != null && !delivery.detail().isBlank()) {
+            return delivery.detail();
+        }
+        return "Could not send verification code (" + delivery.channel() + ")";
     }
 
     private static String channelLabel(boolean whatsapp, boolean sms) {

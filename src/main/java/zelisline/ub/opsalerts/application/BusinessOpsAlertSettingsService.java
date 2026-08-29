@@ -140,7 +140,7 @@ public class BusinessOpsAlertSettingsService {
     }
 
     private OpsAlertSettingsResponse toResponse(BusinessOpsAlertSettings s) {
-        TenantMessagingConfig messaging = messagingSettingsService.resolveForTest(s.getBusinessId());
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForPlatformOwnerMessaging();
         boolean messagingReady = messaging.secretsReadable()
                 && (messaging.metaWhatsAppConfigured() || messaging.smsConfigured());
         String phone = s.getPhone();

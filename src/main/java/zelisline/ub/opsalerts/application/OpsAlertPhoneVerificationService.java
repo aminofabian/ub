@@ -4,6 +4,8 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,6 +28,8 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
 @Service
 @RequiredArgsConstructor
 public class OpsAlertPhoneVerificationService {
+
+    private static final Logger log = LoggerFactory.getLogger(OpsAlertPhoneVerificationService.class);
 
     static final Duration OTP_TTL = Duration.ofMinutes(10);
     static final Duration RESEND_COOLDOWN = Duration.ofSeconds(60);
@@ -73,7 +77,7 @@ public class OpsAlertPhoneVerificationService {
         challenge.setLastSentAt(now);
         verificationRepository.save(challenge);
 
-        TenantMessagingConfig messaging = messagingSettingsService.resolveForTest(businessId);
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForPlatformOwnerMessaging();
         if (!messaging.secretsReadable()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
@@ -81,22 +85,28 @@ public class OpsAlertPhoneVerificationService {
                             ? messaging.secretsReadError()
                             : "Messaging credentials are not readable");
         }
-        if (!messaging.metaWhatsAppConfigured() && !messaging.smsConfigured()) {
+        if (!messaging.smsConfigured()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "WhatsApp or SMS must be configured to send a verification code");
+                    "SMS must be configured to send verification codes. Set Sozuri or TextSMS under"
+                            + " Super Admin → Platform integrations, then retry.");
         }
 
         String shopName = resolveShopName(businessId);
         String message = "Your " + shopName + " alert verification code is " + code
                 + ". Valid for 10 minutes. Do not share this code.";
-        // OTP: fire WhatsApp and SMS together when both are configured.
         CustomerMessageDispatcher.DeliveryResult delivery =
                 customerMessageDispatcher.deliverBothChannels(messaging, phone, message);
         if (!"sent".equals(delivery.outcome()) && !"stub".equals(delivery.outcome())) {
+            log.warn(
+                    "Ops alert OTP not sent business={} phone={} channel={} detail={}",
+                    businessId,
+                    BusinessOpsAlertSettingsService.maskPhone(phone),
+                    delivery.channel(),
+                    delivery.detail());
             throw new ResponseStatusException(
                     HttpStatus.BAD_GATEWAY,
-                    "Could not send verification code (" + delivery.channel() + ")");
+                    CustomerMessageDispatcher.verificationFailureMessage(delivery));
         }
 
         return new SendOpsAlertPhoneVerificationResponse(

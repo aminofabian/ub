@@ -67,6 +67,15 @@ public class BusinessCreditMessagingSettingsService {
     }
 
     /**
+     * Platform SMS/WhatsApp for owner-facing alerts (ops alerts, adoption SMS).
+     * Per-tenant credit-tab SMS overrides must not block platform delivery.
+     */
+    @Transactional(readOnly = true)
+    public TenantMessagingConfig resolveForPlatformOwnerMessaging() {
+        return resolvePlatformForContactReply();
+    }
+
+    /**
      * Platform-only messaging credentials for super-admin Talk to Us replies
      * (no tenant business settings).
      */
@@ -145,7 +154,7 @@ public class BusinessCreditMessagingSettingsService {
             metaAccessToken = trimToNull(platformMeta.accessToken());
             metaAccessTokenSource = platformMeta.accessTokenSource();
         }
-        return new TenantMessagingConfig(
+        TenantMessagingConfig tenant = new TenantMessagingConfig(
                 enabled,
                 paymentUrl,
                 firstNonBlank(
@@ -183,6 +192,46 @@ public class BusinessCreditMessagingSettingsService {
                         "https://sms.textsms.co.ke/api/services/sendsms/"),
                 true,
                 null);
+        if (tenant.smsConfigured()) {
+            return tenant;
+        }
+        TenantMessagingConfig platform = resolvePlatformForContactReply();
+        if (platform.smsConfigured()) {
+            return mergePlatformSms(tenant, platform);
+        }
+        return tenant;
+    }
+
+    private static TenantMessagingConfig mergePlatformSms(
+            TenantMessagingConfig tenant,
+            TenantMessagingConfig platform
+    ) {
+        return new TenantMessagingConfig(
+                tenant.enabled(),
+                tenant.paymentAccountUrl(),
+                tenant.rapidApiKey(),
+                tenant.rapidApiHost(),
+                tenant.rapidApiLookupUrl(),
+                tenant.rapidApiPhoneField(),
+                tenant.rapidApiPhoneDigitsOnly(),
+                tenant.metaAccessToken(),
+                tenant.metaPhoneNumberId(),
+                tenant.metaGraphVersion(),
+                tenant.metaAccessTokenSource(),
+                platform.smsProvider(),
+                platform.smsUsername(),
+                platform.smsApiKey(),
+                platform.smsSozuriProject(),
+                platform.smsSozuriApiKey(),
+                platform.smsSozuriFrom(),
+                platform.smsSozuriType(),
+                platform.smsSozuriApiUrl(),
+                platform.smsTextsmsPartnerId(),
+                platform.smsTextsmsApiKey(),
+                platform.smsTextsmsShortcode(),
+                platform.smsTextsmsApiUrl(),
+                tenant.secretsReadable(),
+                tenant.secretsReadError());
     }
 
     @Transactional

@@ -54,7 +54,7 @@ public class TenantOpsAlertDispatcher {
             return;
         }
 
-        TenantMessagingConfig messaging = messagingSettingsService.resolveForTest(businessId);
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForPlatformOwnerMessaging();
         if (!messaging.secretsReadable()) {
             log.info("Skip ops alert {} — messaging secrets unreadable business={}", type, businessId);
             return;
@@ -85,7 +85,7 @@ public class TenantOpsAlertDispatcher {
                     HttpStatus.BAD_REQUEST, "Verify a phone number first, or pass a phone to test");
         }
 
-        TenantMessagingConfig messaging = messagingSettingsService.resolveForTest(businessId);
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForPlatformOwnerMessaging();
         if (!messaging.secretsReadable()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
@@ -93,7 +93,7 @@ public class TenantOpsAlertDispatcher {
                             ? messaging.secretsReadError()
                             : "Messaging credentials are not readable");
         }
-        if (!messaging.metaWhatsAppConfigured() && !messaging.smsConfigured()) {
+        if (!messaging.smsConfigured() && !messaging.metaWhatsAppConfigured()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST, "WhatsApp or SMS must be configured");
         }

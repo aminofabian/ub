@@ -343,7 +343,14 @@ public class PayrollService {
             }
             availableForAdvances = availableForAdvances.min(cap);
         }
-        boolean manualOverride = body.advancesToDeduct() != null;
+        final boolean includeManualAdvances;
+        if (body.advancesToDeduct() != null) {
+            BigDecimal requested = money(body.advancesToDeduct());
+            BigDecimal scheduled = scheduledDeductionTotal(businessId, profile.getId());
+            includeManualAdvances = requested.compareTo(scheduled) > 0;
+        } else {
+            includeManualAdvances = false;
+        }
         List<SalaryAdvance> outstandingAdvances = salaryAdvanceRepository
                 .findByBusinessIdAndStaffProfileIdAndStatusOrderByAdvancedOnAscCreatedAtAsc(
                         businessId, profile.getId(), AdvanceStatus.OUTSTANDING
@@ -351,7 +358,7 @@ public class PayrollService {
         List<AdvanceBalance> balances = outstandingAdvances.stream()
                 .map(a -> {
                     BigDecimal balance = advanceBalance(a);
-                    BigDecimal cap = AdvanceRepaymentPlanner.capForPayRun(a, balance, manualOverride);
+                    BigDecimal cap = AdvanceRepaymentPlanner.capForPayRun(a, balance, includeManualAdvances);
                     return new AdvanceBalance(a.getId(), balance, cap);
                 })
                 .toList();

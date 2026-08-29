@@ -357,6 +357,11 @@ public class ItemCatalogService {
         }
         final Map<String, BigDecimal> stockMap = stockByItemId;
         final boolean includeStock = stockBranch != null;
+        Set<String> variantParentIds = page.getContent().stream()
+                .map(Item::getVariantOfItemId)
+                .filter(id -> id != null && !id.isBlank())
+                .collect(Collectors.toCollection(HashSet::new));
+        Map<String, String> parentNameById = parentNamesById(businessId, variantParentIds);
         return page.map(item -> {
             BigDecimal holderStock = null;
             BigDecimal displayStock = null;
@@ -371,13 +376,17 @@ public class ItemCatalogService {
             boolean groupLabelOnly = item.getVariantOfItemId() == null
                     && parentsWithChildren.contains(item.getId())
                     && !item.isSellable();
+            String parentName = blankToNull(item.getVariantOfItemId()) != null
+                    ? parentNameById.get(item.getVariantOfItemId())
+                    : null;
             return toSummary(
                     item,
                     thumbs,
                     categoryNameFor(catNames, item.getCategoryId()),
                     groupLabelOnly,
                     displayStock,
-                    baseStock);
+                    baseStock,
+                    parentName);
         });
     }
 
@@ -555,7 +564,8 @@ public class ItemCatalogService {
                                 categoryNameFor(catMap, v.getCategoryId()),
                                 false,
                                 display,
-                                base);
+                                base,
+                                item.getName());
                     })
                     .toList();
         }
@@ -766,7 +776,13 @@ public class ItemCatalogService {
             item.setPluCode(next);
         }
         if (patch.name() != null && !patch.name().isBlank()) {
-            item.setName(patch.name().trim());
+            String nextName = patch.name().trim();
+            item.setName(nextName);
+            if (item.getVariantOfItemId() == null
+                    && itemRepository.existsByBusinessIdAndVariantOfItemIdAndDeletedAtIsNull(
+                            businessId, item.getId())) {
+                propagateParentNameToVariants(businessId, item.getId(), nextName);
+            }
         }
         if (patch.description() != null) {
             item.setDescription(blankToNull(patch.description()));
@@ -1552,7 +1568,14 @@ public class ItemCatalogService {
             forCat.addAll(variantRows);
             Map<String, String> catMap = categoryNamesById(forCat.stream().map(Item::getCategoryId).toList());
             variants = variantRows.stream()
-                    .map(v -> toSummary(v, vthumbs, categoryNameFor(catMap, v.getCategoryId()), false, null, null))
+                    .map(v -> toSummary(
+                            v,
+                            vthumbs,
+                            categoryNameFor(catMap, v.getCategoryId()),
+                            false,
+                            null,
+                            null,
+                            item.getName()))
                     .toList();
         }
         return toResponse(item, variants, null, null);
@@ -1655,7 +1678,8 @@ public class ItemCatalogService {
             String categoryName,
             boolean groupLabelOnly,
             BigDecimal stockQty,
-            BigDecimal baseStockQty
+            BigDecimal baseStockQty,
+            String parentName
     ) {
         return new ItemSummaryResponse(
                 i.getId(),
@@ -1681,8 +1705,32 @@ public class ItemCatalogService {
                 i.getBuyingPrice(),
                 i.getItemTypeId(),
                 i.isWeighed(),
-                i.getUnitType()
+                i.getUnitType(),
+                blankToNull(parentName)
         );
+    }
+
+    private Map<String, String> parentNamesById(String businessId, Collection<String> parentIds) {
+        if (parentIds == null || parentIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> out = new LinkedHashMap<>();
+        for (Item parent : itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(parentIds, businessId)) {
+            out.put(parent.getId(), parent.getName() != null ? parent.getName() : "");
+        }
+        return out;
+    }
+
+    private void propagateParentNameToVariants(String businessId, String parentId, String name) {
+        List<Item> variants = itemRepository.findByBusinessIdAndVariantOfItemIdAndDeletedAtIsNullOrderBySkuAsc(
+                businessId, parentId);
+        if (variants.isEmpty()) {
+            return;
+        }
+        for (Item variant : variants) {
+            variant.setName(name);
+        }
+        itemRepository.saveAll(variants);
     }
 
     private ItemResponse toResponse(

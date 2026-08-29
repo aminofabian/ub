@@ -24,6 +24,8 @@ public record PosTopProductResponse(
         String size,
         String variantOfItemId,
         Boolean packageVariant,
-        BigDecimal packageUnitsPerSale
+        BigDecimal packageUnitsPerSale,
+        /** Live parent name when this SKU is a variant child. */
+        String parentName
 ) {
 }

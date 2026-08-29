@@ -7,7 +7,12 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.springframework.http.HttpStatus;
@@ -15,6 +20,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.sales.SalesConstants;
@@ -89,6 +95,19 @@ public class SaleReceiptService {
                 : itemRepository.findAllById(itemIds).stream()
                 .filter(i -> businessId.equals(i.getBusinessId()))
                 .collect(Collectors.toMap(Item::getId, i -> i));
+        Set<String> parentIds = new HashSet<>();
+        for (Item row : itemMap.values()) {
+            String parentId = row.getVariantOfItemId();
+            if (parentId != null && !parentId.isBlank()) {
+                parentIds.add(parentId);
+            }
+        }
+        Map<String, String> parentNameById = new LinkedHashMap<>();
+        if (!parentIds.isEmpty()) {
+            for (Item parent : itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(parentIds, businessId)) {
+                parentNameById.put(parent.getId(), parent.getName());
+            }
+        }
 
         List<ReceiptLineRow> lines = new ArrayList<>();
         for (SaleItem si : items) {
@@ -106,10 +125,12 @@ public class SaleReceiptService {
                 continue;
             }
             Item it = itemMap.get(si.getItemId());
-            String desc = it != null ? it.getName() : "Item";
-            if (it != null && it.getVariantName() != null && !it.getVariantName().isBlank()) {
-                desc = desc + " (" + it.getVariantName() + ")";
-            }
+            String parentName = it != null && it.getVariantOfItemId() != null
+                    ? parentNameById.get(it.getVariantOfItemId())
+                    : null;
+            String desc = it != null
+                    ? ProductDisplayName.forVariant(it, parentName)
+                    : "Item";
             lines.add(new ReceiptLineRow(
                     desc,
                     si.getQuantity().stripTrailingZeros().toPlainString(),

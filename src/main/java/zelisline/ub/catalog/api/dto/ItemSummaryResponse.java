@@ -48,6 +48,12 @@ public record ItemSummaryResponse(
         /** True when the item is sold by weight (kg, g, lb). */
         boolean isWeighed,
         /** Unit of measure: each, kg, g, lb, etc. */
-        String unitType
+        String unitType,
+        /**
+         * Current parent item name when this row is a variant ({@link #variantOfItemId} set).
+         * Lets POS and list UIs show the live family title after a parent rename without
+         * waiting for every child {@link #name} copy to be patched.
+         */
+        String parentName
 ) {
 }

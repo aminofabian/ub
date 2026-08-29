@@ -92,4 +92,15 @@ class ProductDisplayNameTest {
         assertEquals("Festive Bread", ProductDisplayName.forItem(item));
         assertEquals("", ProductDisplayName.optionLabel(item));
     }
+
+    @Test
+    void forVariantUsesLiveParentNameOverStaleChildCopy() {
+        Item variant = new Item();
+        variant.setName("Old Bread Name");
+        variant.setVariantName("400g White");
+        variant.setVariantOfItemId("parent-1");
+        assertEquals(
+                "Festive Bread 400g White",
+                ProductDisplayName.forVariant(variant, "Festive Bread"));
+    }
 }

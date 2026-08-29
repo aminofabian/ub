@@ -40,7 +40,19 @@ public final class ProductDisplayName {
         if (item == null) {
             return "";
         }
-        String family = normalize(item.getName());
+        return forVariant(item, null);
+    }
+
+    /**
+     * Variant-aware shelf title. When {@code parentName} is provided it wins over the
+     * variant row's stored {@link Item#getName()} so receipts and POS stay aligned
+     * after a parent rename.
+     */
+    public static String forVariant(Item item, String parentName) {
+        if (item == null) {
+            return "";
+        }
+        String family = normalize(firstNonBlank(parentName, item.getName()));
         String option = descriptiveOption(item);
         if (!option.isEmpty()) {
             return join(family, option);
@@ -111,6 +123,19 @@ public final class ProductDisplayName {
 
     private static String normalize(String value) {
         return value == null ? "" : value.trim().replaceAll("\\s+", " ");
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            String t = normalize(value);
+            if (!t.isEmpty()) {
+                return t;
+            }
+        }
+        return "";
     }
 
     private static String trimFamilyFiller(String family) {

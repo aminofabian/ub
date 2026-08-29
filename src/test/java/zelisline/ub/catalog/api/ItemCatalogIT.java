@@ -293,6 +293,48 @@ class ItemCatalogIT {
     }
 
     @Test
+    void patchParentNameCascadesToVariantsAndListReturnsParentName() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        String parentId = createItemViaService(TENANT_A, gid, "SKU-RENAME-P", "Old Family");
+        String variantBody = mockMvc.perform(post("/api/v1/items/" + parentId + "/variants")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"variantName\":\"500ml\"}"))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String variantId = JsonPath.read(variantBody, "$.id");
+
+        mockMvc.perform(patch("/api/v1/items/" + parentId)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"name\":\"New Family\"}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/items/" + variantId)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name").value("New Family"));
+
+        mockMvc.perform(get("/api/v1/items")
+                        .param("search", "500ml")
+                        .param("catalogScope", "SKUS_ONLY")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].name").value("New Family"))
+                .andExpect(jsonPath("$.content[0].parentName").value("New Family"));
+    }
+
+    @Test
     void concurrentPatchesEventuallyProduceOptimisticConflict() throws Exception {
         String gid = goodsTypeId(TENANT_A);
         boolean ok = false;

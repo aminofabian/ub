@@ -73,6 +73,19 @@ public class PosTopProductsService {
         }
         Set<String> groupParentIds = groupLabelParentIds(businessId, itemsById.values());
         Map<String, String> thumbs = itemCatalogService.resolveThumbnailUrls(businessId, itemIds);
+        Set<String> parentIds = new HashSet<>();
+        for (Item item : itemsById.values()) {
+            String parentId = item.getVariantOfItemId();
+            if (parentId != null && !parentId.isBlank()) {
+                parentIds.add(parentId);
+            }
+        }
+        Map<String, String> parentNameById = new LinkedHashMap<>();
+        if (!parentIds.isEmpty()) {
+            for (Item parent : itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(parentIds, businessId)) {
+                parentNameById.put(parent.getId(), parent.getName());
+            }
+        }
 
         List<PosTopProductResponse> out = new ArrayList<>(bounded);
         for (Object[] row : rows) {
@@ -93,6 +106,9 @@ public class PosTopProductsService {
                     : BigDecimal.valueOf(((Number) row[2]).doubleValue());
             Instant lastAt = (Instant) row[3];
             BigDecimal packUnits = item.getPackagingUnitQty();
+            String parentName = item.getVariantOfItemId() != null
+                    ? parentNameById.get(item.getVariantOfItemId())
+                    : null;
             out.add(new PosTopProductResponse(
                     itemId,
                     name,
@@ -106,7 +122,8 @@ public class PosTopProductsService {
                     blankToNull(item.getSize()),
                     blankToNull(item.getVariantOfItemId()),
                     item.isPackageVariant() ? Boolean.TRUE : Boolean.FALSE,
-                    packUnits
+                    packUnits,
+                    blankToNull(parentName)
             ));
         }
         return out;
@@ -167,7 +184,8 @@ public class PosTopProductsService {
                     blankToNull(row.size()),
                     blankToNull(row.variantOfItemId()),
                     row.packageVariant() ? Boolean.TRUE : Boolean.FALSE,
-                    row.packageUnitsPerSale()
+                    row.packageUnitsPerSale(),
+                    blankToNull(row.parentName())
             ));
         }
         return out;

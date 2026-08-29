@@ -56,8 +56,9 @@ public class SmsMessagingClient {
             String referenceId
     ) {
         if (!cfg.smsConfigured()) {
-            log.info("SMS stub (provider={}): to={} message={}",
+            log.info("SMS stub (provider={} effective={}): to={} message={}",
                     cfg.smsProvider(),
+                    cfg.effectiveSmsProvider(),
                     mask(toE164),
                     truncate(body));
             return SendResult.stubLogged();
@@ -70,9 +71,10 @@ public class SmsMessagingClient {
             smsCreditGuard.checkBeforeSend(businessId, effectiveReason, referenceId);
         }
         SendResult result;
-        if ("sozuri".equalsIgnoreCase(cfg.smsProvider())) {
+        String provider = cfg.effectiveSmsProvider();
+        if ("sozuri".equalsIgnoreCase(provider)) {
             result = sendSozuri(toE164, body, cfg);
-        } else if ("textsms".equalsIgnoreCase(cfg.smsProvider())) {
+        } else if ("textsms".equalsIgnoreCase(provider)) {
             result = sendTextSms(toE164, body, cfg);
         } else {
             result = sendAfricasTalking(toE164, body, cfg);

@@ -93,6 +93,16 @@ public class BusinessCreditMessagingSettingsService {
         ResolvedMetaWhatsAppConfig platformMeta =
                 platformIntegrationSettingsService.resolveMetaWhatsApp();
         String smsProvider = firstNonBlank(platformSms.provider(), env.sms().provider(), "none");
+        // Keys may be present while the stored provider is still "none" (env-only TextSMS,
+        // or UI left provider unset). Prefer a provider that can actually send.
+        if ("none".equalsIgnoreCase(smsProvider)) {
+            if (platformTextSms.ready()) {
+                smsProvider = "textsms";
+            } else if (platformSms.project() != null && !platformSms.project().isBlank()
+                    && platformSms.apiKey() != null && !platformSms.apiKey().isBlank()) {
+                smsProvider = "sozuri";
+            }
+        }
         return new TenantMessagingConfig(
                 true,
                 defaultPaymentUrl(),
@@ -152,6 +162,19 @@ public class BusinessCreditMessagingSettingsService {
             smsProvider = tenantSmsProvider;
         } else {
             smsProvider = firstNonBlank(platformSms.provider(), env.sms().provider(), "none");
+        }
+        if ("none".equalsIgnoreCase(smsProvider)) {
+            if (platformTextSms.ready()
+                    || (trimToNull(s.getSmsTextsmsPartnerId()) != null
+                            && decryptOrNull(s.getSmsTextsmsApiKeyEnc()) != null
+                            && trimToNull(s.getSmsTextsmsShortcode()) != null)) {
+                smsProvider = "textsms";
+            } else if ((trimToNull(s.getSmsSozuriProject()) != null
+                            || (platformSms.project() != null && !platformSms.project().isBlank()))
+                    && (decryptOrNull(s.getSmsSozuriApiKeyEnc()) != null
+                            || (platformSms.apiKey() != null && !platformSms.apiKey().isBlank()))) {
+                smsProvider = "sozuri";
+            }
         }
         String tenantMetaToken = decryptOrNull(s.getWhatsappMetaAccessTokenEnc());
         String metaAccessToken;

@@ -92,9 +92,7 @@ public class OpsAlertPhoneVerificationService {
         if (!messaging.smsConfigured()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "SMS must be configured to send verification codes. Set Sozuri or TextSMS under"
-                            + " Super Admin → Platform integrations, or under Customers → messaging"
-                            + " settings, then retry.");
+                    messaging.smsNotConfiguredHint());
         }
 
         String shopName = resolveShopName(businessId);

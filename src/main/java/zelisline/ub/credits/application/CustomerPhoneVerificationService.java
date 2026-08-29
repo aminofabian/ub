@@ -117,8 +117,7 @@ public class CustomerPhoneVerificationService {
         if (!messaging.smsConfigured()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "SMS must be configured to send verification codes. Set Sozuri or TextSMS under"
-                            + " Super Admin → Platform integrations, or under Customers → messaging settings.");
+                    messaging.smsNotConfiguredHint());
         }
 
         String message = "Your Palmart verification code is " + code + ". Valid for 10 minutes.";

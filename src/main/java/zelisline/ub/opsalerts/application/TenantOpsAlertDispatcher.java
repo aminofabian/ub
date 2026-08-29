@@ -19,6 +19,7 @@ import zelisline.ub.messaging.domain.SmsSendReason;
 import zelisline.ub.opsalerts.api.dto.OpsAlertTestSendResponse;
 import zelisline.ub.opsalerts.domain.BusinessOpsAlertSettings;
 import zelisline.ub.opsalerts.domain.OpsAlertType;
+import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.repository.BranchRepository;
@@ -49,7 +50,7 @@ public class TenantOpsAlertDispatcher {
             return;
         }
         BusinessOpsAlertSettings settings = settingsService.resolveForBusiness(businessId);
-        String phone = settings.getPhone();
+        String phone = toSmsMsisdn(settings.getPhone());
         if (phone == null || phone.isBlank()) {
             log.info("Skip ops alert {} — blank phone business={}", type, businessId);
             return;
@@ -80,8 +81,8 @@ public class TenantOpsAlertDispatcher {
     public OpsAlertTestSendResponse sendTest(String businessId, String rawPhone, String message) {
         BusinessOpsAlertSettings settings = settingsService.resolveForBusiness(businessId);
         String phone = rawPhone != null && !rawPhone.isBlank()
-                ? zelisline.ub.credits.domain.CustomerPhoneNormalizer.normalize(rawPhone)
-                : settings.getPhone();
+                ? toSmsMsisdn(rawPhone)
+                : toSmsMsisdn(settings.getPhone());
         if (phone == null || phone.isBlank()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST, "Verify a phone number first, or pass a phone to test");
@@ -133,6 +134,15 @@ public class TenantOpsAlertDispatcher {
             return customerMessageDispatcher.deliverBothChannels(messaging, phone, message);
         }
         return customerMessageDispatcher.deliver(messaging, phone, message);
+    }
+
+    /** Prefer {@code 2547…} so providers receive {@code +2547…}, not {@code +07…}. */
+    private static String toSmsMsisdn(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String msisdn = StkPhoneNormalizer.normalize(raw);
+        return msisdn != null ? msisdn : raw.replaceAll("\\D", "");
     }
 
     public String shopName(String businessId) {

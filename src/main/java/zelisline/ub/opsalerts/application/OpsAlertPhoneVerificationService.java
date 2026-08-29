@@ -13,7 +13,6 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.application.BusinessCreditMessagingSettingsService;
-import zelisline.ub.credits.domain.CustomerPhoneNormalizer;
 import zelisline.ub.identity.application.TokenHasher;
 import zelisline.ub.messaging.application.CustomerMessageDispatcher;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
@@ -22,6 +21,7 @@ import zelisline.ub.opsalerts.api.dto.VerifyOpsAlertPhoneVerificationResponse;
 import zelisline.ub.opsalerts.domain.BusinessOpsAlertSettings;
 import zelisline.ub.opsalerts.domain.OpsAlertPhoneVerification;
 import zelisline.ub.opsalerts.repository.OpsAlertPhoneVerificationRepository;
+import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
@@ -174,10 +174,16 @@ public class OpsAlertPhoneVerificationService {
         return String.format("%0" + OTP_DIGITS + "d", value);
     }
 
+    /**
+     * Kenyan MSISDN as {@code 2547XXXXXXXX} so SMS providers get {@code +2547…},
+     * not invalid {@code +07…} from digit-only stripping of local numbers.
+     */
     private static String normalizeOrThrow(String raw) {
-        String n = CustomerPhoneNormalizer.normalize(raw);
-        if (n.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Phone must contain digits");
+        String n = StkPhoneNormalizer.normalize(raw);
+        if (n == null || n.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Enter a valid Kenyan mobile number (e.g. 07XX XXX XXX or +254…)");
         }
         return n;
     }

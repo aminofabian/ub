@@ -15,6 +15,8 @@ public record PayRunRequest(
         Boolean applyStatutory,
         Boolean postExpense,
         @Size(max = 32) String paymentMethod,
-        @Size(max = 36) String branchId
+        @Size(max = 36) String branchId,
+        /** Cap advance deductions this run (cannot exceed available pool after statutory/other). */
+        BigDecimal advancesToDeduct
 ) {
 }

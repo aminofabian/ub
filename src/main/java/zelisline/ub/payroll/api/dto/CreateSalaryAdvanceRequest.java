@@ -10,6 +10,8 @@ import jakarta.validation.constraints.Size;
 public record CreateSalaryAdvanceRequest(
         @NotNull @DecimalMin("0.01") BigDecimal amount,
         @NotNull LocalDate advancedOn,
-        @Size(max = 500) String note
+        @Size(max = 500) String note,
+        /** Optional amount already repaid before Palmart tracked this advance (partial or full). */
+        @DecimalMin("0.00") BigDecimal amountRepaid
 ) {
 }

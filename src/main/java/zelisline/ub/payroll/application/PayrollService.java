@@ -126,13 +126,24 @@ public class PayrollService {
             String actorId
     ) {
         StaffProfile profile = staffProfileService.ensureProfile(businessId, userId);
+        BigDecimal total = money(body.amount());
+        BigDecimal repaid = body.amountRepaid() == null
+                ? ZERO_MONEY
+                : money(body.amountRepaid());
+        if (repaid.signum() < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "amountRepaid cannot be negative");
+        }
+        if (repaid.compareTo(total) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "amountRepaid cannot exceed advance amount");
+        }
         SalaryAdvance advance = new SalaryAdvance();
         advance.setBusinessId(businessId);
         advance.setStaffProfileId(profile.getId());
-        advance.setAmount(money(body.amount()));
+        advance.setAmount(total);
+        advance.setAmountRepaid(repaid);
         advance.setAdvancedOn(body.advancedOn());
         advance.setNote(blankToNull(body.note()));
-        advance.setStatus(AdvanceStatus.OUTSTANDING);
+        advance.setStatus(repaid.compareTo(total) >= 0 ? AdvanceStatus.REPAID : AdvanceStatus.OUTSTANDING);
         advance.setCreatedBy(actorId);
         salaryAdvanceRepository.save(advance);
         return toAdvanceResponse(advance, userId);
@@ -286,6 +297,13 @@ public class PayrollService {
         BigDecimal statutoryTotal = statutoryBreakdown != null ? statutoryBreakdown.total() : ZERO_MONEY;
 
         BigDecimal availableForAdvances = base.subtract(statutoryTotal).subtract(other).max(ZERO_MONEY);
+        if (body.advancesToDeduct() != null) {
+            BigDecimal cap = money(body.advancesToDeduct());
+            if (cap.signum() < 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "advancesToDeduct cannot be negative");
+            }
+            availableForAdvances = availableForAdvances.min(cap);
+        }
         List<SalaryAdvance> outstandingAdvances = salaryAdvanceRepository
                 .findByBusinessIdAndStaffProfileIdAndStatusOrderByAdvancedOnAscCreatedAtAsc(
                         businessId, profile.getId(), AdvanceStatus.OUTSTANDING
@@ -559,7 +577,8 @@ public class PayrollService {
                         body.applyStatutory(),
                         body.postExpense(),
                         body.paymentMethod(),
-                        body.branchId()
+                        body.branchId(),
+                        null
                 ), actorId);
                 paid++;
             } catch (ResponseStatusException ex) {

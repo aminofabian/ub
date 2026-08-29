@@ -21,7 +21,24 @@ public final class SubscriptionBillingDtos {
             int daysSinceExpiry,
             int daysRemainingInGrace,
             String renewalUrl,
-            boolean billingEnabled
+            boolean billingEnabled,
+            PlanFitView planFit
+    ) {}
+
+    public record PlanFitView(
+            long productCount,
+            long userCount,
+            Integer productLimit,
+            Integer userLimit,
+            boolean overProductLimit,
+            boolean overUserLimit,
+            boolean needsUpgrade,
+            boolean negotiable,
+            boolean talkToUs,
+            String recommendedTier,
+            String recommendedDisplayName,
+            BigDecimal recommendedPriceKes,
+            java.util.List<String> reasons
     ) {}
 
     public record PlanResponse(

@@ -12,4 +12,6 @@ public interface PlatformSubscriptionPlanRepository extends JpaRepository<Platfo
     Optional<PlatformSubscriptionPlan> findByTierCodeAndActiveTrue(String tierCode);
 
     List<PlatformSubscriptionPlan> findAllByOrderBySortOrderAsc();
+
+    List<PlatformSubscriptionPlan> findAllByActiveTrueOrderBySortOrderAsc();
 }

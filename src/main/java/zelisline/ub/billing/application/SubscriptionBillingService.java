@@ -40,6 +40,7 @@ public class SubscriptionBillingService {
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
     private final org.springframework.beans.factory.ObjectProvider<SubscriptionExpiryCampaignService> expiryCampaignService;
+    private final org.springframework.beans.factory.ObjectProvider<SubscriptionPlanFitService> planFitService;
 
     @Transactional(readOnly = true)
     public SubscriptionBillingDtos.BillingStatusResponse getBillingStatusView(String businessId) {
@@ -242,6 +243,15 @@ public class SubscriptionBillingService {
         }
 
         var settings = settingsService.loadSingleton();
+        SubscriptionBillingDtos.PlanFitView planFit = null;
+        SubscriptionPlanFitService fit = planFitService.getIfAvailable();
+        if (fit != null) {
+            try {
+                planFit = fit.toView(fit.evaluate(business));
+            } catch (RuntimeException ignored) {
+                planFit = null;
+            }
+        }
         return new SubscriptionBillingDtos.BillingStatusResponse(
                 business.getSubscriptionBillingStatus(),
                 business.getSubscriptionTier(),
@@ -254,7 +264,8 @@ public class SubscriptionBillingService {
                 daysSinceExpiry,
                 daysRemaining,
                 settings.getRenewalBaseUrl(),
-                settings.isBillingEnabled());
+                settings.isBillingEnabled(),
+                planFit);
     }
 
     private static BigDecimal amountDue(PlatformSubscriptionPlan plan) {

@@ -87,6 +87,22 @@ public interface UserRepository extends JpaRepository<User, String> {
 
     long countByBusinessIdAndDeletedAtIsNull(String businessId);
 
+    /**
+     * Staff seats for plan limits. Storefront {@code buyer} accounts do not
+     * count against cashier_limit.
+     */
+    @Query("""
+        select count(u)
+          from User u
+         where u.businessId = :businessId
+           and u.deletedAt is null
+           and u.roleId not in (
+                select r.id from Role r
+                 where lower(r.roleKey) = 'buyer'
+           )
+        """)
+    long countStaffByBusinessIdExcludingBuyers(@Param("businessId") String businessId);
+
     @Query("""
         select u from User u
          where u.businessId = :businessId

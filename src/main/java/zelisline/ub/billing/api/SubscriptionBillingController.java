@@ -31,11 +31,18 @@ public class SubscriptionBillingController {
 
     private final SubscriptionBillingService billingService;
     private final SubscriptionRenewalService renewalService;
+    private final zelisline.ub.billing.application.SubscriptionPlanFitService planFitService;
 
     @GetMapping("/billing-status")
     public SubscriptionBillingDtos.BillingStatusResponse billingStatus(HttpServletRequest request) {
         CurrentTenantUser.require(request);
         return billingService.getBillingStatusView(TenantRequestIds.resolveBusinessId(request));
+    }
+
+    @GetMapping("/plans")
+    public SubscriptionBillingDtos.PlansResponse plans(HttpServletRequest request) {
+        CurrentTenantUser.require(request);
+        return new SubscriptionBillingDtos.PlansResponse(planFitService.activePlanResponses());
     }
 
     @GetMapping("/renewal-quote")

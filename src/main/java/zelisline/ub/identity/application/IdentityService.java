@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.billing.application.SubscriptionPlanFit;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.identity.api.dto.AssignRoleRequest;
 import zelisline.ub.identity.api.dto.CreateRoleRequest;
@@ -71,6 +72,8 @@ public class IdentityService {
     private final CredentialEncryptionService credentialEncryptionService;
     private final ObjectProvider<zelisline.ub.onboarding.progress.application.SetupProgressInvalidatePublisher>
             setupProgressInvalidate;
+    private final ObjectProvider<zelisline.ub.billing.application.SubscriptionPlanLimitGuard>
+            planLimitGuard;
 
     // ---------- Users -------------------------------------------------------
 
@@ -85,6 +88,12 @@ public class IdentityService {
         }
 
         Role role = requireRoleAssignableToTenant(businessId, request.roleId());
+        if (!SubscriptionPlanFit.BUYER_ROLE_KEY.equalsIgnoreCase(role.getRoleKey())) {
+            var guard = planLimitGuard.getIfAvailable();
+            if (guard != null) {
+                guard.assertCanAddUser(businessId);
+            }
+        }
 
         boolean invite = Boolean.TRUE.equals(request.sendInvite());
         boolean hasPassword = request.password() != null && !request.password().isBlank();

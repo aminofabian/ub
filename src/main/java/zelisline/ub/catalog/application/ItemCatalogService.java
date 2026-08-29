@@ -112,6 +112,8 @@ public class ItemCatalogService {
             onboardingSequence;
     private final ObjectProvider<zelisline.ub.onboarding.progress.application.SetupProgressInvalidatePublisher>
             setupProgressInvalidate;
+    private final ObjectProvider<zelisline.ub.billing.application.SubscriptionPlanLimitGuard>
+            planLimitGuard;
 
     @Transactional(readOnly = true)
     public Page<ItemSummaryResponse> listItems(
@@ -614,6 +616,7 @@ public class ItemCatalogService {
         if (idempotencyKeyRaw != null && !idempotencyKeyRaw.isBlank()) {
             return createItemIdempotent(businessId, request, idempotencyKeyRaw.trim(), actorUserId);
         }
+        assertCanAddProduct(businessId);
         Item item = newItemFromCreate(businessId, request);
         try {
             itemRepository.save(item);
@@ -624,6 +627,13 @@ public class ItemCatalogService {
         publishItemEvent(businessId, item, actorUserId, AuditEventTypes.ITEM_CREATED, null);
         notifyOnboardingCatalogChanged(businessId);
         return new ItemCreateResult(HttpStatus.CREATED.value(), toResponse(item, List.of(), null, null));
+    }
+
+    private void assertCanAddProduct(String businessId) {
+        var guard = planLimitGuard.getIfAvailable();
+        if (guard != null) {
+            guard.assertCanAddProduct(businessId);
+        }
     }
 
     private void notifyOnboardingCatalogChanged(String businessId) {
@@ -672,6 +682,7 @@ public class ItemCatalogService {
                 }
             }
 
+            assertCanAddProduct(businessId);
             Item item = newItemFromCreate(businessId, request);
             try {
                 itemRepository.saveAndFlush(item);

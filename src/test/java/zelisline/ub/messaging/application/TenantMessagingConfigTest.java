@@ -45,6 +45,15 @@ class TenantMessagingConfigTest {
         assertTrue(cfg.smsNotConfiguredHint().toLowerCase().contains("api key"));
     }
 
+    @Test
+    void smsNotConfiguredHint_listsMissingTextsmsFieldsWhenProviderTextsms() {
+        TenantMessagingConfig cfg = base("textsms", null, null, null, null, null, null, null);
+        assertFalse(cfg.smsConfigured());
+        assertTrue(cfg.smsNotConfiguredHint().contains("partner ID"));
+        assertTrue(cfg.smsNotConfiguredHint().contains("API key"));
+        assertTrue(cfg.smsNotConfiguredHint().contains("shortcode"));
+    }
+
     private static TenantMessagingConfig base(
             String provider,
             String atUser,

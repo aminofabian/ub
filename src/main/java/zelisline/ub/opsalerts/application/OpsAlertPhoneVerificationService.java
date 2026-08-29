@@ -16,7 +16,6 @@ import zelisline.ub.credits.application.BusinessCreditMessagingSettingsService;
 import zelisline.ub.identity.application.TokenHasher;
 import zelisline.ub.messaging.application.CustomerMessageDispatcher;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
-import zelisline.ub.messaging.domain.SmsSendReason;
 import zelisline.ub.opsalerts.api.dto.SendOpsAlertPhoneVerificationResponse;
 import zelisline.ub.opsalerts.api.dto.VerifyOpsAlertPhoneVerificationResponse;
 import zelisline.ub.opsalerts.domain.BusinessOpsAlertSettings;
@@ -78,10 +77,8 @@ public class OpsAlertPhoneVerificationService {
         challenge.setLastSentAt(now);
         verificationRepository.save(challenge);
 
-        // Same resolve path as customer OTP / ops alert dispatch: tenant SMS first,
-        // then platform integrations — not platform-only (which skipped working tenant TextSMS).
-        TenantMessagingConfig messaging =
-                messagingSettingsService.resolveForTest(businessId, SmsSendReason.OTP);
+        // Tenant + platform SMS fields merged (covers provider=textsms with keys only on platform).
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForOtp(businessId);
         if (!messaging.secretsReadable()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,

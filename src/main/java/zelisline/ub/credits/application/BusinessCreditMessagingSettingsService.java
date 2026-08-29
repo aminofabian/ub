@@ -78,6 +78,20 @@ public class BusinessCreditMessagingSettingsService {
     }
 
     /**
+     * OTP delivery: combine tenant and platform SMS fields (whichever has each value wins),
+     * so a tenant with {@code provider=textsms} but empty keys still picks up platform TextSMS.
+     */
+    @Transactional(readOnly = true)
+    public TenantMessagingConfig resolveForOtp(String businessId) {
+        TenantMessagingConfig tenant = resolveForTest(businessId, SmsSendReason.OTP);
+        if (!tenant.secretsReadable()) {
+            return tenant;
+        }
+        TenantMessagingConfig platform = resolvePlatformForContactReply();
+        return mergeSmsFieldsMaximal(tenant, platform);
+    }
+
+    /**
      * Platform-only messaging credentials for super-admin Talk to Us replies
      * (no tenant business settings).
      */
@@ -305,6 +319,73 @@ public class BusinessCreditMessagingSettingsService {
                 tenant.secretsReadError(),
                 tenant.businessId(),
                 tenant.smsReason());
+    }
+
+    /** Per-field SMS merge so platform keys fill gaps in tenant (and vice versa). */
+    private static TenantMessagingConfig mergeSmsFieldsMaximal(
+            TenantMessagingConfig tenant,
+            TenantMessagingConfig platform
+    ) {
+        String provider = firstNonBlank(tenant.smsProvider(), platform.smsProvider(), "none");
+        TenantMessagingConfig merged = new TenantMessagingConfig(
+                tenant.enabled(),
+                tenant.paymentAccountUrl(),
+                tenant.rapidApiKey(),
+                tenant.rapidApiHost(),
+                tenant.rapidApiLookupUrl(),
+                tenant.rapidApiPhoneField(),
+                tenant.rapidApiPhoneDigitsOnly(),
+                tenant.metaAccessToken(),
+                tenant.metaPhoneNumberId(),
+                tenant.metaGraphVersion(),
+                tenant.metaAccessTokenSource(),
+                provider,
+                firstNonBlank(tenant.smsUsername(), platform.smsUsername()),
+                firstNonBlank(tenant.smsApiKey(), platform.smsApiKey()),
+                firstNonBlank(tenant.smsSozuriProject(), platform.smsSozuriProject()),
+                firstNonBlank(tenant.smsSozuriApiKey(), platform.smsSozuriApiKey()),
+                firstNonBlank(tenant.smsSozuriFrom(), platform.smsSozuriFrom()),
+                firstNonBlank(tenant.smsSozuriType(), platform.smsSozuriType()),
+                firstNonBlank(tenant.smsSozuriApiUrl(), platform.smsSozuriApiUrl()),
+                firstNonBlank(tenant.smsTextsmsPartnerId(), platform.smsTextsmsPartnerId()),
+                firstNonBlank(tenant.smsTextsmsApiKey(), platform.smsTextsmsApiKey()),
+                firstNonBlank(tenant.smsTextsmsShortcode(), platform.smsTextsmsShortcode()),
+                firstNonBlank(tenant.smsTextsmsApiUrl(), platform.smsTextsmsApiUrl()),
+                tenant.secretsReadable(),
+                tenant.secretsReadError(),
+                tenant.businessId(),
+                tenant.smsReason());
+        if (merged.smsConfigured()) {
+            return new TenantMessagingConfig(
+                    merged.enabled(),
+                    merged.paymentAccountUrl(),
+                    merged.rapidApiKey(),
+                    merged.rapidApiHost(),
+                    merged.rapidApiLookupUrl(),
+                    merged.rapidApiPhoneField(),
+                    merged.rapidApiPhoneDigitsOnly(),
+                    merged.metaAccessToken(),
+                    merged.metaPhoneNumberId(),
+                    merged.metaGraphVersion(),
+                    merged.metaAccessTokenSource(),
+                    merged.effectiveSmsProvider(),
+                    merged.smsUsername(),
+                    merged.smsApiKey(),
+                    merged.smsSozuriProject(),
+                    merged.smsSozuriApiKey(),
+                    merged.smsSozuriFrom(),
+                    merged.smsSozuriType(),
+                    merged.smsSozuriApiUrl(),
+                    merged.smsTextsmsPartnerId(),
+                    merged.smsTextsmsApiKey(),
+                    merged.smsTextsmsShortcode(),
+                    merged.smsTextsmsApiUrl(),
+                    merged.secretsReadable(),
+                    merged.secretsReadError(),
+                    merged.businessId(),
+                    merged.smsReason());
+        }
+        return merged;
     }
 
     @Transactional

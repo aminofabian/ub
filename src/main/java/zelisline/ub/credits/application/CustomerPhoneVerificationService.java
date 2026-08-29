@@ -101,7 +101,7 @@ public class CustomerPhoneVerificationService {
         challenge.setLastSentAt(now);
         verificationRepository.save(challenge);
 
-        TenantMessagingConfig messaging = messagingSettingsService.resolveForTest(businessId, SmsSendReason.OTP);
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForOtp(businessId);
         if (!messaging.secretsReadable()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,

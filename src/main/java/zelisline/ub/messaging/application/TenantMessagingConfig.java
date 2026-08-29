@@ -113,11 +113,30 @@ public record TenantMessagingConfig(
     /** Operator-facing hint when {@link #smsConfigured()} is false (no secrets). */
     public String smsNotConfiguredHint() {
         String declared = smsProvider == null ? "none" : smsProvider.trim();
+        String effective = effectiveSmsProvider();
         boolean partner = present(smsTextsmsPartnerId);
         boolean shortcode = present(smsTextsmsShortcode);
         boolean textsmsKey = present(smsTextsmsApiKey);
         boolean sozuriProject = present(smsSozuriProject);
         boolean sozuriKey = present(smsSozuriApiKey);
+        if ("textsms".equalsIgnoreCase(declared) || "textsms".equalsIgnoreCase(effective)) {
+            java.util.List<String> missing = new java.util.ArrayList<>();
+            if (!partner) {
+                missing.add("partner ID");
+            }
+            if (!textsmsKey) {
+                missing.add("API key");
+            }
+            if (!shortcode) {
+                missing.add("shortcode");
+            }
+            if (!missing.isEmpty()) {
+                return "TextSMS is selected but missing: "
+                        + String.join(", ", missing)
+                        + ". Open Super Admin → Platform integrations, enter all three TextSMS"
+                        + " fields, save, then retry (or set them under Customers → messaging).";
+            }
+        }
         if ((partner || shortcode) && !textsmsKey) {
             return "TextSMS partner/shortcode are present but the API key is missing or could not be"
                     + " decrypted. Re-save the TextSMS API key under Super Admin → Platform"

@@ -103,6 +103,7 @@ class PayrollCalendarSummarizerTest {
                 BigDecimal.ZERO,
                 BigDecimal.ZERO,
                 BigDecimal.ZERO,
+                BigDecimal.ZERO,
                 new BigDecimal(base),
                 paid,
                 paid ? "payslip-1" : null,

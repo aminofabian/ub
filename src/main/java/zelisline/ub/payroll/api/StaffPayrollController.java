@@ -6,6 +6,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -18,6 +19,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.payroll.api.dto.CreateSalaryAdvanceRequest;
 import zelisline.ub.payroll.api.dto.CreateSalaryRequest;
+import zelisline.ub.payroll.api.dto.PatchSalaryAdvanceRequest;
 import zelisline.ub.payroll.api.dto.PayslipResponse;
 import zelisline.ub.payroll.api.dto.SalaryAdvanceResponse;
 import zelisline.ub.payroll.api.dto.SalaryResponse;
@@ -78,6 +80,23 @@ public class StaffPayrollController {
                 userId,
                 body,
                 user.userId()
+        );
+    }
+
+    @PatchMapping("/{userId}/advances/{advanceId}")
+    @PreAuthorize("hasPermission(null, 'payroll.manage')")
+    public SalaryAdvanceResponse patchAdvance(
+            @PathVariable String userId,
+            @PathVariable String advanceId,
+            @Valid @RequestBody PatchSalaryAdvanceRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return payrollService.patchAdvance(
+                TenantRequestIds.resolveBusinessId(request),
+                userId,
+                advanceId,
+                body
         );
     }
 

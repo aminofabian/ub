@@ -10,6 +10,8 @@ public record StaffPaySelfAdvanceRow(
         BigDecimal balanceOutstanding,
         LocalDate advancedOn,
         String status,
-        String note
+        String note,
+        String repaymentMode,
+        BigDecimal repaymentValue
 ) {
 }

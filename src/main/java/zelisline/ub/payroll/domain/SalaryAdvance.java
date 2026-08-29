@@ -13,6 +13,7 @@ import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
+import zelisline.ub.payroll.domain.AdvanceRepaymentMode;
 
 @Getter
 @Setter
@@ -48,6 +49,12 @@ public class SalaryAdvance {
     @Column(name = "repaid_in_payslip_id", length = 36)
     private String repaidInPayslipId;
 
+    @Column(name = "repayment_mode", nullable = false, length = 32)
+    private String repaymentMode = AdvanceRepaymentMode.FULL_BALANCE;
+
+    @Column(name = "repayment_value", precision = 14, scale = 2)
+    private BigDecimal repaymentValue;
+
     @Column(name = "created_by", nullable = false, length = 36)
     private String createdBy;
 
@@ -68,6 +75,9 @@ public class SalaryAdvance {
         }
         if (amountRepaid == null) {
             amountRepaid = BigDecimal.ZERO;
+        }
+        if (repaymentMode == null || repaymentMode.isBlank()) {
+            repaymentMode = AdvanceRepaymentMode.FULL_BALANCE;
         }
         if (createdAt == null) {
             createdAt = now;

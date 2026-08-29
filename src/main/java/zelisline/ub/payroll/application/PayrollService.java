@@ -24,6 +24,7 @@ import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.payroll.api.dto.CreateSalaryAdvanceRequest;
 import zelisline.ub.payroll.api.dto.CreateSalaryRequest;
+import zelisline.ub.payroll.api.dto.PatchSalaryAdvanceRequest;
 import zelisline.ub.payroll.api.dto.PayAllRunRequest;
 import zelisline.ub.payroll.api.dto.PayAllRunResponse;
 import zelisline.ub.payroll.api.dto.PayRunRequest;
@@ -143,8 +144,44 @@ public class PayrollService {
         advance.setAmountRepaid(repaid);
         advance.setAdvancedOn(body.advancedOn());
         advance.setNote(blankToNull(body.note()));
+        String mode = AdvanceRepaymentPlanner.normalizeMode(body.repaymentMode());
+        AdvanceRepaymentPlanner.validateValue(mode, body.repaymentValue());
+        advance.setRepaymentMode(mode);
+        advance.setRepaymentValue(body.repaymentValue());
         advance.setStatus(repaid.compareTo(total) >= 0 ? AdvanceStatus.REPAID : AdvanceStatus.OUTSTANDING);
         advance.setCreatedBy(actorId);
+        salaryAdvanceRepository.save(advance);
+        return toAdvanceResponse(advance, userId);
+    }
+
+    @Transactional
+    public SalaryAdvanceResponse patchAdvance(
+            String businessId,
+            String userId,
+            String advanceId,
+            PatchSalaryAdvanceRequest body
+    ) {
+        StaffProfile profile = staffProfileService.ensureProfile(businessId, userId);
+        SalaryAdvance advance = salaryAdvanceRepository.findById(advanceId)
+                .filter(a -> businessId.equals(a.getBusinessId())
+                        && profile.getId().equals(a.getStaffProfileId()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Advance not found"));
+
+        if (body.repaymentMode() != null && !body.repaymentMode().isBlank()) {
+            String mode = AdvanceRepaymentPlanner.normalizeMode(body.repaymentMode());
+            BigDecimal value = body.repaymentValue() != null
+                    ? body.repaymentValue()
+                    : advance.getRepaymentValue();
+            AdvanceRepaymentPlanner.validateValue(mode, value);
+            advance.setRepaymentMode(mode);
+            advance.setRepaymentValue(value);
+        } else if (body.repaymentValue() != null) {
+            AdvanceRepaymentPlanner.validateValue(advance.getRepaymentMode(), body.repaymentValue());
+            advance.setRepaymentValue(body.repaymentValue());
+        }
+        if (body.note() != null) {
+            advance.setNote(blankToNull(body.note()));
+        }
         salaryAdvanceRepository.save(advance);
         return toAdvanceResponse(advance, userId);
     }
@@ -207,9 +244,10 @@ public class PayrollService {
                     : ZERO_MONEY;
 
             BigDecimal outstanding = outstandingTotal(businessId, profile.getId());
+            BigDecimal scheduled = scheduledDeductionTotal(businessId, profile.getId());
             BigDecimal suggestedNet = base
                     .subtract(statutoryTotal)
-                    .subtract(outstanding)
+                    .subtract(scheduled)
                     .max(ZERO_MONEY);
 
             var existing = payslipRepository.findByBusinessIdAndStaffProfileIdAndPeriodYearAndPeriodMonth(
@@ -234,6 +272,7 @@ public class PayrollService {
                     statutoryBreakdown != null ? statutoryBreakdown.nssf() : ZERO_MONEY,
                     statutoryBreakdown != null ? statutoryBreakdown.shif() : ZERO_MONEY,
                     statutoryBreakdown != null ? statutoryBreakdown.housingLevy() : ZERO_MONEY,
+                    scheduled,
                     suggestedNet,
                     existing.isPresent(),
                     existing.map(Payslip::getId).orElse(null),
@@ -304,12 +343,17 @@ public class PayrollService {
             }
             availableForAdvances = availableForAdvances.min(cap);
         }
+        boolean manualOverride = body.advancesToDeduct() != null;
         List<SalaryAdvance> outstandingAdvances = salaryAdvanceRepository
                 .findByBusinessIdAndStaffProfileIdAndStatusOrderByAdvancedOnAscCreatedAtAsc(
                         businessId, profile.getId(), AdvanceStatus.OUTSTANDING
                 );
         List<AdvanceBalance> balances = outstandingAdvances.stream()
-                .map(a -> new AdvanceBalance(a.getId(), advanceBalance(a)))
+                .map(a -> {
+                    BigDecimal balance = advanceBalance(a);
+                    BigDecimal cap = AdvanceRepaymentPlanner.capForPayRun(a, balance, manualOverride);
+                    return new AdvanceBalance(a.getId(), balance, cap);
+                })
                 .toList();
         List<Allocation> allocations = AdvanceRepaymentAllocator.allocate(availableForAdvances, balances);
         BigDecimal deducted = AdvanceRepaymentAllocator.totalAllocated(allocations);
@@ -422,6 +466,8 @@ public class PayrollService {
                     advance.getNote(),
                     advance.getStatus(),
                     advance.getRepaidInPayslipId(),
+                    advance.getRepaymentMode(),
+                    advance.getRepaymentValue(),
                     advance.getCreatedAt()
             ));
         }
@@ -509,7 +555,9 @@ public class PayrollService {
                         advanceBalance(a),
                         a.getAdvancedOn(),
                         a.getStatus(),
-                        a.getNote()
+                        a.getNote(),
+                        a.getRepaymentMode(),
+                        a.getRepaymentValue()
                 ))
                 .toList();
 
@@ -591,6 +639,17 @@ public class PayrollService {
         }
 
         return new PayAllRunResponse(paid, skipped, failures);
+    }
+
+    private BigDecimal scheduledDeductionTotal(String businessId, String staffProfileId) {
+        return salaryAdvanceRepository
+                .findByBusinessIdAndStaffProfileIdAndStatusOrderByAdvancedOnAscCreatedAtAsc(
+                        businessId, staffProfileId, AdvanceStatus.OUTSTANDING
+                )
+                .stream()
+                .map(a -> AdvanceRepaymentPlanner.capForPayRun(a, advanceBalance(a), false))
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(2, RoundingMode.HALF_UP);
     }
 
     private BigDecimal outstandingTotal(String businessId, String staffProfileId) {
@@ -679,17 +738,21 @@ public class PayrollService {
     }
 
     private SalaryAdvanceResponse toAdvanceResponse(SalaryAdvance a, String userId) {
+        BigDecimal balance = advanceBalance(a);
         return new SalaryAdvanceResponse(
                 a.getId(),
                 a.getStaffProfileId(),
                 userId,
                 a.getAmount(),
                 a.getAmountRepaid(),
-                advanceBalance(a),
+                balance,
                 a.getAdvancedOn(),
                 a.getNote(),
                 a.getStatus(),
                 a.getRepaidInPayslipId(),
+                a.getRepaymentMode(),
+                a.getRepaymentValue(),
+                AdvanceRepaymentPlanner.capForPayRun(a, balance, false),
                 a.getCreatedAt()
         );
     }

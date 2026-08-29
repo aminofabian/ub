@@ -15,6 +15,9 @@ public record SalaryAdvanceResponse(
         String note,
         String status,
         String repaidInPayslipId,
+        String repaymentMode,
+        BigDecimal repaymentValue,
+        BigDecimal scheduledDeductionThisRun,
         Instant createdAt
 ) {
 }

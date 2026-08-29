@@ -18,6 +18,8 @@ public record PayrollAdvanceLedgerRowResponse(
         String note,
         String status,
         String repaidInPayslipId,
+        String repaymentMode,
+        BigDecimal repaymentValue,
         Instant createdAt
 ) {
 }

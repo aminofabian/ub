@@ -6,14 +6,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Allocates a repayment pool across outstanding advances oldest-first, allowing partial
- * repayment on the last advance when the pool is smaller than its balance.
+ * Allocates a repayment pool across outstanding advances oldest-first, respecting per-advance
+ * caps from {@link AdvanceRepaymentPlanner}.
  */
 public final class AdvanceRepaymentAllocator {
 
     private static final int MONEY_SCALE = 2;
 
-    public record AdvanceBalance(String advanceId, BigDecimal balance) {
+    public record AdvanceBalance(String advanceId, BigDecimal balance, BigDecimal capThisRun) {
+        public AdvanceBalance(String advanceId, BigDecimal balance) {
+            this(advanceId, balance, balance);
+        }
     }
 
     public record Allocation(String advanceId, BigDecimal amount) {
@@ -36,7 +39,17 @@ public final class AdvanceRepaymentAllocator {
             if (balance.signum() <= 0) {
                 continue;
             }
-            BigDecimal applied = remaining.min(balance);
+            BigDecimal cap = advance.capThisRun() != null
+                    ? money(advance.capThisRun())
+                    : balance;
+            if (cap.signum() <= 0) {
+                continue;
+            }
+            BigDecimal applicable = balance.min(cap);
+            BigDecimal applied = remaining.min(applicable);
+            if (applied.signum() <= 0) {
+                continue;
+            }
             allocations.add(new Allocation(advance.advanceId(), applied));
             remaining = remaining.subtract(applied);
         }

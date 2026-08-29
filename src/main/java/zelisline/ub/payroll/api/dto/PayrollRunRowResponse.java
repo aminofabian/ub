@@ -21,6 +21,8 @@ public record PayrollRunRowResponse(
         BigDecimal nssfSuggested,
         BigDecimal shifSuggested,
         BigDecimal housingLevySuggested,
+        /** Total advance deduction scheduled this run from repayment arrangements (excludes manual). */
+        BigDecimal advancesScheduledThisRun,
         BigDecimal suggestedNet,
         boolean alreadyPaid,
         String payslipId,

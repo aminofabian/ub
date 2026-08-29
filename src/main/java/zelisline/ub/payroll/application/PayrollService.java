@@ -276,7 +276,7 @@ public class PayrollService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "otherDeductions cannot be negative");
         }
 
-        StatutoryBreakdown statutoryBreakdown = body.applyStatutory()
+        StatutoryBreakdown statutoryBreakdown = Boolean.TRUE.equals(body.applyStatutory())
                 ? KenyaPayrollStatutoryCalculator.calculate(base)
                 : null;
         BigDecimal paye = statutoryBreakdown != null ? statutoryBreakdown.paye() : ZERO_MONEY;
@@ -320,7 +320,7 @@ public class PayrollService {
         payslip.setCreatedBy(actorId);
         payslipRepository.save(payslip);
 
-        if (body.postExpense() && net.signum() > 0) {
+        if (Boolean.TRUE.equals(body.postExpense()) && net.signum() > 0) {
             String paymentMethod = normalizePaymentMethod(body.paymentMethod());
             String expenseBranch = blankToNull(body.branchId()) != null
                     ? body.branchId().trim()

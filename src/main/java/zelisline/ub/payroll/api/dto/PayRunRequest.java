@@ -17,11 +17,4 @@ public record PayRunRequest(
         @Size(max = 32) String paymentMethod,
         @Size(max = 36) String branchId
 ) {
-    public boolean applyStatutory() {
-        return Boolean.TRUE.equals(applyStatutory);
-    }
-
-    public boolean postExpense() {
-        return Boolean.TRUE.equals(postExpense);
-    }
 }

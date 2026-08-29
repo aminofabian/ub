@@ -13,6 +13,11 @@ public record PatchExpenseScheduleRequest(
         Boolean includeInCashDrawer,
         String branchId,
         String receiptS3Key,
-        String expenseLedgerAccountId
+        String expenseLedgerAccountId,
+        String automationMode,
+        String vendorContactName,
+        String vendorPhone,
+        String vendorMpesaNumber,
+        String vendorLeaseNote
 ) {
 }

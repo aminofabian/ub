@@ -2,6 +2,7 @@ package zelisline.ub.finance.api;
 
 import java.util.List;
 
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
@@ -25,8 +26,10 @@ import zelisline.ub.finance.api.dto.ExpenseScheduleResponse;
 import zelisline.ub.finance.api.dto.PatchExpenseScheduleRequest;
 import zelisline.ub.finance.api.dto.PostExpenseOccurrenceRequest;
 import zelisline.ub.finance.api.dto.PostExpenseScheduleRequest;
+import zelisline.ub.finance.api.dto.ProcessExpenseSchedulesResponse;
 import zelisline.ub.finance.application.ExpenseScheduleOccurrenceService;
 import zelisline.ub.finance.application.ExpenseScheduleService;
+import zelisline.ub.finance.application.RecurringExpenseService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
@@ -38,6 +41,7 @@ public class FinanceExpenseSchedulesController {
 
     private final ExpenseScheduleService expenseScheduleService;
     private final ExpenseScheduleOccurrenceService occurrenceService;
+    private final RecurringExpenseService recurringExpenseService;
 
     @PostMapping
     @PreAuthorize("hasPermission(null, 'finance.expenses.write')")
@@ -165,5 +169,19 @@ public class FinanceExpenseSchedulesController {
                 body.scheduleId(),
                 body.occurrenceDate()
         );
+    }
+
+    @PostMapping("/process")
+    @PreAuthorize("hasPermission(null, 'finance.expenses.write')")
+    public ProcessExpenseSchedulesResponse processForDate(
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) java.time.LocalDate date,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        int posted = recurringExpenseService.processBusinessForDate(
+                TenantRequestIds.resolveBusinessId(request),
+                date
+        );
+        return new ProcessExpenseSchedulesResponse(date, posted);
     }
 }

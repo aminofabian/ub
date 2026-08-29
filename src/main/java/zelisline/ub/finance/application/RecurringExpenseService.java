@@ -157,14 +157,22 @@ public class RecurringExpenseService {
                 .findByScheduleIdAndOccurrenceDate(schedule.getId(), date)
                 .orElse(null);
         if (existing != null) {
-            if (FinanceConstants.OCCURRENCE_STATUS_POSTED.equals(existing.getStatus())) {
+            return FinanceConstants.OCCURRENCE_STATUS_POSTED.equals(existing.getStatus())
+                    && existing.getExpenseId() != null;
+        }
+
+        if (FinanceConstants.AUTOMATION_MODE_REMIND.equals(schedule.getAutomationMode())) {
+            ExpenseScheduleOccurrence occ = new ExpenseScheduleOccurrence();
+            occ.setScheduleId(schedule.getId());
+            occ.setBusinessId(schedule.getBusinessId());
+            occ.setOccurrenceDate(date);
+            occ.setStatus(FinanceConstants.OCCURRENCE_STATUS_DUE);
+            try {
+                occurrenceRepository.save(occ);
+            } catch (DataIntegrityViolationException e) {
                 return false;
             }
-            if (FinanceConstants.OCCURRENCE_STATUS_SKIPPED.equals(existing.getStatus())) {
-                return false;
-            }
-            postExistingOccurrence(schedule, existing, userId);
-            return FinanceConstants.OCCURRENCE_STATUS_POSTED.equals(existing.getStatus());
+            return false;
         }
 
         ExpenseScheduleOccurrence occ = new ExpenseScheduleOccurrence();

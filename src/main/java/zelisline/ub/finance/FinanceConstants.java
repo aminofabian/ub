@@ -21,6 +21,9 @@ public final class FinanceConstants {
     public static final String OCCURRENCE_STATUS_DUE = "due";
     public static final String OCCURRENCE_STATUS_UPCOMING = "upcoming";
 
+    public static final String AUTOMATION_MODE_AUTO_POST = "auto_post";
+    public static final String AUTOMATION_MODE_REMIND = "remind";
+
     private FinanceConstants() {
     }
 }

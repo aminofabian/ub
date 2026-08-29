@@ -51,6 +51,11 @@ public class ExpenseScheduleService {
         s.setIncludeInCashDrawer(req.includeInCashDrawer() != null && req.includeInCashDrawer());
         s.setReceiptS3Key(blankToNull(req.receiptS3Key()));
         s.setExpenseLedgerAccountId(resolveExpenseLedger(businessId, req.expenseLedgerAccountId()).getId());
+        s.setAutomationMode(requireAutomationMode(req.automationMode()));
+        s.setVendorContactName(blankToNull(req.vendorContactName()));
+        s.setVendorPhone(blankToNull(req.vendorPhone()));
+        s.setVendorMpesaNumber(blankToNull(req.vendorMpesaNumber()));
+        s.setVendorLeaseNote(blankToNull(req.vendorLeaseNote()));
         s.setCreatedBy(userId);
         return toDto(expenseScheduleRepository.save(s));
     }
@@ -91,6 +96,21 @@ public class ExpenseScheduleService {
         }
         if (req.expenseLedgerAccountId() != null) {
             s.setExpenseLedgerAccountId(resolveExpenseLedger(businessId, req.expenseLedgerAccountId()).getId());
+        }
+        if (req.automationMode() != null) {
+            s.setAutomationMode(requireAutomationMode(req.automationMode()));
+        }
+        if (req.vendorContactName() != null) {
+            s.setVendorContactName(blankToNull(req.vendorContactName()));
+        }
+        if (req.vendorPhone() != null) {
+            s.setVendorPhone(blankToNull(req.vendorPhone()));
+        }
+        if (req.vendorMpesaNumber() != null) {
+            s.setVendorMpesaNumber(blankToNull(req.vendorMpesaNumber()));
+        }
+        if (req.vendorLeaseNote() != null) {
+            s.setVendorLeaseNote(blankToNull(req.vendorLeaseNote()));
         }
         return toDto(expenseScheduleRepository.save(s));
     }
@@ -209,8 +229,25 @@ public class ExpenseScheduleService {
                 s.getReceiptS3Key(),
                 s.getExpenseLedgerAccountId(),
                 s.getLastGeneratedOn(),
+                s.getAutomationMode(),
+                s.getVendorContactName(),
+                s.getVendorPhone(),
+                s.getVendorMpesaNumber(),
+                s.getVendorLeaseNote(),
                 s.getCreatedBy()
         );
+    }
+
+    private static String requireAutomationMode(String mode) {
+        String value = normalized(mode);
+        if (value.isBlank()) {
+            return FinanceConstants.AUTOMATION_MODE_AUTO_POST;
+        }
+        if (!FinanceConstants.AUTOMATION_MODE_AUTO_POST.equals(value)
+                && !FinanceConstants.AUTOMATION_MODE_REMIND.equals(value)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "automationMode must be auto_post or remind");
+        }
+        return value;
     }
 
     private static String normalized(String raw) {

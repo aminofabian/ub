@@ -18,7 +18,11 @@ public record ExpenseScheduleResponse(
         String receiptS3Key,
         String expenseLedgerAccountId,
         LocalDate lastGeneratedOn,
+        String automationMode,
+        String vendorContactName,
+        String vendorPhone,
+        String vendorMpesaNumber,
+        String vendorLeaseNote,
         String createdBy
 ) {
 }
-

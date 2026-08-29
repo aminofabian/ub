@@ -13,6 +13,7 @@ import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
+import zelisline.ub.finance.FinanceConstants;
 
 @Getter
 @Setter
@@ -65,6 +66,21 @@ public class ExpenseSchedule {
 
     @Column(name = "last_generated_on")
     private LocalDate lastGeneratedOn;
+
+    @Column(name = "automation_mode", nullable = false, length = 16)
+    private String automationMode = FinanceConstants.AUTOMATION_MODE_AUTO_POST;
+
+    @Column(name = "vendor_contact_name", length = 128)
+    private String vendorContactName;
+
+    @Column(name = "vendor_phone", length = 32)
+    private String vendorPhone;
+
+    @Column(name = "vendor_mpesa_number", length = 32)
+    private String vendorMpesaNumber;
+
+    @Column(name = "vendor_lease_note", length = 1000)
+    private String vendorLeaseNote;
 
     @Column(name = "created_by", nullable = false, length = 36)
     private String createdBy;

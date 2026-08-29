@@ -12,6 +12,7 @@ import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
+import zelisline.ub.finance.FinanceConstants;
 
 @Getter
 @Setter
@@ -60,7 +61,7 @@ public class ExpenseScheduleOccurrence {
             createdAt = now;
         }
         if (status == null || status.isBlank()) {
-            status = "posted";
+            status = FinanceConstants.OCCURRENCE_STATUS_POSTED;
         }
         updatedAt = now;
     }

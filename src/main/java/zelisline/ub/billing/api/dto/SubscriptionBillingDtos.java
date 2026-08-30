@@ -98,6 +98,14 @@ public final class SubscriptionBillingDtos {
             String note
     ) {}
 
+    public record OverrideSubscriptionRequest(
+            String tierCode,
+            SubscriptionBillingStatus billingStatus,
+            Instant currentPeriodEnd,
+            Instant graceEndsAt,
+            String note
+    ) {}
+
     public record AdminSubscriptionSnapshot(
             String businessId,
             String tier,

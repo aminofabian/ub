@@ -226,6 +226,88 @@ public class SubscriptionBillingService {
         return adminSnapshot(businessId);
     }
 
+    /**
+     * SA full override: plan, billing (payment) status, and dates.
+     */
+    @Transactional
+    public SubscriptionBillingDtos.AdminSubscriptionSnapshot override(
+            String businessId,
+            SubscriptionBillingDtos.OverrideSubscriptionRequest body,
+            String actorUserId
+    ) {
+        Business business = requireBusiness(businessId);
+        Instant now = Instant.now();
+
+        if (body.tierCode() != null && !body.tierCode().isBlank()) {
+            String code = body.tierCode().trim().toLowerCase();
+            if (!isFreeTierStatic(code) && settingsService.planOrNull(code) == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown subscription plan");
+            }
+            business.setSubscriptionTier(code);
+        }
+
+        if (body.billingStatus() != null
+                && body.billingStatus() != business.getSubscriptionBillingStatus()) {
+            applyBillingStatus(business, body.billingStatus(), now);
+        }
+
+        if (body.currentPeriodEnd() != null) {
+            business.setCurrentPeriodEnd(body.currentPeriodEnd());
+        }
+        if (body.billingStatus() == SubscriptionBillingStatus.ACTIVE) {
+            clearGraceFields(business);
+        } else if (body.graceEndsAt() != null) {
+            business.setGraceEndsAt(body.graceEndsAt());
+            if (business.getGraceStartedAt() == null) {
+                business.setGraceStartedAt(now);
+            }
+        }
+
+        businessRepository.save(business);
+        if (body.billingStatus() == SubscriptionBillingStatus.ACTIVE) {
+            cancelExpiryCampaigns(businessId);
+        }
+        publishAudit(business.getId(), AuditEventTypes.SUBSCRIPTION_OVERRIDDEN, actorUserId);
+        return adminSnapshot(businessId);
+    }
+
+    private void applyBillingStatus(Business business, SubscriptionBillingStatus status, Instant now) {
+        switch (status) {
+            case ACTIVE -> {
+                clearGraceFields(business);
+                business.setSubscriptionBillingStatus(SubscriptionBillingStatus.ACTIVE);
+                business.setSuspensionReason(null);
+                business.setBillingSuspendedAt(null);
+                business.setTenantStatus(TenantStatus.ACTIVE);
+                if (business.getCurrentPeriodEnd() == null || !business.getCurrentPeriodEnd().isAfter(now)) {
+                    business.setCurrentPeriodEnd(now.plus(30, ChronoUnit.DAYS));
+                }
+            }
+            case GRACE -> {
+                business.setSubscriptionBillingStatus(SubscriptionBillingStatus.GRACE);
+                if (business.getGraceStartedAt() == null) {
+                    business.setGraceStartedAt(now);
+                }
+                if (business.getGraceEndsAt() == null || !business.getGraceEndsAt().isAfter(now)) {
+                    PlatformSubscriptionPlan plan = settingsService.planOrNull(business.getSubscriptionTier());
+                    int graceDays = settingsService.resolveGraceDays(plan);
+                    business.setGraceEndsAt(now.plus(graceDays, ChronoUnit.DAYS));
+                }
+                if (business.getSuspensionReason() == SuspensionReason.BILLING_UNPAID) {
+                    business.setSuspensionReason(null);
+                    business.setBillingSuspendedAt(null);
+                }
+                business.setTenantStatus(TenantStatus.ACTIVE);
+            }
+            case SUSPENDED -> {
+                business.setSubscriptionBillingStatus(SubscriptionBillingStatus.SUSPENDED);
+                business.setBillingSuspendedAt(now);
+                business.setSuspensionReason(SuspensionReason.BILLING_UNPAID);
+                business.setTenantStatus(TenantStatus.SUSPENDED);
+            }
+        }
+    }
+
     @Transactional
     public SubscriptionBillingDtos.AdminSubscriptionSnapshot reactivate(String businessId, String actorUserId) {
         Business business = requireBusiness(businessId);

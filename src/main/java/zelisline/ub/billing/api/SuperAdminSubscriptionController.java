@@ -98,6 +98,15 @@ public class SuperAdminSubscriptionController {
         return billingService.assignPlan(businessId, body.tierCode(), body.note(), admin.getId());
     }
 
+    @PatchMapping("/businesses/{businessId}/subscription")
+    public SubscriptionBillingDtos.AdminSubscriptionSnapshot overrideSubscription(
+            @PathVariable String businessId,
+            @Valid @RequestBody SubscriptionBillingDtos.OverrideSubscriptionRequest body
+    ) {
+        SuperAdmin admin = requireSuperAdmin();
+        return billingService.override(businessId, body, admin.getId());
+    }
+
     @PostMapping("/businesses/{businessId}/subscription/reactivate")
     public SubscriptionBillingDtos.AdminSubscriptionSnapshot reactivateSubscription(
             @PathVariable String businessId

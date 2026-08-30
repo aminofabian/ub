@@ -34,9 +34,10 @@ import zelisline.ub.tenancy.api.dto.BusinessResponse;
 import zelisline.ub.tenancy.application.TenancyService;
 
 /**
- * Mints a short-lived tenant session so a platform operator can open a
- * tenant dashboard (implement.md §14.4). Requires a real {@link UserSession}
- * row — bare JWTs are rejected by {@code JwtAuthenticationFilter}.
+ * Mints a tenant session so a platform operator can open a tenant dashboard
+ * (implement.md §14.4). Requires a real {@link UserSession} row — bare JWTs
+ * are rejected by {@code JwtAuthenticationFilter}. Access TTL matches
+ * {@code app.jwt.impersonation-access-ttl-minutes} and then slides via refresh.
  */
 @Service
 @RequiredArgsConstructor
@@ -72,7 +73,7 @@ public class SuperAdminImpersonationService {
         String jti = UUID.randomUUID().toString();
         String refreshRaw = newSecureRefresh();
         Instant now = Instant.now();
-        Instant accessExp = now.plus(JwtTokenService.IMPERSONATION_ACCESS_TTL_MINUTES, ChronoUnit.MINUTES);
+        Instant accessExp = now.plus(jwtTokenService.impersonationAccessTtlMinutes(), ChronoUnit.MINUTES);
         Instant refreshExp = now.plus(refreshTtlDays, ChronoUnit.DAYS);
 
         UserSession session = new UserSession();
@@ -117,7 +118,7 @@ public class SuperAdminImpersonationService {
                 business.slug(),
                 business.primaryDomain(),
                 superAdminId,
-                JwtTokenService.IMPERSONATION_ACCESS_TTL_MINUTES * 60
+                jwtTokenService.impersonationAccessTtlMinutes() * 60
         );
     }
 

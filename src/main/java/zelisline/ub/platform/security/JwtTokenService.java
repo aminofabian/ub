@@ -32,8 +32,11 @@ public class JwtTokenService {
     /** Super-admin id when the access JWT is an impersonation session. */
     public static final String CLAIM_IMPERSONATED_BY = "impersonated_by";
 
-    /** Support/impersonation access tokens are intentionally shorter-lived. */
-    public static final long IMPERSONATION_ACCESS_TTL_MINUTES = 15;
+    /**
+     * Default support/impersonation access TTL. Overridable via
+     * {@code app.jwt.impersonation-access-ttl-minutes}.
+     */
+    public static final long IMPERSONATION_ACCESS_TTL_MINUTES = 240;
 
     /**
      * Tolerated clock skew during JWT validation. Mobile browsers, sleeping
@@ -48,11 +51,13 @@ public class JwtTokenService {
     private final SecretKey key;
     private final long accessTtlMinutes;
     private final long superAdminAccessTtlMinutes;
+    private final long impersonationAccessTtlMinutes;
 
     public JwtTokenService(
             @Value("${app.jwt.secret}") String secret,
             @Value("${app.jwt.access-ttl-minutes:60}") long accessTtlMinutes,
-            @Value("${app.jwt.super-admin-access-ttl-minutes:240}") long superAdminAccessTtlMinutes
+            @Value("${app.jwt.super-admin-access-ttl-minutes:240}") long superAdminAccessTtlMinutes,
+            @Value("${app.jwt.impersonation-access-ttl-minutes:240}") long impersonationAccessTtlMinutes
     ) {
         byte[] bytes = secret.getBytes(StandardCharsets.UTF_8);
         if (bytes.length < 32) {
@@ -61,6 +66,11 @@ public class JwtTokenService {
         this.key = Keys.hmacShaKeyFor(bytes);
         this.accessTtlMinutes = accessTtlMinutes;
         this.superAdminAccessTtlMinutes = superAdminAccessTtlMinutes;
+        this.impersonationAccessTtlMinutes = Math.max(15, impersonationAccessTtlMinutes);
+    }
+
+    public long impersonationAccessTtlMinutes() {
+        return impersonationAccessTtlMinutes;
     }
 
     public String createAccessToken(
@@ -88,7 +98,8 @@ public class JwtTokenService {
 
     /**
      * Tenant access token for super-admin impersonation: same claims as a normal
-     * user JWT plus {@link #CLAIM_IMPERSONATED_BY}, with a shorter TTL.
+     * user JWT plus {@link #CLAIM_IMPERSONATED_BY}. TTL is long enough to work
+     * a tenant, then slides via the normal refresh cookie.
      */
     public String createImpersonationAccessToken(
             String userId,
@@ -99,7 +110,7 @@ public class JwtTokenService {
             String superAdminId
     ) {
         Instant now = Instant.now();
-        Instant exp = now.plusSeconds(IMPERSONATION_ACCESS_TTL_MINUTES * 60);
+        Instant exp = now.plusSeconds(impersonationAccessTtlMinutes * 60);
         var builder = Jwts.builder()
                 .id(jti)
                 .subject(userId)

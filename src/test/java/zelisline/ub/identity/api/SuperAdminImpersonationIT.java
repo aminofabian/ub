@@ -120,7 +120,7 @@ class SuperAdminImpersonationIT {
                 .andExpect(jsonPath("$.refreshToken").isString())
                 .andExpect(jsonPath("$.user.id").value(ownerUserId))
                 .andExpect(jsonPath("$.slug").value("impersonate-co"))
-                .andExpect(jsonPath("$.expiresInSeconds").value(900))
+                .andExpect(jsonPath("$.expiresInSeconds").value(14400))
                 .andReturn()
                 .getResponse()
                 .getContentAsString();

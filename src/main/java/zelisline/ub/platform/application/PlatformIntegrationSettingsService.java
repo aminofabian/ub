@@ -130,9 +130,30 @@ public class PlatformIntegrationSettingsService {
         if (body.whatsappMetaAppSecret() != null) {
             row.setWhatsappMetaAppSecretEnc(encryptOrClear(body.whatsappMetaAppSecret()));
         }
+        SecretRead secrets = readSecrets(row);
+        validateSmsProvider(row, secrets);
         row.setUpdatedAt(Instant.now());
         PlatformIntegrationSettings saved = repository.save(row);
         return toResponse(saved, readSecrets(saved));
+    }
+
+    private void validateSmsProvider(PlatformIntegrationSettings row, SecretRead secrets) {
+        String provider = trimToNull(row.getSmsProvider());
+        if (!"textsms".equalsIgnoreCase(provider)) {
+            return;
+        }
+        ResolvedTextSmsConfig textsms = resolveTextSmsFromRow(row, secrets);
+        if (textsms.ready()) {
+            return;
+        }
+        var env = messagingProperties.sms();
+        if (env.textsmsConfigured()) {
+            return;
+        }
+        throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.BAD_REQUEST,
+                "TextSMS partner ID, API key, and shortcode are required when TextSMS is the platform"
+                        + " SMS provider");
     }
 
     @Transactional(readOnly = true)

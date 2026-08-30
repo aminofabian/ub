@@ -83,12 +83,54 @@ public class BusinessCreditMessagingSettingsService {
      */
     @Transactional(readOnly = true)
     public TenantMessagingConfig resolveForOtp(String businessId) {
+        TenantMessagingConfig platform = resolvePlatformForContactReply();
         TenantMessagingConfig tenant = resolveForTest(businessId, SmsSendReason.OTP);
         if (!tenant.secretsReadable()) {
+            if (platform.smsConfigured()) {
+                return otpConfigFrom(platform, businessId);
+            }
             return tenant;
         }
-        TenantMessagingConfig platform = resolvePlatformForContactReply();
-        return mergeSmsFieldsMaximal(tenant, platform);
+        TenantMessagingConfig merged = mergeSmsFieldsMaximal(tenant, platform);
+        if (merged.smsConfigured()) {
+            return merged;
+        }
+        // Tenant may have provider=textsms with no fields while platform is complete.
+        if (platform.smsConfigured()) {
+            return otpConfigFrom(platform, businessId);
+        }
+        return merged;
+    }
+
+    private static TenantMessagingConfig otpConfigFrom(TenantMessagingConfig source, String businessId) {
+        return new TenantMessagingConfig(
+                source.enabled(),
+                source.paymentAccountUrl(),
+                source.rapidApiKey(),
+                source.rapidApiHost(),
+                source.rapidApiLookupUrl(),
+                source.rapidApiPhoneField(),
+                source.rapidApiPhoneDigitsOnly(),
+                source.metaAccessToken(),
+                source.metaPhoneNumberId(),
+                source.metaGraphVersion(),
+                source.metaAccessTokenSource(),
+                source.effectiveSmsProvider(),
+                source.smsUsername(),
+                source.smsApiKey(),
+                source.smsSozuriProject(),
+                source.smsSozuriApiKey(),
+                source.smsSozuriFrom(),
+                source.smsSozuriType(),
+                source.smsSozuriApiUrl(),
+                source.smsTextsmsPartnerId(),
+                source.smsTextsmsApiKey(),
+                source.smsTextsmsShortcode(),
+                source.smsTextsmsApiUrl(),
+                source.secretsReadable(),
+                source.secretsReadError(),
+                businessId,
+                SmsSendReason.OTP);
     }
 
     /**

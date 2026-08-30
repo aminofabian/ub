@@ -319,10 +319,6 @@ public class PathAPurchaseService {
         if (!PurchasingConstants.PO_SENT.equals(po.getStatus())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Purchase order must be sent to receive goods");
         }
-        if (po.getSentToSupplierAt() != null && po.getSupplierResponseAt() == null) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "Waiting for supplier response before goods can be received");
-        }
         if (req.lines().isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Goods receipt must have lines");
         }

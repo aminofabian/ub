@@ -49,6 +49,7 @@ import zelisline.ub.identity.repository.RolePermissionRepository;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.platform.security.TestAuthenticationFilter;
+import zelisline.ub.purchasing.domain.PurchaseOrder;
 import zelisline.ub.purchasing.repository.GoodsReceiptLineRepository;
 import zelisline.ub.purchasing.repository.GoodsReceiptRepository;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
@@ -433,6 +434,35 @@ class PathAPurchaseIT {
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void portalSentPurchaseOrder_canReceiveBeforeSupplierResponds() throws Exception {
+        String poId = createPo();
+        String poLineId = addPoLine(poId, "10", "5");
+        sendPo(poId);
+
+        PurchaseOrder awaiting = purchaseOrderRepository.findById(poId).orElseThrow();
+        awaiting.setSentToSupplierAt(Instant.parse("2026-06-02T09:00:00Z"));
+        awaiting.setSupplierResponseAt(null);
+        purchaseOrderRepository.saveAndFlush(awaiting);
+
+        String grnBody = """
+                {"purchaseOrderId":"%s","branchId":"%s","receivedAt":"%s","lines":[
+                  {"purchaseOrderLineId":"%s","qtyReceived":10}
+                ]}
+                """.formatted(poId, branchId, Instant.parse("2026-06-02T10:00:00Z"), poLineId);
+
+        mockMvc.perform(post("/api/v1/purchasing/path-a/goods-receipts")
+                        .contentType(APPLICATION_JSON)
+                        .content(grnBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        assertThat(itemRepository.findById(itemId).orElseThrow().getCurrentStock())
+                .isEqualByComparingTo(new BigDecimal("10.0000"));
     }
 
     @Test

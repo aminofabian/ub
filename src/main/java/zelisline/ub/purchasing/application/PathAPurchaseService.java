@@ -364,11 +364,10 @@ public class PathAPurchaseService {
             if (in.qtyReceived().signum() <= 0) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quantity must be positive");
             }
-            BigDecimal maxReceivable = maxReceivableQty(pol, po);
-            BigDecimal remaining = maxReceivable.subtract(pol.getQtyReceived());
+            BigDecimal remaining = pol.getQtyOrdered().subtract(pol.getQtyReceived());
             if (in.qtyReceived().compareTo(remaining) > 0) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "Receive quantity exceeds supplier-accepted quantity on line");
+                        "Receive quantity exceeds ordered quantity on line");
             }
             PackageVariantStockResolver.StockPickResolution inbound = packageVariantStockResolver.resolveInbound(
                     businessId, pol.getItemId(), in.qtyReceived());
@@ -750,22 +749,6 @@ public class PathAPurchaseService {
                 l.getQtyAccepted(),
                 l.getSupplierNote()
         );
-    }
-
-    private static BigDecimal maxReceivableQty(PurchaseOrderLine pol, PurchaseOrder po) {
-        if (po.getSentToSupplierAt() == null) {
-            return pol.getQtyOrdered();
-        }
-        String status = pol.getSupplierLineStatus() == null
-                ? PurchasingConstants.SUPPLIER_LINE_PENDING : pol.getSupplierLineStatus();
-        if (PurchasingConstants.SUPPLIER_LINE_REJECTED.equals(status)) {
-            return BigDecimal.ZERO;
-        }
-        if (PurchasingConstants.SUPPLIER_LINE_ACCEPTED.equals(status)
-                || PurchasingConstants.SUPPLIER_LINE_PARTIALLY_ACCEPTED.equals(status)) {
-            return pol.getQtyAccepted() == null ? pol.getQtyOrdered() : pol.getQtyAccepted();
-        }
-        return pol.getQtyOrdered();
     }
 
     private static String blankToNull(String s) {

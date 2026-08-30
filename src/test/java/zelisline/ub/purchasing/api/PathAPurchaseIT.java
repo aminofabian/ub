@@ -49,8 +49,11 @@ import zelisline.ub.identity.repository.RolePermissionRepository;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.platform.security.TestAuthenticationFilter;
+import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.domain.PurchaseOrder;
+import zelisline.ub.purchasing.domain.PurchaseOrderLine;
 import zelisline.ub.purchasing.repository.GoodsReceiptLineRepository;
+import zelisline.ub.purchasing.repository.PurchaseOrderLineRepository;
 import zelisline.ub.purchasing.repository.GoodsReceiptRepository;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.purchasing.repository.PurchaseOrderRepository;
@@ -132,6 +135,8 @@ class PathAPurchaseIT {
     private GoodsReceiptRepository goodsReceiptRepository;
     @Autowired
     private PurchaseOrderRepository purchaseOrderRepository;
+    @Autowired
+    private PurchaseOrderLineRepository purchaseOrderLineRepository;
     @Autowired
     private IdempotencyKeyRepository idempotencyKeyRepository;
 
@@ -437,7 +442,7 @@ class PathAPurchaseIT {
     }
 
     @Test
-    void portalSentPurchaseOrder_canReceiveBeforeSupplierResponds() throws Exception {
+    void portalSentPurchaseOrder_canReceiveIgnoringSupplierAcceptedQty() throws Exception {
         String poId = createPo();
         String poLineId = addPoLine(poId, "10", "5");
         sendPo(poId);
@@ -446,6 +451,11 @@ class PathAPurchaseIT {
         awaiting.setSentToSupplierAt(Instant.parse("2026-06-02T09:00:00Z"));
         awaiting.setSupplierResponseAt(null);
         purchaseOrderRepository.saveAndFlush(awaiting);
+
+        PurchaseOrderLine pendingLine = purchaseOrderLineRepository.findById(poLineId).orElseThrow();
+        pendingLine.setSupplierLineStatus(PurchasingConstants.SUPPLIER_LINE_REJECTED);
+        pendingLine.setQtyAccepted(BigDecimal.ZERO);
+        purchaseOrderLineRepository.saveAndFlush(pendingLine);
 
         String grnBody = """
                 {"purchaseOrderId":"%s","branchId":"%s","receivedAt":"%s","lines":[

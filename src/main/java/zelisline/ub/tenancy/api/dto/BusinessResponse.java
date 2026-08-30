@@ -28,6 +28,13 @@ public record BusinessResponse(
         // slug-derived fallback.
         String primaryDomain,
         /** Optional override of regional catalog resolution ({@code settings.globalCatalogCode}). */
-        String globalCatalogCode
+        String globalCatalogCode,
+        /** Highest receipt number already issued for this business, if any. */
+        Long lastReceiptNo,
+        /**
+         * Configured floor for the next POS receipt number ({@code settings.nextReceiptNo}).
+         * Allocation uses {@code max(last+1, nextReceiptNo)}.
+         */
+        Long nextReceiptNo
 ) {
 }

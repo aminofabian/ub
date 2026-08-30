@@ -147,6 +147,14 @@ public interface SaleRepository extends JpaRepository<Sale, String> {
     )
     Optional<Long> nextReceiptNo(@Param("businessId") String businessId);
 
+    /** Read-only latest receipt number (no row lock). Prefer {@link #nextReceiptNo} when allocating. */
+    @Query(
+            value = "SELECT receipt_no FROM sales WHERE business_id = :businessId"
+                    + " ORDER BY receipt_no DESC LIMIT 1",
+            nativeQuery = true
+    )
+    Optional<Long> findLatestReceiptNo(@Param("businessId") String businessId);
+
     boolean existsByBusinessId(String businessId);
 
     boolean existsByBusinessIdAndStatusAndVoidedAtIsNull(String businessId, String status);

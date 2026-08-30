@@ -98,6 +98,7 @@ public class TenancyService {
     private final ObjectMapper objectMapper;
     private final ObjectProvider<zelisline.ub.onboarding.progress.application.SetupProgressInvalidatePublisher>
             setupProgressInvalidate;
+    private final PosReceiptSequenceSettingsService posReceiptSequenceSettingsService;
 
     @Transactional
     public BusinessResponse createBusiness(CreateBusinessRequest request) {
@@ -492,6 +493,24 @@ public class TenancyService {
                 globalCatalogResolver.mergeOverrideCode(
                     business.getSettings(),
                     request.globalCatalogCode()
+                )
+            );
+        }
+        if (request.nextReceiptNo() != null) {
+            long minAllowed = saleRepository
+                .findLatestReceiptNo(business.getId())
+                .map(n -> n + 1)
+                .orElse(1L);
+            if (request.nextReceiptNo() < minAllowed) {
+                throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Next receipt number must be at least " + minAllowed
+                );
+            }
+            business.setSettings(
+                posReceiptSequenceSettingsService.merge(
+                    business.getSettings(),
+                    request.nextReceiptNo()
                 )
             );
         }
@@ -924,7 +943,9 @@ public class TenancyService {
             hubAlerts,
             metaCapi,
             primaryDomain,
-            globalCatalogResolver.readOverrideCode(business.getSettings())
+            globalCatalogResolver.readOverrideCode(business.getSettings()),
+            saleRepository.findLatestReceiptNo(business.getId()).orElse(null),
+            posReceiptSequenceSettingsService.readNextReceiptNo(business.getSettings())
         );
     }
 

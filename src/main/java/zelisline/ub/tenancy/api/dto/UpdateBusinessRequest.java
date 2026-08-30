@@ -1,6 +1,7 @@
 package zelisline.ub.tenancy.api.dto;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
@@ -33,6 +34,11 @@ public record UpdateBusinessRequest(
          * Super Admin only: required when changing country/currency on a business that already
          * has products or sales. Confirms the operator understands amounts are re-labeled, not converted.
          */
-        Boolean acknowledgeRegionRisk
+        Boolean acknowledgeRegionRisk,
+        /**
+         * Floor for the next POS receipt number. Null = unchanged. Must be at least
+         * one greater than the highest existing receipt for this business.
+         */
+        @Min(1) Long nextReceiptNo
 ) {
 }

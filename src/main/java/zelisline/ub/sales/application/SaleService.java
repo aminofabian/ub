@@ -68,7 +68,9 @@ import zelisline.ub.sales.repository.SalePaymentRepository;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
 import zelisline.ub.tenancy.application.FeatureFlagService;
+import zelisline.ub.tenancy.application.PosReceiptSequenceSettingsService;
 import zelisline.ub.tenancy.repository.BranchRepository;
+import zelisline.ub.tenancy.repository.BusinessRepository;
 
 @Service
 @RequiredArgsConstructor
@@ -112,6 +114,8 @@ public class SaleService {
     private final RequestPermissionService requestPermissionService;
     private final FeatureFlagService featureFlagService;
     private final CashDrawerLedgerService cashDrawerLedgerService;
+    private final BusinessRepository businessRepository;
+    private final PosReceiptSequenceSettingsService posReceiptSequenceSettingsService;
 
     @Transactional
     public SaleCreationOutcome createSale(String businessId, String rawIdempotencyKey, PostSaleRequest req, String userId) {
@@ -362,7 +366,7 @@ public class SaleService {
         Sale sale = new Sale();
         sale.setId(saleId);
         sale.setBusinessId(businessId);
-        sale.setReceiptNo(saleRepository.nextReceiptNo(businessId).map(n -> n + 1).orElse(1L));
+        sale.setReceiptNo(allocateReceiptNo(businessId));
         sale.setBranchId(branchId);
         sale.setShiftId(shiftId);
         sale.setStatus(SalesConstants.SALE_STATUS_COMPLETED);
@@ -427,6 +431,18 @@ public class SaleService {
                     }
                 });
         inboundTillPaymentService.requireAmountMatchesIfKnown(businessId, receipt, paymentAmount);
+    }
+
+    private long allocateReceiptNo(String businessId) {
+        long fromMax = saleRepository.nextReceiptNo(businessId).map(n -> n + 1).orElse(1L);
+        Long floor = businessRepository
+                .findSettingsJsonById(businessId)
+                .map(posReceiptSequenceSettingsService::readNextReceiptNo)
+                .orElse(null);
+        if (floor != null && floor > fromMax) {
+            return floor;
+        }
+        return fromMax;
     }
 
     /**

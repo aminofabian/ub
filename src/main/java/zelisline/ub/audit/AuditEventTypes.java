@@ -201,6 +201,8 @@ public final class AuditEventTypes {
     public static final String SUBSCRIPTION_SUSPENDED = "subscription.suspended";
     public static final String SUBSCRIPTION_RENEWED = "subscription.renewed";
     public static final String SUBSCRIPTION_EXTENDED = "subscription.extended";
+    public static final String SUBSCRIPTION_GRACE_EXTENDED = "subscription.grace_extended";
+    public static final String SUBSCRIPTION_PLAN_ASSIGNED = "subscription.plan_assigned";
     public static final String SUBSCRIPTION_CAMPAIGN_SENT = "subscription.campaign_sent";
     public static final String SUBSCRIPTION_PRE_EXPIRY_SENT = "subscription.pre_expiry_sent";
 }

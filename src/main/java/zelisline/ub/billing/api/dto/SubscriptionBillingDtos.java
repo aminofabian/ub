@@ -88,9 +88,20 @@ public final class SubscriptionBillingDtos {
             String note
     ) {}
 
+    public record ExtendGraceRequest(
+            int days,
+            String note
+    ) {}
+
+    public record AssignPlanRequest(
+            String tierCode,
+            String note
+    ) {}
+
     public record AdminSubscriptionSnapshot(
             String businessId,
             String tier,
+            String tierDisplayName,
             SubscriptionBillingStatus billingStatus,
             Instant currentPeriodEnd,
             Instant graceStartedAt,

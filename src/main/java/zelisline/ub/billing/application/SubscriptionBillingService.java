@@ -56,6 +56,7 @@ public class SubscriptionBillingService {
         return new SubscriptionBillingDtos.AdminSubscriptionSnapshot(
                 business.getId(),
                 business.getSubscriptionTier(),
+                plan != null ? plan.getDisplayName() : business.getSubscriptionTier(),
                 business.getSubscriptionBillingStatus(),
                 business.getCurrentPeriodEnd(),
                 business.getGraceStartedAt(),
@@ -155,6 +156,73 @@ public class SubscriptionBillingService {
         businessRepository.save(business);
         cancelExpiryCampaigns(businessId);
         publishAudit(business.getId(), AuditEventTypes.SUBSCRIPTION_EXTENDED, actorUserId);
+        return adminSnapshot(businessId);
+    }
+
+    /**
+     * SA: push the lock date by {@code days}. Unsuspends billing-locked shops
+     * into GRACE. Paid periods that have not ended are left alone — use
+     * {@link #extendPeriod} for those.
+     */
+    @Transactional
+    public SubscriptionBillingDtos.AdminSubscriptionSnapshot extendGrace(
+            String businessId,
+            int days,
+            String note,
+            String actorUserId
+    ) {
+        if (days < 1) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "days must be at least 1");
+        }
+        Business business = requireBusiness(businessId);
+        Instant now = Instant.now();
+        Instant periodEnd = business.getCurrentPeriodEnd();
+        boolean periodStillRunning = periodEnd != null && periodEnd.isAfter(now);
+        if (business.getSubscriptionBillingStatus() == SubscriptionBillingStatus.ACTIVE
+                && periodStillRunning) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Paid period has not ended. Extend paid months instead.");
+        }
+
+        Instant base = business.getGraceEndsAt() != null && business.getGraceEndsAt().isAfter(now)
+                ? business.getGraceEndsAt()
+                : now;
+        if (business.getGraceStartedAt() == null) {
+            business.setGraceStartedAt(now);
+        }
+        business.setGraceEndsAt(base.plus(days, ChronoUnit.DAYS));
+        business.setSubscriptionBillingStatus(SubscriptionBillingStatus.GRACE);
+        if (business.getSuspensionReason() == SuspensionReason.BILLING_UNPAID) {
+            business.setSuspensionReason(null);
+            business.setBillingSuspendedAt(null);
+            business.setTenantStatus(TenantStatus.ACTIVE);
+        } else if (business.getTenantStatus() == TenantStatus.SUSPENDED) {
+            business.setTenantStatus(TenantStatus.ACTIVE);
+        }
+        businessRepository.save(business);
+        publishAudit(business.getId(), AuditEventTypes.SUBSCRIPTION_GRACE_EXTENDED, actorUserId);
+        return adminSnapshot(businessId);
+    }
+
+    @Transactional
+    public SubscriptionBillingDtos.AdminSubscriptionSnapshot assignPlan(
+            String businessId,
+            String tierCode,
+            String note,
+            String actorUserId
+    ) {
+        if (tierCode == null || tierCode.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "tierCode is required");
+        }
+        String code = tierCode.trim().toLowerCase();
+        if (!isFreeTierStatic(code) && settingsService.planOrNull(code) == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown subscription plan");
+        }
+        Business business = requireBusiness(businessId);
+        business.setSubscriptionTier(code);
+        businessRepository.save(business);
+        publishAudit(business.getId(), AuditEventTypes.SUBSCRIPTION_PLAN_ASSIGNED, actorUserId);
         return adminSnapshot(businessId);
     }
 

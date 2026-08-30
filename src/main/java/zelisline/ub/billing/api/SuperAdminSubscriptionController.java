@@ -80,6 +80,24 @@ public class SuperAdminSubscriptionController {
         return billingService.extendPeriod(businessId, body.months(), body.note(), admin.getId());
     }
 
+    @PostMapping("/businesses/{businessId}/subscription/extend-grace")
+    public SubscriptionBillingDtos.AdminSubscriptionSnapshot extendGrace(
+            @PathVariable String businessId,
+            @Valid @RequestBody SubscriptionBillingDtos.ExtendGraceRequest body
+    ) {
+        SuperAdmin admin = requireSuperAdmin();
+        return billingService.extendGrace(businessId, body.days(), body.note(), admin.getId());
+    }
+
+    @PostMapping("/businesses/{businessId}/subscription/plan")
+    public SubscriptionBillingDtos.AdminSubscriptionSnapshot assignPlan(
+            @PathVariable String businessId,
+            @Valid @RequestBody SubscriptionBillingDtos.AssignPlanRequest body
+    ) {
+        SuperAdmin admin = requireSuperAdmin();
+        return billingService.assignPlan(businessId, body.tierCode(), body.note(), admin.getId());
+    }
+
     @PostMapping("/businesses/{businessId}/subscription/reactivate")
     public SubscriptionBillingDtos.AdminSubscriptionSnapshot reactivateSubscription(
             @PathVariable String businessId

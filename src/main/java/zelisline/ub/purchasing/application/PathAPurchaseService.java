@@ -225,6 +225,20 @@ public class PathAPurchaseService {
     }
 
     @Transactional
+    public void deletePurchaseOrderLine(String businessId, String purchaseOrderId, String lineId) {
+        PurchaseOrder po = loadPo(businessId, purchaseOrderId);
+        assertPoLineEditable(po);
+        PurchaseOrderLine line = purchaseOrderLineRepository.findById(lineId)
+                .filter(l -> purchaseOrderId.equals(l.getPurchaseOrderId()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Line not found"));
+        if (line.getQtyReceived().signum() > 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT, "Line has received quantity and cannot be deleted");
+        }
+        purchaseOrderLineRepository.delete(line);
+    }
+
+    @Transactional
     public PathAPurchaseOrderDetailResponse sendPurchaseOrder(String businessId, String purchaseOrderId) {
         PurchaseOrder po = loadPo(businessId, purchaseOrderId);
         assertPoDraft(po);

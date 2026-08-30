@@ -2,6 +2,7 @@ package zelisline.ub.purchasing.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -439,6 +440,30 @@ class PathAPurchaseIT {
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void deletePurchaseOrderLine_removesUnreceivedLine() throws Exception {
+        String poId = createPo();
+        String poLineId = addPoLine(poId, "10", "5");
+        sendPo(poId);
+
+        mockMvc.perform(delete("/api/v1/purchasing/path-a/purchase-orders/" + poId + "/lines/" + poLineId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isNoContent());
+
+        JsonNode detail = objectMapper.readTree(
+                mockMvc.perform(get("/api/v1/purchasing/path-a/purchase-orders/" + poId)
+                                        .header("X-Tenant-Id", TENANT)
+                                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                        .andExpect(status().isOk())
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsString());
+        assertThat(detail.get("lines")).isEmpty();
     }
 
     @Test

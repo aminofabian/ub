@@ -3,6 +3,7 @@ package zelisline.ub.purchasing.api;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -114,6 +115,22 @@ public class PathAPurchasingController {
                 purchaseOrderId,
                 lineId,
                 body
+        );
+    }
+
+    @DeleteMapping("/purchase-orders/{purchaseOrderId}/lines/{lineId}")
+    @PreAuthorize("hasPermission(null, 'purchasing.path_a.write')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteLine(
+            @PathVariable String purchaseOrderId,
+            @PathVariable String lineId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        pathAPurchaseService.deletePurchaseOrderLine(
+                TenantRequestIds.resolveBusinessId(request),
+                purchaseOrderId,
+                lineId
         );
     }
 

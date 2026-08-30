@@ -12,14 +12,18 @@ import org.springframework.stereotype.Component;
 import jakarta.servlet.http.HttpServletRequest;
 
 /**
- * HttpOnly refresh-token cookie ({@value #COOKIE_NAME}) scoped to {@code /api/v1/auth}.
- * When enabled, login/refresh responses omit the refresh token from JSON and set this cookie instead.
+ * HttpOnly refresh-token cookie ({@value #COOKIE_NAME}) scoped to {@code /api}
+ * so both the BFF ({@code /api/v1/auth/*}) and Next helpers
+ * ({@code /api/auth/restore-session}) receive it. The previous
+ * {@code /api/v1/auth} path is cleared on every set so browsers do not keep a
+ * stale second cookie.
  */
 @Component
 public class RefreshTokenCookieSupport {
 
     public static final String COOKIE_NAME = "ub.refresh";
-    private static final String COOKIE_PATH = "/api/v1/auth";
+    static final String COOKIE_PATH = "/api";
+    static final String LEGACY_COOKIE_PATH = "/api/v1/auth";
 
     private final boolean enabled;
     private final String domain;
@@ -58,7 +62,8 @@ public class RefreshTokenCookieSupport {
         if (!enabled || refreshToken == null || refreshToken.isBlank()) {
             return headers;
         }
-        headers.add(HttpHeaders.SET_COOKIE, buildCookie(refreshToken, maxAgeSeconds).toString());
+        headers.add(HttpHeaders.SET_COOKIE, buildCookie(refreshToken, maxAgeSeconds, COOKIE_PATH).toString());
+        headers.add(HttpHeaders.SET_COOKIE, buildCookie("", 0, LEGACY_COOKIE_PATH).toString());
         return headers;
     }
 
@@ -67,16 +72,17 @@ public class RefreshTokenCookieSupport {
         if (!enabled) {
             return headers;
         }
-        headers.add(HttpHeaders.SET_COOKIE, buildCookie("", 0).toString());
+        headers.add(HttpHeaders.SET_COOKIE, buildCookie("", 0, COOKIE_PATH).toString());
+        headers.add(HttpHeaders.SET_COOKIE, buildCookie("", 0, LEGACY_COOKIE_PATH).toString());
         return headers;
     }
 
-    private ResponseCookie buildCookie(String value, long maxAgeSec) {
+    private ResponseCookie buildCookie(String value, long maxAgeSec, String path) {
         ResponseCookie.ResponseCookieBuilder builder = ResponseCookie.from(COOKIE_NAME, value)
                 .httpOnly(true)
                 .secure(secure)
                 .sameSite("Lax")
-                .path(COOKIE_PATH)
+                .path(path)
                 .maxAge(Duration.ofSeconds(maxAgeSec));
         if (!domain.isEmpty()) {
             builder.domain(domain);

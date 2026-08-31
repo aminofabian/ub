@@ -16,9 +16,11 @@ import lombok.Setter;
  * <p>Single-row table. The private key is stored encrypted at rest via
  * {@code CredentialEncryptionService} (AES-256-GCM), so a super admin can
  * configure license issuance from the console without touching the deployment
- * environment. The plaintext base64 public key is kept alongside purely so the
- * console can show operators the exact value that must be baked into the
- * desktop JAR ({@code app.desktop.license.public-key}).
+ * environment. The plaintext base64 public key is kept alongside so the console
+ * can display it, and so the platform can serve it to tills ({@code GET
+ * /api/v1/platform/desktop-license-public-key}) — tills verify against the
+ * matching public key synced from here, falling back to the copy baked into the
+ * desktop JAR ({@code app.desktop.license.public-key}) when offline.
  *
  * <p>{@code APP_DESKTOP_LICENSE_PRIVATE_KEY} on the deployment takes precedence
  * over this row whenever it is set.

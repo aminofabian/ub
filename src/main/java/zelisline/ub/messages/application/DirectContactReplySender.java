@@ -1,5 +1,6 @@
 package zelisline.ub.messages.application;
 
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
@@ -15,21 +16,31 @@ import zelisline.ub.messages.repository.ContactMessageReplyRepository;
 import zelisline.ub.messaging.application.CustomerMessageDispatcher;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
 
+/**
+ * Cloud implementation of {@link ContactReplySender}: sends the reply through
+ * the shop's configured email / WhatsApp / SMS providers immediately.
+ *
+ * <p>Not active on the desktop profile — a till holds no messaging provider
+ * credentials and uses {@link DesktopQueuedContactReplySender} instead.
+ */
 @Component
+@Profile("!desktop")
 @RequiredArgsConstructor
-public class ContactMessageReplySender {
+public class DirectContactReplySender implements ContactReplySender {
 
     private final ContactMessageReplyRepository contactMessageReplyRepository;
     private final NotificationService notificationService;
     private final CustomerMessageDispatcher customerMessageDispatcher;
     private final BusinessCreditMessagingSettingsService messagingSettingsService;
 
+    @Override
     public ContactMessageReply send(
             ContactMessage message,
             ContactMessageReplyRequest request,
             String actorUserId,
             String fromDisplayName,
-            boolean platform
+            boolean platform,
+            String replyId
     ) {
         String body = request.body().trim();
         ContactReplyChannel channel = request.channel();
@@ -60,7 +71,7 @@ public class ContactMessageReplySender {
                 outcome = result.outcome();
                 detail = truncate(result.channel() + ":" + result.detail());
                 if (!"sent".equals(outcome) && !"stub".equals(outcome)) {
-                    persistFailed(message, channel, body, actorUserId, outcome, detail);
+                    persistFailed(message, channel, body, actorUserId, outcome, detail, replyId);
                     throw new ResponseStatusException(
                             HttpStatus.BAD_GATEWAY, "WhatsApp/SMS send failed: " + result.detail());
                 }
@@ -77,7 +88,7 @@ public class ContactMessageReplySender {
                 outcome = result.outcome();
                 detail = truncate(result.channel() + ":" + result.detail());
                 if (!"sent".equals(outcome) && !"stub".equals(outcome)) {
-                    persistFailed(message, channel, body, actorUserId, outcome, detail);
+                    persistFailed(message, channel, body, actorUserId, outcome, detail, replyId);
                     throw new ResponseStatusException(
                             HttpStatus.BAD_GATEWAY, "SMS send failed: " + result.detail());
                 }
@@ -86,6 +97,9 @@ public class ContactMessageReplySender {
         }
 
         ContactMessageReply reply = new ContactMessageReply();
+        if (replyId != null && !replyId.isBlank()) {
+            reply.setId(replyId);
+        }
         reply.setContactMessageId(message.getId());
         reply.setChannel(channel);
         reply.setBody(body);
@@ -108,9 +122,13 @@ public class ContactMessageReplySender {
             String body,
             String actorUserId,
             String outcome,
-            String detail
+            String detail,
+            String replyId
     ) {
         ContactMessageReply reply = new ContactMessageReply();
+        if (replyId != null && !replyId.isBlank()) {
+            reply.setId(replyId);
+        }
         reply.setContactMessageId(message.getId());
         reply.setChannel(channel);
         reply.setBody(body);

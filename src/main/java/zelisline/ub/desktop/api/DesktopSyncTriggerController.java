@@ -11,6 +11,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.desktop.application.DesktopMediaSyncService;
+import zelisline.ub.desktop.application.DesktopMessagePullService;
+import zelisline.ub.desktop.application.DesktopMessagePushService;
 import zelisline.ub.desktop.application.DesktopSyncProgressService;
 import zelisline.ub.desktop.application.DesktopSyncPullService;
 import zelisline.ub.desktop.application.DesktopSyncPushService;
@@ -42,6 +44,8 @@ public class DesktopSyncTriggerController {
     private final DesktopSyncPushService syncPushService;
     private final DesktopSyncPullService syncPullService;
     private final DesktopMediaSyncService mediaSyncService;
+    private final DesktopMessagePushService messagePushService;
+    private final DesktopMessagePullService messagePullService;
     private final DesktopSyncProgressService syncProgress;
 
     @PostMapping
@@ -87,15 +91,19 @@ public class DesktopSyncTriggerController {
             DesktopSyncPullService.PullResult pull = syncPullService.pullMasterData();
             // Mirror sales made in the web portal / other tills into this till.
             int pulled = syncPullService.pullCloudSales();
+            // Mirror the shop's Talk to Us inbox (messages + dashboard replies).
+            DesktopMessagePullService.MessagePullResult messagePull = messagePullService.pullMessages();
             syncProgress.uploadStarted();
             DesktopSyncPushService.SyncPushResult push = syncPushService.pushPending();
-            syncProgress.done(pull, push);
+            // Queued Talk to Us replies -> cloud, which sends them.
+            DesktopMessagePushService.MessagePushResult messagePush = messagePushService.pushPendingReplies();
+            syncProgress.done(pull, push, messagePull, messagePush);
             log.info(
-                "[DesktopSync] full sync finished: {} item(s) refreshed, {} cloud sale(s) pulled, {} sale(s) pushed",
-                pull.items(),
-                pulled,
-                push.salesPushed()
-            );
+                "[DesktopSync] full sync finished: {} item(s) refreshed, {} cloud sale(s) pulled, "
+                    + "{} sale(s) pushed, {} message(s) + {} reply(ies) pulled, "
+                    + "{} reply(ies) relayed",
+                pull.items(), pulled, push.salesPushed(),
+                messagePull.messages(), messagePull.replies(), messagePush.repliesPushed());
         } catch (Exception e) {
             log.warn("[DesktopSync] full sync failed: {}", e.getMessage());
             syncProgress.failed(e.getMessage());

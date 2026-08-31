@@ -75,6 +75,10 @@ public class ImportJob {
     @Column(name = "errors_json")
     private String errorsJson;
 
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "warnings_json")
+    private String warningsJson;
+
     @Column(name = "status_message", length = 1000)
     private String statusMessage;
 

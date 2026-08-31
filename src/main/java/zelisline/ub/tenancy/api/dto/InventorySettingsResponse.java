@@ -6,6 +6,7 @@ public record InventorySettingsResponse(
         SuppliersAccessSettingsResponse suppliers,
         ReceiveStockSettingsResponse receiveStock,
         CreditTabsSettingsResponse creditTabs,
+        CheckoutSettingsResponse checkout,
         CatalogSettingsResponse catalog
 ) {
     public static InventorySettingsResponse defaults() {
@@ -15,6 +16,7 @@ public record InventorySettingsResponse(
                 SuppliersAccessSettingsResponse.defaults(),
                 ReceiveStockSettingsResponse.defaults(),
                 CreditTabsSettingsResponse.defaults(),
+                CheckoutSettingsResponse.defaults(),
                 CatalogSettingsResponse.defaults()
         );
     }

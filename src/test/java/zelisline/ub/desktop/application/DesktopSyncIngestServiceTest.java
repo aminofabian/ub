@@ -167,4 +167,24 @@ class DesktopSyncIngestServiceTest {
         assertEquals(1, ack.salesSkipped());
         verify(eventPublisher, never()).publishEvent(any(RealtimeBridge.SaleCompletedEvent.class));
     }
+
+    @Test
+    void blankTillDeviceKeyIsNormalizedToNull() {
+        // A legacy shift carries no till device key — a blank value must be
+        // stored as null (shared branch drawer), never as an empty string.
+        ShiftSyncRequest request = new ShiftSyncRequest(
+            List.of(new ShiftSyncRequest.ShiftData(
+                "shift-1", "branch-1", "   ", SalesConstants.SHIFT_STATUS_OPEN,
+                "owner-id", new BigDecimal("5000.00"), new BigDecimal("5000.00"),
+                null, null, null, null, null, false,
+                Instant.parse("2026-08-20T08:00:00Z"), null, List.of())),
+            null);
+        when(shiftRepository.findByIdAndBusinessId("shift-1", "cloud-biz"))
+            .thenReturn(Optional.empty());
+
+        service().ingest("cloud-biz", request);
+
+        verify(shiftRepository).save(org.mockito.ArgumentMatchers.argThat(shift ->
+            ((zelisline.ub.sales.domain.Shift) shift).getTillDeviceKey() == null));
+    }
 }

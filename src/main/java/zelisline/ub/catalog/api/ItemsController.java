@@ -26,6 +26,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
+import zelisline.ub.catalog.api.dto.BulkItemImageImportResponse;
 import zelisline.ub.catalog.api.dto.EffectivePricingContextResponse;
 import zelisline.ub.catalog.api.dto.CatalogListScope;
 import zelisline.ub.catalog.api.dto.CatalogRowType;
@@ -43,6 +44,7 @@ import zelisline.ub.catalog.api.dto.RecordItemScanRequest;
 import zelisline.ub.catalog.api.dto.RegisterItemImageRequest;
 import zelisline.ub.catalog.api.dto.SuggestedSkuResponse;
 import zelisline.ub.catalog.application.CategoryPricingResolutionService;
+import zelisline.ub.catalog.application.BulkItemImageImportService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.application.ItemCreateResult;
 import zelisline.ub.catalog.application.ItemTimelineService;
@@ -74,6 +76,7 @@ public class ItemsController {
     private final ProductDescriptionGeneratorService productDescriptionGeneratorService;
     private final BranchResolutionService branchResolutionService;
     private final UserItemTypeRepository userItemTypeRepository;
+    private final BulkItemImageImportService bulkItemImageImportService;
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'catalog.items.read')")
@@ -339,6 +342,31 @@ public class ItemsController {
                 body,
                 CurrentTenantUser.auditActorId(request)
         );
+    }
+
+    @PostMapping(value = "/images/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasPermission(null, 'catalog.items.write')")
+    public BulkItemImageImportResponse importItemImagesBulk(
+            @RequestPart("file") MultipartFile file,
+            HttpServletRequest request
+    ) throws java.io.IOException {
+        TenantPrincipal user = CurrentTenantUser.requireHuman(request);
+        return bulkItemImageImportService.importImageUrls(
+                TenantRequestIds.resolveBusinessId(request),
+                file.getBytes(),
+                user.userId());
+    }
+
+    @PostMapping(value = "/images/upload-bulk", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasPermission(null, 'catalog.items.write')")
+    public BulkItemImageImportResponse uploadItemImagesBulk(
+            @RequestPart("files") List<MultipartFile> files,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return bulkItemImageImportService.uploadImagesBySku(
+                TenantRequestIds.resolveBusinessId(request),
+                files);
     }
 
     @PostMapping("/{id}/images")

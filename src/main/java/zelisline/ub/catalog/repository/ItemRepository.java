@@ -96,6 +96,9 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     Optional<Item> findByBusinessIdAndSkuAndDeletedAtIsNull(String businessId, String sku);
 
+    /** Case-insensitive SKU lookup for filename-matched bulk image uploads. */
+    Optional<Item> findByBusinessIdAndSkuIgnoreCaseAndDeletedAtIsNull(String businessId, String sku);
+
     Optional<Item> findByBusinessIdAndBarcodeAndDeletedAtIsNull(String businessId, String barcode);
 
     Optional<Item> findByBusinessIdAndPluCodeAndDeletedAtIsNull(String businessId, String pluCode);

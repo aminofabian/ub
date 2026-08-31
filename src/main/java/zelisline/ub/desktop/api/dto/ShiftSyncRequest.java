@@ -6,6 +6,7 @@ import java.util.List;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 
 /**
  * Batch of till shifts (with their sales) uploaded by a desktop install to the
@@ -30,7 +31,13 @@ public record ShiftSyncRequest(
     public record ShiftData(
         @NotBlank String id,
         @NotBlank String branchId,
-        @NotBlank String tillDeviceKey,
+        /**
+         * Till device key ({@code X-Till-Device-Id}). Nullable: legacy shifts
+         * opened before till-device tracking use the shared branch drawer
+         * ({@code till_device_key IS NULL}) — same semantics as the schema and
+         * {@code OpenShiftResolver}.
+         */
+        @Size(max = 64) String tillDeviceKey,
         @NotBlank String status,
         /** Cloud user id (the desktop remaps local cashier ids to the owner). */
         @NotBlank String openedBy,

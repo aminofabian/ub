@@ -2,6 +2,8 @@ package zelisline.ub.desktop.license;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
+import org.bouncycastle.crypto.util.PrivateKeyFactory;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -33,11 +35,16 @@ import org.springframework.stereotype.Service;
  *
  * <h2>Key management</h2>
  * <ul>
- *   <li>The <em>private key</em> lives only on the vendor's admin machine —
- *       it never ships with the product.</li>
- *   <li>The <em>public key</em> is baked into the JAR (or supplied via
- *       {@code APP_DESKTOP_LICENSE_PUBLIC_KEY} env var) and is the <em>only</em>
- *       key this service can verify against.</li>
+ *   <li>The <em>private key</em> lives only on the vendor's side — the Super
+ *       Admin console (deployment env var {@code APP_DESKTOP_LICENSE_PRIVATE_KEY}
+ *       or the console-managed key) — it never ships with the product.</li>
+ *   <li>At runtime the till verifies against the console's <em>current</em>
+ *       signing public key, synced from the platform by {@link
+ *       DesktopLicenseKeySyncer} while online. The public key baked into the JAR
+ *       ({@code app.desktop.license.public-key} / {@code
+ *       APP_DESKTOP_LICENSE_PUBLIC_KEY} env var) is the offline fallback used
+ *       until the first sync — and the only key for standalone CLI {@code verify}
+ *       runs.</li>
  * </ul>
  *
  * <h2>Trial mode</h2>
@@ -59,7 +66,22 @@ public class LicenseService {
 
     private static final int TRIAL_DAYS = 30;
 
-    private final PublicKey publicKey;
+    /** DER prefix for a raw 32-byte Ed25519 public key (OID 1.3.101.112). */
+    private static final byte[] ED25519_SPKI_PREFIX = new byte[] {
+        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00
+    };
+
+    /** Public key baked into the app ({@code app.desktop.license.public-key}). */
+    private final PublicKey bakedPublicKey;
+
+    /**
+     * Console-synced verification key pushed by {@link DesktopLicenseKeySyncer}
+     * (null until the first sync — always null in standalone CLI/test mode).
+     * Takes precedence over the baked key because it matches the key the vendor
+     * is actually signing with.
+     */
+    private volatile PublicKey syncedPublicKey;
+
     private final MachineFingerprintProvider machineFingerprintProvider;
     private final Path initializedFile;
 
@@ -92,19 +114,20 @@ public class LicenseService {
 
         if (publicKeyBase64 == null || publicKeyBase64.isBlank()) {
             log.warn(
-                "[License] no public key configured — trial-only mode. " +
-                    "Set APP_DESKTOP_LICENSE_PUBLIC_KEY to enable license verification."
+                "[License] no baked public key configured — trial-only until a key " +
+                    "is baked (APP_DESKTOP_LICENSE_PUBLIC_KEY) or synced from the " +
+                    "Super Admin console."
             );
-            this.publicKey = null;
+            this.bakedPublicKey = null;
         } else {
             try {
                 byte[] keyBytes = Base64.getDecoder().decode(
                     publicKeyBase64.trim()
                 );
-                this.publicKey = KeyFactory.getInstance(
+                this.bakedPublicKey = KeyFactory.getInstance(
                     "Ed25519"
                 ).generatePublic(new X509EncodedKeySpec(keyBytes));
-                log.info("[License] public key loaded (Ed25519)");
+                log.info("[License] baked public key loaded (Ed25519)");
             } catch (Exception e) {
                 throw new RuntimeException(
                     "Invalid license public key. " +
@@ -113,6 +136,50 @@ public class LicenseService {
                 );
             }
         }
+    }
+
+    /**
+     * Installs the console-synced verification key (called by {@link
+     * DesktopLicenseKeySyncer}). Takes precedence over the baked key. Pass
+     * {@code null} to clear — never done at runtime: the till keeps the last
+     * known key so already-issued licenses keep verifying.
+     */
+    public void updateSyncedPublicKey(PublicKey key) {
+        if (java.util.Objects.equals(this.syncedPublicKey, key)) {
+            return;
+        }
+        this.syncedPublicKey = key;
+        if (key == null) {
+            log.info("[License] cleared console-synced public key");
+        } else {
+            log.info("[License] activated console-synced public key (overrides baked key)");
+        }
+    }
+
+    /** The key verification runs against: console-synced first, then the baked fallback. */
+    private PublicKey resolvePublicKey() {
+        PublicKey synced = syncedPublicKey;
+        if (synced != null) {
+            return synced;
+        }
+        return bakedPublicKey;
+    }
+
+    /**
+     * Which public key {@link #decodeAndVerify} currently runs against:
+     * {@code synced} (console key pushed by the syncer), {@code baked} (the
+     * in‑JAR offline fallback), or {@code none} (trial‑only). Exposed on the
+     * license status endpoint so support can tell why a token is (or isn't)
+     * verifying on a given till.
+     */
+    public String activeKeySource() {
+        if (syncedPublicKey != null) {
+            return "synced";
+        }
+        if (bakedPublicKey != null) {
+            return "baked";
+        }
+        return "none";
     }
 
     private static Path resolveInitializedFile() {
@@ -163,8 +230,9 @@ public class LicenseService {
      * Returns {@code null} if the signature is invalid or the token is malformed.
      */
     public LicensePayload decodeAndVerify(String token) {
-        if (publicKey == null) {
-            log.warn("[License] cannot verify — no public key configured");
+        PublicKey key = resolvePublicKey();
+        if (key == null) {
+            log.warn("[License] cannot verify — no public key configured (baked or synced)");
             return null;
         }
         if (token == null || token.isBlank()) {
@@ -181,7 +249,7 @@ public class LicenseService {
             byte[] signatureBytes = dec.decode(token.substring(dot + 1));
 
             Signature sig = Signature.getInstance("Ed25519");
-            sig.initVerify(publicKey);
+            sig.initVerify(key);
             sig.update(payloadBytes);
 
             if (!sig.verify(signatureBytes)) {
@@ -354,6 +422,28 @@ public class LicenseService {
     /** Base64‑encodes a PKCS#8 private key (keep this secret!). */
     public static String encodePrivateKey(PrivateKey key) {
         return Base64.getEncoder().encodeToString(key.getEncoded());
+    }
+
+    /**
+     * Derives the base64 X.509 public key matching a PKCS#8 Ed25519 private key.
+     * Used by the platform's public-key endpoint so a till always learns the key
+     * the vendor is actually signing with — even when only the private key was
+     * configured (env var, or a console row saved without a public key).
+     */
+    public static String derivePublicKeyFromPrivate(String privateKeyBase64) {
+        try {
+            byte[] pkcs8 = Base64.getDecoder().decode(privateKeyBase64.trim());
+            var privateKey = (Ed25519PrivateKeyParameters) PrivateKeyFactory.createKey(pkcs8);
+            byte[] rawPublic = privateKey.generatePublicKey().getEncoded();
+            byte[] spki = new byte[ED25519_SPKI_PREFIX.length + rawPublic.length];
+            System.arraycopy(ED25519_SPKI_PREFIX, 0, spki, 0, ED25519_SPKI_PREFIX.length);
+            System.arraycopy(rawPublic, 0, spki, ED25519_SPKI_PREFIX.length, rawPublic.length);
+            String publicKeyBase64 = Base64.getEncoder().encodeToString(spki);
+            decodePublicKey(publicKeyBase64); // sanity: must be a parseable Ed25519 X.509 key
+            return publicKeyBase64;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to derive Ed25519 public key from private key", e);
+        }
     }
 
     /** Decodes a base64‑encoded PKCS#8 private key. */

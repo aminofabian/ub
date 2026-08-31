@@ -36,6 +36,7 @@ public class LicenseController {
     private final DesktopLicenseGuard licenseGuard;
     private final BusinessRepository businessRepository;
     private final DesktopSetupService desktopSetupService;
+    private final DesktopLicenseKeySyncer licenseKeySyncer;
 
     /**
      * Current license state. The frontend calls this on every page load
@@ -46,14 +47,16 @@ public class LicenseController {
     public LicenseStatus status() {
         String businessId = desktopSetupService.getDesktopBusinessId();
         if (businessId.isEmpty()) {
-            return LicenseStatus.invalid("Business not configured. Run the first-run wizard.");
+            return withVerificationDetails(
+                LicenseStatus.invalid("Business not configured. Run the first-run wizard.")
+            );
         }
 
         if (businessRepository.findByIdAndDeletedAtIsNull(businessId).isEmpty()) {
-            return LicenseStatus.trialActive(30);
+            return withVerificationDetails(LicenseStatus.trialActive(30));
         }
 
-        return licenseGuard.currentStatus();
+        return withVerificationDetails(licenseGuard.currentStatus());
     }
 
     /**
@@ -75,6 +78,13 @@ public class LicenseController {
                         "Business not found"));
 
         LicensePayload payload = licenseService.decodeAndVerify(request.token());
+        if (payload == null) {
+            // The till may not have synced the console's signing key yet (e.g.
+            // the issuer key was just rotated). Pull it once — short timeouts,
+            // never raises — and re-verify before giving up.
+            licenseKeySyncer.syncNow();
+            payload = licenseService.decodeAndVerify(request.token());
+        }
         if (payload == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Invalid license key — signature verification failed. "
@@ -107,7 +117,22 @@ public class LicenseController {
                     "Failed to store license key: " + e.getMessage(), e);
         }
 
-        return licenseService.checkStatus(request.token().trim(), business.getName());
+        return withVerificationDetails(
+            licenseService.checkStatus(request.token().trim(), business.getName())
+        );
+    }
+
+    /**
+     * Attaches the verification-key diagnostics (active key source + last
+     * platform sync) to every status response, so support can tell at a glance
+     * why a token is or isn't verifying on this till.
+     */
+    private LicenseStatus withVerificationDetails(LicenseStatus status) {
+        return status.withVerificationDetails(
+            licenseService.activeKeySource(),
+            licenseKeySyncer.lastSyncAt(),
+            licenseKeySyncer.lastSyncOk()
+        );
     }
 
     private String readStoredLicenseToken(Business business) {

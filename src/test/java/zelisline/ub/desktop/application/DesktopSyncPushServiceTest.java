@@ -24,9 +24,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
+import org.springframework.mock.http.client.MockClientHttpRequest;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import zelisline.ub.desktop.api.dto.ShiftSyncAck;
 import zelisline.ub.desktop.application.DesktopSyncPushService.SyncPushResult;
@@ -71,7 +75,7 @@ class DesktopSyncPushServiceTest {
     void setUp() {
         when(cloudSyncSession.load()).thenReturn(Optional.of(new CloudSyncSession.Session(
             CLOUD_ORIGIN, "cloud-biz", "access-token", "refresh-token",
-            "owner-id", List.of("staff-1"), Instant.EPOCH)));
+            "owner-id", List.of("staff-1"), Instant.EPOCH, null)));
         when(saleItemRepository.findBySaleIdOrderByLineIndexAsc(anyString())).thenReturn(List.of());
         when(salePaymentRepository.findBySaleIdOrderBySortOrderAsc(anyString())).thenReturn(List.of());
 
@@ -171,6 +175,43 @@ class DesktopSyncPushServiceTest {
         assertEquals(1, result.shiftsPushed());
         verify(shiftRepository).saveAll(org.mockito.ArgumentMatchers.argThat(list ->
             ((java.util.List<Shift>) list).get(0).getCloudSyncedAt() != null));
+    }
+
+    @Test
+    void legacyShiftWithoutTillDeviceKeyPushesNullKey() throws Exception {
+        // Shifts opened before X-Till-Device-Id existed (or via a headerless
+        // client) carry a null till_device_key. The cloud treats that as the
+        // shared branch drawer — the batch must upload null, never blank, or
+        // the ingest 400s with "tillDeviceKey must not be blank".
+        Shift legacy = shift("shift-legacy", SalesConstants.SHIFT_STATUS_CLOSED);
+        legacy.setTillDeviceKey(null);
+        Sale completed = sale("sale-legacy", "shift-legacy", SalesConstants.SALE_STATUS_COMPLETED);
+
+        when(saleRepository.findByBusinessIdAndCloudSyncedAtIsNullOrderBySoldAtAsc(LOCAL_BUSINESS))
+            .thenReturn(List.of(completed));
+        when(shiftRepository.findByBusinessIdAndStatusAndCloudSyncedAtIsNullOrderByClosedAtAsc(
+                LOCAL_BUSINESS, SalesConstants.SHIFT_STATUS_CLOSED))
+            .thenReturn(List.of(legacy));
+        when(shiftRepository.findAllById(Set.of("shift-legacy"))).thenReturn(List.of(legacy));
+        when(saleRepository.countByShiftIdAndCloudSyncedAtIsNull("shift-legacy")).thenReturn(0L);
+
+        server.expect(requestTo(CLOUD_ORIGIN + "/api/v1/desktop/sync/shifts"))
+            .andExpect(method(HttpMethod.POST))
+            .andExpect(request -> {
+                String body = ((MockClientHttpRequest) request).getBodyAsString();
+                JsonNode tillKey = new ObjectMapper()
+                    .readTree(body).path("shifts").path(0).path("tillDeviceKey");
+                assertTrue(tillKey.isNull(),
+                    "legacy shift must upload null tillDeviceKey, got: " + tillKey);
+            })
+            .andRespond(withSuccess(
+                "{\"shiftsIngested\":1,\"salesIngested\":1,\"salesSkipped\":0}",
+                MediaType.APPLICATION_JSON));
+
+        SyncPushResult result = service.pushPending();
+
+        server.verify();
+        assertEquals(1, result.shiftsPushed());
     }
 
     @Test

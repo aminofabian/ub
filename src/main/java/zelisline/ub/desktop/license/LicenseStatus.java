@@ -11,6 +11,11 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * <p>The frontend uses the {@link #readOnly} flag to disable write operations:
  * no new sales, no stock receipts, no inventory adjustments. Reports and
  * history remain visible.
+ *
+ * <p>The {@code keySource}/{@code keySyncedAt}/{@code keySyncOk} fields are
+ * verification diagnostics for support: which public key the till is verifying
+ * against (console-synced vs baked fallback) and whether its platform key sync
+ * is working. They are null when there is nothing to report (e.g. never synced).
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record LicenseStatus(
@@ -27,7 +32,17 @@ public record LicenseStatus(
         /** When true, the UI must prevent any write operation. */
         boolean readOnly,
         /** This machine's fingerprint (SHA‑256 hex) — the vendor needs it to issue a bound license. */
-        String machineId
+        String machineId,
+        /**
+         * Which public key verification runs against: {@code synced} (console
+         * key synced from the platform), {@code baked} (the in‑JAR fallback), or
+         * {@code none} (trial‑only).
+         */
+        String keySource,
+        /** When the till last attempted a key sync from the platform (null = never). */
+        Instant keySyncedAt,
+        /** Whether the last key‑sync attempt reached the platform (null = never synced). */
+        Boolean keySyncOk
 ) {
     // ── factory methods ────────────────────────────────────────────────
 
@@ -39,6 +54,9 @@ public record LicenseStatus(
                 daysRemaining,
                 expiresAt,
                 false,
+                null,
+                null,
+                null,
                 null
         );
     }
@@ -51,6 +69,9 @@ public record LicenseStatus(
                 0L,
                 expiresAt,
                 true,
+                null,
+                null,
+                null,
                 null
         );
     }
@@ -63,6 +84,9 @@ public record LicenseStatus(
                 null,
                 null,
                 true,
+                null,
+                null,
+                null,
                 null
         );
     }
@@ -75,6 +99,9 @@ public record LicenseStatus(
                 daysRemaining,
                 null,
                 false,
+                null,
+                null,
+                null,
                 null
         );
     }
@@ -87,6 +114,9 @@ public record LicenseStatus(
                 0L,
                 expiredAt,
                 true,
+                null,
+                null,
+                null,
                 null
         );
     }
@@ -94,6 +124,14 @@ public record LicenseStatus(
     /** Copy with the machine id attached (the Settings page shows it regardless of state). */
     LicenseStatus withMachineId(String machineId) {
         return new LicenseStatus(
-            state, message, plan, daysRemaining, expiresAt, readOnly, machineId);
+            state, message, plan, daysRemaining, expiresAt, readOnly, machineId,
+            keySource, keySyncedAt, keySyncOk);
+    }
+
+    /** Copy with the verification-key diagnostics attached (status endpoint). */
+    LicenseStatus withVerificationDetails(String keySource, Instant keySyncedAt, Boolean keySyncOk) {
+        return new LicenseStatus(
+            state, message, plan, daysRemaining, expiresAt, readOnly, machineId,
+            keySource, keySyncedAt, keySyncOk);
     }
 }

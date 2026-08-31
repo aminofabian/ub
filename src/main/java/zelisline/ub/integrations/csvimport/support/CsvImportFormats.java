@@ -24,7 +24,10 @@ public final class CsvImportFormats {
             "selling_price",
             "on_hand",
             "min_stock_level",
-            "reorder_level"
+            "reorder_level",
+            "supplier_name",
+            "supplier_code",
+            "image_url"
     };
 
     public static final String[] SUPPLIER_HEADERS = {

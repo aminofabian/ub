@@ -110,10 +110,10 @@ public class ImportJobRunner {
         CsvImportResponse res =
                 csvImportApplicationService.commitItems(job.getBusinessId(), bytes, job.getActorUserId(), sink);
         if (!res.errors().isEmpty()) {
-            progressWriter.finalizeCommitRejected(job.getId(), res.rowsParsed(), res.errors());
+            progressWriter.finalizeCommitRejected(job.getId(), res.rowsParsed(), res.errors(), res.warnings());
         } else {
             progressWriter.finalizeCommitOk(job.getId(), res.rowsParsed(),
-                    res.rowsCommitted() != null ? res.rowsCommitted() : 0);
+                    res.rowsCommitted() != null ? res.rowsCommitted() : 0, res.warnings());
         }
     }
 
@@ -125,10 +125,10 @@ public class ImportJobRunner {
         }
         CsvImportResponse res = csvImportApplicationService.commitSuppliers(job.getBusinessId(), bytes, sink);
         if (!res.errors().isEmpty()) {
-            progressWriter.finalizeCommitRejected(job.getId(), res.rowsParsed(), res.errors());
+            progressWriter.finalizeCommitRejected(job.getId(), res.rowsParsed(), res.errors(), res.warnings());
         } else {
             progressWriter.finalizeCommitOk(job.getId(), res.rowsParsed(),
-                    res.rowsCommitted() != null ? res.rowsCommitted() : 0);
+                    res.rowsCommitted() != null ? res.rowsCommitted() : 0, res.warnings());
         }
     }
 
@@ -144,10 +144,10 @@ public class ImportJobRunner {
                 job.getActorUserId(),
                 sink);
         if (!res.errors().isEmpty()) {
-            progressWriter.finalizeCommitRejected(job.getId(), res.rowsParsed(), res.errors());
+            progressWriter.finalizeCommitRejected(job.getId(), res.rowsParsed(), res.errors(), res.warnings());
         } else {
             progressWriter.finalizeCommitOk(job.getId(), res.rowsParsed(),
-                    res.rowsCommitted() != null ? res.rowsCommitted() : 0);
+                    res.rowsCommitted() != null ? res.rowsCommitted() : 0, res.warnings());
         }
     }
 }

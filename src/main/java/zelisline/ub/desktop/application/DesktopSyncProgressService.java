@@ -44,10 +44,12 @@ public class DesktopSyncProgressService {
         int itemsTotal,
         DesktopSyncPullService.PullResult pull,
         DesktopSyncPushService.SyncPushResult push,
+        DesktopMessagePullService.MessagePullResult messagePull,
+        DesktopMessagePushService.MessagePushResult messagePush,
         String error
     ) {
         public static Snapshot idle() {
-            return new Snapshot(Phase.IDLE, "", 0L, 0L, 0, 0, null, null, null);
+            return new Snapshot(Phase.IDLE, "", 0L, 0L, 0, 0, null, null, null, null, null);
         }
 
         public boolean running() {
@@ -77,6 +79,8 @@ public class DesktopSyncProgressService {
             0,
             null,
             null,
+            null,
+            null,
             null
         );
     }
@@ -92,6 +96,8 @@ public class DesktopSyncProgressService {
             itemsTotal,
             s.pull(),
             s.push(),
+            s.messagePull(),
+            s.messagePush(),
             s.error()
         );
     }
@@ -111,6 +117,8 @@ public class DesktopSyncProgressService {
             s.itemsTotal(),
             s.pull(),
             s.push(),
+            s.messagePull(),
+            s.messagePush(),
             s.error()
         );
     }
@@ -126,13 +134,17 @@ public class DesktopSyncProgressService {
             s.itemsTotal(),
             s.pull(),
             s.push(),
+            s.messagePull(),
+            s.messagePush(),
             s.error()
         );
     }
 
     public void done(
             DesktopSyncPullService.PullResult pull,
-            DesktopSyncPushService.SyncPushResult push) {
+            DesktopSyncPushService.SyncPushResult push,
+            DesktopMessagePullService.MessagePullResult messagePull,
+            DesktopMessagePushService.MessagePushResult messagePush) {
         Snapshot s = snapshot;
         snapshot = new Snapshot(
             Phase.DONE,
@@ -143,6 +155,8 @@ public class DesktopSyncProgressService {
             s.itemsTotal(),
             pull,
             push,
+            messagePull,
+            messagePush,
             null
         );
     }
@@ -158,6 +172,8 @@ public class DesktopSyncProgressService {
             s.itemsTotal(),
             s.pull(),
             s.push(),
+            s.messagePull(),
+            s.messagePush(),
             message
         );
     }

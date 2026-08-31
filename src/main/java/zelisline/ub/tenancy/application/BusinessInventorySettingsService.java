@@ -12,6 +12,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.tenancy.api.dto.CatalogPatchRequest;
 import zelisline.ub.tenancy.api.dto.CatalogSettingsResponse;
+import zelisline.ub.tenancy.api.dto.CheckoutPatchRequest;
+import zelisline.ub.tenancy.api.dto.CheckoutSettingsResponse;
 import zelisline.ub.tenancy.api.dto.CreditTabsPatchRequest;
 import zelisline.ub.tenancy.api.dto.CreditTabsSettingsResponse;
 import zelisline.ub.tenancy.api.dto.InventoryPatchRequest;
@@ -38,6 +40,9 @@ public class BusinessInventorySettingsService {
     private static final String KEY_PRESERVE_PRODUCT_NAME_CASING =
             "preserveProductNameCasing";
     private static final String KEY_CREDIT_TABS = "creditTabs";
+    private static final String KEY_CHECKOUT = "checkout";
+    private static final String KEY_CAPTURE_CUSTOMER_FOR_CASH_AND_MPESA =
+            "captureCustomerForCashAndMpesa";
     private static final String KEY_SHOW_SYSTEM_STOCK =
             "showSystemStockToStockManager";
     private static final String KEY_DAILY_AUDIT_SAMPLE_SIZE = "dailyAuditSampleSize";
@@ -104,6 +109,7 @@ public class BusinessInventorySettingsService {
                     readSuppliers(inventory),
                     readReceiveStock(inventory),
                     readCreditTabs(inventory),
+                    readCheckout(inventory),
                     readCatalog(inventory)
             );
         } catch (Exception e) {
@@ -121,6 +127,7 @@ public class BusinessInventorySettingsService {
                     && patch.suppliers() == null
                     && patch.receiveStock() == null
                     && patch.creditTabs() == null
+                    && patch.checkout() == null
                     && patch.catalog() == null
         ) {
             return currentSettings;
@@ -151,6 +158,11 @@ public class BusinessInventorySettingsService {
             ObjectNode creditTabs = copyNamespace(inventory, KEY_CREDIT_TABS);
             applyCreditTabsPatch(creditTabs, patch.creditTabs());
             inventory.set(KEY_CREDIT_TABS, creditTabs);
+        }
+        if (patch.checkout() != null) {
+            ObjectNode checkout = copyNamespace(inventory, KEY_CHECKOUT);
+            applyCheckoutPatch(checkout, patch.checkout());
+            inventory.set(KEY_CHECKOUT, checkout);
         }
         if (patch.catalog() != null) {
             ObjectNode catalog = copyNamespace(inventory, KEY_CATALOG);
@@ -314,6 +326,19 @@ public class BusinessInventorySettingsService {
         );
     }
 
+    private static CheckoutSettingsResponse readCheckout(JsonNode inventoryNode) {
+        if (inventoryNode.isMissingNode() || !inventoryNode.isObject()) {
+            return CheckoutSettingsResponse.defaults();
+        }
+        JsonNode checkout = inventoryNode.path(KEY_CHECKOUT);
+        if (checkout.isMissingNode() || !checkout.isObject()) {
+            return CheckoutSettingsResponse.defaults();
+        }
+        return new CheckoutSettingsResponse(
+                checkout.path(KEY_CAPTURE_CUSTOMER_FOR_CASH_AND_MPESA).asBoolean(false)
+        );
+    }
+
     private static CatalogSettingsResponse readCatalog(JsonNode inventoryNode) {
         if (inventoryNode.isMissingNode() || !inventoryNode.isObject()) {
             return CatalogSettingsResponse.defaults();
@@ -458,6 +483,18 @@ public class BusinessInventorySettingsService {
             creditTabs.put(
                     KEY_ALLOW_CASHIER_SEARCH_CUSTOMERS_BY_NAME,
                     patch.allowCashierSearchCustomersByName()
+            );
+        }
+    }
+
+    private static void applyCheckoutPatch(
+            ObjectNode checkout,
+            CheckoutPatchRequest patch
+    ) {
+        if (patch.captureCustomerForCashAndMpesa() != null) {
+            checkout.put(
+                    KEY_CAPTURE_CUSTOMER_FOR_CASH_AND_MPESA,
+                    patch.captureCustomerForCashAndMpesa()
             );
         }
     }

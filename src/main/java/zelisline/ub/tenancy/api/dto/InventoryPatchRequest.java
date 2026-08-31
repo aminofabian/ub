@@ -8,6 +8,7 @@ public record InventoryPatchRequest(
         @Valid SuppliersAccessPatchRequest suppliers,
         @Valid ReceiveStockPatchRequest receiveStock,
         @Valid CreditTabsPatchRequest creditTabs,
+        @Valid CheckoutPatchRequest checkout,
         @Valid CatalogPatchRequest catalog
 ) {
 }

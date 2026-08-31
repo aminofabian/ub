@@ -56,32 +56,45 @@ public class ImportJobProgressWriter {
         j.setRowsProcessed(response.rowsParsed());
         j.setRowsCommitted(null);
         j.setErrorsJson(safeErrorsJson(response.errors()));
+        j.setWarningsJson(safeWarningsJson(response.warnings()));
         j.setStatusMessage(response.errors().isEmpty() ? "Dry-run OK" : "Dry-run finished with validation issues");
         j.setCompletedAt(Instant.now());
         importJobRepository.save(j);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void finalizeCommitOk(String jobId, int rowsParsed, int rowsCommitted) {
+    public void finalizeCommitOk(
+            String jobId,
+            int rowsParsed,
+            int rowsCommitted,
+            List<CsvImportLineError> warnings
+    ) {
         ImportJob j = load(jobId);
         j.setStatus(ImportJob.Status.completed);
         j.setRowsTotal(rowsParsed);
         j.setRowsProcessed(rowsParsed);
         j.setRowsCommitted(rowsCommitted);
         j.setErrorsJson(null);
+        j.setWarningsJson(safeWarningsJson(warnings));
         j.setStatusMessage("Committed");
         j.setCompletedAt(Instant.now());
         importJobRepository.save(j);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void finalizeCommitRejected(String jobId, int rowsParsed, List<CsvImportLineError> errors) {
+    public void finalizeCommitRejected(
+            String jobId,
+            int rowsParsed,
+            List<CsvImportLineError> errors,
+            List<CsvImportLineError> warnings
+    ) {
         ImportJob j = load(jobId);
         j.setStatus(ImportJob.Status.failed);
         j.setRowsTotal(rowsParsed);
         j.setRowsProcessed(0);
         j.setRowsCommitted(null);
         j.setErrorsJson(safeErrorsJson(errors));
+        j.setWarningsJson(safeWarningsJson(warnings));
         j.setStatusMessage("Validation failed before commit");
         j.setCompletedAt(Instant.now());
         importJobRepository.save(j);
@@ -107,6 +120,19 @@ public class ImportJobProgressWriter {
         }
         List<CsvImportLineError> capped =
                 errors.size() > MAX_ERRORS_JSON_ROWS ? errors.subList(0, MAX_ERRORS_JSON_ROWS) : errors;
+        try {
+            return objectMapper.writeValueAsString(capped);
+        } catch (JsonProcessingException e) {
+            return null;
+        }
+    }
+
+    private String safeWarningsJson(List<CsvImportLineError> warnings) {
+        if (warnings == null || warnings.isEmpty()) {
+            return null;
+        }
+        List<CsvImportLineError> capped =
+                warnings.size() > MAX_ERRORS_JSON_ROWS ? warnings.subList(0, MAX_ERRORS_JSON_ROWS) : warnings;
         try {
             return objectMapper.writeValueAsString(capped);
         } catch (JsonProcessingException e) {

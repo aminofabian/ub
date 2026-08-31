@@ -1,7 +1,6 @@
 package zelisline.ub.globalcatalog.application;
 
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.util.Locale;
 import java.util.Optional;
 
@@ -14,8 +13,8 @@ import zelisline.ub.globalcatalog.domain.GlobalProductSupplierLink;
 import zelisline.ub.globalcatalog.domain.GlobalSupplierTemplate;
 import zelisline.ub.globalcatalog.repository.GlobalProductSupplierLinkRepository;
 import zelisline.ub.globalcatalog.repository.GlobalSupplierTemplateRepository;
-import zelisline.ub.suppliers.SupplierCodes;
 import zelisline.ub.suppliers.application.SupplierProductPrimaryService;
+import zelisline.ub.suppliers.application.SystemUnassignedLinkDemoter;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierProduct;
 import zelisline.ub.suppliers.repository.SupplierProductRepository;
@@ -36,6 +35,7 @@ public class GlobalCatalogSupplierAdoptLinker {
     private final SupplierRepository supplierRepository;
     private final SupplierProductRepository supplierProductRepository;
     private final SupplierProductPrimaryService primaryService;
+    private final SystemUnassignedLinkDemoter systemUnassignedLinkDemoter;
 
     @Transactional
     public Optional<String> linkPrimaryTemplate(String businessId, String globalProductId, Item item) {
@@ -55,7 +55,7 @@ public class GlobalCatalogSupplierAdoptLinker {
 
         Supplier supplier = getOrCreateTenantSupplier(businessId, template);
         upsertPrimaryLink(item.getId(), supplier.getId(), primary);
-        demoteSystemUnassigned(businessId, item.getId());
+        systemUnassignedLinkDemoter.demote(businessId, item.getId());
         primaryService.normalizeAfterChange(businessId, item.getId());
         return Optional.of(supplier.getId());
     }
@@ -101,19 +101,6 @@ public class GlobalCatalogSupplierAdoptLinker {
             sp.setDefaultCostPrice(cost);
         }
         supplierProductRepository.save(sp);
-    }
-
-    private void demoteSystemUnassigned(String businessId, String itemId) {
-        for (SupplierProduct link : supplierProductRepository.listForItem(businessId, itemId)) {
-            Supplier supplier = supplierRepository.findById(link.getSupplierId()).orElse(null);
-            if (supplier == null || !SupplierCodes.SYSTEM_UNASSIGNED.equals(supplier.getCode())) {
-                continue;
-            }
-            link.setPrimaryLink(false);
-            link.setActive(false);
-            link.setDeletedAt(Instant.now());
-            supplierProductRepository.save(link);
-        }
     }
 
     private static String blankTo(String value, String fallback) {

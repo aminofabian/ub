@@ -177,7 +177,7 @@ public class DesktopSyncPushService {
             data.add(new ShiftSyncRequest.ShiftData(
                 shift.getId(),
                 shift.getBranchId(),
-                shift.getTillDeviceKey(),
+                blankToNull(shift.getTillDeviceKey()),
                 shift.getStatus(),
                 openedByCloudId(shift, ownerUserId, cloudStaffIds),
                 shift.getOpeningCash(),
@@ -209,6 +209,11 @@ public class DesktopSyncPushService {
             && cloudStaffIds.contains(shift.getOpenedBy())
             ? shift.getOpenedBy()
             : ownerUserId;
+    }
+
+    /** Legacy shifts (no {@code X-Till-Device-Id} at open) upload a null key, never blank. */
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s.trim();
     }
 
     private ShiftSyncRequest.SaleData toSaleData(

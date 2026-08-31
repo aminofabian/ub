@@ -42,6 +42,14 @@ public class ContactMessageReply {
     @Column(name = "sent_by_user_id", length = 36)
     private String sentByUserId;
 
+    /**
+     * When the desktop → cloud relay acknowledged this reply (queued on the till,
+     * sent by the shop's online instance). Null on the cloud and for non-desktop
+     * replies; mirrors the per-sale {@code cloud_synced_at} marker.
+     */
+    @Column(name = "cloud_synced_at")
+    private Instant cloudSyncedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

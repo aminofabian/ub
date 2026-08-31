@@ -41,8 +41,11 @@ import zelisline.ub.inventory.api.dto.PostOpeningBalanceRequest;
 import zelisline.ub.inventory.application.InventoryLedgerService;
 import zelisline.ub.pricing.api.dto.PostSellingPriceRequest;
 import zelisline.ub.pricing.application.PricingService;
+import zelisline.ub.suppliers.api.dto.AddItemSupplierLinkRequest;
 import zelisline.ub.suppliers.api.dto.CreateSupplierRequest;
+import zelisline.ub.suppliers.application.ItemSupplierLinkService;
 import zelisline.ub.suppliers.application.SupplierService;
+import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.repository.SupplierRepository;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.repository.BranchRepository;
@@ -72,6 +75,7 @@ public class CsvImportApplicationService {
     private final CategoryRepository categoryRepository;
     private final SupplierService supplierService;
     private final SupplierRepository supplierRepository;
+    private final ItemSupplierLinkService itemSupplierLinkService;
     private final BranchRepository branchRepository;
     private final InventoryLedgerService inventoryLedgerService;
     private final PricingService pricingService;
@@ -85,8 +89,9 @@ public class CsvImportApplicationService {
         List<SourceRow> rows = readCsv(csvBytes);
         s.onRowsParsed(rows.size());
         List<CsvImportLineError> errors = validateItemRows(businessId, rows);
+        List<CsvImportLineError> warnings = supplierWarnings(businessId, rows);
         s.onRowCommitted(rows.size());
-        return new CsvImportResponse(true, rows.size(), errors, null);
+        return new CsvImportResponse(true, rows.size(), errors, null, warnings);
     }
 
     public CsvImportResponse commitItems(String businessId, byte[] csvBytes, String actorUserId) {
@@ -122,6 +127,8 @@ public class CsvImportApplicationService {
             }
         }
         int n = 0;
+        List<CsvImportLineError> warnings = new ArrayList<>();
+        SupplierIndex suppliers = SupplierIndex.of(businessId, supplierRepository);
         for (SourceRow sr : rows) {
             Map<String, String> c = sr.columns();
             String sku = col(c, "sku").trim();
@@ -144,6 +151,17 @@ public class CsvImportApplicationService {
             String brand = blankToNull(col(c, "brand"));
             String size = blankToNull(col(c, "size"));
             String categoryId = resolveOrCreateCategoryId(businessId, col(c, "category_name").trim(), categoryIdByNameLower);
+
+            // Optional supplier: exact code match, then exact name match. Unresolved supplier
+            // names are reported as warnings and the item still imports unlinked.
+            Supplier supplier = suppliers.resolve(c);
+            String supplierValue = SupplierIndex.describedValue(c);
+            if (supplier == null && !supplierValue.isEmpty()) {
+                warnings.add(new CsvImportLineError(
+                        sr.lineNumber(),
+                        "supplier not found: " + supplierValue + " — item imported without a supplier"));
+            }
+            String imageKey = imageKeyOrNull(col(c, "image_url"));
 
             CreateItemRequest req = new CreateItemRequest(
                     sku,
@@ -168,12 +186,27 @@ public class CsvImportApplicationService {
                     null,
                     null,
                     null,
-                    null,
+                    imageKey,
                     brand,
                     size,
                     null);
             ItemCreateResult created = itemCatalogService.createItem(businessId, req, null, actorUserId);
             String itemId = created.body().id();
+
+            if (supplier != null) {
+                try {
+                    itemSupplierLinkService.addLink(
+                            businessId,
+                            itemId,
+                            new AddItemSupplierLinkRequest(
+                                    supplier.getId(), null, null, null, null, Boolean.TRUE));
+                } catch (ResponseStatusException ex) {
+                    warnings.add(new CsvImportLineError(
+                            sr.lineNumber(),
+                            "supplier " + supplier.getName() + " could not be linked: "
+                                    + (ex.getReason() != null ? ex.getReason() : ex.getStatusCode())));
+                }
+            }
 
             BigDecimal sellPrice = sanitizeMoney14_2(
                     parseMoney(firstPresent(c, "selling_price", "sell_price", "shelf_price", "price")));
@@ -209,7 +242,7 @@ public class CsvImportApplicationService {
             n++;
             s.onRowCommitted(n);
         }
-        return new CsvImportResponse(false, rows.size(), List.of(), n);
+        return new CsvImportResponse(false, rows.size(), List.of(), n, warnings);
     }
 
     public CsvImportResponse dryRunSuppliers(String businessId, byte[] csvBytes) {
@@ -497,6 +530,95 @@ public class CsvImportApplicationService {
         return branchRepository.findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(businessId).stream()
                 .filter(b -> b.getName().trim().equalsIgnoreCase(branchName.trim()))
                 .findFirst();
+    }
+
+    /**
+     * Non-blocking notices for supplier columns that could not be resolved. Mirrors the
+     * resolution used by {@link #commitItems(String, byte[], String, CsvImportProgressSink)}
+     * so a dry run shows the same warnings as the real import.
+     */
+    private List<CsvImportLineError> supplierWarnings(String businessId, List<SourceRow> rows) {
+        SupplierIndex suppliers = SupplierIndex.of(businessId, supplierRepository);
+        List<CsvImportLineError> warnings = new ArrayList<>();
+        for (SourceRow sr : rows) {
+            String value = SupplierIndex.describedValue(sr.columns());
+            if (suppliers.resolve(sr.columns()) == null && !value.isEmpty()) {
+                warnings.add(new CsvImportLineError(
+                        sr.lineNumber(),
+                        "supplier not found: " + value + " — item will import without a supplier"));
+            }
+        }
+        return warnings;
+    }
+
+    /**
+     * Case-insensitive lookup index over a business's suppliers, keyed by exact code first,
+     * then exact name. Unknown supplier columns are never an import error (the item imports
+     * unlinked) — they surface as warnings instead.
+     */
+    private static final class SupplierIndex {
+
+        private final Map<String, Supplier> byCode;
+        private final Map<String, Supplier> byName;
+
+        private SupplierIndex(Map<String, Supplier> byCode, Map<String, Supplier> byName) {
+            this.byCode = byCode;
+            this.byName = byName;
+        }
+
+        static SupplierIndex of(String businessId, SupplierRepository repository) {
+            Map<String, Supplier> byCode = new java.util.HashMap<>();
+            Map<String, Supplier> byName = new java.util.HashMap<>();
+            for (Supplier s : repository.findAllByBusinessIdNotDeleted(businessId)) {
+                if (s.getCode() != null && !s.getCode().isBlank()) {
+                    byCode.putIfAbsent(s.getCode().trim().toLowerCase(Locale.ROOT), s);
+                }
+                if (s.getName() != null && !s.getName().isBlank()) {
+                    byName.putIfAbsent(s.getName().trim().toLowerCase(Locale.ROOT), s);
+                }
+            }
+            return new SupplierIndex(byCode, byName);
+        }
+
+        /** Exact code match first, then exact name match. Returns null when unresolved. */
+        Supplier resolve(Map<String, String> c) {
+            String code = firstPresent(c, "supplier_code", "vendor_code").trim();
+            if (!code.isEmpty()) {
+                Supplier s = byCode.get(code.toLowerCase(Locale.ROOT));
+                if (s != null) {
+                    return s;
+                }
+            }
+            String name = firstPresent(c, "supplier_name", "supplier", "vendor_name", "vendor").trim();
+            if (!name.isEmpty()) {
+                Supplier s = byName.get(name.toLowerCase(Locale.ROOT));
+                if (s != null) {
+                    return s;
+                }
+            }
+            return null;
+        }
+
+        /** Human-readable supplier value for warnings — name preferred, code as fallback. */
+        static String describedValue(Map<String, String> c) {
+            String name = firstPresent(c, "supplier_name", "supplier", "vendor_name", "vendor").trim();
+            if (!name.isEmpty()) {
+                return name;
+            }
+            return firstPresent(c, "supplier_code", "vendor_code").trim();
+        }
+    }
+
+    /** Accepts an http(s) URL (stored directly) or a Cloudinary-style key; mirrors legacy JSON import. */
+    private static String imageKeyOrNull(String url) {
+        String u = blankToNull(url);
+        if (u == null) {
+            return null;
+        }
+        if (u.startsWith("http://") || u.startsWith("https://")) {
+            return u;
+        }
+        return u;
     }
 
     private static List<SourceRow> readCsv(byte[] csvBytes) {

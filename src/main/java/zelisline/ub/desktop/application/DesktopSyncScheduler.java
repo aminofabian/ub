@@ -30,6 +30,8 @@ public class DesktopSyncScheduler {
 
     private final DesktopSyncPushService syncPushService;
     private final DesktopSyncPullService syncPullService;
+    private final DesktopMessagePushService messagePushService;
+    private final DesktopMessagePullService messagePullService;
 
     @EventListener(ApplicationReadyEvent.class)
     public void flushOnStartup() {
@@ -47,14 +49,22 @@ public class DesktopSyncScheduler {
         try {
             // Down first (cloud sales -> this till), then up (this till's sales
             // -> cloud): a sale made in the web portal lands on the till within
-            // a couple of minutes, and vice versa.
+            // a couple of minutes, and vice versa. Talk to Us inbox threads pull
+            // down (each message carries its full reply thread), and queued
+            // replies push up (the cloud sends them).
             int pulled = syncPullService.pullCloudSales();
+            DesktopMessagePullService.MessagePullResult messages = messagePullService.pullMessages();
             DesktopSyncPushService.SyncPushResult push = syncPushService.pushPending();
-            if (pulled > 0 || push.shiftsPushed() > 0 || push.salesPushed() > 0) {
+            DesktopMessagePushService.MessagePushResult replies = messagePushService.pushPendingReplies();
+            if (pulled > 0 || messages.messages() > 0 || messages.replies() > 0
+                    || push.shiftsPushed() > 0 || push.salesPushed() > 0
+                    || replies.repliesPushed() > 0) {
                 log.info(
-                    "[DesktopSync] {} flush: pulled {} cloud sale(s), pushed {} sale(s) in {} shift(s)",
-                    reason, pulled, push.salesPushed(), push.shiftsPushed()
-                );
+                    "[DesktopSync] {} flush: pulled {} cloud sale(s), {} message(s) "
+                        + "+ {} reply(ies); pushed {} sale(s) in {} shift(s), "
+                        + "relayed {} message reply(ies)",
+                    reason, pulled, messages.messages(), messages.replies(),
+                    push.salesPushed(), push.shiftsPushed(), replies.repliesPushed());
             } else if (push.configured()) {
                 log.debug("[DesktopSync] {} flush: nothing pending", reason);
             }

@@ -134,4 +134,51 @@ class LicenseServiceTest {
         assertEquals(BUSINESS, payload.businessName());
         assertEquals(THIS_MACHINE, payload.machineFingerprint());
     }
+
+    @Test
+    void syncedConsoleKeyOverridesBakedKey() {
+        // A license signed with the Super Admin console's key (the pasted key
+        // that motivated the platform sync) must verify once the till has
+        // synced that key — even though the baked key is a different pair.
+        KeyPair consoleKeys = LicenseService.generateKeyPair();
+        String consoleToken = LicenseService.encodeToken(
+            new LicensePayload(BUSINESS, "shop", Instant.now(), null, THIS_MACHINE),
+            LicenseService.decodePrivateKey(LicenseService.encodePrivateKey(consoleKeys.getPrivate())));
+
+        // Baked key alone rejects the console-signed token.
+        assertNull(till.decodeAndVerify(consoleToken));
+
+        // After the syncer pushes the console public key, it verifies.
+        till.updateSyncedPublicKey(consoleKeys.getPublic());
+        assertNotNull(till.decodeAndVerify(consoleToken));
+
+        // The synced key takes precedence: a token signed with the baked key
+        // now fails.
+        assertNull(till.decodeAndVerify(
+            tokenFor(THIS_MACHINE, BUSINESS, Instant.now().plus(30, ChronoUnit.DAYS))));
+    }
+
+    @Test
+    void derivedPublicKeyMatchesEncodedPair() {
+        // The platform endpoint derives the public key from the private key;
+        // it must equal the X.509 encoding of the same pair.
+        assertEquals(
+            publicKey,
+            LicenseService.derivePublicKeyFromPrivate(privateKey));
+    }
+
+    @Test
+    void activeKeySourceReflectsBakedThenSyncedThenNone() {
+        // Baked key present, nothing synced yet.
+        assertEquals("baked", till.activeKeySource());
+
+        // Once the console key is synced, it takes over.
+        KeyPair console = LicenseService.generateKeyPair();
+        till.updateSyncedPublicKey(console.getPublic());
+        assertEquals("synced", till.activeKeySource());
+
+        // No baked key at all → trial-only until something is configured.
+        LicenseService none = new LicenseService((String) null, null);
+        assertEquals("none", none.activeKeySource());
+    }
 }

@@ -167,6 +167,10 @@ public class SecurityConfig {
                         // shared X-Desktop-Log-Ingest-Key checked inside the controller.
                         .requestMatchers(HttpMethod.POST, "/api/v1/platform/desktop-logs").permitAll()
 
+                        // Desktop tills poll this when online to learn the console's
+                        // current license signing key — a public key, no auth needed.
+                        .requestMatchers(HttpMethod.GET, "/api/v1/platform/desktop-license-public-key").permitAll()
+
                         .requestMatchers("/api/v1/super-admin/**").hasRole("SUPER_ADMIN")
 
                         .requestMatchers("/api/v1/supplier-portal/**").hasRole("SUPPLIER")

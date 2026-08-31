@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.apache.commons.csv.CSVFormat;
@@ -34,7 +35,10 @@ import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.pricing.domain.SellingPrice;
 import zelisline.ub.pricing.repository.SellingPriceRepository;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
+import zelisline.ub.suppliers.SupplierCodes;
 import zelisline.ub.suppliers.domain.Supplier;
+import zelisline.ub.suppliers.domain.SupplierProduct;
+import zelisline.ub.suppliers.repository.SupplierProductRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.repository.BranchRepository;
@@ -54,6 +58,7 @@ public class CsvExportApplicationService {
     private final ItemTypeRepository itemTypeRepository;
     private final CategoryRepository categoryRepository;
     private final SupplierRepository supplierRepository;
+    private final SupplierProductRepository supplierProductRepository;
     private final BranchRepository branchRepository;
     private final SellingPriceRepository sellingPriceRepository;
     private final InventoryBatchRepository inventoryBatchRepository;
@@ -74,8 +79,37 @@ public class CsvExportApplicationService {
 
         Map<String, BigDecimal> sellByItemId = latestBusinessWideSellPriceByItem(businessId);
 
+        // Primary real supplier per item (first row per item is the primary; synthetic
+        // unassigned supplier is omitted so it does not round-trip back into the import).
+        Map<String, SupplierProduct> primaryLinkByItemId = new HashMap<>();
+        final Map<String, Supplier> supplierById;
+        if (items.isEmpty()) {
+            supplierById = Map.of();
+        } else {
+            Set<String> itemIds = items.stream().map(Item::getId).collect(Collectors.toSet());
+            List<SupplierProduct> candidates =
+                    supplierProductRepository.findByItemIdInAndDeletedAtIsNull(itemIds);
+            supplierById = supplierRepository
+                    .findAllById(candidates.stream()
+                            .map(SupplierProduct::getSupplierId)
+                            .collect(Collectors.toSet()))
+                    .stream()
+                    .collect(Collectors.toMap(Supplier::getId, s -> s, (a, b) -> a));
+            for (SupplierProduct sp : candidates) {
+                Supplier supplier = supplierById.get(sp.getSupplierId());
+                if (supplier == null || SupplierCodes.SYSTEM_UNASSIGNED.equals(supplier.getCode())) {
+                    continue;
+                }
+                primaryLinkByItemId.putIfAbsent(sp.getItemId(), sp);
+            }
+        }
+
         return writeCsv(CsvImportFormats.ITEM_HEADERS, printer -> {
             for (Item item : items) {
+                SupplierProduct primary = primaryLinkByItemId.get(item.getId());
+                Supplier primarySupplier = primary == null
+                        ? null
+                        : supplierById.get(primary.getSupplierId());
                 printer.printRecord(
                         nullToEmpty(item.getSku()),
                         nullToEmpty(item.getName()),
@@ -93,7 +127,10 @@ public class CsvExportApplicationService {
                         decimal(sellByItemId.get(item.getId()), MONEY_SCALE),
                         decimal(item.getCurrentStock(), QTY_SCALE),
                         decimal(item.getMinStockLevel(), QTY_SCALE),
-                        decimal(item.getReorderLevel(), QTY_SCALE));
+                        decimal(item.getReorderLevel(), QTY_SCALE),
+                        nullToEmpty(primarySupplier == null ? null : primarySupplier.getName()),
+                        nullToEmpty(primarySupplier == null ? null : primarySupplier.getCode()),
+                        nullToEmpty(item.getImageKey()));
             }
         });
     }

@@ -12,6 +12,7 @@ import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,7 +25,10 @@ import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.pricing.domain.BuyingPrice;
+import zelisline.ub.pricing.repository.BuyingPriceRepository;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
+import zelisline.ub.suppliers.SupplierCodes;
 import zelisline.ub.suppliers.api.dto.AddItemSupplierLinkRequest;
 import zelisline.ub.suppliers.api.dto.ItemSupplierLinkResponse;
 import zelisline.ub.suppliers.api.dto.SupplierItemLinkResponse;
@@ -42,6 +46,7 @@ public class ItemSupplierLinkService {
     private final SupplierRepository supplierRepository;
     private final SupplierProductRepository supplierProductRepository;
     private final SupplierProductPrimaryService primaryService;
+    private final BuyingPriceRepository buyingPriceRepository;
     private final PackageVariantStockResolver packageVariantStockResolver;
     private final InventoryBatchRepository inventoryBatchRepository;
     private final BranchRepository branchRepository;
@@ -49,6 +54,7 @@ public class ItemSupplierLinkService {
             setupProgressInvalidate;
     private final ItemCatalogService itemCatalogService;
     private final SupplierPackOfferResolver supplierPackOfferResolver;
+    private final SystemUnassignedLinkDemoter systemUnassignedLinkDemoter;
 
     @Transactional(readOnly = true)
     public java.util.List<ItemSupplierLinkResponse> listLinks(String businessId, String itemId) {
@@ -171,6 +177,7 @@ public class ItemSupplierLinkService {
             } catch (DataIntegrityViolationException ex) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Supplier link already exists", ex);
             }
+            retireUnassignedLink(businessId, itemId, supplier);
             primaryService.normalizeAfterChange(businessId, itemId);
             maybeReactivateItem(item);
             notifySetupProgressChanged(businessId);
@@ -192,10 +199,63 @@ public class ItemSupplierLinkService {
             sp.setPrimaryLink(true);
         }
         supplierProductRepository.save(sp);
+        retireUnassignedLink(businessId, itemId, supplier);
         primaryService.normalizeAfterChange(businessId, itemId);
         maybeReactivateItem(item);
         notifySetupProgressChanged(businessId);
         return toLinkResponse(sp, supplier);
+    }
+
+    /**
+     * When a real supplier is linked, retire the synthetic "Unassigned (migrate)" link so the
+     * item leaves the merchant-facing "Suppliers Not Linked" bucket. Linking to the synthetic
+     * supplier itself is a no-op here. Shared demote logic lives in
+     * {@link SystemUnassignedLinkDemoter} so it cannot drift from
+     * {@code GlobalCatalogSupplierAdoptLinker}.
+     */
+    private void retireUnassignedLink(String businessId, String itemId, Supplier realSupplier) {
+        if (realSupplier == null || SupplierCodes.SYSTEM_UNASSIGNED.equals(realSupplier.getCode())) {
+            return;
+        }
+        String unassignedSupplierId = systemUnassignedLinkDemoter.demote(businessId, itemId);
+        if (unassignedSupplierId != null) {
+            migrateUnassignedBuyingPrices(businessId, itemId, unassignedSupplierId, realSupplier);
+        }
+    }
+
+    /**
+     * Re-point open-ended (active) buying prices from the synthetic unassigned supplier to the
+     * newly linked real supplier. Only runs when the real supplier has no buying-price history
+     * for the item yet, so real cost history is never clobbered; ambiguous cases stay on the
+     * unassigned bucket and remain visible via the cost-issues surface.
+     */
+    private void migrateUnassignedBuyingPrices(
+            String businessId,
+            String itemId,
+            String unassignedSupplierId,
+            Supplier realSupplier
+    ) {
+        if (unassignedSupplierId == null || realSupplier == null) {
+            return;
+        }
+        boolean realSupplierHasHistory = !buyingPriceRepository
+                .findLatestRows(businessId, itemId, realSupplier.getId(), Pageable.ofSize(1))
+                .isEmpty();
+        if (realSupplierHasHistory) {
+            return;
+        }
+        for (BuyingPrice bp : buyingPriceRepository.findOpenEnded(businessId, itemId, unassignedSupplierId)) {
+            bp.setSupplierId(realSupplier.getId());
+            String note = bp.getNotes() == null || bp.getNotes().isBlank()
+                    ? "Moved from Suppliers Not Linked (SYS-UNASSIGNED) on supplier link"
+                    : bp.getNotes() + " — moved from Suppliers Not Linked (SYS-UNASSIGNED) on supplier link";
+            bp.setNotes(truncate(note, 2000));
+            buyingPriceRepository.save(bp);
+        }
+    }
+
+    private static String truncate(String s, int max) {
+        return s != null && s.length() > max ? s.substring(0, max) : s;
     }
 
     private void notifySetupProgressChanged(String businessId) {
@@ -229,6 +289,9 @@ public class ItemSupplierLinkService {
         }
         sp.setPrimaryLink(true);
         supplierProductRepository.save(sp);
+        Supplier supplier = supplierRepository.findByIdAndBusinessIdAndDeletedAtIsNull(sp.getSupplierId(), businessId)
+                .orElse(null);
+        retireUnassignedLink(businessId, itemId, supplier);
         primaryService.normalizeAfterChange(businessId, itemId);
     }
 

@@ -142,7 +142,34 @@ class BusinessInventorySettingsIT {
                 .andExpect(jsonPath("$.inventory.creditTabs.requirePhoneVerificationForNewTabCustomers")
                         .value(true))
                 .andExpect(jsonPath("$.inventory.creditTabs.allowCashierSearchCustomersByName")
+                        .value(false))
+                .andExpect(jsonPath("$.inventory.checkout.captureCustomerForCashAndMpesa")
                         .value(false));
+    }
+
+    @Test
+    void patchCheckoutSettingsPersist() throws Exception {
+        mockMvc.perform(patch("/api/v1/businesses/me")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"inventory":{"checkout":{"captureCustomerForCashAndMpesa":true}}}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inventory.checkout.captureCustomerForCashAndMpesa")
+                        .value(true));
+
+        entityManager.clear();
+
+        mockMvc.perform(get("/api/v1/businesses/me")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inventory.checkout.captureCustomerForCashAndMpesa")
+                        .value(true));
     }
 
     @Test

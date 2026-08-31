@@ -106,8 +106,12 @@ public class DesktopLicenseIssuer {
     /**
      * Resolves the signing key each call so a console-managed key change is
      * picked up immediately (no restart). The env var wins when present.
+     *
+     * <p>Public so {@link PlatformDesktopLicensePublicKeyController} can derive
+     * the matching public key for tills — the plaintext key never leaves this
+     * JVM.
      */
-    private String resolvePrivateKeyBase64() {
+    public String resolvePrivateKeyBase64() {
         if (envPrivateKeyBase64 != null) {
             return envPrivateKeyBase64;
         }

@@ -189,7 +189,9 @@ public class DesktopSyncIngestService {
             });
 
         shift.setBranchId(data.branchId());
-        shift.setTillDeviceKey(data.tillDeviceKey());
+        // Blank → null: a legacy shift (no X-Till-Device-Id) is the shared
+        // branch drawer, never an empty-string key.
+        shift.setTillDeviceKey(blankToNull(data.tillDeviceKey()));
         shift.setStatus(data.status());
         // shifts.opened_by is NOT NULL — without this every new shift upload
         // failed the whole ingest (sale included) on the cloud.
@@ -205,6 +207,10 @@ public class DesktopSyncIngestService {
         shift.setOpenedAt(data.openedAt());
         shift.setClosedAt(data.closedAt());
         shiftRepository.save(shift);
+    }
+
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s.trim();
     }
 
     private void ingestSale(String businessId, String shiftId, ShiftSyncRequest.SaleData data) {

@@ -99,6 +99,15 @@ public interface SupplierProductRepository extends JpaRepository<SupplierProduct
     List<SupplierProduct> findByItemIdAndDeletedAtIsNull(String itemId);
 
     @Query("""
+            SELECT sp FROM SupplierProduct sp
+            WHERE sp.itemId IN :itemIds AND sp.deletedAt IS NULL
+            ORDER BY sp.itemId ASC, sp.primaryLink DESC, sp.updatedAt DESC
+            """)
+    List<SupplierProduct> findByItemIdInAndDeletedAtIsNull(
+            @Param("itemIds") java.util.Collection<String> itemIds
+    );
+
+    @Query("""
             SELECT COUNT(sp) FROM SupplierProduct sp
             JOIN Supplier s ON s.id = sp.supplierId
             WHERE s.businessId = :businessId

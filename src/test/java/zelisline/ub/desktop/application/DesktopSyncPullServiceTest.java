@@ -105,7 +105,7 @@ class DesktopSyncPullServiceTest {
 
         when(cloudSyncSession.load()).thenReturn(Optional.of(new CloudSyncSession.Session(
             CLOUD_ORIGIN, "cloud-biz", "access-token", "refresh-token",
-            "owner-id", List.of(STAFF_ID), null)));
+            "owner-id", List.of(STAFF_ID), null, null)));
         when(userRepository.findIdsByBusinessIdAndDeletedAtIsNull(LOCAL_BUSINESS))
             .thenReturn(List.of(STAFF_ID));
         when(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(STAFF_ID, LOCAL_BUSINESS))

@@ -19,6 +19,7 @@ public record ImportJobResponse(
         int rowsProcessed,
         Integer rowsCommitted,
         List<CsvImportLineError> errors,
+        List<CsvImportLineError> warnings,
         String statusMessage,
         Instant createdAt,
         Instant completedAt
@@ -32,6 +33,14 @@ public record ImportJobResponse(
                 errs = List.of();
             }
         }
+        List<CsvImportLineError> warns = List.of();
+        if (job.getWarningsJson() != null && !job.getWarningsJson().isBlank()) {
+            try {
+                warns = mapper.readValue(job.getWarningsJson(), new TypeReference<List<CsvImportLineError>>() {});
+            } catch (JsonProcessingException ignored) {
+                warns = List.of();
+            }
+        }
         return new ImportJobResponse(
                 job.getId(),
                 job.getKind().name(),
@@ -41,6 +50,7 @@ public record ImportJobResponse(
                 job.getRowsProcessed(),
                 job.getRowsCommitted(),
                 Collections.unmodifiableList(errs),
+                Collections.unmodifiableList(warns),
                 job.getStatusMessage(),
                 job.getCreatedAt(),
                 job.getCompletedAt()

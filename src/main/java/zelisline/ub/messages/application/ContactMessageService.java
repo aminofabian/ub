@@ -40,7 +40,7 @@ public class ContactMessageService {
     private final ContactMessageReplyRepository contactMessageReplyRepository;
     private final PublicStorefrontContextService storefrontContextService;
     private final BusinessRepository businessRepository;
-    private final ContactMessageReplySender contactMessageReplySender;
+    private final ContactReplySender contactReplySender;
 
     @Transactional
     public PublicContactMessageResponse submitPlatform(
@@ -111,12 +111,27 @@ public class ContactMessageService {
     @Transactional
     public ContactMessageReplyResponse replyTenant(
             String businessId, String id, ContactMessageReplyRequest body, String actorUserId) {
+        return replyTenant(businessId, id, body, actorUserId, null);
+    }
+
+    /**
+     * Reply with an explicit reply row id — used by the desktop → cloud relay so
+     * the cloud row correlates 1:1 with the till's queued row (idempotent
+     * re-pushes; see {@code docs/scopes/DESKTOP_MESSAGES_SCOPE.md}).
+     */
+    @Transactional
+    public ContactMessageReplyResponse replyTenant(
+            String businessId,
+            String id,
+            ContactMessageReplyRequest body,
+            String actorUserId,
+            String replyId) {
         ContactMessage message = requireTenantMessage(businessId, id);
         Business business = businessRepository
                 .findByIdAndDeletedAtIsNull(businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
-        ContactMessageReply reply = contactMessageReplySender.send(
-                message, body, actorUserId, business.getName(), false);
+        ContactMessageReply reply = contactReplySender.send(
+                message, body, actorUserId, business.getName(), false, replyId);
         markReadIfNeeded(message);
         return toReply(reply);
     }
@@ -126,7 +141,7 @@ public class ContactMessageService {
             String id, ContactMessageReplyRequest body, String actorUserId) {
         ContactMessage message = requirePlatformMessage(id);
         ContactMessageReply reply =
-                contactMessageReplySender.send(message, body, actorUserId, "Kiosk", true);
+                contactReplySender.send(message, body, actorUserId, "Kiosk", true, null);
         markReadIfNeeded(message);
         return toReply(reply);
     }

@@ -10,5 +10,6 @@ public record GenerateProductDescriptionRequest(
         String unitType,
         String variantName,
         String sku,
-        String barcode
+        String barcode,
+        String itemTypeName
 ) {}

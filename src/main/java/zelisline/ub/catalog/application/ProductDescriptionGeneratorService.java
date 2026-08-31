@@ -3,6 +3,7 @@ package zelisline.ub.catalog.application;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -13,6 +14,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import lombok.RequiredArgsConstructor;
 
 import zelisline.ub.ai.application.provider.AiChatCompletionRequest;
@@ -21,10 +25,13 @@ import zelisline.ub.ai.application.provider.AiProviderRouter;
 import zelisline.ub.ai.domain.AiRequestLog;
 import zelisline.ub.ai.repository.AiRequestLogRepository;
 import zelisline.ub.catalog.api.dto.GenerateProductDescriptionRequest;
+import zelisline.ub.catalog.api.dto.GenerateProductDescriptionResponse;
+import zelisline.ub.catalog.repository.CategoryRepository;
+import zelisline.ub.catalog.repository.ItemTypeRepository;
 
 /**
- * Short product-copy generation. Uses the same SokoMind provider as storefront
- * theme AI (Super Admin → Platform → SokoMind), not the legacy RapidAPI catalog key.
+ * Product copy plus a category and department suggestion. Uses the same
+ * SokoMind provider as storefront theme AI.
  */
 @Service
 @RequiredArgsConstructor
@@ -32,25 +39,32 @@ public class ProductDescriptionGeneratorService {
 
     private static final Logger log = LoggerFactory.getLogger(ProductDescriptionGeneratorService.class);
     private static final String SKILL = "product_description";
-    private static final int MAX_TOKENS = 400;
+    private static final int MAX_TOKENS = 700;
+    private static final int MAX_LIST = 80;
+    private static final int MAX_NAME = 80;
 
     private static final String SYSTEM_PROMPT =
             """
-            You write short product descriptions for a retail shop catalog (in-store shelves, POS, and online storefront).
+            You help a Kenyan shop owner add a product. Return ONE JSON object and nothing else.
 
-            Style:
-            - 2–3 sentences, plain text only (no title, bullets, markdown, or quotes)
-            - Natural, warm, and helpful—like copy a shopper would enjoy reading
-            - Lead with what the product is and why someone would buy it; mention benefits and everyday use
-            - Keep it concise; avoid filler, clichés, and stiff corporate phrases
+            JSON schema:
+            {
+              "description": "2-3 sentences, plain text, no markdown or quotes",
+              "categoryName": "string",
+              "departmentName": "string"
+            }
 
-            Hard rules:
-            - NEVER mention SKU, barcode, product codes, "scannable", inventory, or warehouse language
-            - Do NOT list every attribute in one sentence; weave only useful details in naturally
-            - If brand, variant, or size text looks like placeholder or nonsense (e.g. Latin filler like lorem ipsum, \
-            "culpa nihil", "temporibus"), ignore it completely—do not quote or paraphrase it
-            - If the product name already includes brand or variant, do not repeat awkwardly
-            - Pack size (e.g. "100 pieces") may be mentioned naturally as quantity, never as a code
+            Description style:
+            - Natural, warm, helpful — what a shopper would enjoy reading
+            - Lead with what it is and why someone would buy it
+            - Never mention SKU, barcode, product codes, inventory, or warehouse language
+            - Ignore placeholder or Latin filler (lorem ipsum, culpa nihil, temporibus)
+
+            Category and department:
+            - Prefer an EXACT name from the available lists when it is a reasonable home for this product
+            - If the current category or department already fits, return that exact name
+            - Only invent a new name when nothing on the list fits. Keep new names short (1-3 words, Title Case)
+            - Department is the shop section (Grocery, Dairy, Electronics). Category is the shelf grouping (Fresh milk, Rice, Soap)
             """;
 
     private static final Pattern PLACEHOLDER_WORD =
@@ -65,11 +79,28 @@ public class ProductDescriptionGeneratorService {
                     "\\b(piece|pieces|pcs?|pack|box|carton|bundle|kg|g|ml|l|litre|liter|unit|units)\\b|\\d+\\s*(x|×)",
                     Pattern.CASE_INSENSITIVE);
 
+    public record Named(String id, String name) {}
+
     private final AiProviderRouter providerRouter;
     private final AiRequestLogRepository requestLogRepository;
+    private final CategoryRepository categoryRepository;
+    private final ItemTypeRepository itemTypeRepository;
+    private final ObjectMapper objectMapper;
 
     @Transactional
-    public String generate(String businessId, String userId, GenerateProductDescriptionRequest request) {
+    public GenerateProductDescriptionResponse generate(
+            String businessId, String userId, GenerateProductDescriptionRequest request) {
+        List<Named> categories = categoryRepository.findByBusinessIdOrderByPositionAsc(businessId).stream()
+                .filter(c -> c.getName() != null && !c.getName().isBlank())
+                .limit(MAX_LIST)
+                .map(c -> new Named(c.getId(), c.getName().trim()))
+                .toList();
+        List<Named> departments = itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(businessId).stream()
+                .filter(t -> t.getLabel() != null && !t.getLabel().isBlank())
+                .limit(MAX_LIST)
+                .map(t -> new Named(t.getId(), t.getLabel().trim()))
+                .toList();
+
         String requestId = UUID.randomUUID().toString();
         long started = System.currentTimeMillis();
         AiRequestLog requestLog = new AiRequestLog();
@@ -87,11 +118,13 @@ public class ProductDescriptionGeneratorService {
                             null,
                             List.of(
                                     new AiChatCompletionRequest.AiChatMessage("system", SYSTEM_PROMPT),
-                                    new AiChatCompletionRequest.AiChatMessage("user", buildUserPrompt(request))),
-                            0.5,
+                                    new AiChatCompletionRequest.AiChatMessage(
+                                            "user", buildUserPrompt(request, categories, departments))),
+                            0.4,
                             MAX_TOKENS));
-            String description = sanitize(result.content());
-            if (description.isBlank()) {
+            GenerateProductDescriptionResponse parsed =
+                    parseModelContent(objectMapper, result.content(), categories, departments);
+            if (parsed.description() == null || parsed.description().isBlank()) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_GATEWAY, "AI provider returned empty content");
             }
@@ -103,7 +136,7 @@ public class ProductDescriptionGeneratorService {
             requestLog.setCompletionTokens(result.completionTokens());
             requestLog.setLatencyMs((int) Math.min(latency, Integer.MAX_VALUE));
             requestLogRepository.save(requestLog);
-            return description;
+            return parsed;
         } catch (RuntimeException ex) {
             long latency = System.currentTimeMillis() - started;
             requestLog.setSuccess(false);
@@ -113,6 +146,101 @@ public class ProductDescriptionGeneratorService {
             log.warn("Product description generation failed: {}", ex.getMessage());
             throw ex;
         }
+    }
+
+    static GenerateProductDescriptionResponse parseModelContent(
+            ObjectMapper mapper, String content, List<Named> categories, List<Named> departments) {
+        String json = extractJsonObject(content);
+        if (json != null) {
+            try {
+                JsonNode root = mapper.readTree(json);
+                if (root != null && root.isObject()) {
+                    String description = sanitize(text(root, "description"));
+                    Named category = matchNamed(text(root, "categoryName"), categories);
+                    Named department = matchNamed(text(root, "departmentName"), departments);
+                    String categoryName = boundName(text(root, "categoryName"));
+                    String departmentName = boundName(text(root, "departmentName"));
+                    boolean createCategory = category == null && categoryName != null;
+                    boolean createItemType = department == null && departmentName != null;
+                    return new GenerateProductDescriptionResponse(
+                            description,
+                            category != null ? category.id() : null,
+                            category != null ? category.name() : categoryName,
+                            createCategory,
+                            department != null ? department.id() : null,
+                            department != null ? department.name() : departmentName,
+                            createItemType);
+                }
+            } catch (Exception ex) {
+                log.debug("Description JSON parse failed: {}", ex.getMessage());
+            }
+        }
+        return GenerateProductDescriptionResponse.descriptionOnly(sanitize(content));
+    }
+
+    static String buildUserPrompt(
+            GenerateProductDescriptionRequest request, List<Named> categories, List<Named> departments) {
+        List<String> lines = new ArrayList<>();
+        lines.add("Write a customer-facing description using only the facts below, then pick category and department.");
+        lines.add("Product name: " + request.name().trim());
+        appendIfUseful(lines, "Current category", request.categoryName());
+        appendIfUseful(lines, "Current department", request.itemTypeName());
+        appendIfUseful(lines, "Brand", request.brand());
+        appendIfUseful(lines, "Size", request.size());
+        appendIfUseful(lines, "Variant or option", request.variantName());
+        appendIfUseful(lines, "Sold as", request.unitType());
+        String packHint = packHintFromSku(request.sku());
+        if (packHint != null) {
+            lines.add("Pack / quantity (mention naturally if relevant): " + packHint);
+        }
+        lines.add("");
+        lines.add("Available categories (prefer exact names):");
+        if (categories.isEmpty()) {
+            lines.add("- (none yet — suggest a short new category name)");
+        } else {
+            for (Named c : categories) {
+                lines.add("- " + c.name());
+            }
+        }
+        lines.add("");
+        lines.add("Available departments (prefer exact labels):");
+        if (departments.isEmpty()) {
+            lines.add("- (none yet — suggest a short new department name)");
+        } else {
+            for (Named d : departments) {
+                lines.add("- " + d.name());
+            }
+        }
+        lines.add("");
+        lines.add("Return JSON only.");
+        return String.join("\n", lines);
+    }
+
+    static Named matchNamed(String raw, List<Named> options) {
+        String needle = boundName(raw);
+        if (needle == null || options == null || options.isEmpty()) {
+            return null;
+        }
+        String lower = needle.toLowerCase(Locale.ROOT);
+        Named contains = null;
+        Named starts = null;
+        for (Named option : options) {
+            String candidate = option.name() == null ? "" : option.name().trim();
+            if (candidate.isEmpty()) {
+                continue;
+            }
+            if (candidate.equalsIgnoreCase(needle)) {
+                return option;
+            }
+            String cl = candidate.toLowerCase(Locale.ROOT);
+            if (starts == null && cl.startsWith(lower)) {
+                starts = option;
+            }
+            if (contains == null && lower.length() >= 4 && cl.contains(lower)) {
+                contains = option;
+            }
+        }
+        return starts != null ? starts : contains;
     }
 
     static String sanitize(String content) {
@@ -137,22 +265,62 @@ public class ProductDescriptionGeneratorService {
         return s;
     }
 
-    static String buildUserPrompt(GenerateProductDescriptionRequest request) {
-        List<String> lines = new ArrayList<>();
-        lines.add("Write a customer-facing description using only the facts below.");
-        lines.add("Product name: " + request.name().trim());
-        appendIfUseful(lines, "Category", request.categoryName());
-        appendIfUseful(lines, "Brand", request.brand());
-        appendIfUseful(lines, "Size", request.size());
-        appendIfUseful(lines, "Variant or option", request.variantName());
-        appendIfUseful(lines, "Sold as", request.unitType());
-        String packHint = packHintFromSku(request.sku());
-        if (packHint != null) {
-            lines.add("Pack / quantity (mention naturally if relevant): " + packHint);
+    static String extractJsonObject(String content) {
+        if (content == null) {
+            return null;
         }
-        lines.add("");
-        lines.add("Return only the description text.");
-        return String.join("\n", lines);
+        String trimmed = content.trim();
+        int start = trimmed.indexOf('{');
+        if (start < 0) {
+            return null;
+        }
+        int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
+        for (int i = start; i < trimmed.length(); i++) {
+            char ch = trimmed.charAt(i);
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (ch == '\\') {
+                    escaped = true;
+                } else if (ch == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (ch == '"') {
+                inString = true;
+            } else if (ch == '{') {
+                depth++;
+            } else if (ch == '}') {
+                depth--;
+                if (depth == 0) {
+                    return trimmed.substring(start, i + 1);
+                }
+            }
+        }
+        return null;
+    }
+
+    private static String text(JsonNode node, String key) {
+        JsonNode value = node == null ? null : node.get(key);
+        if (value == null || value.isNull() || !value.isTextual()) {
+            return null;
+        }
+        String s = value.asText("").trim();
+        return s.isEmpty() ? null : s;
+    }
+
+    private static String boundName(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        if (trimmed.isEmpty() || isLikelyPlaceholder(trimmed)) {
+            return null;
+        }
+        return trimmed.length() <= MAX_NAME ? trimmed : trimmed.substring(0, MAX_NAME);
     }
 
     private static void appendIfUseful(List<String> lines, String label, String value) {

@@ -193,8 +193,7 @@ public class ItemsController {
     ) {
         TenantPrincipal user = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
-        return new GenerateProductDescriptionResponse(
-                productDescriptionGeneratorService.generate(businessId, user.userId(), body));
+        return productDescriptionGeneratorService.generate(businessId, user.userId(), body);
     }
 
     @GetMapping("/next-sku")

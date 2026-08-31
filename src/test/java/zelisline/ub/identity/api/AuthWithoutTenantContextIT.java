@@ -130,7 +130,7 @@ class AuthWithoutTenantContextIT {
     }
 
     @Test
-    void refreshRotatesFromTheSessionRow() throws Exception {
+    void refreshSlidesAccessFromTheSessionRow() throws Exception {
         MvcResult login = mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(APPLICATION_JSON)
                         .content(loginBody(EMAIL, PASSWORD)))

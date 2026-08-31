@@ -19,6 +19,8 @@ public interface UserSessionRepository extends JpaRepository<UserSession, String
 
     Optional<UserSession> findByAccessTokenJti(String accessTokenJti);
 
+    Optional<UserSession> findByPreviousAccessTokenJtiAndRevokedAtIsNull(String previousAccessTokenJti);
+
     Optional<UserSession> findByRefreshTokenHash(String refreshTokenHash);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)

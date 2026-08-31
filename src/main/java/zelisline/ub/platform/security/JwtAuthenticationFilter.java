@@ -45,8 +45,9 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 
 /**
  * Validates {@code Authorization: Bearer} access tokens: tenant JWTs require host
- * tenant alignment and an active {@code user_sessions} row; super-admin JWTs are
- * stateless (PHASE_1_PLAN.md §3.3).
+ * tenant alignment and a live {@code user_sessions} row (current jti, previous
+ * jti after an in-place slide, or a legacy rotated successor); super-admin JWTs
+ * are stateless (PHASE_1_PLAN.md §3.3).
  */
 @RequiredArgsConstructor
 public class JwtAuthenticationFilter extends OncePerRequestFilter {

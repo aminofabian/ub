@@ -37,7 +37,10 @@ import zelisline.ub.tenancy.repository.DomainMappingRepository;
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@TestPropertySource(properties = "spring.jpa.hibernate.ddl-auto=create-drop")
+@TestPropertySource(properties = {
+        "spring.jpa.hibernate.ddl-auto=create-drop",
+        "app.security.login-rate-limit-per-minute=50"
+})
 class AuthLoginIT {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -144,7 +147,7 @@ class AuthLoginIT {
     }
 
     @Test
-    void refreshRotatesAndReplayRejectedWithinGrace_successorStaysUsable() throws Exception {
+    void refreshSlidesAccessAndKeepsTheSameRefreshToken() throws Exception {
         MvcResult login = mockMvc.perform(post("/api/v1/auth/login")
                         .header("X-Tenant-Id", TENANT)
                         .contentType(APPLICATION_JSON)
@@ -155,6 +158,7 @@ class AuthLoginIT {
                 .andReturn();
 
         String refresh1 = JsonPath.read(login.getResponse().getContentAsString(), "$.refreshToken");
+        String oldAccess = JsonPath.read(login.getResponse().getContentAsString(), "$.accessToken");
 
         MvcResult refreshed = mockMvc.perform(post("/api/v1/auth/refresh")
                         .header("X-Tenant-Id", TENANT)
@@ -164,25 +168,27 @@ class AuthLoginIT {
                 .andReturn();
 
         String refresh2 = JsonPath.read(refreshed.getResponse().getContentAsString(), "$.refreshToken");
-        assertThat(refresh2).isNotEqualTo(refresh1);
+        String newAccess = JsonPath.read(refreshed.getResponse().getContentAsString(), "$.accessToken");
+        assertThat(refresh2).isEqualTo(refresh1);
+        assertThat(newAccess).isNotEqualTo(oldAccess);
 
-        // Replaying the consumed token is rejected…
+        // Same refresh token can be presented again (tabs, retries, leftover cookies).
         mockMvc.perform(post("/api/v1/auth/refresh")
                         .header("X-Tenant-Id", TENANT)
                         .contentType(APPLICATION_JSON)
                         .content(MAPPER.writeValueAsString(java.util.Map.of("refreshToken", refresh1))))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isOk());
 
-        // …but inside the rotation grace window that's a benign duplicate: the
-        // family is NOT revoked, so the successor token stays usable.
-        MvcResult again = mockMvc.perform(post("/api/v1/auth/refresh")
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get("/api/v1/permissions")
                         .header("X-Tenant-Id", TENANT)
-                        .contentType(APPLICATION_JSON)
-                        .content(MAPPER.writeValueAsString(java.util.Map.of("refreshToken", refresh2))))
-                .andExpect(status().isOk())
-                .andReturn();
-        String refresh3 = JsonPath.read(again.getResponse().getContentAsString(), "$.refreshToken");
-        assertThat(refresh3).isNotEqualTo(refresh2);
+                        .header("Authorization", "Bearer " + oldAccess))
+                .andExpect(status().isOk());
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get("/api/v1/permissions")
+                        .header("X-Tenant-Id", TENANT)
+                        .header("Authorization", "Bearer " + newAccess))
+                .andExpect(status().isOk());
     }
 
     @Test

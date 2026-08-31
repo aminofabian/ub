@@ -1,7 +1,10 @@
 package zelisline.ub.identity.application;
 
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 
@@ -55,17 +58,44 @@ public class RefreshTokenCookieSupport {
     /**
      * Every {@code ub.refresh} the browser sent. Host-only leftovers can shadow
      * a newer parent-domain cookie; callers must prefer a still-active row.
+     * Parses the raw {@code Cookie} header as well as {@code getCookies()}
+     * because some containers collapse duplicate cookie names.
      */
     public List<String> readAll(HttpServletRequest request) {
-        if (!enabled || request.getCookies() == null) {
+        if (!enabled) {
             return List.of();
         }
-        return Arrays.stream(request.getCookies())
-                .filter(c -> COOKIE_NAME.equals(c.getName()))
-                .map(jakarta.servlet.http.Cookie::getValue)
-                .filter(v -> v != null && !v.isBlank())
-                .distinct()
-                .toList();
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        if (request.getCookies() != null) {
+            Arrays.stream(request.getCookies())
+                    .filter(c -> COOKIE_NAME.equals(c.getName()))
+                    .map(jakarta.servlet.http.Cookie::getValue)
+                    .filter(v -> v != null && !v.isBlank())
+                    .forEach(values::add);
+        }
+        String header = request.getHeader(HttpHeaders.COOKIE);
+        if (header != null && !header.isBlank()) {
+            String prefix = COOKIE_NAME + "=";
+            for (String part : header.split(";")) {
+                String trimmed = part.trim();
+                if (!trimmed.regionMatches(true, 0, prefix, 0, prefix.length())) {
+                    continue;
+                }
+                String raw = decodeCookieValue(trimmed.substring(prefix.length()).trim());
+                if (!raw.isBlank()) {
+                    values.add(raw);
+                }
+            }
+        }
+        return List.copyOf(values);
+    }
+
+    private static String decodeCookieValue(String raw) {
+        try {
+            return URLDecoder.decode(raw, StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException ex) {
+            return raw;
+        }
     }
 
     public HttpHeaders cookieHeaders(String refreshToken) {

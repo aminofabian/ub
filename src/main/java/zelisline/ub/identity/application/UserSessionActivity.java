@@ -77,6 +77,11 @@ public class UserSessionActivity {
         if (active.isPresent()) {
             return active;
         }
+        Optional<UserSession> previous =
+                userSessionRepository.findByPreviousAccessTokenJtiAndRevokedAtIsNull(jti);
+        if (previous.isPresent()) {
+            return previous;
+        }
         UserSession cursor = userSessionRepository.findByAccessTokenJti(jti).orElse(null);
         if (cursor == null) {
             return Optional.empty();

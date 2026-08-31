@@ -30,6 +30,10 @@ public class UserSession {
     @Column(name = "access_token_jti", nullable = false, unique = true, length = 36)
     private String accessTokenJti;
 
+    /** Prior access jti after an in-place slide; still accepted until the next slide. */
+    @Column(name = "previous_access_token_jti", length = 36)
+    private String previousAccessTokenJti;
+
     @Column(name = "refresh_token_hash", nullable = false, unique = true, length = 64)
     private String refreshTokenHash;
 

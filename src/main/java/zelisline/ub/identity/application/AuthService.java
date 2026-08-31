@@ -50,8 +50,8 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 import zelisline.ub.till.application.TillDeviceService;
 
 /**
- * Slice 3 auth use-cases (PHASE_1_PLAN.md §3.3–3.4): login, PIN, refresh rotation,
- * password flows, logout, time-window lockout.
+ * Slice 3 auth use-cases (PHASE_1_PLAN.md §3.3–3.4): login, PIN, refresh
+ * (in-place access slide), password flows, logout, time-window lockout.
  */
 @Service
 @RequiredArgsConstructor
@@ -64,27 +64,15 @@ public class AuthService {
     private static final int HARD_LOCK_FAILURES = 10;
 
     /**
-     * Rotation-grace window for refresh-token reuse detection.
+     * Refresh slides a new access JWT onto the existing session row and keeps
+     * the same refresh token. Rotating the refresh token on every access-token
+     * renew (RFC 6819) logged owners out within minutes: background heartbeat,
+     * activity refresh, and host-only cookie leftovers all replayed the previous
+     * refresh value, which then family-revoked every session for the user.
      *
-     * <p>RFC 6819 §5.2.2.3 reuse detection cascades a revocation of every session
-     * for the user when an already-rotated refresh token is presented a second
-     * time. That is safe against an attacker but disastrous when the same client
-     * legitimately fires two requests in parallel (page load issuing 4-6 API
-     * calls, mobile browser retrying after a flaky network, WebSocket reauth
-     * racing with a normal API request, two tabs both hitting the scheduled
-     * proactive refresh, etc.).
-     *
-     * <p>The grace window covers exactly that case: if the presented refresh
-     * token was rotated within the last N seconds ({@code app.auth.refresh-rotation-grace-seconds})
-     * <em>and</em> its successor session is still active, we treat the second request as a
-     * benign duplicate and return {@code 401} <em>without</em> cascading the
-     * revoke. The first caller already received a fresh access+refresh pair,
-     * so the duplicate caller can simply read the new tokens from shared
-     * storage (or get a fresh 401 + single-flight refresh) and continue.
-     *
-     * <p>True reuse (token stolen and replayed minutes/hours later) still
-     * triggers the cascade because either (a) the time delta exceeds the
-     * window, or (b) the successor has already been rotated again itself.
+     * <p>Legacy rows that still have {@code rotatedTo} (from the old rotate-on-
+     * every-refresh design) are rejected as {@link #REFRESH_ALREADY_ROTATED_TITLE}
+     * without cascading a revoke-all.
      */
     @Value("${app.auth.refresh-rotation-grace-seconds:120}")
     private long refreshRotationGraceSeconds;
@@ -112,7 +100,6 @@ public class AuthService {
 
     private final UserRepository userRepository;
     private final UserSessionRepository userSessionRepository;
-    private final UserSessionRevocation userSessionRevocation;
     private final UserSessionActivity userSessionActivity;
     private final EntityManager entityManager;
     private final PasswordResetTokenRepository passwordResetTokenRepository;
@@ -301,25 +288,21 @@ public class AuthService {
                 .orElseThrow(this::invalidCredentials);
         assertCanAuthenticate(user);
 
-        SessionBundle neu = issueNewSessionWithSession(user, http);
-        old.setRevokedAt(Instant.now());
-        old.setRotatedToId(neu.session().getId());
-        userSessionRepository.save(old);
-
-        return attachBillingGate(neu.tokens(), user.getBusinessId());
+        LoginResponse tokens = reissueAccessOnSession(old, user, http);
+        return attachBillingGate(
+                new LoginResponse(tokens.accessToken(), refreshRaw, tokens.user(), tokens.billing()),
+                user.getBusinessId());
     }
 
     /**
      * Validates that a refresh token's session row can still mint a new access token.
-     * Throws {@link #REFRESH_ALREADY_ROTATED_TITLE} inside the rotation grace window
-     * (benign duplicate) instead of cascading a family-wide revocation.
+     * Already-rotated legacy rows are rejected without family-wide revocation.
      */
     private void assertRefreshSessionValid(UserSession session) {
         if (session.getRevokedAt() != null) {
-            if (isWithinRotationGrace(session)) {
+            if (session.getRotatedToId() != null && !session.getRotatedToId().isBlank()) {
                 throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, REFRESH_ALREADY_ROTATED_TITLE);
             }
-            userSessionRevocation.revokeAllActiveForUserNow(session.getUserId());
             throw invalidCredentials();
         }
         if (session.getRefreshExpiresAt().isBefore(Instant.now())) {
@@ -356,7 +339,7 @@ public class AuthService {
         if (principal.accessJti() == null) {
             return;
         }
-        userSessionRepository.findByAccessTokenJtiAndRevokedAtIsNull(principal.accessJti())
+        userSessionActivity.findLiveSessionForAccessJti(principal.accessJti())
                 .ifPresent(session -> {
                     session.setRevokedAt(Instant.now());
                     userSessionRepository.save(session);
@@ -580,6 +563,10 @@ public class AuthService {
         String jti = UUID.randomUUID().toString();
         Instant now = Instant.now();
         Instant accessExp = now.plus(accessTtlMinutes, ChronoUnit.MINUTES);
+        String currentJti = session.getAccessTokenJti();
+        if (currentJti != null && !currentJti.isBlank() && !currentJti.equals(jti)) {
+            session.setPreviousAccessTokenJti(currentJti);
+        }
         session.setAccessTokenJti(jti);
         session.setExpiresAt(accessExp);
         session.setLastSeenAt(now);

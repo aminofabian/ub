@@ -38,6 +38,18 @@ class UserSessionActivityTest {
     }
 
     @Test
+    void previousAccessJtiOnLiveRowIsAccepted() {
+        UserSession live = session("jti-new", null, null);
+        live.setPreviousAccessTokenJti("jti-old");
+        given(userSessionRepository.findByAccessTokenJtiAndRevokedAtIsNull("jti-old"))
+                .willReturn(Optional.empty());
+        given(userSessionRepository.findByPreviousAccessTokenJtiAndRevokedAtIsNull("jti-old"))
+                .willReturn(Optional.of(live));
+
+        assertThat(activity.findLiveSessionForAccessJti("jti-old")).contains(live);
+    }
+
+    @Test
     void rotatedPredecessorFollowsToLiveSuccessor() {
         UserSession old = session("jti-old", Instant.now(), "sess-new");
         UserSession neu = session("jti-new", null, null);

@@ -36,18 +36,11 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
 
 /**
- * Same refresh token used twice in parallel — one {@code 200}, one {@code 401},
- * and the winner's freshly-rotated refresh token stays usable.
+ * Same refresh token used twice in parallel — both succeed, and the shared
+ * refresh token stays usable afterwards.
  *
- * <p>This guards against the failure mode where two legitimate concurrent
- * refresh requests (e.g. multi-tab, page navigation issuing several
- * authenticated calls that all 401 simultaneously, WS reauth racing with
- * an API refresh) would otherwise trip RFC 6819 reuse detection inside
- * {@code AuthService.refresh} and cascade-revoke every active session for
- * the user. The rotation grace window inside {@code AuthService.refresh}
- * suppresses that cascade for concurrent requests within
- * {@code REFRESH_ROTATION_GRACE_SECONDS} as long as the successor session
- * is still active.
+ * <p>Access-token refresh no longer rotates the refresh token, so concurrent
+ * tabs / 401 recovery / WebSocket reauth cannot trip RFC 6819 family-revoke.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
@@ -110,7 +103,7 @@ class AuthRefreshConcurrencyIT {
     }
 
     @Test
-    void parallelRefreshWithSameToken_oneUnauthorizedAndNewRefreshStillUsable() throws Exception {
+    void parallelRefreshWithSameToken_bothSucceedAndRefreshStaysUsable() throws Exception {
         String root = "http://127.0.0.1:" + port;
 
         HttpRequest loginReq = HttpRequest.newBuilder()
@@ -154,50 +147,17 @@ class AuthRefreshConcurrencyIT {
 
             HttpResponse<String> r1 = f1.get(30, TimeUnit.SECONDS);
             HttpResponse<String> r2 = f2.get(30, TimeUnit.SECONDS);
-            int c200 = 0;
-            int c401 = 0;
-            for (HttpResponse<String> r : new HttpResponse[] {r1, r2}) {
-                int c = r.statusCode();
-                if (c == 200) {
-                    c200++;
-                } else if (c == 401) {
-                    c401++;
-                }
-            }
-            assertThat(c200).isEqualTo(1);
-            assertThat(c401).isEqualTo(1);
+            assertThat(r1.statusCode()).isEqualTo(200);
+            assertThat(r2.statusCode()).isEqualTo(200);
 
-            HttpResponse<String> loser = r1.statusCode() == 401 ? r1 : r2;
-            assertThat(loser.body()).contains("Refresh token already rotated");
-
-            String newRefresh = null;
-            if (r1.statusCode() == 200) {
-                newRefresh = objectMapper.readTree(r1.body()).get("refreshToken").asText();
-            } else if (r2.statusCode() == 200) {
-                newRefresh = objectMapper.readTree(r2.body()).get("refreshToken").asText();
-            }
-            assertThat(newRefresh).isNotNull();
-
-            /*
-             * The winner's freshly-rotated refresh token must remain usable.
-             * The concurrent loser's 401 is benign (inside the rotation grace
-             * window) and must NOT cascade-revoke the successor session.
-             *
-             * Without this guarantee, any time the frontend fires multiple
-             * authenticated requests in parallel after the access token has
-             * expired, every parallel refresh after the winner would trigger
-             * a cascade and silently log the user out.
-             */
             HttpRequest replayReq = HttpRequest.newBuilder()
                     .uri(URI.create(root + "/api/v1/auth/refresh"))
                     .header("Content-Type", "application/json")
                     .header("X-Tenant-Id", TENANT)
-                    .POST(HttpRequest.BodyPublishers.ofString(
-                            objectMapper.writeValueAsString(java.util.Map.of("refreshToken", newRefresh)),
-                            StandardCharsets.UTF_8))
+                    .POST(HttpRequest.BodyPublishers.ofString(refreshBody, StandardCharsets.UTF_8))
                     .build();
-            HttpResponse<String> replayNew = httpClient.send(replayReq, HttpResponse.BodyHandlers.ofString());
-            assertThat(replayNew.statusCode()).isEqualTo(200);
+            HttpResponse<String> replay = httpClient.send(replayReq, HttpResponse.BodyHandlers.ofString());
+            assertThat(replay.statusCode()).isEqualTo(200);
         } finally {
             pool.shutdownNow();
         }

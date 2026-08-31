@@ -30,8 +30,8 @@ import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 
 /**
- * Product copy plus a category and department suggestion. Uses the same
- * SokoMind provider as storefront theme AI.
+ * Product copy plus a department and category pick from the shop's real lists.
+ * If nothing on a list is a real home, the model proposes a name to create.
  */
 @Service
 @RequiredArgsConstructor
@@ -45,32 +45,32 @@ public class ProductDescriptionGeneratorService {
 
     private static final String SYSTEM_PROMPT =
             """
-            You help a Kenyan shop owner file a product on the correct shelf. Return ONE JSON object and nothing else.
+            You file one product into a Kenyan shop catalog. Return ONE JSON object, nothing else.
 
             JSON schema:
             {
               "description": "2-3 sentences, plain text, no markdown or quotes",
-              "categoryName": "string",
-              "departmentName": "string"
+              "departmentId": "id from the department list, or null",
+              "departmentName": "new department to create, or null",
+              "categoryId": "id from the category list, or null",
+              "categoryName": "new category to create, or null"
             }
 
-            Description style:
-            - Natural, warm, helpful — what a shopper would enjoy reading
-            - Lead with what the product is (the real product type, not a vague grocery item)
-            - Never mention SKU, barcode, product codes, inventory, or warehouse language
-            - Ignore placeholder or Latin filler (lorem ipsum, culpa nihil, temporibus)
+            How to choose:
+            1. Decide what the product actually is (detergent, margarine, milk, cooking oil, soda, rice…).
+            2. Search the department list. Pick the id whose label is the aisle a shopper would walk to.
+            3. Search the category list. Pick the id whose name is the shelf / bay for that product.
+            4. If nothing on the list is a real home, set that id to null and propose a short Title Case name to create (1-3 words).
 
-            Merchandising (Kenyan duka / supermarket):
-            - Department = the aisle a shopper walks to. Category = the bay / shelf name on the till
-            - Use exact names from the available lists when they are a real home for THIS product
-            - Never keep Grocery, Goods, General, Other, or similar catch-alls if a more specific department exists or should be created
-            - The "current" department on the form is often just the first option — ignore it unless it is already the best home
-            - Invent shop-shelf names, not cooking-science names. Short Title Case (1-3 words)
-            - Blue Band, Flora, Ramia = Dairy / Margarine (a spread). NOT Grocery. NOT Cooking fat
-            - Kimbo, Cowboy, Kasuku = Oils & fats / Cooking fat
-            - Elianto, Salit, Golden Fry = Oils & fats / Cooking oil
-            - Brookside milk = Dairy / Fresh milk
-            - Coca-Cola, Fanta, Sprite = Beverages / Soft drinks
+            Hard rules:
+            - Only use an id that appears in the list. Never invent ids.
+            - Grocery, Goods, General, Other, Miscellaneous are catch-alls — not a home for detergent, margarine, milk, oil, soda, or electronics. Do not pick them. Propose a better department instead (Household, Dairy, Oils & fats, Beverages, Electronics…).
+            - Ignore "current" form values; they are often just the first dropdown option.
+            - Omo, Ariel, Sunlight (laundry) → Household / Detergent — never Grocery.
+            - Blue Band, Flora → Dairy / Margarine — never Grocery, never Cooking fat.
+            - Kimbo, Cowboy → Oils & fats / Cooking fat.
+            - Coca-Cola, Fanta → Beverages / Soft drinks.
+            - Description: what it is and why someone would buy it. No SKU, barcode, or warehouse language.
             """;
 
     private static final Pattern PLACEHOLDER_WORD =
@@ -126,13 +126,10 @@ public class ProductDescriptionGeneratorService {
                                     new AiChatCompletionRequest.AiChatMessage("system", SYSTEM_PROMPT),
                                     new AiChatCompletionRequest.AiChatMessage(
                                             "user", buildUserPrompt(request, categories, departments))),
-                            0.2,
+                            0.15,
                             MAX_TOKENS));
-            GenerateProductDescriptionResponse parsed = applyShelfHint(
-                    request,
-                    parseModelContent(objectMapper, result.content(), categories, departments),
-                    categories,
-                    departments);
+            GenerateProductDescriptionResponse parsed =
+                    parseModelContent(objectMapper, result.content(), categories, departments);
             if (parsed.description() == null || parsed.description().isBlank()) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_GATEWAY, "AI provider returned empty content");
@@ -165,20 +162,16 @@ public class ProductDescriptionGeneratorService {
                 JsonNode root = mapper.readTree(json);
                 if (root != null && root.isObject()) {
                     String description = sanitize(text(root, "description"));
-                    Named category = matchNamed(text(root, "categoryName"), categories);
-                    Named department = matchNamed(text(root, "departmentName"), departments);
-                    String categoryName = boundName(text(root, "categoryName"));
-                    String departmentName = boundName(text(root, "departmentName"));
-                    boolean createCategory = category == null && categoryName != null;
-                    boolean createItemType = department == null && departmentName != null;
+                    Pick category = resolvePick(root, "categoryId", "categoryName", categories);
+                    Pick department = resolvePick(root, "departmentId", "departmentName", departments);
                     return new GenerateProductDescriptionResponse(
                             description,
-                            category != null ? category.id() : null,
-                            category != null ? category.name() : categoryName,
-                            createCategory,
-                            department != null ? department.id() : null,
-                            department != null ? department.name() : departmentName,
-                            createItemType);
+                            category.id(),
+                            category.name(),
+                            category.create(),
+                            department.id(),
+                            department.name(),
+                            department.create());
                 }
             } catch (Exception ex) {
                 log.debug("Description JSON parse failed: {}", ex.getMessage());
@@ -187,79 +180,33 @@ public class ProductDescriptionGeneratorService {
         return GenerateProductDescriptionResponse.descriptionOnly(sanitize(content));
     }
 
-    static GenerateProductDescriptionResponse applyShelfHint(
-            GenerateProductDescriptionRequest request,
-            GenerateProductDescriptionResponse parsed,
-            List<Named> categories,
-            List<Named> departments) {
-        KenyanShelfHints.ShelfHint hint = KenyanShelfHints.match(request.name(), request.brand());
-        if (hint == null || parsed == null || parsed.description() == null || parsed.description().isBlank()) {
-            return parsed;
+    record Pick(String id, String name, boolean create) {
+        static Pick none() {
+            return new Pick(null, null, false);
         }
-
-        Named category = keepIfSpecific(parsed.categoryId(), parsed.categoryName(), categories, hint);
-        Named department = keepIfSpecific(parsed.itemTypeId(), parsed.itemTypeName(), departments, hint);
-        if (category == null) {
-            category = firstExisting(hint.categories(), categories);
-        }
-        if (department == null) {
-            department = firstExisting(hint.departments(), departments);
-        }
-
-        String categoryName = category != null ? category.name() : hint.preferredCategory();
-        String departmentName = department != null ? department.name() : hint.preferredDepartment();
-        return new GenerateProductDescriptionResponse(
-                parsed.description(),
-                category != null ? category.id() : null,
-                categoryName,
-                category == null,
-                department != null ? department.id() : null,
-                departmentName,
-                department == null);
     }
 
-    private static Named keepIfSpecific(
-            String id, String name, List<Named> options, KenyanShelfHints.ShelfHint hint) {
-        if (id == null || id.isBlank()) {
-            return null;
+    static Pick resolvePick(JsonNode root, String idKey, String nameKey, List<Named> options) {
+        Named byId = findById(text(root, idKey), options);
+        if (byId != null && !isCatchAll(byId.name())) {
+            return new Pick(byId.id(), byId.name(), false);
         }
-        if (KenyanShelfHints.isCatchAll(name) || hint.avoids(name)) {
-            return null;
+        String proposed = boundName(text(root, nameKey));
+        Named byName = findByExactName(proposed, options);
+        if (byName != null && !isCatchAll(byName.name())) {
+            return new Pick(byName.id(), byName.name(), false);
         }
-        return matchNamed(name, options);
-    }
-
-    private static Named firstExisting(List<String> preferred, List<Named> options) {
-        for (String name : preferred) {
-            Named hit = matchNamed(name, options);
-            if (hit != null) {
-                return hit;
-            }
+        if (proposed != null && !isCatchAll(proposed)) {
+            return new Pick(null, proposed, true);
         }
-        return null;
+        return Pick.none();
     }
 
     static String buildUserPrompt(
             GenerateProductDescriptionRequest request, List<Named> categories, List<Named> departments) {
         List<String> lines = new ArrayList<>();
-        lines.add("Write a customer-facing description, then file this product on the correct Kenyan shop shelf.");
-        lines.add("Product name: " + request.name().trim());
-        if (KenyanShelfHints.isCatchAll(request.categoryName())) {
-            lines.add("Form default category (catch-all — do not keep): " + request.categoryName().trim());
-        } else {
-            appendIfUseful(lines, "Current category", request.categoryName());
-        }
-        if (KenyanShelfHints.isCatchAll(request.itemTypeName())) {
-            lines.add("Form default department (catch-all — do not keep): " + request.itemTypeName().trim());
-        } else {
-            appendIfUseful(lines, "Current department", request.itemTypeName());
-        }
-        KenyanShelfHints.ShelfHint hint = KenyanShelfHints.match(request.name(), request.brand());
-        if (hint != null) {
-            lines.add("Shop-floor hint: department \"" + hint.preferredDepartment()
-                    + "\", category \"" + hint.preferredCategory()
-                    + "\". Follow this unless an available name is a better exact match.");
-        }
+        lines.add("Product to file:");
+        lines.add("Name: " + request.name().trim());
         appendIfUseful(lines, "Brand", request.brand());
         appendIfUseful(lines, "Size", request.size());
         appendIfUseful(lines, "Variant or option", request.variantName());
@@ -269,57 +216,72 @@ public class ProductDescriptionGeneratorService {
             lines.add("Pack / quantity (mention naturally if relevant): " + packHint);
         }
         lines.add("");
-        lines.add("Available categories (prefer exact names):");
-        if (categories.isEmpty()) {
-            lines.add("- (none yet — suggest a short new category name)");
-        } else {
-            for (Named c : categories) {
-                lines.add("- " + c.name());
-            }
-        }
+        lines.add("Search these departments. Return the winning id, or null + a new name if none is a real home.");
+        appendNamedList(lines, departments);
         lines.add("");
-        lines.add("Available departments (prefer exact labels):");
-        if (departments.isEmpty()) {
-            lines.add("- (none yet — suggest a short new department name)");
-        } else {
-            for (Named d : departments) {
-                if (KenyanShelfHints.isCatchAll(d.name())) {
-                    lines.add("- " + d.name() + " (catch-all; last resort only)");
-                } else {
-                    lines.add("- " + d.name());
-                }
-            }
-        }
+        lines.add("Search these categories. Return the winning id, or null + a new name if none is a real home.");
+        appendNamedList(lines, categories);
         lines.add("");
         lines.add("Return JSON only.");
         return String.join("\n", lines);
     }
 
-    static Named matchNamed(String raw, List<Named> options) {
-        String needle = boundName(raw);
-        if (needle == null || options == null || options.isEmpty()) {
+    private static void appendNamedList(List<String> lines, List<Named> options) {
+        if (options.isEmpty()) {
+            lines.add("- (none yet — propose a short name to create)");
+            return;
+        }
+        for (Named option : options) {
+            if (isCatchAll(option.name())) {
+                lines.add("- id=" + option.id() + "  " + option.name()
+                        + "  [catch-all — do not pick; propose a better name instead]");
+            } else {
+                lines.add("- id=" + option.id() + "  " + option.name());
+            }
+        }
+    }
+
+    static Named findById(String id, List<Named> options) {
+        if (id == null || options == null) {
             return null;
         }
-        String lower = needle.toLowerCase(Locale.ROOT);
-        Named contains = null;
-        Named starts = null;
         for (Named option : options) {
-            String candidate = option.name() == null ? "" : option.name().trim();
-            if (candidate.isEmpty()) {
-                continue;
-            }
-            if (candidate.equalsIgnoreCase(needle)) {
+            if (id.equals(option.id())) {
                 return option;
             }
-            String cl = candidate.toLowerCase(Locale.ROOT);
-            if (starts == null && cl.startsWith(lower)) {
-                starts = option;
-            }
-            if (contains == null && lower.length() >= 4 && cl.contains(lower)) {
-                contains = option;
+        }
+        return null;
+    }
+
+    static Named findByExactName(String raw, List<Named> options) {
+        if (raw == null || options == null) {
+            return null;
+        }
+        for (Named option : options) {
+            if (option.name() != null && option.name().equalsIgnoreCase(raw)) {
+                return option;
             }
         }
-        return starts != null ? starts : contains;
+        return null;
+    }
+
+    static boolean isCatchAll(String name) {
+        if (name == null || name.isBlank()) {
+            return false;
+        }
+        String lower = name.trim().toLowerCase(Locale.ROOT);
+        return lower.equals("grocery")
+                || lower.equals("goods")
+                || lower.equals("general")
+                || lower.equals("general shop")
+                || lower.equals("retail")
+                || lower.equals("retail shop")
+                || lower.equals("other")
+                || lower.equals("misc")
+                || lower.equals("miscellaneous")
+                || lower.equals("default")
+                || lower.equals("uncategorized")
+                || lower.equals("uncategorised");
     }
 
     static String sanitize(String content) {
@@ -361,10 +323,10 @@ public class ProductDescriptionGeneratorService {
             if (inString) {
                 if (escaped) {
                     escaped = false;
-                } else if (ch == '\\') {
-                    escaped = true;
                 } else if (ch == '"') {
                     inString = false;
+                } else if (ch == '\\') {
+                    escaped = true;
                 }
                 continue;
             }
@@ -384,11 +346,11 @@ public class ProductDescriptionGeneratorService {
 
     private static String text(JsonNode node, String key) {
         JsonNode value = node == null ? null : node.get(key);
-        if (value == null || value.isNull() || !value.isTextual()) {
+        if (value == null || value.isNull()) {
             return null;
         }
         String s = value.asText("").trim();
-        return s.isEmpty() ? null : s;
+        return s.isEmpty() || s.equalsIgnoreCase("null") ? null : s;
     }
 
     private static String boundName(String value) {

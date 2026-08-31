@@ -569,6 +569,10 @@ public class AuthService {
         }
         session.setAccessTokenJti(jti);
         session.setExpiresAt(accessExp);
+        // Slide the 30-day refresh window on every renewal (was implicit in the
+        // old rotate-a-new-session design; without it a session hard-expired 30
+        // days after login even for daily users).
+        session.setRefreshExpiresAt(now.plus(refreshTtlDays, ChronoUnit.DAYS));
         session.setLastSeenAt(now);
         String ua = trimToNull(http.getHeader("User-Agent"));
         if (ua != null) {

@@ -45,7 +45,7 @@ public class ProductDescriptionGeneratorService {
 
     private static final String SYSTEM_PROMPT =
             """
-            You help a Kenyan shop owner add a product. Return ONE JSON object and nothing else.
+            You help a Kenyan shop owner file a product on the correct shelf. Return ONE JSON object and nothing else.
 
             JSON schema:
             {
@@ -56,15 +56,21 @@ public class ProductDescriptionGeneratorService {
 
             Description style:
             - Natural, warm, helpful — what a shopper would enjoy reading
-            - Lead with what it is and why someone would buy it
+            - Lead with what the product is (the real product type, not a vague grocery item)
             - Never mention SKU, barcode, product codes, inventory, or warehouse language
             - Ignore placeholder or Latin filler (lorem ipsum, culpa nihil, temporibus)
 
-            Category and department:
-            - Prefer an EXACT name from the available lists when it is a reasonable home for this product
-            - If the current category or department already fits, return that exact name
-            - Only invent a new name when nothing on the list fits. Keep new names short (1-3 words, Title Case)
-            - Department is the shop section (Grocery, Dairy, Electronics). Category is the shelf grouping (Fresh milk, Rice, Soap)
+            Merchandising (Kenyan duka / supermarket):
+            - Department = the aisle a shopper walks to. Category = the bay / shelf name on the till
+            - Use exact names from the available lists when they are a real home for THIS product
+            - Never keep Grocery, Goods, General, Other, or similar catch-alls if a more specific department exists or should be created
+            - The "current" department on the form is often just the first option — ignore it unless it is already the best home
+            - Invent shop-shelf names, not cooking-science names. Short Title Case (1-3 words)
+            - Blue Band, Flora, Ramia = Dairy / Margarine (a spread). NOT Grocery. NOT Cooking fat
+            - Kimbo, Cowboy, Kasuku = Oils & fats / Cooking fat
+            - Elianto, Salit, Golden Fry = Oils & fats / Cooking oil
+            - Brookside milk = Dairy / Fresh milk
+            - Coca-Cola, Fanta, Sprite = Beverages / Soft drinks
             """;
 
     private static final Pattern PLACEHOLDER_WORD =
@@ -113,17 +119,20 @@ public class ProductDescriptionGeneratorService {
         requestLog.setCreatedAt(Instant.now());
 
         try {
-            AiChatCompletionResult result = providerRouter.completeMini(
+            AiChatCompletionResult result = providerRouter.completeSmart(
                     new AiChatCompletionRequest(
                             null,
                             List.of(
                                     new AiChatCompletionRequest.AiChatMessage("system", SYSTEM_PROMPT),
                                     new AiChatCompletionRequest.AiChatMessage(
                                             "user", buildUserPrompt(request, categories, departments))),
-                            0.4,
+                            0.2,
                             MAX_TOKENS));
-            GenerateProductDescriptionResponse parsed =
-                    parseModelContent(objectMapper, result.content(), categories, departments);
+            GenerateProductDescriptionResponse parsed = applyShelfHint(
+                    request,
+                    parseModelContent(objectMapper, result.content(), categories, departments),
+                    categories,
+                    departments);
             if (parsed.description() == null || parsed.description().isBlank()) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_GATEWAY, "AI provider returned empty content");
@@ -178,13 +187,79 @@ public class ProductDescriptionGeneratorService {
         return GenerateProductDescriptionResponse.descriptionOnly(sanitize(content));
     }
 
+    static GenerateProductDescriptionResponse applyShelfHint(
+            GenerateProductDescriptionRequest request,
+            GenerateProductDescriptionResponse parsed,
+            List<Named> categories,
+            List<Named> departments) {
+        KenyanShelfHints.ShelfHint hint = KenyanShelfHints.match(request.name(), request.brand());
+        if (hint == null || parsed == null || parsed.description() == null || parsed.description().isBlank()) {
+            return parsed;
+        }
+
+        Named category = keepIfSpecific(parsed.categoryId(), parsed.categoryName(), categories, hint);
+        Named department = keepIfSpecific(parsed.itemTypeId(), parsed.itemTypeName(), departments, hint);
+        if (category == null) {
+            category = firstExisting(hint.categories(), categories);
+        }
+        if (department == null) {
+            department = firstExisting(hint.departments(), departments);
+        }
+
+        String categoryName = category != null ? category.name() : hint.preferredCategory();
+        String departmentName = department != null ? department.name() : hint.preferredDepartment();
+        return new GenerateProductDescriptionResponse(
+                parsed.description(),
+                category != null ? category.id() : null,
+                categoryName,
+                category == null,
+                department != null ? department.id() : null,
+                departmentName,
+                department == null);
+    }
+
+    private static Named keepIfSpecific(
+            String id, String name, List<Named> options, KenyanShelfHints.ShelfHint hint) {
+        if (id == null || id.isBlank()) {
+            return null;
+        }
+        if (KenyanShelfHints.isCatchAll(name) || hint.avoids(name)) {
+            return null;
+        }
+        return matchNamed(name, options);
+    }
+
+    private static Named firstExisting(List<String> preferred, List<Named> options) {
+        for (String name : preferred) {
+            Named hit = matchNamed(name, options);
+            if (hit != null) {
+                return hit;
+            }
+        }
+        return null;
+    }
+
     static String buildUserPrompt(
             GenerateProductDescriptionRequest request, List<Named> categories, List<Named> departments) {
         List<String> lines = new ArrayList<>();
-        lines.add("Write a customer-facing description using only the facts below, then pick category and department.");
+        lines.add("Write a customer-facing description, then file this product on the correct Kenyan shop shelf.");
         lines.add("Product name: " + request.name().trim());
-        appendIfUseful(lines, "Current category", request.categoryName());
-        appendIfUseful(lines, "Current department", request.itemTypeName());
+        if (KenyanShelfHints.isCatchAll(request.categoryName())) {
+            lines.add("Form default category (catch-all — do not keep): " + request.categoryName().trim());
+        } else {
+            appendIfUseful(lines, "Current category", request.categoryName());
+        }
+        if (KenyanShelfHints.isCatchAll(request.itemTypeName())) {
+            lines.add("Form default department (catch-all — do not keep): " + request.itemTypeName().trim());
+        } else {
+            appendIfUseful(lines, "Current department", request.itemTypeName());
+        }
+        KenyanShelfHints.ShelfHint hint = KenyanShelfHints.match(request.name(), request.brand());
+        if (hint != null) {
+            lines.add("Shop-floor hint: department \"" + hint.preferredDepartment()
+                    + "\", category \"" + hint.preferredCategory()
+                    + "\". Follow this unless an available name is a better exact match.");
+        }
         appendIfUseful(lines, "Brand", request.brand());
         appendIfUseful(lines, "Size", request.size());
         appendIfUseful(lines, "Variant or option", request.variantName());
@@ -208,7 +283,11 @@ public class ProductDescriptionGeneratorService {
             lines.add("- (none yet — suggest a short new department name)");
         } else {
             for (Named d : departments) {
-                lines.add("- " + d.name());
+                if (KenyanShelfHints.isCatchAll(d.name())) {
+                    lines.add("- " + d.name() + " (catch-all; last resort only)");
+                } else {
+                    lines.add("- " + d.name());
+                }
             }
         }
         lines.add("");

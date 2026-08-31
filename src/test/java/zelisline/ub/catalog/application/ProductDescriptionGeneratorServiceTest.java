@@ -38,7 +38,9 @@ class ProductDescriptionGeneratorServiceTest {
         String prompt = ProductDescriptionGeneratorService.buildUserPrompt(request, categories, departments);
         assertThat(prompt).contains("Product name: Brookside 500ml");
         assertThat(prompt).contains("Current category: Dairy");
-        assertThat(prompt).contains("Current department: Goods");
+        assertThat(prompt).contains("Form default department (catch-all — do not keep): Goods");
+        assertThat(prompt).contains("(catch-all; last resort only)");
+        assertThat(prompt).doesNotContain("Current department: Goods");
         assertThat(prompt).contains("Brand: Brookside");
         assertThat(prompt).contains("Size: 500ml");
         assertThat(prompt).doesNotContain("lorem ipsum");
@@ -90,5 +92,50 @@ class ProductDescriptionGeneratorServiceTest {
         assertThat(out.createItemType()).isTrue();
         assertThat(out.categoryId()).isNull();
         assertThat(out.itemTypeId()).isNull();
+    }
+
+    @Test
+    void blueBandDoesNotStayInGroceryAsCookingFat() {
+        var request = new GenerateProductDescriptionRequest(
+                "Blue Band 500g", null, "Blue Band", "500g", null, null, null, null, "Grocery");
+        var grocery = new ProductDescriptionGeneratorService.Named("d1", "Grocery");
+        var cookingFat = new ProductDescriptionGeneratorService.Named("c1", "Cooking fat");
+        var wrong = ProductDescriptionGeneratorService.parseModelContent(
+                MAPPER,
+                """
+                {"description":"Everyday spread.","categoryName":"Cooking fat","departmentName":"Grocery"}
+                """,
+                java.util.List.of(cookingFat),
+                java.util.List.of(grocery));
+        var fixed = ProductDescriptionGeneratorService.applyShelfHint(
+                request, wrong, java.util.List.of(cookingFat), java.util.List.of(grocery));
+        assertThat(fixed.description()).isEqualTo("Everyday spread.");
+        assertThat(fixed.itemTypeName()).isEqualTo("Dairy");
+        assertThat(fixed.createItemType()).isTrue();
+        assertThat(fixed.categoryName()).isEqualTo("Margarine");
+        assertThat(fixed.createCategory()).isTrue();
+        assertThat(fixed.itemTypeId()).isNull();
+        assertThat(fixed.categoryId()).isNull();
+    }
+
+    @Test
+    void blueBandPicksExistingDairyAndMargarine() {
+        var request = new GenerateProductDescriptionRequest(
+                "Blue Band Original", "Blue Band", null, null, null, null, null, null, "Goods");
+        var dairy = new ProductDescriptionGeneratorService.Named("d2", "Dairy");
+        var margarine = new ProductDescriptionGeneratorService.Named("c2", "Margarine");
+        var wrong = ProductDescriptionGeneratorService.parseModelContent(
+                MAPPER,
+                """
+                {"description":"Creamy margarine.","categoryName":"Cooking fat","departmentName":"Grocery"}
+                """,
+                java.util.List.of(margarine),
+                java.util.List.of(dairy));
+        var fixed = ProductDescriptionGeneratorService.applyShelfHint(
+                request, wrong, java.util.List.of(margarine), java.util.List.of(dairy));
+        assertThat(fixed.itemTypeId()).isEqualTo("d2");
+        assertThat(fixed.categoryId()).isEqualTo("c2");
+        assertThat(fixed.createItemType()).isFalse();
+        assertThat(fixed.createCategory()).isFalse();
     }
 }

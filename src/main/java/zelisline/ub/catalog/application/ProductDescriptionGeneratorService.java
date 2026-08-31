@@ -70,8 +70,11 @@ public class ProductDescriptionGeneratorService {
             4. When unsure, pick the closest general food / snacks / grocery option on the list. Do not invent a niche aisle.
 
             Hard rules:
+            - Words in the product name win. "Kabras sugar" is sugar — not cereals. "Omo" is detergent.
+            - Department and category are different levels. Do not copy the same label to both (not Cereals / Cereals). Category is the tighter shelf (Grocery + Sugar, Household + Detergent).
+            - Cereals = flakes, maize, wheat, oats, Weetabix. Not sugar, salt, or tea. Salt, tea, rice, and flour belong in Grocery or their own shelf — never Cereals.
             - Only use an id that appears in the list. Never invent ids.
-            - Grocery / Goods are catch-alls: do not use them for detergent, milk, margarine, oil, soda, or electronics when a better aisle exists or should be created. Packaged snacks and biscuits may live in Grocery if that is the best listed home.
+            - Grocery / Goods are catch-alls for detergent, milk, margarine, oil, soda, or electronics — pick or create a better aisle. Sugar, salt, tea, rice, flour, and biscuits may live in Grocery.
             - Ignore current form values; they are often the first dropdown option.
             """;
 
@@ -188,6 +191,8 @@ public class ProductDescriptionGeneratorService {
                             resolvePick(root, "categoryId", "categoryName", categories, productName, brand);
                     Pick department =
                             resolvePick(root, "departmentId", "departmentName", departments, productName, brand);
+                    department = refineDepartment(department, departments, productName, brand, category);
+                    category = refineCategory(category, categories, department, productName, brand);
                     return new GenerateProductDescriptionResponse(
                             description,
                             category.id(),
@@ -218,20 +223,103 @@ public class ProductDescriptionGeneratorService {
             String productName,
             String brand) {
         Named byId = findById(text(root, idKey), options);
-        if (allowed(byId != null ? byId.name() : null, productName, brand) && byId != null && !isCatchAll(byId.name())) {
+        if (byId != null
+                && allowed(byId.name(), productName, brand)
+                && !forbiddenCatchAll(byId.name(), productName, brand)) {
             return new Pick(byId.id(), byId.name(), false);
         }
         String proposed = boundName(text(root, nameKey));
         Named byName = findByExactName(proposed, options);
-        if (allowed(byName != null ? byName.name() : null, productName, brand)
-                && byName != null
-                && !isCatchAll(byName.name())) {
+        if (byName != null
+                && allowed(byName.name(), productName, brand)
+                && !forbiddenCatchAll(byName.name(), productName, brand)) {
             return new Pick(byName.id(), byName.name(), false);
         }
-        if (proposed != null && !isCatchAll(proposed) && allowed(proposed, productName, brand)) {
+        if (proposed != null
+                && !forbiddenCatchAll(proposed, productName, brand)
+                && allowed(proposed, productName, brand)) {
             return new Pick(null, proposed, true);
         }
         return Pick.none();
+    }
+
+    static Pick refineDepartment(
+            Pick department,
+            List<Named> departments,
+            String productName,
+            String brand,
+            Pick category) {
+        if (department != null && department.name() != null) {
+            // A brand-new department that would just repeat the product's shelf or the
+            // category (Sugar dept + Sugar cat) is a duplicate label, not a filing.
+            // Prefer an existing Grocery/Goods aisle; otherwise leave the department
+            // for the user instead of inventing a redundant one.
+            if (department.create()
+                    && duplicates(department.name(), category, productName, brand)) {
+                Named catchAll = findCatchAll(departments);
+                return catchAll != null
+                        ? new Pick(catchAll.id(), catchAll.name(), false)
+                        : Pick.none();
+            }
+            return department;
+        }
+        if (!CatalogAiGuard.isDryGroceryStaple(productName, brand)) {
+            return Pick.none();
+        }
+        Named catchAll = findCatchAll(departments);
+        return catchAll != null
+                ? new Pick(catchAll.id(), catchAll.name(), false)
+                : Pick.none();
+    }
+
+    /** True when the invented department label repeats the product's shelf or the category. */
+    private static boolean duplicates(
+            String departmentName, Pick category, String productName, String brand) {
+        String shelf = CatalogAiGuard.namedShelf(productName, brand);
+        if (shelf != null && departmentName.equalsIgnoreCase(shelf)) {
+            return true;
+        }
+        return category != null
+                && category.name() != null
+                && departmentName.equalsIgnoreCase(category.name());
+    }
+
+    private static Named findCatchAll(List<Named> departments) {
+        if (departments == null) {
+            return null;
+        }
+        for (Named option : departments) {
+            if (isCatchAll(option.name())) {
+                return option;
+            }
+        }
+        return null;
+    }
+
+    static Pick refineCategory(
+            Pick category, List<Named> categories, Pick department, String productName, String brand) {
+        String shelf = CatalogAiGuard.namedShelf(productName, brand);
+        boolean sameAsDepartment = category != null
+                && category.name() != null
+                && department != null
+                && department.name() != null
+                && category.name().equalsIgnoreCase(department.name());
+        boolean missing = category == null || category.name() == null;
+        if (shelf == null || (!missing && !sameAsDepartment)) {
+            return category == null ? Pick.none() : category;
+        }
+        Named existing = findByExactName(shelf, categories);
+        if (existing != null) {
+            return new Pick(existing.id(), existing.name(), false);
+        }
+        return new Pick(null, shelf, true);
+    }
+
+    private static boolean forbiddenCatchAll(String aisleName, String productName, String brand) {
+        if (!isCatchAll(aisleName)) {
+            return false;
+        }
+        return !CatalogAiGuard.isDryGroceryStaple(productName, brand);
     }
 
     private static boolean allowed(String aisleName, String productName, String brand) {
@@ -271,7 +359,8 @@ public class ProductDescriptionGeneratorService {
         lines.add("Search these categories. Return the winning id, or null + a new name if none is a real home.");
         appendNamedList(lines, categories);
         lines.add("");
-        lines.add("Do not invent a product type. If the name does not say what it is, pick a general listed shelf — do not create Baby Care, Pharmacy, or Vitamins.");
+        lines.add("Words in the name win. Do not copy the same label to department and category.");
+        lines.add("Sugar, salt, tea, rice, and flour are never Cereals.");
         return String.join("\n", lines);
     }
 

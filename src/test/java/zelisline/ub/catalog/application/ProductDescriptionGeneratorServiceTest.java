@@ -165,4 +165,67 @@ class ProductDescriptionGeneratorServiceTest {
         assertThat(out.categoryId()).isEqualTo("c9");
         assertThat(out.createCategory()).isFalse();
     }
+
+    @Test
+    void kabrasSugarDoesNotFileAsCerealsOnBoth() {
+        var cerealsDept = new ProductDescriptionGeneratorService.Named("d1", "Cereals");
+        var grocery = new ProductDescriptionGeneratorService.Named("d2", "Grocery");
+        var cerealsCat = new ProductDescriptionGeneratorService.Named("c1", "Cereals");
+        var out = ProductDescriptionGeneratorService.parseModelContent(
+                MAPPER,
+                """
+                {"description":"White sugar.","departmentId":"d1","categoryId":"c1"}
+                """,
+                java.util.List.of(cerealsCat),
+                java.util.List.of(cerealsDept, grocery),
+                "Kabras sugar 2kg",
+                "Kabras");
+        assertThat(out.itemTypeId()).isEqualTo("d2");
+        assertThat(out.itemTypeName()).isEqualTo("Grocery");
+        assertThat(out.categoryName()).isEqualTo("Sugar");
+        assertThat(out.createCategory()).isTrue();
+        assertThat(out.categoryId()).isNull();
+    }
+
+    @Test
+    void kabrasSugarDoesNotCreateADuplicateSugarDepartment() {
+        var grocery = new ProductDescriptionGeneratorService.Named("d2", "Grocery");
+        var out = ProductDescriptionGeneratorService.parseModelContent(
+                MAPPER,
+                """
+                {"description":"White sugar.","departmentName":"Sugar","categoryName":"Sugar"}
+                """,
+                java.util.List.of(),
+                java.util.List.of(grocery),
+                "Kabras sugar 2kg",
+                "Kabras");
+        // The model invented a Sugar department AND a Sugar category — collapse the
+        // duplicate department into Grocery instead of creating the same label twice.
+        assertThat(out.itemTypeId()).isEqualTo("d2");
+        assertThat(out.itemTypeName()).isEqualTo("Grocery");
+        assertThat(out.createItemType()).isFalse();
+        assertThat(out.categoryName()).isEqualTo("Sugar");
+        assertThat(out.createCategory()).isTrue();
+    }
+
+    @Test
+    void saltIsNotFiledIntoCerealsAndGetsTheNameShelf() {
+        var cerealsDept = new ProductDescriptionGeneratorService.Named("d1", "Cereals");
+        var out = ProductDescriptionGeneratorService.parseModelContent(
+                MAPPER,
+                """
+                {"description":"Table salt.","departmentId":"d1"}
+                """,
+                java.util.List.of(),
+                java.util.List.of(cerealsDept),
+                "Sea salt",
+                null);
+        // No Grocery exists, so the department is left for the user — but the
+        // category must be Salt, never Cereals.
+        assertThat(out.itemTypeId()).isNull();
+        assertThat(out.itemTypeName()).isNull();
+        assertThat(out.createItemType()).isFalse();
+        assertThat(out.categoryName()).isEqualTo("Salt");
+        assertThat(out.createCategory()).isTrue();
+    }
 }

@@ -2,6 +2,7 @@ package zelisline.ub.identity.application;
 
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -47,14 +48,24 @@ public class RefreshTokenCookieSupport {
     }
 
     public Optional<String> read(HttpServletRequest request) {
+        List<String> all = readAll(request);
+        return all.isEmpty() ? Optional.empty() : Optional.of(all.get(0));
+    }
+
+    /**
+     * Every {@code ub.refresh} the browser sent. Host-only leftovers can shadow
+     * a newer parent-domain cookie; callers must prefer a still-active row.
+     */
+    public List<String> readAll(HttpServletRequest request) {
         if (!enabled || request.getCookies() == null) {
-            return Optional.empty();
+            return List.of();
         }
         return Arrays.stream(request.getCookies())
                 .filter(c -> COOKIE_NAME.equals(c.getName()))
                 .map(jakarta.servlet.http.Cookie::getValue)
                 .filter(v -> v != null && !v.isBlank())
-                .findFirst();
+                .distinct()
+                .toList();
     }
 
     public HttpHeaders cookieHeaders(String refreshToken) {
@@ -64,6 +75,7 @@ public class RefreshTokenCookieSupport {
         }
         headers.add(HttpHeaders.SET_COOKIE, buildCookie(refreshToken, maxAgeSeconds, COOKIE_PATH).toString());
         headers.add(HttpHeaders.SET_COOKIE, buildCookie("", 0, LEGACY_COOKIE_PATH).toString());
+        appendHostOnlyClears(headers);
         return headers;
     }
 
@@ -74,7 +86,16 @@ public class RefreshTokenCookieSupport {
         }
         headers.add(HttpHeaders.SET_COOKIE, buildCookie("", 0, COOKIE_PATH).toString());
         headers.add(HttpHeaders.SET_COOKIE, buildCookie("", 0, LEGACY_COOKIE_PATH).toString());
+        appendHostOnlyClears(headers);
         return headers;
+    }
+
+    private void appendHostOnlyClears(HttpHeaders headers) {
+        if (domain.isEmpty()) {
+            return;
+        }
+        headers.add(HttpHeaders.SET_COOKIE, buildHostOnlyClear(COOKIE_PATH).toString());
+        headers.add(HttpHeaders.SET_COOKIE, buildHostOnlyClear(LEGACY_COOKIE_PATH).toString());
     }
 
     private ResponseCookie buildCookie(String value, long maxAgeSec, String path) {
@@ -88,5 +109,15 @@ public class RefreshTokenCookieSupport {
             builder.domain(domain);
         }
         return builder.build();
+    }
+
+    private ResponseCookie buildHostOnlyClear(String path) {
+        return ResponseCookie.from(COOKIE_NAME, "")
+                .httpOnly(true)
+                .secure(secure)
+                .sameSite("Lax")
+                .path(path)
+                .maxAge(Duration.ZERO)
+                .build();
     }
 }

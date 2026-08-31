@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -813,14 +814,33 @@ public class AuthService {
     }
 
     private String resolveRefreshToken(HttpServletRequest http, RefreshRequest request) {
-        Optional<String> fromCookie = refreshTokenCookieSupport.read(http);
-        if (fromCookie.isPresent()) {
-            return fromCookie.get();
-        }
+        LinkedHashSet<String> candidates = new LinkedHashSet<>(refreshTokenCookieSupport.readAll(http));
         if (request != null && request.refreshToken() != null && !request.refreshToken().isBlank()) {
-            return request.refreshToken().trim();
+            candidates.add(request.refreshToken().trim());
         }
-        return null;
+        String first = null;
+        String grace = null;
+        for (String raw : candidates) {
+            if (raw == null || raw.isBlank()) {
+                continue;
+            }
+            if (first == null) {
+                first = raw;
+            }
+            Optional<UserSession> row =
+                    userSessionRepository.findByRefreshTokenHash(TokenHasher.sha256Hex(raw));
+            if (row.isEmpty()) {
+                continue;
+            }
+            UserSession session = row.get();
+            if (session.getRevokedAt() == null) {
+                return raw;
+            }
+            if (grace == null && isWithinRotationGrace(session)) {
+                grace = raw;
+            }
+        }
+        return grace != null ? grace : first;
     }
 
     private record SessionBundle(LoginResponse tokens, UserSession session) {

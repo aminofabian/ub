@@ -37,7 +37,6 @@ import zelisline.ub.identity.domain.UserSession;
 import zelisline.ub.identity.domain.UserStatus;
 import zelisline.ub.identity.repository.SuperAdminRepository;
 import zelisline.ub.identity.repository.UserRepository;
-import zelisline.ub.identity.repository.UserSessionRepository;
 import zelisline.ub.marketplace.domain.SupplierUser;
 import zelisline.ub.marketplace.repository.SupplierUserRepository;
 import zelisline.ub.marketplace.repository.SupplierUserSessionRepository;
@@ -57,7 +56,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private static final String SESSION_IDLE_EXPIRED_TITLE = "Session idle timeout expired";
 
     private final JwtTokenService jwtTokenService;
-    private final UserSessionRepository userSessionRepository;
     private final UserRepository userRepository;
     private final SuperAdminRepository superAdminRepository;
     private final SupplierUserRepository supplierUserRepository;
@@ -180,7 +178,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             writeProblem(request, response, HttpStatus.UNAUTHORIZED, "Session is no longer active", "unauthorized");
             return;
         }
-        var sessionOpt = userSessionRepository.findByAccessTokenJtiAndRevokedAtIsNull(jti);
+        var sessionOpt = userSessionActivity.findLiveSessionForAccessJti(jti);
         if (sessionOpt.isEmpty()) {
             publishSecurityEvent(
                     request,
@@ -264,7 +262,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         SecurityContextHolder.getContext().setAuthentication(authentication);
 
         try {
-            userSessionActivity.recordActivity(jti);
+            userSessionActivity.recordActivity(session.getAccessTokenJti());
         } catch (Exception ignored) {
             // Never fail the request because of a last_seen write failure.
         }

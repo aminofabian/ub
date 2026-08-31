@@ -213,4 +213,31 @@ class AuthLoginIT {
                         .header("Authorization", "Bearer " + access))
                 .andExpect(status().isOk());
     }
+
+    @Test
+    void previousAccessTokenStillWorksAfterRefreshRotation() throws Exception {
+        MvcResult login = mockMvc.perform(post("/api/v1/auth/login")
+                        .header("X-Tenant-Id", TENANT)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"email":"owner@example.com","password":"correct-password"}
+                                """))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        String oldAccess = JsonPath.read(login.getResponse().getContentAsString(), "$.accessToken");
+        String refresh1 = JsonPath.read(login.getResponse().getContentAsString(), "$.refreshToken");
+
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .header("X-Tenant-Id", TENANT)
+                        .contentType(APPLICATION_JSON)
+                        .content(MAPPER.writeValueAsString(java.util.Map.of("refreshToken", refresh1))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get("/api/v1/permissions")
+                        .header("X-Tenant-Id", TENANT)
+                        .header("Authorization", "Bearer " + oldAccess))
+                .andExpect(status().isOk());
+    }
 }

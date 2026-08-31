@@ -28,7 +28,6 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import zelisline.ub.identity.application.ApiKeyAuthService;
 import zelisline.ub.identity.repository.UserRepository;
-import zelisline.ub.identity.repository.UserSessionRepository;
 import zelisline.ub.identity.repository.SuperAdminRepository;
 import zelisline.ub.platform.security.ApiKeyAuthenticationFilter;
 import zelisline.ub.platform.security.ApiKeyRateLimitFilter;
@@ -244,7 +243,6 @@ public class SecurityConfig {
     @Bean
     public JwtAuthenticationFilter jwtAuthenticationFilter(
             JwtTokenService jwtTokenService,
-            UserSessionRepository userSessionRepository,
             UserRepository userRepository,
             SuperAdminRepository superAdminRepository,
             zelisline.ub.marketplace.repository.SupplierUserRepository supplierUserRepository,
@@ -255,7 +253,7 @@ public class SecurityConfig {
             zelisline.ub.identity.application.UserSessionActivity userSessionActivity
     ) {
         return new JwtAuthenticationFilter(
-                jwtTokenService, userSessionRepository, userRepository, superAdminRepository,
+                jwtTokenService, userRepository, superAdminRepository,
                 supplierUserRepository, supplierUserSessionRepository, supplierPortalSessionService,
                 auditEventPublisher, auditEventBuilder, userSessionActivity);
     }

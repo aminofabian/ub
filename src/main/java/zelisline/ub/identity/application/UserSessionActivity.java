@@ -3,6 +3,7 @@ package zelisline.ub.identity.application;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -59,6 +60,42 @@ public class UserSessionActivity {
         session.setRevokedAt(Instant.now());
         userSessionRepository.save(session);
         return true;
+    }
+
+    /**
+     * Active session for this access jti, including predecessors whose refresh
+     * was rotated. Logout (revoke with no {@code rotatedTo}) still rejects.
+     * Without this, a 3-minute background refresh instantly 401s every in-flight
+     * request still carrying the previous access JWT.
+     */
+    public Optional<UserSession> findLiveSessionForAccessJti(String accessJti) {
+        if (accessJti == null || accessJti.isBlank()) {
+            return Optional.empty();
+        }
+        String jti = accessJti.trim();
+        Optional<UserSession> active = userSessionRepository.findByAccessTokenJtiAndRevokedAtIsNull(jti);
+        if (active.isPresent()) {
+            return active;
+        }
+        UserSession cursor = userSessionRepository.findByAccessTokenJti(jti).orElse(null);
+        if (cursor == null) {
+            return Optional.empty();
+        }
+        for (int hop = 0; hop < 8; hop++) {
+            String nextId = cursor.getRotatedToId();
+            if (nextId == null || nextId.isBlank()) {
+                return Optional.empty();
+            }
+            UserSession next = userSessionRepository.findById(nextId).orElse(null);
+            if (next == null) {
+                return Optional.empty();
+            }
+            if (next.getRevokedAt() == null) {
+                return Optional.of(next);
+            }
+            cursor = next;
+        }
+        return Optional.empty();
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

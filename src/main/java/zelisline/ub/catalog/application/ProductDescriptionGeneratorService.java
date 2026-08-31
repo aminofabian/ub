@@ -56,21 +56,23 @@ public class ProductDescriptionGeneratorService {
               "categoryName": "new category to create, or null"
             }
 
-            How to choose:
-            1. Decide what the product actually is (detergent, margarine, milk, cooking oil, soda, rice…).
-            2. Search the department list. Pick the id whose label is the aisle a shopper would walk to.
-            3. Search the category list. Pick the id whose name is the shelf / bay for that product.
-            4. If nothing on the list is a real home, set that id to null and propose a short Title Case name to create (1-3 words).
+            You do not know every brand. Do not guess from the name.
+            If a Web lookup block is present, that is the source of truth for what the product is
+            (Nuvita biscuits stay biscuits — never Baby Care). File department and category from those facts.
+
+            Description:
+            - Use only facts in the name, brand, and size. If you are unsure what it is, say it is a shop product by name — do not claim baby, medicinal, organic, imported, or fortified.
+
+            How to choose department and category:
+            1. Search the lists. Pick the existing id that actually fits this product.
+            2. Specialized aisles (Baby Care, Pharmacy, Vitamins, Clinic) need a proving word in the product name (diapers, formula, baby wipes, syrup). Otherwise do not pick or create them.
+            3. Create a new name only when the product type is obvious from the name AND no listed option fits (Omo → Household / Detergent, Blue Band → Dairy / Margarine).
+            4. When unsure, pick the closest general food / snacks / grocery option on the list. Do not invent a niche aisle.
 
             Hard rules:
             - Only use an id that appears in the list. Never invent ids.
-            - Grocery, Goods, General, Other, Miscellaneous are catch-alls — not a home for detergent, margarine, milk, oil, soda, or electronics. Do not pick them. Propose a better department instead (Household, Dairy, Oils & fats, Beverages, Electronics…).
-            - Ignore "current" form values; they are often just the first dropdown option.
-            - Omo, Ariel, Sunlight (laundry) → Household / Detergent — never Grocery.
-            - Blue Band, Flora → Dairy / Margarine — never Grocery, never Cooking fat.
-            - Kimbo, Cowboy → Oils & fats / Cooking fat.
-            - Coca-Cola, Fanta → Beverages / Soft drinks.
-            - Description: what it is and why someone would buy it. No SKU, barcode, or warehouse language.
+            - Grocery / Goods are catch-alls: do not use them for detergent, milk, margarine, oil, soda, or electronics when a better aisle exists or should be created. Packaged snacks and biscuits may live in Grocery if that is the best listed home.
+            - Ignore current form values; they are often the first dropdown option.
             """;
 
     private static final Pattern PLACEHOLDER_WORD =
@@ -92,6 +94,7 @@ public class ProductDescriptionGeneratorService {
     private final CategoryRepository categoryRepository;
     private final ItemTypeRepository itemTypeRepository;
     private final ObjectMapper objectMapper;
+    private final ProductWebFactsService productWebFactsService;
 
     @Transactional
     public GenerateProductDescriptionResponse generate(
@@ -119,17 +122,31 @@ public class ProductDescriptionGeneratorService {
         requestLog.setCreatedAt(Instant.now());
 
         try {
+            String webFacts;
+            try {
+                webFacts = productWebFactsService.lookup(request.name(), request.brand());
+            } catch (Exception ex) {
+                log.debug("Product web lookup skipped: {}", ex.getMessage());
+                webFacts = "";
+            }
             AiChatCompletionResult result = providerRouter.completeSmart(
                     new AiChatCompletionRequest(
                             null,
                             List.of(
                                     new AiChatCompletionRequest.AiChatMessage("system", SYSTEM_PROMPT),
                                     new AiChatCompletionRequest.AiChatMessage(
-                                            "user", buildUserPrompt(request, categories, departments))),
+                                            "user",
+                                            buildUserPrompt(request, categories, departments, webFacts))),
                             0.15,
                             MAX_TOKENS));
             GenerateProductDescriptionResponse parsed =
-                    parseModelContent(objectMapper, result.content(), categories, departments);
+                    parseModelContent(
+                            objectMapper,
+                            result.content(),
+                            categories,
+                            departments,
+                            request.name(),
+                            request.brand());
             if (parsed.description() == null || parsed.description().isBlank()) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_GATEWAY, "AI provider returned empty content");
@@ -155,15 +172,22 @@ public class ProductDescriptionGeneratorService {
     }
 
     static GenerateProductDescriptionResponse parseModelContent(
-            ObjectMapper mapper, String content, List<Named> categories, List<Named> departments) {
+            ObjectMapper mapper,
+            String content,
+            List<Named> categories,
+            List<Named> departments,
+            String productName,
+            String brand) {
         String json = extractJsonObject(content);
         if (json != null) {
             try {
                 JsonNode root = mapper.readTree(json);
                 if (root != null && root.isObject()) {
                     String description = sanitize(text(root, "description"));
-                    Pick category = resolvePick(root, "categoryId", "categoryName", categories);
-                    Pick department = resolvePick(root, "departmentId", "departmentName", departments);
+                    Pick category =
+                            resolvePick(root, "categoryId", "categoryName", categories, productName, brand);
+                    Pick department =
+                            resolvePick(root, "departmentId", "departmentName", departments, productName, brand);
                     return new GenerateProductDescriptionResponse(
                             description,
                             category.id(),
@@ -186,24 +210,42 @@ public class ProductDescriptionGeneratorService {
         }
     }
 
-    static Pick resolvePick(JsonNode root, String idKey, String nameKey, List<Named> options) {
+    static Pick resolvePick(
+            JsonNode root,
+            String idKey,
+            String nameKey,
+            List<Named> options,
+            String productName,
+            String brand) {
         Named byId = findById(text(root, idKey), options);
-        if (byId != null && !isCatchAll(byId.name())) {
+        if (allowed(byId != null ? byId.name() : null, productName, brand) && byId != null && !isCatchAll(byId.name())) {
             return new Pick(byId.id(), byId.name(), false);
         }
         String proposed = boundName(text(root, nameKey));
         Named byName = findByExactName(proposed, options);
-        if (byName != null && !isCatchAll(byName.name())) {
+        if (allowed(byName != null ? byName.name() : null, productName, brand)
+                && byName != null
+                && !isCatchAll(byName.name())) {
             return new Pick(byName.id(), byName.name(), false);
         }
-        if (proposed != null && !isCatchAll(proposed)) {
+        if (proposed != null && !isCatchAll(proposed) && allowed(proposed, productName, brand)) {
             return new Pick(null, proposed, true);
         }
         return Pick.none();
     }
 
+    private static boolean allowed(String aisleName, String productName, String brand) {
+        if (aisleName == null) {
+            return false;
+        }
+        return CatalogAiGuard.allows(aisleName, productName, brand);
+    }
+
     static String buildUserPrompt(
-            GenerateProductDescriptionRequest request, List<Named> categories, List<Named> departments) {
+            GenerateProductDescriptionRequest request,
+            List<Named> categories,
+            List<Named> departments,
+            String webFacts) {
         List<String> lines = new ArrayList<>();
         lines.add("Product to file:");
         lines.add("Name: " + request.name().trim());
@@ -216,13 +258,20 @@ public class ProductDescriptionGeneratorService {
             lines.add("Pack / quantity (mention naturally if relevant): " + packHint);
         }
         lines.add("");
+        if (webFacts != null && !webFacts.isBlank()) {
+            lines.add("Web lookup (source of truth for what this product is — do not contradict):");
+            lines.add(webFacts);
+        } else {
+            lines.add("Web lookup returned nothing. Do not guess a specialist product type.");
+        }
+        lines.add("");
         lines.add("Search these departments. Return the winning id, or null + a new name if none is a real home.");
         appendNamedList(lines, departments);
         lines.add("");
         lines.add("Search these categories. Return the winning id, or null + a new name if none is a real home.");
         appendNamedList(lines, categories);
         lines.add("");
-        lines.add("Return JSON only.");
+        lines.add("Do not invent a product type. If the name does not say what it is, pick a general listed shelf — do not create Baby Care, Pharmacy, or Vitamins.");
         return String.join("\n", lines);
     }
 

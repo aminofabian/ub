@@ -172,6 +172,12 @@ class AuthLoginIT {
         assertThat(refresh2).isEqualTo(refresh1);
         assertThat(newAccess).isNotEqualTo(oldAccess);
 
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get("/api/v1/permissions")
+                        .header("X-Tenant-Id", TENANT)
+                        .header("Authorization", "Bearer " + oldAccess))
+                .andExpect(status().isOk());
+
         // Same refresh token can be presented again (tabs, retries, leftover cookies).
         mockMvc.perform(post("/api/v1/auth/refresh")
                         .header("X-Tenant-Id", TENANT)
@@ -179,11 +185,6 @@ class AuthLoginIT {
                         .content(MAPPER.writeValueAsString(java.util.Map.of("refreshToken", refresh1))))
                 .andExpect(status().isOk());
 
-        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
-                        .get("/api/v1/permissions")
-                        .header("X-Tenant-Id", TENANT)
-                        .header("Authorization", "Bearer " + oldAccess))
-                .andExpect(status().isOk());
         mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
                         .get("/api/v1/permissions")
                         .header("X-Tenant-Id", TENANT)

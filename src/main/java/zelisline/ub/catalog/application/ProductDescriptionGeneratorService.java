@@ -1,19 +1,38 @@
 package zelisline.ub.catalog.application;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.regex.Pattern;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 
+import zelisline.ub.ai.application.provider.AiChatCompletionRequest;
+import zelisline.ub.ai.application.provider.AiChatCompletionResult;
+import zelisline.ub.ai.application.provider.AiProviderRouter;
+import zelisline.ub.ai.domain.AiRequestLog;
+import zelisline.ub.ai.repository.AiRequestLogRepository;
 import zelisline.ub.catalog.api.dto.GenerateProductDescriptionRequest;
-import zelisline.ub.catalog.infrastructure.DeepSeekRapidApiClient;
 
+/**
+ * Short product-copy generation. Uses the same SokoMind provider as storefront
+ * theme AI (Super Admin → Platform → SokoMind), not the legacy RapidAPI catalog key.
+ */
 @Service
 @RequiredArgsConstructor
 public class ProductDescriptionGeneratorService {
+
+    private static final Logger log = LoggerFactory.getLogger(ProductDescriptionGeneratorService.class);
+    private static final String SKILL = "product_description";
+    private static final int MAX_TOKENS = 400;
 
     private static final String SYSTEM_PROMPT =
             """
@@ -46,13 +65,79 @@ public class ProductDescriptionGeneratorService {
                     "\\b(piece|pieces|pcs?|pack|box|carton|bundle|kg|g|ml|l|litre|liter|unit|units)\\b|\\d+\\s*(x|×)",
                     Pattern.CASE_INSENSITIVE);
 
-    private final DeepSeekRapidApiClient deepSeekClient;
+    private final AiProviderRouter providerRouter;
+    private final AiRequestLogRepository requestLogRepository;
 
-    public String generate(GenerateProductDescriptionRequest request) {
-        return deepSeekClient.complete(SYSTEM_PROMPT, buildUserPrompt(request));
+    @Transactional
+    public String generate(String businessId, String userId, GenerateProductDescriptionRequest request) {
+        String requestId = UUID.randomUUID().toString();
+        long started = System.currentTimeMillis();
+        AiRequestLog requestLog = new AiRequestLog();
+        requestLog.setId(requestId);
+        requestLog.setBusinessId(businessId);
+        requestLog.setUserId(userId);
+        requestLog.setSkill(SKILL);
+        requestLog.setSurface("products.create");
+        requestLog.setRoutePath("/products");
+        requestLog.setCreatedAt(Instant.now());
+
+        try {
+            AiChatCompletionResult result = providerRouter.completeMini(
+                    new AiChatCompletionRequest(
+                            null,
+                            List.of(
+                                    new AiChatCompletionRequest.AiChatMessage("system", SYSTEM_PROMPT),
+                                    new AiChatCompletionRequest.AiChatMessage("user", buildUserPrompt(request))),
+                            0.5,
+                            MAX_TOKENS));
+            String description = sanitize(result.content());
+            if (description.isBlank()) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_GATEWAY, "AI provider returned empty content");
+            }
+            long latency = System.currentTimeMillis() - started;
+            requestLog.setSuccess(true);
+            requestLog.setProvider(result.provider());
+            requestLog.setModel(result.model());
+            requestLog.setPromptTokens(result.promptTokens());
+            requestLog.setCompletionTokens(result.completionTokens());
+            requestLog.setLatencyMs((int) Math.min(latency, Integer.MAX_VALUE));
+            requestLogRepository.save(requestLog);
+            return description;
+        } catch (RuntimeException ex) {
+            long latency = System.currentTimeMillis() - started;
+            requestLog.setSuccess(false);
+            requestLog.setLatencyMs((int) Math.min(latency, Integer.MAX_VALUE));
+            requestLog.setErrorMessage(truncate(ex.getMessage(), 500));
+            requestLogRepository.save(requestLog);
+            log.warn("Product description generation failed: {}", ex.getMessage());
+            throw ex;
+        }
     }
 
-    private static String buildUserPrompt(GenerateProductDescriptionRequest request) {
+    static String sanitize(String content) {
+        if (content == null) {
+            return "";
+        }
+        String s = content.strip();
+        if (s.startsWith("```")) {
+            int firstNl = s.indexOf('\n');
+            int lastFence = s.lastIndexOf("```");
+            if (firstNl > 0 && lastFence > firstNl) {
+                s = s.substring(firstNl + 1, lastFence).strip();
+            }
+        }
+        if (s.length() >= 2) {
+            char first = s.charAt(0);
+            char last = s.charAt(s.length() - 1);
+            if ((first == '"' && last == '"') || (first == '\'' && last == '\'')) {
+                s = s.substring(1, s.length() - 1).strip();
+            }
+        }
+        return s;
+    }
+
+    static String buildUserPrompt(GenerateProductDescriptionRequest request) {
         List<String> lines = new ArrayList<>();
         lines.add("Write a customer-facing description using only the facts below.");
         lines.add("Product name: " + request.name().trim());
@@ -102,5 +187,12 @@ public class ProductDescriptionGeneratorService {
 
     private static boolean isLikelyPlaceholder(String value) {
         return PLACEHOLDER_WORD.matcher(value).find();
+    }
+
+    private static String truncate(String value, int max) {
+        if (value == null) {
+            return null;
+        }
+        return value.length() <= max ? value : value.substring(0, max);
     }
 }

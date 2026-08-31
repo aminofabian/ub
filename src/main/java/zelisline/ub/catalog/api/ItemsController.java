@@ -191,8 +191,10 @@ public class ItemsController {
             @Valid @RequestBody GenerateProductDescriptionRequest body,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.require(request);
-        return new GenerateProductDescriptionResponse(productDescriptionGeneratorService.generate(body));
+        TenantPrincipal user = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return new GenerateProductDescriptionResponse(
+                productDescriptionGeneratorService.generate(businessId, user.userId(), body));
     }
 
     @GetMapping("/next-sku")

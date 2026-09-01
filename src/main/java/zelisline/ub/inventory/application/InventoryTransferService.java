@@ -192,14 +192,23 @@ public class InventoryTransferService {
      * Phase 9: Receive an in-transit transfer — destination batches flip from
      * {@code in_transit} to {@code active}, making goods sellable at the
      * receiving branch. Transfer-in stock movements are recorded.
+     *
+     * <p>Branch-scoped staff may only confirm receipt for transfers addressed
+     * to their own branch; branch-unscoped operators (owners/admins) may
+     * confirm for any branch.
      */
     @Transactional
-    public void receiveTransfer(String businessId, String transferId, String userId) {
+    public void receiveTransfer(
+            String businessId,
+            String transferId,
+            String userId,
+            String callerBranchId) {
         StockTransfer t = stockTransferRepository.findByIdAndBusinessIdFetchLines(transferId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer not found"));
         if (!InventoryConstants.TRANSFER_STATUS_IN_TRANSIT.equals(t.getStatus())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Transfer must be in-transit to receive");
         }
+        requireDestinationScope(t, callerBranchId);
         validateBranchesDifferentTenant(businessId, t.getFromBranchId(), t.getToBranchId());
 
         // Flip all destination batches created by this transfer from in_transit → active
@@ -217,14 +226,22 @@ public class InventoryTransferService {
     /**
      * Phase 9: Cancel an in-transit transfer — reverses stock movements at source,
      * discards destination batches, and marks the transfer cancelled.
+     *
+     * <p>Same destination scoping as {@link #receiveTransfer}: the receiving
+     * branch owns the decision to refuse a delivery.
      */
     @Transactional
-    public void cancelTransfer(String businessId, String transferId, String userId) {
+    public void cancelTransfer(
+            String businessId,
+            String transferId,
+            String userId,
+            String callerBranchId) {
         StockTransfer t = stockTransferRepository.findByIdAndBusinessIdFetchLines(transferId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer not found"));
         if (!InventoryConstants.TRANSFER_STATUS_IN_TRANSIT.equals(t.getStatus())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Only in-transit transfers can be cancelled");
         }
+        requireDestinationScope(t, callerBranchId);
         validateBranchesDifferentTenant(businessId, t.getFromBranchId(), t.getToBranchId());
 
         for (StockTransferLine line : t.getLines()) {
@@ -235,6 +252,20 @@ public class InventoryTransferService {
 
         eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.TransferCancelledEvent(
                 businessId, t.getFromBranchId(), t.getToBranchId(), transferId));
+    }
+
+    /**
+     * Confirm-receipt guard: a branch-scoped caller must belong to the
+     * transfer's destination branch. Unscoped callers (owner/admin tokens carry
+     * no branch) pass — they already operate across branches.
+     */
+    private static void requireDestinationScope(StockTransfer t, String callerBranchId) {
+        String scope = callerBranchId == null ? "" : callerBranchId.trim();
+        if (!scope.isEmpty() && !scope.equals(t.getToBranchId())) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Only staff at the receiving branch can confirm this transfer");
+        }
     }
 
     private void cancelLine(StockTransfer t, StockTransferLine line, String userId) {

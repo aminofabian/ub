@@ -209,7 +209,8 @@ public class InventoryController {
         inventoryTransferService.receiveTransfer(
                 TenantRequestIds.resolveBusinessId(request),
                 transferId,
-                user.userId()
+                user.userId(),
+                user.branchId()
         );
     }
 
@@ -224,7 +225,8 @@ public class InventoryController {
         inventoryTransferService.cancelTransfer(
                 TenantRequestIds.resolveBusinessId(request),
                 transferId,
-                user.userId()
+                user.userId(),
+                user.branchId()
         );
     }
 

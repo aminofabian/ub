@@ -340,9 +340,31 @@ public class GlobalExceptionHandler {
         ProblemDetail body = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
         body.setTitle("Internal server error");
         body.setType(URI.create(PROBLEM_BASE + "internal-error"));
-        body.setDetail("Unexpected server error. Retry, or sign in if your account was already created.");
+        body.setDetail(unexpectedErrorDetail(correlationId, request));
         PlatformRequestLogErrorCapture.capture(request, body, ex);
         return problem(body, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    /**
+     * The setup wizard's "sign in if your account was already created" hint only
+     * makes sense on the setup/connect endpoints — on every other 500 it read
+     * like a mystery toast ("I don't know why it pops up"). Elsewhere the detail
+     * carries the correlation reference so the failing request can be found in
+     * the log (desktop: {@code backend.err.log} / cloud: platform logs).
+     */
+    private static String unexpectedErrorDetail(String correlationId, HttpServletRequest request) {
+        String ref = correlationId == null || correlationId.isBlank()
+                ? ""
+                : " (ref " + correlationId + ")";
+        String path = request.getRequestURI();
+        boolean setupFlow = path != null
+                && (path.contains("/desktop/setup") || path.contains("/desktop/connect"));
+        if (setupFlow) {
+            return "Unexpected server error. Retry, or sign in if your account was already created."
+                    + ref;
+        }
+        return "Unexpected server error" + ref
+                + ". Retry — if it keeps happening, the cause is in the app log.";
     }
 
     /**

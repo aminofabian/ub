@@ -19,12 +19,22 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.desktop.api.dto.ShiftSyncAck;
 import zelisline.ub.desktop.api.dto.ShiftSyncRequest;
+import zelisline.ub.desktop.api.dto.SupplySyncAck;
+import zelisline.ub.desktop.api.dto.SupplySyncSnapshot;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.Customer;
 import zelisline.ub.credits.domain.CustomerPhone;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
+import zelisline.ub.purchasing.domain.RawPurchaseLine;
+import zelisline.ub.purchasing.domain.RawPurchaseSession;
+import zelisline.ub.purchasing.domain.SupplierInvoice;
+import zelisline.ub.purchasing.domain.SupplierInvoiceLine;
+import zelisline.ub.purchasing.repository.RawPurchaseLineRepository;
+import zelisline.ub.purchasing.repository.RawPurchaseSessionRepository;
+import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
+import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.SaleItem;
@@ -76,13 +86,17 @@ public class DesktopSyncPushService {
     private final CreditAccountRepository creditAccountRepository;
     private final SupplierRepository supplierRepository;
     private final SupplierContactRepository supplierContactRepository;
+    private final RawPurchaseSessionRepository rawPurchaseSessionRepository;
+    private final RawPurchaseLineRepository rawPurchaseLineRepository;
+    private final SupplierInvoiceRepository supplierInvoiceRepository;
+    private final SupplierInvoiceLineRepository supplierInvoiceLineRepository;
     private final CloudSyncSession cloudSyncSession;
     private final RestClient.Builder restClientBuilder;
 
     @Value("${app.desktop.business-id:}")
     private String desktopBusinessId;
 
-    public record SyncPushResult(int shiftsPushed, int salesPushed, boolean configured) {}
+    public record SyncPushResult(int shiftsPushed, int salesPushed, int suppliesPushed, boolean configured) {}
 
     public SyncPushResult pushPending() {
         String localId = desktopBusinessId == null ? "" : desktopBusinessId.trim();
@@ -91,7 +105,7 @@ public class DesktopSyncPushService {
             .orElse(null);
         if (mapping == null || localId.isEmpty()) {
             log.info("[DesktopSync] no cloud mapping — nothing to push.");
-            return new SyncPushResult(0, 0, false);
+            return new SyncPushResult(0, 0, 0, false);
         }
 
         // Sales not yet acknowledged by the cloud — includes sales made in the
@@ -116,7 +130,8 @@ public class DesktopSyncPushService {
         pendingSales.forEach(s -> shiftIds.add(s.getShiftId()));
         pendingClosedShifts.forEach(s -> shiftIds.add(s.getId()));
         if (shiftIds.isEmpty() && dirtyCustomers.isEmpty() && dirtySuppliers.isEmpty()) {
-            return new SyncPushResult(0, 0, true);
+            int supplies = pushSupplies(localId, mapping);
+            return new SyncPushResult(0, 0, supplies, true);
         }
         log.info(
             "[DesktopSync] pushing {} pending sale(s) in {} shift(s), {} customer(s) and {} supplier(s) to {}",
@@ -160,7 +175,12 @@ public class DesktopSyncPushService {
             dirtyCustomers.size(),
             dirtySuppliers.size()
         );
-        return new SyncPushResult(closedToStamp.size(), ack.salesIngested(), true);
+
+        // Supplies are pushed after the shifts batch so any suppliers upserted
+        // above are already on the cloud and the raw_purchase_sessions.supplier_id
+        // FK resolves even for a brand-new till-created supplier.
+        int suppliesPushed = pushSupplies(localId, mapping);
+        return new SyncPushResult(closedToStamp.size(), ack.salesIngested(), suppliesPushed, true);
     }
 
     private ShiftSyncRequest buildBatch(
@@ -363,6 +383,168 @@ public class DesktopSyncPushService {
             payment.getReference(),
             payment.getSortOrder()
         );
+    }
+
+    /**
+     * Push till-recorded supplies (posted Path B sessions + their invoices) to
+     * the cloud. Idempotent: the cloud skips session ids it already stored, and
+     * only then does the till stamp {@code cloud_synced_at}. The sync scheduler
+     * runs this AFTER the shifts/customers/suppliers batch in the same flush,
+     * so referenced suppliers always exist cloud-side first.
+     *
+     * @return number of sessions the cloud accepted as new
+     */
+    private int pushSupplies(String localId, CloudSyncSession.Session mapping) {
+        List<RawPurchaseSession> dirtySupplies =
+            rawPurchaseSessionRepository.findDirtyForDesktopSync(localId);
+        if (dirtySupplies.isEmpty()) {
+            return 0;
+        }
+        log.info(
+            "[DesktopSync] pushing {} supply session(s) to {}",
+            dirtySupplies.size(), mapping.origin());
+
+        List<SupplySyncSnapshot.SupplyData> data = dirtySupplies.stream()
+            .map(this::toSupplyData)
+            .toList();
+
+        RestClient client = restClientBuilder.baseUrl(mapping.origin()).build();
+        SupplySyncAck ack = postSupplies(client, mapping, new SupplySyncSnapshot(data));
+
+        Instant syncedAt = Instant.now();
+        dirtySupplies.forEach(s -> s.setCloudSyncedAt(syncedAt));
+        rawPurchaseSessionRepository.saveAll(dirtySupplies);
+
+        log.info(
+            "[DesktopSync] acknowledged: {} supply session(s) new, {} skipped",
+            ack.sessionsIngested(),
+            ack.sessionsSkipped()
+        );
+        return ack.sessionsIngested();
+    }
+
+    /** Session + raw lines + resulting invoice, as the till's authoritative copy. */
+    private SupplySyncSnapshot.SupplyData toSupplyData(RawPurchaseSession session) {
+        List<SupplySyncSnapshot.SupplyLineData> lines = rawPurchaseLineRepository
+            .findBySessionIdOrderBySortOrderAscIdAsc(session.getId())
+            .stream()
+            .map(l -> new SupplySyncSnapshot.SupplyLineData(
+                l.getId(),
+                l.getSortOrder(),
+                l.getDescriptionText(),
+                l.getAmountMoney(),
+                l.getSuggestedItemId(),
+                l.getLineStatus(),
+                l.getPostedItemId(),
+                l.getUsableQty(),
+                l.getWastageQty(),
+                l.getDraftQty(),
+                l.getDraftUnitCost(),
+                l.getDraftSellPrice(),
+                l.getDraftExpiryDate(),
+                l.getPackOptionId()))
+            .toList();
+        // Double-posts can leave more than one invoice on a session; the newest
+        // one is the authoritative document.
+        List<SupplierInvoice> invoices = supplierInvoiceRepository
+            .findByRawPurchaseSessionIdOrderByCreatedAtDesc(session.getId());
+        SupplierInvoice invoice = invoices.isEmpty() ? null : invoices.get(0);
+        List<SupplySyncSnapshot.InvoiceLineData> invoiceLines = invoice == null
+            ? null
+            : supplierInvoiceLineRepository
+                .findByInvoiceIdOrderBySortOrderAsc(invoice.getId())
+                .stream()
+                .map(DesktopSyncPushService::toInvoiceLineData)
+                .toList();
+        return new SupplySyncSnapshot.SupplyData(
+            session.getId(),
+            session.getSupplierId(),
+            session.getBranchId(),
+            session.getReceivedAt(),
+            session.getStatus(),
+            session.getNotes(),
+            session.getUpdatedAt(),
+            lines,
+            invoice == null ? null : new SupplySyncSnapshot.InvoiceData(
+                invoice.getId(),
+                invoice.getInvoiceNumber(),
+                invoice.getInvoiceDate(),
+                invoice.getDueDate(),
+                invoice.getSubtotal(),
+                invoice.getTaxTotal(),
+                invoice.getGrandTotal(),
+                invoice.getStatus(),
+                invoice.getNotes(),
+                invoiceLines
+            )
+        );
+    }
+
+    private static SupplySyncSnapshot.InvoiceLineData toInvoiceLineData(SupplierInvoiceLine l) {
+        return new SupplySyncSnapshot.InvoiceLineData(
+            l.getId(),
+            l.getDescription(),
+            l.getItemId(),
+            l.getQty(),
+            l.getUnitCost(),
+            l.getLineTotal(),
+            l.getSortOrder(),
+            l.getRawLineId());
+    }
+
+    private SupplySyncAck postSupplies(
+            RestClient client,
+            CloudSyncSession.Session session,
+            SupplySyncSnapshot batch) {
+        try {
+            return doPostSupplies(client, session, batch);
+        } catch (Exception e) {
+            if (!isUnauthorized(e)) {
+                throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Could not upload supplies to the online shop (" + e.getMessage() + ")"
+                );
+            }
+            CloudSyncSession.Session refreshed = cloudSyncSession
+                .refresh(client, session)
+                .orElse(null);
+            if (refreshed == null) {
+                throw new ResponseStatusException(
+                    HttpStatus.UNAUTHORIZED,
+                    "Your online-shop session has expired — open Settings → Sync to reconnect"
+                );
+            }
+            try {
+                return doPostSupplies(client, refreshed, batch);
+            } catch (Exception e2) {
+                throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Could not upload supplies to the online shop (" + e2.getMessage() + ")"
+                );
+            }
+        }
+    }
+
+    private SupplySyncAck doPostSupplies(
+            RestClient client,
+            CloudSyncSession.Session session,
+            SupplySyncSnapshot batch) {
+        SupplySyncAck ack = client
+            .post()
+            .uri("/api/v1/desktop/sync/supplies")
+            .header("Authorization", "Bearer " + session.accessToken())
+            .header("X-Tenant-Id", session.cloudBusinessId())
+            .contentType(MediaType.APPLICATION_JSON)
+            .body(batch)
+            .retrieve()
+            .body(SupplySyncAck.class);
+        if (ack == null) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_GATEWAY,
+                "The online shop returned an empty acknowledgment"
+            );
+        }
+        return ack;
     }
 
     /**

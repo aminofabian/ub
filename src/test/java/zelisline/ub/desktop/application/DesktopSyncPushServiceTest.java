@@ -39,6 +39,10 @@ import zelisline.ub.credits.domain.Customer;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
+import zelisline.ub.purchasing.repository.RawPurchaseLineRepository;
+import zelisline.ub.purchasing.repository.RawPurchaseSessionRepository;
+import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
+import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.Shift;
@@ -68,6 +72,10 @@ class DesktopSyncPushServiceTest {
     private final CreditAccountRepository creditAccountRepository = mock(CreditAccountRepository.class);
     private final SupplierRepository supplierRepository = mock(SupplierRepository.class);
     private final SupplierContactRepository supplierContactRepository = mock(SupplierContactRepository.class);
+    private final RawPurchaseSessionRepository rawPurchaseSessionRepository = mock(RawPurchaseSessionRepository.class);
+    private final RawPurchaseLineRepository rawPurchaseLineRepository = mock(RawPurchaseLineRepository.class);
+    private final SupplierInvoiceRepository supplierInvoiceRepository = mock(SupplierInvoiceRepository.class);
+    private final SupplierInvoiceLineRepository supplierInvoiceLineRepository = mock(SupplierInvoiceLineRepository.class);
     private final CloudSyncSession cloudSyncSession = mock(CloudSyncSession.class);
 
     private final RestClient.Builder restClientBuilder = RestClient.builder();
@@ -79,7 +87,7 @@ class DesktopSyncPushServiceTest {
     void setUp() {
         when(cloudSyncSession.load()).thenReturn(Optional.of(new CloudSyncSession.Session(
             CLOUD_ORIGIN, "cloud-biz", "access-token", "refresh-token",
-            "owner-id", List.of("staff-1"), Instant.EPOCH, null)));
+            "owner-id", List.of("staff-1"), Instant.EPOCH, null, null)));
         when(saleItemRepository.findBySaleIdOrderByLineIndexAsc(anyString())).thenReturn(List.of());
         when(salePaymentRepository.findBySaleIdOrderBySortOrderAsc(anyString())).thenReturn(List.of());
 
@@ -87,6 +95,8 @@ class DesktopSyncPushServiceTest {
             shiftRepository, saleRepository, saleItemRepository,
             salePaymentRepository, customerRepository, customerPhoneRepository,
             creditAccountRepository, supplierRepository, supplierContactRepository,
+            rawPurchaseSessionRepository, rawPurchaseLineRepository,
+            supplierInvoiceRepository, supplierInvoiceLineRepository,
             cloudSyncSession, restClientBuilder);
         ReflectionTestUtils.setField(service, "desktopBusinessId", LOCAL_BUSINESS);
 

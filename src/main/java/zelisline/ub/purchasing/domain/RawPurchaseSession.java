@@ -45,6 +45,10 @@ public class RawPurchaseSession {
     @Column(name = "status", nullable = false, length = 16)
     private String status;
 
+    /** When the desktop till uploaded this supply to the cloud (null = pending). */
+    @Column(name = "cloud_synced_at")
+    private Instant cloudSyncedAt;
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;

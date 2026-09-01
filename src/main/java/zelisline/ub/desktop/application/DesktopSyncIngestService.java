@@ -9,12 +9,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import zelisline.ub.desktop.api.dto.ShiftSyncAck;
 import zelisline.ub.desktop.api.dto.ShiftSyncRequest;
+import zelisline.ub.desktop.api.dto.SupplySyncAck;
+import zelisline.ub.desktop.api.dto.SupplySyncSnapshot;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.Customer;
 import zelisline.ub.credits.domain.CustomerPhone;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
+import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.platform.realtime.RealtimeBridge;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.SaleItem;
@@ -28,6 +31,14 @@ import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierContact;
 import zelisline.ub.suppliers.repository.SupplierContactRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
+import zelisline.ub.purchasing.domain.RawPurchaseLine;
+import zelisline.ub.purchasing.domain.RawPurchaseSession;
+import zelisline.ub.purchasing.domain.SupplierInvoice;
+import zelisline.ub.purchasing.domain.SupplierInvoiceLine;
+import zelisline.ub.purchasing.repository.RawPurchaseLineRepository;
+import zelisline.ub.purchasing.repository.RawPurchaseSessionRepository;
+import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
+import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
 
 /**
  * Cloud-side ingest for till-uploaded shifts (the "up" direction of
@@ -38,12 +49,12 @@ import zelisline.ub.suppliers.repository.SupplierRepository;
  * business. Because the whole batch runs in one transaction, a failed push
  * rolls back entirely and the till simply retries later.
  *
- * <p>v1 scope: sales are recorded directly (visible in cloud reports, and
- * announced in realtime to connected POS/dashboard sessions) but the
- * heavy pipelines are intentionally not re-run — no receipt-number allocation,
- * no ledger journal postings, no stock deduction, no customer resolution.
- * Those are follow-ups, and the till's local copy is the source of truth for
- * its own operation.
+ * <p>v1 scope: sales and supplies are recorded directly (visible in cloud
+ * reports, and sales announced in realtime to connected POS/dashboard
+ * sessions) but the heavy pipelines are intentionally not re-run — no receipt
+ * number allocation, no ledger journal postings, no stock deduction, no
+ * customer resolution. Those are follow-ups, and the till's local copy is the
+ * source of truth for its own operation.
  */
 @Service
 @RequiredArgsConstructor
@@ -60,6 +71,11 @@ public class DesktopSyncIngestService {
     private final CreditAccountRepository creditAccountRepository;
     private final SupplierRepository supplierRepository;
     private final SupplierContactRepository supplierContactRepository;
+    private final RawPurchaseSessionRepository rawPurchaseSessionRepository;
+    private final RawPurchaseLineRepository rawPurchaseLineRepository;
+    private final SupplierInvoiceRepository supplierInvoiceRepository;
+    private final SupplierInvoiceLineRepository supplierInvoiceLineRepository;
+    private final ItemRepository itemRepository;
     private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
@@ -242,6 +258,137 @@ public class DesktopSyncIngestService {
                 contact.setEmail(c.email());
                 contact.setPrimaryContact(c.primary());
                 supplierContactRepository.save(contact);
+            }
+        }
+    }
+
+    /**
+     * Ingest till-recorded supplies (Path B sessions + their invoices).
+     * Idempotent by session id — a retried push skips sessions the cloud has
+     * already stored. Runs in one transaction like the shift ingest. Called
+     * separately from {@link #ingest} (the till pushes supplies on their own
+     * endpoint), after the suppliers in the same push have been upserted so
+     * the {@code supplier_id} FK resolves.
+     */
+    @Transactional
+    public SupplySyncAck ingestSupplies(String businessId, SupplySyncSnapshot request) {
+        int ingested = 0;
+        int skipped = 0;
+        if (request.supplies() != null) {
+            for (SupplySyncSnapshot.SupplyData data : request.supplies()) {
+                if (rawPurchaseSessionRepository
+                        .findByIdAndBusinessId(data.sessionId(), businessId)
+                        .isPresent()) {
+                    skipped++;
+                    continue;
+                }
+                ingestSupply(businessId, data);
+                ingested++;
+            }
+        }
+        log.info(
+            "[DesktopSync] ingested {} supply session(s), {} already seen",
+            ingested,
+            skipped
+        );
+        return new SupplySyncAck(ingested, skipped);
+    }
+
+    /** Keep a cross-side item reference only when the receiving side knows the item. */
+    private String resolveKnownItem(String businessId, String itemId) {
+        if (itemId == null || itemId.isBlank()) {
+            return null;
+        }
+        return itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId).isPresent()
+            ? itemId
+            : null;
+    }
+
+    private void ingestSupply(String businessId, SupplySyncSnapshot.SupplyData data) {
+        RawPurchaseSession session = new RawPurchaseSession();
+        session.setId(data.sessionId());
+        session.setBusinessId(businessId);
+        // Suppliers are upserted earlier in the same push/pull, so the FK resolves.
+        session.setSupplierId(data.supplierId());
+        session.setBranchId(data.branchId());
+        session.setReceivedAt(data.receivedAt());
+        session.setNotes(data.notes());
+        // The till's opaque draft JSON is client-local state — not carried across.
+        session.setClientDraftJson(null);
+        session.setStatus(data.status());
+        rawPurchaseSessionRepository.save(session);
+
+        if (data.lines() != null) {
+            for (SupplySyncSnapshot.SupplyLineData lineData : data.lines()) {
+                RawPurchaseLine line = new RawPurchaseLine();
+                line.setId(lineData.id());
+                line.setSessionId(session.getId());
+                line.setSortOrder(lineData.sortOrder());
+                line.setDescriptionText(lineData.descriptionText());
+                line.setAmountMoney(lineData.amountMoney());
+                line.setSuggestedItemId(resolveKnownItem(businessId, lineData.suggestedItemId()));
+                line.setLineStatus(lineData.lineStatus());
+                // fk_rpl_posted_item points at items(id): a till-created item the
+                // cloud hasn't adopted yet must not roll back the whole batch.
+                line.setPostedItemId(resolveKnownItem(businessId, lineData.postedItemId()));
+                line.setUsableQty(lineData.usableQty());
+                line.setWastageQty(lineData.wastageQty());
+                line.setDraftQty(lineData.draftQty());
+                line.setDraftUnitCost(lineData.draftUnitCost());
+                line.setDraftSellPrice(lineData.draftSellPrice());
+                line.setDraftExpiryDate(lineData.draftExpiryDate());
+                line.setPackOptionId(lineData.packOptionId());
+                // Till batches don't exist on the cloud — fk_rpl_inventory_batch
+                // would roll back the whole ingest; null defensively here too.
+                line.setInventoryBatchId(null);
+                rawPurchaseLineRepository.save(line);
+            }
+        }
+
+        if (data.invoice() != null) {
+            SupplierInvoice invoice = new SupplierInvoice();
+            invoice.setId(data.invoice().id());
+            invoice.setBusinessId(businessId);
+            invoice.setSupplierId(data.supplierId());
+            invoice.setRawPurchaseSessionId(session.getId());
+            // Till-allocated PB-#### numbers can collide with the cloud's own
+            // sequence; keep the document but disambiguate rather than 409-ing
+            // the whole batch.
+            String invoiceNumber = data.invoice().invoiceNumber();
+            if (supplierInvoiceRepository.existsByBusinessIdAndInvoiceNumber(businessId, invoiceNumber)) {
+                String suffixed = invoiceNumber + "-T";
+                invoice.setInvoiceNumber(suffixed.length() > 64
+                    ? suffixed.substring(0, 64)
+                    : suffixed);
+            } else {
+                invoice.setInvoiceNumber(invoiceNumber);
+            }
+            invoice.setInvoiceDate(data.invoice().invoiceDate());
+            invoice.setDueDate(data.invoice().dueDate());
+            invoice.setSubtotal(data.invoice().subtotal());
+            invoice.setTaxTotal(data.invoice().taxTotal());
+            invoice.setGrandTotal(data.invoice().grandTotal());
+            invoice.setStatus(data.invoice().status());
+            invoice.setNotes(data.invoice().notes());
+            // goods_receipt_id points at a cloud-side document the till never
+            // created — drop it, same as batch ids.
+            invoice.setGoodsReceiptId(null);
+            supplierInvoiceRepository.save(invoice);
+
+            if (data.invoice().lines() != null) {
+                for (SupplySyncSnapshot.InvoiceLineData lineData : data.invoice().lines()) {
+                    SupplierInvoiceLine line = new SupplierInvoiceLine();
+                    line.setId(lineData.id());
+                    line.setInvoiceId(invoice.getId());
+                    line.setDescription(lineData.description());
+                    line.setItemId(resolveKnownItem(businessId, lineData.itemId()));
+                    line.setQty(lineData.qty());
+                    line.setUnitCost(lineData.unitCost());
+                    line.setLineTotal(lineData.lineTotal());
+                    line.setSortOrder(lineData.sortOrder());
+                    line.setRawLineId(lineData.rawLineId());
+                    supplierInvoiceLineRepository.save(line);
+                }
             }
         }
     }

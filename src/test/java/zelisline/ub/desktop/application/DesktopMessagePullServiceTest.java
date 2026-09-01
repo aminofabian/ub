@@ -74,7 +74,7 @@ class DesktopMessagePullServiceTest {
 
         when(cloudSyncSession.load()).thenReturn(Optional.of(new CloudSyncSession.Session(
             CLOUD_ORIGIN, "cloud-biz", "access-token", "refresh-token",
-            "owner-id", List.of("staff-1"), null, null)));
+            "owner-id", List.of("staff-1"), null, null, null)));
 
         service = new DesktopMessagePullService(
             messageRepository, replyRepository, cloudSyncSession,

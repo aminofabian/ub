@@ -42,6 +42,8 @@ import zelisline.ub.desktop.api.dto.MessageReplyPushRequest;
 import zelisline.ub.desktop.api.dto.MessageSyncSnapshot;
 import zelisline.ub.desktop.api.dto.ShiftSyncAck;
 import zelisline.ub.desktop.api.dto.ShiftSyncRequest;
+import zelisline.ub.desktop.api.dto.SupplySyncAck;
+import zelisline.ub.desktop.api.dto.SupplySyncSnapshot;
 import zelisline.ub.desktop.application.DesktopSyncIngestService;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.repository.RoleRepository;
@@ -55,6 +57,14 @@ import zelisline.ub.messages.repository.ContactMessageReplyRepository;
 import zelisline.ub.messages.repository.ContactMessageRepository;
 import zelisline.ub.pricing.domain.TaxRate;
 import zelisline.ub.pricing.repository.TaxRateRepository;
+import zelisline.ub.purchasing.domain.RawPurchaseLine;
+import zelisline.ub.purchasing.domain.RawPurchaseSession;
+import zelisline.ub.purchasing.domain.SupplierInvoice;
+import zelisline.ub.purchasing.domain.SupplierInvoiceLine;
+import zelisline.ub.purchasing.repository.RawPurchaseLineRepository;
+import zelisline.ub.purchasing.repository.RawPurchaseSessionRepository;
+import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
+import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.SaleItem;
 import zelisline.ub.sales.domain.SalePayment;
@@ -113,6 +123,10 @@ public class DesktopSyncController {
     private final ContactMessageRepository contactMessageRepository;
     private final SupplierRepository supplierRepository;
     private final SupplierContactRepository supplierContactRepository;
+    private final RawPurchaseSessionRepository rawPurchaseSessionRepository;
+    private final RawPurchaseLineRepository rawPurchaseLineRepository;
+    private final SupplierInvoiceRepository supplierInvoiceRepository;
+    private final SupplierInvoiceLineRepository supplierInvoiceLineRepository;
 
     private static final Logger log = LoggerFactory.getLogger(DesktopSyncController.class);
 
@@ -620,6 +634,113 @@ public class DesktopSyncController {
             return new MessageReplyPushAck.MessageReplyPushResult(
                 item.replyId(), "failed", truncate(e.getMessage()), null);
         }
+    }
+
+    /**
+     * Ingest till-uploaded supplies (Path B sessions + invoices, the "up"
+     * direction of the supplies sync). Idempotent — see
+     * {@link DesktopSyncIngestService}.
+     */
+    @PostMapping("/supplies")
+    public SupplySyncAck ingestSupplies(
+            @Valid @RequestBody SupplySyncSnapshot request,
+            HttpServletRequest http) {
+        String businessId = TenantRequestIds.resolveBusinessId(http);
+        if (request.supplies() == null || request.supplies().isEmpty()) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Batch is empty — provide at least one supply session"
+            );
+        }
+        return ingestService.ingestSupplies(businessId, request);
+    }
+
+    /**
+     * Cloud → till supplies pull: Path B sessions posted on the cloud at/after
+     * {@code since}, with lines + the resulting supplier invoice, so the till
+     * can mirror web-entered supplies. Idempotent on the till side.
+     */
+    @GetMapping("/supplies")
+    public SupplySyncSnapshot cloudSupplies(
+            @RequestParam(defaultValue = "1970-01-01T00:00:00Z") String since,
+            HttpServletRequest request) {
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        Instant cursor = parseCursor(since);
+        List<RawPurchaseSession> sessions = rawPurchaseSessionRepository
+            .findForDesktopSyncPull(businessId, cursor, PageRequest.of(0, 500));
+
+        List<SupplySyncSnapshot.SupplyData> data = sessions.stream()
+            .map(this::toSupplyData)
+            .toList();
+        return new SupplySyncSnapshot(data);
+    }
+
+    private SupplySyncSnapshot.SupplyData toSupplyData(RawPurchaseSession session) {
+        List<SupplySyncSnapshot.SupplyLineData> lines = rawPurchaseLineRepository
+            .findBySessionIdOrderBySortOrderAscIdAsc(session.getId())
+            .stream()
+            .map(l -> new SupplySyncSnapshot.SupplyLineData(
+                l.getId(),
+                l.getSortOrder(),
+                l.getDescriptionText(),
+                l.getAmountMoney(),
+                l.getSuggestedItemId(),
+                l.getLineStatus(),
+                l.getPostedItemId(),
+                l.getUsableQty(),
+                l.getWastageQty(),
+                l.getDraftQty(),
+                l.getDraftUnitCost(),
+                l.getDraftSellPrice(),
+                l.getDraftExpiryDate(),
+                l.getPackOptionId()))
+            .toList();
+        // Double-posts can leave more than one invoice on a session; the newest
+        // posted one is the authoritative document.
+        SupplierInvoice invoice = supplierInvoiceRepository
+            .findByRawPurchaseSessionIdOrderByCreatedAtDesc(session.getId())
+            .stream()
+            .findFirst()
+            .orElse(null);
+        return new SupplySyncSnapshot.SupplyData(
+            session.getId(),
+            session.getSupplierId(),
+            session.getBranchId(),
+            session.getReceivedAt(),
+            session.getStatus(),
+            session.getNotes(),
+            session.getUpdatedAt(),
+            lines,
+            invoice == null ? null : toInvoiceData(invoice)
+        );
+    }
+
+    private SupplySyncSnapshot.InvoiceData toInvoiceData(SupplierInvoice invoice) {
+        List<SupplySyncSnapshot.InvoiceLineData> lines = supplierInvoiceLineRepository
+            .findByInvoiceIdOrderBySortOrderAsc(invoice.getId())
+            .stream()
+            .map(l -> new SupplySyncSnapshot.InvoiceLineData(
+                l.getId(),
+                l.getDescription(),
+                l.getItemId(),
+                l.getQty(),
+                l.getUnitCost(),
+                l.getLineTotal(),
+                l.getSortOrder(),
+                l.getRawLineId()))
+            .toList();
+        return new SupplySyncSnapshot.InvoiceData(
+            invoice.getId(),
+            invoice.getInvoiceNumber(),
+            invoice.getInvoiceDate(),
+            invoice.getDueDate(),
+            invoice.getSubtotal(),
+            invoice.getTaxTotal(),
+            invoice.getGrandTotal(),
+            invoice.getStatus(),
+            invoice.getNotes(),
+            lines
+        );
     }
 
     private static String truncate(String value) {

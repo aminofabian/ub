@@ -46,6 +46,9 @@ public interface SupplierInvoiceRepository extends JpaRepository<SupplierInvoice
 
     int countByRawPurchaseSessionId(String rawPurchaseSessionId);
 
+    /** Supply-document export: invoices produced by a Path B session (newest first). */
+    List<SupplierInvoice> findByRawPurchaseSessionIdOrderByCreatedAtDesc(String rawPurchaseSessionId);
+
     Optional<SupplierInvoice> findByIdAndBusinessId(String id, String businessId);
 
     List<SupplierInvoice> findByBusinessIdAndStatus(String businessId, String status);

@@ -32,9 +32,18 @@ import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.desktop.api.dto.CloudSalesSnapshot;
 import zelisline.ub.desktop.api.dto.MasterDataSnapshot;
+import zelisline.ub.desktop.api.dto.SupplySyncSnapshot;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.pricing.domain.TaxRate;
 import zelisline.ub.pricing.repository.TaxRateRepository;
+import zelisline.ub.purchasing.domain.RawPurchaseLine;
+import zelisline.ub.purchasing.domain.RawPurchaseSession;
+import zelisline.ub.purchasing.domain.SupplierInvoice;
+import zelisline.ub.purchasing.domain.SupplierInvoiceLine;
+import zelisline.ub.purchasing.repository.RawPurchaseLineRepository;
+import zelisline.ub.purchasing.repository.RawPurchaseSessionRepository;
+import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
+import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.SaleItem;
@@ -99,6 +108,10 @@ public class DesktopSyncPullService {
     private final CustomerRepository customerRepository;
     private final CustomerPhoneRepository customerPhoneRepository;
     private final CreditAccountRepository creditAccountRepository;
+    private final RawPurchaseSessionRepository rawPurchaseSessionRepository;
+    private final RawPurchaseLineRepository rawPurchaseLineRepository;
+    private final SupplierInvoiceRepository supplierInvoiceRepository;
+    private final SupplierInvoiceLineRepository supplierInvoiceLineRepository;
     private final RestClient.Builder restClientBuilder;
 
     @Value("${app.desktop.business-id:}")
@@ -226,6 +239,244 @@ public class DesktopSyncPullService {
             total, mapping.origin(), cursor
         );
         return total;
+    }
+
+    /**
+     * Pull supplies posted on the cloud (web Path B receives) into this till —
+     * the "down" direction of the supplies sync, so purchases made in the web
+     * portal show up in the till's purchasing views and the two sides agree on
+     * what was received and what is owed.
+     *
+     * <p>Incremental via {@code lastSuppliesPullAt} (stored in cloud-sync.json)
+     * and idempotent by session id: sessions already present locally (including
+     * this till's own uploads) are skipped. Mirrored sessions are stamped
+     * {@code cloud_synced_at} so they are never pushed back up.
+     *
+     * @return number of new supply sessions mirrored into the local database
+     */
+    public int pullSupplies() {
+        String localId = desktopBusinessId == null ? "" : desktopBusinessId.trim();
+        CloudSyncSession.Session mapping = cloudSyncSession.load().orElse(null);
+        if (mapping == null || localId.isEmpty()) {
+            throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "This PC is not connected to an online shop yet"
+            );
+        }
+
+        java.time.Instant cursor = mapping.lastSuppliesPullAt() != null
+            ? mapping.lastSuppliesPullAt()
+            : java.time.Instant.EPOCH;
+        RestClient client = restClientBuilder.baseUrl(mapping.origin()).build();
+
+        int total = 0;
+        while (true) {
+            SupplySyncSnapshot snapshot = fetchSupplies(client, mapping, cursor);
+            List<SupplySyncSnapshot.SupplyData> supplies = snapshot.supplies();
+            if (supplies == null || supplies.isEmpty()) {
+                break;
+            }
+
+            Integer inserted = transactionTemplate.execute(status ->
+                insertCloudSupplies(localId, supplies));
+            if (inserted == null) {
+                throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Supplies pull failed — nothing was written"
+                );
+            }
+            total += inserted;
+
+            java.time.Instant newest = supplies.stream()
+                .map(SupplySyncSnapshot.SupplyData::updatedAt)
+                .filter(java.util.Objects::nonNull)
+                .max(java.time.Instant::compareTo)
+                .orElse(null);
+            if (newest != null && newest.isAfter(cursor)) {
+                cursor = newest;
+                cloudSyncSession.persistLastSuppliesPullAt(mapping, cursor);
+            }
+
+            if (supplies.size() < SALES_PAGE_SIZE) {
+                break;
+            }
+        }
+        log.info(
+            "[DesktopSync] supplies pull: {} new supply session(s) from {} (cursor now {})",
+            total, mapping.origin(), cursor
+        );
+        return total;
+    }
+
+    private SupplySyncSnapshot fetchSupplies(
+            RestClient client,
+            CloudSyncSession.Session mapping,
+            java.time.Instant since) {
+        try {
+            return doFetchSupplies(client, mapping, since);
+        } catch (Exception e) {
+            if (!isUnauthorized(e)) {
+                throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Could not download supplies (" + e.getMessage() + ")"
+                );
+            }
+            CloudSyncSession.Session refreshed = cloudSyncSession
+                .refresh(client, mapping)
+                .orElse(null);
+            if (refreshed == null) {
+                throw new ResponseStatusException(
+                    HttpStatus.UNAUTHORIZED,
+                    "Your online-shop session has expired — open Settings → Sync to reconnect"
+                );
+            }
+            try {
+                return doFetchSupplies(client, refreshed, since);
+            } catch (Exception e2) {
+                throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Could not download supplies (" + e2.getMessage() + ")"
+                );
+            }
+        }
+    }
+
+    private SupplySyncSnapshot doFetchSupplies(
+            RestClient client,
+            CloudSyncSession.Session mapping,
+            java.time.Instant since) {
+        SupplySyncSnapshot snapshot = client
+            .get()
+            .uri(uriBuilder -> uriBuilder
+                .path("/api/v1/desktop/sync/supplies")
+                .queryParam("since", since.toString())
+                .build())
+            .header("Authorization", "Bearer " + mapping.accessToken())
+            .header("X-Tenant-Id", mapping.cloudBusinessId())
+            .accept(MediaType.APPLICATION_JSON)
+            .retrieve()
+            .body(SupplySyncSnapshot.class);
+        if (snapshot == null) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_GATEWAY,
+                "The online shop returned an empty supplies snapshot"
+            );
+        }
+        return snapshot;
+    }
+
+    /**
+     * Insert cloud supplies that don't exist locally yet. Runs in the caller's
+     * transaction. Returns the number of newly inserted sessions.
+     */
+    private Integer insertCloudSupplies(
+            String localId,
+            List<SupplySyncSnapshot.SupplyData> supplies) {
+        int inserted = 0;
+        for (SupplySyncSnapshot.SupplyData data : supplies) {
+            if (rawPurchaseSessionRepository.findByIdAndBusinessId(data.sessionId(), localId).isPresent()) {
+                continue;
+            }
+            insertCloudSupply(localId, data);
+            inserted++;
+        }
+        return inserted;
+    }
+
+    /** Insert one cloud supply session (lines + invoice) as a till-local mirror. */
+    private void insertCloudSupply(String localId, SupplySyncSnapshot.SupplyData data) {
+        RawPurchaseSession session = new RawPurchaseSession();
+        session.setId(data.sessionId());
+        session.setBusinessId(localId);
+        // Suppliers are mirrored by the master-data pull, so the FK resolves.
+        session.setSupplierId(data.supplierId());
+        session.setBranchId(data.branchId());
+        session.setReceivedAt(data.receivedAt());
+        session.setNotes(data.notes());
+        session.setClientDraftJson(null);
+        session.setStatus(data.status());
+        // Stamped so a mirrored supply is never pushed back up by the till.
+        session.setCloudSyncedAt(java.time.Instant.now());
+        rawPurchaseSessionRepository.save(session);
+
+        if (data.lines() != null) {
+            for (SupplySyncSnapshot.SupplyLineData lineData : data.lines()) {
+                RawPurchaseLine line = new RawPurchaseLine();
+                line.setId(lineData.id());
+                line.setSessionId(session.getId());
+                line.setSortOrder(lineData.sortOrder());
+                line.setDescriptionText(lineData.descriptionText());
+                line.setAmountMoney(lineData.amountMoney());
+                line.setSuggestedItemId(knownLocalItem(localId, lineData.suggestedItemId()));
+                line.setLineStatus(lineData.lineStatus());
+                line.setPostedItemId(knownLocalItem(localId, lineData.postedItemId()));
+                line.setUsableQty(lineData.usableQty());
+                line.setWastageQty(lineData.wastageQty());
+                line.setDraftQty(lineData.draftQty());
+                line.setDraftUnitCost(lineData.draftUnitCost());
+                line.setDraftSellPrice(lineData.draftSellPrice());
+                line.setDraftExpiryDate(lineData.draftExpiryDate());
+                line.setPackOptionId(lineData.packOptionId());
+                // Cloud-side inventory batches don't exist locally (fk_rpl_inventory_batch).
+                line.setInventoryBatchId(null);
+                rawPurchaseLineRepository.save(line);
+            }
+        }
+
+        if (data.invoice() != null) {
+            SupplierInvoice invoice = new SupplierInvoice();
+            invoice.setId(data.invoice().id());
+            invoice.setBusinessId(localId);
+            invoice.setSupplierId(data.supplierId());
+            invoice.setRawPurchaseSessionId(session.getId());
+            // The cloud and the till allocate PB-#### numbers from independent
+            // sequences; disambiguate a collision instead of failing the batch
+            // (uq_supplier_invoices_business_no).
+            String invoiceNumber = data.invoice().invoiceNumber();
+            if (supplierInvoiceRepository.existsByBusinessIdAndInvoiceNumber(localId, invoiceNumber)) {
+                String suffixed = invoiceNumber + "-T";
+                invoice.setInvoiceNumber(suffixed.length() > 64
+                    ? suffixed.substring(0, 64)
+                    : suffixed);
+            } else {
+                invoice.setInvoiceNumber(invoiceNumber);
+            }
+            invoice.setInvoiceDate(data.invoice().invoiceDate());
+            invoice.setDueDate(data.invoice().dueDate());
+            invoice.setSubtotal(data.invoice().subtotal());
+            invoice.setTaxTotal(data.invoice().taxTotal());
+            invoice.setGrandTotal(data.invoice().grandTotal());
+            invoice.setStatus(data.invoice().status());
+            invoice.setNotes(data.invoice().notes());
+            invoice.setGoodsReceiptId(null);
+            supplierInvoiceRepository.save(invoice);
+
+            if (data.invoice().lines() != null) {
+                for (SupplySyncSnapshot.InvoiceLineData lineData : data.invoice().lines()) {
+                    SupplierInvoiceLine line = new SupplierInvoiceLine();
+                    line.setId(lineData.id());
+                    line.setInvoiceId(invoice.getId());
+                    line.setDescription(lineData.description());
+                    line.setItemId(knownLocalItem(localId, lineData.itemId()));
+                    line.setQty(lineData.qty());
+                    line.setUnitCost(lineData.unitCost());
+                    line.setLineTotal(lineData.lineTotal());
+                    line.setSortOrder(lineData.sortOrder());
+                    line.setRawLineId(lineData.rawLineId());
+                    supplierInvoiceLineRepository.save(line);
+                }
+            }
+        }
+    }
+
+    /** Keep a cross-side item reference only when this till knows the item. */
+    private String knownLocalItem(String localId, String itemId) {
+        if (itemId == null || itemId.isBlank()) {
+            return null;
+        }
+        return itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, localId).isPresent()
+            ? itemId
+            : null;
     }
 
     private CloudSalesSnapshot fetchSales(

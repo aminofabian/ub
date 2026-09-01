@@ -32,6 +32,31 @@ public interface WebOrderRepository extends JpaRepository<WebOrder, String> {
 
     Optional<WebOrder> findByIdAndBusinessId(String id, String businessId);
 
+    /** Cloud → till orders pull: orders touched at/after the cursor. */
+    @Query("""
+            select w from WebOrder w
+             where w.businessId = :businessId
+               and w.updatedAt >= :since
+             order by w.updatedAt asc
+            """)
+    List<WebOrder> findForDesktopSyncPull(
+            @Param("businessId") String businessId,
+            @Param("since") Instant since,
+            Pageable pageable);
+
+    /**
+     * Orders the till must upload: never synced, or changed locally since the
+     * last sync (a till-side fulfillment confirmation flips fulfillment_status,
+     * bumping updated_at — that is the change that flows back up).
+     */
+    @Query("""
+            select w from WebOrder w
+             where w.businessId = :businessId
+               and (w.cloudSyncedAt is null or w.updatedAt > w.cloudSyncedAt)
+             order by w.updatedAt asc
+            """)
+    List<WebOrder> findDirtyForDesktopSync(@Param("businessId") String businessId);
+
     /** WhatsApp orders still awaiting confirmation whose stock window has lapsed (scope §11). */
     @Query("""
             select w from WebOrder w

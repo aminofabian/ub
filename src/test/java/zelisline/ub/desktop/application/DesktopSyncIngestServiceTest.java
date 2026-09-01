@@ -17,10 +17,15 @@ import org.springframework.context.ApplicationEventPublisher;
 
 import zelisline.ub.desktop.api.dto.ShiftSyncAck;
 import zelisline.ub.desktop.api.dto.ShiftSyncRequest;
+import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.platform.realtime.RealtimeBridge;
+import zelisline.ub.purchasing.repository.RawPurchaseLineRepository;
+import zelisline.ub.purchasing.repository.RawPurchaseSessionRepository;
+import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
+import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.sales.repository.SalePaymentRepository;
@@ -45,6 +50,11 @@ class DesktopSyncIngestServiceTest {
     private final CreditAccountRepository creditAccountRepository = mock(CreditAccountRepository.class);
     private final SupplierRepository supplierRepository = mock(SupplierRepository.class);
     private final SupplierContactRepository supplierContactRepository = mock(SupplierContactRepository.class);
+    private final RawPurchaseSessionRepository rawPurchaseSessionRepository = mock(RawPurchaseSessionRepository.class);
+    private final RawPurchaseLineRepository rawPurchaseLineRepository = mock(RawPurchaseLineRepository.class);
+    private final SupplierInvoiceRepository supplierInvoiceRepository = mock(SupplierInvoiceRepository.class);
+    private final SupplierInvoiceLineRepository supplierInvoiceLineRepository = mock(SupplierInvoiceLineRepository.class);
+    private final ItemRepository itemRepository = mock(ItemRepository.class);
     private final ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
 
     private DesktopSyncIngestService service() {
@@ -52,7 +62,9 @@ class DesktopSyncIngestServiceTest {
             shiftRepository, saleRepository, saleItemRepository,
             salePaymentRepository, customerRepository, customerPhoneRepository,
             creditAccountRepository, supplierRepository, supplierContactRepository,
-            eventPublisher);
+            rawPurchaseSessionRepository, rawPurchaseLineRepository,
+            supplierInvoiceRepository, supplierInvoiceLineRepository,
+            itemRepository, eventPublisher);
     }
 
     private static ShiftSyncRequest requestWithOneSale(String saleId, String idempotencyKey) {

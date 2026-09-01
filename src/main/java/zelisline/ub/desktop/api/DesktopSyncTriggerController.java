@@ -134,6 +134,8 @@ public class DesktopSyncTriggerController {
             DesktopSyncPullService.PullResult pull = syncPullService.pullMasterData();
             // Mirror sales made in the web portal / other tills into this till.
             int pulled = syncPullService.pullCloudSales();
+            // Mirror supplies posted in the web portal into this till.
+            int suppliesPulled = syncPullService.pullSupplies();
             // Mirror the shop's Talk to Us inbox (messages + dashboard replies).
             DesktopMessagePullService.MessagePullResult messagePull = messagePullService.pullMessages();
             syncProgress.uploadStarted();
@@ -143,10 +145,11 @@ public class DesktopSyncTriggerController {
             syncProgress.done(pull, push, messagePull, messagePush);
             log.info(
                 "[DesktopSync] full sync finished: {} item(s) refreshed, {} cloud sale(s) pulled, "
-                    + "{} sale(s) pushed, {} message(s) + {} reply(ies) pulled, "
-                    + "{} reply(ies) relayed",
-                pull.items(), pulled, push.salesPushed(),
-                messagePull.messages(), messagePull.replies(), messagePush.repliesPushed());
+                    + "{} supply session(s) pulled, {} sale(s) pushed, {} supply session(s) pushed, "
+                    + "{} message(s) + {} reply(ies) pulled, {} reply(ies) relayed",
+                pull.items(), pulled, suppliesPulled, push.salesPushed(),
+                push.suppliesPushed(), messagePull.messages(), messagePull.replies(),
+                messagePush.repliesPushed());
         } catch (Exception e) {
             log.warn("[DesktopSync] full sync failed: {}", e.getMessage());
             syncProgress.failed(e.getMessage());

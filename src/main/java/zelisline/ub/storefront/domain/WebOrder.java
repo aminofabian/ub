@@ -100,6 +100,10 @@ public class WebOrder {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
+    /** When this order was synced with the cloud (null = pending push). */
+    @Column(name = "cloud_synced_at")
+    private Instant cloudSyncedAt;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 

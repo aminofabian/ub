@@ -93,6 +93,14 @@ class DesktopSyncPullServiceTest {
     private final CreditAccountRepository creditAccountRepository = mock(CreditAccountRepository.class);
     private final SupplierRepository supplierRepository = mock(SupplierRepository.class);
     private final SupplierContactRepository supplierContactRepository = mock(SupplierContactRepository.class);
+    private final zelisline.ub.purchasing.repository.RawPurchaseSessionRepository rawPurchaseSessionRepository =
+        mock(zelisline.ub.purchasing.repository.RawPurchaseSessionRepository.class);
+    private final zelisline.ub.purchasing.repository.RawPurchaseLineRepository rawPurchaseLineRepository =
+        mock(zelisline.ub.purchasing.repository.RawPurchaseLineRepository.class);
+    private final zelisline.ub.purchasing.repository.SupplierInvoiceRepository supplierInvoiceRepository =
+        mock(zelisline.ub.purchasing.repository.SupplierInvoiceRepository.class);
+    private final zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository supplierInvoiceLineRepository =
+        mock(zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository.class);
 
     private final RestClient.Builder restClientBuilder = RestClient.builder();
     private final ObjectMapper objectMapper = new ObjectMapper()
@@ -111,7 +119,7 @@ class DesktopSyncPullServiceTest {
 
         when(cloudSyncSession.load()).thenReturn(Optional.of(new CloudSyncSession.Session(
             CLOUD_ORIGIN, "cloud-biz", "access-token", "refresh-token",
-            "owner-id", List.of(STAFF_ID), null, null)));
+            "owner-id", List.of(STAFF_ID), null, null, null)));
         when(userRepository.findIdsByBusinessIdAndDeletedAtIsNull(LOCAL_BUSINESS))
             .thenReturn(List.of(STAFF_ID));
         when(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(STAFF_ID, LOCAL_BUSINESS))
@@ -129,7 +137,9 @@ class DesktopSyncPullServiceTest {
             cloudSyncSession, transactionTemplate, syncProgress, saleRepository,
             saleItemRepository, salePaymentRepository, shiftRepository, userRepository,
             supplierRepository, supplierContactRepository, customerRepository,
-            customerPhoneRepository, creditAccountRepository, restClientBuilder);
+            customerPhoneRepository, creditAccountRepository, rawPurchaseSessionRepository,
+            rawPurchaseLineRepository, supplierInvoiceRepository, supplierInvoiceLineRepository,
+            restClientBuilder);
         ReflectionTestUtils.setField(service, "desktopBusinessId", LOCAL_BUSINESS);
 
         server = MockRestServiceServer.bindTo(restClientBuilder).build();

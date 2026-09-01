@@ -2,6 +2,7 @@ package zelisline.ub.inventory.api.dto;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 
 public record SupplyBatchSummaryResponse(
         String id,
@@ -13,6 +14,8 @@ public record SupplyBatchSummaryResponse(
         Instant receivedAt,
         String status,
         int itemCount,
+        /** Item names in this batch (capped preview — see {@code itemCount} for the total). */
+        List<String> itemNames,
         BigDecimal totalInitialQuantity,
         BigDecimal totalRemainingQuantity,
         Instant closedAt,

@@ -138,6 +138,7 @@ public class SupplyBatchReportService {
                 sb.getReceivedAt(),
                 sb.getStatus(),
                 sb.getItemCount(),
+                resolveItemNames(lines),
                 sb.getTotalInitialQuantity(),
                 sb.getTotalRemainingQuantity(),
                 sb.getClosedAt(),
@@ -147,6 +148,31 @@ public class SupplyBatchReportService {
                 totalAssociatedCosts,
                 soldPercentage
         );
+    }
+
+    /** Names for the list preview — one batched query, capped to keep the payload small. */
+    private static final int ITEM_NAME_PREVIEW_LIMIT = 5;
+
+    private List<String> resolveItemNames(List<InventoryBatch> lines) {
+        List<String> itemIds = lines.stream()
+                .map(InventoryBatch::getItemId)
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .limit(ITEM_NAME_PREVIEW_LIMIT)
+                .toList();
+        if (itemIds.isEmpty()) {
+            return List.of();
+        }
+        Map<String, String> namesById = itemRepository.findAllById(itemIds).stream()
+                .filter(i -> itemIds.contains(i.getId()))
+                .collect(Collectors.toMap(Item::getId, Item::getName, (a, b) -> a));
+        return lines.stream()
+                .map(InventoryBatch::getItemId)
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .limit(ITEM_NAME_PREVIEW_LIMIT)
+                .map(id -> namesById.getOrDefault(id, "Unknown item"))
+                .toList();
     }
 
     // ── Financial helpers ─────────────────────────────────────────

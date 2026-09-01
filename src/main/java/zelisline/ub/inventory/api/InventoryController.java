@@ -35,6 +35,7 @@ import zelisline.ub.inventory.api.dto.PostStandaloneWastageRequest;
 import zelisline.ub.inventory.api.dto.PostStockIncreaseRequest;
 import zelisline.ub.inventory.api.dto.PostStockTransferRequest;
 import zelisline.ub.inventory.api.dto.StockTransferCreatedResponse;
+import zelisline.ub.inventory.api.dto.StockTransferSummaryResponse;
 import zelisline.ub.inventory.application.InventoryBatchPickerService;
 import zelisline.ub.inventory.application.InventoryLedgerService;
 import zelisline.ub.inventory.application.InventoryTransferService;
@@ -135,6 +136,20 @@ public class InventoryController {
                 TenantRequestIds.resolveBusinessId(request),
                 body,
                 user.userId()
+        );
+    }
+
+    @GetMapping("/transfers")
+    @PreAuthorize("hasPermission(null, 'inventory.transfer')")
+    public List<StockTransferSummaryResponse> listTransfers(
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String branchId,
+            HttpServletRequest request
+    ) {
+        return inventoryTransferService.listTransfers(
+                TenantRequestIds.resolveBusinessId(request),
+                status,
+                branchId
         );
     }
 

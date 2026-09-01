@@ -3,7 +3,9 @@ package zelisline.ub.inventory.api;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.math.BigDecimal;
@@ -233,6 +235,66 @@ class InventorySlice3IT {
                 .hasSize(1);
         assertThat(moves.stream().filter(m -> InventoryConstants.MOVEMENT_TRANSFER_IN.equals(m.getMovementType())))
                 .hasSize(1);
+    }
+
+    @Test
+    void transfer_staysInTransitUntilReceivingBranchConfirms() throws Exception {
+        String tid = createTransferViaApi(new BigDecimal("4"));
+
+        // Sending flips the transfer (and its destination batches) to in_transit;
+        // goods are NOT sellable at the destination yet.
+        mockMvc.perform(post("/api/v1/inventory/transfers/" + tid + "/send")
+                        .contentType(APPLICATION_JSON)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isNoContent());
+
+        assertThat(inventoryBatchRepository.findById(sourceBatchId).orElseThrow()
+                .getQuantityRemaining().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("6");
+        assertThat(inventoryBatchRepository.findActiveBatchesForPreview(
+                        TENANT, itemId, branchBId,
+                        InventoryConstants.BATCH_STATUS_ACTIVE, BigDecimal.ZERO))
+                .as("destination stock must stay unsellable until receipt is confirmed")
+                .isEmpty();
+
+        // The list shows the pending transfer with item names resolved.
+        mockMvc.perform(get("/api/v1/inventory/transfers")
+                        .param("status", "in_transit")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(tid))
+                .andExpect(jsonPath("$[0].status").value("in_transit"))
+                .andExpect(jsonPath("$[0].lines[0].itemName").value("Xfer Item"))
+                .andExpect(jsonPath("$[0].lines[0].quantity").value(4));
+
+        // The receiving shop confirms physical receipt — only now does the
+        // stock activate (become sellable) at the destination.
+        mockMvc.perform(post("/api/v1/inventory/transfers/" + tid + "/receive")
+                        .contentType(APPLICATION_JSON)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isNoContent());
+
+        List<InventoryBatch> atB = inventoryBatchRepository.findActiveBatchesForPreview(
+                TENANT, itemId, branchBId,
+                InventoryConstants.BATCH_STATUS_ACTIVE, BigDecimal.ZERO);
+        assertThat(atB).hasSize(1);
+        assertThat(atB.getFirst().getQuantityRemaining().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("4");
+
+        // Receiving is terminal for this transfer — it no longer lists as pending.
+        mockMvc.perform(get("/api/v1/inventory/transfers")
+                        .param("status", "in_transit")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isEmpty());
     }
 
     @Test

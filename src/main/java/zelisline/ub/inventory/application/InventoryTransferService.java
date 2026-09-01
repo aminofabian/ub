@@ -28,6 +28,7 @@ import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.inventory.api.dto.BatchAllocationLine;
 import zelisline.ub.inventory.api.dto.PostStockTransferRequest;
 import zelisline.ub.inventory.api.dto.StockTransferCreatedResponse;
+import zelisline.ub.inventory.api.dto.StockTransferSummaryResponse;
 import zelisline.ub.inventory.domain.StockTransfer;
 import zelisline.ub.inventory.domain.StockTransferLine;
 import zelisline.ub.inventory.repository.StockTransferRepository;
@@ -63,6 +64,53 @@ public class InventoryTransferService {
     private final SupplyBatchLifecycleService supplyBatchLifecycleService;
     private final ApplicationEventPublisher eventPublisher;
     private final PackageVariantStockResolver packageVariantStockResolver;
+
+    /**
+     * Transfers list for the Inventory → Transfers view — newest first, with
+     * item names resolved so the receiving shop sees what's arriving. The
+     * confirm-receipt workflow lives on these rows: an in-transit transfer
+     * stays pending until the receiving side calls {@code /receive}.
+     */
+    @Transactional(readOnly = true)
+    public List<StockTransferSummaryResponse> listTransfers(
+            String businessId,
+            String status,
+            String branchId) {
+        String effectiveStatus = (status != null && !status.isBlank()) ? status : null;
+        String effectiveBranch = (branchId != null && !branchId.isBlank()) ? branchId : null;
+        List<StockTransfer> transfers = stockTransferRepository.findByBusinessIdFiltered(
+                businessId, effectiveStatus, effectiveBranch);
+
+        // One batched name lookup for every line across the page.
+        List<String> itemIds = transfers.stream()
+                .flatMap(t -> t.getLines().stream())
+                .map(StockTransferLine::getItemId)
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .toList();
+        Map<String, String> namesById = itemIds.isEmpty()
+                ? Map.of()
+                : itemRepository.findAllById(itemIds).stream()
+                        .filter(i -> itemIds.contains(i.getId()))
+                        .collect(java.util.stream.Collectors.toMap(Item::getId, Item::getName, (a, b) -> a));
+
+        return transfers.stream()
+                .map(t -> new StockTransferSummaryResponse(
+                        t.getId(),
+                        t.getStatus(),
+                        t.getFromBranchId(),
+                        t.getToBranchId(),
+                        t.getNotes(),
+                        t.getCreatedAt(),
+                        t.getCreatedBy(),
+                        t.getLines().stream()
+                                .map(l -> new StockTransferSummaryResponse.Line(
+                                        l.getItemId(),
+                                        namesById.getOrDefault(l.getItemId(), "Unknown item"),
+                                        l.getQuantity()))
+                                .toList()))
+                .toList();
+    }
 
     @Transactional
     public StockTransferCreatedResponse createDraft(

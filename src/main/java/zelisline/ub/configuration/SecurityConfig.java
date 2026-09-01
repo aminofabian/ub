@@ -20,6 +20,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.access.expression.WebExpressionAuthorizationManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 import org.springframework.web.cors.CorsConfiguration;
@@ -136,6 +137,15 @@ public class SecurityConfig {
                                 "/actuator/health/**",
                                 "/actuator/info"
                         ).permitAll()
+
+                        // Desktop shell's clean-JVM-shutdown path (the desktop profile
+                        // exposes the endpoint; the shell POSTs it on exit). Loopback
+                        // only — in LAN mode remote machines must not be able to kill
+                        // the till. On cloud the endpoint isn't exposed at all, so this
+                        // rule is unreachable there.
+                        .requestMatchers(HttpMethod.POST, "/actuator/shutdown")
+                            .access(new WebExpressionAuthorizationManager(
+                                "hasIpAddress('127.0.0.1') or hasIpAddress('::1')"))
 
                         // Micrometer metrics + Prometheus scrape: super-admin JWT, or the
                         // app.actuator.prometheus-token bearer secret (MetricsBearerTokenFilter).

@@ -21,6 +21,8 @@ import zelisline.ub.desktop.api.dto.ShiftSyncAck;
 import zelisline.ub.desktop.api.dto.ShiftSyncRequest;
 import zelisline.ub.desktop.api.dto.SupplySyncAck;
 import zelisline.ub.desktop.api.dto.SupplySyncSnapshot;
+import zelisline.ub.desktop.api.dto.WebOrderSyncAck;
+import zelisline.ub.desktop.api.dto.WebOrderSyncSnapshot;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.Customer;
 import zelisline.ub.credits.domain.CustomerPhone;
@@ -35,6 +37,9 @@ import zelisline.ub.purchasing.repository.RawPurchaseLineRepository;
 import zelisline.ub.purchasing.repository.RawPurchaseSessionRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
+import zelisline.ub.storefront.domain.WebOrder;
+import zelisline.ub.storefront.repository.WebOrderLineRepository;
+import zelisline.ub.storefront.repository.WebOrderRepository;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.SaleItem;
@@ -90,13 +95,17 @@ public class DesktopSyncPushService {
     private final RawPurchaseLineRepository rawPurchaseLineRepository;
     private final SupplierInvoiceRepository supplierInvoiceRepository;
     private final SupplierInvoiceLineRepository supplierInvoiceLineRepository;
+    private final WebOrderRepository webOrderRepository;
+    private final WebOrderLineRepository webOrderLineRepository;
     private final CloudSyncSession cloudSyncSession;
     private final RestClient.Builder restClientBuilder;
 
     @Value("${app.desktop.business-id:}")
     private String desktopBusinessId;
 
-    public record SyncPushResult(int shiftsPushed, int salesPushed, int suppliesPushed, boolean configured) {}
+    public record SyncPushResult(
+            int shiftsPushed, int salesPushed, int suppliesPushed,
+            int orderConfirmationsPushed, boolean configured) {}
 
     public SyncPushResult pushPending() {
         String localId = desktopBusinessId == null ? "" : desktopBusinessId.trim();
@@ -105,7 +114,7 @@ public class DesktopSyncPushService {
             .orElse(null);
         if (mapping == null || localId.isEmpty()) {
             log.info("[DesktopSync] no cloud mapping — nothing to push.");
-            return new SyncPushResult(0, 0, 0, false);
+            return new SyncPushResult(0, 0, 0, 0, false);
         }
 
         // Sales not yet acknowledged by the cloud — includes sales made in the
@@ -131,7 +140,8 @@ public class DesktopSyncPushService {
         pendingClosedShifts.forEach(s -> shiftIds.add(s.getId()));
         if (shiftIds.isEmpty() && dirtyCustomers.isEmpty() && dirtySuppliers.isEmpty()) {
             int supplies = pushSupplies(localId, mapping);
-            return new SyncPushResult(0, 0, supplies, true);
+            int confirmations = pushWebOrderConfirmations(localId, mapping);
+            return new SyncPushResult(0, 0, supplies, confirmations, true);
         }
         log.info(
             "[DesktopSync] pushing {} pending sale(s) in {} shift(s), {} customer(s) and {} supplier(s) to {}",
@@ -180,7 +190,141 @@ public class DesktopSyncPushService {
         // above are already on the cloud and the raw_purchase_sessions.supplier_id
         // FK resolves even for a brand-new till-created supplier.
         int suppliesPushed = pushSupplies(localId, mapping);
-        return new SyncPushResult(closedToStamp.size(), ack.salesIngested(), suppliesPushed, true);
+        // Till-side order confirmations last: the cloud replays them through its
+        // own fulfillment service (which notifies the customer).
+        int confirmationsPushed = pushWebOrderConfirmations(localId, mapping);
+        return new SyncPushResult(
+            closedToStamp.size(), ack.salesIngested(), suppliesPushed, confirmationsPushed, true);
+    }
+
+    /**
+     * Push till-side web-order confirmations (a cashier tapping "confirm" on a
+     * paid online order). The cloud ingests them by replaying the transition
+     * through its own fulfillment service, so the customer notification comes
+     * from the same code path a web-side confirmation uses. Idempotent by
+     * order id + transition; the till stamps {@code cloud_synced_at} on ack so
+     * confirmed orders aren't re-pushed every flush.
+     *
+     * @return number of confirmations the cloud accepted
+     */
+    private int pushWebOrderConfirmations(String localId, CloudSyncSession.Session mapping) {
+        List<WebOrder> dirtyOrders = webOrderRepository.findDirtyForDesktopSync(localId);
+        if (dirtyOrders.isEmpty()) {
+            return 0;
+        }
+        log.info(
+            "[DesktopSync] pushing {} web order update(s) to {}",
+            dirtyOrders.size(), mapping.origin());
+
+        List<WebOrderSyncSnapshot.OrderData> data = dirtyOrders.stream()
+            .map(this::toWebOrderData)
+            .toList();
+
+        RestClient client = restClientBuilder.baseUrl(mapping.origin()).build();
+        WebOrderSyncAck ack = postWebOrders(client, mapping, new WebOrderSyncSnapshot(data));
+
+        Instant syncedAt = Instant.now();
+        dirtyOrders.forEach(o -> o.setCloudSyncedAt(syncedAt));
+        webOrderRepository.saveAll(dirtyOrders);
+
+        log.info(
+            "[DesktopSync] acknowledged: {} web order confirmation(s) applied, {} skipped",
+            ack.confirmationsApplied(),
+            ack.confirmationsSkipped()
+        );
+        return ack.confirmationsApplied();
+    }
+
+    /** Order + its lines (context for the cloud's fulfillment transition). */
+    private WebOrderSyncSnapshot.OrderData toWebOrderData(WebOrder order) {
+        List<WebOrderSyncSnapshot.LineData> lines = webOrderLineRepository
+            .findByOrderIdOrderByLineIndexAsc(order.getId())
+            .stream()
+            .map(l -> new WebOrderSyncSnapshot.LineData(
+                l.getId(),
+                l.getItemId(),
+                l.getItemName(),
+                l.getVariantName(),
+                l.getQuantity(),
+                l.getUnitPrice(),
+                l.getLineTotal(),
+                l.getLineIndex()))
+            .toList();
+        return new WebOrderSyncSnapshot.OrderData(
+            order.getId(),
+            order.getCode(),
+            order.getChannel(),
+            order.getCatalogBranchId(),
+            order.getStatus(),
+            order.getFulfillmentStatus(),
+            order.getCurrency(),
+            order.getGrandTotal(),
+            order.getCustomerName(),
+            order.getCustomerPhone(),
+            order.getCustomerEmail(),
+            order.getNotes(),
+            order.getPaidAt(),
+            order.getCreatedAt(),
+            order.getUpdatedAt(),
+            order.getPickupTicketPrintedAt(),
+            order.getExpiresAt(),
+            lines
+        );
+    }
+
+    private WebOrderSyncAck postWebOrders(
+            RestClient client,
+            CloudSyncSession.Session session,
+            WebOrderSyncSnapshot batch) {
+        try {
+            return doPostWebOrders(client, session, batch);
+        } catch (Exception e) {
+            if (!isUnauthorized(e)) {
+                throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Could not upload order confirmations to the online shop (" + e.getMessage() + ")"
+                );
+            }
+            CloudSyncSession.Session refreshed = cloudSyncSession
+                .refresh(client, session)
+                .orElse(null);
+            if (refreshed == null) {
+                throw new ResponseStatusException(
+                    HttpStatus.UNAUTHORIZED,
+                    "Your online-shop session has expired — open Settings → Sync to reconnect"
+                );
+            }
+            try {
+                return doPostWebOrders(client, refreshed, batch);
+            } catch (Exception e2) {
+                throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Could not upload order confirmations to the online shop (" + e2.getMessage() + ")"
+                );
+            }
+        }
+    }
+
+    private WebOrderSyncAck doPostWebOrders(
+            RestClient client,
+            CloudSyncSession.Session session,
+            WebOrderSyncSnapshot batch) {
+        WebOrderSyncAck ack = client
+            .post()
+            .uri("/api/v1/desktop/sync/web-orders")
+            .header("Authorization", "Bearer " + session.accessToken())
+            .header("X-Tenant-Id", session.cloudBusinessId())
+            .contentType(MediaType.APPLICATION_JSON)
+            .body(batch)
+            .retrieve()
+            .body(WebOrderSyncAck.class);
+        if (ack == null) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_GATEWAY,
+                "The online shop returned an empty acknowledgment"
+            );
+        }
+        return ack;
     }
 
     private ShiftSyncRequest buildBatch(

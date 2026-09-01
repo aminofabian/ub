@@ -44,6 +44,8 @@ import zelisline.ub.desktop.api.dto.ShiftSyncAck;
 import zelisline.ub.desktop.api.dto.ShiftSyncRequest;
 import zelisline.ub.desktop.api.dto.SupplySyncAck;
 import zelisline.ub.desktop.api.dto.SupplySyncSnapshot;
+import zelisline.ub.desktop.api.dto.WebOrderSyncAck;
+import zelisline.ub.desktop.api.dto.WebOrderSyncSnapshot;
 import zelisline.ub.desktop.application.DesktopSyncIngestService;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.repository.RoleRepository;
@@ -73,6 +75,10 @@ import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.sales.repository.SalePaymentRepository;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
+import zelisline.ub.storefront.domain.WebOrder;
+import zelisline.ub.storefront.domain.WebOrderLine;
+import zelisline.ub.storefront.repository.WebOrderLineRepository;
+import zelisline.ub.storefront.repository.WebOrderRepository;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierContact;
 import zelisline.ub.suppliers.repository.SupplierContactRepository;
@@ -127,6 +133,8 @@ public class DesktopSyncController {
     private final RawPurchaseLineRepository rawPurchaseLineRepository;
     private final SupplierInvoiceRepository supplierInvoiceRepository;
     private final SupplierInvoiceLineRepository supplierInvoiceLineRepository;
+    private final WebOrderRepository webOrderRepository;
+    private final WebOrderLineRepository webOrderLineRepository;
 
     private static final Logger log = LoggerFactory.getLogger(DesktopSyncController.class);
 
@@ -739,6 +747,81 @@ public class DesktopSyncController {
             invoice.getGrandTotal(),
             invoice.getStatus(),
             invoice.getNotes(),
+            lines
+        );
+    }
+
+    /**
+     * Ingest till-side web-order fulfillment confirmations (the "up" direction
+     * of the orders sync). See {@link DesktopSyncIngestService}.
+     */
+    @PostMapping("/web-orders")
+    public WebOrderSyncAck ingestWebOrders(
+            @Valid @RequestBody WebOrderSyncSnapshot request,
+            HttpServletRequest http) {
+        String businessId = TenantRequestIds.resolveBusinessId(http);
+        if (request.orders() == null || request.orders().isEmpty()) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Batch is empty — provide at least one web order"
+            );
+        }
+        return ingestService.ingestWebOrders(businessId, request);
+    }
+
+    /**
+     * Cloud → till web-orders pull: every order touched at/after {@code since}
+     * (status + fulfillment status + lines), so the cashier sees online-shop
+     * orders — including "paid, awaiting confirmation" — right at the till.
+     * Idempotent on the till side (it upserts by order id).
+     */
+    @GetMapping("/web-orders")
+    public WebOrderSyncSnapshot cloudWebOrders(
+            @RequestParam(defaultValue = "1970-01-01T00:00:00Z") String since,
+            HttpServletRequest request) {
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        Instant cursor = parseCursor(since);
+        List<WebOrder> orders = webOrderRepository
+            .findForDesktopSyncPull(businessId, cursor, PageRequest.of(0, 500));
+
+        List<WebOrderSyncSnapshot.OrderData> data = orders.stream()
+            .map(this::toWebOrderData)
+            .toList();
+        return new WebOrderSyncSnapshot(data);
+    }
+
+    private WebOrderSyncSnapshot.OrderData toWebOrderData(WebOrder order) {
+        List<WebOrderSyncSnapshot.LineData> lines = webOrderLineRepository
+            .findByOrderIdOrderByLineIndexAsc(order.getId())
+            .stream()
+            .map(l -> new WebOrderSyncSnapshot.LineData(
+                l.getId(),
+                l.getItemId(),
+                l.getItemName(),
+                l.getVariantName(),
+                l.getQuantity(),
+                l.getUnitPrice(),
+                l.getLineTotal(),
+                l.getLineIndex()))
+            .toList();
+        return new WebOrderSyncSnapshot.OrderData(
+            order.getId(),
+            order.getCode(),
+            order.getChannel(),
+            order.getCatalogBranchId(),
+            order.getStatus(),
+            order.getFulfillmentStatus(),
+            order.getCurrency(),
+            order.getGrandTotal(),
+            order.getCustomerName(),
+            order.getCustomerPhone(),
+            order.getCustomerEmail(),
+            order.getNotes(),
+            order.getPaidAt(),
+            order.getCreatedAt(),
+            order.getUpdatedAt(),
+            order.getPickupTicketPrintedAt(),
+            order.getExpiresAt(),
             lines
         );
     }

@@ -37,8 +37,8 @@ import zelisline.ub.identity.application.RefreshTokenCookieSupport;
  * <p>Also persists the incremental pull cursors so a re-sync resumes where it
  * left off: {@code lastSalesPullAt} (cloud sales), {@code lastMessagesPullAt}
  * (storefront Talk to Us messages + their reply threads — advanced to the
- * newest activity timestamp seen) and {@code lastSuppliesPullAt} (cloud-entered
- * Path B supplies).
+ * newest activity timestamp seen), {@code lastSuppliesPullAt} (cloud-entered
+ * Path B supplies) and {@code lastWebOrdersPullAt} (storefront web orders).
  */
 @Service
 @Profile("desktop")
@@ -61,7 +61,8 @@ public class CloudSyncSession {
             List<String> staffIds,
             java.time.Instant lastSalesPullAt,
             java.time.Instant lastMessagesPullAt,
-            java.time.Instant lastSuppliesPullAt
+            java.time.Instant lastSuppliesPullAt,
+            java.time.Instant lastWebOrdersPullAt
     ) {
         public Session {
             staffIds = staffIds == null ? List.of() : List.copyOf(staffIds);
@@ -94,7 +95,8 @@ public class CloudSyncSession {
                 staffIds,
                 readInstant(node, "lastSalesPullAt"),
                 readInstant(node, "lastMessagesPullAt"),
-                readInstant(node, "lastSuppliesPullAt")
+                readInstant(node, "lastSuppliesPullAt"),
+                readInstant(node, "lastWebOrdersPullAt")
             ));
         } catch (IOException | RuntimeException e) {
             log.warn("[CloudSync] could not read cloud-sync.json: {}", e.getMessage());
@@ -117,7 +119,8 @@ public class CloudSyncSession {
             session.staffIds(),
             session.lastSalesPullAt(),
             session.lastMessagesPullAt(),
-            session.lastSuppliesPullAt()
+            session.lastSuppliesPullAt(),
+            session.lastWebOrdersPullAt()
         );
     }
 
@@ -132,7 +135,8 @@ public class CloudSyncSession {
             staffIds,
             current.lastSalesPullAt(),
             current.lastMessagesPullAt(),
-            current.lastSuppliesPullAt()
+            current.lastSuppliesPullAt(),
+            current.lastWebOrdersPullAt()
         );
     }
 
@@ -147,7 +151,8 @@ public class CloudSyncSession {
             current.staffIds(),
             lastSalesPullAt,
             current.lastMessagesPullAt(),
-            current.lastSuppliesPullAt()
+            current.lastSuppliesPullAt(),
+            current.lastWebOrdersPullAt()
         );
     }
 
@@ -162,7 +167,8 @@ public class CloudSyncSession {
             current.staffIds(),
             current.lastSalesPullAt(),
             lastMessagesPullAt,
-            current.lastSuppliesPullAt()
+            current.lastSuppliesPullAt(),
+            current.lastWebOrdersPullAt()
         );
     }
 
@@ -177,7 +183,24 @@ public class CloudSyncSession {
             current.staffIds(),
             current.lastSalesPullAt(),
             current.lastMessagesPullAt(),
-            lastSuppliesPullAt
+            lastSuppliesPullAt,
+            current.lastWebOrdersPullAt()
+        );
+    }
+
+    /** Re-persist the session with the cloud web-orders pull cursor advanced. */
+    public void persistLastWebOrdersPullAt(Session current, java.time.Instant lastWebOrdersPullAt) {
+        persist(
+            current.origin(),
+            current.cloudBusinessId(),
+            current.accessToken(),
+            current.refreshToken(),
+            current.ownerUserId(),
+            current.staffIds(),
+            current.lastSalesPullAt(),
+            current.lastMessagesPullAt(),
+            current.lastSuppliesPullAt(),
+            lastWebOrdersPullAt
         );
     }
 
@@ -187,7 +210,7 @@ public class CloudSyncSession {
             String accessToken,
             String refreshToken,
             String ownerUserId) {
-        persist(origin, cloudBusinessId, accessToken, refreshToken, ownerUserId, List.of(), null, null, null);
+        persist(origin, cloudBusinessId, accessToken, refreshToken, ownerUserId, List.of(), null, null, null, null);
     }
 
     public void persist(
@@ -197,7 +220,7 @@ public class CloudSyncSession {
             String refreshToken,
             String ownerUserId,
             List<String> staffIds) {
-        persist(origin, cloudBusinessId, accessToken, refreshToken, ownerUserId, staffIds, null, null, null);
+        persist(origin, cloudBusinessId, accessToken, refreshToken, ownerUserId, staffIds, null, null, null, null);
     }
 
     public void persist(
@@ -209,7 +232,7 @@ public class CloudSyncSession {
             List<String> staffIds,
             java.time.Instant lastSalesPullAt) {
         persist(origin, cloudBusinessId, accessToken, refreshToken, ownerUserId, staffIds,
-            lastSalesPullAt, null, null);
+            lastSalesPullAt, null, null, null);
     }
 
     public void persist(
@@ -222,7 +245,7 @@ public class CloudSyncSession {
             java.time.Instant lastSalesPullAt,
             java.time.Instant lastMessagesPullAt) {
         persist(origin, cloudBusinessId, accessToken, refreshToken, ownerUserId, staffIds,
-            lastSalesPullAt, lastMessagesPullAt, null);
+            lastSalesPullAt, lastMessagesPullAt, null, null);
     }
 
     public void persist(
@@ -235,6 +258,21 @@ public class CloudSyncSession {
             java.time.Instant lastSalesPullAt,
             java.time.Instant lastMessagesPullAt,
             java.time.Instant lastSuppliesPullAt) {
+        persist(origin, cloudBusinessId, accessToken, refreshToken, ownerUserId, staffIds,
+            lastSalesPullAt, lastMessagesPullAt, lastSuppliesPullAt, null);
+    }
+
+    public void persist(
+            String origin,
+            String cloudBusinessId,
+            String accessToken,
+            String refreshToken,
+            String ownerUserId,
+            List<String> staffIds,
+            java.time.Instant lastSalesPullAt,
+            java.time.Instant lastMessagesPullAt,
+            java.time.Instant lastSuppliesPullAt,
+            java.time.Instant lastWebOrdersPullAt) {
         try {
             Path confDir = Path.of(appData).resolve("conf");
             Files.createDirectories(confDir);
@@ -262,6 +300,9 @@ public class CloudSyncSession {
             }
             if (lastSuppliesPullAt != null) {
                 node.put("lastSuppliesPullAt", lastSuppliesPullAt.toString());
+            }
+            if (lastWebOrdersPullAt != null) {
+                node.put("lastWebOrdersPullAt", lastWebOrdersPullAt.toString());
             }
             node.put("connectedAt", Instant.now().toString());
             Files.writeString(
@@ -317,7 +358,8 @@ public class CloudSyncSession {
                 current.staffIds(),
                 current.lastSalesPullAt(),
                 current.lastMessagesPullAt(),
-                current.lastSuppliesPullAt()
+                current.lastSuppliesPullAt(),
+                current.lastWebOrdersPullAt()
             );
             persist(next);
             log.info("[CloudSync] refreshed cloud session for {}", current.origin());

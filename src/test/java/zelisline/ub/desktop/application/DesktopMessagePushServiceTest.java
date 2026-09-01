@@ -54,7 +54,7 @@ class DesktopMessagePushServiceTest {
     void setUp() {
         when(cloudSyncSession.load()).thenReturn(Optional.of(new CloudSyncSession.Session(
             CLOUD_ORIGIN, "cloud-biz", "access-token", "refresh-token",
-            "owner-id", List.of("staff-1"), Instant.EPOCH, null, null)));
+            "owner-id", List.of("staff-1"), Instant.EPOCH, null, null, null)));
 
         service = new DesktopMessagePushService(
             replyRepository, cloudSyncSession, restClientBuilder);

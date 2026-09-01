@@ -11,6 +11,8 @@ import zelisline.ub.desktop.api.dto.ShiftSyncAck;
 import zelisline.ub.desktop.api.dto.ShiftSyncRequest;
 import zelisline.ub.desktop.api.dto.SupplySyncAck;
 import zelisline.ub.desktop.api.dto.SupplySyncSnapshot;
+import zelisline.ub.desktop.api.dto.WebOrderSyncAck;
+import zelisline.ub.desktop.api.dto.WebOrderSyncSnapshot;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.Customer;
 import zelisline.ub.credits.domain.CustomerPhone;
@@ -39,6 +41,7 @@ import zelisline.ub.purchasing.repository.RawPurchaseLineRepository;
 import zelisline.ub.purchasing.repository.RawPurchaseSessionRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
+import zelisline.ub.storefront.application.WebOrderFulfillmentService;
 
 /**
  * Cloud-side ingest for till-uploaded shifts (the "up" direction of
@@ -76,6 +79,7 @@ public class DesktopSyncIngestService {
     private final SupplierInvoiceRepository supplierInvoiceRepository;
     private final SupplierInvoiceLineRepository supplierInvoiceLineRepository;
     private final ItemRepository itemRepository;
+    private final WebOrderFulfillmentService webOrderFulfillmentService;
     private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
@@ -391,6 +395,44 @@ public class DesktopSyncIngestService {
                 }
             }
         }
+    }
+
+    /**
+     * Ingest till-side web-order fulfillment confirmations. The cloud replays
+     * each transition through its own {@link WebOrderFulfillmentService} — the
+     * same code path a web-side confirmation uses — so the customer's
+     * "order confirmed" notification fires exactly once, from one writer.
+     * Transitions the cloud can't apply (unknown order, cloud already ahead)
+     * are skipped, never fatal: the till stamps its markers either way so one
+     * bad order can't wedge the queue.
+     */
+    @Transactional
+    public WebOrderSyncAck ingestWebOrders(String businessId, WebOrderSyncSnapshot request) {
+        int applied = 0;
+        int skipped = 0;
+        if (request.orders() != null) {
+            for (WebOrderSyncSnapshot.OrderData data : request.orders()) {
+                if (data.fulfillmentStatus() == null || data.fulfillmentStatus().isBlank()) {
+                    skipped++;
+                    continue;
+                }
+                try {
+                    webOrderFulfillmentService.advance(businessId, data.id(), data.fulfillmentStatus());
+                    applied++;
+                } catch (Exception e) {
+                    log.info(
+                        "[DesktopSync] could not apply till fulfillment '{}' for order {}: {}",
+                        data.fulfillmentStatus(), data.id(), e.getMessage());
+                    skipped++;
+                }
+            }
+        }
+        log.info(
+            "[DesktopSync] ingested web-order confirmation(s): {} applied, {} skipped",
+            applied,
+            skipped
+        );
+        return new WebOrderSyncAck(0, applied, skipped);
     }
 
     private void ingestShift(String businessId, ShiftSyncRequest.ShiftData data) {

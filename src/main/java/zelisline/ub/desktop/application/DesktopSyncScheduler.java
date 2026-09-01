@@ -54,19 +54,22 @@ public class DesktopSyncScheduler {
             // and queued replies push up (the cloud sends them).
             int pulled = syncPullService.pullCloudSales();
             int suppliesPulled = syncPullService.pullSupplies();
+            int ordersPulled = syncPullService.pullWebOrders();
             DesktopMessagePullService.MessagePullResult messages = messagePullService.pullMessages();
             DesktopSyncPushService.SyncPushResult push = syncPushService.pushPending();
             DesktopMessagePushService.MessagePushResult replies = messagePushService.pushPendingReplies();
-            if (pulled > 0 || suppliesPulled > 0 || messages.messages() > 0 || messages.replies() > 0
-                    || push.shiftsPushed() > 0 || push.salesPushed() > 0 || push.suppliesPushed() > 0
+            if (pulled > 0 || suppliesPulled > 0 || ordersPulled > 0 || messages.messages() > 0
+                    || messages.replies() > 0 || push.shiftsPushed() > 0 || push.salesPushed() > 0
+                    || push.suppliesPushed() > 0 || push.orderConfirmationsPushed() > 0
                     || replies.repliesPushed() > 0) {
                 log.info(
                     "[DesktopSync] {} flush: pulled {} cloud sale(s), {} supply session(s), "
-                        + "{} message(s) + {} reply(ies); pushed {} sale(s) in {} shift(s), "
-                        + "{} supply session(s), relayed {} message reply(ies)",
-                    reason, pulled, suppliesPulled, messages.messages(), messages.replies(),
+                        + "{} web order(s), {} message(s) + {} reply(ies); pushed {} sale(s) in "
+                        + "{} shift(s), {} supply session(s), {} order confirmation(s), "
+                        + "relayed {} message reply(ies)",
+                    reason, pulled, suppliesPulled, ordersPulled, messages.messages(), messages.replies(),
                     push.salesPushed(), push.shiftsPushed(), push.suppliesPushed(),
-                    replies.repliesPushed());
+                    push.orderConfirmationsPushed(), replies.repliesPushed());
             } else if (push.configured()) {
                 log.debug("[DesktopSync] {} flush: nothing pending", reason);
             }

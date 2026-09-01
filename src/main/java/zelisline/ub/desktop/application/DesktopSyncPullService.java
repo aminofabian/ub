@@ -33,6 +33,7 @@ import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.desktop.api.dto.CloudSalesSnapshot;
 import zelisline.ub.desktop.api.dto.MasterDataSnapshot;
 import zelisline.ub.desktop.api.dto.SupplySyncSnapshot;
+import zelisline.ub.desktop.api.dto.WebOrderSyncSnapshot;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.pricing.domain.TaxRate;
 import zelisline.ub.pricing.repository.TaxRateRepository;
@@ -58,6 +59,10 @@ import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierContact;
 import zelisline.ub.suppliers.repository.SupplierContactRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
+import zelisline.ub.storefront.domain.WebOrder;
+import zelisline.ub.storefront.domain.WebOrderLine;
+import zelisline.ub.storefront.repository.WebOrderLineRepository;
+import zelisline.ub.storefront.repository.WebOrderRepository;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BranchRepository;
@@ -112,6 +117,8 @@ public class DesktopSyncPullService {
     private final RawPurchaseLineRepository rawPurchaseLineRepository;
     private final SupplierInvoiceRepository supplierInvoiceRepository;
     private final SupplierInvoiceLineRepository supplierInvoiceLineRepository;
+    private final WebOrderRepository webOrderRepository;
+    private final WebOrderLineRepository webOrderLineRepository;
     private final RestClient.Builder restClientBuilder;
 
     @Value("${app.desktop.business-id:}")
@@ -396,7 +403,8 @@ public class DesktopSyncPullService {
         session.setClientDraftJson(null);
         session.setStatus(data.status());
         // Stamped so a mirrored supply is never pushed back up by the till.
-        session.setCloudSyncedAt(java.time.Instant.now());
+        // +2s grace covers @PreUpdate re-stamping updated_at at flush time.
+        session.setCloudSyncedAt(java.time.Instant.now().plusSeconds(2));
         rawPurchaseSessionRepository.save(session);
 
         if (data.lines() != null) {
@@ -477,6 +485,197 @@ public class DesktopSyncPullService {
         return itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, localId).isPresent()
             ? itemId
             : null;
+    }
+
+    /**
+     * Pull web orders placed in the online shop into this till — orders and
+     * their order-confirmation state, so the cashier sees "paid, awaiting
+     * confirmation" pickups without the web dashboard. The confirmation push
+     * (the "up" direction) lives in the push service.
+     *
+     * <p>Incremental via {@code lastWebOrdersPullAt} and <b>upsert</b> by order
+     * id (unlike supplies, orders mutate — status, fulfillment state — so the
+     * till's mirror is refreshed rather than insert-only; lines are replaced
+     * wholesale). Mirrored orders are stamped {@code cloud_synced_at}; a local
+     * confirmation bumps {@code updated_at} past the stamp and re-pushes.
+     *
+     * @return number of orders mirrored (inserted or refreshed)
+     */
+    public int pullWebOrders() {
+        String localId = desktopBusinessId == null ? "" : desktopBusinessId.trim();
+        CloudSyncSession.Session mapping = cloudSyncSession.load().orElse(null);
+        if (mapping == null || localId.isEmpty()) {
+            throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "This PC is not connected to an online shop yet"
+            );
+        }
+
+        java.time.Instant cursor = mapping.lastWebOrdersPullAt() != null
+            ? mapping.lastWebOrdersPullAt()
+            : java.time.Instant.EPOCH;
+        RestClient client = restClientBuilder.baseUrl(mapping.origin()).build();
+
+        int total = 0;
+        while (true) {
+            WebOrderSyncSnapshot snapshot = fetchWebOrders(client, mapping, cursor);
+            List<WebOrderSyncSnapshot.OrderData> orders = snapshot.orders();
+            if (orders == null || orders.isEmpty()) {
+                break;
+            }
+
+            Integer synced = transactionTemplate.execute(status ->
+                upsertCloudWebOrders(localId, orders));
+            if (synced == null) {
+                throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Web-orders pull failed — nothing was written"
+                );
+            }
+            total += synced;
+
+            java.time.Instant newest = orders.stream()
+                .map(WebOrderSyncSnapshot.OrderData::updatedAt)
+                .filter(java.util.Objects::nonNull)
+                .max(java.time.Instant::compareTo)
+                .orElse(null);
+            if (newest != null && newest.isAfter(cursor)) {
+                cursor = newest;
+                cloudSyncSession.persistLastWebOrdersPullAt(mapping, cursor);
+            }
+
+            if (orders.size() < SALES_PAGE_SIZE) {
+                break;
+            }
+        }
+        log.info(
+            "[DesktopSync] web-orders pull: {} order(s) mirrored from {} (cursor now {})",
+            total, mapping.origin(), cursor
+        );
+        return total;
+    }
+
+    private WebOrderSyncSnapshot fetchWebOrders(
+            RestClient client,
+            CloudSyncSession.Session mapping,
+            java.time.Instant since) {
+        try {
+            return doFetchWebOrders(client, mapping, since);
+        } catch (Exception e) {
+            if (!isUnauthorized(e)) {
+                throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Could not download web orders (" + e.getMessage() + ")"
+                );
+            }
+            CloudSyncSession.Session refreshed = cloudSyncSession
+                .refresh(client, mapping)
+                .orElse(null);
+            if (refreshed == null) {
+                throw new ResponseStatusException(
+                    HttpStatus.UNAUTHORIZED,
+                    "Your online-shop session has expired — open Settings → Sync to reconnect"
+                );
+            }
+            try {
+                return doFetchWebOrders(client, refreshed, since);
+            } catch (Exception e2) {
+                throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Could not download web orders (" + e2.getMessage() + ")"
+                );
+            }
+        }
+    }
+
+    private WebOrderSyncSnapshot doFetchWebOrders(
+            RestClient client,
+            CloudSyncSession.Session mapping,
+            java.time.Instant since) {
+        WebOrderSyncSnapshot snapshot = client
+            .get()
+            .uri(uriBuilder -> uriBuilder
+                .path("/api/v1/desktop/sync/web-orders")
+                .queryParam("since", since.toString())
+                .build())
+            .header("Authorization", "Bearer " + mapping.accessToken())
+            .header("X-Tenant-Id", mapping.cloudBusinessId())
+            .accept(MediaType.APPLICATION_JSON)
+            .retrieve()
+            .body(WebOrderSyncSnapshot.class);
+        if (snapshot == null) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_GATEWAY,
+                "The online shop returned an empty web-orders snapshot"
+            );
+        }
+        return snapshot;
+    }
+
+    /** Upsert cloud orders (insert or refresh) in the caller's transaction. */
+    private Integer upsertCloudWebOrders(
+            String localId,
+            List<WebOrderSyncSnapshot.OrderData> orders) {
+        int synced = 0;
+        for (WebOrderSyncSnapshot.OrderData data : orders) {
+            WebOrder order = webOrderRepository
+                .findByIdAndBusinessId(data.id(), localId)
+                .orElseGet(() -> {
+                    WebOrder created = new WebOrder();
+                    created.setId(data.id());
+                    created.setBusinessId(localId);
+                    created.setCreatedAt(data.createdAt() == null
+                        ? java.time.Instant.now()
+                        : data.createdAt());
+                    return created;
+                });
+            order.setCartId(data.id()); // not null in the schema; order id is a stable stand-in
+            order.setCatalogBranchId(data.catalogBranchId());
+            order.setStatus(data.status());
+            order.setFulfillmentStatus(data.fulfillmentStatus());
+            order.setCurrency(data.currency());
+            order.setGrandTotal(data.grandTotal());
+            order.setCustomerName(data.customerName());
+            order.setCustomerPhone(data.customerPhone());
+            order.setCustomerEmail(data.customerEmail());
+            order.setNotes(data.notes());
+            order.setPaidAt(data.paidAt());
+            order.setCode(data.code());
+            order.setChannel(data.channel());
+            order.setPickupTicketPrintedAt(data.pickupTicketPrintedAt());
+            order.setExpiresAt(data.expiresAt());
+            order.setUpdatedAt(data.updatedAt() == null
+                ? java.time.Instant.now()
+                : data.updatedAt());
+            // Stamped so the mirror itself is never pushed back; a local
+            // confirmation bumps updated_at past this stamp and re-pushes.
+            // The +2s grace covers @PreUpdate re-stamping updated_at at flush
+            // time (a microsecond "newer" than the stamp would otherwise look
+            // like a local edit and re-push the mirror once).
+            order.setCloudSyncedAt(java.time.Instant.now().plusSeconds(2));
+            webOrderRepository.save(order);
+
+            // Lines are immutable once placed — replace wholesale, idempotent.
+            webOrderLineRepository.findByOrderIdOrderByLineIndexAsc(order.getId())
+                .forEach(webOrderLineRepository::delete);
+            if (data.lines() != null) {
+                for (WebOrderSyncSnapshot.LineData lineData : data.lines()) {
+                    WebOrderLine line = new WebOrderLine();
+                    line.setId(lineData.id());
+                    line.setOrderId(order.getId());
+                    line.setItemId(lineData.itemId());
+                    line.setItemName(lineData.itemName());
+                    line.setVariantName(lineData.variantName());
+                    line.setQuantity(lineData.quantity());
+                    line.setUnitPrice(lineData.unitPrice());
+                    line.setLineTotal(lineData.lineTotal());
+                    line.setLineIndex(lineData.lineIndex());
+                    webOrderLineRepository.save(line);
+                }
+            }
+            synced++;
+        }
+        return synced;
     }
 
     private CloudSalesSnapshot fetchSales(

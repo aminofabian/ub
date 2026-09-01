@@ -101,6 +101,10 @@ class DesktopSyncPullServiceTest {
         mock(zelisline.ub.purchasing.repository.SupplierInvoiceRepository.class);
     private final zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository supplierInvoiceLineRepository =
         mock(zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository.class);
+    private final zelisline.ub.storefront.repository.WebOrderRepository webOrderRepository =
+        mock(zelisline.ub.storefront.repository.WebOrderRepository.class);
+    private final zelisline.ub.storefront.repository.WebOrderLineRepository webOrderLineRepository =
+        mock(zelisline.ub.storefront.repository.WebOrderLineRepository.class);
 
     private final RestClient.Builder restClientBuilder = RestClient.builder();
     private final ObjectMapper objectMapper = new ObjectMapper()
@@ -119,7 +123,7 @@ class DesktopSyncPullServiceTest {
 
         when(cloudSyncSession.load()).thenReturn(Optional.of(new CloudSyncSession.Session(
             CLOUD_ORIGIN, "cloud-biz", "access-token", "refresh-token",
-            "owner-id", List.of(STAFF_ID), null, null, null)));
+            "owner-id", List.of(STAFF_ID), null, null, null, null)));
         when(userRepository.findIdsByBusinessIdAndDeletedAtIsNull(LOCAL_BUSINESS))
             .thenReturn(List.of(STAFF_ID));
         when(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(STAFF_ID, LOCAL_BUSINESS))
@@ -139,7 +143,7 @@ class DesktopSyncPullServiceTest {
             supplierRepository, supplierContactRepository, customerRepository,
             customerPhoneRepository, creditAccountRepository, rawPurchaseSessionRepository,
             rawPurchaseLineRepository, supplierInvoiceRepository, supplierInvoiceLineRepository,
-            restClientBuilder);
+            webOrderRepository, webOrderLineRepository, restClientBuilder);
         ReflectionTestUtils.setField(service, "desktopBusinessId", LOCAL_BUSINESS);
 
         server = MockRestServiceServer.bindTo(restClientBuilder).build();

@@ -55,6 +55,8 @@ class DesktopSyncIngestServiceTest {
     private final SupplierInvoiceRepository supplierInvoiceRepository = mock(SupplierInvoiceRepository.class);
     private final SupplierInvoiceLineRepository supplierInvoiceLineRepository = mock(SupplierInvoiceLineRepository.class);
     private final ItemRepository itemRepository = mock(ItemRepository.class);
+    private final zelisline.ub.storefront.application.WebOrderFulfillmentService webOrderFulfillmentService =
+        mock(zelisline.ub.storefront.application.WebOrderFulfillmentService.class);
     private final ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
 
     private DesktopSyncIngestService service() {
@@ -64,7 +66,7 @@ class DesktopSyncIngestServiceTest {
             creditAccountRepository, supplierRepository, supplierContactRepository,
             rawPurchaseSessionRepository, rawPurchaseLineRepository,
             supplierInvoiceRepository, supplierInvoiceLineRepository,
-            itemRepository, eventPublisher);
+            itemRepository, webOrderFulfillmentService, eventPublisher);
     }
 
     private static ShiftSyncRequest requestWithOneSale(String saleId, String idempotencyKey) {

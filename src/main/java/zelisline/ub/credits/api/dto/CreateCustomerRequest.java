@@ -5,7 +5,6 @@ import java.util.List;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Size;
 
 public record CreateCustomerRequest(
@@ -13,7 +12,13 @@ public record CreateCustomerRequest(
         @Size(max = 255) String email,
         @Size(max = 10_000) String notes,
         BigDecimal creditLimit,
-        @NotEmpty @Valid List<CustomerPhoneDraft> phones,
+        /** Optional — a customer may be registered with a name only (e.g. POS capture). */
+        @Valid List<CustomerPhoneDraft> phones,
         @Size(max = 128) String phoneVerificationToken
 ) {
+    public CreateCustomerRequest {
+        if (phones == null) {
+            phones = List.of();
+        }
+    }
 }

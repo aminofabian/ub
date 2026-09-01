@@ -33,10 +33,38 @@ public class DesktopLicenseGuard {
             return LicenseStatus.trialActive(30);
         }
 
-        return licenseService.checkStatus(
-            readStoredLicenseToken(business),
-            business.getName()
+        return withCloudPlan(
+            licenseService.checkStatus(
+                readStoredLicenseToken(business),
+                business.getName()
+            ),
+            business.getSettings()
         );
+    }
+
+    /**
+     * The license plan mirrors the shop's cloud subscription tier, but the plan
+     * inside the signed token is frozen at issue time. When the shop upgrades
+     * on the cloud (e.g. starter → growth) and the till pulls master data, the
+     * current tier is stamped into {@code settings.desktop.cloudPlanTier} —
+     * prefer it so the till never reports a stale plan. Offline shops with no
+     * stamp keep the token's plan.
+     */
+    private static LicenseStatus withCloudPlan(LicenseStatus status, String settings) {
+        if (status == null || settings == null || settings.isBlank()) {
+            return status;
+        }
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper json =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+            String tier = json.readTree(settings)
+                .path("desktop")
+                .path("cloudPlanTier")
+                .asText(null);
+            return status.withPlan(tier);
+        } catch (Exception ignored) {
+            return status;
+        }
     }
 
     public boolean isReadOnly() {

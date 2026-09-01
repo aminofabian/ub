@@ -129,6 +129,27 @@ public record LicenseStatus(
             keySource, keySyncedAt, keySyncOk);
     }
 
+    /**
+     * Copy with the plan replaced by the shop's current cloud tier. The plan
+     * inside a signed token is a snapshot from issue time — when the shop
+     * upgrades on the cloud afterwards, the till must still report the new
+     * tier (the token's plan is only a fallback for offline shops).
+     */
+    LicenseStatus withPlan(String newPlan) {
+        if (newPlan == null || newPlan.isBlank() || newPlan.equals(plan)) {
+            return this;
+        }
+        String refreshedMessage = switch (state) {
+            case "active" -> "Licensed — " + newPlan + " plan"
+                    + (expiresAt != null ? " (expires " + expiresAt + ")" : "");
+            case "expired" -> newPlan + " license expired on " + expiresAt + ". Please renew to continue.";
+            default -> message;
+        };
+        return new LicenseStatus(
+            state, refreshedMessage, newPlan, daysRemaining, expiresAt, readOnly, machineId,
+            keySource, keySyncedAt, keySyncOk);
+    }
+
     /** Copy with the verification-key diagnostics attached (status endpoint). */
     LicenseStatus withVerificationDetails(String keySource, Instant keySyncedAt, Boolean keySyncOk) {
         return new LicenseStatus(

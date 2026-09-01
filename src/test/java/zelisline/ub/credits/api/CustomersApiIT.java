@@ -257,6 +257,19 @@ class CustomersApiIT {
                 .toString();
     }
 
+    @Test
+    void createWithoutPhones_allowsNameOnlyCustomer() throws Exception {
+        mockMvc.perform(post("/api/v1/customers")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"name\":\"Walk-in Ada\"}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.name").value("Walk-in Ada"))
+                .andExpect(jsonPath("$.phones.length()").value(0));
+    }
+
     private void insertBusiness(String id, String slug) {
         Business b = new Business();
         b.setId(id);

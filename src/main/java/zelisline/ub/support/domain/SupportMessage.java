@@ -71,6 +71,10 @@ public class SupportMessage {
     @Column(name = "read_at")
     private Instant readAt;
 
+    /** When set, this message is a reply to another message in the same thread. */
+    @Column(name = "reply_to_message_id", length = 36)
+    private String replyToMessageId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

@@ -86,6 +86,12 @@ public class FeatureFlagService {
      */
     public static final String FLAG_POS_CASHIER_DRAWOUT = "pos.cashier_drawout";
 
+    /**
+     * Show Clear sale beside Checkout / Pay on the till. Absent defaults to enabled;
+     * set {@code false} to hide the one-tap abandon control.
+     */
+    public static final String FLAG_POS_CASHIER_CLEAR_SALE = "pos.cashier_clear_sale";
+
     /** Auto-add scanned barcodes straight to cart when the barcode resolves to
      * exactly one sellable product. When off, scanned barcodes fill the search
      * box (cashier must tap the hit). Independent of pos_drafts.enabled so

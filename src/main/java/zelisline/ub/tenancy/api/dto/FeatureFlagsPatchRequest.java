@@ -20,6 +20,8 @@ public record FeatureFlagsPatchRequest(
         Boolean posCashierOrderConfirm,
         /** Allow cashiers to record cash drawouts from an open till. */
         Boolean posCashierDrawout,
+        /** Show Clear sale on the cashier till (default on when absent). */
+        Boolean posCashierClearSale,
         /**
          * Search-first hybrid POS catalog (list results + frequent chips).
          * Absent / false keeps the classic product grid.

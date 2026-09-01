@@ -3,6 +3,7 @@ package zelisline.ub.support.application;
 import java.time.Instant;
 
 import zelisline.ub.support.api.dto.SupportAttachmentDto;
+import zelisline.ub.support.api.dto.SupportMessageReplyDto;
 import zelisline.ub.support.api.dto.SupportOrderCardDto;
 import zelisline.ub.support.api.dto.SupportWelcomeCardDto;
 
@@ -31,6 +32,7 @@ public final class SupportEvents {
             SupportOrderCardDto orderCard,
             SupportWelcomeCardDto welcomeCard,
             SupportAttachmentDto attachment,
+            SupportMessageReplyDto replyTo,
             Instant createdAt,
             String conversationType,
             String guestId

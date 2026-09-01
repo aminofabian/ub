@@ -686,6 +686,7 @@ public class StorefrontSettingsService {
                         && patch.posCashierOrderPad() == null
                         && patch.posCashierOrderConfirm() == null
                         && patch.posCashierDrawout() == null
+                        && patch.posCashierClearSale() == null
                         && patch.posCatalogHybrid() == null
                         && patch.shiftsPrefillOpeningFromLastClose() == null
                         && patch.tillListen() == null
@@ -733,6 +734,11 @@ public class StorefrontSettingsService {
                 flags,
                 FeatureFlagService.FLAG_POS_CASHIER_DRAWOUT,
                 patch.posCashierDrawout()
+        );
+        putFlagIfPresent(
+                flags,
+                FeatureFlagService.FLAG_POS_CASHIER_CLEAR_SALE,
+                patch.posCashierClearSale()
         );
         putFlagIfPresent(
                 flags,

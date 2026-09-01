@@ -3,8 +3,11 @@ package zelisline.ub.support.application;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,6 +32,7 @@ import zelisline.ub.support.api.dto.SupportAttachmentDto;
 import zelisline.ub.support.api.dto.SupportConversationDetailDto;
 import zelisline.ub.support.api.dto.SupportConversationDto;
 import zelisline.ub.support.api.dto.SupportMessageDto;
+import zelisline.ub.support.api.dto.SupportMessageReplyDto;
 import zelisline.ub.support.api.dto.SupportOrderCardDto;
 import zelisline.ub.support.api.dto.SupportWelcomeCardDto;
 import zelisline.ub.support.domain.SupportConversation;
@@ -171,6 +175,7 @@ public class SupportService {
                     SupportMessage.KIND_WELCOME_CARD,
                     null,
                     card,
+                    null,
                     null,
                     message.getCreatedAt(),
                     conversation.getConversationType(), conversation.getGuestId()));
@@ -338,6 +343,7 @@ public class SupportService {
                     message.getBody(),
                     SupportMessage.KIND_ORDER_CARD,
                     card,
+                    null,
                     null,
                     null,
                     message.getCreatedAt(),
@@ -932,7 +938,7 @@ public class SupportService {
             String senderUserId, String senderName, String body
     ) {
         return persistMessage(conversation, senderType, senderUserId, senderName,
-                new SendSupportMessageRequest(body, null, null));
+                new SendSupportMessageRequest(body, null, null, null));
     }
 
     private SupportMessageDto persistMessage(
@@ -941,6 +947,19 @@ public class SupportService {
     ) {
         SupportAttachmentDto attachment = normalizeAttachment(request == null ? null : request.attachment());
         String body = normalizeBody(request == null ? null : request.body(), attachment);
+        String replyToMessageId = blankToNull(request == null ? null : request.replyToMessageId());
+        SupportMessageReplyDto replyPreview = null;
+
+        if (replyToMessageId != null) {
+            SupportMessage parent = messageRepository.findById(replyToMessageId)
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.NOT_FOUND, "Reply target not found"));
+            if (!conversation.getId().equals(parent.getConversationId())) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Reply target is in another conversation");
+            }
+            replyPreview = toReplyDto(parent);
+        }
 
         SupportMessage message = new SupportMessage();
         message.setConversationId(conversation.getId());
@@ -948,6 +967,7 @@ public class SupportService {
         message.setSenderUserId(senderUserId);
         message.setSenderName(senderName);
         message.setBody(body);
+        message.setReplyToMessageId(replyToMessageId);
         if (attachment != null) {
             message.setAttachmentUrl(attachment.url());
             message.setAttachmentPublicId(blankToNull(attachment.publicId()));
@@ -968,10 +988,11 @@ public class SupportService {
                 null,
                 null,
                 toAttachmentDto(message),
+                replyPreview,
                 message.getCreatedAt(),
                 conversation.getConversationType(), conversation.getGuestId()));
 
-        return toMessageDto(message);
+        return toMessageDto(message, replyPreview);
     }
 
     private static String normalizeBody(String raw, SupportAttachmentDto attachment) {
@@ -1169,11 +1190,8 @@ public class SupportService {
     private SupportConversationDetailDto toDetail(
             SupportConversation conversation, String displayName, long unreadCount
     ) {
-        List<SupportMessageDto> messages = messageRepository
-                .findByConversationIdOrderByCreatedAtAsc(conversation.getId())
-                .stream()
-                .map(this::toMessageDto)
-                .toList();
+        List<SupportMessageDto> messages = toMessageDtos(
+                messageRepository.findByConversationIdOrderByCreatedAtAsc(conversation.getId()));
         return new SupportConversationDetailDto(
                 toAdminDto(conversation, displayName, unreadCount),
                 messages);
@@ -1248,7 +1266,30 @@ public class SupportService {
         return trimmed.length() > max ? trimmed.substring(0, max) : trimmed;
     }
 
+    private List<SupportMessageDto> toMessageDtos(List<SupportMessage> messages) {
+        if (messages.isEmpty()) {
+            return List.of();
+        }
+        Set<String> replyIds = messages.stream()
+                .map(SupportMessage::getReplyToMessageId)
+                .filter(id -> id != null && !id.isBlank())
+                .collect(Collectors.toSet());
+        Map<String, SupportMessage> replyTargets = replyIds.isEmpty()
+                ? Map.of()
+                : messageRepository.findAllById(replyIds).stream()
+                        .collect(Collectors.toMap(SupportMessage::getId, Function.identity()));
+        return messages.stream()
+                .map(message -> toMessageDto(
+                        message,
+                        buildReplyDto(message.getReplyToMessageId(), replyTargets)))
+                .toList();
+    }
+
     private SupportMessageDto toMessageDto(SupportMessage message) {
+        return toMessageDto(message, resolveReplyDto(message));
+    }
+
+    private SupportMessageDto toMessageDto(SupportMessage message, SupportMessageReplyDto replyTo) {
         return new SupportMessageDto(
                 message.getId(),
                 message.getConversationId(),
@@ -1262,9 +1303,61 @@ public class SupportService {
                 parseOrderCard(message),
                 parseWelcomeCard(message),
                 toAttachmentDto(message),
+                replyTo,
                 message.getReadAt(),
                 message.getCreatedAt()
         );
+    }
+
+    private SupportMessageReplyDto resolveReplyDto(SupportMessage message) {
+        return buildReplyDto(message.getReplyToMessageId(), Map.of());
+    }
+
+    private SupportMessageReplyDto buildReplyDto(
+            String replyId, Map<String, SupportMessage> replyTargets
+    ) {
+        if (replyId == null || replyId.isBlank()) {
+            return null;
+        }
+        SupportMessage parent = replyTargets.get(replyId);
+        if (parent == null) {
+            parent = messageRepository.findById(replyId).orElse(null);
+        }
+        if (parent == null) {
+            return null;
+        }
+        return toReplyDto(parent);
+    }
+
+    private SupportMessageReplyDto toReplyDto(SupportMessage parent) {
+        return new SupportMessageReplyDto(
+                parent.getId(),
+                parent.getSenderType(),
+                parent.getSenderName(),
+                replyPreviewBody(parent),
+                parent.getMessageKind() == null || parent.getMessageKind().isBlank()
+                        ? SupportMessage.KIND_TEXT
+                        : parent.getMessageKind()
+        );
+    }
+
+    private static String replyPreviewBody(SupportMessage message) {
+        if (SupportMessage.KIND_ORDER_CARD.equals(message.getMessageKind())) {
+            return "Online order";
+        }
+        if (SupportMessage.KIND_WELCOME_CARD.equals(message.getMessageKind())) {
+            return "Welcome message";
+        }
+        if (message.getAttachmentUrl() != null && !message.getAttachmentUrl().isBlank()
+                && (message.getBody() == null || message.getBody().isBlank())) {
+            String name = message.getAttachmentFileName();
+            return name == null || name.isBlank() ? "Attachment" : name;
+        }
+        String body = message.getBody() == null ? "" : message.getBody().trim();
+        if (body.isEmpty()) {
+            return "Message";
+        }
+        return body.length() > 160 ? body.substring(0, 160) + "…" : body;
     }
 
     private SupportOrderCardDto parseOrderCard(SupportMessage message) {

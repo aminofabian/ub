@@ -13,6 +13,7 @@ public record SupportMessageDto(
         SupportOrderCardDto orderCard,
         SupportWelcomeCardDto welcomeCard,
         SupportAttachmentDto attachment,
+        SupportMessageReplyDto replyTo,
         Instant readAt,
         Instant createdAt
 ) {}

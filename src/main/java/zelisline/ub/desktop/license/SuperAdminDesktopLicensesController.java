@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 
 import org.springframework.data.domain.PageRequest;
@@ -24,6 +25,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.identity.application.NotificationService;
+import zelisline.ub.tenancy.domain.Business;
+import zelisline.ub.tenancy.repository.BusinessRepository;
 
 /**
  * Super Admin → Platform → Desktop licenses: issue Ed25519-signed Kiosk Desktop
@@ -48,6 +51,7 @@ public class SuperAdminDesktopLicensesController {
     private final NotificationService notificationService;
     private final DesktopLicenseIssueRepository issueRepository;
     private final DesktopLicenseIssuerConfigService issuerConfigService;
+    private final BusinessRepository businessRepository;
 
     /** Issuer configuration + public-key sync hint for the console UI. */
     @GetMapping("/status")
@@ -121,7 +125,9 @@ public class SuperAdminDesktopLicensesController {
 
     private IssueResponse doIssue(IssueRequest request, String emailTo) {
         Instant expiresAt = resolveExpiry(request);
-        String plan = request.plan() == null || request.plan().isBlank() ? "shop" : request.plan().trim();
+        String plan = request.plan() == null || request.plan().isBlank()
+                ? resolvePlanFromBusiness(request.businessName().trim())
+                : request.plan().trim().toLowerCase(Locale.ROOT);
         DesktopLicenseIssuer.IssuedLicense issued = issuer.issue(
             request.businessName().trim(),
             plan,
@@ -156,6 +162,20 @@ public class SuperAdminDesktopLicensesController {
         DesktopLicenseIssue saved = issueRepository.save(row);
 
         return toResponse(saved, issued.token());
+    }
+
+    /**
+     * The desktop license plan mirrors the shop's cloud subscription tier so
+     * the till and the online shop always agree. A blank plan on the issue form
+     * uses the business's current tier (fallback: {@code starter}).
+     */
+    private String resolvePlanFromBusiness(String businessName) {
+        return businessRepository
+            .findFirstByNameIgnoreCaseAndDeletedAtIsNull(businessName)
+            .map(Business::getSubscriptionTier)
+            .filter(t -> t != null && !t.isBlank())
+            .map(t -> t.trim().toLowerCase(Locale.ROOT))
+            .orElse("starter");
     }
 
     private Instant resolveExpiry(IssueRequest request) {
@@ -269,7 +289,8 @@ public class SuperAdminDesktopLicensesController {
 
     public record IssueRequest(
             @NotBlank String businessName,
-            @Pattern(regexp = "counter|shop|lan", message = "plan must be counter, shop, or lan") String plan,
+            @Pattern(regexp = "(?:free|starter|business|growth|enterprise)?",
+                     message = "plan must be a subscription tier: free, starter, business, growth, or enterprise") String plan,
             Integer days,
             String expiresAt,
             Boolean perpetual,

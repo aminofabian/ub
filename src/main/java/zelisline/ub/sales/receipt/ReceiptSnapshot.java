@@ -24,7 +24,10 @@ public record ReceiptSnapshot(
         String explicitReceiptLabel,
         String soldAtDisplay,
         String saleStatus,
-        /** Optional customer block for web / pickup tickets; null for POS sales. */
+        /**
+         * Customer block when the sale is linked to a customer (POS capture, credit
+         * tabs, wallet, or web orders); null for anonymous POS sales.
+         */
         String customerName,
         String customerPhone,
         List<ReceiptLineRow> lines,

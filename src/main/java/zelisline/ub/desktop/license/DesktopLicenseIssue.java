@@ -31,8 +31,8 @@ public class DesktopLicenseIssue {
     @Column(name = "business_name", nullable = false, length = 255)
     private String businessName;
 
-    /** License tier: {@code counter}, {@code shop}, or {@code lan}. */
-    @Column(name = "plan", nullable = false, length = 16)
+    /** Subscription tier mirroring the shop's cloud plan ({@code free|starter|business|growth|enterprise}). */
+    @Column(name = "plan", nullable = false, length = 64)
     private String plan;
 
     @Column(name = "issued_at", nullable = false)

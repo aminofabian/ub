@@ -32,7 +32,11 @@ public record MasterDataSnapshot(
             String currency,
             String countryCode,
             String timezone,
-            String settings
+            String settings,
+            /** The shop's cloud subscription tier (e.g. {@code growth}) — for the till's Sync view. */
+            String subscriptionTier,
+            /** The shop's cloud billing status ({@code ACTIVE}/{@code GRACE}/{@code SUSPENDED}). */
+            String subscriptionStatus
     ) {}
 
     public record BranchData(

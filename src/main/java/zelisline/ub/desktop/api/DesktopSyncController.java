@@ -139,7 +139,11 @@ public class DesktopSyncController {
                 business.getCurrency(),
                 business.getCountryCode(),
                 business.getTimezone(),
-                business.getSettings()
+                business.getSettings(),
+                business.getSubscriptionTier(),
+                business.getSubscriptionBillingStatus() == null
+                    ? null
+                    : business.getSubscriptionBillingStatus().name()
             ),
             branchRepository
                 .findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(businessId)

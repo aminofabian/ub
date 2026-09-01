@@ -3,6 +3,7 @@ package zelisline.ub.desktop.application;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -15,6 +16,7 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -166,6 +168,31 @@ class DesktopSyncPullServiceTest {
 
     private String snapshotJson(List<CloudSalesSnapshot.CloudSaleData> sales) throws Exception {
         return objectMapper.writeValueAsString(new CloudSalesSnapshot(sales, null));
+    }
+
+    @Test
+    void mergeBusinessSettingsKeepsLocalDesktopNodeAndAdoptsCloudSettings() throws Exception {
+        String local = "{\"theme\":\"dark\",\"desktop\":{\"licenseKey\":\"tok-1\"}}";
+        String cloud = "{\"theme\":\"light\",\"onboarding\":{\"done\":true}}";
+
+        String merged = DesktopSyncPullService.mergeBusinessSettings(local, cloud);
+
+        ObjectNode root = (ObjectNode) new ObjectMapper().readTree(merged);
+        assertEquals("light", root.path("theme").asText(), "cloud settings win outside the desktop node");
+        assertTrue(root.path("onboarding").path("done").asBoolean());
+        assertEquals("tok-1", root.path("desktop").path("licenseKey").asText(),
+            "the local desktop node (license key) must survive a master-data pull");
+    }
+
+    @Test
+    void storeCloudPlanStampsTierAndStatusIntoDesktopNode() throws Exception {
+        String merged = DesktopSyncPullService.storeCloudPlan(
+            "{\"theme\":\"dark\"}", "Growth", "ACTIVE");
+
+        ObjectNode root = (ObjectNode) new ObjectMapper().readTree(merged);
+        assertEquals("growth", root.path("desktop").path("cloudPlanTier").asText());
+        assertEquals("ACTIVE", root.path("desktop").path("cloudPlanStatus").asText());
+        assertEquals("dark", root.path("theme").asText());
     }
 
     @Test

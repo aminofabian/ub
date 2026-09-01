@@ -1073,6 +1073,38 @@ class SaleSlice2IT {
     }
 
     @Test
+    void saleReceiptThermal_includesLinkedCustomer() throws Exception {
+        String customerId = seedCustomerWithCreditAccount(new BigDecimal("20.00"));
+        openShift(new BigDecimal("40.00"));
+
+        String saleBody = """
+                {"branchId":"%s","customerId":"%s","lines":[{"itemId":"%s","quantity":1,"unitPrice":3}],"payments":[{"method":"cash","amount":3}]}
+                """.formatted(branchId, customerId, itemId);
+        MvcResult saleRes = mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(saleBody)
+                        .header("Idempotency-Key", "rcp-cust-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String saleId = objectMapper.readTree(saleRes.getResponse().getContentAsString()).get("id").asText();
+
+        MvcResult raw = mockMvc.perform(get("/api/v1/sales/{saleId}/receipt/thermal", saleId)
+                        .param("widthMm", "80")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        String text = new String(raw.getResponse().getContentAsByteArray(), StandardCharsets.US_ASCII);
+        assertThat(text).contains("Customer: Credit buyer");
+        assertThat(text).contains("Phone: 0700990001");
+    }
+
+    @Test
     void getSaleReceiptThermal_invalidWidth_returnsBadRequest() throws Exception {
         openShift(new BigDecimal("10.00"));
         String saleBody = """

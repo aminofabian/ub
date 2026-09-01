@@ -1,5 +1,7 @@
 package zelisline.ub.desktop.api;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,9 +15,11 @@ import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.desktop.application.DesktopMediaSyncService;
 import zelisline.ub.desktop.application.DesktopMessagePullService;
 import zelisline.ub.desktop.application.DesktopMessagePushService;
+import zelisline.ub.desktop.application.DesktopSetupService;
 import zelisline.ub.desktop.application.DesktopSyncProgressService;
 import zelisline.ub.desktop.application.DesktopSyncPullService;
 import zelisline.ub.desktop.application.DesktopSyncPushService;
+import zelisline.ub.tenancy.repository.BusinessRepository;
 
 /**
  * Sync triggers for the desktop install.
@@ -47,6 +51,10 @@ public class DesktopSyncTriggerController {
     private final DesktopMessagePushService messagePushService;
     private final DesktopMessagePullService messagePullService;
     private final DesktopSyncProgressService syncProgress;
+    private final DesktopSetupService desktopSetupService;
+    private final BusinessRepository businessRepository;
+
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     @PostMapping
     public DesktopSyncPushService.SyncPushResult syncNow() {
@@ -84,7 +92,42 @@ public class DesktopSyncTriggerController {
         return syncProgress.snapshot();
     }
 
+    /**
+     * The online shop's subscription plan as last seen by the till (stamped
+     * during each master-data pull) — so Settings → Sync can show
+     * "Online shop plan: Growth · Active" and the two never look contradictory.
+     */
+    @GetMapping("/plan")
+    public DesktopSyncPlan cloudPlan() {
+        String localId = desktopSetupService.getDesktopBusinessId();
+        if (localId.isEmpty()) {
+            return new DesktopSyncPlan(null, null);
+        }
+        return businessRepository
+            .findByIdAndDeletedAtIsNull(localId)
+            .map(b -> readCloudPlan(b.getSettings()))
+            .orElseGet(() -> new DesktopSyncPlan(null, null));
+    }
+
+    private static DesktopSyncPlan readCloudPlan(String settings) {
+        if (settings == null || settings.isBlank()) {
+            return new DesktopSyncPlan(null, null);
+        }
+        try {
+            JsonNode desktop = JSON.readTree(settings).path("desktop");
+            return new DesktopSyncPlan(
+                desktop.path("cloudPlanTier").asText(null),
+                desktop.path("cloudPlanStatus").asText(null)
+            );
+        } catch (Exception e) {
+            return new DesktopSyncPlan(null, null);
+        }
+    }
+
     public record SyncStartResult(boolean started) {}
+
+    /** @param tier  cloud subscription tier (e.g. {@code growth}), null when unknown/not synced yet */
+    public record DesktopSyncPlan(String tier, String status) {}
 
     private void runFullSync() {
         try {

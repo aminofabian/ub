@@ -23,7 +23,8 @@ public record LicenseStatus(
         String state,
         /** Human‑readable message for the banner / status bar. */
         String message,
-        /** License plan tier: {@code counter}, {@code shop}, {@code lan}, or null. */
+        /** License plan: the shop's cloud subscription tier ({@code free}, {@code starter},
+         *  {@code business}, {@code growth}, {@code enterprise}), or null pre‑license. */
         String plan,
         /** Days remaining until expiry (trial or licensed). Negative = expired. */
         Long daysRemaining,

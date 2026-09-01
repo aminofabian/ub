@@ -32,12 +32,14 @@
 #
 #   LICENSE_PRIVATE_KEY=<base64> \
 #   bash backend/scripts/generate-license.sh issue \
-#       --business "My Shop" --plan shop --days 365 --fingerprint <machine-id>
+#       --business "My Shop" --plan growth --days 365 --fingerprint <machine-id>
 #       Prints the license token to send to the customer.
 #
 #       --business  must match the shop name entered in the first-run wizard
 #                   EXACTLY (case-sensitive compare at runtime).
-#       --plan      counter | shop | lan
+#       --plan      the shop's cloud subscription tier: free | starter |
+#                   business | growth | enterprise (mirrors the online shop's
+#                   plan so the till and the cloud never disagree).
 #       --days N    validity in days from now (or --expires <ISO-8601> for an
 #                   exact expiry instant, or --perpetual for no expiry).
 #       --fingerprint REQUIRED — the till's Machine ID, shown in
@@ -163,6 +165,10 @@ public class PalmartLicenseCli {
             System.err.println("issue requires --business, --plan and LICENSE_PRIVATE_KEY (or --private-key)");
             usage(2);
         }
+        if (!java.util.Set.of("free", "starter", "business", "growth", "enterprise").contains(plan)) {
+            System.err.println("--plan must be one of: free, starter, business, growth, enterprise");
+            usage(2);
+        }
         Instant issuedAt = Instant.now();
         String expiresArg = arg(args, "--expires");
         String daysArg = arg(args, "--days");
@@ -229,7 +235,7 @@ public class PalmartLicenseCli {
     private static void usage(int code) {
         System.err.println("commands: bootstrap | pubkey | keys | issue | verify");
         System.err.println("  keys  — generate a new Ed25519 key pair (stdout)");
-        System.err.println("  issue — --business NAME --plan counter|shop|lan (--days N | --expires ISO | --perpetual) --fingerprint MACHINE_ID");
+        System.err.println("  issue — --business NAME --plan free|starter|business|growth|enterprise (--days N | --expires ISO | --perpetual) --fingerprint MACHINE_ID");
         System.err.println("  verify— --token TOKEN [--public-key BASE64 | LICENSE_PUBLIC_KEY]");
         System.exit(code);
     }

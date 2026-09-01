@@ -9,7 +9,8 @@ import java.time.Instant;
  * wizard or the Settings → License screen.
  *
  * @param businessName     the name the license was issued to (must match the installed business)
- * @param plan             tier: {@code counter}, {@code shop}, or {@code lan}
+ * @param plan             subscription tier mirroring the shop's cloud plan: {@code free},
+ *                         {@code starter}, {@code business}, {@code growth}, or {@code enterprise}
  * @param issuedAt         ISO‑8601 instant the license was issued
  * @param expiresAt        ISO‑8601 instant the license expires (null = perpetual)
  * @param machineFingerprint optional SHA‑256 hash of MAC + disk UUID; if present

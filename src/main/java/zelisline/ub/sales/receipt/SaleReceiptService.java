@@ -23,6 +23,10 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.credits.domain.Customer;
+import zelisline.ub.credits.domain.CustomerPhone;
+import zelisline.ub.credits.repository.CustomerPhoneRepository;
+import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.SaleItem;
@@ -54,6 +58,8 @@ public class SaleReceiptService {
     private final SaleActorNameService saleActorNameService;
     private final BranchReceiptSettingsService branchReceiptSettingsService;
     private final StorefrontSettingsService storefrontSettingsService;
+    private final CustomerRepository customerRepository;
+    private final CustomerPhoneRepository customerPhoneRepository;
 
     public byte[] buildPdf(String businessId, String saleId) {
         return ReceiptPdfRenderer.render(loadSnapshot(businessId, saleId, null));
@@ -149,6 +155,19 @@ public class SaleReceiptService {
             ));
         }
 
+        String customerName = null;
+        String customerPhone = null;
+        String customerId = sale.getCustomerId();
+        if (customerId != null && !customerId.isBlank()) {
+            customerName = customerRepository
+                    .findByIdAndBusinessIdAndDeletedAtIsNull(customerId.trim(), businessId)
+                    .map(Customer::getName)
+                    .map(String::trim)
+                    .filter(name -> !name.isBlank())
+                    .orElse(null);
+            customerPhone = resolvePrimaryPhone(customerId.trim());
+        }
+
         ZoneId zone = ZoneId.of(blankToDefault(business.getTimezone(), "UTC"));
         String soldAt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm z")
                 .withZone(zone)
@@ -188,8 +207,8 @@ public class SaleReceiptService {
                 null,
                 soldAt,
                 sale.getStatus(),
-                null,
-                null,
+                customerName,
+                customerPhone,
                 lines,
                 payments,
                 money(sale.getGrandTotal()),
@@ -204,6 +223,16 @@ public class SaleReceiptService {
             return null;
         }
         return raw.trim();
+    }
+
+    /** Primary phone first (oldest row wins ties), else the first non-blank phone. */
+    private String resolvePrimaryPhone(String customerId) {
+        return customerPhoneRepository.findByCustomerIdOrderByCreatedAtAsc(customerId).stream()
+                .filter(p -> p.getPhone() != null && !p.getPhone().isBlank())
+                .sorted((a, b) -> Boolean.compare(b.isPrimary(), a.isPrimary()))
+                .findFirst()
+                .map(p -> p.getPhone().trim())
+                .orElse(null);
     }
 
     private static String footerNote(Sale sale) {

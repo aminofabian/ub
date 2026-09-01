@@ -1,8 +1,12 @@
 package zelisline.ub.desktop.application;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,9 +21,6 @@ import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.ItemType;
-import zelisline.ub.catalog.repository.CategoryRepository;
-import zelisline.ub.catalog.repository.ItemRepository;
-import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
@@ -67,6 +68,8 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
 public class DesktopSyncPullService {
 
     private static final Logger log = LoggerFactory.getLogger(DesktopSyncPullService.class);
+
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     /** Page size used when downloading cloud sales (matches the controller). */
     private static final int SALES_PAGE_SIZE = 500;
@@ -805,8 +808,50 @@ public class DesktopSyncPullService {
         b.setCurrency(d.currency() == null ? b.getCurrency() : d.currency());
         b.setCountryCode(d.countryCode() == null ? b.getCountryCode() : d.countryCode());
         b.setTimezone(d.timezone() == null ? b.getTimezone() : d.timezone());
-        if (d.settings() != null && !d.settings().isBlank()) {
-            b.setSettings(d.settings());
+        // The cloud's settings JSON doesn't carry the local desktop node (license
+        // key, synced-key state) — replacing it wholesale would silently drop the
+        // till's license on every master-data pull. Merge instead.
+        String merged = mergeBusinessSettings(b.getSettings(), d.settings());
+        b.setSettings(storeCloudPlan(merged, d.subscriptionTier(), d.subscriptionStatus()));
+    }
+
+    /** Copy the cloud's settings but keep the local {@code desktop} node. */
+    static String mergeBusinessSettings(String localSettings, String cloudSettings) {
+        if (cloudSettings == null || cloudSettings.isBlank()) {
+            return localSettings;
+        }
+        try {
+            ObjectNode cloud = (ObjectNode) JSON.readTree(cloudSettings);
+            if (localSettings != null && !localSettings.isBlank()) {
+                JsonNode desktop = JSON.readTree(localSettings).path("desktop");
+                if (desktop.isObject()) {
+                    cloud.set("desktop", desktop);
+                }
+            }
+            return JSON.writeValueAsString(cloud);
+        } catch (Exception e) {
+            log.warn("[DesktopSync] could not merge cloud settings: {}", e.getMessage());
+            return cloudSettings;
+        }
+    }
+
+    /** Stamp the shop's cloud subscription tier/status into the local desktop node. */
+    static String storeCloudPlan(String settings, String tier, String status) {
+        try {
+            ObjectNode root = settings == null || settings.isBlank()
+                ? JSON.createObjectNode()
+                : (ObjectNode) JSON.readTree(settings);
+            ObjectNode desktop = root.withObject("/desktop");
+            if (tier != null && !tier.isBlank()) {
+                desktop.put("cloudPlanTier", tier.trim().toLowerCase(Locale.ROOT));
+            }
+            if (status != null && !status.isBlank()) {
+                desktop.put("cloudPlanStatus", status.trim().toUpperCase(Locale.ROOT));
+            }
+            return JSON.writeValueAsString(root);
+        } catch (Exception e) {
+            log.warn("[DesktopSync] could not store cloud plan: {}", e.getMessage());
+            return settings;
         }
     }
 

@@ -145,7 +145,7 @@ public class DesktopLicenseIssuerConfigService {
             );
         }
         LicensePayload probe = new LicensePayload(
-            "__pairing-check__", "shop", Instant.now(), Instant.now().plusSeconds(60), null);
+            "__pairing-check__", "free", Instant.now(), Instant.now().plusSeconds(60), null);
         String token = LicenseService.encodeToken(probe, privateKey);
         if (verifier.decodeAndVerify(token) == null) {
             throw new ResponseStatusException(

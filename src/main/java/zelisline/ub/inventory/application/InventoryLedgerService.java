@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.inventory.application.BatchAllocationPlanner;
 import zelisline.ub.inventory.application.BatchNumberGenerator;
 import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.domain.Item;
@@ -29,6 +30,7 @@ import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.inventory.WastageReason;
 import zelisline.ub.inventory.domain.SupplyBatch;
 import zelisline.ub.inventory.repository.SupplyBatchRepository;
+import zelisline.ub.inventory.api.dto.BatchAllocationLine;
 import zelisline.ub.inventory.api.dto.InventoryMutationResponse;
 import zelisline.ub.inventory.api.dto.PostBatchDecreaseRequest;
 import zelisline.ub.inventory.api.dto.PostBatchIncreaseRequest;
@@ -289,23 +291,7 @@ public class InventoryLedgerService {
         Item item = packageVariantStockResolver.requireInventoryHolder(businessId, outbound.stockItemId());
         String opId = UUID.randomUUID().toString();
 
-        // ── Resolve the target batch ──────────────────────────────────
-        InventoryBatch batch = resolveWastageBatch(businessId, req, item);
-
-        // ── Decrement the batch ───────────────────────────────────────
-        BigDecimal qty = outbound.stockQuantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
-        if (batch.getQuantityRemaining().compareTo(qty) < 0) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Wastage quantity (" + qty + ") exceeds batch remaining ("
-                            + batch.getQuantityRemaining() + ")"
-            );
-        }
-        batch.setQuantityRemaining(batch.getQuantityRemaining().subtract(qty));
-        inventoryBatchRepository.save(batch);
-        supplyBatchLifecycleService.checkAndTransitionToSoldoutIfNeeded(businessId, batch.getSupplyBatchId());
-
-        // ── Resolve enum reason ──────────────────────────────────────────
+        // ── Resolve enum reason ──────────────────────────────────────
         WastageReason cat = WastageReason.fromString(req.wastageReason());
         String movementReason;
         if (req.reason() != null && !req.reason().isBlank()) {
@@ -314,32 +300,89 @@ public class InventoryLedgerService {
             movementReason = cat.name();
         }
 
-        // ── Record the movement (now WITH batch_id) ───────────────────
-        StockMovement mv = persistMovement(
-                businessId,
-                req.branchId(),
-                item.getId(),
-                batch.getId(),
-                PurchasingConstants.MOVEMENT_WASTAGE,
-                opId,
-                qty.negate(),
-                batch.getUnitCost(),
-                movementReason,
-                userId
-        );
-        mv.setWastageReason(cat.name());
-        stockMovementRepository.save(mv);
+        BigDecimal qty = outbound.stockQuantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
+
+        // ── Deplete batches FEFO/FIFO — across as many as needed ─────
+        // Grocery stock is usually split across batches (one per delivery),
+        // so a single-batch write-off failed whenever the first batch held
+        // less than the spoil quantity even though the item had enough total.
+        List<BatchAllocationLine> slices;
+        InventoryBatch primaryBatch;
+        if (req.batchId() != null && !req.batchId().isBlank()) {
+            // Explicit batch pick stays single-batch (caller's choice).
+            primaryBatch = resolveWastageBatch(businessId, req, item);
+            if (primaryBatch.getQuantityRemaining().compareTo(qty) < 0) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Wastage quantity (" + qty + ") exceeds batch remaining ("
+                                + primaryBatch.getQuantityRemaining() + ")"
+                );
+            }
+            slices = List.of(new BatchAllocationLine(
+                    primaryBatch.getId(), qty, primaryBatch.getUnitCost()));
+        } else {
+            List<InventoryBatch> candidates = inventoryBatchRepository
+                    .findActiveBatchesForPreview(
+                            businessId,
+                            item.getId(),
+                            req.branchId(),
+                            InventoryConstants.BATCH_STATUS_ACTIVE,
+                            BigDecimal.ZERO
+                    );
+            if (candidates.isEmpty()) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "No active batches with remaining quantity");
+            }
+            BatchAllocationPlanner.sortBatchesForPick(
+                    candidates,
+                    item,
+                    CostMethod.FIFO   // wastage: oldest first (FEFO if expiry exists)
+            );
+            slices = BatchAllocationPlanner.allocateInOrder(candidates, qty);
+            primaryBatch = inventoryBatchRepository.findById(slices.getFirst().batchId()).orElseThrow();
+        }
+
+        // ── Decrement each batch and record its movement ─────────────
+        StockMovement firstMv = null;
+        BigDecimal totalValue = BigDecimal.ZERO;
+        String firstBatchNumber = null;
+        for (BatchAllocationLine slice : slices) {
+            InventoryBatch batch = inventoryBatchRepository.findById(slice.batchId()).orElseThrow();
+            batch.setQuantityRemaining(batch.getQuantityRemaining().subtract(slice.quantity()));
+            inventoryBatchRepository.save(batch);
+            supplyBatchLifecycleService.checkAndTransitionToSoldoutIfNeeded(
+                    businessId, batch.getSupplyBatchId());
+
+            StockMovement mv = persistMovement(
+                    businessId,
+                    req.branchId(),
+                    item.getId(),
+                    batch.getId(),
+                    PurchasingConstants.MOVEMENT_WASTAGE,
+                    opId,
+                    slice.quantity().negate(),
+                    batch.getUnitCost(),
+                    movementReason,
+                    userId
+            );
+            mv.setWastageReason(cat.name());
+            stockMovementRepository.save(mv);
+            if (firstMv == null) {
+                firstMv = mv;
+                firstBatchNumber = batch.getBatchNumber();
+            }
+            totalValue = totalValue.add(extensionMoney(slice.quantity(), batch.getUnitCost()));
+        }
         applyStockDelta(item, qty.negate(), true);
 
-        BigDecimal value = extensionMoney(qty, batch.getUnitCost());
         String jeId = null;
-        if (value.signum() > 0) {
+        if (totalValue.signum() > 0) {
             jeId = saveJournal(
                     businessId,
                     InventoryConstants.JOURNAL_STANDALONE_WASTAGE,
                     opId,
-                    "Inventory wastage — batch " + batch.getBatchNumber(),
-                    value,
+                    "Inventory wastage — batch " + firstBatchNumber,
+                    totalValue,
                     false
             );
         }
@@ -348,7 +391,7 @@ public class InventoryLedgerService {
         eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.StockAdjustedEvent(
                 businessId, req.branchId(), req.itemId(), itemName,
                 "wastage", qty.negate()));
-        return new InventoryMutationResponse(jeId, mv.getId(), batch.getId());
+        return new InventoryMutationResponse(jeId, firstMv.getId(), primaryBatch.getId());
     }
 
     /**

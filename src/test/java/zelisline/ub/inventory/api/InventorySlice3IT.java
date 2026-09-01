@@ -44,6 +44,7 @@ import zelisline.ub.identity.repository.RolePermissionRepository;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.inventory.InventoryConstants;
+import zelisline.ub.inventory.api.dto.PostStandaloneWastageRequest;
 import zelisline.ub.inventory.api.dto.PostStockTransferRequest;
 import zelisline.ub.inventory.api.dto.StockTransferCreatedResponse;
 import zelisline.ub.inventory.application.InventoryTransferService;
@@ -51,6 +52,7 @@ import zelisline.ub.inventory.repository.StockAdjustmentRequestRepository;
 import zelisline.ub.inventory.repository.StockTakeSessionRepository;
 import zelisline.ub.inventory.repository.StockTransferRepository;
 import zelisline.ub.platform.security.TestAuthenticationFilter;
+import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.domain.InventoryBatch;
 import zelisline.ub.purchasing.domain.StockMovement;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
@@ -71,6 +73,7 @@ class InventorySlice3IT {
     private static final String OTHER_TENANT = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
     private static final String P_READ = "11111111-0000-0000-0000-000000000040";
     private static final String P_INV_T = "11111111-0000-0000-0000-000000000056";
+    private static final String P_INV_W = "11111111-0000-0000-0000-000000000057";
     private static final String ROLE_OWNER = "22222222-0000-0000-0000-000000000077";
     private static final String ROLE_STAFF = "22222222-0000-0000-0000-000000000078";
 
@@ -164,6 +167,7 @@ class InventorySlice3IT {
 
         permissionRepository.save(perm(P_READ, "catalog.items.read", "r"));
         permissionRepository.save(perm(P_INV_T, "inventory.transfer", "xfer"));
+        permissionRepository.save(perm(P_INV_W, "inventory.write", "w"));
 
         Role ownerRole = new Role();
         ownerRole.setId(ROLE_OWNER);
@@ -172,7 +176,7 @@ class InventorySlice3IT {
         ownerRole.setName("Owner");
         ownerRole.setSystem(true);
         roleRepository.save(ownerRole);
-        for (String pid : List.of(P_READ, P_INV_T)) {
+        for (String pid : List.of(P_READ, P_INV_T, P_INV_W)) {
             RolePermission rp = new RolePermission();
             rp.setId(new RolePermission.Id(ROLE_OWNER, pid));
             rolePermissionRepository.save(rp);
@@ -363,6 +367,47 @@ class InventorySlice3IT {
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isNoContent());
+    }
+
+    @Test
+    void wastage_consumesAcrossBatchesWhenFirstBatchIsShort() throws Exception {
+        // Item stock split across two batches: 1 (older) + 10. A single-batch
+        // write-off rejected a spoil of 3 even though the item had 11 total.
+        String olderBatchId = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+        InventoryBatch older = sourceBatch(olderBatchId, branchAId, new BigDecimal("1"));
+        older.setReceivedAt(Instant.parse("2026-02-01T12:00:00Z")); // FIFO-first
+        inventoryBatchRepository.save(older);
+
+        PostStandaloneWastageRequest body = new PostStandaloneWastageRequest(
+                branchAId, itemId, new BigDecimal("3"), new BigDecimal("1.00"),
+                null, null, "SPOILAGE");
+        mockMvc.perform(post("/api/v1/inventory/wastage")
+                        .contentType(APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated());
+
+        // Cross-batch depletion: 1 from the older batch, 2 from the newer.
+        assertThat(inventoryBatchRepository.findById(olderBatchId).orElseThrow()
+                .getQuantityRemaining().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("0");
+        assertThat(inventoryBatchRepository.findById(sourceBatchId).orElseThrow()
+                .getQuantityRemaining().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("8");
+
+        // One wastage movement per depleted batch, same operation reference.
+        List<StockMovement> wastage = stockMovementRepository.findAll().stream()
+                .filter(m -> PurchasingConstants.MOVEMENT_WASTAGE.equals(m.getMovementType()))
+                .toList();
+        assertThat(wastage).hasSize(2);
+        assertThat(wastage.get(0).getReferenceId())
+                .isEqualTo(wastage.get(1).getReferenceId());
+        // Item total reduced by the full spoil quantity.
+        assertThat(itemRepository.findById(itemId).orElseThrow().getCurrentStock()
+                .setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("7");
     }
 
     @Test

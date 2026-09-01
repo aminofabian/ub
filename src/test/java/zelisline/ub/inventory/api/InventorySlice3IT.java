@@ -72,6 +72,7 @@ class InventorySlice3IT {
     private static final String P_READ = "11111111-0000-0000-0000-000000000040";
     private static final String P_INV_T = "11111111-0000-0000-0000-000000000056";
     private static final String ROLE_OWNER = "22222222-0000-0000-0000-000000000077";
+    private static final String ROLE_STAFF = "22222222-0000-0000-0000-000000000078";
 
     @Autowired
     private MockMvc mockMvc;
@@ -117,6 +118,7 @@ class InventorySlice3IT {
     private DomainMappingRepository domainMappingRepository;
 
     private User owner;
+    private User branchStaff;
     private String branchAId;
     private String branchBId;
     private String itemId;
@@ -184,6 +186,30 @@ class InventorySlice3IT {
         owner.setStatus(UserStatus.ACTIVE);
         owner.setPasswordHash("$2a$10$stubstubstubstubstubstubstubstubst");
         userRepository.save(owner);
+
+        // Branch-scoped staff at the SENDING branch — must not be able to
+        // confirm receipt for transfers addressed elsewhere.
+        Role staffRole = new Role();
+        staffRole.setId(ROLE_STAFF);
+        staffRole.setBusinessId(null);
+        staffRole.setRoleKey("manager");
+        staffRole.setName("Manager");
+        staffRole.setSystem(true);
+        roleRepository.save(staffRole);
+        for (String pid : List.of(P_READ, P_INV_T)) {
+            RolePermission rp = new RolePermission();
+            rp.setId(new RolePermission.Id(ROLE_STAFF, pid));
+            rolePermissionRepository.save(rp);
+        }
+        branchStaff = new User();
+        branchStaff.setBusinessId(TENANT);
+        branchStaff.setEmail("staff-a-xfer@test");
+        branchStaff.setName("Branch A Staff");
+        branchStaff.setRoleId(ROLE_STAFF);
+        branchStaff.setBranchId(branchAId);
+        branchStaff.setStatus(UserStatus.ACTIVE);
+        branchStaff.setPasswordHash("$2a$10$stubstubstubstubstubstubstubstubst");
+        userRepository.save(branchStaff);
 
         itemId = itemCatalogService.createItem(
                 TENANT,
@@ -295,6 +321,48 @@ class InventorySlice3IT {
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$").isEmpty());
+    }
+
+    @Test
+    void confirmReceipt_isRestrictedToReceivingBranchStaff() throws Exception {
+        String tid = createTransferViaApi(new BigDecimal("2"));
+        mockMvc.perform(post("/api/v1/inventory/transfers/" + tid + "/send")
+                        .contentType(APPLICATION_JSON)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isNoContent());
+
+        // Branch-scoped staff at the SENDING branch cannot confirm receipt for
+        // a transfer addressed to branch B.
+        mockMvc.perform(post("/api/v1/inventory/transfers/" + tid + "/receive")
+                        .contentType(APPLICATION_JSON)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, branchStaff.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_STAFF)
+                        .header(TestAuthenticationFilter.HEADER_BRANCH_ID, branchAId))
+                .andExpect(status().isForbidden());
+
+        // Same for cancelling a delivery they didn't receive.
+        mockMvc.perform(post("/api/v1/inventory/transfers/" + tid + "/cancel")
+                        .contentType(APPLICATION_JSON)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, branchStaff.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_STAFF)
+                        .header(TestAuthenticationFilter.HEADER_BRANCH_ID, branchAId))
+                .andExpect(status().isForbidden());
+
+        // Transfer is untouched — still in transit for the real receiver.
+        assertThat(stockTransferRepository.findById(tid).orElseThrow().getStatus())
+                .isEqualTo(InventoryConstants.TRANSFER_STATUS_IN_TRANSIT);
+
+        // Unscoped owner (no branch header) confirms on behalf of branch B.
+        mockMvc.perform(post("/api/v1/inventory/transfers/" + tid + "/receive")
+                        .contentType(APPLICATION_JSON)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isNoContent());
     }
 
     @Test

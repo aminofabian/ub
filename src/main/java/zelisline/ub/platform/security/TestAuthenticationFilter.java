@@ -29,6 +29,8 @@ public class TestAuthenticationFilter extends OncePerRequestFilter {
 
     public static final String HEADER_USER_ID = "X-Test-User-Id";
     public static final String HEADER_ROLE_ID = "X-Test-Role-Id";
+    /** Optional branch scope — mirrors {@code users.branch_id} from a real JWT. */
+    public static final String HEADER_BRANCH_ID = "X-Test-Branch-Id";
 
     @Override
     protected void doFilterInternal(
@@ -51,6 +53,7 @@ public class TestAuthenticationFilter extends OncePerRequestFilter {
 
         String userId = trimToNull(request.getHeader(HEADER_USER_ID));
         String roleId = trimToNull(request.getHeader(HEADER_ROLE_ID));
+        String branchId = trimToNull(request.getHeader(HEADER_BRANCH_ID));
 
         if (userId == null && roleId == null) {
             filterChain.doFilter(request, response);
@@ -69,7 +72,7 @@ public class TestAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
-        TenantPrincipal principal = new TenantPrincipal(userId, businessId, roleId);
+        TenantPrincipal principal = new TenantPrincipal(userId, businessId, roleId, branchId, null);
         SecurityContextHolder.getContext().setAuthentication(new TenantAuthenticationToken(principal));
 
         try {

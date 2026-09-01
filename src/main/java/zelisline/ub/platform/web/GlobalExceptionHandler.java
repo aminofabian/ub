@@ -293,6 +293,26 @@ public class GlobalExceptionHandler {
         return problem(body, HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
+    /**
+     * Unknown paths must be 404, not 500. Without this, a stale cached UI
+     * (WebView2 cache) calling a route the jar doesn't have — or a typo'd
+     * path — surfaces as "Unexpected server error" toasts that look like a
+     * broken backend and send the user hunting for a non-existent outage.
+     */
+    @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
+    public ResponseEntity<ProblemDetail> handleNoResource(
+            org.springframework.web.servlet.resource.NoResourceFoundException ex,
+            HttpServletRequest request) {
+        String correlationId = MDC.get(CorrelationIdFilter.CORRELATION_ID_MDC_KEY);
+        log.warn("Client error 404: {} (correlationId={})", ex.getMessage(), correlationId);
+        ProblemDetail body = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+        body.setTitle("Not found");
+        body.setType(URI.create(PROBLEM_BASE + "not-found"));
+        body.setDetail("This endpoint does not exist on this install. "
+                + "Update the app so the UI and backend match.");
+        return problem(body, HttpStatus.NOT_FOUND);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ProblemDetail> handleUnexpected(Exception ex, HttpServletRequest request) {
         String correlationId = MDC.get(CorrelationIdFilter.CORRELATION_ID_MDC_KEY);

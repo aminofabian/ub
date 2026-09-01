@@ -22,7 +22,11 @@ public record MasterDataSnapshot(
         List<TaxRateData> taxRates,
         List<ItemTypeData> itemTypes,
         List<StaffData> staff,
-        List<ImageData> images
+        List<ImageData> images,
+        /** Supplier directory mirror (live rows) — null-tolerant for older clouds. */
+        List<SupplierData> suppliers,
+        /** Suppliers soft-deleted on the cloud recently — the till hides these. */
+        List<String> deletedSupplierIds
 ) {
 
     public record BusinessData(
@@ -137,5 +141,42 @@ public record MasterDataSnapshot(
             Integer width,
             Integer height,
             Long bytes
+    ) {}
+
+    /**
+     * Supplier directory row (scopes/DESKTOP_SUPPLIERS_SYNC_SCOPE.md §4).
+     * Finance-owned state (prepayment balance) is pulled read-only; payments
+     * themselves stay cloud-side in V1.
+     */
+    public record SupplierData(
+            String id,
+            String name,
+            String code,
+            String supplierType,
+            String vatPin,
+            boolean taxExempt,
+            Integer creditTermsDays,
+            BigDecimal creditLimit,
+            String status,
+            String notes,
+            String paymentMethodPreferred,
+            String paymentDetails,
+            String payoutType,
+            String payoutPhone,
+            String payoutTillNumber,
+            String payoutPaybillNumber,
+            String payoutPaybillAccount,
+            BigDecimal prepaymentBalance,
+            boolean active,
+            List<SupplierContactData> contacts
+    ) {}
+
+    public record SupplierContactData(
+            String id,
+            String name,
+            String roleLabel,
+            String phone,
+            String email,
+            boolean primary
     ) {}
 }

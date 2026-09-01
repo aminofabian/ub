@@ -46,6 +46,8 @@ import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.sales.repository.SalePaymentRepository;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
+import zelisline.ub.suppliers.repository.SupplierContactRepository;
+import zelisline.ub.suppliers.repository.SupplierRepository;
 
 /**
  * Desktop → cloud "up" sync: pending sales (including sales made in the
@@ -64,6 +66,8 @@ class DesktopSyncPushServiceTest {
     private final CustomerRepository customerRepository = mock(CustomerRepository.class);
     private final CustomerPhoneRepository customerPhoneRepository = mock(CustomerPhoneRepository.class);
     private final CreditAccountRepository creditAccountRepository = mock(CreditAccountRepository.class);
+    private final SupplierRepository supplierRepository = mock(SupplierRepository.class);
+    private final SupplierContactRepository supplierContactRepository = mock(SupplierContactRepository.class);
     private final CloudSyncSession cloudSyncSession = mock(CloudSyncSession.class);
 
     private final RestClient.Builder restClientBuilder = RestClient.builder();
@@ -82,7 +86,8 @@ class DesktopSyncPushServiceTest {
         service = new DesktopSyncPushService(
             shiftRepository, saleRepository, saleItemRepository,
             salePaymentRepository, customerRepository, customerPhoneRepository,
-            creditAccountRepository, cloudSyncSession, restClientBuilder);
+            creditAccountRepository, supplierRepository, supplierContactRepository,
+            cloudSyncSession, restClientBuilder);
         ReflectionTestUtils.setField(service, "desktopBusinessId", LOCAL_BUSINESS);
 
         server = MockRestServiceServer.bindTo(restClientBuilder).build();
@@ -137,7 +142,7 @@ class DesktopSyncPushServiceTest {
             .andExpect(header("Authorization", "Bearer access-token"))
             .andExpect(header("X-Tenant-Id", "cloud-biz"))
             .andRespond(withSuccess(
-                "{\"shiftsIngested\":1,\"salesIngested\":1,\"salesSkipped\":0}",
+                "{\"shiftsIngested\":1,\"salesIngested\":1,\"salesSkipped\":0,\"suppliersIngested\":0}",
                 MediaType.APPLICATION_JSON));
 
         SyncPushResult result = service.pushPending();
@@ -166,7 +171,7 @@ class DesktopSyncPushServiceTest {
 
         server.expect(requestTo(CLOUD_ORIGIN + "/api/v1/desktop/sync/shifts"))
             .andRespond(withSuccess(
-                "{\"shiftsIngested\":1,\"salesIngested\":1,\"salesSkipped\":0}",
+                "{\"shiftsIngested\":1,\"salesIngested\":1,\"salesSkipped\":0,\"suppliersIngested\":0}",
                 MediaType.APPLICATION_JSON));
 
         SyncPushResult result = service.pushPending();
@@ -205,7 +210,7 @@ class DesktopSyncPushServiceTest {
                     "legacy shift must upload null tillDeviceKey, got: " + tillKey);
             })
             .andRespond(withSuccess(
-                "{\"shiftsIngested\":1,\"salesIngested\":1,\"salesSkipped\":0}",
+                "{\"shiftsIngested\":1,\"salesIngested\":1,\"salesSkipped\":0,\"suppliersIngested\":0}",
                 MediaType.APPLICATION_JSON));
 
         SyncPushResult result = service.pushPending();
@@ -250,7 +255,7 @@ class DesktopSyncPushServiceTest {
         server.expect(requestTo(CLOUD_ORIGIN + "/api/v1/desktop/sync/shifts"))
             .andExpect(method(HttpMethod.POST))
             .andRespond(withSuccess(
-                "{\"shiftsIngested\":0,\"salesIngested\":0,\"salesSkipped\":0}",
+                "{\"shiftsIngested\":0,\"salesIngested\":0,\"salesSkipped\":0,\"suppliersIngested\":0}",
                 MediaType.APPLICATION_JSON));
 
         SyncPushResult result = service.pushPending();

@@ -7,5 +7,7 @@ package zelisline.ub.desktop.api.dto;
 public record ShiftSyncAck(
         int shiftsIngested,
         int salesIngested,
-        int salesSkipped
+        int salesSkipped,
+        /** Suppliers upserted from the same batch (till-created directory rows). */
+        int suppliersIngested
 ) {}

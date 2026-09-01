@@ -24,6 +24,10 @@ import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.sales.repository.SalePaymentRepository;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
+import zelisline.ub.suppliers.domain.Supplier;
+import zelisline.ub.suppliers.domain.SupplierContact;
+import zelisline.ub.suppliers.repository.SupplierContactRepository;
+import zelisline.ub.suppliers.repository.SupplierRepository;
 
 /**
  * Cloud-side ingest for till-uploaded shifts (the "up" direction of
@@ -54,6 +58,8 @@ public class DesktopSyncIngestService {
     private final CustomerRepository customerRepository;
     private final CustomerPhoneRepository customerPhoneRepository;
     private final CreditAccountRepository creditAccountRepository;
+    private final SupplierRepository supplierRepository;
+    private final SupplierContactRepository supplierContactRepository;
     private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
@@ -63,6 +69,14 @@ public class DesktopSyncIngestService {
             for (ShiftSyncRequest.CustomerData data : request.customers()) {
                 upsertCustomer(businessId, data);
                 customersIngested++;
+            }
+        }
+
+        int suppliersIngested = 0;
+        if (request.suppliers() != null) {
+            for (ShiftSyncRequest.SupplierData data : request.suppliers()) {
+                upsertSupplier(businessId, data);
+                suppliersIngested++;
             }
         }
 
@@ -100,13 +114,14 @@ public class DesktopSyncIngestService {
         }
 
         log.info(
-            "[DesktopSync] ingested {} customer(s), {} shift(s): {} new sale(s), {} already seen",
+            "[DesktopSync] ingested {} customer(s), {} supplier(s), {} shift(s): {} new sale(s), {} already seen",
             customersIngested,
+            suppliersIngested,
             shifts,
             salesIngested,
             salesSkipped
         );
-        return new ShiftSyncAck(shifts, salesIngested, salesSkipped);
+        return new ShiftSyncAck(shifts, salesIngested, salesSkipped, suppliersIngested);
     }
 
     /**
@@ -175,6 +190,59 @@ public class DesktopSyncIngestService {
             acc.setCreditLimit(data.creditAccount().creditLimit());
             acc.setLastActivityAt(java.time.Instant.now());
             creditAccountRepository.save(acc);
+        }
+    }
+
+    /**
+     * Upsert a till-created/edited supplier id-preservingly (the cloud adopts
+     * the till's id, as it does for till customers). Contacts are replaced
+     * wholesale from the till's copy — the till is the source of truth for the
+     * suppliers it edited (last-writer-wins per the scope's conflict rule).
+     */
+    private void upsertSupplier(String businessId, ShiftSyncRequest.SupplierData data) {
+        Supplier supplier = supplierRepository
+            .findByIdAndBusinessId(data.id(), businessId)
+            .orElseGet(() -> {
+                Supplier created = new Supplier();
+                created.setId(data.id());
+                created.setBusinessId(businessId);
+                return created;
+            });
+        supplier.setName(data.name());
+        supplier.setCode(data.code());
+        supplier.setSupplierType(data.supplierType() == null ? "distributor" : data.supplierType());
+        supplier.setVatPin(data.vatPin());
+        supplier.setTaxExempt(data.taxExempt());
+        supplier.setCreditTermsDays(data.creditTermsDays());
+        supplier.setCreditLimit(data.creditLimit());
+        supplier.setStatus(data.status() == null || data.status().isBlank() ? "active" : data.status());
+        supplier.setNotes(data.notes());
+        supplier.setPaymentMethodPreferred(data.paymentMethodPreferred());
+        supplier.setPaymentDetails(data.paymentDetails());
+        supplier.setPayoutType(data.payoutType() == null ? "manual" : data.payoutType());
+        supplier.setPayoutPhone(data.payoutPhone());
+        supplier.setPayoutTillNumber(data.payoutTillNumber());
+        supplier.setPayoutPaybillNumber(data.payoutPaybillNumber());
+        supplier.setPayoutPaybillAccount(data.payoutPaybillAccount());
+        // Flush BEFORE contacts are queued — Hibernate does not order
+        // unassociated inserts, so supplier_contacts (alphabetically first)
+        // would hit the suppliers FK before the row exists.
+        supplierRepository.saveAndFlush(supplier);
+
+        if (data.contacts() != null) {
+            supplierContactRepository.findBySupplierIdOrderByPrimaryContactDescNameAsc(supplier.getId())
+                .forEach(supplierContactRepository::delete);
+            for (ShiftSyncRequest.SupplierContactData c : data.contacts()) {
+                SupplierContact contact = new SupplierContact();
+                contact.setId(c.id());
+                contact.setSupplierId(supplier.getId());
+                contact.setName(c.name());
+                contact.setRoleLabel(c.roleLabel());
+                contact.setPhone(c.phone());
+                contact.setEmail(c.email());
+                contact.setPrimaryContact(c.primary());
+                supplierContactRepository.save(contact);
+            }
         }
     }
 

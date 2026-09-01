@@ -208,4 +208,33 @@ public interface SupplierRepository extends JpaRepository<Supplier, String> {
 
     @Query("select coalesce(sum(s.prepaymentBalance), 0) from Supplier s where s.businessId = :bid and s.deletedAt is null")
     BigDecimal sumPrepaymentBalanceByBusinessId(@Param("bid") String businessId);
+
+    /**
+     * Suppliers created/edited on the till since the last cloud upload — the
+     * dirty-tracking pattern behind {@code customers.findDirtyForDesktopSync}.
+     * A contact row added after the last ack also dirties the supplier (the
+     * contact list is pushed wholesale).
+     */
+    @Query("""
+            select s from Supplier s
+             where s.businessId = :businessId
+               and s.deletedAt is null
+               and (s.cloudSyncedAt is null
+                    or s.updatedAt > s.cloudSyncedAt
+                    or exists (select 1 from SupplierContact c
+                                where c.supplierId = s.id
+                                  and c.createdAt > s.cloudSyncedAt))
+             order by s.updatedAt asc""")
+    List<Supplier> findDirtyForDesktopSync(@Param("businessId") String businessId);
+
+    /** Ids of suppliers soft-deleted recently — tombstones for the till mirror. */
+    @Query("""
+            select s.id from Supplier s
+             where s.businessId = :businessId
+               and s.deletedAt is not null
+               and s.deletedAt > :since
+            """)
+    List<String> findDeletedIdsSince(
+            @Param("businessId") String businessId,
+            @Param("since") java.time.Instant since);
 }

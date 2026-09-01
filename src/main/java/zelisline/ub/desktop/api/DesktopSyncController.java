@@ -63,6 +63,10 @@ import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.sales.repository.SalePaymentRepository;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
+import zelisline.ub.suppliers.domain.Supplier;
+import zelisline.ub.suppliers.domain.SupplierContact;
+import zelisline.ub.suppliers.repository.SupplierContactRepository;
+import zelisline.ub.suppliers.repository.SupplierRepository;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.domain.Business;
@@ -107,6 +111,8 @@ public class DesktopSyncController {
     private final ContactMessageService contactMessageService;
     private final ContactMessageReplyRepository contactMessageReplyRepository;
     private final ContactMessageRepository contactMessageRepository;
+    private final SupplierRepository supplierRepository;
+    private final SupplierContactRepository supplierContactRepository;
 
     private static final Logger log = LoggerFactory.getLogger(DesktopSyncController.class);
 
@@ -172,7 +178,16 @@ public class DesktopSyncController {
                 .map(this::toStaff)
                 .filter(s -> s.roleKey() == null || !NON_TILL_ROLE_KEYS.contains(s.roleKey()))
                 .toList(),
-            images.stream().map(DesktopSyncController::toImage).toList()
+            images.stream().map(DesktopSyncController::toImage).toList(),
+            supplierRepository
+                .findAllByBusinessIdNotDeleted(businessId)
+                .stream()
+                .map(this::toSupplier)
+                .toList(),
+            // Tombstones bounded to the last 90 days so the list stays small
+            // while still catching a till that syncs monthly.
+            supplierRepository.findDeletedIdsSince(
+                businessId, Instant.now().minus(java.time.Duration.ofDays(90)))
         );
     }
 
@@ -279,6 +294,46 @@ public class DesktopSyncController {
         );
     }
 
+    private MasterDataSnapshot.SupplierData toSupplier(Supplier s) {
+        return new MasterDataSnapshot.SupplierData(
+            s.getId(),
+            s.getName(),
+            s.getCode(),
+            s.getSupplierType(),
+            s.getVatPin(),
+            s.isTaxExempt(),
+            s.getCreditTermsDays(),
+            s.getCreditLimit(),
+            s.getStatus(),
+            s.getNotes(),
+            s.getPaymentMethodPreferred(),
+            s.getPaymentDetails(),
+            s.getPayoutType(),
+            s.getPayoutPhone(),
+            s.getPayoutTillNumber(),
+            s.getPayoutPaybillNumber(),
+            s.getPayoutPaybillAccount(),
+            s.getPrepaymentBalance(),
+            "active".equalsIgnoreCase(s.getStatus()),
+            supplierContactRepository
+                .findBySupplierIdOrderByPrimaryContactDescNameAsc(s.getId())
+                .stream()
+                .map(DesktopSyncController::toSupplierContact)
+                .toList()
+        );
+    }
+
+    private static MasterDataSnapshot.SupplierContactData toSupplierContact(SupplierContact c) {
+        return new MasterDataSnapshot.SupplierContactData(
+            c.getId(),
+            c.getName(),
+            c.getRoleLabel(),
+            c.getPhone(),
+            c.getEmail(),
+            c.isPrimaryContact()
+        );
+    }
+
     /**
      * Ingest till-uploaded shifts (the "up" direction of sync). Idempotent —
      * see {@link DesktopSyncIngestService}.
@@ -289,10 +344,11 @@ public class DesktopSyncController {
             HttpServletRequest http) {
         String businessId = TenantRequestIds.resolveBusinessId(http);
         if ((request.shifts() == null || request.shifts().isEmpty())
-                && (request.customers() == null || request.customers().isEmpty())) {
+                && (request.customers() == null || request.customers().isEmpty())
+                && (request.suppliers() == null || request.suppliers().isEmpty())) {
             throw new ResponseStatusException(
                 HttpStatus.BAD_REQUEST,
-                "Batch is empty — provide at least one shift or customer"
+                "Batch is empty — provide at least one shift, customer, or supplier"
             );
         }
         return ingestService.ingest(businessId, request);

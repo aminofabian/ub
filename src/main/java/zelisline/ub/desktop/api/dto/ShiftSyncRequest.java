@@ -25,7 +25,9 @@ import jakarta.validation.constraints.Size;
 public record ShiftSyncRequest(
         @Valid List<ShiftData> shifts,
         /** Customers created/edited on the till since the last upload. */
-        @Valid List<CustomerData> customers
+        @Valid List<CustomerData> customers,
+        /** Suppliers created/edited on the till since the last upload. */
+        @Valid List<SupplierData> suppliers
 ) {
 
     public record ShiftData(
@@ -89,6 +91,41 @@ public record ShiftSyncRequest(
     public record CustomerPhoneData(
         @NotBlank String id,
         @NotBlank String phone,
+        boolean primary
+    ) {}
+
+    /**
+     * Supplier (with contacts) created or edited on the till — upserted by the
+     * cloud id-preservingly so both sides reference the same directory
+     * (scopes/DESKTOP_SUPPLIERS_SYNC_SCOPE.md §4).
+     */
+    public record SupplierData(
+        @NotBlank String id,
+        @NotBlank String name,
+        String code,
+        String supplierType,
+        String vatPin,
+        boolean taxExempt,
+        Integer creditTermsDays,
+        BigDecimal creditLimit,
+        String status,
+        String notes,
+        String paymentMethodPreferred,
+        String paymentDetails,
+        String payoutType,
+        String payoutPhone,
+        String payoutTillNumber,
+        String payoutPaybillNumber,
+        String payoutPaybillAccount,
+        @Valid List<SupplierContactData> contacts
+    ) {}
+
+    public record SupplierContactData(
+        @NotBlank String id,
+        String name,
+        String roleLabel,
+        String phone,
+        String email,
         boolean primary
     ) {}
 

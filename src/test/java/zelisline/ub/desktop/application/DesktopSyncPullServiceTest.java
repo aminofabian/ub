@@ -53,6 +53,8 @@ import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.sales.repository.SalePaymentRepository;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
+import zelisline.ub.suppliers.repository.SupplierContactRepository;
+import zelisline.ub.suppliers.repository.SupplierRepository;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.tenancy.repository.BusinessRepository;
@@ -89,6 +91,8 @@ class DesktopSyncPullServiceTest {
     private final CustomerRepository customerRepository = mock(CustomerRepository.class);
     private final CustomerPhoneRepository customerPhoneRepository = mock(CustomerPhoneRepository.class);
     private final CreditAccountRepository creditAccountRepository = mock(CreditAccountRepository.class);
+    private final SupplierRepository supplierRepository = mock(SupplierRepository.class);
+    private final SupplierContactRepository supplierContactRepository = mock(SupplierContactRepository.class);
 
     private final RestClient.Builder restClientBuilder = RestClient.builder();
     private final ObjectMapper objectMapper = new ObjectMapper()
@@ -124,8 +128,8 @@ class DesktopSyncPullServiceTest {
             itemTypeRepository, taxRateRepository, staffSyncService, mediaSyncService,
             cloudSyncSession, transactionTemplate, syncProgress, saleRepository,
             saleItemRepository, salePaymentRepository, shiftRepository, userRepository,
-            customerRepository, customerPhoneRepository, creditAccountRepository,
-            restClientBuilder);
+            supplierRepository, supplierContactRepository, customerRepository,
+            customerPhoneRepository, creditAccountRepository, restClientBuilder);
         ReflectionTestUtils.setField(service, "desktopBusinessId", LOCAL_BUSINESS);
 
         server = MockRestServiceServer.bindTo(restClientBuilder).build();

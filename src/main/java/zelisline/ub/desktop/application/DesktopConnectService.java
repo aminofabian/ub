@@ -40,6 +40,10 @@ import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.pricing.domain.TaxRate;
 import zelisline.ub.pricing.repository.TaxRateRepository;
 import zelisline.ub.sales.api.dto.PostOpenShiftRequest;
+import zelisline.ub.suppliers.domain.Supplier;
+import zelisline.ub.suppliers.domain.SupplierContact;
+import zelisline.ub.suppliers.repository.SupplierContactRepository;
+import zelisline.ub.suppliers.repository.SupplierRepository;
 import zelisline.ub.tenancy.api.dto.PublicHostResolveResponse;
 import zelisline.ub.sales.api.dto.ShiftResponse;
 import zelisline.ub.sales.application.ShiftService;
@@ -89,6 +93,8 @@ public class DesktopConnectService {
     private final DesktopInitializationService initializationService;
     private final DesktopStaffSyncService staffSyncService;
     private final DesktopMediaSyncService mediaSyncService;
+    private final SupplierRepository supplierRepository;
+    private final SupplierContactRepository supplierContactRepository;
     private final TransactionTemplate transactionTemplate;
     private final CloudSyncSession cloudSyncSession;
 
@@ -543,6 +549,61 @@ public class DesktopConnectService {
                 .map(MasterDataSnapshot.BranchData::id)
                 .collect(java.util.stream.Collectors.toSet());
         staffSyncService.upsertStaff(localId, snapshot.staff(), validBranchIds);
+
+        // ── Supplier directory (cloud ids preserved; stamped synced so the
+        // first push doesn't bounce the whole directory back up) ─────
+        if (snapshot.suppliers() != null) {
+            for (MasterDataSnapshot.SupplierData d : snapshot.suppliers()) {
+                if (d.id() == null || d.id().isBlank()) {
+                    continue;
+                }
+                Supplier supplier = supplierRepository
+                    .findByIdAndBusinessId(d.id(), localId)
+                    .orElseGet(() -> {
+                        Supplier created = new Supplier();
+                        created.setId(d.id());
+                        created.setBusinessId(localId);
+                        return created;
+                    });
+                supplier.setName(d.name());
+                supplier.setCode(d.code());
+                supplier.setSupplierType(d.supplierType() == null ? "distributor" : d.supplierType());
+                supplier.setVatPin(d.vatPin());
+                supplier.setTaxExempt(d.taxExempt());
+                supplier.setCreditTermsDays(d.creditTermsDays());
+                supplier.setCreditLimit(d.creditLimit());
+                supplier.setStatus(d.status() == null || d.status().isBlank() ? "active" : d.status());
+                supplier.setNotes(d.notes());
+                supplier.setPaymentMethodPreferred(d.paymentMethodPreferred());
+                supplier.setPaymentDetails(d.paymentDetails());
+                supplier.setPayoutType(d.payoutType() == null ? "manual" : d.payoutType());
+                supplier.setPayoutPhone(d.payoutPhone());
+                supplier.setPayoutTillNumber(d.payoutTillNumber());
+                supplier.setPayoutPaybillNumber(d.payoutPaybillNumber());
+                supplier.setPayoutPaybillAccount(d.payoutPaybillAccount());
+                if (d.prepaymentBalance() != null) {
+                    supplier.setPrepaymentBalance(d.prepaymentBalance());
+                }
+                supplier.setCloudSyncedAt(Instant.now());
+                supplierRepository.save(supplier);
+
+                if (d.contacts() != null) {
+                    supplierContactRepository.findBySupplierIdOrderByPrimaryContactDescNameAsc(supplier.getId())
+                        .forEach(supplierContactRepository::delete);
+                    for (MasterDataSnapshot.SupplierContactData c : d.contacts()) {
+                        SupplierContact contact = new SupplierContact();
+                        contact.setId(c.id());
+                        contact.setSupplierId(supplier.getId());
+                        contact.setName(c.name());
+                        contact.setRoleLabel(c.roleLabel());
+                        contact.setPhone(c.phone());
+                        contact.setEmail(c.email());
+                        contact.setPrimaryContact(c.primary());
+                        supplierContactRepository.save(contact);
+                    }
+                }
+            }
+        }
 
         // ── Image metadata (files re-hosted after the transaction) ─────
         List<DesktopMediaSyncService.PendingImage> pendingImages =

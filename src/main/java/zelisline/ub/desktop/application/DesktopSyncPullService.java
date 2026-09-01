@@ -45,6 +45,10 @@ import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.sales.repository.SalePaymentRepository;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
+import zelisline.ub.suppliers.domain.Supplier;
+import zelisline.ub.suppliers.domain.SupplierContact;
+import zelisline.ub.suppliers.repository.SupplierContactRepository;
+import zelisline.ub.suppliers.repository.SupplierRepository;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BranchRepository;
@@ -90,6 +94,8 @@ public class DesktopSyncPullService {
     private final SalePaymentRepository salePaymentRepository;
     private final ShiftRepository shiftRepository;
     private final UserRepository userRepository;
+    private final SupplierRepository supplierRepository;
+    private final SupplierContactRepository supplierContactRepository;
     private final CustomerRepository customerRepository;
     private final CustomerPhoneRepository customerPhoneRepository;
     private final CreditAccountRepository creditAccountRepository;
@@ -104,7 +110,8 @@ public class DesktopSyncPullService {
         int items,
         int taxRates,
         int staff,
-        int images
+        int images,
+        int suppliers
     ) {}
 
     public PullResult pullMasterData() {
@@ -795,11 +802,179 @@ public class DesktopSyncPullService {
         List<DesktopMediaSyncService.PendingImage> pending =
             mediaSyncService.upsertMetadata(localId, snapshot.images());
 
+        int suppliers = upsertSuppliers(localId, snapshot.suppliers());
+        applySupplierTombstones(localId, snapshot.deletedSupplierIds());
+
         return new UpsertOutcome(
-            new PullResult(branches, categories, items, taxRates, staffCount, snapshot.images() == null ? 0 : snapshot.images().size()),
+            new PullResult(branches, categories, items, taxRates, staffCount,
+                snapshot.images() == null ? 0 : snapshot.images().size(), suppliers),
             pending,
             staffIds
         );
+    }
+
+    /**
+     * Mirror the cloud's supplier directory (scopes/DESKTOP_SUPPLIERS_SYNC_SCOPE.md
+     * §4). Change-aware like the customer mirror: an unchanged copy is left
+     * untouched so the periodic pull never rewrites the directory — and an
+     * untouched mirror is never re-pushed (updated_at stays <= cloud_synced_at).
+     * Contacts are replaced wholesale when they differ.
+     *
+     * @return number of suppliers processed (mirrored or confirmed unchanged)
+     */
+    private int upsertSuppliers(
+            String localId,
+            List<MasterDataSnapshot.SupplierData> suppliers) {
+        if (suppliers == null || suppliers.isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        for (MasterDataSnapshot.SupplierData d : suppliers) {
+            if (d.id() == null || d.id().isBlank()) {
+                continue;
+            }
+            java.util.Optional<Supplier> existing = supplierRepository
+                .findByIdAndBusinessId(d.id(), localId);
+            Supplier supplier = existing.orElseGet(() -> {
+                Supplier created = new Supplier();
+                created.setId(d.id());
+                created.setBusinessId(localId);
+                return created;
+            });
+            boolean changed = existing.isEmpty() || supplierDiffers(supplier, d);
+            if (changed) {
+                applySupplier(supplier, d);
+                supplier.setCloudSyncedAt(java.time.Instant.now());
+                // Flush BEFORE contacts are queued — Hibernate does not order
+                // unassociated inserts, so supplier_contacts (alphabetically
+                // first) would hit the suppliers FK before the row exists.
+                supplierRepository.saveAndFlush(supplier);
+            }
+
+            boolean contactsChanged =
+                d.contacts() != null && supplierContactsDiffer(supplier.getId(), d.contacts());
+            if (contactsChanged) {
+                supplierContactRepository.findBySupplierIdOrderByPrimaryContactDescNameAsc(supplier.getId())
+                    .forEach(supplierContactRepository::delete);
+                for (MasterDataSnapshot.SupplierContactData c : d.contacts()) {
+                    SupplierContact contact = new SupplierContact();
+                    contact.setId(c.id());
+                    contact.setSupplierId(supplier.getId());
+                    contact.setName(c.name());
+                    contact.setRoleLabel(c.roleLabel());
+                    contact.setPhone(c.phone());
+                    contact.setEmail(c.email());
+                    contact.setPrimaryContact(c.primary());
+                    supplierContactRepository.save(contact);
+                }
+            }
+
+            // Advance the stamp whenever any part changed so the dirty query
+            // sees nothing to re-push (a copy the till merely adopted from the
+            // cloud must not bounce back).
+            if (!changed && contactsChanged) {
+                supplier.setCloudSyncedAt(java.time.Instant.now());
+                supplierRepository.save(supplier);
+            }
+            count++;
+        }
+        return count;
+    }
+
+    private static boolean supplierDiffers(Supplier s, MasterDataSnapshot.SupplierData d) {
+        return !java.util.Objects.equals(s.getName(), d.name())
+            || !java.util.Objects.equals(s.getCode(), d.code())
+            || !java.util.Objects.equals(s.getSupplierType(), d.supplierType())
+            || !java.util.Objects.equals(s.getVatPin(), d.vatPin())
+            || s.isTaxExempt() != d.taxExempt()
+            || !java.util.Objects.equals(s.getCreditTermsDays(), d.creditTermsDays())
+            || !bdEquals(s.getCreditLimit(), d.creditLimit())
+            || !java.util.Objects.equals(s.getStatus(), d.status())
+            || !java.util.Objects.equals(s.getNotes(), d.notes())
+            || !java.util.Objects.equals(s.getPaymentMethodPreferred(), d.paymentMethodPreferred())
+            || !java.util.Objects.equals(s.getPaymentDetails(), d.paymentDetails())
+            || !java.util.Objects.equals(s.getPayoutType(), d.payoutType())
+            || !java.util.Objects.equals(s.getPayoutPhone(), d.payoutPhone())
+            || !java.util.Objects.equals(s.getPayoutTillNumber(), d.payoutTillNumber())
+            || !java.util.Objects.equals(s.getPayoutPaybillNumber(), d.payoutPaybillNumber())
+            || !java.util.Objects.equals(s.getPayoutPaybillAccount(), d.payoutPaybillAccount())
+            || !bdEquals(s.getPrepaymentBalance(), d.prepaymentBalance());
+    }
+
+    private static void applySupplier(Supplier s, MasterDataSnapshot.SupplierData d) {
+        s.setName(d.name());
+        s.setCode(d.code());
+        s.setSupplierType(d.supplierType() == null ? "distributor" : d.supplierType());
+        s.setVatPin(d.vatPin());
+        s.setTaxExempt(d.taxExempt());
+        s.setCreditTermsDays(d.creditTermsDays());
+        s.setCreditLimit(d.creditLimit());
+        s.setStatus(d.status() == null || d.status().isBlank() ? "active" : d.status());
+        s.setNotes(d.notes());
+        s.setPaymentMethodPreferred(d.paymentMethodPreferred());
+        s.setPaymentDetails(d.paymentDetails());
+        s.setPayoutType(d.payoutType() == null ? "manual" : d.payoutType());
+        s.setPayoutPhone(d.payoutPhone());
+        s.setPayoutTillNumber(d.payoutTillNumber());
+        s.setPayoutPaybillNumber(d.payoutPaybillNumber());
+        s.setPayoutPaybillAccount(d.payoutPaybillAccount());
+        if (d.prepaymentBalance() != null) {
+            s.setPrepaymentBalance(d.prepaymentBalance());
+        }
+        // deletedAt stays null — tombstoned rows are handled separately so a
+        // live snapshot row always revives a local row an earlier tombstone hit.
+        s.setDeletedAt(null);
+    }
+
+    private static boolean bdEquals(BigDecimal a, BigDecimal b) {
+        if (a == null && b == null) {
+            return true;
+        }
+        if (a == null || b == null) {
+            return false;
+        }
+        return a.compareTo(b) == 0;
+    }
+
+    private boolean supplierContactsDiffer(
+            String supplierId,
+            List<MasterDataSnapshot.SupplierContactData> incoming) {
+        List<SupplierContact> existing = supplierContactRepository
+            .findBySupplierIdOrderByPrimaryContactDescNameAsc(supplierId);
+        if (existing.size() != incoming.size()) {
+            return true;
+        }
+        java.util.Map<String, MasterDataSnapshot.SupplierContactData> byId = incoming.stream()
+            .collect(java.util.stream.Collectors.toMap(
+                MasterDataSnapshot.SupplierContactData::id, c -> c));
+        for (SupplierContact contact : existing) {
+            MasterDataSnapshot.SupplierContactData match = byId.get(contact.getId());
+            if (match == null
+                || !java.util.Objects.equals(match.name(), contact.getName())
+                || !java.util.Objects.equals(match.roleLabel(), contact.getRoleLabel())
+                || !java.util.Objects.equals(match.phone(), contact.getPhone())
+                || !java.util.Objects.equals(match.email(), contact.getEmail())
+                || match.primary() != contact.isPrimaryContact()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Hide suppliers the cloud soft-deleted (idempotent — already-gone ids skip). */
+    private void applySupplierTombstones(String localId, List<String> deletedIds) {
+        if (deletedIds == null || deletedIds.isEmpty()) {
+            return;
+        }
+        for (String id : deletedIds) {
+            supplierRepository.findByIdAndBusinessId(id, localId)
+                .filter(s -> s.getDeletedAt() == null)
+                .ifPresent(s -> {
+                    s.setDeletedAt(java.time.Instant.now());
+                    s.setCloudSyncedAt(java.time.Instant.now());
+                    supplierRepository.save(s);
+                });
+        }
     }
 
     private static void applyBusiness(Business b, MasterDataSnapshot.BusinessData d) {

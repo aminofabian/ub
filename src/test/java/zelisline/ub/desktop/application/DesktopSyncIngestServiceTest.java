@@ -26,6 +26,8 @@ import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.sales.repository.SalePaymentRepository;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
+import zelisline.ub.suppliers.repository.SupplierContactRepository;
+import zelisline.ub.suppliers.repository.SupplierRepository;
 
 /**
  * Cloud-side ingest of till-uploaded shifts: new sales are recorded and
@@ -41,13 +43,16 @@ class DesktopSyncIngestServiceTest {
     private final CustomerRepository customerRepository = mock(CustomerRepository.class);
     private final CustomerPhoneRepository customerPhoneRepository = mock(CustomerPhoneRepository.class);
     private final CreditAccountRepository creditAccountRepository = mock(CreditAccountRepository.class);
+    private final SupplierRepository supplierRepository = mock(SupplierRepository.class);
+    private final SupplierContactRepository supplierContactRepository = mock(SupplierContactRepository.class);
     private final ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
 
     private DesktopSyncIngestService service() {
         return new DesktopSyncIngestService(
             shiftRepository, saleRepository, saleItemRepository,
             salePaymentRepository, customerRepository, customerPhoneRepository,
-            creditAccountRepository, eventPublisher);
+            creditAccountRepository, supplierRepository, supplierContactRepository,
+            eventPublisher);
     }
 
     private static ShiftSyncRequest requestWithOneSale(String saleId, String idempotencyKey) {
@@ -83,7 +88,7 @@ class DesktopSyncIngestServiceTest {
                 List.of(),
                 List.of()
             ))
-        )), null);
+        )), null, null);
     }
 
     @Test
@@ -128,7 +133,8 @@ class DesktopSyncIngestServiceTest {
                 List.of(new ShiftSyncRequest.CustomerPhoneData(
                     "phone-1", "254700111222", true)),
                 new ShiftSyncRequest.CreditAccountData(
-                    new BigDecimal("500.00"), BigDecimal.ZERO, 12, new BigDecimal("5000.00")))));
+                    new BigDecimal("500.00"), BigDecimal.ZERO, 12, new BigDecimal("5000.00")))),
+            null);
         when(customerRepository.findByIdAndBusinessIdAndDeletedAtIsNull("customer-1", "cloud-biz"))
             .thenReturn(Optional.empty());
         when(customerRepository.nextCustomerNo("cloud-biz")).thenReturn(Optional.of(4L));
@@ -178,6 +184,7 @@ class DesktopSyncIngestServiceTest {
                 "owner-id", new BigDecimal("5000.00"), new BigDecimal("5000.00"),
                 null, null, null, null, null, false,
                 Instant.parse("2026-08-20T08:00:00Z"), null, List.of())),
+            null,
             null);
         when(shiftRepository.findByIdAndBusinessId("shift-1", "cloud-biz"))
             .thenReturn(Optional.empty());
@@ -186,5 +193,49 @@ class DesktopSyncIngestServiceTest {
 
         verify(shiftRepository).save(org.mockito.ArgumentMatchers.argThat(shift ->
             ((zelisline.ub.sales.domain.Shift) shift).getTillDeviceKey() == null));
+    }
+
+    @Test
+    void upsertsTillSuppliersIdPreservingly() {
+        ShiftSyncRequest request = new ShiftSyncRequest(
+            List.of(),
+            null,
+            List.of(new ShiftSyncRequest.SupplierData(
+                "supplier-1",
+                "Kilimanjaro Distributors",
+                "SUP-001",
+                "distributor",
+                null,
+                false,
+                30,
+                new BigDecimal("100000.00"),
+                "active",
+                null,
+                null,
+                null,
+                "mobile_wallet",
+                "254700999888",
+                null,
+                null,
+                null,
+                List.of(new ShiftSyncRequest.SupplierContactData(
+                    "contact-1", "Amina", "Sales rep", "254701222333", null, true)))));
+        when(supplierRepository.findByIdAndBusinessId("supplier-1", "cloud-biz"))
+            .thenReturn(Optional.empty());
+        when(supplierContactRepository.findBySupplierIdOrderByPrimaryContactDescNameAsc(any()))
+            .thenReturn(List.of());
+
+        ShiftSyncAck ack = service().ingest("cloud-biz", request);
+
+        assertEquals(1, ack.suppliersIngested());
+        // The cloud adopts the till's supplier id so both sides reference the
+        // same directory row.
+        verify(supplierRepository).saveAndFlush(org.mockito.ArgumentMatchers.argThat(s ->
+            "supplier-1".equals(((zelisline.ub.suppliers.domain.Supplier) s).getId())
+                && "mobile_wallet".equals(
+                    ((zelisline.ub.suppliers.domain.Supplier) s).getPayoutType())));
+        verify(supplierContactRepository).save(org.mockito.ArgumentMatchers.argThat(c ->
+            "contact-1".equals(((zelisline.ub.suppliers.domain.SupplierContact) c).getId())
+                && c.isPrimaryContact()));
     }
 }

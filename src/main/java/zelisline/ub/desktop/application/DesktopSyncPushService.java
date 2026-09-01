@@ -34,6 +34,10 @@ import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.sales.repository.SalePaymentRepository;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
+import zelisline.ub.suppliers.domain.Supplier;
+import zelisline.ub.suppliers.domain.SupplierContact;
+import zelisline.ub.suppliers.repository.SupplierContactRepository;
+import zelisline.ub.suppliers.repository.SupplierRepository;
 
 /**
  * Desktop-side push of till sales to the shop's online instance — the "up"
@@ -70,6 +74,8 @@ public class DesktopSyncPushService {
     private final CustomerRepository customerRepository;
     private final CustomerPhoneRepository customerPhoneRepository;
     private final CreditAccountRepository creditAccountRepository;
+    private final SupplierRepository supplierRepository;
+    private final SupplierContactRepository supplierContactRepository;
     private final CloudSyncSession cloudSyncSession;
     private final RestClient.Builder restClientBuilder;
 
@@ -103,23 +109,25 @@ public class DesktopSyncPushService {
         // in the SAME batch as the sales that reference them so the cloud's
         // sales.customer_id FK always resolves, whatever triggered the flush.
         List<Customer> dirtyCustomers = customerRepository.findDirtyForDesktopSync(localId);
+        // Same dirty-tracking pattern for the supplier directory.
+        List<Supplier> dirtySuppliers = supplierRepository.findDirtyForDesktopSync(localId);
 
         Set<String> shiftIds = new TreeSet<>();
         pendingSales.forEach(s -> shiftIds.add(s.getShiftId()));
         pendingClosedShifts.forEach(s -> shiftIds.add(s.getId()));
-        if (shiftIds.isEmpty() && dirtyCustomers.isEmpty()) {
+        if (shiftIds.isEmpty() && dirtyCustomers.isEmpty() && dirtySuppliers.isEmpty()) {
             return new SyncPushResult(0, 0, true);
         }
         log.info(
-            "[DesktopSync] pushing {} pending sale(s) in {} shift(s) and {} customer(s) to {}",
-            pendingSales.size(), shiftIds.size(), dirtyCustomers.size(), mapping.origin());
+            "[DesktopSync] pushing {} pending sale(s) in {} shift(s), {} customer(s) and {} supplier(s) to {}",
+            pendingSales.size(), shiftIds.size(), dirtyCustomers.size(), dirtySuppliers.size(), mapping.origin());
 
         Map<String, Shift> shiftsById = shiftRepository
             .findAllById(shiftIds)
             .stream()
             .collect(Collectors.toMap(Shift::getId, s -> s));
 
-        ShiftSyncRequest batch = buildBatch(pendingSales, shiftsById, dirtyCustomers, mapping);
+        ShiftSyncRequest batch = buildBatch(pendingSales, shiftsById, dirtyCustomers, dirtySuppliers, mapping);
 
         RestClient client = restClientBuilder.baseUrl(mapping.origin()).build();
         ShiftSyncAck ack = postBatch(client, mapping, batch);
@@ -139,14 +147,18 @@ public class DesktopSyncPushService {
         dirtyCustomers.forEach(c -> c.setCloudSyncedAt(syncedAt));
         customerRepository.saveAll(dirtyCustomers);
 
+        dirtySuppliers.forEach(s -> s.setCloudSyncedAt(syncedAt));
+        supplierRepository.saveAll(dirtySuppliers);
+
         log.info(
             "[DesktopSync] acknowledged: {} sale(s) new, {} skipped; marked {} sale(s), "
-                + "{} shift(s) and {} customer(s) synced",
+                + "{} shift(s), {} customer(s) and {} supplier(s) synced",
             ack.salesIngested(),
             ack.salesSkipped(),
             pendingSales.size(),
             closedToStamp.size(),
-            dirtyCustomers.size()
+            dirtyCustomers.size(),
+            dirtySuppliers.size()
         );
         return new SyncPushResult(closedToStamp.size(), ack.salesIngested(), true);
     }
@@ -155,12 +167,17 @@ public class DesktopSyncPushService {
             List<Sale> pendingSales,
             Map<String, Shift> shiftsById,
             List<Customer> dirtyCustomers,
+            List<Supplier> dirtySuppliers,
             CloudSyncSession.Session mapping) {
         Set<String> cloudStaffIds = mapping.staffIds().stream().collect(Collectors.toSet());
         String ownerUserId = mapping.ownerUserId();
 
         List<ShiftSyncRequest.CustomerData> customerData = dirtyCustomers.stream()
             .map(this::toCustomerData)
+            .toList();
+
+        List<ShiftSyncRequest.SupplierData> supplierData = dirtySuppliers.stream()
+            .map(this::toSupplierData)
             .toList();
 
         Map<String, List<Sale>> salesByShift = pendingSales.stream()
@@ -193,7 +210,7 @@ public class DesktopSyncPushService {
                 sales
             ));
         }
-        return new ShiftSyncRequest(data, customerData);
+        return new ShiftSyncRequest(data, customerData, supplierData);
     }
 
     /**
@@ -280,6 +297,37 @@ public class DesktopSyncPushService {
             customer.getNotes(),
             phones,
             credit
+        );
+    }
+
+    /** Supplier + contacts, as the till's authoritative copy (last-writer-wins). */
+    private ShiftSyncRequest.SupplierData toSupplierData(Supplier supplier) {
+        List<ShiftSyncRequest.SupplierContactData> contacts = supplierContactRepository
+            .findBySupplierIdOrderByPrimaryContactDescNameAsc(supplier.getId())
+            .stream()
+            .map(c -> new ShiftSyncRequest.SupplierContactData(
+                c.getId(), c.getName(), c.getRoleLabel(), c.getPhone(), c.getEmail(),
+                c.isPrimaryContact()))
+            .toList();
+        return new ShiftSyncRequest.SupplierData(
+            supplier.getId(),
+            supplier.getName(),
+            supplier.getCode(),
+            supplier.getSupplierType(),
+            supplier.getVatPin(),
+            supplier.isTaxExempt(),
+            supplier.getCreditTermsDays(),
+            supplier.getCreditLimit(),
+            supplier.getStatus(),
+            supplier.getNotes(),
+            supplier.getPaymentMethodPreferred(),
+            supplier.getPaymentDetails(),
+            supplier.getPayoutType(),
+            supplier.getPayoutPhone(),
+            supplier.getPayoutTillNumber(),
+            supplier.getPayoutPaybillNumber(),
+            supplier.getPayoutPaybillAccount(),
+            contacts
         );
     }
 

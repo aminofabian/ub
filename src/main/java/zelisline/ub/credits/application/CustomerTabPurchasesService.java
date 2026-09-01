@@ -25,6 +25,7 @@ import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.credits.CreditTxnTypes;
 import zelisline.ub.credits.WalletTxnTypes;
 import zelisline.ub.credits.api.dto.TabPurchaseLineResponse;
+import zelisline.ub.credits.api.dto.TabPurchasesPageResponse;
 import zelisline.ub.credits.api.dto.TabPurchaseRowResponse;
 import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.CreditTransaction;
@@ -46,6 +47,8 @@ public class CustomerTabPurchasesService {
     private static final int MONEY_SCALE = 2;
     private static final int QTY_SCALE = 4;
     private static final int DEFAULT_LIMIT = 40;
+    private static final int MAX_LIMIT = 100;
+    private static final int MAX_FETCH = 250;
 
     private final CustomerRepository customerRepository;
     private final CreditAccountRepository creditAccountRepository;
@@ -58,6 +61,29 @@ public class CustomerTabPurchasesService {
 
     @Transactional(readOnly = true)
     public List<TabPurchaseRowResponse> list(String businessId, String customerId) {
+        return listPage(businessId, customerId, 0, DEFAULT_LIMIT).rows();
+    }
+
+    @Transactional(readOnly = true)
+    public TabPurchasesPageResponse listPage(
+            String businessId,
+            String customerId,
+            int offset,
+            Integer limit
+    ) {
+        int safeOffset = Math.max(0, offset);
+        int pageSize = limit == null ? DEFAULT_LIMIT : Math.max(1, Math.min(limit, MAX_LIMIT));
+        int fetchCap = Math.min(safeOffset + pageSize + 1, MAX_FETCH);
+        List<TabPurchaseRowResponse> merged = buildRows(businessId, customerId, fetchCap);
+        boolean hasMore = merged.size() > safeOffset + pageSize;
+        int end = Math.min(safeOffset + pageSize, merged.size());
+        List<TabPurchaseRowResponse> slice = safeOffset >= merged.size()
+                ? List.of()
+                : List.copyOf(merged.subList(safeOffset, end));
+        return new TabPurchasesPageResponse(slice, safeOffset, pageSize, hasMore);
+    }
+
+    private List<TabPurchaseRowResponse> buildRows(String businessId, String customerId, int fetchLimit) {
         customerRepository.findByIdAndBusinessIdAndDeletedAtIsNull(customerId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Customer not found"));
         CreditAccount acc = creditAccountRepository.findByCustomerIdAndBusinessId(customerId, businessId)
@@ -65,7 +91,7 @@ public class CustomerTabPurchasesService {
 
         // Include cash / wallet visits linked to the customer — not only tab (debt) sales.
         List<Sale> sales = new ArrayList<>(saleRepository.findByBusinessIdAndCustomerIdOrderBySoldAtDesc(
-                businessId, customerId, PageRequest.of(0, DEFAULT_LIMIT)));
+                businessId, customerId, PageRequest.of(0, fetchLimit)));
 
         // Also pull sales that credited this wallet (covers edge cases where customerId
         // was not persisted on the sale row but the wallet ledger was updated).
@@ -102,13 +128,13 @@ public class CustomerTabPurchasesService {
                 if (b.getSoldAt() == null) return -1;
                 return b.getSoldAt().compareTo(a.getSoldAt());
             });
-            if (sales.size() > DEFAULT_LIMIT) {
-                sales = new ArrayList<>(sales.subList(0, DEFAULT_LIMIT));
+            if (sales.size() > fetchLimit) {
+                sales = new ArrayList<>(sales.subList(0, fetchLimit));
             }
         }
 
         if (sales.isEmpty()) {
-            return List.copyOf(airtimeRows(businessId, customerId));
+            return List.copyOf(airtimeRows(businessId, customerId, fetchLimit));
         }
 
         Set<String> saleIds = new HashSet<>();
@@ -126,7 +152,7 @@ public class CustomerTabPurchasesService {
                 .findByCreditAccountIdAndTxnTypeAndSaleIdIsNotNullOrderByCreatedAtDesc(
                         acc.getId(),
                         CreditTxnTypes.DEBT,
-                        PageRequest.of(0, DEFAULT_LIMIT * 2));
+                        PageRequest.of(0, fetchLimit * 2));
         for (CreditTransaction t : debts) {
             if (t.getSaleId() != null && saleIds.contains(t.getSaleId().trim())) {
                 debtBySale.merge(t.getSaleId().trim(), scaleMoney(t.getAmount()), BigDecimal::add);
@@ -161,11 +187,15 @@ public class CustomerTabPurchasesService {
         }
 
         Map<String, String> itemNames = new HashMap<>();
+        Map<String, String> itemSkus = new HashMap<>();
         if (!itemIds.isEmpty()) {
             for (Item item : itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)) {
                 itemNames.put(item.getId(), item.getName() != null && !item.getName().isBlank()
                         ? item.getName().trim()
                         : "Item");
+                if (item.getSku() != null && !item.getSku().isBlank()) {
+                    itemSkus.put(item.getId(), item.getSku().trim());
+                }
             }
         }
 
@@ -183,6 +213,7 @@ public class CustomerTabPurchasesService {
                                         ? si.getLineLabel()
                                         : "Airtime")
                                 : itemNames.getOrDefault(si.getItemId(), "Item"),
+                        si.isAirtime() ? null : itemSkus.get(si.getItemId()),
                         scaleQty(si.getQuantity()),
                         scaleUnitPrice(si.getUnitPrice()),
                         scaleMoney(si.getLineTotal())));
@@ -199,24 +230,24 @@ public class CustomerTabPurchasesService {
                     List.copyOf(lines)));
         }
         List<TabPurchaseRowResponse> merged = new ArrayList<>(out);
-        merged.addAll(airtimeRows(businessId, customerId));
+        merged.addAll(airtimeRows(businessId, customerId, fetchLimit));
         merged.sort((a, b) -> {
             if (a.soldAt() == null && b.soldAt() == null) return 0;
             if (a.soldAt() == null) return 1;
             if (b.soldAt() == null) return -1;
             return b.soldAt().compareTo(a.soldAt());
         });
-        if (merged.size() > DEFAULT_LIMIT) {
-            merged = new ArrayList<>(merged.subList(0, DEFAULT_LIMIT));
+        if (merged.size() > fetchLimit) {
+            merged = new ArrayList<>(merged.subList(0, fetchLimit));
         }
         return List.copyOf(merged);
     }
 
-    private List<TabPurchaseRowResponse> airtimeRows(String businessId, String customerId) {
+    private List<TabPurchaseRowResponse> airtimeRows(String businessId, String customerId, int fetchLimit) {
         List<AirtimeOrder> orders = airtimeOrderRepository
                 .findByBusinessIdAndCustomerIdAndStatusOrderByCompletedAtDesc(
                         businessId, customerId, AirtimeOrderStatuses.SUCCESS,
-                        PageRequest.of(0, DEFAULT_LIMIT));
+                        PageRequest.of(0, fetchLimit));
         List<TabPurchaseRowResponse> rows = new ArrayList<>();
         for (AirtimeOrder order : orders) {
             if (!AirtimeTenders.TAB.equals(order.getTender())) {
@@ -236,6 +267,7 @@ public class CustomerTabPurchasesService {
                     BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP),
                     List.of(new TabPurchaseLineResponse(
                             network + " airtime · " + phone,
+                            null,
                             BigDecimal.ONE.setScale(QTY_SCALE, RoundingMode.HALF_UP),
                             scaleUnitPrice(order.getAmount()),
                             scaleMoney(order.getAmount())))));

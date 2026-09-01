@@ -28,8 +28,10 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.application.ProductDisplayName;
+import zelisline.ub.catalog.domain.Aisle;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.ItemType;
+import zelisline.ub.catalog.repository.AisleRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.inventory.InventoryConstants;
@@ -89,12 +91,15 @@ public class RestockDigestService {
     /** Query value for items with no department. Also accept the old {@code __none__} sentinel. */
     static final String UNCATEGORISED_KEY = "uncategorised";
     private static final String LEGACY_UNCATEGORISED_KEY = "__none__";
+    /** Query value for items with no shelf zone (matches dashboard header sentinel). */
+    static final String UNASSIGNED_AISLE_KEY = "__unset__";
 
     private final RestockRunRepository restockRunRepository;
     private final RestockSuggestionRepository restockSuggestionRepository;
     private final BranchRepository branchRepository;
     private final BusinessRepository businessRepository;
     private final ItemRepository itemRepository;
+    private final AisleRepository aisleRepository;
     private final ItemCatalogService itemCatalogService;
     private final ItemTypeRepository itemTypeRepository;
     private final InventoryBatchRepository inventoryBatchRepository;
@@ -309,10 +314,12 @@ public class RestockDigestService {
                 .collect(Collectors.toSet());
         Map<String, Item> items = loadItems(businessId, itemIds);
         Map<String, ItemType> types = loadItemTypes(businessId, items);
+        Map<String, Aisle> aisles = loadAisles(businessId, items);
         List<RestockDigestDtos.RestockPrepItem> itemsOut = rows.stream()
                 .map(s -> {
                     Item item = items.get(s.getItemId());
                     ItemType type = item == null ? null : types.get(item.getItemTypeId());
+                    Aisle aisle = aisleForItem(aisles, item);
                     return new RestockDigestDtos.RestockPrepItem(
                             s.getItemId(),
                             itemDisplayName(item),
@@ -320,6 +327,9 @@ public class RestockDigestService {
                             item != null ? item.getSku() : null,
                             item != null ? item.getItemTypeId() : null,
                             type != null ? type.getLabel() : UNCATEGORISED,
+                            item != null ? item.getAisleId() : null,
+                            aisle != null ? aisle.getCode() : null,
+                            aisle != null ? aisle.getName() : null,
                             s.getTarget(),
                             s.getOnHand(),
                             s.getPar(),
@@ -362,6 +372,7 @@ public class RestockDigestService {
             String runId,
             String departmentId,
             String supplierId,
+            String aisleId,
             boolean padOnly
     ) {
         RestockRun run = requireRun(businessId, runId);
@@ -372,17 +383,19 @@ public class RestockDigestService {
 
         String deptFilter = blankToNull(departmentId);
         String supplierFilter = blankToNull(supplierId);
+        String aisleFilter = blankToNull(aisleId);
         List<RestockDigestDtos.RestockSuggestionResponse> lines = suggestions.stream()
                 .filter(s -> !"dismissed".equals(s.status()) && !"snoozed".equals(s.status()))
                 .filter(s -> matchesDepartment(deptFilter, s.itemTypeId()))
                 .filter(s -> supplierFilter == null || supplierFilter.equals(s.supplierId()))
+                .filter(s -> matchesAisle(aisleFilter, s.aisleId()))
                 .filter(s -> !padOnly || InventoryConstants.DIGEST_TARGET_PAD.equals(s.target()))
                 .toList();
         if (lines.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No lines in this group");
         }
 
-        String groupTitle = groupTitle(lines, deptFilter, supplierFilter, padOnly);
+        String groupTitle = groupTitle(lines, deptFilter, supplierFilter, aisleFilter, padOnly);
         String groupHint = lines.size() + (lines.size() == 1 ? " item" : " items");
         BigDecimal subtotal = BigDecimal.ZERO;
         List<RestockDigestPdfLine> pdfLines = new ArrayList<>();
@@ -441,6 +454,16 @@ public class RestockDigestService {
         return deptFilter.equals(itemTypeId);
     }
 
+    private static boolean matchesAisle(String aisleFilter, String aisleId) {
+        if (aisleFilter == null) {
+            return true;
+        }
+        if (UNASSIGNED_AISLE_KEY.equals(aisleFilter)) {
+            return aisleId == null || aisleId.isBlank();
+        }
+        return aisleFilter.equals(aisleId);
+    }
+
     private static boolean isUncategorisedKey(String key) {
         return UNCATEGORISED_KEY.equalsIgnoreCase(key) || LEGACY_UNCATEGORISED_KEY.equals(key);
     }
@@ -449,26 +472,46 @@ public class RestockDigestService {
             List<RestockDigestDtos.RestockSuggestionResponse> lines,
             String departmentId,
             String supplierId,
+            String aisleId,
             boolean padOnly
     ) {
         String dept = lines.get(0).itemTypeName();
         if (dept == null || dept.isBlank()) {
             dept = UNCATEGORISED;
         }
+        String base;
         if (padOnly) {
-            return departmentId != null ? dept + " - Needs a supplier" : "Needs a supplier";
-        }
-        if (supplierId != null) {
+            base = departmentId != null ? dept + " - Needs a supplier" : "Needs a supplier";
+        } else if (supplierId != null) {
             String supplier = lines.get(0).supplierName();
             if (supplier == null || supplier.isBlank()) {
                 supplier = "Supplier";
             }
-            return departmentId != null ? dept + " - " + supplier : supplier;
+            base = departmentId != null ? dept + " - " + supplier : supplier;
+        } else if (departmentId != null) {
+            base = dept;
+        } else if (aisleId != null) {
+            base = aisleLabel(lines.get(0), aisleId);
+        } else {
+            base = "Tonight's list";
         }
-        if (departmentId != null) {
-            return dept;
+        if (aisleId != null && departmentId != null) {
+            return base + " · " + aisleLabel(lines.get(0), aisleId);
         }
-        return "Tonight's list";
+        return base;
+    }
+
+    private static String aisleLabel(RestockDigestDtos.RestockSuggestionResponse line, String aisleFilter) {
+        if (UNASSIGNED_AISLE_KEY.equals(aisleFilter)) {
+            return "No shelf zone";
+        }
+        if (line.aisleName() != null && !line.aisleName().isBlank()) {
+            return line.aisleName().trim();
+        }
+        if (line.aisleCode() != null && !line.aisleCode().isBlank()) {
+            return line.aisleCode().trim();
+        }
+        return "Shelf zone";
     }
 
     private static String itemDisplayName(Item item) {
@@ -1091,6 +1134,7 @@ public class RestockDigestService {
                 : supplierRepository.findAllById(supplierIds).stream()
                         .collect(Collectors.toMap(Supplier::getId, Supplier::getName, (a, b) -> a));
         Map<String, String> thumbs = itemCatalogService.resolveThumbnailUrls(businessId, itemIds);
+        Map<String, Aisle> aisles = loadAisles(businessId, items);
         return rows.stream()
                 .map(r -> {
                     Item item = items.get(r.getItemId());
@@ -1101,10 +1145,30 @@ public class RestockDigestService {
                             r,
                             item,
                             type,
+                            aisleForItem(aisles, item),
                             supplierName(supplierNames, r.getSupplierId()),
                             thumbs.get(r.getItemId()));
                 })
                 .toList();
+    }
+
+    private Map<String, Aisle> loadAisles(String businessId, Map<String, Item> items) {
+        Set<String> aisleIds = items.values().stream()
+                .map(Item::getAisleId)
+                .filter(id -> id != null && !id.isBlank())
+                .collect(Collectors.toSet());
+        if (aisleIds.isEmpty()) {
+            return Map.of();
+        }
+        return aisleRepository.findByBusinessIdAndIdIn(businessId, aisleIds).stream()
+                .collect(Collectors.toMap(Aisle::getId, a -> a, (a, b) -> a));
+    }
+
+    private static Aisle aisleForItem(Map<String, Aisle> aisles, Item item) {
+        if (item == null || item.getAisleId() == null || item.getAisleId().isBlank()) {
+            return null;
+        }
+        return aisles.get(item.getAisleId());
     }
 
     private Map<String, ItemType> loadItemTypes(String businessId, Map<String, Item> items) {
@@ -1131,6 +1195,7 @@ public class RestockDigestService {
             RestockSuggestion r,
             Item item,
             ItemType itemType,
+            Aisle aisle,
             String supplierName,
             String thumbnailUrl
     ) {
@@ -1146,6 +1211,9 @@ public class RestockDigestService {
                 itemType != null && itemType.getLabel() != null && !itemType.getLabel().isBlank()
                         ? itemType.getLabel()
                         : UNCATEGORISED,
+                item != null ? item.getAisleId() : null,
+                aisle != null ? aisle.getCode() : null,
+                aisle != null ? aisle.getName() : null,
                 r.getSupplierId(),
                 supplierName,
                 r.getTarget(),

@@ -144,7 +144,7 @@ public class DesktopSyncTriggerController {
             DesktopSyncPushService.SyncPushResult push = syncPushService.pushPending();
             // Queued Talk to Us replies -> cloud, which sends them.
             DesktopMessagePushService.MessagePushResult messagePush = messagePushService.pushPendingReplies();
-            syncProgress.done(pull, push, messagePull, messagePush);
+            syncProgress.done(pull, push, messagePull, messagePush, suppliesPulled, ordersPulled);
             log.info(
                 "[DesktopSync] full sync finished: {} item(s) refreshed, {} cloud sale(s) pulled, "
                     + "{} supply session(s) pulled, {} web order(s) pulled, {} sale(s) pushed, "

@@ -42,6 +42,8 @@ public class DesktopSyncProgressService {
         long finishedAt,
         int itemsDone,
         int itemsTotal,
+        int suppliesPulled,
+        int ordersPulled,
         DesktopSyncPullService.PullResult pull,
         DesktopSyncPushService.SyncPushResult push,
         DesktopMessagePullService.MessagePullResult messagePull,
@@ -49,7 +51,7 @@ public class DesktopSyncProgressService {
         String error
     ) {
         public static Snapshot idle() {
-            return new Snapshot(Phase.IDLE, "", 0L, 0L, 0, 0, null, null, null, null, null);
+            return new Snapshot(Phase.IDLE, "", 0L, 0L, 0, 0, 0, 0, null, null, null, null, null);
         }
 
         public boolean running() {
@@ -77,6 +79,8 @@ public class DesktopSyncProgressService {
             0L,
             0,
             0,
+            0,
+            0,
             null,
             null,
             null,
@@ -94,6 +98,8 @@ public class DesktopSyncProgressService {
             s.finishedAt(),
             0,
             itemsTotal,
+            s.suppliesPulled(),
+            s.ordersPulled(),
             s.pull(),
             s.push(),
             s.messagePull(),
@@ -115,6 +121,8 @@ public class DesktopSyncProgressService {
             s.finishedAt(),
             done,
             s.itemsTotal(),
+            s.suppliesPulled(),
+            s.ordersPulled(),
             s.pull(),
             s.push(),
             s.messagePull(),
@@ -132,6 +140,8 @@ public class DesktopSyncProgressService {
             s.finishedAt(),
             s.itemsDone(),
             s.itemsTotal(),
+            s.suppliesPulled(),
+            s.ordersPulled(),
             s.pull(),
             s.push(),
             s.messagePull(),
@@ -144,7 +154,9 @@ public class DesktopSyncProgressService {
             DesktopSyncPullService.PullResult pull,
             DesktopSyncPushService.SyncPushResult push,
             DesktopMessagePullService.MessagePullResult messagePull,
-            DesktopMessagePushService.MessagePushResult messagePush) {
+            DesktopMessagePushService.MessagePushResult messagePush,
+            int suppliesPulled,
+            int ordersPulled) {
         Snapshot s = snapshot;
         snapshot = new Snapshot(
             Phase.DONE,
@@ -153,6 +165,8 @@ public class DesktopSyncProgressService {
             System.currentTimeMillis(),
             s.itemsDone(),
             s.itemsTotal(),
+            suppliesPulled,
+            ordersPulled,
             pull,
             push,
             messagePull,
@@ -170,6 +184,8 @@ public class DesktopSyncProgressService {
             System.currentTimeMillis(),
             s.itemsDone(),
             s.itemsTotal(),
+            s.suppliesPulled(),
+            s.ordersPulled(),
             s.pull(),
             s.push(),
             s.messagePull(),

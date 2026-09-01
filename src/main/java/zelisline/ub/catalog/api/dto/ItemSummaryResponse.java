@@ -45,6 +45,12 @@ public record ItemSummaryResponse(
         BigDecimal buyingPrice,
         /** Department / item type ID. */
         String itemTypeId,
+        /** Optional shelf zone (aisle) ID. */
+        String aisleId,
+        /** Short shelf zone code for list badges. */
+        String aisleCode,
+        /** Shelf zone display name. */
+        String aisleName,
         /** True when the item is sold by weight (kg, g, lb). */
         boolean isWeighed,
         /** Unit of measure: each, kg, g, lb, etc. */

@@ -24,9 +24,11 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.domain.Aisle;
 import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.ItemType;
+import zelisline.ub.catalog.repository.AisleRepository;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
@@ -57,6 +59,7 @@ public class CsvExportApplicationService {
     private final ItemRepository itemRepository;
     private final ItemTypeRepository itemTypeRepository;
     private final CategoryRepository categoryRepository;
+    private final AisleRepository aisleRepository;
     private final SupplierRepository supplierRepository;
     private final SupplierProductRepository supplierProductRepository;
     private final BranchRepository branchRepository;
@@ -76,6 +79,9 @@ public class CsvExportApplicationService {
 
         Map<String, String> categoryNameById = categoryRepository.findByBusinessIdOrderByPositionAsc(businessId).stream()
                 .collect(Collectors.toMap(Category::getId, Category::getName, (a, b) -> a));
+
+        Map<String, String> aisleCodeById = aisleRepository.findByBusinessIdOrderBySortOrderAsc(businessId).stream()
+                .collect(Collectors.toMap(Aisle::getId, Aisle::getCode, (a, b) -> a));
 
         Map<String, BigDecimal> sellByItemId = latestBusinessWideSellPriceByItem(businessId);
 
@@ -121,6 +127,9 @@ public class CsvExportApplicationService {
                         nullToEmpty(item.getCategoryId() == null
                                 ? null
                                 : categoryNameById.get(item.getCategoryId())),
+                        nullToEmpty(item.getAisleId() == null
+                                ? null
+                                : aisleCodeById.get(item.getAisleId())),
                         nullToEmpty(item.getBrand()),
                         nullToEmpty(item.getSize()),
                         decimal(item.getBuyingPrice(), MONEY_SCALE),

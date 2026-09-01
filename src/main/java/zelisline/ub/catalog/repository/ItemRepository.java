@@ -239,6 +239,9 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                             and ch.deletedAt is null
                         )))
                and (:itemTypeUnset = true or i.itemTypeId = :itemTypeId)
+               and (:aisleFilterUnset = true
+                    or (:filterAisleUnset = true and (i.aisleId is null or trim(i.aisleId) = ''))
+                    or (:filterAisleUnset = false and i.aisleId = :aisleId))
                and (:restrictByAllowedItemTypes = false or i.itemTypeId in :allowedItemTypeIds)
                and (:isWeighedUnset = true or i.weighed = :isWeighed)
                and (:filterNoPrice = false or (
@@ -276,6 +279,9 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("itemTypeId") String itemTypeId,
             @Param("restrictByAllowedItemTypes") boolean restrictByAllowedItemTypes,
             @Param("allowedItemTypeIds") Collection<String> allowedItemTypeIds,
+            @Param("aisleFilterUnset") boolean aisleFilterUnset,
+            @Param("filterAisleUnset") boolean filterAisleUnset,
+            @Param("aisleId") String aisleId,
             @Param("filterNoPrice") boolean filterNoPrice,
             @Param("restrictItemIdsUnset") boolean restrictItemIdsUnset,
             @Param("restrictItemIds") Collection<String> restrictItemIds,
@@ -342,6 +348,9 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                          and sp.deletedAt is null
                     ))
                and (:itemTypeUnset = true or i.itemTypeId = :itemTypeId)
+               and (:aisleFilterUnset = true
+                    or (:filterAisleUnset = true and (i.aisleId is null or trim(i.aisleId) = ''))
+                    or (:filterAisleUnset = false and i.aisleId = :aisleId))
                and (:restrictByAllowedItemTypes = false or i.itemTypeId in :allowedItemTypeIds)
             """)
     CatalogRowTypeSum sumCatalogRowTypes(
@@ -361,7 +370,10 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("itemTypeUnset") boolean itemTypeUnset,
             @Param("itemTypeId") String itemTypeId,
             @Param("restrictByAllowedItemTypes") boolean restrictByAllowedItemTypes,
-            @Param("allowedItemTypeIds") Collection<String> allowedItemTypeIds
+            @Param("allowedItemTypeIds") Collection<String> allowedItemTypeIds,
+            @Param("aisleFilterUnset") boolean aisleFilterUnset,
+            @Param("filterAisleUnset") boolean filterAisleUnset,
+            @Param("aisleId") String aisleId
     );
 
     @Query("""
@@ -407,6 +419,9 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                          and sp.deletedAt is null
                     ))
                and (:itemTypeUnset = true or i.itemTypeId = :itemTypeId)
+               and (:aisleFilterUnset = true
+                    or (:filterAisleUnset = true and (i.aisleId is null or trim(i.aisleId) = ''))
+                    or (:filterAisleUnset = false and i.aisleId = :aisleId))
                and (:restrictByAllowedItemTypes = false or i.itemTypeId in :allowedItemTypeIds)
                and (i.barcode is null or trim(i.barcode) = '')
             """)
@@ -427,7 +442,10 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("itemTypeUnset") boolean itemTypeUnset,
             @Param("itemTypeId") String itemTypeId,
             @Param("restrictByAllowedItemTypes") boolean restrictByAllowedItemTypes,
-            @Param("allowedItemTypeIds") Collection<String> allowedItemTypeIds
+            @Param("allowedItemTypeIds") Collection<String> allowedItemTypeIds,
+            @Param("aisleFilterUnset") boolean aisleFilterUnset,
+            @Param("filterAisleUnset") boolean filterAisleUnset,
+            @Param("aisleId") String aisleId
     );
 
     @Query("""
@@ -470,6 +488,9 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                          and sp.deletedAt is null
                     ))
                and (:itemTypeUnset = true or i.itemTypeId = :itemTypeId)
+               and (:aisleFilterUnset = true
+                    or (:filterAisleUnset = true and (i.aisleId is null or trim(i.aisleId) = ''))
+                    or (:filterAisleUnset = false and i.aisleId = :aisleId))
                and (:restrictByAllowedItemTypes = false or i.itemTypeId in :allowedItemTypeIds)
                and i.active = false
             """)
@@ -487,7 +508,10 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("itemTypeUnset") boolean itemTypeUnset,
             @Param("itemTypeId") String itemTypeId,
             @Param("restrictByAllowedItemTypes") boolean restrictByAllowedItemTypes,
-            @Param("allowedItemTypeIds") Collection<String> allowedItemTypeIds
+            @Param("allowedItemTypeIds") Collection<String> allowedItemTypeIds,
+            @Param("aisleFilterUnset") boolean aisleFilterUnset,
+            @Param("filterAisleUnset") boolean filterAisleUnset,
+            @Param("aisleId") String aisleId
     );
 
     @Query("""
@@ -533,6 +557,9 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                          and sp.deletedAt is null
                     ))
                and (:itemTypeUnset = true or i.itemTypeId = :itemTypeId)
+               and (:aisleFilterUnset = true
+                    or (:filterAisleUnset = true and (i.aisleId is null or trim(i.aisleId) = ''))
+                    or (:filterAisleUnset = false and i.aisleId = :aisleId))
                and (:restrictByAllowedItemTypes = false or i.itemTypeId in :allowedItemTypeIds)
                and i.sellable = true
                and (i.bundlePrice is null or i.bundlePrice <= 0)
@@ -561,7 +588,10 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("itemTypeUnset") boolean itemTypeUnset,
             @Param("itemTypeId") String itemTypeId,
             @Param("restrictByAllowedItemTypes") boolean restrictByAllowedItemTypes,
-            @Param("allowedItemTypeIds") Collection<String> allowedItemTypeIds
+            @Param("allowedItemTypeIds") Collection<String> allowedItemTypeIds,
+            @Param("aisleFilterUnset") boolean aisleFilterUnset,
+            @Param("filterAisleUnset") boolean filterAisleUnset,
+            @Param("aisleId") String aisleId
     );
 
     @Query("""
@@ -645,6 +675,9 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                             and ch.deletedAt is null
                         )))
                and (:itemTypeUnset = true or i.itemTypeId = :itemTypeId)
+               and (:aisleFilterUnset = true
+                    or (:filterAisleUnset = true and (i.aisleId is null or trim(i.aisleId) = ''))
+                    or (:filterAisleUnset = false and i.aisleId = :aisleId))
                and (:restrictByAllowedItemTypes = false or i.itemTypeId in :allowedItemTypeIds)
             """)
     List<String> findCatalogStockAttentionItemIds(
@@ -669,7 +702,10 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("itemTypeUnset") boolean itemTypeUnset,
             @Param("itemTypeId") String itemTypeId,
             @Param("restrictByAllowedItemTypes") boolean restrictByAllowedItemTypes,
-            @Param("allowedItemTypeIds") Collection<String> allowedItemTypeIds
+            @Param("allowedItemTypeIds") Collection<String> allowedItemTypeIds,
+            @Param("aisleFilterUnset") boolean aisleFilterUnset,
+            @Param("filterAisleUnset") boolean filterAisleUnset,
+            @Param("aisleId") String aisleId
     );
 
     @Query("""
@@ -823,4 +859,22 @@ public interface ItemRepository extends JpaRepository<Item, String> {
              group by i.categoryId
             """)
     List<Object[]> countActiveItemsByCategory(@Param("businessId") String businessId);
+
+    @Query("""
+            select i.aisleId, count(i) from Item i
+             where i.businessId = :businessId
+               and i.deletedAt is null
+               and i.aisleId is not null
+               and trim(i.aisleId) <> ''
+             group by i.aisleId
+            """)
+    List<Object[]> countItemsGroupedByAisleId(@Param("businessId") String businessId);
+
+    @Query("""
+            select count(i) from Item i
+             where i.businessId = :businessId
+               and i.deletedAt is null
+               and (i.aisleId is null or trim(i.aisleId) = '')
+            """)
+    long countItemsWithNoAisle(@Param("businessId") String businessId);
 }

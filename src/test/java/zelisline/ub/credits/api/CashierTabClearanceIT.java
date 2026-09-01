@@ -260,12 +260,13 @@ class CashierTabClearanceIT {
     }
 
     @Test
-    void tabPurchasesBlockedWhenToggleOff() throws Exception {
+    void tabPurchasesAvailableWithCustomersRead() throws Exception {
         mockMvc.perform(get("/api/v1/customers/" + customerId + "/tab-purchases")
                         .header("X-Tenant-Id", TENANT)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_CASHIER))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rows").isArray());
     }
 
     @Test
@@ -276,8 +277,8 @@ class CashierTabClearanceIT {
                         .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_CASHIER))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$").isArray())
-                .andExpect(jsonPath("$.length()").value(0));
+                .andExpect(jsonPath("$.rows").isArray())
+                .andExpect(jsonPath("$.rows.length()").value(0));
     }
 
     private void enableToggle() throws Exception {

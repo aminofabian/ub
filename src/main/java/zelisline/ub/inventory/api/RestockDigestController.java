@@ -127,13 +127,14 @@ public class RestockDigestController {
             @PathVariable String runId,
             @RequestParam(required = false) String departmentId,
             @RequestParam(required = false) String supplierId,
+            @RequestParam(required = false) String aisleId,
             @RequestParam(required = false, defaultValue = "false") boolean pad,
             HttpServletRequest request
     ) {
         CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         RestockDigestPdfFile file = restockDigestService.renderGroupPdf(
-                businessId, runId.trim(), departmentId, supplierId, pad);
+                businessId, runId.trim(), departmentId, supplierId, aisleId, pad);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + file.filename() + "\"")
                 .contentType(MediaType.APPLICATION_PDF)

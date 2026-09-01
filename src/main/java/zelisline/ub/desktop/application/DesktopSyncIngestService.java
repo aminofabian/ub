@@ -41,6 +41,9 @@ import zelisline.ub.purchasing.repository.RawPurchaseLineRepository;
 import zelisline.ub.purchasing.repository.RawPurchaseSessionRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
+import zelisline.ub.purchasing.repository.StockMovementRepository;
+import zelisline.ub.purchasing.PurchasingConstants;
+import zelisline.ub.purchasing.domain.StockMovement;
 import zelisline.ub.storefront.application.WebOrderFulfillmentService;
 
 /**
@@ -79,6 +82,7 @@ public class DesktopSyncIngestService {
     private final SupplierInvoiceRepository supplierInvoiceRepository;
     private final SupplierInvoiceLineRepository supplierInvoiceLineRepository;
     private final ItemRepository itemRepository;
+    private final StockMovementRepository stockMovementRepository;
     private final WebOrderFulfillmentService webOrderFulfillmentService;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -298,6 +302,59 @@ public class DesktopSyncIngestService {
         return new SupplySyncAck(ingested, skipped);
     }
 
+    /**
+     * Apply one till supply line to the cloud's stock: bump
+     * {@code items.current_stock} by the usable quantity and write the audit
+     * movements (receipt for usable, wastage for the loss), mirroring what the
+     * cloud's own PathB posting writes.
+     */
+    private void applyInboundStock(
+            String businessId,
+            RawPurchaseSession session,
+            SupplySyncSnapshot.SupplyLineData lineData,
+            String postedItemId) {
+        var item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(postedItemId, businessId)
+            .orElse(null);
+        if (item == null) {
+            return;
+        }
+        java.math.BigDecimal unitCost = lineData.draftUnitCost();
+
+        java.math.BigDecimal base = item.getCurrentStock() == null
+            ? java.math.BigDecimal.ZERO
+            : item.getCurrentStock();
+        item.setCurrentStock(base.add(lineData.usableQty()));
+        itemRepository.save(item);
+
+        StockMovement receipt = new StockMovement();
+        receipt.setBusinessId(businessId);
+        receipt.setBranchId(session.getBranchId());
+        receipt.setItemId(postedItemId);
+        receipt.setBatchId(null); // till batches don't exist cloud-side
+        receipt.setMovementType(PurchasingConstants.MOVEMENT_RECEIPT);
+        receipt.setReferenceType(PurchasingConstants.STOCK_REF_RAW_LINE);
+        receipt.setReferenceId(lineData.id());
+        receipt.setQuantityDelta(lineData.usableQty());
+        receipt.setUnitCost(unitCost);
+        receipt.setNotes("Received at till (desktop sync, session " + session.getId() + ")");
+        stockMovementRepository.save(receipt);
+
+        if (lineData.wastageQty() != null && lineData.wastageQty().signum() > 0) {
+            StockMovement wastage = new StockMovement();
+            wastage.setBusinessId(businessId);
+            wastage.setBranchId(session.getBranchId());
+            wastage.setItemId(postedItemId);
+            wastage.setBatchId(null);
+            wastage.setMovementType(PurchasingConstants.MOVEMENT_WASTAGE);
+            wastage.setReferenceType(PurchasingConstants.STOCK_REF_RAW_LINE);
+            wastage.setReferenceId(lineData.id());
+            wastage.setQuantityDelta(lineData.wastageQty());
+            wastage.setUnitCost(unitCost);
+            wastage.setNotes("Wastage at till receive (desktop sync)");
+            stockMovementRepository.save(wastage);
+        }
+    }
+
     /** Keep a cross-side item reference only when the receiving side knows the item. */
     private String resolveKnownItem(String businessId, String itemId) {
         if (itemId == null || itemId.isBlank()) {
@@ -334,7 +391,8 @@ public class DesktopSyncIngestService {
                 line.setLineStatus(lineData.lineStatus());
                 // fk_rpl_posted_item points at items(id): a till-created item the
                 // cloud hasn't adopted yet must not roll back the whole batch.
-                line.setPostedItemId(resolveKnownItem(businessId, lineData.postedItemId()));
+                String postedItemId = resolveKnownItem(businessId, lineData.postedItemId());
+                line.setPostedItemId(postedItemId);
                 line.setUsableQty(lineData.usableQty());
                 line.setWastageQty(lineData.wastageQty());
                 line.setDraftQty(lineData.draftQty());
@@ -346,6 +404,22 @@ public class DesktopSyncIngestService {
                 // would roll back the whole ingest; null defensively here too.
                 line.setInventoryBatchId(null);
                 rawPurchaseLineRepository.save(line);
+
+                // Stock application — exactly once by construction (this whole
+                // method only runs for sessions the cloud has never seen). The
+                // till already moved its own stock at receive time; here we bump
+                // the cloud's item totals and write audit movements that mirror
+                // the cloud's own PathB posting (receipt adds usable qty; wastage
+                // is recorded but never adds stock). Unit cost is the till's draft
+                // estimate — the authoritative per-line cost lives on the synced
+                // invoice lines. Full inventory-batch + ledger replay stays a
+                // documented follow-up — batch numbering and journal posting
+                // belong to the cloud's posting pipeline.
+                if (postedItemId != null
+                        && lineData.usableQty() != null
+                        && lineData.usableQty().signum() > 0) {
+                    applyInboundStock(businessId, session, lineData, postedItemId);
+                }
             }
         }
 

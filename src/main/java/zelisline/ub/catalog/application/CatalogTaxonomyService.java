@@ -3,6 +3,7 @@ package zelisline.ub.catalog.application;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -32,6 +33,7 @@ import zelisline.ub.catalog.api.dto.CreateCategorySupplierLinkRequest;
 import zelisline.ub.catalog.api.dto.CreateItemTypeRequest;
 import zelisline.ub.catalog.api.dto.ItemImageResponse;
 import zelisline.ub.catalog.api.dto.ItemTypeResponse;
+import zelisline.ub.catalog.api.dto.PatchAisleRequest;
 import zelisline.ub.catalog.api.dto.PatchCategoryRequest;
 import zelisline.ub.catalog.api.dto.PatchItemTypeRequest;
 import zelisline.ub.catalog.api.dto.PostCategoryPriceRuleRequest;
@@ -701,9 +703,18 @@ public class CatalogTaxonomyService {
 
     @Transactional(readOnly = true)
     public List<AisleResponse> listAisles(String businessId) {
+        Map<String, Long> counts = new HashMap<>();
+        for (Object[] row : itemRepository.countItemsGroupedByAisleId(businessId)) {
+            counts.put((String) row[0], (Long) row[1]);
+        }
         return aisleRepository.findByBusinessIdOrderBySortOrderAsc(businessId).stream()
-                .map(this::toAisleResponse)
+                .map(a -> toAisleResponse(a, counts.getOrDefault(a.getId(), 0L)))
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public long countUnassignedAisleProducts(String businessId) {
+        return itemRepository.countItemsWithNoAisle(businessId);
     }
 
     @Transactional
@@ -719,7 +730,39 @@ public class CatalogTaxonomyService {
         row.setSortOrder(request.sortOrder() != null ? request.sortOrder() : 0);
         row.setActive(true);
         aisleRepository.save(row);
-        return toAisleResponse(row);
+        return toAisleResponse(row, 0L);
+    }
+
+    @Transactional
+    public AisleResponse updateAisle(String businessId, String id, PatchAisleRequest request) {
+        Aisle row = aisleRepository.findByIdAndBusinessId(id, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Aisle not found"));
+        if (request.name() != null) {
+            row.setName(request.name().trim());
+        }
+        if (request.code() != null) {
+            String code = request.code().trim();
+            if (code.isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Code cannot be blank");
+            }
+            if (!row.getCode().equals(code) && aisleRepository.existsByBusinessIdAndCode(businessId, code)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Aisle code already in use");
+            }
+            row.setCode(code);
+        }
+        if (request.sortOrder() != null) {
+            row.setSortOrder(request.sortOrder());
+        }
+        if (request.active() != null) {
+            row.setActive(request.active());
+        }
+        aisleRepository.save(row);
+        long count = itemRepository.countItemsGroupedByAisleId(businessId).stream()
+                .filter(r -> id.equals(r[0]))
+                .map(r -> (Long) r[1])
+                .findFirst()
+                .orElse(0L);
+        return toAisleResponse(row, count);
     }
 
     @Transactional(readOnly = true)
@@ -815,13 +858,14 @@ public class CatalogTaxonomyService {
         return slug;
     }
 
-    private AisleResponse toAisleResponse(Aisle a) {
+    private AisleResponse toAisleResponse(Aisle a, long productCount) {
         return new AisleResponse(
                 a.getId(),
                 a.getName(),
                 a.getCode(),
                 a.getSortOrder(),
-                a.isActive());
+                a.isActive(),
+                productCount);
     }
 
     private ItemTypeResponse toItemTypeResponse(ItemType t) {

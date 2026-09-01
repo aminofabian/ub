@@ -54,6 +54,7 @@ import zelisline.ub.catalog.api.dto.ItemResponse;
 import zelisline.ub.catalog.api.dto.ItemSummaryResponse;
 import zelisline.ub.catalog.api.dto.PatchItemRequest;
 import zelisline.ub.catalog.api.dto.RegisterItemImageRequest;
+import zelisline.ub.catalog.domain.Aisle;
 import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.domain.IdempotencyKey;
 import zelisline.ub.catalog.domain.Item;
@@ -149,6 +150,8 @@ public class ItemCatalogService {
                 false,
                 false,
                 null,
+                null,
+                false,
                 pageable);
     }
 
@@ -195,6 +198,8 @@ public class ItemCatalogService {
                 false,
                 false,
                 null,
+                null,
+                false,
                 pageable);
     }
 
@@ -218,6 +223,8 @@ public class ItemCatalogService {
             boolean filterLowStock,
             boolean inactiveOnly,
             Boolean isWeighed,
+            String aisleId,
+            boolean aisleUnset,
             Pageable pageable
     ) {
         CatalogListQueryContext ctx = resolveCatalogListQuery(
@@ -234,6 +241,8 @@ public class ItemCatalogService {
                 itemTypeId,
                 allowedItemTypeIds,
                 isWeighed,
+                aisleId,
+                aisleUnset,
                 pageable);
         if (ctx.emptyResult()) {
             return Page.empty(ctx.pageable());
@@ -291,6 +300,9 @@ public class ItemCatalogService {
                 ctx.itemTypeId(),
                 ctx.restrictByAllowedItemTypes(),
                 ctx.allowedItemTypeIds(),
+                ctx.aisleFilterUnset(),
+                ctx.filterAisleUnset(),
+                ctx.aisleId(),
                 filterNoPrice,
                 restrictIdsUnset,
                 restrictIds,
@@ -321,6 +333,9 @@ public class ItemCatalogService {
                     ctx.itemTypeId(),
                     ctx.restrictByAllowedItemTypes(),
                     ctx.allowedItemTypeIds(),
+                    ctx.aisleFilterUnset(),
+                    ctx.filterAisleUnset(),
+                    ctx.aisleId(),
                     filterNoPrice,
                     restrictIdsUnset,
                     restrictIds,
@@ -335,6 +350,14 @@ public class ItemCatalogService {
                 .filter(id -> id != null && !id.isBlank())
                 .collect(Collectors.toCollection(HashSet::new));
         Map<String, String> catNames = categoryNamesById(catIds);
+        Set<String> aisleIdsOnPage = page.getContent().stream()
+                .map(Item::getAisleId)
+                .filter(id -> id != null && !id.isBlank())
+                .collect(Collectors.toCollection(HashSet::new));
+        Map<String, Aisle> aisleById = aisleIdsOnPage.isEmpty()
+                ? Map.of()
+                : aisleRepository.findByBusinessIdAndIdIn(businessId, aisleIdsOnPage).stream()
+                        .collect(Collectors.toMap(Aisle::getId, a -> a, (a, b) -> a, LinkedHashMap::new));
         Set<String> parentIdsOnPage = page.getContent().stream()
                 .filter(i -> i.getVariantOfItemId() == null)
                 .map(Item::getId)
@@ -383,6 +406,9 @@ public class ItemCatalogService {
             String parentName = blankToNull(item.getVariantOfItemId()) != null
                     ? parentNameById.get(item.getVariantOfItemId())
                     : null;
+            Aisle aisle = blankToNull(item.getAisleId()) != null
+                    ? aisleById.get(item.getAisleId())
+                    : null;
             return toSummary(
                     item,
                     thumbs,
@@ -390,7 +416,8 @@ public class ItemCatalogService {
                     groupLabelOnly,
                     displayStock,
                     baseStock,
-                    parentName);
+                    parentName,
+                    aisle);
         });
     }
 
@@ -407,7 +434,9 @@ public class ItemCatalogService {
             String excludeLinkedSupplierId,
             String branchIdForStock,
             String itemTypeId,
-            Collection<String> allowedItemTypeIds
+            Collection<String> allowedItemTypeIds,
+            String aisleId,
+            boolean aisleUnset
     ) {
         CatalogListQueryContext ctx = resolveCatalogListQuery(
                 businessId,
@@ -423,6 +452,8 @@ public class ItemCatalogService {
                 itemTypeId,
                 allowedItemTypeIds,
                 null,
+                aisleId,
+                aisleUnset,
                 PageRequest.of(0, 1));
         if (ctx.emptyResult()) {
             return new CatalogRowTypeCountsResponse(0, 0, 0, 0, 0, 0, 0, 0);
@@ -444,7 +475,10 @@ public class ItemCatalogService {
                 ctx.itemTypeUnset(),
                 ctx.itemTypeId(),
                 ctx.restrictByAllowedItemTypes(),
-                ctx.allowedItemTypeIds());
+                ctx.allowedItemTypeIds(),
+                ctx.aisleFilterUnset(),
+                ctx.filterAisleUnset(),
+                ctx.aisleId());
         long missingBarcode = itemRepository.countCatalogMissingBarcodes(
                 businessId,
                 dbSearchToken(ctx.q()),
@@ -462,7 +496,10 @@ public class ItemCatalogService {
                 ctx.itemTypeUnset(),
                 ctx.itemTypeId(),
                 ctx.restrictByAllowedItemTypes(),
-                ctx.allowedItemTypeIds());
+                ctx.allowedItemTypeIds(),
+                ctx.aisleFilterUnset(),
+                ctx.filterAisleUnset(),
+                ctx.aisleId());
         long inactive = itemRepository.countCatalogInactive(
                 businessId,
                 dbSearchToken(ctx.q()),
@@ -477,7 +514,10 @@ public class ItemCatalogService {
                 ctx.itemTypeUnset(),
                 ctx.itemTypeId(),
                 ctx.restrictByAllowedItemTypes(),
-                ctx.allowedItemTypeIds());
+                ctx.allowedItemTypeIds(),
+                ctx.aisleFilterUnset(),
+                ctx.filterAisleUnset(),
+                ctx.aisleId());
         long missingPrice = itemRepository.countCatalogMissingPrices(
                 businessId,
                 dbSearchToken(ctx.q()),
@@ -495,7 +535,10 @@ public class ItemCatalogService {
                 ctx.itemTypeUnset(),
                 ctx.itemTypeId(),
                 ctx.restrictByAllowedItemTypes(),
-                ctx.allowedItemTypeIds());
+                ctx.allowedItemTypeIds(),
+                ctx.aisleFilterUnset(),
+                ctx.filterAisleUnset(),
+                ctx.aisleId());
         StockAttentionSnapshot stockAttention = computeStockAttention(
                 businessId,
                 branchIdForStock,
@@ -569,7 +612,8 @@ public class ItemCatalogService {
                                 false,
                                 display,
                                 base,
-                                item.getName());
+                                item.getName(),
+                                null);
                     })
                     .toList();
         }
@@ -1592,7 +1636,8 @@ public class ItemCatalogService {
                             false,
                             null,
                             null,
-                            item.getName()))
+                            item.getName(),
+                            null))
                     .toList();
         }
         return toResponse(item, variants, null, null);
@@ -1696,7 +1741,8 @@ public class ItemCatalogService {
             boolean groupLabelOnly,
             BigDecimal stockQty,
             BigDecimal baseStockQty,
-            String parentName
+            String parentName,
+            Aisle aisle
     ) {
         return new ItemSummaryResponse(
                 i.getId(),
@@ -1721,6 +1767,9 @@ public class ItemCatalogService {
                 i.getBundlePrice(),
                 i.getBuyingPrice(),
                 i.getItemTypeId(),
+                aisle != null ? aisle.getId() : null,
+                aisle != null ? aisle.getCode() : null,
+                aisle != null ? aisle.getName() : null,
                 i.isWeighed(),
                 i.getUnitType(),
                 blankToNull(parentName)
@@ -1879,6 +1928,9 @@ public class ItemCatalogService {
             Collection<String> allowedItemTypeIds,
             boolean isWeighedUnset,
             boolean isWeighed,
+            boolean aisleFilterUnset,
+            boolean filterAisleUnset,
+            String aisleId,
             Pageable pageable,
             boolean emptyResult
     ) {
@@ -1898,6 +1950,8 @@ public class ItemCatalogService {
             String itemTypeId,
             Collection<String> allowedItemTypeIds,
             Boolean isWeighed,
+            String aisleId,
+            boolean aisleUnset,
             Pageable pageable
     ) {
         String q = blankToNull(search);
@@ -1940,13 +1994,18 @@ public class ItemCatalogService {
                         blankToNull(excludeLinkedSupplierId),
                         includeAllScopes && q != null,
                         true, "", false, List.of(""),
-                        isWeighed == null, isWeighed != null && isWeighed, pg, true);
+                        isWeighed == null, isWeighed != null && isWeighed,
+                        true, false, "", pg, true);
             }
         }
         boolean squashParentGroupsForSearch = includeAllScopes && q != null;
         String itemType = blankToNull(itemTypeId);
         boolean itemTypeUnset = itemType == null;
         boolean restrictByAllowedItemTypes = allowedItemTypeIds != null;
+        String aisle = blankToNull(aisleId);
+        boolean aisleFilterUnset = !aisleUnset && aisle == null;
+        boolean filterAisleUnset = aisleUnset;
+        String aisleFilterId = aisle != null ? aisle : "";
         if (restrictByAllowedItemTypes && allowedItemTypeIds.isEmpty()) {
             return new CatalogListQueryContext(
                     q, bc, catUnset, categoryIds,
@@ -1957,7 +2016,8 @@ public class ItemCatalogService {
                     itemTypeUnset, itemType != null ? itemType : "",
                     restrictByAllowedItemTypes,
                     List.of(""),
-                    isWeighed == null, isWeighed != null && isWeighed, pg, true);
+                    isWeighed == null, isWeighed != null && isWeighed,
+                    aisleFilterUnset, filterAisleUnset, aisleFilterId, pg, true);
         }
         Collection<String> safeAllowedItemTypes = restrictByAllowedItemTypes
                 ? allowedItemTypeIds
@@ -1970,7 +2030,8 @@ public class ItemCatalogService {
                 squashParentGroupsForSearch,
                 itemTypeUnset, itemType != null ? itemType : "",
                 restrictByAllowedItemTypes, safeAllowedItemTypes,
-                isWeighed == null, isWeighed != null && isWeighed, pg, false);
+                isWeighed == null, isWeighed != null && isWeighed,
+                aisleFilterUnset, filterAisleUnset, aisleFilterId, pg, false);
     }
 
     private static String blankToNull(String s) {
@@ -2140,7 +2201,10 @@ public class ItemCatalogService {
                 ctx.itemTypeUnset(),
                 ctx.itemTypeId(),
                 ctx.restrictByAllowedItemTypes(),
-                ctx.allowedItemTypeIds());
+                ctx.allowedItemTypeIds(),
+                ctx.aisleFilterUnset(),
+                ctx.filterAisleUnset(),
+                ctx.aisleId());
         if (candidateIds.isEmpty()) {
             return StockAttentionSnapshot.empty();
         }

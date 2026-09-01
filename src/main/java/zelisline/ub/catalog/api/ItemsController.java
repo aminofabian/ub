@@ -96,6 +96,8 @@ public class ItemsController {
             @RequestParam(required = false) String excludeLinkedSupplierId,
             @RequestParam(required = false) String branchId,
             @RequestParam(required = false) String itemTypeId,
+            @RequestParam(required = false) String aisleId,
+            @RequestParam(required = false, defaultValue = "false") boolean aisleUnset,
             @RequestParam(required = false) Boolean isWeighed,
             Pageable pageable,
             HttpServletRequest request
@@ -121,6 +123,8 @@ public class ItemsController {
                 lowStock,
                 inactiveOnly,
                 isWeighed,
+                aisleId,
+                aisleUnset,
                 pageable
         );
     }
@@ -138,6 +142,8 @@ public class ItemsController {
             @RequestParam(required = false) String excludeLinkedSupplierId,
             @RequestParam(required = false) String branchId,
             @RequestParam(required = false) String itemTypeId,
+            @RequestParam(required = false) String aisleId,
+            @RequestParam(required = false, defaultValue = "false") boolean aisleUnset,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
@@ -154,7 +160,9 @@ public class ItemsController {
                 excludeLinkedSupplierId,
                 branchId,
                 itemTypeId,
-                allowedItemTypes
+                allowedItemTypes,
+                aisleId,
+                aisleUnset
         );
     }
 

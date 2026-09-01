@@ -27,8 +27,10 @@ import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.application.CatalogTaxonomyService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.application.ItemCreateResult;
+import zelisline.ub.catalog.domain.Aisle;
 import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.repository.AisleRepository;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
@@ -73,6 +75,7 @@ public class CsvImportApplicationService {
     private final ItemRepository itemRepository;
     private final ItemTypeRepository itemTypeRepository;
     private final CategoryRepository categoryRepository;
+    private final AisleRepository aisleRepository;
     private final SupplierService supplierService;
     private final SupplierRepository supplierRepository;
     private final ItemSupplierLinkService itemSupplierLinkService;
@@ -151,6 +154,7 @@ public class CsvImportApplicationService {
             String brand = blankToNull(col(c, "brand"));
             String size = blankToNull(col(c, "size"));
             String categoryId = resolveOrCreateCategoryId(businessId, col(c, "category_name").trim(), categoryIdByNameLower);
+            String aisleId = resolveAisleId(businessId, col(c, "aisle_code").trim());
 
             // Optional supplier: exact code match, then exact name match. Unresolved supplier
             // names are reported as warnings and the item still imports unlinked.
@@ -170,7 +174,7 @@ public class CsvImportApplicationService {
                     null,
                     itemTypeId,
                     categoryId,
-                    null,
+                    aisleId,
                     unitTypeOrNull,
                     null,
                     sellable,
@@ -437,6 +441,11 @@ public class CsvImportApplicationService {
             if (onHand == null && !onHandRaw.isEmpty()) {
                 errors.add(new CsvImportLineError(line, "invalid on_hand"));
             }
+            String aisleCode = col(c, "aisle_code").trim();
+            if (!aisleCode.isEmpty()
+                    && aisleRepository.findByBusinessIdAndCode(businessId, aisleCode).isEmpty()) {
+                errors.add(new CsvImportLineError(line, "unknown aisle_code: " + aisleCode));
+            }
         }
         return errors;
     }
@@ -627,6 +636,15 @@ public class CsvImportApplicationService {
         } catch (IOException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Could not parse CSV: " + e.getMessage());
         }
+    }
+
+    private String resolveAisleId(String businessId, String aisleCode) {
+        if (aisleCode == null || aisleCode.isBlank()) {
+            return null;
+        }
+        return aisleRepository.findByBusinessIdAndCode(businessId, aisleCode.trim())
+                .map(Aisle::getId)
+                .orElse(null);
     }
 
     private String resolveOrCreateCategoryId(

@@ -26,6 +26,7 @@ import zelisline.ub.purchasing.repository.RawPurchaseLineRepository;
 import zelisline.ub.purchasing.repository.RawPurchaseSessionRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
+import zelisline.ub.purchasing.repository.StockMovementRepository;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.sales.repository.SalePaymentRepository;
@@ -55,6 +56,7 @@ class DesktopSyncIngestServiceTest {
     private final SupplierInvoiceRepository supplierInvoiceRepository = mock(SupplierInvoiceRepository.class);
     private final SupplierInvoiceLineRepository supplierInvoiceLineRepository = mock(SupplierInvoiceLineRepository.class);
     private final ItemRepository itemRepository = mock(ItemRepository.class);
+    private final StockMovementRepository stockMovementRepository = mock(StockMovementRepository.class);
     private final zelisline.ub.storefront.application.WebOrderFulfillmentService webOrderFulfillmentService =
         mock(zelisline.ub.storefront.application.WebOrderFulfillmentService.class);
     private final ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
@@ -66,7 +68,8 @@ class DesktopSyncIngestServiceTest {
             creditAccountRepository, supplierRepository, supplierContactRepository,
             rawPurchaseSessionRepository, rawPurchaseLineRepository,
             supplierInvoiceRepository, supplierInvoiceLineRepository,
-            itemRepository, webOrderFulfillmentService, eventPublisher);
+            itemRepository, stockMovementRepository, webOrderFulfillmentService,
+            eventPublisher);
     }
 
     private static ShiftSyncRequest requestWithOneSale(String saleId, String idempotencyKey) {

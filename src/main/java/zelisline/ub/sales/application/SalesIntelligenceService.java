@@ -41,6 +41,7 @@ import zelisline.ub.credits.domain.MaskedMsisdn;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.BranchCogsRow;
 import zelisline.ub.sales.api.dto.CategoryDailyRevenueRow;
+import zelisline.ub.sales.api.dto.CustomerProductSegmentRow;
 import zelisline.ub.sales.api.dto.CustomerSpendResponse;
 import zelisline.ub.sales.api.dto.CustomerSpendRow;
 import zelisline.ub.sales.api.dto.CustomerTrendResponse;
@@ -1956,6 +1957,86 @@ public class SalesIntelligenceService {
                 walkInSpend,
                 truncated,
                 ranked);
+    }
+
+    private static final String Q_CUSTOMERS_BY_PRODUCT = """
+            SELECT c.id AS customer_id,
+                   c.customer_no,
+                   c.name,
+                   (SELECT p.phone
+                      FROM customer_phones p
+                     WHERE p.customer_id = c.id
+                       AND p.business_id = c.business_id
+                       AND p.phone IS NOT NULL
+                       AND p.phone <> ''
+                     ORDER BY p.is_primary DESC, p.created_at ASC
+                     LIMIT 1) AS primary_phone,
+                   COUNT(DISTINCT s.id) AS purchase_count,
+                   COALESCE(SUM(sil.line_total), 0) AS spend_on_item,
+                   MAX(s.sold_at) AS last_purchase_at
+              FROM sales s
+              JOIN sale_items sil ON sil.sale_id = s.id
+              JOIN customers c ON c.id = s.customer_id AND c.business_id = s.business_id
+             WHERE s.business_id = ?
+               AND sil.item_id = ?
+               AND s.status IN (?, ?)
+               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND s.customer_id IS NOT NULL
+               AND c.deleted_at IS NULL
+               AND c.anonymised_at IS NULL
+               AND (? IS NULL OR s.branch_id = ?)
+             GROUP BY c.id, c.customer_no, c.name
+             ORDER BY last_purchase_at DESC
+             LIMIT ?
+            """;
+
+    @Transactional(readOnly = true)
+    public List<CustomerProductSegmentRow> customersByProduct(
+            String businessId,
+            String itemId,
+            LocalDate fromInclusive,
+            LocalDate toInclusive,
+            String branchId,
+            Integer limit
+    ) {
+        if (itemId == null || itemId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "itemId is required");
+        }
+        if (!itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId.trim(), businessId).isPresent()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found");
+        }
+        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
+        Date from = Date.valueOf(w[0]);
+        Date to = Date.valueOf(w[1]);
+        String branchFilter = blankToNull(branchId);
+        int rowLimit = limit == null ? 200 : Math.max(1, Math.min(limit, 500));
+
+        List<CustomerProductSegmentRow> out = new ArrayList<>();
+        jdbc.query(
+                Q_CUSTOMERS_BY_PRODUCT,
+                rs -> {
+                    long customerNo = rs.getLong("customer_no");
+                    Long customerNoOrNull = rs.wasNull() ? null : customerNo;
+                    BigDecimal spend = rs.getBigDecimal("spend_on_item");
+                    out.add(new CustomerProductSegmentRow(
+                            rs.getString("customer_id"),
+                            customerNoOrNull,
+                            rs.getString("name"),
+                            rs.getString("primary_phone"),
+                            rs.getLong("purchase_count"),
+                            spend == null ? ZERO : spend.setScale(2, RoundingMode.HALF_UP),
+                            rs.getTimestamp("last_purchase_at").toInstant()));
+                },
+                businessId,
+                itemId.trim(),
+                SalesConstants.SALE_STATUS_COMPLETED,
+                SalesConstants.SALE_STATUS_REFUNDED,
+                from,
+                to,
+                branchFilter,
+                branchFilter,
+                rowLimit);
+        return out;
     }
 
     private static BranchCogsAgg combineBranchCogs(BranchCogsAgg a, BranchCogsAgg b) {

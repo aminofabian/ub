@@ -17,6 +17,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.sales.api.dto.BranchCogsRow;
 import zelisline.ub.sales.api.dto.CategoryDailyRevenueRow;
+import zelisline.ub.sales.api.dto.CustomerProductSegmentRow;
 import zelisline.ub.sales.api.dto.CustomerSpendResponse;
 import zelisline.ub.sales.api.dto.CustomerTrendResponse;
 import zelisline.ub.sales.api.dto.ItemActivityResponse;
@@ -197,6 +198,21 @@ public class SalesIntelligenceController {
         CurrentTenantUser.require(request);
         return salesIntelligenceService.customerSpend(
                 TenantRequestIds.resolveBusinessId(request), from, to, branchId, limit);
+    }
+
+    @GetMapping("/customers-by-product")
+    @PreAuthorize("hasPermission(null, 'sales.intelligence.read')")
+    public List<CustomerProductSegmentRow> customersByProduct(
+            @RequestParam String itemId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) Integer limit,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return salesIntelligenceService.customersByProduct(
+                TenantRequestIds.resolveBusinessId(request), itemId, from, to, branchId, limit);
     }
 
     @GetMapping("/staff-performance")

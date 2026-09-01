@@ -272,7 +272,13 @@ public class CustomerDirectoryService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Stale customer version");
         }
         if (patch.name() != null && !patch.name().isBlank()) {
-            customer.setName(patch.name().trim());
+            String trimmed = patch.name().trim();
+            customer.setName(trimmed);
+            String[] parts = PayerNameNormalizer.splitDisplayName(trimmed);
+            customer.setFirstName(parts[0].isEmpty() ? null : parts[0]);
+            customer.setLastName(parts[1].isEmpty() ? null : parts[1]);
+            customer.setFirstNameNorm(PayerNameNormalizer.normalize(parts[0]));
+            customer.setLastNameNorm(PayerNameNormalizer.normalize(parts[1]));
         }
         if (patch.email() != null) {
             customer.setEmail(blankToNull(patch.email()));

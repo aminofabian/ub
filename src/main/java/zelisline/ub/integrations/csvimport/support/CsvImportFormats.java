@@ -18,6 +18,7 @@ public final class CsvImportFormats {
             "is_stocked",
             "is_sellable",
             "category_name",
+            "aisle_code",
             "brand",
             "size",
             "buying_price",

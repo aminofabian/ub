@@ -28,6 +28,8 @@ import org.springframework.format.annotation.DateTimeFormat;
 
 import zelisline.ub.credits.api.dto.AddCustomerPhoneRequest;
 import zelisline.ub.credits.api.dto.CreateCustomerRequest;
+import zelisline.ub.credits.api.dto.CustomerBulkMessageRequest;
+import zelisline.ub.credits.api.dto.CustomerBulkMessageResponse;
 import zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse;
 import zelisline.ub.credits.api.dto.CustomerResponse;
 import zelisline.ub.credits.api.dto.IssuePaymentClaimResponse;
@@ -39,10 +41,11 @@ import zelisline.ub.credits.api.dto.RevealCustomerPhoneVerifyRequest;
 import zelisline.ub.credits.api.dto.SendCustomerPhoneVerificationRequest;
 import zelisline.ub.credits.api.dto.SendCustomerPhoneVerificationResponse;
 import zelisline.ub.credits.api.dto.TabPurchaseRowResponse;
+import zelisline.ub.credits.api.dto.TabPurchasesPageResponse;
 import zelisline.ub.credits.api.dto.TopUpWalletRequest;
 import zelisline.ub.credits.api.dto.VerifyCustomerPhoneVerificationRequest;
 import zelisline.ub.credits.api.dto.VerifyCustomerPhoneVerificationResponse;
-import zelisline.ub.credits.application.CashierTabClearanceAccess;
+import zelisline.ub.credits.application.CustomerBulkSmsService;
 import zelisline.ub.credits.application.CreditCustomerStatementService;
 import zelisline.ub.credits.application.CreditCustomerStatementService.CreditStatement;
 import zelisline.ub.credits.application.CustomerDirectoryService;
@@ -69,7 +72,7 @@ public class CustomersController {
     private final CustomerTabPurchasesService customerTabPurchasesService;
     private final WalletLedgerService walletLedgerService;
     private final PublicPaymentClaimService publicPaymentClaimService;
-    private final CashierTabClearanceAccess cashierTabClearanceAccess;
+    private final CustomerBulkSmsService customerBulkSmsService;
     private final OverdueDebtReminderService overdueDebtReminderService;
     private final CustomerPhoneVerificationService customerPhoneVerificationService;
     private final PayerPhoneClaimService payerPhoneClaimService;
@@ -260,15 +263,29 @@ public class CustomersController {
 
     @GetMapping("/{customerId}/tab-purchases")
     @PreAuthorize("hasPermission(null, 'credits.customers.read')")
-    public List<TabPurchaseRowResponse> tabPurchases(
+    public TabPurchasesPageResponse tabPurchases(
             @PathVariable String customerId,
+            @RequestParam(defaultValue = "0") int offset,
+            @RequestParam(required = false) Integer limit,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
-        cashierTabClearanceAccess.requireEnabled(businessId);
         String resolved = customerDirectoryService.resolveCustomerIdOrThrow(businessId, customerId);
-        return customerTabPurchasesService.list(businessId, resolved);
+        return customerTabPurchasesService.listPage(
+                businessId, resolved, offset, limit);
+    }
+
+    @PostMapping("/bulk-message")
+    @PreAuthorize("hasPermission(null, 'credits.customers.write')")
+    public CustomerBulkMessageResponse bulkMessage(
+            @Valid @RequestBody CustomerBulkMessageRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return customerBulkSmsService.bulkSend(
+                TenantRequestIds.resolveBusinessId(request),
+                body);
     }
 
     @PostMapping("/{customerId}/wallet/top-ups")

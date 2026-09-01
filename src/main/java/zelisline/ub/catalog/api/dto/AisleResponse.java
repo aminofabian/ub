@@ -5,6 +5,7 @@ public record AisleResponse(
         String name,
         String code,
         int sortOrder,
-        boolean active
+        boolean active,
+        long productCount
 ) {
 }

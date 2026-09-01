@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -35,17 +36,25 @@ public class AislesController {
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'catalog.items.read')")
-    public List<AisleResponse> list(HttpServletRequest request) {
+    public List<AisleResponse> list(
+            @RequestParam(required = false) String itemTypeId,
+            HttpServletRequest request
+    ) {
         CurrentTenantUser.require(request);
-        return catalogTaxonomyService.listAisles(TenantRequestIds.resolveBusinessId(request));
+        return catalogTaxonomyService.listAisles(
+                TenantRequestIds.resolveBusinessId(request), itemTypeId);
     }
 
     @GetMapping("/unassigned-count")
     @PreAuthorize("hasPermission(null, 'catalog.items.read')")
-    public AisleUnassignedCountResponse unassignedCount(HttpServletRequest request) {
+    public AisleUnassignedCountResponse unassignedCount(
+            @RequestParam(required = false) String itemTypeId,
+            HttpServletRequest request
+    ) {
         CurrentTenantUser.require(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
-        return new AisleUnassignedCountResponse(catalogTaxonomyService.countUnassignedAisleProducts(businessId));
+        return new AisleUnassignedCountResponse(
+                catalogTaxonomyService.countUnassignedAisleProducts(businessId, itemTypeId));
     }
 
     @PostMapping

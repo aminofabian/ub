@@ -703,8 +703,14 @@ public class CatalogTaxonomyService {
 
     @Transactional(readOnly = true)
     public List<AisleResponse> listAisles(String businessId) {
+        return listAisles(businessId, null);
+    }
+
+    @Transactional(readOnly = true)
+    public List<AisleResponse> listAisles(String businessId, String itemTypeId) {
+        String scopedType = trimToNull(itemTypeId);
         Map<String, Long> counts = new HashMap<>();
-        for (Object[] row : itemRepository.countItemsGroupedByAisleId(businessId)) {
+        for (Object[] row : itemRepository.countItemsGroupedByAisleId(businessId, scopedType)) {
             counts.put((String) row[0], (Long) row[1]);
         }
         return aisleRepository.findByBusinessIdOrderBySortOrderAsc(businessId).stream()
@@ -714,7 +720,12 @@ public class CatalogTaxonomyService {
 
     @Transactional(readOnly = true)
     public long countUnassignedAisleProducts(String businessId) {
-        return itemRepository.countItemsWithNoAisle(businessId);
+        return countUnassignedAisleProducts(businessId, null);
+    }
+
+    @Transactional(readOnly = true)
+    public long countUnassignedAisleProducts(String businessId, String itemTypeId) {
+        return itemRepository.countItemsWithNoAisle(businessId, trimToNull(itemTypeId));
     }
 
     @Transactional
@@ -757,7 +768,7 @@ public class CatalogTaxonomyService {
             row.setActive(request.active());
         }
         aisleRepository.save(row);
-        long count = itemRepository.countItemsGroupedByAisleId(businessId).stream()
+        long count = itemRepository.countItemsGroupedByAisleId(businessId, null).stream()
                 .filter(r -> id.equals(r[0]))
                 .map(r -> (Long) r[1])
                 .findFirst()

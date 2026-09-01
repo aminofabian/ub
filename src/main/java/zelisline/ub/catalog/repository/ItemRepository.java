@@ -866,15 +866,21 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                and i.deletedAt is null
                and i.aisleId is not null
                and trim(i.aisleId) <> ''
+               and (:itemTypeId is null or i.itemTypeId = :itemTypeId)
              group by i.aisleId
             """)
-    List<Object[]> countItemsGroupedByAisleId(@Param("businessId") String businessId);
+    List<Object[]> countItemsGroupedByAisleId(
+            @Param("businessId") String businessId,
+            @Param("itemTypeId") String itemTypeId);
 
     @Query("""
             select count(i) from Item i
              where i.businessId = :businessId
                and i.deletedAt is null
                and (i.aisleId is null or trim(i.aisleId) = '')
+               and (:itemTypeId is null or i.itemTypeId = :itemTypeId)
             """)
-    long countItemsWithNoAisle(@Param("businessId") String businessId);
+    long countItemsWithNoAisle(
+            @Param("businessId") String businessId,
+            @Param("itemTypeId") String itemTypeId);
 }

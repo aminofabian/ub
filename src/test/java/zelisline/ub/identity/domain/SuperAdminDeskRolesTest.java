@@ -27,6 +27,8 @@ class SuperAdminDeskRolesTest {
         assertFalse(SuperAdminDeskRoles.canManageStaff(SuperAdminDeskRoles.AGENT));
         assertTrue(SuperAdminDeskRoles.permissionsFor(SuperAdminDeskRoles.AGENT)
                 .contains(SuperAdminDeskRoles.PERM_SERVING_ACCESS));
+        assertTrue(SuperAdminDeskRoles.permissionsFor(SuperAdminDeskRoles.AGENT)
+                .contains(SuperAdminDeskRoles.PERM_INBOX_ACCESS));
         assertFalse(SuperAdminDeskRoles.permissionsFor(SuperAdminDeskRoles.AGENT)
                 .contains(SuperAdminDeskRoles.PERM_CONSOLE_FULL));
     }
@@ -38,5 +40,8 @@ class SuperAdminDeskRolesTest {
         assertTrue(SuperAdminDeskRoles.authoritiesFor(SuperAdminDeskRoles.LEAD).stream()
                 .map(GrantedAuthority::getAuthority)
                 .anyMatch("PERM_sa.staff.manage"::equals));
+        assertTrue(SuperAdminDeskRoles.authoritiesFor(SuperAdminDeskRoles.LEAD).stream()
+                .map(GrantedAuthority::getAuthority)
+                .anyMatch("PERM_sa.inbox.access"::equals));
     }
 }

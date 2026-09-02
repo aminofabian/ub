@@ -186,8 +186,10 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/super-admin/realtime/**").hasRole("SUPER_ADMIN")
                         .requestMatchers("/api/v1/super-admin/serving/**")
                             .hasAuthority("PERM_sa.serving.access")
-                        .requestMatchers(HttpMethod.GET, "/api/v1/super-admin/support/unread-count")
-                            .hasAuthority("PERM_sa.serving.access")
+                        .requestMatchers("/api/v1/super-admin/support/**")
+                            .hasAuthority("PERM_sa.inbox.access")
+                        .requestMatchers("/api/v1/super-admin/contact-messages/**")
+                            .hasAuthority("PERM_sa.inbox.access")
                         .requestMatchers("/api/v1/super-admin/**")
                             .hasAuthority("PERM_sa.console.full")
 

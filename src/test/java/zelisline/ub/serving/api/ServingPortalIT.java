@@ -30,6 +30,7 @@ import zelisline.ub.identity.repository.SuperAdminRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.serving.repository.ServingTicketEventRepository;
 import zelisline.ub.serving.repository.ServingTicketNoteRepository;
+import zelisline.ub.serving.repository.ServingTicketPointRepository;
 import zelisline.ub.serving.repository.ServingTicketRepository;
 import zelisline.ub.support.repository.SupportConversationRepository;
 import zelisline.ub.support.repository.SupportMessageRepository;
@@ -78,6 +79,9 @@ class ServingPortalIT {
     private ServingTicketNoteRepository servingTicketNoteRepository;
 
     @Autowired
+    private ServingTicketPointRepository servingTicketPointRepository;
+
+    @Autowired
     private ServingTicketEventRepository servingTicketEventRepository;
 
     @Autowired
@@ -91,6 +95,7 @@ class ServingPortalIT {
 
     @BeforeEach
     void seed() throws Exception {
+        servingTicketPointRepository.deleteAll();
         servingTicketNoteRepository.deleteAll();
         servingTicketEventRepository.deleteAll();
         servingTicketRepository.deleteAll();
@@ -188,6 +193,15 @@ class ServingPortalIT {
                         .param("size", "20")
                         .header("Authorization", "Bearer " + agentToken))
                 .andExpect(status().isForbidden());
+
+        mockMvc.perform(get("/api/v1/super-admin/support/conversations")
+                        .header("Authorization", "Bearer " + agentToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conversations").isArray());
+
+        mockMvc.perform(get("/api/v1/super-admin/contact-messages")
+                        .header("Authorization", "Bearer " + agentToken))
+                .andExpect(status().isOk());
 
         mockMvc.perform(post("/api/v1/super-admin/serving/tickets/" + ticketId + "/assign")
                         .header("Authorization", "Bearer " + ownerToken)
@@ -377,6 +391,65 @@ class ServingPortalIT {
                         .header("Authorization", "Bearer " + ownerToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.ticket.status").value("OPEN"));
+    }
+
+    @Test
+    void organizeThreadIntoNumberedPointsTenantCanComplete() throws Exception {
+        mockMvc.perform(post("/api/v1/support/conversation/messages")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"body\":\"1. Till is stuck on the splash. 2. Please point a custom domain. 3. We also need SMS credits.\"}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header("X-Test-User-Id", userIdFor())
+                        .header("X-Test-Role-Id", ROLE_OWNER))
+                .andExpect(status().isCreated());
+
+        String ticketId = objectMapper.readTree(
+                        mockMvc.perform(get("/api/v1/super-admin/serving/tickets")
+                                        .header("Authorization", "Bearer " + ownerToken))
+                                .andExpect(status().isOk())
+                                .andReturn()
+                                .getResponse()
+                                .getContentAsString())
+                .path("tickets").get(0).path("id").asText();
+
+        MvcResult organized = mockMvc.perform(post("/api/v1/super-admin/serving/tickets/" + ticketId + "/organize")
+                        .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.source").value("HEURISTIC"))
+                .andExpect(jsonPath("$.ticket.points[0].seq").value(1))
+                .andExpect(jsonPath("$.ticket.points[1].seq").value(2))
+                .andExpect(jsonPath("$.ticket.points[2].seq").value(3))
+                .andExpect(jsonPath("$.ticket.ticket.shopSeq").value(1))
+                .andExpect(jsonPath("$.ticket.ticket.pointCount").value(3))
+                .andReturn();
+
+        String pointId = objectMapper.readTree(organized.getResponse().getContentAsString())
+                .path("ticket").path("points").get(0).path("id").asText();
+
+        mockMvc.perform(get("/api/v1/support/tickets")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header("X-Test-User-Id", userIdFor())
+                        .header("X-Test-Role-Id", ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.tickets[0].shopSeq").value(1));
+
+        mockMvc.perform(post("/api/v1/support/tickets/" + ticketId + "/points/" + pointId + "/complete")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header("X-Test-User-Id", userIdFor())
+                        .header("X-Test-Role-Id", ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.seq").value(1))
+                .andExpect(jsonPath("$.status").value("DONE"))
+                .andExpect(jsonPath("$.completedByKind").value("TENANT"));
+
+        mockMvc.perform(get("/api/v1/support/tickets/" + ticketId)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header("X-Test-User-Id", userIdFor())
+                        .header("X-Test-Role-Id", ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.points[0].status").value("DONE"))
+                .andExpect(jsonPath("$.points[1].status").value("OPEN"))
+                .andExpect(jsonPath("$.ticket.doneCount").value(1));
     }
 
     private String userIdFor() {

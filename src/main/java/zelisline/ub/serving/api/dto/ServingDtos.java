@@ -71,7 +71,23 @@ public final class ServingDtos {
             String contactMessageId,
             Instant lastActivityAt,
             Instant createdAt,
-            Instant updatedAt
+            Instant updatedAt,
+            Integer shopSeq,
+            int pointCount,
+            int doneCount
+    ) {
+    }
+
+    public record TicketPoint(
+            String id,
+            int seq,
+            String title,
+            String detail,
+            String status,
+            String source,
+            Instant completedAt,
+            String completedByName,
+            String completedByKind
     ) {
     }
 
@@ -98,7 +114,20 @@ public final class ServingDtos {
             TicketSummary ticket,
             List<SupportMessageDto> messages,
             List<TicketNote> notes,
-            List<TicketEvent> events
+            List<TicketEvent> events,
+            List<TicketPoint> points
+    ) {
+    }
+
+    public record OrganizeResult(
+            TicketDetail ticket,
+            String source
+    ) {
+    }
+
+    public record AddPointRequest(
+            String title,
+            String detail
     ) {
     }
 

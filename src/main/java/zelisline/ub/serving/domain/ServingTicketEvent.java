@@ -26,6 +26,8 @@ public class ServingTicketEvent {
     public static final String KIND_MESSAGE = "MESSAGE";
     public static final String KIND_PROMOTED = "PROMOTED";
     public static final String KIND_ESCALATED = "ESCALATED";
+    public static final String KIND_ORGANIZED = "ORGANIZED";
+    public static final String KIND_POINT = "POINT";
 
     @Id
     @Column(name = "id", nullable = false, length = 36)

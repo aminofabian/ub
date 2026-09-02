@@ -13,7 +13,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
  *
  * <p>{@code owner} is the historical full console operator. {@code lead} is a CS
  * supervisor with the full console plus staff management. {@code agent} only
- * works tickets on Serving.
+ * works tickets, live Support, and Talk to Us Messages — not Tenants or billing.
  */
 public final class SuperAdminDeskRoles {
 
@@ -23,12 +23,14 @@ public final class SuperAdminDeskRoles {
 
     public static final String PERM_CONSOLE_FULL = "sa.console.full";
     public static final String PERM_SERVING_ACCESS = "sa.serving.access";
+    public static final String PERM_INBOX_ACCESS = "sa.inbox.access";
     public static final String PERM_STAFF_MANAGE = "sa.staff.manage";
     public static final String PERM_SERVING_ASSIGN = "sa.serving.assign";
 
     private static final Set<String> OWNER_PERMISSIONS = Set.of(
             PERM_CONSOLE_FULL,
             PERM_SERVING_ACCESS,
+            PERM_INBOX_ACCESS,
             PERM_STAFF_MANAGE,
             PERM_SERVING_ASSIGN
     );
@@ -36,12 +38,14 @@ public final class SuperAdminDeskRoles {
     private static final Set<String> LEAD_PERMISSIONS = Set.of(
             PERM_CONSOLE_FULL,
             PERM_SERVING_ACCESS,
+            PERM_INBOX_ACCESS,
             PERM_STAFF_MANAGE,
             PERM_SERVING_ASSIGN
     );
 
     private static final Set<String> AGENT_PERMISSIONS = Set.of(
-            PERM_SERVING_ACCESS
+            PERM_SERVING_ACCESS,
+            PERM_INBOX_ACCESS
     );
 
     private SuperAdminDeskRoles() {

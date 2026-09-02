@@ -216,4 +216,20 @@ public class SupportController {
                 "Shop staff",
                 body == null ? null : body.body());
     }
+
+    @PostMapping("/tickets/{id}/points/{pointId}/complete")
+    public ServingDtos.TicketPoint completePoint(
+            @PathVariable String id,
+            @PathVariable String pointId,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return servingTicketService.completePointAsTenant(
+                businessId,
+                id,
+                pointId,
+                principal.userId(),
+                "Shop staff");
+    }
 }

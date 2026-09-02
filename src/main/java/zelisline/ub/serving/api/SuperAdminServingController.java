@@ -141,6 +141,46 @@ public class SuperAdminServingController {
         return ticketService.addNote(actor(), id, body == null ? null : body.body());
     }
 
+    @PostMapping("/tickets/{id}/organize")
+    public ServingDtos.OrganizeResult organize(@PathVariable String id) {
+        return ticketService.organize(actor(), id);
+    }
+
+    @PostMapping("/tickets/organize-from-conversation/{conversationId}")
+    public ServingDtos.OrganizeResult organizeFromConversation(@PathVariable String conversationId) {
+        return ticketService.organizeFromConversation(actor(), conversationId);
+    }
+
+    @PostMapping("/tickets/organize-from-contact/{contactMessageId}")
+    public ServingDtos.OrganizeResult organizeFromContact(@PathVariable String contactMessageId) {
+        return ticketService.organizeFromContact(actor(), contactMessageId);
+    }
+
+    @PostMapping("/tickets/{id}/points")
+    @ResponseStatus(HttpStatus.CREATED)
+    public ServingDtos.TicketPoint addPoint(
+            @PathVariable String id,
+            @RequestBody ServingDtos.AddPointRequest body
+    ) {
+        return ticketService.addPoint(actor(), id, body);
+    }
+
+    @PostMapping("/tickets/{id}/points/{pointId}/complete")
+    public ServingDtos.TicketPoint completePoint(
+            @PathVariable String id,
+            @PathVariable String pointId
+    ) {
+        return ticketService.completePoint(actor(), id, pointId);
+    }
+
+    @PostMapping("/tickets/{id}/points/{pointId}/reopen")
+    public ServingDtos.TicketPoint reopenPoint(
+            @PathVariable String id,
+            @PathVariable String pointId
+    ) {
+        return ticketService.reopenPoint(actor(), id, pointId);
+    }
+
     @PostMapping("/tickets/from-conversation/{conversationId}")
     public ServingDtos.TicketSummary promote(@PathVariable String conversationId) {
         return ticketService.promoteConversation(actor(), conversationId);

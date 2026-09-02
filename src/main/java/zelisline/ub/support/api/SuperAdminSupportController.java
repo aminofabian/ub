@@ -30,8 +30,8 @@ import zelisline.ub.support.application.SupportService;
 
 /**
  * Super-admin support inbox: every tenant's support thread, one conversation
- * each. Guarded by {@code ROLE_SUPER_ADMIN} at the route level
- * ({@code /api/v1/super-admin/**}).
+ * each. Desk roles with {@code sa.inbox.access} (owner, lead, and agent) can
+ * read and reply. Agents still cannot open Tenants or billing.
  */
 @Validated
 @RestController

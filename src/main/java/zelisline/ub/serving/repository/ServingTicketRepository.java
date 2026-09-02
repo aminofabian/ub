@@ -20,6 +20,8 @@ public interface ServingTicketRepository extends JpaRepository<ServingTicket, St
 
     List<ServingTicket> findAllByOrderByUpdatedAtDesc();
 
+    List<ServingTicket> findByBusinessIdOrderByCreatedAtAsc(String businessId);
+
     long countByAssignedToAndStatusIn(String assignedTo, Collection<String> statuses);
 
     long countByAssignedToIsNullAndStatus(String status);

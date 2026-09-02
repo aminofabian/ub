@@ -21,6 +21,7 @@ import zelisline.ub.identity.api.dto.SuperAdminLoginResponse;
 import zelisline.ub.identity.api.dto.SuperAdminTestSmsResponse;
 import zelisline.ub.identity.api.dto.UpdateSuperAdminProfileRequest;
 import zelisline.ub.identity.domain.SuperAdmin;
+import zelisline.ub.identity.domain.SuperAdminDeskRoles;
 import zelisline.ub.identity.repository.SuperAdminRepository;
 import zelisline.ub.messaging.application.CustomerMessageDispatcher;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
@@ -71,7 +72,13 @@ public class SuperAdminMeController {
     }
 
     private static SuperAdminLoginResponse toResponse(SuperAdmin admin) {
-        return new SuperAdminLoginResponse(null, admin.getId(), admin.getEmail(), admin.getName(), admin.getPhone());
+        return new SuperAdminLoginResponse(
+                null,
+                admin.getId(),
+                admin.getEmail(),
+                admin.getName(),
+                admin.getPhone(),
+                SuperAdminDeskRoles.normalizeOrOwner(admin.getDeskRole()));
     }
 
     @PostMapping("/change-password")

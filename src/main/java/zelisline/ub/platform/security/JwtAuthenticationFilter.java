@@ -32,6 +32,7 @@ import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.identity.application.UserSessionActivity;
 import zelisline.ub.platform.logs.PlatformRequestLogErrorCapture;
 import zelisline.ub.identity.domain.SuperAdmin;
+import zelisline.ub.identity.domain.SuperAdminDeskRoles;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.domain.UserSession;
 import zelisline.ub.identity.domain.UserStatus;
@@ -329,7 +330,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         var authentication = new UsernamePasswordAuthenticationToken(
                 admin.getId(),
                 "",
-                List.of(new SimpleGrantedAuthority("ROLE_SUPER_ADMIN"))
+                SuperAdminDeskRoles.authoritiesFor(admin.getDeskRole())
         );
         SecurityContextHolder.getContext().setAuthentication(authentication);
         return true;

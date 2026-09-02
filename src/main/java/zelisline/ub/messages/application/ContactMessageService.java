@@ -26,6 +26,7 @@ import zelisline.ub.messages.domain.ContactMessageStatus;
 import zelisline.ub.messages.repository.ContactMessageReplyRepository;
 import zelisline.ub.messages.repository.ContactMessageRepository;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
+import zelisline.ub.serving.application.ServingTicketService;
 import zelisline.ub.storefront.application.PublicStorefrontContextService;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
@@ -41,11 +42,17 @@ public class ContactMessageService {
     private final PublicStorefrontContextService storefrontContextService;
     private final BusinessRepository businessRepository;
     private final ContactReplySender contactReplySender;
+    private final ServingTicketService servingTicketService;
 
     @Transactional
     public PublicContactMessageResponse submitPlatform(
             PublicContactMessageRequest body, HttpServletRequest request) {
         ContactMessage saved = persist(ContactMessageScope.PLATFORM, null, body, request);
+        try {
+            servingTicketService.openFromContact(saved);
+        } catch (Exception ignored) {
+            // Ticket intake must not fail the public form.
+        }
         return new PublicContactMessageResponse(true, saved.getId());
     }
 

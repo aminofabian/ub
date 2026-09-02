@@ -19,6 +19,8 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
+import zelisline.ub.serving.api.dto.ServingDtos;
+import zelisline.ub.serving.application.ServingTicketService;
 import zelisline.ub.support.api.dto.CreateSupportConversationRequest;
 import zelisline.ub.support.api.dto.SendSupportMessageRequest;
 import zelisline.ub.support.api.dto.SupportConversationDetailDto;
@@ -42,6 +44,7 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class SupportController {
 
     private final SupportService supportService;
+    private final ServingTicketService servingTicketService;
 
     // ── Platform thread (the classic tenant → super-admin chat) ─────────────
 
@@ -155,5 +158,62 @@ public class SupportController {
         CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         return Map.of("count", supportService.storefrontStaffUnreadCount(businessId));
+    }
+
+    @PostMapping("/storefront/conversations/{id}/escalate")
+    public ServingDtos.TicketSummary escalateStorefront(
+            @PathVariable String id,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return servingTicketService.escalateStorefront(
+                businessId, id, principal.userId(), "Shop staff");
+    }
+
+    @GetMapping("/tickets")
+    public Map<String, Object> tickets(
+            @RequestParam(required = false) String status,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        List<ServingDtos.TicketSummary> tickets = servingTicketService.listForTenant(businessId, status);
+        return Map.of("tickets", tickets, "total", tickets.size());
+    }
+
+    @PostMapping("/tickets")
+    @ResponseStatus(HttpStatus.CREATED)
+    public ServingDtos.TicketSummary createTicket(
+            @RequestBody ServingDtos.TenantCreateTicketRequest body,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return servingTicketService.createForTenant(businessId, principal.userId(), "Shop staff", body);
+    }
+
+    @GetMapping("/tickets/{id}")
+    public ServingDtos.TicketDetail ticket(@PathVariable String id, HttpServletRequest request) {
+        CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return servingTicketService.getForTenant(businessId, id);
+    }
+
+    @PostMapping("/tickets/{id}/messages")
+    @ResponseStatus(HttpStatus.CREATED)
+    public SupportMessageDto ticketReply(
+            @PathVariable String id,
+            @Valid @RequestBody SendSupportMessageRequest body,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return servingTicketService.replyAsTenant(
+                businessId,
+                id,
+                principal.userId(),
+                "Shop staff",
+                body == null ? null : body.body());
     }
 }

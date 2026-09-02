@@ -539,6 +539,33 @@ class PathAPurchaseIT {
     }
 
     @Test
+    void receiveMoreThanOrdered_raisesOrderedQtyToWhatArrived() throws Exception {
+        String poId = createPo();
+        String poLineId = addPoLine(poId, "10", "5");
+        sendPo(poId);
+
+        String grnBody = """
+                {"purchaseOrderId":"%s","branchId":"%s","receivedAt":"%s","lines":[
+                  {"purchaseOrderLineId":"%s","qtyReceived":12}
+                ]}
+                """.formatted(poId, branchId, Instant.parse("2026-05-12T08:00:00Z"), poLineId);
+
+        mockMvc.perform(post("/api/v1/purchasing/path-a/goods-receipts")
+                        .contentType(APPLICATION_JSON)
+                        .content(grnBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        PurchaseOrderLine line = purchaseOrderLineRepository.findById(poLineId).orElseThrow();
+        assertThat(line.getQtyOrdered()).isEqualByComparingTo(new BigDecimal("12.0000"));
+        assertThat(line.getQtyReceived()).isEqualByComparingTo(new BigDecimal("12.0000"));
+        assertThat(itemRepository.findById(itemId).orElseThrow().getCurrentStock())
+                .isEqualByComparingTo(new BigDecimal("12.0000"));
+    }
+
+    @Test
     void sendPurchaseOrderWithoutLinesIsBadRequest() throws Exception {
         String poId = createPo();
         mockMvc.perform(post("/api/v1/purchasing/path-a/purchase-orders/" + poId + "/send")

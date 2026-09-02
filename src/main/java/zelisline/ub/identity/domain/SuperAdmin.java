@@ -47,6 +47,10 @@ public class SuperAdmin {
     @Column(name = "active", nullable = false)
     private boolean active = true;
 
+    /** owner (full console), lead (CS supervisor), or agent (Serving only). */
+    @Column(name = "desk_role", nullable = false, length = 16)
+    private String deskRole = SuperAdminDeskRoles.OWNER;
+
     @Column(name = "last_login_at")
     private Instant lastLoginAt;
 

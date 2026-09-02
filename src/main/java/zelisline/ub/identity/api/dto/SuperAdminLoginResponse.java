@@ -5,6 +5,7 @@ public record SuperAdminLoginResponse(
         String superAdminId,
         String email,
         String name,
-        String phone
+        String phone,
+        String deskRole
 ) {
 }

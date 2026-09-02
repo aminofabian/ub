@@ -19,6 +19,7 @@ import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.identity.api.dto.SuperAdminLoginRequest;
 import zelisline.ub.identity.api.dto.SuperAdminLoginResponse;
 import zelisline.ub.identity.domain.SuperAdmin;
+import zelisline.ub.identity.domain.SuperAdminDeskRoles;
 import zelisline.ub.identity.repository.SuperAdminRepository;
 import zelisline.ub.platform.security.JwtTokenService;
 
@@ -65,7 +66,7 @@ public class SuperAdminAuthService {
         String jti = UUID.randomUUID().toString();
         String access = jwtTokenService.createSuperAdminAccessToken(admin.getId(), jti);
         publishSuperAdminEvent(admin, AuditEventTypes.LOGIN_SUCCEEDED, null);
-        return new SuperAdminLoginResponse(access, admin.getId(), admin.getEmail(), admin.getName(), admin.getPhone());
+        return toResponse(access, admin);
     }
 
     /**
@@ -83,7 +84,17 @@ public class SuperAdminAuthService {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Account is temporarily locked");
         }
         String access = jwtTokenService.createSuperAdminAccessToken(admin.getId(), UUID.randomUUID().toString());
-        return new SuperAdminLoginResponse(access, admin.getId(), admin.getEmail(), admin.getName(), admin.getPhone());
+        return toResponse(access, admin);
+    }
+
+    private static SuperAdminLoginResponse toResponse(String access, SuperAdmin admin) {
+        return new SuperAdminLoginResponse(
+                access,
+                admin.getId(),
+                admin.getEmail(),
+                admin.getName(),
+                admin.getPhone(),
+                SuperAdminDeskRoles.normalizeOrOwner(admin.getDeskRole()));
     }
 
     private void publishSuperAdminEvent(SuperAdmin admin, String eventType, String reason) {

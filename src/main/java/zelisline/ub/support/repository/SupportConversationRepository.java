@@ -11,6 +11,9 @@ import zelisline.ub.support.domain.SupportConversation;
 
 public interface SupportConversationRepository extends JpaRepository<SupportConversation, String> {
 
+    /** The one TENANT thread of a business (keyed by tenant_thread_key = businessId). */
+    Optional<SupportConversation> findByTenantThreadKey(String tenantThreadKey);
+
     /** The one TENANT thread of a business (never a STOREFRONT buyer thread). */
     Optional<SupportConversation> findByConversationTypeAndBusinessId(String conversationType, String businessId);
 

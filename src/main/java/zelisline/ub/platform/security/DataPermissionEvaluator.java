@@ -45,6 +45,13 @@ public class DataPermissionEvaluator implements PermissionEvaluator {
                 return zelisline.ub.marketplace.domain.SupplierUserRoles.permissionsFor(supplier.roleKey())
                         .contains(perm);
             }
+            boolean superAdmin = authentication.getAuthorities().stream()
+                    .anyMatch(a -> "ROLE_SUPER_ADMIN".equals(a.getAuthority()));
+            if (superAdmin) {
+                String wanted = "PERM_" + perm;
+                return authentication.getAuthorities().stream()
+                        .anyMatch(a -> wanted.equals(a.getAuthority()));
+            }
             return false;
         }
         RequestPermissionService permissions = permissionService.getObject();

@@ -115,8 +115,7 @@ public class SupportService {
     }
 
     public Optional<SupportConversation> findByBusinessId(String businessId) {
-        return conversationRepository.findByConversationTypeAndBusinessId(
-                SupportConversation.TYPE_TENANT, businessId);
+        return conversationRepository.findByTenantThreadKey(businessId);
     }
 
     /**
@@ -578,7 +577,10 @@ public class SupportService {
             rows = conversationRepository.findByStatusAndConversationTypeOrderByLastMessageAtDesc(
                     status.toUpperCase(), conversationType);
         }
-        return rows.stream().map(c -> toAdminDto(c, staffUnread(c))).toList();
+        return rows.stream()
+                .filter(this::visibleInAdminInbox)
+                .map(c -> toAdminDto(c, staffUnread(c)))
+                .toList();
     }
 
     public SupportConversationDetailDto adminDetail(String conversationId) {
@@ -614,6 +616,78 @@ public class SupportService {
         SupportConversation conversation = requirePlatformStaffed(conversationId);
         reopenIfResolved(conversation);
         return persistMessage(conversation, SupportMessage.SENDER_SUPER_ADMIN, adminUserId, adminName, request);
+    }
+
+    /**
+     * Ticket-owned thread: platform staff may reply even on an escalated STOREFRONT
+     * conversation (the SA inbox still hides those threads).
+     */
+    @Transactional
+    public SupportMessageDto sendServingStaffMessage(
+            String conversationId, String adminUserId, String adminName, SendSupportMessageRequest request
+    ) {
+        SupportConversation conversation = conversationRepository.findById(conversationId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation not found"));
+        reopenIfResolved(conversation);
+        return persistMessage(conversation, SupportMessage.SENDER_SUPER_ADMIN, adminUserId, adminName, request);
+    }
+
+    @Transactional
+    public SupportConversation createStandaloneConversation(
+            String type,
+            String businessId,
+            String createdBy,
+            String createdByName,
+            String subject,
+            String guestId,
+            String guestName,
+            String guestPhone
+    ) {
+        SupportConversation conversation = new SupportConversation();
+        conversation.setBusinessId(businessId == null || businessId.isBlank()
+                ? SupportConversation.PLATFORM_BUSINESS : businessId.trim());
+        conversation.setConversationType(
+                type == null || type.isBlank() ? SupportConversation.TYPE_TENANT : type.trim());
+        conversation.setStatus(SupportConversation.STATUS_OPEN);
+        conversation.setCreatedBy(createdBy == null || createdBy.isBlank() ? PLATFORM_BOT_USER_ID : createdBy);
+        conversation.setCreatedByName(createdByName);
+        String cleaned = subject == null ? null : subject.trim();
+        if (cleaned != null && cleaned.length() > 191) {
+            cleaned = cleaned.substring(0, 191);
+        }
+        conversation.setSubject(cleaned);
+        conversation.setGuestId(guestId);
+        conversation.setGuestName(guestName);
+        conversation.setGuestPhone(guestPhone);
+        if (guestId != null && !guestId.isBlank()) {
+            String token = guestTokens.mintToken();
+            conversation.setGuestTokenHash(guestTokens.hash(token));
+        }
+        return conversationRepository.saveAndFlush(conversation);
+    }
+
+    @Transactional
+    public SupportMessageDto postIntakeMessage(
+            String conversationId,
+            String senderType,
+            String senderUserId,
+            String senderName,
+            String body
+    ) {
+        SupportConversation conversation = conversationRepository.findById(conversationId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation not found"));
+        reopenIfResolved(conversation);
+        return persistMessage(conversation, senderType, senderUserId, senderName, body);
+    }
+
+    public List<SupportMessageDto> messagesSince(String conversationId, Instant since) {
+        List<SupportMessage> rows = messageRepository.findByConversationIdOrderByCreatedAtAsc(conversationId);
+        if (since != null) {
+            rows = rows.stream()
+                    .filter(message -> message.getCreatedAt() != null && !message.getCreatedAt().isBefore(since))
+                    .toList();
+        }
+        return toMessageDtos(rows);
     }
 
     /** Marks the platform's side read and broadcasts read receipts to the tenant/guest. */
@@ -831,6 +905,14 @@ public class SupportService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation not found");
         }
         return conversation;
+    }
+
+    private boolean visibleInAdminInbox(SupportConversation conversation) {
+        if (SupportConversation.TYPE_TENANT.equals(conversation.getConversationType())) {
+            return conversation.getBusinessId() != null
+                    && conversation.getBusinessId().equals(conversation.getTenantThreadKey());
+        }
+        return true;
     }
 
     private SupportConversation requireGuestThread(String conversationId, String guestId, String token) {
@@ -1161,8 +1243,7 @@ public class SupportService {
     private SupportConversation ensureConversation(
             String businessId, String createdByUserId, String createdByName, String subject
     ) {
-        return conversationRepository.findByConversationTypeAndBusinessId(
-                SupportConversation.TYPE_TENANT, businessId).orElseGet(() -> {
+        return conversationRepository.findByTenantThreadKey(businessId).orElseGet(() -> {
             SupportConversation conversation = new SupportConversation();
             conversation.setBusinessId(businessId);
             conversation.setConversationType(SupportConversation.TYPE_TENANT);
@@ -1180,8 +1261,7 @@ public class SupportService {
                 return conversation;
             } catch (DataIntegrityViolationException ex) {
                 // Concurrent create from two devices — the tenant thread key wins.
-                return conversationRepository.findByConversationTypeAndBusinessId(
-                        SupportConversation.TYPE_TENANT, businessId)
+                return conversationRepository.findByTenantThreadKey(businessId)
                         .orElseThrow(() -> ex);
             }
         });

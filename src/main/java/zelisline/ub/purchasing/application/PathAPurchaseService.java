@@ -375,28 +375,29 @@ public class PathAPurchaseService {
             PurchaseOrderLine pol = purchaseOrderLineRepository.findById(in.purchaseOrderLineId())
                     .filter(l -> l.getPurchaseOrderId().equals(po.getId()))
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid purchase order line"));
-            if (in.qtyReceived().signum() <= 0) {
+            BigDecimal incoming = in.qtyReceived().setScale(UNIT_SCALE, RoundingMode.HALF_UP);
+            if (incoming.signum() <= 0) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quantity must be positive");
             }
             BigDecimal remaining = pol.getQtyOrdered().subtract(pol.getQtyReceived());
-            if (in.qtyReceived().compareTo(remaining) > 0) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "Receive quantity exceeds ordered quantity on line");
+            if (incoming.compareTo(remaining) > 0) {
+                // Confirm supply: the quantity that arrived is the source of truth.
+                pol.setQtyOrdered(pol.getQtyReceived().add(incoming));
             }
             PackageVariantStockResolver.StockPickResolution inbound = packageVariantStockResolver.resolveInbound(
-                    businessId, pol.getItemId(), in.qtyReceived());
+                    businessId, pol.getItemId(), incoming);
             Item item = packageVariantStockResolver.requireInventoryHolder(businessId, inbound.stockItemId());
             // PO unit cost is per catalog unit (e.g. per tray); batch cost must be per base stock unit.
             BigDecimal lineMoney = PackageVariantStockResolver.catalogExtensionMoney(
-                    in.qtyReceived(), pol.getUnitEstimatedCost());
+                    incoming, pol.getUnitEstimatedCost());
             BigDecimal unitCost = PackageVariantStockResolver.toStockUnitCost(
-                    in.qtyReceived(), pol.getUnitEstimatedCost(), inbound);
+                    incoming, pol.getUnitEstimatedCost(), inbound);
             grniTotal = grniTotal.add(lineMoney);
 
             GoodsReceiptLine gl = new GoodsReceiptLine();
             gl.setGoodsReceiptId(grn.getId());
             gl.setPurchaseOrderLineId(pol.getId());
-            gl.setQtyReceived(in.qtyReceived().setScale(UNIT_SCALE, RoundingMode.HALF_UP));
+            gl.setQtyReceived(incoming);
             goodsReceiptLineRepository.save(gl);
             createdLines.add(gl);
 
@@ -434,7 +435,7 @@ public class PathAPurchaseService {
             item.setCurrentStock(base.add(inbound.stockQuantity()));
             itemRepository.save(item);
 
-            pol.setQtyReceived(pol.getQtyReceived().add(in.qtyReceived()));
+            pol.setQtyReceived(pol.getQtyReceived().add(incoming));
             purchaseOrderLineRepository.save(pol);
 
             gl.setInventoryBatchId(batch.getId());

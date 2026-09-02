@@ -181,7 +181,15 @@ public class SecurityConfig {
                         // current license signing key — a public key, no auth needed.
                         .requestMatchers(HttpMethod.GET, "/api/v1/platform/desktop-license-public-key").permitAll()
 
-                        .requestMatchers("/api/v1/super-admin/**").hasRole("SUPER_ADMIN")
+                        .requestMatchers("/api/v1/super-admin/auth/**").hasRole("SUPER_ADMIN")
+                        .requestMatchers("/api/v1/super-admin/me/**").hasRole("SUPER_ADMIN")
+                        .requestMatchers("/api/v1/super-admin/realtime/**").hasRole("SUPER_ADMIN")
+                        .requestMatchers("/api/v1/super-admin/serving/**")
+                            .hasAuthority("PERM_sa.serving.access")
+                        .requestMatchers(HttpMethod.GET, "/api/v1/super-admin/support/unread-count")
+                            .hasAuthority("PERM_sa.serving.access")
+                        .requestMatchers("/api/v1/super-admin/**")
+                            .hasAuthority("PERM_sa.console.full")
 
                         .requestMatchers("/api/v1/supplier-portal/**").hasRole("SUPPLIER")
 

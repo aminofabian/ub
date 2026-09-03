@@ -1,5 +1,7 @@
 package zelisline.ub.sales.repository;
 
+import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 
 import org.springframework.data.domain.Pageable;
@@ -108,5 +110,63 @@ public interface SaleItemRepository extends JpaRepository<SaleItem, String> {
             @Param("branchId") String branchId,
             @Param("soldOn") LocalDate soldOn,
             @Param("limit") int limit
+    );
+
+    /**
+     * Completed, non-voided sale-line totals for a set of SKUs.
+     * Row: {@code [qty, revenue, cost, profit, saleCount, lastSoldAt]}.
+     */
+    @Query("""
+            select coalesce(sum(si.quantity), 0),
+                   coalesce(sum(si.lineTotal), 0),
+                   coalesce(sum(si.costTotal), 0),
+                   coalesce(sum(si.profit), 0),
+                   count(distinct s.id),
+                   max(s.soldAt)
+              from SaleItem si
+              join Sale s on s.id = si.saleId
+             where s.businessId = :businessId
+               and si.itemId in :itemIds
+               and s.status = 'completed'
+               and s.voidedAt is null
+               and (:from is null or s.soldAt >= :from)
+            """)
+    List<Object[]> aggregateCompletedSales(
+            @Param("businessId") String businessId,
+            @Param("itemIds") Collection<String> itemIds,
+            @Param("from") Instant from
+    );
+
+    @Query("""
+            select s.id, s.receiptNo, s.soldAt, s.branchId, si.itemId,
+                   si.quantity, si.unitPrice, si.lineTotal, si.costTotal, si.profit
+              from SaleItem si
+              join Sale s on s.id = si.saleId
+             where s.businessId = :businessId
+               and si.itemId in :itemIds
+               and s.status = 'completed'
+               and s.voidedAt is null
+             order by s.soldAt desc
+            """)
+    List<Object[]> recentCompletedSaleLines(
+            @Param("businessId") String businessId,
+            @Param("itemIds") Collection<String> itemIds,
+            Pageable pageable
+    );
+
+    @Query("""
+            select s.soldAt, si.quantity, si.lineTotal
+              from SaleItem si
+              join Sale s on s.id = si.saleId
+             where s.businessId = :businessId
+               and si.itemId in :itemIds
+               and s.status = 'completed'
+               and s.voidedAt is null
+               and s.soldAt >= :from
+            """)
+    List<Object[]> completedSalePointsSince(
+            @Param("businessId") String businessId,
+            @Param("itemIds") Collection<String> itemIds,
+            @Param("from") Instant from
     );
 }

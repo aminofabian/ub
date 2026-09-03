@@ -38,6 +38,7 @@ import zelisline.ub.catalog.api.dto.GenerateProductDescriptionResponse;
 import zelisline.ub.catalog.api.dto.ItemImageResponse;
 import zelisline.ub.catalog.api.dto.ItemResponse;
 import zelisline.ub.catalog.api.dto.ItemSummaryResponse;
+import zelisline.ub.catalog.api.dto.ItemEconomicsResponse;
 import zelisline.ub.catalog.api.dto.ItemTimelineResponse;
 import zelisline.ub.catalog.api.dto.PatchItemRequest;
 import zelisline.ub.catalog.api.dto.RecordItemScanRequest;
@@ -47,6 +48,7 @@ import zelisline.ub.catalog.application.CategoryPricingResolutionService;
 import zelisline.ub.catalog.application.BulkItemImageImportService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.application.ItemCreateResult;
+import zelisline.ub.catalog.application.ItemEconomicsService;
 import zelisline.ub.catalog.application.ItemTimelineService;
 import zelisline.ub.catalog.application.ProductDescriptionGeneratorService;
 import zelisline.ub.discounts.api.dto.ResolvedDiscountRef;
@@ -71,6 +73,7 @@ public class ItemsController {
 
     private final ItemCatalogService itemCatalogService;
     private final ItemTimelineService itemTimelineService;
+    private final ItemEconomicsService itemEconomicsService;
     private final CategoryPricingResolutionService categoryPricingResolutionService;
     private final DiscountResolutionService discountResolutionService;
     private final ProductDescriptionGeneratorService productDescriptionGeneratorService;
@@ -243,6 +246,16 @@ public class ItemsController {
                 id,
                 branchId);
         return resolved.discount();
+    }
+
+    @GetMapping("/{id}/economics")
+    @PreAuthorize("hasPermission(null, 'catalog.items.read')")
+    public ItemEconomicsResponse economics(
+            @PathVariable("id") String id,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return itemEconomicsService.economics(TenantRequestIds.resolveBusinessId(request), id);
     }
 
     @GetMapping("/{id}/timeline")

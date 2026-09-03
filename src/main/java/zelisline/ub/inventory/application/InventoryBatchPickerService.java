@@ -185,7 +185,9 @@ public class InventoryBatchPickerService {
         );
 
         BigDecimal stockBefore = item.getCurrentStock() == null ? BigDecimal.ZERO : item.getCurrentStock();
-        applyStockDelta(item, appliedQty.negate(), false);
+        // Batch remaining is the physical guard; current_stock may already sit below
+        // branch on-hand (oversell / multi-branch drift) — same as ledger adjustments.
+        applyStockDelta(item, appliedQty.negate(), true);
         maybeEnqueueLowStockWebhook(businessId, branchId, pick.stockItemId(), item, stockBefore);
         return batchLines;
     }
@@ -310,7 +312,10 @@ public class InventoryBatchPickerService {
         }
 
         BigDecimal stockBefore = item.getCurrentStock() == null ? BigDecimal.ZERO : item.getCurrentStock();
-        applyStockDelta(item, pick.stockQuantity().negate(), allowNegativeStock);
+        // Branch batch remaining is the physical guard (and allowNegativeStock covers
+        // true oversell). Denormalized current_stock is business-wide and can already
+        // sit below this branch's on-hand — do not block the sale on that drift.
+        applyStockDelta(item, pick.stockQuantity().negate(), true);
         maybeEnqueueLowStockWebhook(businessId, branchId, pick.stockItemId(), item, stockBefore);
         return resultLines;
     }
@@ -543,6 +548,11 @@ public class InventoryBatchPickerService {
         return item.getId() == null || item.getId().isBlank() ? "this item" : item.getId();
     }
 
+    /**
+     * @param allowNegative when true (batch-backed sale / stock-take), skip the denormalized
+     *        {@code current_stock} floor. POS and branch UIs use batch on-hand; {@code current_stock}
+     *        can already sit below that after cross-branch drift or prior oversell.
+     */
     private void applyStockDelta(Item item, BigDecimal delta, boolean allowNegative) {
         BigDecimal base = item.getCurrentStock() == null ? BigDecimal.ZERO : item.getCurrentStock();
         BigDecimal next = base.add(delta).setScale(QTY_SCALE, RoundingMode.HALF_UP);

@@ -315,6 +315,39 @@ class InventorySlice2IT {
     }
 
     @Test
+    void salePickSucceedsWhenBranchBatchesCoverButCurrentStockDriftedLow() {
+        Item item = itemRepository.findById(itemId).orElseThrow();
+        item.setHasExpiry(false);
+        itemRepository.save(item);
+        inventoryBatchRepository.deleteAll();
+        stockMovementRepository.deleteAll();
+
+        String sole = UUID.randomUUID().toString();
+        inventoryBatchRepository.save(batch(sole, itemId, Instant.parse("2026-02-01T12:00:00Z"), null, "10"));
+        // Drift: branch batch on-hand is 10, but denormalized current_stock is only 2.
+        Item stocked = itemRepository.findById(itemId).orElseThrow();
+        stocked.setCurrentStock(new BigDecimal("2"));
+        itemRepository.save(stocked);
+
+        transactionTemplate.executeWithoutResult(st ->
+                inventoryBatchPickerService.pickAndApplyPhysicalDecrement(
+                        TENANT,
+                        itemId,
+                        branchId,
+                        new BigDecimal("5"),
+                        InventoryConstants.REF_OPERATION,
+                        inventoryBatchPickerService.newPickReferenceId(),
+                        InventoryConstants.MOVEMENT_SALE,
+                        owner.getId()
+                ));
+
+        InventoryBatch left = inventoryBatchRepository.findById(sole).orElseThrow();
+        assertThat(left.getQuantityRemaining().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("5");
+        Item after = itemRepository.findById(itemId).orElseThrow();
+        assertThat(after.getCurrentStock().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("-3");
+    }
+
+    @Test
     void salePickAllowsNegativeStockWhenConfigured() {
         Business business = businessRepository.findById(TENANT).orElseThrow();
         business.setSettings("{\"inventory\":{\"stockLevels\":{\"allowNegativeStock\":true}}}");

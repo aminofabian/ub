@@ -21,6 +21,7 @@ public record ItemEconomicsResponse(
         BigDecimal unitsBought,
         BigDecimal onHand,
         List<ItemEconomicsDayPoint> last30Days,
+        List<ItemCustomerBuyRow> buyers,
         List<ItemSupplierSpendRow> supplierSpendBreakdown,
         List<ItemSaleHistoryRow> sales,
         List<ItemPurchaseHistoryRow> purchases

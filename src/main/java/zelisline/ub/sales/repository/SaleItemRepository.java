@@ -139,7 +139,8 @@ public interface SaleItemRepository extends JpaRepository<SaleItem, String> {
 
     @Query("""
             select s.id, s.receiptNo, s.soldAt, s.branchId, si.itemId,
-                   si.quantity, si.unitPrice, si.lineTotal, si.costTotal, si.profit
+                   si.quantity, si.unitPrice, si.lineTotal, si.costTotal, si.profit,
+                   s.customerId
               from SaleItem si
               join Sale s on s.id = si.saleId
              where s.businessId = :businessId
@@ -149,6 +150,27 @@ public interface SaleItemRepository extends JpaRepository<SaleItem, String> {
              order by s.soldAt desc
             """)
     List<Object[]> recentCompletedSaleLines(
+            @Param("businessId") String businessId,
+            @Param("itemIds") Collection<String> itemIds,
+            Pageable pageable
+    );
+
+    @Query("""
+            select s.customerId,
+                   coalesce(sum(si.quantity), 0),
+                   coalesce(sum(si.lineTotal), 0),
+                   count(distinct s.id),
+                   max(s.soldAt)
+              from SaleItem si
+              join Sale s on s.id = si.saleId
+             where s.businessId = :businessId
+               and si.itemId in :itemIds
+               and s.status = 'completed'
+               and s.voidedAt is null
+             group by s.customerId
+             order by coalesce(sum(si.lineTotal), 0) desc
+            """)
+    List<Object[]> buyersOfItem(
             @Param("businessId") String businessId,
             @Param("itemIds") Collection<String> itemIds,
             Pageable pageable

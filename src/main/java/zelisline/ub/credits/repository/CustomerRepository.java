@@ -18,6 +18,9 @@ public interface CustomerRepository extends JpaRepository<Customer, String> {
 
     Optional<Customer> findByIdAndBusinessIdAndDeletedAtIsNull(String id, String businessId);
 
+    List<Customer> findByIdInAndBusinessIdAndDeletedAtIsNull(
+            java.util.Collection<String> ids, String businessId);
+
     /** All live customers of a business — used by the desktop sync export. */
     List<Customer> findByBusinessIdAndDeletedAtIsNull(String businessId);
 

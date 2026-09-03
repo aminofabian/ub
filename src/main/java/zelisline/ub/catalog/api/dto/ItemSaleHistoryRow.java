@@ -14,6 +14,8 @@ public record ItemSaleHistoryRow(
         BigDecimal unitPrice,
         BigDecimal lineTotal,
         BigDecimal costTotal,
-        BigDecimal profit
+        BigDecimal profit,
+        String customerId,
+        String customerName
 ) {
 }

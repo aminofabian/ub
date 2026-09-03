@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.api.dto.ItemCustomerBuyRow;
 import zelisline.ub.catalog.api.dto.ItemEconomicsDayPoint;
 import zelisline.ub.catalog.api.dto.ItemEconomicsResponse;
 import zelisline.ub.catalog.api.dto.ItemPurchaseHistoryRow;
@@ -27,6 +28,8 @@ import zelisline.ub.catalog.api.dto.ItemSaleHistoryRow;
 import zelisline.ub.catalog.api.dto.ItemSupplierSpendRow;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.credits.domain.Customer;
+import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.suppliers.domain.Supplier;
@@ -40,12 +43,15 @@ public class ItemEconomicsService {
 
     static final ZoneId SHOP_ZONE = ZoneId.of("Africa/Nairobi");
     private static final int HISTORY_LIMIT = 40;
+    private static final int BUYER_LIMIT = 24;
     private static final int TREND_DAYS = 30;
+    private static final String WALK_IN_NAME = "Walk-in";
 
     private final ItemRepository itemRepository;
     private final SaleItemRepository saleItemRepository;
     private final SupplierInvoiceLineRepository supplierInvoiceLineRepository;
     private final SupplierRepository supplierRepository;
+    private final CustomerRepository customerRepository;
     private final BranchRepository branchRepository;
 
     @Transactional(readOnly = true)
@@ -95,8 +101,13 @@ public class ItemEconomicsService {
                 row.spend())));
 
         List<ItemSaleHistoryRow> sales = new ArrayList<>();
+        List<String> saleCustomerIds = new ArrayList<>();
         for (Object[] row : saleItemRepository.recentCompletedSaleLines(
                 businessId, skuIds, PageRequest.of(0, HISTORY_LIMIT))) {
+            String customerId = blankToNull(asString(row[10]));
+            if (customerId != null) {
+                saleCustomerIds.add(customerId);
+            }
             String branchId = asString(row[3]);
             sales.add(new ItemSaleHistoryRow(
                     asString(row[0]),
@@ -109,7 +120,52 @@ public class ItemEconomicsService {
                     bd(row[6]),
                     bd(row[7]),
                     bd(row[8]),
-                    bd(row[9])));
+                    bd(row[9]),
+                    customerId,
+                    null));
+        }
+
+        List<Object[]> buyerRows = saleItemRepository.buyersOfItem(
+                businessId, skuIds, PageRequest.of(0, BUYER_LIMIT));
+        for (Object[] row : buyerRows) {
+            String customerId = blankToNull(asString(row[0]));
+            if (customerId != null) {
+                saleCustomerIds.add(customerId);
+            }
+        }
+        Map<String, String> customerNames = customerNames(saleCustomerIds, businessId);
+
+        sales = sales.stream()
+                .map(row -> new ItemSaleHistoryRow(
+                        row.saleId(),
+                        row.receiptNo(),
+                        row.soldAt(),
+                        row.branchId(),
+                        row.branchName(),
+                        row.itemId(),
+                        row.quantity(),
+                        row.unitPrice(),
+                        row.lineTotal(),
+                        row.costTotal(),
+                        row.profit(),
+                        row.customerId(),
+                        row.customerId() == null
+                                ? WALK_IN_NAME
+                                : customerNames.getOrDefault(row.customerId(), WALK_IN_NAME)))
+                .toList();
+
+        List<ItemCustomerBuyRow> buyers = new ArrayList<>();
+        for (Object[] row : buyerRows) {
+            String customerId = blankToNull(asString(row[0]));
+            buyers.add(new ItemCustomerBuyRow(
+                    customerId,
+                    customerId == null
+                            ? WALK_IN_NAME
+                            : customerNames.getOrDefault(customerId, WALK_IN_NAME),
+                    bd(row[1]),
+                    bd(row[2]),
+                    asLong(row[3]) == null ? 0L : asLong(row[3]),
+                    asInstant(row[4])));
         }
 
         List<ItemPurchaseHistoryRow> purchases = new ArrayList<>();
@@ -146,6 +202,7 @@ public class ItemEconomicsService {
                 spend.totalQty(),
                 onHand,
                 days,
+                buyers,
                 supplierRows,
                 sales,
                 purchases);
@@ -208,6 +265,27 @@ public class ItemEconomicsService {
     private Map<String, String> branchNames(String businessId) {
         return branchRepository.findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(businessId).stream()
                 .collect(Collectors.toMap(Branch::getId, Branch::getName, (a, b) -> a));
+    }
+
+    private Map<String, String> customerNames(Collection<String> ids, String businessId) {
+        if (ids == null || ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> out = new HashMap<>();
+        for (Customer c : customerRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(
+                ids.stream().distinct().toList(), businessId)) {
+            if (c.getName() != null && !c.getName().isBlank()) {
+                out.put(c.getId(), c.getName().trim());
+            }
+        }
+        return out;
+    }
+
+    static String blankToNull(String v) {
+        if (v == null || v.isBlank()) {
+            return null;
+        }
+        return v.trim();
     }
 
     private Map<String, String> supplierNames(Set<String> ids, String businessId) {

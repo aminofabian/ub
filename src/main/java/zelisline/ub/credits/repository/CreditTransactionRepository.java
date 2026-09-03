@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import zelisline.ub.credits.api.dto.CreditCollectionRowResponse;
 import zelisline.ub.credits.domain.CreditTransaction;
 
 public interface CreditTransactionRepository extends JpaRepository<CreditTransaction, String> {
@@ -58,5 +59,31 @@ public interface CreditTransactionRepository extends JpaRepository<CreditTransac
             @Param("txnType") String txnType,
             @Param("fromInclusive") Instant fromInclusive,
             @Param("toExclusive") Instant toExclusive
+    );
+
+    @Query("""
+            select new zelisline.ub.credits.api.dto.CreditCollectionRowResponse(
+                t.id,
+                a.customerId,
+                c.name,
+                t.createdAt,
+                t.amount
+            )
+            from CreditTransaction t
+            join CreditAccount a on a.id = t.creditAccountId
+            join Customer c on c.id = a.customerId
+            where t.businessId = :businessId
+              and t.txnType = :txnType
+              and t.createdAt >= :fromInclusive
+              and t.createdAt < :toExclusive
+              and c.deletedAt is null
+            order by t.createdAt desc
+            """)
+    List<CreditCollectionRowResponse> findCollectionsByBusinessIdAndTxnTypeAndCreatedAtRange(
+            @Param("businessId") String businessId,
+            @Param("txnType") String txnType,
+            @Param("fromInclusive") Instant fromInclusive,
+            @Param("toExclusive") Instant toExclusive,
+            Pageable pageable
     );
 }

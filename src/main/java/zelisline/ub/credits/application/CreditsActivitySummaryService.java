@@ -5,12 +5,15 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.List;
 
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.CreditTxnTypes;
+import zelisline.ub.credits.api.dto.CreditCollectionRowResponse;
 import zelisline.ub.credits.api.dto.CreditsActivitySummaryResponse;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CreditTransactionRepository;
@@ -51,8 +54,15 @@ public class CreditsActivitySummaryService {
                 toExclusive);
         BigDecimal owed = money(creditAccountRepository.sumOutstandingBalanceByBusinessId(businessId));
         long openTabCount = creditAccountRepository.countOutstandingByBusinessId(businessId);
+        List<CreditCollectionRowResponse> collections =
+                creditTransactionRepository.findCollectionsByBusinessIdAndTxnTypeAndCreatedAtRange(
+                        businessId,
+                        CreditTxnTypes.PAYMENT,
+                        fromInclusive,
+                        toExclusive,
+                        PageRequest.of(0, 80));
 
-        return new CreditsActivitySummaryResponse(paid, paymentCount, owed, openTabCount);
+        return new CreditsActivitySummaryResponse(paid, paymentCount, owed, openTabCount, collections);
     }
 
     private static BigDecimal money(BigDecimal raw) {

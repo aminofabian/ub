@@ -117,6 +117,7 @@ public final class AuditEventTypes {
     public static final String CUSTOMER_CREATED = "customer.created";
     public static final String CUSTOMER_UPDATED = "customer.updated";
     public static final String CUSTOMER_CREDIT_LIMIT_CHANGED = "customer.credit_limit_changed";
+    public static final String CUSTOMER_CREDIT_SUSPENDED = "customer.credit_suspended";
     public static final String CUSTOMER_DELETED = "customer.deleted";
     public static final String CUSTOMER_CREDIT_TRANSACTION = "customer.credit_transaction";
     public static final String CUSTOMER_WALLET_TRANSACTION = "customer.wallet_transaction";

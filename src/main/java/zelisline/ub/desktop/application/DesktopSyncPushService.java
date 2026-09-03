@@ -452,7 +452,8 @@ public class DesktopSyncPushService {
                 a.getBalanceOwed(),
                 a.getWalletBalance(),
                 a.getLoyaltyPoints(),
-                a.getCreditLimit()))
+                a.getCreditLimit(),
+                a.isCreditSuspended()))
             .orElse(null);
         return new ShiftSyncRequest.CustomerData(
             customer.getId(),

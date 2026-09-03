@@ -207,6 +207,9 @@ public class CreditSaleDebtService {
     }
 
     private static void assertWithinLimit(CreditAccount acc, BigDecimal nextBalance) {
+        if (acc.isCreditSuspended()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "This customer's tab is suspended");
+        }
         BigDecimal limit = acc.getCreditLimit();
         if (limit != null && nextBalance.compareTo(limit.setScale(MONEY_SCALE, RoundingMode.HALF_UP)) > 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Exceeds customer credit limit");

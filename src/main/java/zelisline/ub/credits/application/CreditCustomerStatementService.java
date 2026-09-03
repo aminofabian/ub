@@ -44,9 +44,18 @@ public class CreditCustomerStatementService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Credit profile not found"));
 
         List<StatementLineDto> merged = new ArrayList<>();
+        BigDecimal totalCharged = zeroMoney();
+        BigDecimal totalPaid = zeroMoney();
         for (CreditTransaction t : creditTransactionRepository.findByCreditAccountIdOrderByCreatedAtAsc(acc.getId())) {
             StatementLineDto line = mapCreditTxn(t);
             merged.add(line);
+            if (CreditTxnTypes.DEBT.equals(t.getTxnType())) {
+                totalCharged = totalCharged.add(t.getAmount().setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+            } else if (CreditTxnTypes.PAYMENT.equals(t.getTxnType())) {
+                totalPaid = totalPaid.add(t.getAmount().setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+            } else if (CreditTxnTypes.PAYMENT_REVERSAL.equals(t.getTxnType())) {
+                totalPaid = totalPaid.subtract(t.getAmount().setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+            }
         }
         for (WalletTransaction w : walletTransactionRepository.findByCreditAccountIdOrderByCreatedAtAsc(acc.getId())) {
             merged.add(mapWalletTxn(w));
@@ -55,12 +64,19 @@ public class CreditCustomerStatementService {
             merged.add(mapLoyaltyTxn(l));
         }
         merged.sort(Comparator.comparing(StatementLineDto::at));
+        if (totalPaid.signum() < 0) {
+            totalPaid = zeroMoney();
+        }
         return new CreditStatement(
                 c.getId(),
                 c.getName(),
                 acc.getBalanceOwed().setScale(MONEY_SCALE, RoundingMode.HALF_UP),
                 acc.getWalletBalance().setScale(MONEY_SCALE, RoundingMode.HALF_UP),
                 acc.getLoyaltyPoints(),
+                acc.isCreditSuspended(),
+                acc.getCreditLimit() == null ? null : acc.getCreditLimit().setScale(MONEY_SCALE, RoundingMode.HALF_UP),
+                totalCharged.setScale(MONEY_SCALE, RoundingMode.HALF_UP),
+                totalPaid.setScale(MONEY_SCALE, RoundingMode.HALF_UP),
                 List.copyOf(merged));
     }
 
@@ -119,6 +135,10 @@ public class CreditCustomerStatementService {
             BigDecimal balanceOwed,
             BigDecimal walletBalance,
             int loyaltyPoints,
+            boolean creditSuspended,
+            BigDecimal creditLimit,
+            BigDecimal totalCharged,
+            BigDecimal totalPaid,
             List<StatementLineDto> lines
     ) {
     }

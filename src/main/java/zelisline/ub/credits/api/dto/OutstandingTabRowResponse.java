@@ -6,6 +6,7 @@ public record OutstandingTabRowResponse(
         String customerId,
         String name,
         String primaryPhone,
-        BigDecimal balanceOwed
+        BigDecimal balanceOwed,
+        boolean creditSuspended
 ) {
 }

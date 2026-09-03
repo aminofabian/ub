@@ -54,6 +54,9 @@ public class CreditAccount {
     @Column(name = "credit_limit", precision = 14, scale = 2)
     private BigDecimal creditLimit;
 
+    @Column(name = "credit_suspended", nullable = false)
+    private boolean creditSuspended;
+
     @Column(name = "last_activity_at")
     private Instant lastActivityAt;
 

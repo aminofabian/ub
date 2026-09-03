@@ -203,6 +203,7 @@ public class PrivacyExportService {
             credit.put("walletBalance", acc.getWalletBalance() != null ? acc.getWalletBalance().toPlainString() : null);
             credit.put("loyaltyPoints", acc.getLoyaltyPoints());
             credit.put("creditLimit", acc.getCreditLimit() != null ? acc.getCreditLimit().toPlainString() : null);
+            credit.put("creditSuspended", acc.isCreditSuspended());
             credit.put("remindersOptOut", acc.isRemindersOptOut());
         }
         zipEntry(zos, "credits/credit_account.json", objectMapper.writeValueAsBytes(credit));

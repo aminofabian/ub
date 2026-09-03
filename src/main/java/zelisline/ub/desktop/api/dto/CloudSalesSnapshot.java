@@ -85,6 +85,7 @@ public record CloudSalesSnapshot(
             BigDecimal balanceOwed,
             BigDecimal walletBalance,
             int loyaltyPoints,
-            BigDecimal creditLimit
+            BigDecimal creditLimit,
+            Boolean creditSuspended
     ) {}
 }

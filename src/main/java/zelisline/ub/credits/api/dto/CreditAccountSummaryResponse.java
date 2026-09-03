@@ -7,6 +7,7 @@ public record CreditAccountSummaryResponse(
         BigDecimal walletBalance,
         int loyaltyPoints,
         BigDecimal creditLimit,
+        boolean creditSuspended,
         long version
 ) {
 }

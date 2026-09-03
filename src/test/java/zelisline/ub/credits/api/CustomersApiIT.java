@@ -2,6 +2,7 @@ package zelisline.ub.credits.api;
 
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -165,6 +166,7 @@ class CustomersApiIT {
                 .andExpect(jsonPath("$.phones[0].primary").value(true))
                 .andExpect(jsonPath("$.credit.balanceOwed").value(0))
                 .andExpect(jsonPath("$.credit.walletBalance").value(0))
+                .andExpect(jsonPath("$.credit.creditSuspended").value(false))
                 .andReturn();
 
         JsonNode node = objectMapper.readTree(r.getResponse().getContentAsString());
@@ -234,6 +236,46 @@ class CustomersApiIT {
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content.length()").value(0));
+    }
+
+    @Test
+    void patchCanSuspendAndRestoreTabCredit() throws Exception {
+        MvcResult created = mockMvc.perform(post("/api/v1/customers")
+                        .contentType(APPLICATION_JSON)
+                        .content(createBody("Tab freeze", "0700111222", true))
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String id = objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText();
+
+        mockMvc.perform(patch("/api/v1/customers/" + id)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"creditSuspended\":true}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.credit.creditSuspended").value(true));
+
+        mockMvc.perform(get("/api/v1/customers/" + id + "/credit-statement")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.creditSuspended").value(true))
+                .andExpect(jsonPath("$.totalCharged").value(0))
+                .andExpect(jsonPath("$.totalPaid").value(0));
+
+        mockMvc.perform(patch("/api/v1/customers/" + id)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"creditSuspended\":false}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.credit.creditSuspended").value(false));
     }
 
     @Test

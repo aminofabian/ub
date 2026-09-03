@@ -132,7 +132,8 @@ public class CustomerDirectoryService {
                     c.getId(),
                     c.getName(),
                     phone,
-                    acc.getBalanceOwed()
+                    acc.getBalanceOwed(),
+                    acc.isCreditSuspended()
             ));
         }
         return out;
@@ -257,15 +258,22 @@ public class CustomerDirectoryService {
         Customer customer = loadActive(businessId, customerId);
         Map<String, Object> oldState = customerSnapshot(customer);
         BigDecimal oldCreditLimit = null;
-        if (patch.creditLimit() != null) {
+        Boolean oldSuspended = null;
+        if (patch.creditLimit() != null || patch.creditSuspended() != null) {
             CreditAccount account = creditAccountRepository
                     .findByCustomerIdAndBusinessId(customerId, businessId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Credit account not found"));
             oldCreditLimit = account.getCreditLimit();
+            oldSuspended = account.isCreditSuspended();
             if (patch.creditAccountVersion() != null && patch.creditAccountVersion() != account.getVersion()) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Stale credit account version");
             }
-            account.setCreditLimit(patch.creditLimit());
+            if (patch.creditLimit() != null) {
+                account.setCreditLimit(patch.creditLimit());
+            }
+            if (patch.creditSuspended() != null) {
+                account.setCreditSuspended(patch.creditSuspended());
+            }
             creditAccountRepository.save(account);
         }
         if (patch.version() != null && patch.version() != customer.getVersion()) {
@@ -299,6 +307,11 @@ public class CustomerDirectoryService {
                     map("creditLimit", map(
                             "old", oldCreditLimit.toPlainString(),
                             "new", patch.creditLimit().toPlainString())));
+        }
+        if (patch.creditSuspended() != null && oldSuspended != null
+                && oldSuspended != patch.creditSuspended()) {
+            publishCustomerEvent(businessId, customer, actorUserId, AuditEventTypes.CUSTOMER_CREDIT_SUSPENDED,
+                    map("creditSuspended", map("old", oldSuspended, "new", patch.creditSuspended())));
         }
         return toResponseSingle(businessId, customer);
     }
@@ -500,13 +513,14 @@ public class CustomerDirectoryService {
 
     private static CreditAccountSummaryResponse toCreditSummary(CreditAccount a) {
         if (a == null) {
-            return new CreditAccountSummaryResponse(BigDecimal.ZERO, BigDecimal.ZERO, 0, null, 0);
+            return new CreditAccountSummaryResponse(BigDecimal.ZERO, BigDecimal.ZERO, 0, null, false, 0);
         }
         return new CreditAccountSummaryResponse(
                 a.getBalanceOwed(),
                 a.getWalletBalance(),
                 a.getLoyaltyPoints(),
                 a.getCreditLimit(),
+                a.isCreditSuspended(),
                 a.getVersion()
         );
     }

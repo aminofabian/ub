@@ -212,6 +212,9 @@ public class DesktopSyncIngestService {
             }
             acc.setLoyaltyPoints(data.creditAccount().loyaltyPoints());
             acc.setCreditLimit(data.creditAccount().creditLimit());
+            if (data.creditAccount().creditSuspended() != null) {
+                acc.setCreditSuspended(data.creditAccount().creditSuspended());
+            }
             acc.setLastActivityAt(java.time.Instant.now());
             creditAccountRepository.save(acc);
         }

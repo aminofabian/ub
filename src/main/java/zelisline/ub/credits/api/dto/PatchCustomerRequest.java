@@ -9,6 +9,7 @@ public record PatchCustomerRequest(
         @Size(max = 255) String email,
         @Size(max = 10_000) String notes,
         BigDecimal creditLimit,
+        Boolean creditSuspended,
         Long version,
         Long creditAccountVersion
 ) {

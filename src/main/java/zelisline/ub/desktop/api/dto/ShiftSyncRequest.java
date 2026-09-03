@@ -134,7 +134,8 @@ public record ShiftSyncRequest(
         @NotNull BigDecimal balanceOwed,
         BigDecimal walletBalance,
         int loyaltyPoints,
-        BigDecimal creditLimit
+        BigDecimal creditLimit,
+        Boolean creditSuspended
     ) {}
 
     public record SaleItemData(

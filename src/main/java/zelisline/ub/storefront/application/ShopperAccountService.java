@@ -247,6 +247,9 @@ public class ShopperAccountService {
             if (limit != null) {
                 available = limit.subtract(owedScaled).setScale(2, RoundingMode.HALF_UP);
             }
+            if (acc.isCreditSuspended()) {
+                available = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+            }
             balances = new ShopperBalancesResponse(
                     acc.getWalletBalance().setScale(2, RoundingMode.HALF_UP),
                     owedScaled,

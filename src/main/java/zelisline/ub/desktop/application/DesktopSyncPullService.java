@@ -838,6 +838,9 @@ public class DesktopSyncPullService {
             }
             acc.setLoyaltyPoints(data.creditAccount().loyaltyPoints());
             acc.setCreditLimit(data.creditAccount().creditLimit());
+            if (data.creditAccount().creditSuspended() != null) {
+                acc.setCreditSuspended(data.creditAccount().creditSuspended());
+            }
             creditAccountRepository.save(acc);
         }
 

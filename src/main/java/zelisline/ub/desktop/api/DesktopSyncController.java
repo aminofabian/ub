@@ -496,7 +496,8 @@ public class DesktopSyncController {
                 creditAccount.getBalanceOwed(),
                 creditAccount.getWalletBalance(),
                 creditAccount.getLoyaltyPoints(),
-                creditAccount.getCreditLimit());
+                creditAccount.getCreditLimit(),
+                creditAccount.isCreditSuspended());
         return new CloudSalesSnapshot.CloudCustomerData(
             customer.getId(),
             customer.getName(),

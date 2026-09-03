@@ -150,7 +150,7 @@ class DesktopSyncIngestServiceTest {
                 List.of(new ShiftSyncRequest.CustomerPhoneData(
                     "phone-1", "254700111222", true)),
                 new ShiftSyncRequest.CreditAccountData(
-                    new BigDecimal("500.00"), BigDecimal.ZERO, 12, new BigDecimal("5000.00")))),
+                    new BigDecimal("500.00"), BigDecimal.ZERO, 12, new BigDecimal("5000.00"), false))),
             null);
         when(customerRepository.findByIdAndBusinessIdAndDeletedAtIsNull("customer-1", "cloud-biz"))
             .thenReturn(Optional.empty());

@@ -288,6 +288,9 @@ public class GuideLiveToolsService {
                                 .append(nullToDash(tab.name()))
                                 .append(" owes ")
                                 .append(money(tab.balanceOwed()));
+                        if (tab.creditSuspended()) {
+                            facts.append(" [tab suspended]");
+                        }
                         if (tab.primaryPhone() != null && !tab.primaryPhone().isBlank()) {
                             facts.append(" (").append(tab.primaryPhone().trim()).append(')');
                         }

@@ -373,6 +373,54 @@ public class AuthRegistrationService {
     }
 
     /**
+     * Super-admin: re-issue the verification email. Does not activate the user.
+     */
+    @Transactional
+    public void resendVerificationAsSuperAdmin(String businessId, String userId) {
+        User user = userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(userId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+        if (user.statusAsEnum() != UserStatus.INVITED) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "This person already verified. You can't skip the inbox from here.");
+        }
+        if (user.getPasswordHash() == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "This is a staff invite. They need to open their invite link — email verification isn't the gate.");
+        }
+        issueVerificationEmailForBusiness(user);
+    }
+
+    private String issueVerificationEmailForBusiness(User user) {
+        emailVerificationTokenRepository.deleteUnusedByUserId(user.getId());
+        String raw = newRawToken();
+        EmailVerificationToken token = new EmailVerificationToken();
+        token.setUserId(user.getId());
+        token.setTokenHash(TokenHasher.sha256Hex(raw));
+        token.setExpiresAt(Instant.now().plus(emailVerificationTtlHours, ChronoUnit.HOURS));
+        emailVerificationTokenRepository.save(token);
+        String link = frontendAuthLinkBuilder.verificationLinkForBusiness(user.getBusinessId(), raw);
+        String host = frontendAuthLinkBuilder.tenantOrigin(user.getBusinessId());
+        String hostname = null;
+        try {
+            hostname = java.net.URI.create(host).getHost();
+        } catch (RuntimeException ignored) {
+            hostname = null;
+        }
+        var branding = EmailVerificationBrandingContext.fromHost(
+                hostname != null
+                        ? publicHostResolverService.resolveByHost(hostname)
+                        : Optional.empty(),
+                hostname);
+        String subject = emailVerificationEmailRenderer.renderSubject(branding);
+        String htmlBody = emailVerificationEmailRenderer.renderHtml(
+                branding, user.getName(), user.getEmail(), link);
+        notificationService.sendEmailVerificationEmail(user.getEmail(), subject, htmlBody);
+        return link;
+    }
+
+    /**
      * Mint a verification URL without sending the stock verify mail — used when a
      * platform campaign already carries the continue button.
      */

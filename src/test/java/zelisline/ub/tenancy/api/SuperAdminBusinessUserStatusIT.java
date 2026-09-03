@@ -38,9 +38,9 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
  * Pins the super-admin tenant-user status contract:
  * {@code PATCH /super-admin/businesses/{id}/users/{userId}/status}.
  *
- * <p>Super-admin can move a user between lifecycle states (e.g. invited →
- * active) without going through the tenant's own flow, but the last-active-owner
- * invariant is still enforced and leaving {@code active} revokes sessions.
+ * <p>Email verification is not a console toggle ({@code invited → active} is
+ * refused). Super-admin can still suspend/lock active users; leaving
+ * {@code active} revokes sessions and the last-active-owner invariant holds.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -161,14 +161,40 @@ class SuperAdminBusinessUserStatusIT {
     }
 
     @Test
-    void activatesInvitedUser() throws Exception {
-        patchStatus(invitedUserId, "active");
+    void refusesToActivateInvitedUser() throws Exception {
+        mockMvc.perform(patch(
+                        "/api/v1/super-admin/businesses/{b}/users/{u}/status", businessId, invitedUserId)
+                        .header("Authorization", "Bearer " + saToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"status":"active"}
+                                """))
+                .andExpect(status().isConflict());
 
         mockMvc.perform(get("/api/v1/super-admin/businesses/{b}/users", businessId)
                         .header("Authorization", "Bearer " + saToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.id=='" + invitedUserId + "')].status")
-                        .value("active"));
+                        .value("invited"));
+    }
+
+    @Test
+    void resendVerificationLeavesUserInvited() throws Exception {
+        User invited = userRepository.findById(invitedUserId).orElseThrow();
+        invited.setPasswordHash(passwordEncoder.encode("already-chose-a-password"));
+        userRepository.save(invited);
+
+        mockMvc.perform(post(
+                        "/api/v1/super-admin/businesses/{b}/users/{u}/resend-verification",
+                        businessId, invitedUserId)
+                        .header("Authorization", "Bearer " + saToken))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(get("/api/v1/super-admin/businesses/{b}/users", businessId)
+                        .header("Authorization", "Bearer " + saToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id=='" + invitedUserId + "')].status")
+                        .value("invited"));
     }
 
     @Test

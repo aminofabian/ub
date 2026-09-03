@@ -24,6 +24,8 @@ public record OnboardingAnswersDto(
         @Size(max = 32) String primaryColor,
         @Size(max = 32) String accentColor,
         /** How they plan to stock: {@code new}, {@code spreadsheet}, or {@code other_pos}. */
-        @Pattern(regexp = "new|spreadsheet|other_pos") String productSource
+        @Pattern(regexp = "new|spreadsheet|other_pos") String productSource,
+        /** Owner shop line (WhatsApp / SMS / till alerts). */
+        @Size(max = 32) String ownerPhone
 ) {
 }

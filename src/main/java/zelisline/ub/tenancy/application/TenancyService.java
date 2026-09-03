@@ -1107,7 +1107,10 @@ public class TenancyService {
 
     /**
      * Super-admin override for a tenant user's lifecycle status
-     * (invited → active → suspended → locked).
+     * (active → suspended → locked, and back).
+     *
+     * <p>{@code invited → active} is refused: email verification is not a
+     * console toggle. Use {@code POST .../users/{id}/resend-verification}.
      *
      * <p>Moving an active user out of {@code active} revokes their sessions and
      * refuses to deactivate the last active owner, mirroring the tenant-side
@@ -1124,6 +1127,11 @@ public class TenancyService {
         UserStatus current = user.statusAsEnum();
         UserStatus next = parseUserStatus(statusWire, current);
         if (next != current) {
+            if (current == UserStatus.INVITED && next == UserStatus.ACTIVE) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Email verification can't be skipped. Resend the inbox link — they have to tap it.");
+            }
             if (next != UserStatus.ACTIVE && current == UserStatus.ACTIVE) {
                 if (hasOwnerRole(user.getRoleId())) {
                     guardLastActiveOwner(businessId);

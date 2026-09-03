@@ -43,6 +43,7 @@ public class BusinessOnboardingSettingsService {
     private static final String KEY_PRIMARY_COLOR = "primaryColor";
     private static final String KEY_ACCENT_COLOR = "accentColor";
     private static final String KEY_PRODUCT_SOURCE = "productSource";
+    private static final String KEY_OWNER_PHONE = "ownerPhone";
 
     private final ObjectMapper objectMapper;
 
@@ -149,6 +150,7 @@ public class BusinessOnboardingSettingsService {
                         && answers.path(KEY_PRIMARY_COLOR).isMissingNode()
                         && answers.path(KEY_ACCENT_COLOR).isMissingNode()
                         && answers.path(KEY_PRODUCT_SOURCE).isMissingNode()
+                        && answers.path(KEY_OWNER_PHONE).isMissingNode()
         ) {
             return null;
         }
@@ -164,7 +166,8 @@ public class BusinessOnboardingSettingsService {
                 textOrNull(answers.path(KEY_DISPLAY_NAME)),
                 textOrNull(answers.path(KEY_PRIMARY_COLOR)),
                 textOrNull(answers.path(KEY_ACCENT_COLOR)),
-                textOrNull(answers.path(KEY_PRODUCT_SOURCE))
+                textOrNull(answers.path(KEY_PRODUCT_SOURCE)),
+                textOrNull(answers.path(KEY_OWNER_PHONE))
         );
     }
 
@@ -236,6 +239,9 @@ public class BusinessOnboardingSettingsService {
         }
         if (patch.productSource() != null) {
             answers.put(KEY_PRODUCT_SOURCE, patch.productSource().trim());
+        }
+        if (patch.ownerPhone() != null) {
+            answers.put(KEY_OWNER_PHONE, patch.ownerPhone().trim());
         }
     }
 

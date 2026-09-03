@@ -24,6 +24,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.identity.api.dto.SaImpersonateRequest;
 import zelisline.ub.identity.api.dto.SaImpersonateResponse;
+import zelisline.ub.identity.application.AuthRegistrationService;
 import zelisline.ub.identity.application.SuperAdminImpersonationService;
 import zelisline.ub.onboarding.sequence.application.MerchantOnboardingSequenceService;
 import zelisline.ub.tenancy.api.dto.BusinessResponse;
@@ -47,6 +48,7 @@ public class SuperAdminBusinessController {
     private final BusinessDeletionService businessDeletionService;
     private final SuperAdminImpersonationService superAdminImpersonationService;
     private final MerchantOnboardingSequenceService onboardingSequenceService;
+    private final AuthRegistrationService authRegistrationService;
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -115,6 +117,19 @@ public class SuperAdminBusinessController {
             @Valid @RequestBody UpdateSaBusinessUserStatusRequest request
     ) {
         return tenancyService.updateBusinessUserStatus(businessId, userId, request.status());
+    }
+
+    /**
+     * Re-sends the email-verification link. Does not mark the user verified.
+     */
+    @PostMapping("/{businessId}/users/{userId}/resend-verification")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void resendUserVerification(
+            @PathVariable String businessId,
+            @PathVariable String userId
+    ) {
+        requireSuperAdminId();
+        authRegistrationService.resendVerificationAsSuperAdmin(businessId, userId);
     }
 
     // ── Statistics ───────────────────────────────────────────────────────

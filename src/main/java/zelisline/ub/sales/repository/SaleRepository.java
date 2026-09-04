@@ -158,4 +158,19 @@ public interface SaleRepository extends JpaRepository<Sale, String> {
     boolean existsByBusinessId(String businessId);
 
     boolean existsByBusinessIdAndStatusAndVoidedAtIsNull(String businessId, String status);
+
+    @Query("""
+            select s.customerId,
+                   count(s),
+                   coalesce(sum(s.grandTotal), 0),
+                   min(s.soldAt),
+                   max(s.soldAt)
+              from Sale s
+             where s.businessId = :businessId
+               and s.customerId is not null
+               and s.status = 'completed'
+               and s.voidedAt is null
+             group by s.customerId
+            """)
+    List<Object[]> aggregatePurchaseStatsByCustomer(@Param("businessId") String businessId);
 }

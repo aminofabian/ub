@@ -21,6 +21,9 @@ public interface CustomerRepository extends JpaRepository<Customer, String> {
     List<Customer> findByIdInAndBusinessIdAndDeletedAtIsNull(
             java.util.Collection<String> ids, String businessId);
 
+    /** Includes soft-deleted / anonymised rows so campaign exclusion reasons can be shown. */
+    List<Customer> findByIdInAndBusinessId(java.util.Collection<String> ids, String businessId);
+
     /** All live customers of a business — used by the desktop sync export. */
     List<Customer> findByBusinessIdAndDeletedAtIsNull(String businessId);
 
@@ -183,6 +186,8 @@ public interface CustomerRepository extends JpaRepository<Customer, String> {
                                    )
                             ))
                          OR (:customerNo IS NOT NULL AND c.customerNo = :customerNo)
+                         OR (:namePart IS NOT NULL AND c.email IS NOT NULL
+                             AND lower(c.email) LIKE concat('%', :namePart, '%'))
                       )
                       AND (:createdFrom IS NULL OR c.createdAt >= :createdFrom)
                       AND (:createdToExclusive IS NULL OR c.createdAt < :createdToExclusive)
@@ -209,6 +214,8 @@ public interface CustomerRepository extends JpaRepository<Customer, String> {
                                    )
                             ))
                          OR (:customerNo IS NOT NULL AND c.customerNo = :customerNo)
+                         OR (:namePart IS NOT NULL AND c.email IS NOT NULL
+                             AND lower(c.email) LIKE concat('%', :namePart, '%'))
                       )
                       AND (:createdFrom IS NULL OR c.createdAt >= :createdFrom)
                       AND (:createdToExclusive IS NULL OR c.createdAt < :createdToExclusive)

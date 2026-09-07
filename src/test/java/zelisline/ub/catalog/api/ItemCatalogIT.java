@@ -692,6 +692,94 @@ class ItemCatalogIT {
     }
 
     @Test
+    void createGroupFromItemsAttachesExistingSkusInPlace() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        String a = createItemViaService(TENANT_A, gid, "DRYBR-12", "Dry Hook #12");
+        String b = createItemViaService(TENANT_A, gid, "DRYBR-16", "Dry Hook #16");
+
+        String body = """
+                {
+                  "name":"Dry Hook",
+                  "itemTypeId":"%s",
+                  "items":[
+                    {"itemId":"%s","variantName":"#12"},
+                    {"itemId":"%s","variantName":"#16"}
+                  ]
+                }
+                """.formatted(gid, a, b);
+
+        String response = mockMvc.perform(post("/api/v1/items/groups/from-items")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.name").value("Dry Hook"))
+                .andExpect(jsonPath("$.isSellable").value(false))
+                .andExpect(jsonPath("$.variants.length()").value(2))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        String parentId = JsonPath.read(response, "$.id");
+
+        mockMvc.perform(get("/api/v1/items/" + a)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(a))
+                .andExpect(jsonPath("$.sku").value("DRYBR-12"))
+                .andExpect(jsonPath("$.variantOfItemId").value(parentId))
+                .andExpect(jsonPath("$.variantName").value("#12"));
+
+        mockMvc.perform(get("/api/v1/items/" + b)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sku").value("DRYBR-16"))
+                .andExpect(jsonPath("$.variantOfItemId").value(parentId))
+                .andExpect(jsonPath("$.variantName").value("#16"));
+    }
+
+    @Test
+    void attachVariantsRejectsAlreadyVariant() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        String parent = createItemViaService(TENANT_A, gid, "SKU-PARENT", "Parent Family");
+        String child = mockMvc.perform(post("/api/v1/items/" + parent + "/variants")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"sku\":\"SKU-CHILD\",\"variantName\":\"A\"}"))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String childId = JsonPath.read(child, "$.id");
+        String other = createItemViaService(TENANT_A, gid, "SKU-OTHER", "Other Standalone");
+
+        String body = """
+                {
+                  "items":[
+                    {"itemId":"%s","variantName":"Nope"},
+                    {"itemId":"%s","variantName":"Ok"}
+                  ]
+                }
+                """.formatted(childId, other);
+
+        mockMvc.perform(post("/api/v1/items/" + parent + "/variants/attach")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void registerItemImageStoresMetadataAndExposesGalleryOnGetItem() throws Exception {
         String gid = goodsTypeId(TENANT_A);
         String itemId = createItemViaService(TENANT_A, gid, "SKU-IMG", "Photo");

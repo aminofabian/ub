@@ -46,6 +46,9 @@ import zelisline.ub.catalog.api.dto.CatalogRowType;
 import zelisline.ub.catalog.api.dto.CatalogRowTypeSum;
 import zelisline.ub.catalog.api.dto.CatalogRowTypeCountsResponse;
 import zelisline.ub.sales.application.VariableWeightBarcodeService;
+import zelisline.ub.catalog.api.dto.AttachVariantLineRequest;
+import zelisline.ub.catalog.api.dto.AttachVariantsRequest;
+import zelisline.ub.catalog.api.dto.CreateGroupFromItemsRequest;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.api.dto.CreateVariantRequest;
 import zelisline.ub.catalog.api.dto.ItemImageResponse;
@@ -1197,6 +1200,162 @@ public class ItemCatalogService {
         supplierLinkProvisioner.afterItemChanged(businessId, child);
         publishItemEvent(businessId, child, actorUserId, AuditEventTypes.ITEM_CREATED, null);
         return toResponse(child, List.of(), null, null);
+    }
+
+    /**
+     * Nest existing standalone products under {@code parentId} as option variants.
+     * Preserves each child's id, SKU, stock batches, and sales history.
+     */
+    @Transactional
+    public ItemResponse attachVariants(
+            String businessId,
+            String parentId,
+            AttachVariantsRequest request,
+            String actorUserId
+    ) {
+        Item parent = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(parentId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Parent item not found"));
+        if (parent.getVariantOfItemId() != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cannot attach variants under a variant");
+        }
+
+        List<AttachVariantLineRequest> lines = request.items();
+        if (lines == null || lines.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Select at least one product to attach");
+        }
+
+        LinkedHashSet<String> seenIds = new LinkedHashSet<>();
+        for (AttachVariantLineRequest line : lines) {
+            String itemId = line.itemId() == null ? "" : line.itemId().trim();
+            if (itemId.isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Each line needs an itemId");
+            }
+            if (!seenIds.add(itemId)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Duplicate item in attach list: " + itemId);
+            }
+            if (itemId.equals(parent.getId())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cannot attach a product to itself");
+            }
+            String label = line.variantName() == null ? "" : line.variantName().trim();
+            if (label.isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Each option needs a label");
+            }
+        }
+
+        for (AttachVariantLineRequest line : lines) {
+            String itemId = line.itemId().trim();
+            Item child = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.NOT_FOUND, "Product not found: " + itemId));
+            if (child.getVariantOfItemId() != null) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Already in a family: " + displayItemLabel(child)
+                                + ". Detach it first, or pick a standalone product.");
+            }
+            if (itemRepository.existsByBusinessIdAndVariantOfItemIdAndDeletedAtIsNull(businessId, child.getId())) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Already a family parent: " + displayItemLabel(child)
+                                + ". Pick products that are not families themselves.");
+            }
+
+            Map<String, Object> oldState = itemSnapshot(child);
+            child.setVariantOfItemId(parent.getId());
+            child.setVariantName(line.variantName().trim());
+            // Keep department aligned with the family when attaching.
+            if (parent.getItemTypeId() != null && !parent.getItemTypeId().isBlank()) {
+                child.setItemTypeId(parent.getItemTypeId());
+            }
+            itemRepository.save(child);
+            supplierLinkProvisioner.afterItemChanged(businessId, child);
+            publishItemEvent(
+                    businessId,
+                    child,
+                    actorUserId,
+                    AuditEventTypes.ITEM_UPDATED,
+                    compactDiff(oldState, itemSnapshot(child)));
+        }
+
+        boolean makeNonSellable = request.makeParentNonSellable() == null || Boolean.TRUE.equals(request.makeParentNonSellable());
+        if (makeNonSellable && parent.isSellable()) {
+            Map<String, Object> parentOld = itemSnapshot(parent);
+            parent.setSellable(false);
+            // Family label rows are not stock holders for option-variant catalogs.
+            if (parent.isStocked()) {
+                parent.setStocked(false);
+            }
+            itemRepository.save(parent);
+            publishItemEvent(
+                    businessId,
+                    parent,
+                    actorUserId,
+                    AuditEventTypes.ITEM_UPDATED,
+                    compactDiff(parentOld, itemSnapshot(parent)));
+        }
+
+        notifyOnboardingCatalogChanged(businessId);
+        return toResponseWithVariants(businessId, parent);
+    }
+
+    /**
+     * Create a non-sellable family parent and attach existing standalones under it.
+     * Child ids / SKUs / stock / history are preserved.
+     */
+    @Transactional
+    public ItemResponse createGroupFromItems(
+            String businessId,
+            CreateGroupFromItemsRequest request,
+            String actorUserId
+    ) {
+        String name = request.name() == null ? "" : request.name().trim();
+        if (name.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Family name is required");
+        }
+        CreateItemRequest parentCreate = new CreateItemRequest(
+                null,
+                null,
+                name,
+                null,
+                request.itemTypeId(),
+                request.categoryId(),
+                request.aisleId(),
+                "each",
+                false,
+                false,
+                false,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                false,
+                null,
+                null,
+                null,
+                null
+        );
+        ItemCreateResult created = createItem(businessId, parentCreate, null, actorUserId);
+        String parentId = created.body().id();
+        AttachVariantsRequest attach = new AttachVariantsRequest(request.items(), true);
+        return attachVariants(businessId, parentId, attach, actorUserId);
+    }
+
+    private static String displayItemLabel(Item item) {
+        String name = item.getName() == null ? "" : item.getName().trim();
+        String sku = item.getSku() == null ? "" : item.getSku().trim();
+        if (!name.isEmpty() && !sku.isEmpty()) {
+            return name + " (" + sku + ")";
+        }
+        if (!name.isEmpty()) {
+            return name;
+        }
+        return sku.isEmpty() ? item.getId() : sku;
     }
 
     @Transactional

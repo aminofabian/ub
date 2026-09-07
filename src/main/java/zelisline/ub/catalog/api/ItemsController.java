@@ -26,11 +26,13 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
+import zelisline.ub.catalog.api.dto.AttachVariantsRequest;
 import zelisline.ub.catalog.api.dto.BulkItemImageImportResponse;
 import zelisline.ub.catalog.api.dto.EffectivePricingContextResponse;
 import zelisline.ub.catalog.api.dto.CatalogListScope;
 import zelisline.ub.catalog.api.dto.CatalogRowType;
 import zelisline.ub.catalog.api.dto.CatalogRowTypeCountsResponse;
+import zelisline.ub.catalog.api.dto.CreateGroupFromItemsRequest;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.api.dto.CreateVariantRequest;
 import zelisline.ub.catalog.api.dto.GenerateProductDescriptionRequest;
@@ -360,6 +362,44 @@ public class ItemsController {
         return itemCatalogService.createVariant(
                 TenantRequestIds.resolveBusinessId(request),
                 id,
+                body,
+                CurrentTenantUser.auditActorId(request)
+        );
+    }
+
+    /**
+     * Nest existing standalone products under this parent as option variants.
+     * Keeps each product's id, SKU, stock, and history — only the family link changes.
+     */
+    @PostMapping("/{id}/variants/attach")
+    @PreAuthorize("hasPermission(null, 'catalog.items.write')")
+    public ItemResponse attachVariants(
+            @PathVariable("id") String id,
+            @Valid @RequestBody AttachVariantsRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return itemCatalogService.attachVariants(
+                TenantRequestIds.resolveBusinessId(request),
+                id,
+                body,
+                CurrentTenantUser.auditActorId(request)
+        );
+    }
+
+    /**
+     * Create a non-sellable family parent and attach existing standalones under it.
+     */
+    @PostMapping("/groups/from-items")
+    @PreAuthorize("hasPermission(null, 'catalog.items.write')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public ItemResponse createGroupFromItems(
+            @Valid @RequestBody CreateGroupFromItemsRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return itemCatalogService.createGroupFromItems(
+                TenantRequestIds.resolveBusinessId(request),
                 body,
                 CurrentTenantUser.auditActorId(request)
         );

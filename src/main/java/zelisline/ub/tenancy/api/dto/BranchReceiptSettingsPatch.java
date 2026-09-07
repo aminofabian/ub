@@ -8,6 +8,8 @@ public record BranchReceiptSettingsPatch(
         @Size(max = 500) String website,
         @Size(max = 40) String tillNumber,
         @Size(max = 500) String footerNote,
-        @Size(max = 120) String printerCupsName
+        @Size(max = 120) String printerCupsName,
+        /** Null = leave unchanged; true/false persists the WhatsApp receipt toggle. */
+        Boolean whatsappReceiptEnabled
 ) {
 }

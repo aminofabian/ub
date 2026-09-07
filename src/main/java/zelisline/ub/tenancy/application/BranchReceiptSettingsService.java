@@ -20,6 +20,7 @@ public class BranchReceiptSettingsService {
     private static final String KEY_TILL_NUMBER = "tillNumber";
     private static final String KEY_FOOTER_NOTE = "footerNote";
     private static final String KEY_PRINTER_CUPS_NAME = "printerCupsName";
+    private static final String KEY_WHATSAPP_RECEIPT_ENABLED = "whatsappReceiptEnabled";
 
     private final ObjectMapper objectMapper;
 
@@ -38,7 +39,8 @@ public class BranchReceiptSettingsService {
                     textOrNull(root.get(KEY_WEBSITE)),
                     textOrNull(root.get(KEY_TILL_NUMBER)),
                     textOrNull(root.get(KEY_FOOTER_NOTE)),
-                    textOrNull(root.get(KEY_PRINTER_CUPS_NAME))
+                    textOrNull(root.get(KEY_PRINTER_CUPS_NAME)),
+                    booleanOrFalse(root.get(KEY_WHATSAPP_RECEIPT_ENABLED))
             );
         } catch (Exception e) {
             return BranchReceiptSettingsResponse.empty();
@@ -67,6 +69,13 @@ public class BranchReceiptSettingsService {
         }
         if (patch.printerCupsName() != null) {
             putOrRemove(root, KEY_PRINTER_CUPS_NAME, patch.printerCupsName());
+        }
+        if (patch.whatsappReceiptEnabled() != null) {
+            if (Boolean.TRUE.equals(patch.whatsappReceiptEnabled())) {
+                root.put(KEY_WHATSAPP_RECEIPT_ENABLED, true);
+            } else {
+                root.remove(KEY_WHATSAPP_RECEIPT_ENABLED);
+            }
         }
         if (root.isEmpty()) {
             return null;
@@ -107,5 +116,19 @@ public class BranchReceiptSettingsService {
         }
         String t = node.asText().trim();
         return t.isEmpty() ? null : t;
+    }
+
+    private static boolean booleanOrFalse(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return false;
+        }
+        if (node.isBoolean()) {
+            return node.asBoolean();
+        }
+        if (node.isTextual()) {
+            return "true".equalsIgnoreCase(node.asText().trim())
+                    || "1".equals(node.asText().trim());
+        }
+        return false;
     }
 }

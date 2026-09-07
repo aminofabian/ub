@@ -115,36 +115,7 @@ public class SaleReceiptService {
             }
         }
 
-        List<ReceiptLineRow> lines = new ArrayList<>();
-        for (SaleItem si : items) {
-            if (si.isAirtime()) {
-                String desc = si.getLineLabel() != null && !si.getLineLabel().isBlank()
-                        ? si.getLineLabel()
-                        : "Airtime";
-                lines.add(new ReceiptLineRow(
-                        desc,
-                        si.getQuantity().stripTrailingZeros().toPlainString(),
-                        null,
-                        money(si.getUnitPrice()),
-                        money(si.getLineTotal())
-                ));
-                continue;
-            }
-            Item it = itemMap.get(si.getItemId());
-            String parentName = it != null && it.getVariantOfItemId() != null
-                    ? parentNameById.get(it.getVariantOfItemId())
-                    : null;
-            String desc = it != null
-                    ? ProductDisplayName.forVariant(it, parentName)
-                    : "Item";
-            lines.add(new ReceiptLineRow(
-                    desc,
-                    si.getQuantity().stripTrailingZeros().toPlainString(),
-                    it != null ? it.getUnitType() : null,
-                    money(si.getUnitPrice()),
-                    money(si.getLineTotal())
-            ));
-        }
+        List<ReceiptLineRow> lines = buildReceiptLines(items, itemMap, parentNameById);
 
         List<ReceiptPaymentRow> payments = new ArrayList<>();
         for (SalePayment p : pays) {
@@ -216,6 +187,67 @@ public class SaleReceiptService {
                 changeGivenDisplay,
                 footer
         );
+    }
+
+    /**
+     * One cart SKU can become multiple {@link SaleItem} rows when stock is taken
+     * from several batches. Receipts must show one line per cart line ({@code lineIndex}),
+     * with quantities and totals summed.
+     */
+    static List<ReceiptLineRow> buildReceiptLines(
+            List<SaleItem> items,
+            Map<String, Item> itemMap,
+            Map<String, String> parentNameById
+    ) {
+        Map<Integer, List<SaleItem>> byLineIndex = new LinkedHashMap<>();
+        for (SaleItem si : items) {
+            byLineIndex.computeIfAbsent(si.getLineIndex(), k -> new ArrayList<>()).add(si);
+        }
+
+        List<ReceiptLineRow> lines = new ArrayList<>();
+        for (List<SaleItem> group : byLineIndex.values()) {
+            SaleItem first = group.get(0);
+            BigDecimal qty = BigDecimal.ZERO;
+            BigDecimal total = BigDecimal.ZERO;
+            for (SaleItem si : group) {
+                if (si.getQuantity() != null) {
+                    qty = qty.add(si.getQuantity());
+                }
+                if (si.getLineTotal() != null) {
+                    total = total.add(si.getLineTotal());
+                }
+            }
+
+            if (first.isAirtime()) {
+                String desc = first.getLineLabel() != null && !first.getLineLabel().isBlank()
+                        ? first.getLineLabel()
+                        : "Airtime";
+                lines.add(new ReceiptLineRow(
+                        desc,
+                        qty.stripTrailingZeros().toPlainString(),
+                        null,
+                        money(first.getUnitPrice()),
+                        money(total)
+                ));
+                continue;
+            }
+
+            Item it = itemMap.get(first.getItemId());
+            String parentName = it != null && it.getVariantOfItemId() != null
+                    ? parentNameById.get(it.getVariantOfItemId())
+                    : null;
+            String desc = it != null
+                    ? ProductDisplayName.forVariant(it, parentName)
+                    : "Item";
+            lines.add(new ReceiptLineRow(
+                    desc,
+                    qty.stripTrailingZeros().toPlainString(),
+                    it != null ? it.getUnitType() : null,
+                    money(first.getUnitPrice()),
+                    money(total)
+            ));
+        }
+        return lines;
     }
 
     private static String blankToNull(String raw) {

@@ -1127,14 +1127,31 @@ public class SaleService {
                         item -> item.getName() != null ? item.getName() : "Item",
                         (a, b) -> a));
         return saleItems.stream()
-                .map(line -> new CreditSaleReminderLineItem(
-                        line.isAirtime()
-                                ? (line.getLineLabel() != null && !line.getLineLabel().isBlank()
-                                        ? line.getLineLabel()
-                                        : "Airtime")
-                                : itemNames.getOrDefault(line.getItemId(), "Item"),
-                        line.getQuantity(),
-                        line.getLineTotal()))
+                .collect(java.util.stream.Collectors.groupingBy(
+                        SaleItem::getLineIndex,
+                        java.util.LinkedHashMap::new,
+                        java.util.stream.Collectors.toList()))
+                .values()
+                .stream()
+                .map(group -> {
+                    SaleItem first = group.get(0);
+                    BigDecimal qty = BigDecimal.ZERO;
+                    BigDecimal total = BigDecimal.ZERO;
+                    for (SaleItem line : group) {
+                        if (line.getQuantity() != null) {
+                            qty = qty.add(line.getQuantity());
+                        }
+                        if (line.getLineTotal() != null) {
+                            total = total.add(line.getLineTotal());
+                        }
+                    }
+                    String name = first.isAirtime()
+                            ? (first.getLineLabel() != null && !first.getLineLabel().isBlank()
+                                    ? first.getLineLabel()
+                                    : "Airtime")
+                            : itemNames.getOrDefault(first.getItemId(), "Item");
+                    return new CreditSaleReminderLineItem(name, qty, total);
+                })
                 .toList();
     }
 

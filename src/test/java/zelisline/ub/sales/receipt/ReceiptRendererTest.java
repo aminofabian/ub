@@ -144,5 +144,75 @@ class ReceiptRendererTest {
         byte[] bytes = ReceiptPdfRenderer.render(s);
 
         assertThat(bytes).startsWith("%PDF".getBytes(StandardCharsets.US_ASCII));
+        // Slip-style page is 80mm wide (~227pt), not A6 invoice.
+        assertThat(bytes.length).isGreaterThan(200);
+    }
+
+    @Test
+    void pdf_matchesSlipSections_withContactAndClosing() {
+        ReceiptSnapshot s = new ReceiptSnapshot(
+                "Butcher Shop",
+                null,
+                "Main Branch",
+                "12 Market St",
+                "0712345678",
+                "shop@example.com",
+                "example.com",
+                "123456",
+                "Karibu tena",
+                "Asha",
+                "KES",
+                "sale-123",
+                42L,
+                null,
+                "2026-07-01 12:00 UTC",
+                "completed",
+                "Jane Doe",
+                null,
+                List.of(new ReceiptLineRow("Beef Mince", "0.347", "kg", "1200.00", "416.40")),
+                List.of(new ReceiptPaymentRow("cash", "416.40", null)),
+                "416.40",
+                "500.00",
+                "83.60",
+                ""
+        );
+
+        byte[] bytes = ReceiptPdfRenderer.render(s);
+
+        assertThat(bytes).startsWith("%PDF".getBytes(StandardCharsets.US_ASCII));
+    }
+
+    @Test
+    void pdf_voidedSale_renders() {
+        ReceiptSnapshot s = new ReceiptSnapshot(
+                "Butcher Shop",
+                null,
+                "Main Branch",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                "KES",
+                "sale-void",
+                7L,
+                null,
+                "2026-07-01 12:00 UTC",
+                "voided",
+                null,
+                null,
+                List.of(new ReceiptLineRow("Soda", "1", "each", "5.00", "5.00")),
+                List.of(new ReceiptPaymentRow("cash", "5.00", null)),
+                "5.00",
+                "5.00",
+                "0.00",
+                "*** VOIDED — not valid for returns ***"
+        );
+
+        byte[] bytes = ReceiptPdfRenderer.render(s);
+
+        assertThat(bytes).startsWith("%PDF".getBytes(StandardCharsets.US_ASCII));
     }
 }

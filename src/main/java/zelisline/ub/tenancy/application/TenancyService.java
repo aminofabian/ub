@@ -2,6 +2,7 @@ package zelisline.ub.tenancy.application;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -155,9 +156,12 @@ public class TenancyService {
 
     @Transactional(readOnly = true)
     public Page<BusinessResponse> listBusinesses(Pageable pageable) {
-        return businessRepository
-            .findByDeletedAtIsNull(pageable)
-            .map(this::toResponse);
+        Page<Business> page = businessRepository.findByDeletedAtIsNull(pageable);
+        Map<String, String> ownerPhones = ownerPhonesByBusinessId(
+                page.getContent().stream().map(Business::getId).toList()
+        );
+        return page.map(business ->
+                toResponse(business, true, ownerPhones.get(business.getId())));
     }
 
     @Transactional
@@ -887,6 +891,14 @@ public class TenancyService {
     }
 
     private BusinessResponse toResponse(Business business) {
+        return toResponse(business, false, null);
+    }
+
+    private BusinessResponse toResponse(
+            Business business,
+            boolean ownerPhoneLookedUp,
+            String ownerPhoneHint
+    ) {
         StorefrontSettingsResponse storefront =
             storefrontSettingsService.readFromSettingsJson(
                 business.getSettings()
@@ -945,8 +957,55 @@ public class TenancyService {
             primaryDomain,
             globalCatalogResolver.readOverrideCode(business.getSettings()),
             saleRepository.findLatestReceiptNo(business.getId()).orElse(null),
-            posReceiptSequenceSettingsService.readNextReceiptNo(business.getSettings())
+            posReceiptSequenceSettingsService.readNextReceiptNo(business.getSettings()),
+            resolveOwnerPhone(business.getId(), ownerPhoneLookedUp, ownerPhoneHint, onboarding)
         );
+    }
+
+    /**
+     * Prefer the linked owner account phone; fall back to the onboarding answer
+     * when the user row has not been updated yet.
+     */
+    private String resolveOwnerPhone(
+            String businessId,
+            boolean ownerPhoneLookedUp,
+            String ownerPhoneHint,
+            OnboardingSettingsResponse onboarding
+    ) {
+        String fromUser = blankToNull(ownerPhoneHint);
+        if (!ownerPhoneLookedUp && fromUser == null) {
+            fromUser = userRepository
+                    .findOwnersWithPhoneByBusinessIdIn(List.of(businessId))
+                    .stream()
+                    .map(User::getPhone)
+                    .map(TenancyService::blankToNull)
+                    .filter(phone -> phone != null)
+                    .findFirst()
+                    .orElse(null);
+        }
+        if (fromUser != null) {
+            return fromUser;
+        }
+        if (onboarding != null && onboarding.answers() != null) {
+            return blankToNull(onboarding.answers().ownerPhone());
+        }
+        return null;
+    }
+
+    /** First non-blank owner phone per business (oldest owner wins). */
+    private Map<String, String> ownerPhonesByBusinessId(List<String> businessIds) {
+        Map<String, String> out = new HashMap<>();
+        if (businessIds == null || businessIds.isEmpty()) {
+            return out;
+        }
+        for (User owner : userRepository.findOwnersWithPhoneByBusinessIdIn(businessIds)) {
+            String phone = blankToNull(owner.getPhone());
+            if (phone == null) {
+                continue;
+            }
+            out.putIfAbsent(owner.getBusinessId(), phone);
+        }
+        return out;
     }
 
     private DomainResponse toResponse(DomainMapping domain) {

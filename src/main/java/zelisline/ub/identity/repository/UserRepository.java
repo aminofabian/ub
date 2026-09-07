@@ -1,6 +1,7 @@
 package zelisline.ub.identity.repository;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -138,6 +139,21 @@ public interface UserRepository extends JpaRepository<User, String> {
     List<User> findActiveByRoleKeyOrderByCreatedAtAsc(
             @Param("businessId") String businessId,
             @Param("roleKey") String roleKey);
+
+    /**
+     * Oldest owner row per business that has a non-blank phone — used to enrich
+     * the super-admin tenants list without N+1 lookups.
+     */
+    @Query("""
+        select u from User u
+         where u.deletedAt is null
+           and u.phone is not null
+           and u.businessId in :businessIds
+           and u.roleId in (select r.id from Role r where r.roleKey = 'owner')
+         order by u.createdAt asc
+        """)
+    List<User> findOwnersWithPhoneByBusinessIdIn(
+            @Param("businessIds") Collection<String> businessIds);
 
     /** Owner-count guard for the "cannot demote last owner" invariant (§2.4). */
     @Query("""

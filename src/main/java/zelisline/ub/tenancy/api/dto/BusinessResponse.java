@@ -35,6 +35,11 @@ public record BusinessResponse(
          * Configured floor for the next POS receipt number ({@code settings.nextReceiptNo}).
          * Allocation uses {@code max(last+1, nextReceiptNo)}.
          */
-        Long nextReceiptNo
+        Long nextReceiptNo,
+        /**
+         * Owner shop phone when linked ({@code users.phone} for an owner, else
+         * onboarding {@code answers.ownerPhone}). Null when neither is set.
+         */
+        String ownerPhone
 ) {
 }

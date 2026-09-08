@@ -580,20 +580,36 @@ public class PathAPurchaseService {
         if (grnLines.size() != req.lines().size()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice lines must match goods receipt lines");
         }
-        for (int i = 0; i < grnLines.size(); i++) {
-            GoodsReceiptLine gl = grnLines.get(i);
-            PostGrnSupplierInvoiceLineInput il = req.lines().get(i);
+        // Match by (itemId, qty), not list index: GRN line ids are random UUIDs, so OrderByIdAsc
+        // does not preserve request order and positional matching fails on multi-line receives.
+        record ReceiptExpect(String itemId, BigDecimal qty) {}
+        List<ReceiptExpect> remaining = new ArrayList<>(grnLines.size());
+        for (GoodsReceiptLine gl : grnLines) {
             PurchaseOrderLine pol = purchaseOrderLineRepository.findById(gl.getPurchaseOrderLineId()).orElseThrow();
-            if (!pol.getItemId().equals(il.itemId())) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice line item does not match receipt");
-            }
-            if (gl.getQtyReceived().compareTo(il.qty()) != 0) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice quantity does not match receipt");
-            }
+            remaining.add(new ReceiptExpect(pol.getItemId(), gl.getQtyReceived()));
+        }
+        for (PostGrnSupplierInvoiceLineInput il : req.lines()) {
             BigDecimal expect = il.qty().multiply(il.unitCost()).setScale(2, RoundingMode.HALF_UP);
             if (il.lineTotal().setScale(2, RoundingMode.HALF_UP).compareTo(expect) != 0) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Line total does not match qty × unit cost");
             }
+            int matchIdx = -1;
+            for (int j = 0; j < remaining.size(); j++) {
+                ReceiptExpect e = remaining.get(j);
+                if (e.itemId().equals(il.itemId()) && e.qty().compareTo(il.qty()) == 0) {
+                    matchIdx = j;
+                    break;
+                }
+            }
+            if (matchIdx < 0) {
+                boolean itemOnReceipt = remaining.stream().anyMatch(e -> e.itemId().equals(il.itemId()));
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        itemOnReceipt
+                                ? "Invoice quantity does not match receipt"
+                                : "Invoice line item does not match receipt");
+            }
+            remaining.remove(matchIdx);
         }
 
         BigDecimal invoiceSum = req.lines().stream()

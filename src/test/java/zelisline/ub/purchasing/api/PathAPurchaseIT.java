@@ -539,6 +539,83 @@ class PathAPurchaseIT {
     }
 
     @Test
+    void multiLineInvoice_succeedsWhenPayloadOrderDiffersFromUuidSort() throws Exception {
+        String itemB = itemCatalogService.createItem(
+                TENANT,
+                new CreateItemRequest(
+                        "SKU-BEANS", null, "Beans 25kg", null, goodsTypeId, null, null, null,
+                        false, true, true,
+                        null, null, null, null, null, null, null, null, null, null, null, null, null, null, null),
+                null
+        ).body().id();
+
+        String poId = createPo();
+        String lineA = addPoLine(poId, "10", "5");
+        String lineBBody = """
+                {"itemId":"%s","qtyOrdered":4,"unitEstimatedCost":12.5}
+                """.formatted(itemB);
+        MvcResult lineBRes = mockMvc.perform(post("/api/v1/purchasing/path-a/purchase-orders/" + poId + "/lines")
+                        .contentType(APPLICATION_JSON)
+                        .content(lineBBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String lineB = objectMapper.readTree(lineBRes.getResponse().getContentAsString()).get("id").asText();
+        sendPo(poId);
+
+        String grnBody = """
+                {"purchaseOrderId":"%s","branchId":"%s","receivedAt":"%s","lines":[
+                  {"purchaseOrderLineId":"%s","qtyReceived":10},
+                  {"purchaseOrderLineId":"%s","qtyReceived":4}
+                ]}
+                """.formatted(poId, branchId, Instant.parse("2026-05-15T08:00:00Z"), lineA, lineB);
+
+        MvcResult grnRes = mockMvc.perform(post("/api/v1/purchasing/path-a/goods-receipts")
+                        .contentType(APPLICATION_JSON)
+                        .content(grnBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        String grnId = objectMapper.readTree(grnRes.getResponse().getContentAsString()).get("goodsReceiptId").asText();
+
+        // Invoice lines in reverse of UUID id order — positional matching against OrderByIdAsc would 400.
+        var byId = goodsReceiptLineRepository.findByGoodsReceiptIdOrderByIdAsc(grnId);
+        assertThat(byId).hasSize(2);
+        StringBuilder invLines = new StringBuilder();
+        for (int i = byId.size() - 1; i >= 0; i--) {
+            var gl = byId.get(i);
+            var pol = purchaseOrderLineRepository.findById(gl.getPurchaseOrderLineId()).orElseThrow();
+            BigDecimal qty = gl.getQtyReceived();
+            BigDecimal unit = pol.getUnitEstimatedCost();
+            BigDecimal total = qty.multiply(unit).setScale(2, RoundingMode.HALF_UP);
+            if (invLines.length() > 0) {
+                invLines.append(',');
+            }
+            invLines.append("""
+                    {"itemId":"%s","qty":%s,"unitCost":%s,"lineTotal":%s}
+                    """.formatted(pol.getItemId(), qty.toPlainString(), unit.toPlainString(), total.toPlainString()).trim());
+        }
+
+        String invBody = """
+                {"invoiceNumber":"INV-MULTI-1","invoiceDate":"2026-05-15","lines":[%s]}
+                """.formatted(invLines);
+
+        mockMvc.perform(post("/api/v1/purchasing/path-a/goods-receipts/" + grnId + "/supplier-invoice")
+                        .contentType(APPLICATION_JSON)
+                        .content(invBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        assertThat(supplierInvoiceRepository.existsByGoodsReceiptId(grnId)).isTrue();
+    }
+
+    @Test
     void receiveMoreThanOrdered_raisesOrderedQtyToWhatArrived() throws Exception {
         String poId = createPo();
         String poLineId = addPoLine(poId, "10", "5");

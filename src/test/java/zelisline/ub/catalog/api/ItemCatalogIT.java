@@ -293,7 +293,7 @@ class ItemCatalogIT {
     }
 
     @Test
-    void patchParentNameCascadesToVariantsAndListReturnsParentName() throws Exception {
+    void patchParentNamePreservesVariantDisplayNamesAndListReturnsParentName() throws Exception {
         String gid = goodsTypeId(TENANT_A);
         String parentId = createItemViaService(TENANT_A, gid, "SKU-RENAME-P", "Old Family");
         String variantBody = mockMvc.perform(post("/api/v1/items/" + parentId + "/variants")
@@ -303,6 +303,7 @@ class ItemCatalogIT {
                         .contentType(APPLICATION_JSON)
                         .content("{\"variantName\":\"500ml\"}"))
                 .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.name").value("500ml"))
                 .andReturn()
                 .getResponse()
                 .getContentAsString();
@@ -321,7 +322,8 @@ class ItemCatalogIT {
                         .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.name").value("New Family"));
+                .andExpect(jsonPath("$.name").value("500ml"))
+                .andExpect(jsonPath("$.variantName").value("500ml"));
 
         mockMvc.perform(get("/api/v1/items")
                         .param("search", "500ml")
@@ -330,8 +332,75 @@ class ItemCatalogIT {
                         .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content[0].name").value("New Family"))
+                .andExpect(jsonPath("$.content[0].name").value("500ml"))
                 .andExpect(jsonPath("$.content[0].parentName").value("New Family"));
+    }
+
+    @Test
+    void patchParentNameHealsLegacyVariantsStillCarryingFamilyTitle() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        String parentId = createItemViaService(TENANT_A, gid, "SKU-HEAL-P", "Legacy Family");
+        String variantBody = mockMvc.perform(post("/api/v1/items/" + parentId + "/variants")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"variantName\":\"2.0\",\"name\":\"Legacy Family\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.name").value("Legacy Family"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String variantId = JsonPath.read(variantBody, "$.id");
+
+        mockMvc.perform(patch("/api/v1/items/" + parentId)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"name\":\"Healed Family\"}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/items/" + variantId)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name").value("2.0"))
+                .andExpect(jsonPath("$.variantName").value("2.0"));
+    }
+
+    @Test
+    void patchParentNameLeavesCustomizedVariantDisplayNameAlone() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        String parentId = createItemViaService(TENANT_A, gid, "SKU-KEEP-P", "Family");
+        String variantBody = mockMvc.perform(post("/api/v1/items/" + parentId + "/variants")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"variantName\":\"3.0\",\"name\":\"BRS-B.NICKEL 3.0\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.name").value("BRS-B.NICKEL 3.0"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String variantId = JsonPath.read(variantBody, "$.id");
+
+        mockMvc.perform(patch("/api/v1/items/" + parentId)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"name\":\"Family Renamed\"}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/items/" + variantId)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name").value("BRS-B.NICKEL 3.0"));
     }
 
     @Test

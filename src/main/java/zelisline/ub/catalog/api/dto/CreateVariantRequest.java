@@ -13,6 +13,10 @@ public record CreateVariantRequest(
         @Size(max = 191) String sku,
         @NotBlank @Size(max = 255) String variantName,
         @Size(max = 191) String barcode,
+        /**
+         * Optional display name. When omitted, defaults to {@code variantName} so backend
+         * lists and history can tell sibling SKUs apart without a second edit.
+         */
         @Size(max = 500) String name,
         @Size(max = 10_000) String description,
         @Size(max = 36) String categoryId,

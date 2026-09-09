@@ -840,12 +840,13 @@ public class ItemCatalogService {
             item.setPluCode(next);
         }
         if (patch.name() != null && !patch.name().isBlank()) {
+            String previousName = item.getName();
             String nextName = patch.name().trim();
             item.setName(nextName);
             if (item.getVariantOfItemId() == null
                     && itemRepository.existsByBusinessIdAndVariantOfItemIdAndDeletedAtIsNull(
                             businessId, item.getId())) {
-                propagateParentNameToVariants(businessId, item.getId(), nextName);
+                propagateParentNameToVariants(businessId, item.getId(), previousName, nextName);
             }
         }
         if (patch.description() != null) {
@@ -1133,7 +1134,13 @@ public class ItemCatalogService {
         child.setBusinessId(businessId);
         child.setSku(sku);
         child.setBarcode(barcode);
-        child.setName(firstNonBlank(request.name(), parent.getName()));
+        // Display name defaults to the variant label so backend lists / history can tell
+        // siblings apart without a second manual edit. Explicit request.name still wins.
+        // Receipts and POS keep joining live parentName + variantName separately.
+        child.setName(firstNonBlank(
+                request.name(),
+                request.variantName(),
+                parent.getName()));
         child.setDescription(firstNonBlank(request.description(), parent.getDescription()));
         child.setVariantOfItemId(parent.getId());
         child.setVariantName(request.variantName().trim());
@@ -1946,16 +1953,46 @@ public class ItemCatalogService {
         return out;
     }
 
-    private void propagateParentNameToVariants(String businessId, String parentId, String name) {
+    /**
+     * Keeps denormalized family copies in sync when the parent is renamed — but only for
+     * variants that still carry the old family title. Custom display names (and names that
+     * already match {@code variantName}) are left alone so a parent rename does not wipe
+     * per-size labels that clerks use in history / backend lists.
+     * <p>
+     * Variants that still have the old parent name and also have a {@code variantName} are
+     * healed to that label instead of copying the new family title, so existing catalogs
+     * become identifiable the next time the product name is touched.
+     */
+    private void propagateParentNameToVariants(
+            String businessId,
+            String parentId,
+            String previousName,
+            String nextName
+    ) {
         List<Item> variants = itemRepository.findByBusinessIdAndVariantOfItemIdAndDeletedAtIsNullOrderBySkuAsc(
                 businessId, parentId);
         if (variants.isEmpty()) {
             return;
         }
+        String oldFamily = previousName == null ? "" : previousName.trim();
+        List<Item> toSave = new ArrayList<>();
         for (Item variant : variants) {
-            variant.setName(name);
+            String current = variant.getName() == null ? "" : variant.getName().trim();
+            boolean stillSyncedFamily = current.isEmpty()
+                    || (!oldFamily.isEmpty() && current.equalsIgnoreCase(oldFamily));
+            if (!stillSyncedFamily) {
+                continue;
+            }
+            String option = variant.getVariantName() == null ? "" : variant.getVariantName().trim();
+            String resolved = !option.isEmpty() ? option : nextName;
+            if (!current.equals(resolved)) {
+                variant.setName(resolved);
+                toSave.add(variant);
+            }
         }
-        itemRepository.saveAll(variants);
+        if (!toSave.isEmpty()) {
+            itemRepository.saveAll(toSave);
+        }
     }
 
     private ItemResponse toResponse(
@@ -2274,6 +2311,16 @@ public class ItemCatalogService {
     private static String firstNonBlank(String preferred, String fallback) {
         if (preferred != null && !preferred.isBlank()) {
             return preferred.trim();
+        }
+        return fallback;
+    }
+
+    private static String firstNonBlank(String preferred, String second, String fallback) {
+        if (preferred != null && !preferred.isBlank()) {
+            return preferred.trim();
+        }
+        if (second != null && !second.isBlank()) {
+            return second.trim();
         }
         return fallback;
     }

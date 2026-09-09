@@ -863,7 +863,11 @@ public class PathBPurchaseService {
         SupplierInvoice inv = supplierInvoiceRepository.findByIdAndBusinessId(invoiceId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Invoice not found"));
         if (inv.getRawPurchaseSessionId() == null || inv.getRawPurchaseSessionId().isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Not a direct supply (Path B) invoice");
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    inv.getGoodsReceiptId() != null && !inv.getGoodsReceiptId().isBlank()
+                            ? "Order delivery invoices cannot be deleted from Supplies"
+                            : "Not a direct supply (Path B) invoice");
         }
         if (!PurchasingConstants.INVOICE_POSTED.equals(inv.getStatus())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only posted invoices can be deleted");

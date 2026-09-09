@@ -21,10 +21,12 @@ import zelisline.ub.purchasing.api.dto.PatchPathBSupplyInvoiceRequest;
 import zelisline.ub.purchasing.api.dto.PathBSupplyExpenseDto;
 import zelisline.ub.purchasing.api.dto.PathBSupplyInvoiceDetailDto;
 import zelisline.ub.purchasing.api.dto.PathBSupplyInvoiceLineDto;
+import zelisline.ub.purchasing.domain.GoodsReceipt;
 import zelisline.ub.purchasing.domain.RawPurchaseLine;
 import zelisline.ub.purchasing.domain.RawPurchaseSession;
 import zelisline.ub.purchasing.domain.SupplierInvoice;
 import zelisline.ub.purchasing.domain.SupplierInvoiceLine;
+import zelisline.ub.purchasing.repository.GoodsReceiptRepository;
 import zelisline.ub.purchasing.repository.RawPurchaseLineRepository;
 import zelisline.ub.purchasing.repository.RawPurchaseSessionRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
@@ -46,6 +48,7 @@ public class SupplyInvoiceEditService {
     private final PathBPurchaseService pathBPurchaseService;
     private final RawPurchaseLineRepository rawPurchaseLineRepository;
     private final RawPurchaseSessionRepository rawPurchaseSessionRepository;
+    private final GoodsReceiptRepository goodsReceiptRepository;
     private final SupplyBatchRepository supplyBatchRepository;
     private final SupplyBatchExpenseRepository supplyBatchExpenseRepository;
     private final PathBAssociatedCostService pathBAssociatedCostService;
@@ -54,9 +57,7 @@ public class SupplyInvoiceEditService {
     public PathBSupplyInvoiceDetailDto getPathBInvoiceDetail(String businessId, String invoiceId) {
         SupplierInvoice inv = supplierInvoiceRepository.findByIdAndBusinessId(invoiceId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Invoice not found"));
-        if (inv.getRawPurchaseSessionId() == null || inv.getRawPurchaseSessionId().isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Not a direct supply (Path B) invoice");
-        }
+        requireSupplyBoardInvoice(inv);
         return toDetail(businessId, inv);
     }
 
@@ -68,13 +69,17 @@ public class SupplyInvoiceEditService {
     ) {
         SupplierInvoice inv = supplierInvoiceRepository.findByIdAndBusinessId(invoiceId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Invoice not found"));
-        if (inv.getRawPurchaseSessionId() == null || inv.getRawPurchaseSessionId().isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Not a direct supply (Path B) invoice");
-        }
+        requireSupplyBoardInvoice(inv);
         if (!PurchasingConstants.INVOICE_POSTED.equals(inv.getStatus())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only posted invoices can be edited");
         }
+        boolean pathB = isPathB(inv);
         if (req.lines() != null && !req.lines().isEmpty()) {
+            if (!pathB) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Order delivery invoices can only update the bill header from Supplies");
+            }
             BigDecimal paid = nz(allocationRepository.sumAmountBySupplierInvoiceId(invoiceId));
             if (paid.compareTo(MONEY) >= 0) {
                 throw new ResponseStatusException(
@@ -130,10 +135,13 @@ public class SupplyInvoiceEditService {
         String status = paymentStatus(open, paid);
 
         String sessionId = inv.getRawPurchaseSessionId();
+        String grnId = inv.getGoodsReceiptId();
         String branchId = null;
         String supplyBatchId = null;
         List<PathBSupplyExpenseDto> expenses = List.of();
-        if (sessionId != null && !sessionId.isBlank()) {
+        String source = isPathB(inv) ? "path_b" : "path_a";
+
+        if (hasText(sessionId)) {
             RawPurchaseSession session = rawPurchaseSessionRepository
                     .findByIdAndBusinessId(sessionId, businessId)
                     .orElse(null);
@@ -147,25 +155,30 @@ public class SupplyInvoiceEditService {
                 // Prefer the oldest batch as the canonical header for extras (Path B creates one).
                 SupplyBatch sb = batches.getFirst();
                 supplyBatchId = sb.getId();
-                List<SupplyBatchExpense> expenseRows =
-                        supplyBatchExpenseRepository.findBySupplyBatchIdOrderByCreatedAtAsc(sb.getId());
-                expenses = new ArrayList<>(expenseRows.size());
-                for (SupplyBatchExpense e : expenseRows) {
-                    expenses.add(new PathBSupplyExpenseDto(
-                            e.getId(),
-                            e.getCategory(),
-                            e.getAmount().setScale(2, RoundingMode.HALF_UP),
-                            e.getDescription()));
-                }
+                expenses = mapExpenses(sb.getId());
+            }
+        } else if (hasText(grnId)) {
+            GoodsReceipt grn = goodsReceiptRepository.findByIdAndBusinessId(grnId, businessId).orElse(null);
+            if (grn != null) {
+                branchId = grn.getBranchId();
+            }
+            List<SupplyBatch> batches = supplyBatchRepository
+                    .findAllByBusinessIdAndSourceTypeAndSourceIdOrderByCreatedAtAscIdAsc(
+                            businessId, PurchasingConstants.BATCH_SOURCE_PATH_A_GRN, grnId);
+            if (!batches.isEmpty()) {
+                SupplyBatch sb = batches.getFirst();
+                supplyBatchId = sb.getId();
+                expenses = mapExpenses(sb.getId());
             }
         }
 
+        boolean pathB = isPathB(inv);
         List<SupplierInvoiceLine> dbLines = supplierInvoiceLineRepository.findByInvoiceIdOrderBySortOrderAsc(inv.getId());
         List<PathBSupplyInvoiceLineDto> lines = new ArrayList<>(dbLines.size());
         for (SupplierInvoiceLine sil : dbLines) {
             BigDecimal usable = BigDecimal.ZERO;
             BigDecimal wastage = BigDecimal.ZERO;
-            if (sil.getRawLineId() != null) {
+            if (pathB && sil.getRawLineId() != null) {
                 RawPurchaseLine rl = rawPurchaseLineRepository.findById(sil.getRawLineId()).orElse(null);
                 if (rl != null && rl.getUsableQty() != null) {
                     usable = rl.getUsableQty();
@@ -173,6 +186,9 @@ public class SupplyInvoiceEditService {
                 if (rl != null && rl.getWastageQty() != null) {
                     wastage = rl.getWastageQty();
                 }
+            } else if (sil.getQty() != null) {
+                // Path A GRN invoices have no wastage breakdown — treat received qty as usable.
+                usable = sil.getQty();
             }
             lines.add(new PathBSupplyInvoiceLineDto(
                     sil.getId(),
@@ -202,7 +218,40 @@ public class SupplyInvoiceEditService {
                 branchId,
                 supplyBatchId,
                 expenses,
-                lines);
+                lines,
+                source);
+    }
+
+    private List<PathBSupplyExpenseDto> mapExpenses(String supplyBatchId) {
+        List<SupplyBatchExpense> expenseRows =
+                supplyBatchExpenseRepository.findBySupplyBatchIdOrderByCreatedAtAsc(supplyBatchId);
+        List<PathBSupplyExpenseDto> expenses = new ArrayList<>(expenseRows.size());
+        for (SupplyBatchExpense e : expenseRows) {
+            expenses.add(new PathBSupplyExpenseDto(
+                    e.getId(),
+                    e.getCategory(),
+                    e.getAmount().setScale(2, RoundingMode.HALF_UP),
+                    e.getDescription()));
+        }
+        return expenses;
+    }
+
+    private static void requireSupplyBoardInvoice(SupplierInvoice inv) {
+        if (!isPathB(inv) && !isPathA(inv)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Not a supply invoice");
+        }
+    }
+
+    private static boolean isPathB(SupplierInvoice inv) {
+        return hasText(inv.getRawPurchaseSessionId());
+    }
+
+    private static boolean isPathA(SupplierInvoice inv) {
+        return hasText(inv.getGoodsReceiptId());
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private static String paymentStatus(BigDecimal open, BigDecimal paid) {

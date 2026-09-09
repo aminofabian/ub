@@ -19,6 +19,10 @@ public record PathBSupplyListRow(
         /** {@code PAID}, {@code PARTIAL}, or {@code UNPAID} */
         String paymentStatus,
         /** Receiving branch from the Path B session or Path A goods receipt. */
-        String branchId
+        String branchId,
+        /**
+         * {@code path_b} (direct receive) or {@code path_a} (confirmed purchase order / GRN).
+         */
+        String source
 ) {
 }

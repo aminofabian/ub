@@ -128,6 +128,7 @@ public class SupplyReceiptQueryService {
                     .setScale(2, RoundingMode.HALF_UP);
             BigDecimal open = grand.subtract(paid).setScale(2, RoundingMode.HALF_UP);
             String status = paymentStatus(open, paid);
+            String source = hasText(inv.getRawPurchaseSessionId()) ? "path_b" : "path_a";
             rows.add(new PathBSupplyListRow(
                     inv.getId(),
                     inv.getSupplierId(),
@@ -139,7 +140,8 @@ public class SupplyReceiptQueryService {
                     paid,
                     open,
                     status,
-                    rowBranchId));
+                    rowBranchId,
+                    source));
         }
         return rows;
     }

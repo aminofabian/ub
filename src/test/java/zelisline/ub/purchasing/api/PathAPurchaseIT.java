@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -82,6 +83,8 @@ class PathAPurchaseIT {
     private static final String P_WRITE = "11111111-0000-0000-0000-000000000041";
     private static final String P_PATH_AR = "11111111-0000-0000-0000-000000000049";
     private static final String P_PATH_AW = "11111111-0000-0000-0000-000000000050";
+    private static final String P_PATH_BR = "11111111-0000-0000-0000-000000000051";
+    private static final String P_PATH_BW = "11111111-0000-0000-0000-000000000052";
     private static final String ROLE_OWNER = "22222222-0000-0000-0000-000000000001";
 
     @Autowired
@@ -201,6 +204,8 @@ class PathAPurchaseIT {
         permissionRepository.save(perm(P_WRITE, "catalog.items.write", "w"));
         permissionRepository.save(perm(P_PATH_AR, "purchasing.path_a.read", "par"));
         permissionRepository.save(perm(P_PATH_AW, "purchasing.path_a.write", "paw"));
+        permissionRepository.save(perm(P_PATH_BR, "purchasing.path_b.read", "pbr"));
+        permissionRepository.save(perm(P_PATH_BW, "purchasing.path_b.write", "pbw"));
 
         Role ownerRole = new Role();
         ownerRole.setId(ROLE_OWNER);
@@ -209,7 +214,7 @@ class PathAPurchaseIT {
         ownerRole.setName("Owner");
         ownerRole.setSystem(true);
         roleRepository.save(ownerRole);
-        for (String pid : List.of(P_READ, P_WRITE, P_PATH_AR, P_PATH_AW)) {
+        for (String pid : List.of(P_READ, P_WRITE, P_PATH_AR, P_PATH_AW, P_PATH_BR, P_PATH_BW)) {
             RolePermission rp = new RolePermission();
             rp.setId(new RolePermission.Id(ROLE_OWNER, pid));
             rolePermissionRepository.save(rp);
@@ -398,6 +403,87 @@ class PathAPurchaseIT {
 
         assertThat(itemRepository.findById(itemId).orElseThrow().getCurrentStock().setScale(2, RoundingMode.HALF_UP))
                 .isEqualByComparingTo(new BigDecimal("100.00"));
+    }
+
+    @Test
+    void pathAInvoice_appearsOnSuppliesBoardAndDetail() throws Exception {
+        String poId = createPo();
+        String poLineId = addPoLine(poId, "20", "5");
+        sendPo(poId);
+
+        String grnBody = """
+                {"purchaseOrderId":"%s","branchId":"%s","receivedAt":"%s","lines":[
+                  {"purchaseOrderLineId":"%s","qtyReceived":20}
+                ]}
+                """.formatted(poId, branchId, Instant.parse("2026-07-01T08:00:00Z"), poLineId);
+        MvcResult grnRes = mockMvc.perform(post("/api/v1/purchasing/path-a/goods-receipts")
+                        .contentType(APPLICATION_JSON)
+                        .content(grnBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        String grnId = objectMapper.readTree(grnRes.getResponse().getContentAsString()).get("goodsReceiptId").asText();
+
+        String invBody = """
+                {"invoiceNumber":"INV-SUP-PA","invoiceDate":"2026-07-01","lines":[
+                  {"itemId":"%s","qty":20,"unitCost":5,"lineTotal":100.00}
+                ]}
+                """.formatted(itemId);
+        MvcResult invRes = mockMvc.perform(post(
+                "/api/v1/purchasing/path-a/goods-receipts/" + grnId + "/supplier-invoice")
+                        .contentType(APPLICATION_JSON)
+                        .content(invBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        String invId = objectMapper.readTree(invRes.getResponse().getContentAsString()).get("supplierInvoiceId").asText();
+
+        MvcResult list = mockMvc.perform(get("/api/v1/purchasing/supplies")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode arr = objectMapper.readTree(list.getResponse().getContentAsString());
+        assertThat(arr.isArray()).isTrue();
+        assertThat(arr.size()).isEqualTo(1);
+        assertThat(arr.get(0).get("supplierInvoiceId").asText()).isEqualTo(invId);
+        assertThat(arr.get(0).get("source").asText()).isEqualTo("path_a");
+        assertThat(arr.get(0).get("branchId").asText()).isEqualTo(branchId);
+
+        MvcResult detail = mockMvc.perform(get("/api/v1/purchasing/supplies/" + invId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode body = objectMapper.readTree(detail.getResponse().getContentAsString());
+        assertThat(body.get("source").asText()).isEqualTo("path_a");
+        assertThat(body.get("branchId").asText()).isEqualTo(branchId);
+        assertThat(body.get("lines").size()).isEqualTo(1);
+        assertThat(body.get("lines").get(0).get("usableQty").decimalValue())
+                .isEqualByComparingTo(new BigDecimal("20"));
+
+        String patchJson = """
+                {"invoiceNumber":"INV-SUP-PA-2","invoiceDate":"2026-07-02","dueDate":null,"notes":"DN 7"}
+                """;
+        mockMvc.perform(patch("/api/v1/purchasing/supplies/" + invId)
+                        .contentType(APPLICATION_JSON)
+                        .content(patchJson)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(delete("/api/v1/purchasing/supplies/" + invId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

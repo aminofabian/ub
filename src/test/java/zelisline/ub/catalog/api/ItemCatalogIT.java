@@ -814,30 +814,76 @@ class ItemCatalogIT {
     }
 
     @Test
-    void attachVariantsRejectsAlreadyVariant() throws Exception {
+    void attachVariantsMovesExistingVariantToAnotherFamily() throws Exception {
         String gid = goodsTypeId(TENANT_A);
-        String parent = createItemViaService(TENANT_A, gid, "SKU-PARENT", "Parent Family");
-        String child = mockMvc.perform(post("/api/v1/items/" + parent + "/variants")
+        String parentA = createItemViaService(TENANT_A, gid, "SKU-PARENT-A", "Family A");
+        String parentB = createItemViaService(TENANT_A, gid, "SKU-PARENT-B", "Family B");
+        String child = mockMvc.perform(post("/api/v1/items/" + parentA + "/variants")
                         .header("X-Tenant-Id", TENANT_A)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
                         .contentType(APPLICATION_JSON)
-                        .content("{\"sku\":\"SKU-CHILD\",\"variantName\":\"A\"}"))
+                        .content("{\"sku\":\"SKU-CHILD-MOVE\",\"variantName\":\"20ml\"}"))
                 .andExpect(status().isCreated())
                 .andReturn()
                 .getResponse()
                 .getContentAsString();
         String childId = JsonPath.read(child, "$.id");
-        String other = createItemViaService(TENANT_A, gid, "SKU-OTHER", "Other Standalone");
 
         String body = """
                 {
                   "items":[
-                    {"itemId":"%s","variantName":"Nope"},
-                    {"itemId":"%s","variantName":"Ok"}
+                    {"itemId":"%s","variantName":"20ml"}
                   ]
                 }
-                """.formatted(childId, other);
+                """.formatted(childId);
+
+        mockMvc.perform(post("/api/v1/items/" + parentB + "/variants/attach")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(parentB));
+
+        mockMvc.perform(get("/api/v1/items/" + childId)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sku").value("SKU-CHILD-MOVE"))
+                .andExpect(jsonPath("$.variantOfItemId").value(parentB))
+                .andExpect(jsonPath("$.variantName").value("20ml"));
+    }
+
+    @Test
+    void attachVariantsRejectsFamilyParent() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        String parent = createItemViaService(TENANT_A, gid, "SKU-PARENT", "Parent Family");
+        mockMvc.perform(post("/api/v1/items/" + parent + "/variants")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"sku\":\"SKU-CHILD\",\"variantName\":\"A\"}"))
+                .andExpect(status().isCreated());
+        String otherFamily = createItemViaService(TENANT_A, gid, "SKU-OTHER-FAM", "Other Family");
+        mockMvc.perform(post("/api/v1/items/" + otherFamily + "/variants")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"sku\":\"SKU-OTHER-CHILD\",\"variantName\":\"B\"}"))
+                .andExpect(status().isCreated());
+
+        String body = """
+                {
+                  "items":[
+                    {"itemId":"%s","variantName":"Nope"}
+                  ]
+                }
+                """.formatted(otherFamily);
 
         mockMvc.perform(post("/api/v1/items/" + parent + "/variants/attach")
                         .header("X-Tenant-Id", TENANT_A)

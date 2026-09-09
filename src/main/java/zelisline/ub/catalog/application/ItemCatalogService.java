@@ -1210,7 +1210,8 @@ public class ItemCatalogService {
     }
 
     /**
-     * Nest existing standalone products under {@code parentId} as option variants.
+     * Nest products under {@code parentId} as option variants.
+     * Accepts standalones and variants already in another family (re-parent).
      * Preserves each child's id, SKU, stock batches, and sales history.
      */
     @Transactional
@@ -1254,12 +1255,6 @@ public class ItemCatalogService {
             Item child = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
                     .orElseThrow(() -> new ResponseStatusException(
                             HttpStatus.NOT_FOUND, "Product not found: " + itemId));
-            if (child.getVariantOfItemId() != null) {
-                throw new ResponseStatusException(
-                        HttpStatus.BAD_REQUEST,
-                        "Already in a family: " + displayItemLabel(child)
-                                + ". Detach it first, or pick a standalone product.");
-            }
             if (itemRepository.existsByBusinessIdAndVariantOfItemIdAndDeletedAtIsNull(businessId, child.getId())) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_REQUEST,
@@ -1270,7 +1265,7 @@ public class ItemCatalogService {
             Map<String, Object> oldState = itemSnapshot(child);
             child.setVariantOfItemId(parent.getId());
             child.setVariantName(line.variantName().trim());
-            // Keep department aligned with the family when attaching.
+            // Keep department aligned with the family when attaching / moving.
             if (parent.getItemTypeId() != null && !parent.getItemTypeId().isBlank()) {
                 child.setItemTypeId(parent.getItemTypeId());
             }

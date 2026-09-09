@@ -48,9 +48,11 @@ import zelisline.ub.inventory.api.dto.PostStandaloneWastageRequest;
 import zelisline.ub.inventory.api.dto.PostStockTransferRequest;
 import zelisline.ub.inventory.api.dto.StockTransferCreatedResponse;
 import zelisline.ub.inventory.application.InventoryTransferService;
+import zelisline.ub.inventory.domain.SupplyBatch;
 import zelisline.ub.inventory.repository.StockAdjustmentRequestRepository;
 import zelisline.ub.inventory.repository.StockTakeSessionRepository;
 import zelisline.ub.inventory.repository.StockTransferRepository;
+import zelisline.ub.inventory.repository.SupplyBatchRepository;
 import zelisline.ub.platform.security.TestAuthenticationFilter;
 import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.domain.InventoryBatch;
@@ -104,6 +106,8 @@ class InventorySlice3IT {
     @Autowired
     private InventoryBatchRepository inventoryBatchRepository;
     @Autowired
+    private SupplyBatchRepository supplyBatchRepository;
+    @Autowired
     private StockMovementRepository stockMovementRepository;
     @Autowired
     private StockAdjustmentRequestRepository stockAdjustmentRequestRepository;
@@ -131,6 +135,7 @@ class InventorySlice3IT {
     void seed() {
         stockMovementRepository.deleteAll();
         inventoryBatchRepository.deleteAll();
+        supplyBatchRepository.deleteAll();
         stockAdjustmentRequestRepository.deleteAll();
         stockTakeSessionRepository.deleteAll();
         stockTransferRepository.deleteAll();
@@ -408,6 +413,59 @@ class InventorySlice3IT {
         assertThat(itemRepository.findById(itemId).orElseThrow().getCurrentStock()
                 .setScale(2, RoundingMode.HALF_UP))
                 .isEqualByComparingTo("7");
+    }
+
+    @Test
+    void wastage_writesOffStockEvenWhenSupplyBatchHeaderIsClosed() throws Exception {
+        // Grocery on-hand sums active inventory lines; sale picks exclude closed
+        // supply headers. Spoils must still write off physical remaining qty.
+        String supplyId = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+        SupplyBatch closed = new SupplyBatch();
+        closed.setId(supplyId);
+        closed.setBusinessId(TENANT);
+        closed.setBranchId(branchAId);
+        closed.setBatchNumber("SB-CLOSED1");
+        closed.setSourceType("test");
+        closed.setSourceId(UUID.randomUUID().toString());
+        closed.setItemCount(1);
+        closed.setTotalInitialQuantity(new BigDecimal("10"));
+        closed.setTotalRemainingQuantity(new BigDecimal("4"));
+        closed.setReceivedAt(Instant.parse("2026-03-01T12:00:00Z"));
+        closed.setStatus(InventoryConstants.SUPPLY_BATCH_STATUS_CLOSED);
+        closed.setClosedAt(Instant.parse("2026-03-02T12:00:00Z"));
+        supplyBatchRepository.save(closed);
+
+        InventoryBatch line = inventoryBatchRepository.findById(sourceBatchId).orElseThrow();
+        line.setSupplyBatchId(supplyId);
+        line.setQuantityRemaining(new BigDecimal("4"));
+        inventoryBatchRepository.save(line);
+        Item item = itemRepository.findById(itemId).orElseThrow();
+        item.setCurrentStock(new BigDecimal("4"));
+        itemRepository.save(item);
+
+        // Sale-style preview pool is empty (closed supply excluded)…
+        assertThat(inventoryBatchRepository.findActiveBatchesForPreview(
+                        TENANT, itemId, branchAId,
+                        InventoryConstants.BATCH_STATUS_ACTIVE, BigDecimal.ZERO))
+                .isEmpty();
+
+        PostStandaloneWastageRequest body = new PostStandaloneWastageRequest(
+                branchAId, itemId, new BigDecimal("2"), new BigDecimal("1.00"),
+                null, null, "SPOILAGE");
+        mockMvc.perform(post("/api/v1/inventory/wastage")
+                        .contentType(APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated());
+
+        assertThat(inventoryBatchRepository.findById(sourceBatchId).orElseThrow()
+                .getQuantityRemaining().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("2");
+        assertThat(itemRepository.findById(itemId).orElseThrow().getCurrentStock()
+                .setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("2");
     }
 
     @Test

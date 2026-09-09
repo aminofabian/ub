@@ -6,7 +6,11 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.context.ApplicationEventPublisher;
@@ -288,7 +292,12 @@ public class InventoryLedgerService {
         requireBranch(businessId, req.branchId());
         PackageVariantStockResolver.StockPickResolution outbound =
                 packageVariantStockResolver.resolveInbound(businessId, req.itemId(), req.quantity());
-        Item item = packageVariantStockResolver.requireInventoryHolder(businessId, outbound.stockItemId());
+        // Resolve holder from the catalog SKU (package variants write off parent stock).
+        Item item = packageVariantStockResolver.requireInventoryHolder(businessId, req.itemId());
+        if (!item.getId().equals(outbound.stockItemId())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Stock holder mismatch for wastage");
+        }
         String opId = UUID.randomUUID().toString();
 
         // ── Resolve enum reason ──────────────────────────────────────
@@ -303,14 +312,17 @@ public class InventoryLedgerService {
         BigDecimal qty = outbound.stockQuantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
 
         // ── Deplete batches FEFO/FIFO — across as many as needed ─────
-        // Grocery stock is usually split across batches (one per delivery),
-        // so a single-batch write-off failed whenever the first batch held
-        // less than the spoil quantity even though the item had enough total.
+        // Grocery on-hand is the sum of active inventory lines (including lots
+        // whose supply header was closed). Sale picks exclude closed supply
+        // batches; wastage must still write off physical shelf stock — same
+        // pool as stock-take write-downs — and lock rows to avoid optimistic
+        // lock 500s when clerks spoil while sales are depleting the same lots.
         List<BatchAllocationLine> slices;
+        Map<String, InventoryBatch> lockedById = new LinkedHashMap<>();
         InventoryBatch primaryBatch;
         if (req.batchId() != null && !req.batchId().isBlank()) {
-            // Explicit batch pick stays single-batch (caller's choice).
-            primaryBatch = resolveWastageBatch(businessId, req, item);
+            primaryBatch = lockWastageBatch(businessId, req, item);
+            lockedById.put(primaryBatch.getId(), primaryBatch);
             if (primaryBatch.getQuantityRemaining().compareTo(qty) < 0) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_REQUEST,
@@ -322,7 +334,7 @@ public class InventoryLedgerService {
                     primaryBatch.getId(), qty, primaryBatch.getUnitCost()));
         } else {
             List<InventoryBatch> candidates = inventoryBatchRepository
-                    .findActiveBatchesForPreview(
+                    .lockActiveBatchesForPhysicalAdjustment(
                             businessId,
                             item.getId(),
                             req.branchId(),
@@ -331,27 +343,58 @@ public class InventoryLedgerService {
                     );
             if (candidates.isEmpty()) {
                 throw new ResponseStatusException(
-                        HttpStatus.BAD_REQUEST, "No active batches with remaining quantity");
+                        HttpStatus.BAD_REQUEST,
+                        "No on-hand stock to write off for this item at this branch. "
+                                + "Receive stock or refresh — the shelf count may be out of date."
+                );
             }
+            for (InventoryBatch b : candidates) {
+                lockedById.put(b.getId(), b);
+            }
+            List<InventoryBatch> working = new ArrayList<>(candidates);
             BatchAllocationPlanner.sortBatchesForPick(
-                    candidates,
+                    working,
                     item,
                     CostMethod.FIFO   // wastage: oldest first (FEFO if expiry exists)
             );
-            slices = BatchAllocationPlanner.allocateInOrder(candidates, qty);
-            primaryBatch = inventoryBatchRepository.findById(slices.getFirst().batchId()).orElseThrow();
+            BigDecimal available = working.stream()
+                    .map(InventoryBatch::getQuantityRemaining)
+                    .filter(q -> q != null && q.signum() > 0)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add)
+                    .setScale(QTY_SCALE, RoundingMode.HALF_UP);
+            if (available.compareTo(qty) < 0) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Not enough on-hand stock to write off ("
+                                + qty + " needed, " + available + " available)."
+                );
+            }
+            slices = BatchAllocationPlanner.allocateInOrder(working, qty);
+            primaryBatch = lockedById.get(slices.getFirst().batchId());
+            if (primaryBatch == null) {
+                primaryBatch = inventoryBatchRepository.findById(slices.getFirst().batchId())
+                        .orElseThrow(() -> new ResponseStatusException(
+                                HttpStatus.BAD_REQUEST, "Allocated batch not found"));
+            }
         }
 
         // ── Decrement each batch and record its movement ─────────────
         StockMovement firstMv = null;
         BigDecimal totalValue = BigDecimal.ZERO;
         String firstBatchNumber = null;
+        Set<String> supplyBatchIds = new LinkedHashSet<>();
         for (BatchAllocationLine slice : slices) {
-            InventoryBatch batch = inventoryBatchRepository.findById(slice.batchId()).orElseThrow();
+            InventoryBatch batch = lockedById.get(slice.batchId());
+            if (batch == null) {
+                batch = inventoryBatchRepository.findById(slice.batchId())
+                        .orElseThrow(() -> new ResponseStatusException(
+                                HttpStatus.BAD_REQUEST, "Allocated batch not found"));
+            }
             batch.setQuantityRemaining(batch.getQuantityRemaining().subtract(slice.quantity()));
             inventoryBatchRepository.save(batch);
-            supplyBatchLifecycleService.checkAndTransitionToSoldoutIfNeeded(
-                    businessId, batch.getSupplyBatchId());
+            if (batch.getSupplyBatchId() != null && !batch.getSupplyBatchId().isBlank()) {
+                supplyBatchIds.add(batch.getSupplyBatchId());
+            }
 
             StockMovement mv = persistMovement(
                     businessId,
@@ -372,6 +415,12 @@ public class InventoryLedgerService {
                 firstBatchNumber = batch.getBatchNumber();
             }
             totalValue = totalValue.add(extensionMoney(slice.quantity(), batch.getUnitCost()));
+        }
+        // Close supply headers only after every line decrement — calling this
+        // mid-loop can mark sibling lots depleted before they are written off.
+        for (String supplyBatchId : supplyBatchIds) {
+            supplyBatchLifecycleService.checkAndTransitionToSoldoutIfNeeded(
+                    businessId, supplyBatchId);
         }
         applyStockDelta(item, qty.negate(), true);
 
@@ -395,58 +444,30 @@ public class InventoryLedgerService {
     }
 
     /**
-     * Resolves which batch to deplete for wastage.
-     * If the caller specifies a batchId, use that (validate it).
-     * Otherwise, auto-pick the most eligible batch using FEFO → FIFO.
+     * Locks and validates a caller-picked batch for wastage.
      */
-    private InventoryBatch resolveWastageBatch(
+    private InventoryBatch lockWastageBatch(
             String businessId,
             PostStandaloneWastageRequest req,
             Item item
     ) {
-        if (req.batchId() != null && !req.batchId().isBlank()) {
-            // ── Caller picked a specific batch ────────────────────────
-            InventoryBatch b = inventoryBatchRepository
-                    .findByIdAndBusinessId(req.batchId(), businessId)
-                    .orElseThrow(() -> new ResponseStatusException(
-                            HttpStatus.NOT_FOUND, "Batch not found"));
-            if (!InventoryConstants.BATCH_STATUS_ACTIVE.equals(b.getStatus())) {
-                throw new ResponseStatusException(
-                        HttpStatus.BAD_REQUEST, "Batch is not active");
-            }
-            if (!b.getBranchId().equals(req.branchId())) {
-                throw new ResponseStatusException(
-                        HttpStatus.BAD_REQUEST, "Batch does not belong to this branch");
-            }
-            if (!b.getItemId().equals(item.getId())) {
-                throw new ResponseStatusException(
-                        HttpStatus.BAD_REQUEST, "Batch item does not match");
-            }
-            return b;
-        }
-
-        // ── Auto-pick: load active batches, sort FEFO → FIFO, take first ─
-        List<InventoryBatch> candidates = inventoryBatchRepository
-                .findActiveBatchesForPreview(
-                        businessId,
-                        item.getId(),
-                        req.branchId(),
-                        InventoryConstants.BATCH_STATUS_ACTIVE,
-                        BigDecimal.ZERO
-                );
-        if (candidates.isEmpty()) {
+        InventoryBatch b = inventoryBatchRepository
+                .findByIdAndBusinessIdForUpdate(req.batchId(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "Batch not found"));
+        if (!InventoryConstants.BATCH_STATUS_ACTIVE.equals(b.getStatus())) {
             throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST, "No active batches with remaining quantity");
+                    HttpStatus.BAD_REQUEST, "Batch is not active");
         }
-
-        // Reuse the existing sort logic from BatchAllocationPlanner
-        List<InventoryBatch> working = new ArrayList<>(candidates);
-        BatchAllocationPlanner.sortBatchesForPick(
-                working,
-                item,
-                CostMethod.FIFO   // wastage: oldest first (FEFO if expiry exists)
-        );
-        return working.getFirst();
+        if (!b.getBranchId().equals(req.branchId())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Batch does not belong to this branch");
+        }
+        if (!b.getItemId().equals(item.getId())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Batch item does not match");
+        }
+        return b;
     }
 
     private InventoryBatch saveInboundBatch(

@@ -313,7 +313,7 @@ public class ItemCatalogService {
                 ctx.isWeighed(),
                 fetchPageable);
         if (intelligentSearch) {
-            page = rankCatalogSearchPage(page, ctx.q(), ctx.pageable(), fuzzyToken -> itemRepository.search(
+            page = rankCatalogSearchPage(businessId, page, ctx.q(), ctx.pageable(), fuzzyToken -> itemRepository.search(
                     businessId,
                     fuzzyToken,
                     ctx.barcodeExact(),
@@ -2259,12 +2259,13 @@ public class ItemCatalogService {
     }
 
     private Page<Item> rankCatalogSearchPage(
+            String businessId,
             Page<Item> candidates,
             String query,
             Pageable pageable,
             java.util.function.Function<String, Page<Item>> candidateFallback
     ) {
-        List<Item> ranked = rankSearchHits(candidates.getContent(), query);
+        List<Item> ranked = rankSearchHits(businessId, candidates.getContent(), query);
         if (ranked.isEmpty()) {
             LinkedHashSet<String> tried = new LinkedHashSet<>();
             String first = dbSearchToken(query);
@@ -2276,7 +2277,7 @@ public class ItemCatalogService {
                     continue;
                 }
                 Page<Item> next = candidateFallback.apply(token);
-                ranked = rankSearchHits(next.getContent(), query);
+                ranked = rankSearchHits(businessId, next.getContent(), query);
                 if (!ranked.isEmpty()) {
                     break;
                 }
@@ -2290,17 +2291,30 @@ public class ItemCatalogService {
         return new PageImpl<>(ranked.subList(from, to), pageable, ranked.size());
     }
 
-    private static List<Item> rankSearchHits(List<Item> candidates, String query) {
+    private List<Item> rankSearchHits(String businessId, List<Item> candidates, String query) {
+        LinkedHashSet<String> parentIds = new LinkedHashSet<>();
+        for (Item item : candidates) {
+            String parentId = blankToNull(item.getVariantOfItemId());
+            if (parentId != null) {
+                parentIds.add(parentId);
+            }
+        }
+        Map<String, String> parentNames = parentNamesById(businessId, parentIds);
         return CatalogSearchSupport.rankAndFilter(
                 candidates,
-                item -> CatalogSearchSupport.SearchableText.of(
-                        item.getName(),
-                        item.getVariantName(),
-                        item.getSku(),
-                        item.getBarcode(),
-                        item.getDescription(),
-                        item.getBrand(),
-                        item.getSize()),
+                item -> {
+                    String parentId = blankToNull(item.getVariantOfItemId());
+                    String parentName = parentId != null ? parentNames.get(parentId) : null;
+                    return CatalogSearchSupport.SearchableText.of(
+                            item.getName(),
+                            item.getVariantName(),
+                            item.getSku(),
+                            item.getBarcode(),
+                            item.getDescription(),
+                            item.getBrand(),
+                            item.getSize(),
+                            parentName);
+                },
                 query);
     }
 

@@ -216,6 +216,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                and (:q is null or :q = ''
                     or lower(i.name) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.variantName, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(p.name, '')) like lower(concat('%', :q, '%'))
                     or lower(i.sku) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.barcode, '')) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.description, '')) like lower(concat('%', :q, '%')))
@@ -307,6 +308,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                   ) then 1 else 0 end), 0L)
             )
             from Item i
+             left join Item p on p.id = i.variantOfItemId and p.businessId = i.businessId and p.deletedAt is null
              where i.businessId = :businessId
                and i.deletedAt is null
                and (:inactiveOnly = false or i.active = false)
@@ -335,6 +337,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                and (:q is null or :q = ''
                     or lower(i.name) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.variantName, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(p.name, '')) like lower(concat('%', :q, '%'))
                     or lower(i.sku) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.barcode, '')) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.description, '')) like lower(concat('%', :q, '%')))
@@ -378,6 +381,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     @Query("""
             select count(i) from Item i
+             left join Item p on p.id = i.variantOfItemId and p.businessId = i.businessId and p.deletedAt is null
              where i.businessId = :businessId
                and i.deletedAt is null
                and (:inactiveOnly = false or i.active = false)
@@ -406,6 +410,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                and (:q is null or :q = ''
                     or lower(i.name) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.variantName, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(p.name, '')) like lower(concat('%', :q, '%'))
                     or lower(i.sku) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.barcode, '')) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.description, '')) like lower(concat('%', :q, '%')))
@@ -450,6 +455,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     @Query("""
             select count(i) from Item i
+             left join Item p on p.id = i.variantOfItemId and p.businessId = i.businessId and p.deletedAt is null
              where i.businessId = :businessId
                and i.deletedAt is null
                and (:catUnset = true or i.categoryId in :categoryIds)
@@ -475,6 +481,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                and (:q is null or :q = ''
                     or lower(i.name) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.variantName, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(p.name, '')) like lower(concat('%', :q, '%'))
                     or lower(i.sku) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.barcode, '')) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.description, '')) like lower(concat('%', :q, '%')))
@@ -516,6 +523,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     @Query("""
             select count(i) from Item i
+             left join Item p on p.id = i.variantOfItemId and p.businessId = i.businessId and p.deletedAt is null
              where i.businessId = :businessId
                and i.deletedAt is null
                and (:inactiveOnly = false or i.active = false)
@@ -544,6 +552,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                and (:q is null or :q = ''
                     or lower(i.name) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.variantName, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(p.name, '')) like lower(concat('%', :q, '%'))
                     or lower(i.sku) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.barcode, '')) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.description, '')) like lower(concat('%', :q, '%')))
@@ -596,6 +605,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     @Query("""
             select i.id from Item i
+             left join Item p on p.id = i.variantOfItemId and p.businessId = i.businessId and p.deletedAt is null
              where i.businessId = :businessId
                and i.deletedAt is null
                and (:inactiveOnly = false or i.active = false)
@@ -652,6 +662,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                and (:q is null or :q = ''
                     or lower(i.name) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.variantName, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(p.name, '')) like lower(concat('%', :q, '%'))
                     or lower(i.sku) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.barcode, '')) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.description, '')) like lower(concat('%', :q, '%')))
@@ -767,6 +778,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     @Query("""
             select i from Item i
+             left join Item p on p.id = i.variantOfItemId and p.businessId = i.businessId and p.deletedAt is null
              where i.businessId = :businessId
                and i.deletedAt is null
                and i.active = true
@@ -776,6 +788,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                and (:q is null or :q = ''
                     or lower(i.name) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.variantName, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(p.name, '')) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.description, '')) like lower(concat('%', :q, '%')))
                and ((:q is null or :q = '')
                     or i.variantOfItemId is not null
@@ -802,6 +815,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     @Query("""
             select count(i) from Item i
+             left join Item p on p.id = i.variantOfItemId and p.businessId = i.businessId and p.deletedAt is null
              where i.businessId = :businessId
                and i.deletedAt is null
                and i.active = true
@@ -811,6 +825,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                and (:q is null or :q = ''
                     or lower(i.name) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.variantName, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(p.name, '')) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.description, '')) like lower(concat('%', :q, '%')))
                and ((:q is null or :q = '')
                     or i.variantOfItemId is not null

@@ -168,4 +168,20 @@ class CatalogSearchSupportTest {
                 .extracting(CatalogSearchSupport.SearchableText::name)
                 .containsExactly("Coca-Cola 500ml");
     }
+
+    @Test
+    void score_matchesVariantViaParentName() {
+        var text = CatalogSearchSupport.SearchableText.of(
+                "444",
+                "444",
+                "SKU-1",
+                null,
+                null,
+                null,
+                null,
+                "molped");
+        assertThat(CatalogSearchSupport.score(text, "molped")).isGreaterThan(0);
+        assertThat(CatalogSearchSupport.rankAndFilter(List.of(text), t -> t, "molped"))
+                .hasSize(1);
+    }
 }

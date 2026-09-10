@@ -55,7 +55,8 @@ public final class CatalogSearchSupport {
             String barcode,
             String description,
             String brand,
-            String size
+            String size,
+            String parentName
     ) {
         public static SearchableText of(
                 String name,
@@ -64,7 +65,7 @@ public final class CatalogSearchSupport {
                 String barcode,
                 String description
         ) {
-            return of(name, variantName, sku, barcode, description, null, null);
+            return of(name, variantName, sku, barcode, description, null, null, null);
         }
 
         public static SearchableText of(
@@ -76,7 +77,21 @@ public final class CatalogSearchSupport {
                 String brand,
                 String size
         ) {
-            return new SearchableText(name, variantName, sku, barcode, description, brand, size);
+            return of(name, variantName, sku, barcode, description, brand, size, null);
+        }
+
+        public static SearchableText of(
+                String name,
+                String variantName,
+                String sku,
+                String barcode,
+                String description,
+                String brand,
+                String size,
+                String parentName
+        ) {
+            return new SearchableText(
+                    name, variantName, sku, barcode, description, brand, size, parentName);
         }
     }
 
@@ -192,11 +207,12 @@ public final class CatalogSearchSupport {
         String description = norm(item.description());
         String brand = norm(item.brand());
         String size = norm(item.size());
+        String parent = norm(item.parentName());
         String phrase = String.join(" ", tokens);
         String compactPhrase = compact(phrase);
 
-        String primaryHaystack = joinHaystack(name, variant, brand, size);
-        String haystack = joinHaystack(name, variant, brand, size, sku, barcode, description);
+        String primaryHaystack = joinHaystack(name, variant, brand, size, parent);
+        String haystack = joinHaystack(name, variant, brand, size, sku, barcode, description, parent);
         String[] primaryWords = splitWords(primaryHaystack);
         String[] words = splitWords(haystack);
         String initials = initialsOf(primaryWords);
@@ -207,11 +223,17 @@ public final class CatalogSearchSupport {
         if (!name.isBlank() && name.equals(phrase)) {
             best = Math.max(best, 50_000);
         }
+        if (!parent.isBlank() && parent.equals(phrase)) {
+            best = Math.max(best, 49_000);
+        }
         if (!brand.isBlank() && brand.equals(phrase)) {
             best = Math.max(best, 48_000);
         }
         if (!name.isBlank() && name.startsWith(phrase)) {
             best = Math.max(best, 45_000);
+        }
+        if (!parent.isBlank() && parent.startsWith(phrase)) {
+            best = Math.max(best, 44_500);
         }
         if (!brand.isBlank() && brand.startsWith(phrase)) {
             best = Math.max(best, 44_000);
@@ -288,7 +310,7 @@ public final class CatalogSearchSupport {
         String primary = tokens.stream()
                 .max(Comparator.comparingInt(String::length))
                 .orElse(tokens.get(0));
-        int fuzzy = bestFuzzyDistance(primary, primaryWords, name, variant, brand);
+        int fuzzy = bestFuzzyDistance(primary, primaryWords, name, variant, brand, parent);
         int maxEdits = maxEdits(primary.length());
         if (fuzzy >= 0 && fuzzy <= maxEdits) {
             best = Math.max(best, 10_000 - fuzzy * 400);
@@ -469,7 +491,8 @@ public final class CatalogSearchSupport {
             String[] words,
             String name,
             String variant,
-            String brand
+            String brand,
+            String parent
     ) {
         int best = Integer.MAX_VALUE;
         for (String word : words) {
@@ -478,7 +501,7 @@ public final class CatalogSearchSupport {
                 best = Math.min(best, damerauLevenshtein(token, word.substring(0, token.length())));
             }
         }
-        for (String field : List.of(name, variant, brand)) {
+        for (String field : List.of(name, variant, brand, parent)) {
             if (field == null || field.isBlank()) {
                 continue;
             }

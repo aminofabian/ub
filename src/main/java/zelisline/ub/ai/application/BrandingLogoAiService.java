@@ -23,8 +23,8 @@ import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
 /**
- * Two shop marks from one merchant prompt: light chrome and dark chrome.
- * Returns PNG bytes; the client previews and uploads through branding.
+ * Brand kit from one merchant prompt: light logo, dark logo, favicon, and
+ * social share image. Returns PNG bytes; the client previews and uploads.
  */
 @Service
 @RequiredArgsConstructor
@@ -70,6 +70,10 @@ public class BrandingLogoAiService {
                 prompt, shopName, shopType, primary, accent, BrandingLogoPromptComposer.Theme.LIGHT);
         String darkPrompt = BrandingLogoPromptComposer.compose(
                 prompt, shopName, shopType, primary, accent, BrandingLogoPromptComposer.Theme.DARK);
+        String faviconPrompt = BrandingLogoPromptComposer.compose(
+                prompt, shopName, shopType, primary, accent, BrandingLogoPromptComposer.Theme.FAVICON);
+        String ogPrompt = BrandingLogoPromptComposer.compose(
+                prompt, shopName, shopType, primary, accent, BrandingLogoPromptComposer.Theme.OG);
 
         String imageProvider = config.imageProvider();
         String requestId = UUID.randomUUID().toString();
@@ -88,20 +92,33 @@ public class BrandingLogoAiService {
                     CompletableFuture.supplyAsync(() -> generateOne(config, imageProvider, lightPrompt));
             CompletableFuture<OpenAiImageClient.GeneratedImage> darkFuture =
                     CompletableFuture.supplyAsync(() -> generateOne(config, imageProvider, darkPrompt));
+            CompletableFuture<OpenAiImageClient.GeneratedImage> faviconFuture =
+                    CompletableFuture.supplyAsync(() -> generateOne(config, imageProvider, faviconPrompt));
+            CompletableFuture<OpenAiImageClient.GeneratedImage> ogFuture =
+                    CompletableFuture.supplyAsync(() -> generateOne(config, imageProvider, ogPrompt));
             OpenAiImageClient.GeneratedImage light = unwrap(lightFuture);
             OpenAiImageClient.GeneratedImage dark = unwrap(darkFuture);
+            OpenAiImageClient.GeneratedImage favicon = unwrap(faviconFuture);
+            OpenAiImageClient.GeneratedImage og = unwrap(ogFuture);
             long latency = System.currentTimeMillis() - started;
             log.setSuccess(true);
-            log.setModel(firstNonBlank(light.model(), dark.model()));
-            log.setPromptTokens(sumTokens(light.promptTokens(), dark.promptTokens()));
-            log.setCompletionTokens(sumTokens(light.completionTokens(), dark.completionTokens()));
+            log.setModel(firstNonBlank(light.model(), dark.model(), favicon.model(), og.model()));
+            log.setPromptTokens(sumTokens(
+                    light.promptTokens(), dark.promptTokens(), favicon.promptTokens(), og.promptTokens()));
+            log.setCompletionTokens(sumTokens(
+                    light.completionTokens(),
+                    dark.completionTokens(),
+                    favicon.completionTokens(),
+                    og.completionTokens()));
             log.setLatencyMs((int) Math.min(latency, Integer.MAX_VALUE));
             requestLogRepository.save(log);
             return new BrandingLogoGenerateResponse(
                     requestId,
                     List.of(
                             new BrandingLogoVariantDto("light", light.mimeType(), light.base64()),
-                            new BrandingLogoVariantDto("dark", dark.mimeType(), dark.base64())));
+                            new BrandingLogoVariantDto("dark", dark.mimeType(), dark.base64()),
+                            new BrandingLogoVariantDto("favicon", favicon.mimeType(), favicon.base64()),
+                            new BrandingLogoVariantDto("og", og.mimeType(), og.base64())));
         } catch (RuntimeException ex) {
             long latency = System.currentTimeMillis() - started;
             log.setSuccess(false);
@@ -152,6 +169,10 @@ public class BrandingLogoAiService {
         return Integer.valueOf((a == null ? 0 : a) + (b == null ? 0 : b));
     }
 
+    private static Integer sumTokens(Integer a, Integer b, Integer c, Integer d) {
+        return sumTokens(sumTokens(a, b), sumTokens(c, d));
+    }
+
     private static String firstNonBlank(String a, String b) {
         if (a != null && !a.isBlank()) {
             return a.trim();
@@ -162,6 +183,10 @@ public class BrandingLogoAiService {
     private static String firstNonBlank(String a, String b, String c) {
         String first = firstNonBlank(a, b);
         return firstNonBlank(first, c);
+    }
+
+    private static String firstNonBlank(String a, String b, String c, String d) {
+        return firstNonBlank(firstNonBlank(a, b), firstNonBlank(c, d));
     }
 
     private static String truncate(String value, int max) {

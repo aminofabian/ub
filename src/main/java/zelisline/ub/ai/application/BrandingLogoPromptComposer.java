@@ -4,14 +4,16 @@ import java.util.Locale;
 import java.util.regex.Pattern;
 
 /**
- * Turns the merchant's short description (or a default brand brief) into two
- * Images-API prompts: one mark for light chrome, one for dark chrome.
+ * Turns the merchant's short description (or a default brand brief) into
+ * Images-API prompts for the shop mark and matching web assets.
  */
 final class BrandingLogoPromptComposer {
 
     enum Theme {
         LIGHT,
-        DARK
+        DARK,
+        FAVICON,
+        OG
     }
 
     private static final int MAX_PROMPT = 4_000;
@@ -20,8 +22,8 @@ final class BrandingLogoPromptComposer {
 
     /**
      * Used when the merchant taps Generate without describing the mark.
-     * Two separate image calls apply this brief (one per theme) so each
-     * file is a usable logo, not a labeled comparison sheet.
+     * Separate image calls apply this brief (one per asset) so each
+     * file is usable on its own, not a labeled comparison sheet.
      */
     static final String DEFAULT_CONCEPT = """
             Generate a professional, visually appealing logo that fits the overall brand identity \
@@ -59,7 +61,7 @@ final class BrandingLogoPromptComposer {
         String accent = hexOrEmpty(accentColor);
 
         StringBuilder sb = new StringBuilder(MAX_PROMPT);
-        sb.append("Professional shop logo for a Kenyan neighbourhood business.\n");
+        sb.append("Professional shop identity for a Kenyan neighbourhood business.\n");
         if (!name.isEmpty()) {
             sb.append("Shop name: ").append(name).append('\n');
         }
@@ -85,36 +87,63 @@ final class BrandingLogoPromptComposer {
         } else {
             sb.append(DEFAULT_CONCEPT.strip()).append("\n\n");
         }
-        if (resolved == Theme.LIGHT) {
-            sb.append("""
-                    Theme: LIGHT
-                    Create a version specifically designed to work well on light backgrounds. \
-                    Ensure sufficient contrast, clarity, and visual balance while using colours \
-                    that complement the application's existing theme. Darker ink and brand colour \
-                    on a transparent or pale field.
+        switch (resolved) {
+            case LIGHT -> sb.append("""
+                    Asset: LOGO for LIGHT chrome
+                    Isolated mark only. Darker ink and brand colour. Must sit on white UI, \
+                    receipts, and emails with no extra plate.
 
                     """);
-        } else {
-            sb.append("""
-                    Theme: DARK
-                    Create a corresponding version optimized for dark backgrounds. Adjust colours, \
-                    contrast, and any necessary visual elements so the logo remains highly visible \
-                    and visually appealing without losing its brand identity. Lighter ink and \
-                    brighter brand colour on a transparent or deep field.
+            case DARK -> sb.append("""
+                    Asset: LOGO for DARK chrome
+                    Isolated mark only. Lighter ink (white, cream, or a bright brand tint). \
+                    Must sit on navy, black, or deep brand panels with no extra plate. \
+                    Never a light mark trapped inside a white square.
+
+                    """);
+            case FAVICON -> sb.append("""
+                    Asset: FAVICON / APP ICON
+                    A simplified sibling of the same mark, built as a browser tab icon. \
+                    Fill a rounded square edge to edge. Solid brand-primary tile. \
+                    High-contrast glyph centred (white or cream). No wordmark, no tagline, \
+                    no photo, no letterboxing. Must read at 16 pixels.
+
+                    """);
+            case OG -> sb.append("""
+                    Asset: SOCIAL SHARE IMAGE
+                    Square link-preview card for WhatsApp and Facebook. Brand-primary field \
+                    (not white, not a photo of a website). The same mark large and centred \
+                    in light ink so it reads on that dark or saturated field. \
+                    Shop name in one clean sans-serif line under the mark if it fits. \
+                    Generous padding. No browser chrome, no phone mockup, no white card \
+                    behind the logo.
 
                     """);
         }
-        sb.append("""
-                Design rules:
-                - Output THIS theme's mark only. Do not draw both versions. Do not label the image.
-                - Square 1:1 composition, mark centred, generous padding
-                - Clean, simple, memorable; must read at 32 pixels
-                - Flat or lightly shaded vector look. Not a photograph, not 3D, not a mockup
-                - No watermarks, no app UI, no business cards, no storefront photos
-                - Transparent background if possible; otherwise one solid colour that matches the theme
-                - Include the shop name as lettering only if the merchant asked for text
-                - No extra slogans or taglines
-                """);
+        if (resolved == Theme.LIGHT || resolved == Theme.DARK) {
+            sb.append("""
+                    Design rules:
+                    - Output THIS asset only. Do not draw both versions. Do not label the image.
+                    - Square 1:1 composition, mark centred, generous padding
+                    - Clean, simple, memorable; must read at 32 pixels
+                    - Flat or lightly shaded vector look. Not a photograph, not 3D, not a mockup
+                    - No watermarks, no app UI, no business cards, no storefront photos
+                    - Transparent background. PNG with alpha. No white square, card, sticker, \
+                    badge backing, canvas, drop shadow box, or pale plate behind the mark.
+                    - The file is the glyph itself, not a picture of a logo on a background
+                    - Include the shop name as lettering only if the merchant asked for text
+                    - No extra slogans or taglines
+                    """);
+        } else {
+            sb.append("""
+                    Design rules:
+                    - Output THIS asset only. Do not draw a comparison sheet. Do not label the image.
+                    - Square 1:1, fills the frame, no empty letterbox bars
+                    - Flat vector look. Not a photograph, not 3D, not a mockup of a browser
+                    - No watermarks, no UI chrome, no business cards
+                    - Never put a white rectangle behind the mark
+                    """);
+        }
 
         String out = sb.toString().strip();
         return out.length() <= MAX_PROMPT ? out : out.substring(0, MAX_PROMPT);

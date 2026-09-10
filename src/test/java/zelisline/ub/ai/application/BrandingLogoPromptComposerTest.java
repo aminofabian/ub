@@ -19,7 +19,7 @@ class BrandingLogoPromptComposerTest {
         assertThat(out).contains("Fresh market");
         assertThat(out).contains("A green leaf in a circle");
         assertThat(out).contains("#0D9488");
-        assertThat(out).contains("Theme: LIGHT");
+        assertThat(out).contains("Asset: LOGO for LIGHT chrome");
         assertThat(out).contains("Transparent background");
         assertThat(out).doesNotContain("—");
     }
@@ -32,18 +32,19 @@ class BrandingLogoPromptComposerTest {
                 "  ", "Palmart", null, null, null, BrandingLogoPromptComposer.Theme.DARK);
         assertThat(light).contains("Palmart");
         assertThat(light).contains("professional, visually appealing logo");
-        assertThat(light).contains("Theme: LIGHT");
-        assertThat(light).doesNotContain("Theme: DARK");
-        assertThat(dark).contains("Theme: DARK");
+        assertThat(light).contains("Asset: LOGO for LIGHT chrome");
+        assertThat(light).doesNotContain("Asset: LOGO for DARK chrome");
+        assertThat(dark).contains("Asset: LOGO for DARK chrome");
         assertThat(dark).contains("same core iconography");
-        assertThat(dark).doesNotContain("Theme: LIGHT");
+        assertThat(dark).doesNotContain("Asset: LOGO for LIGHT chrome");
+        assertThat(dark).contains("Never a light mark trapped inside a white square");
     }
 
     @Test
     void composeAllowsEmptyShopNameWhenUsingDefaultBrief() {
         String out = BrandingLogoPromptComposer.compose(
                 "  ", "", null, null, null, BrandingLogoPromptComposer.Theme.LIGHT);
-        assertThat(out).contains("Theme: LIGHT");
+        assertThat(out).contains("Asset: LOGO for LIGHT chrome");
         assertThat(out).contains("professional, visually appealing logo");
     }
 
@@ -60,5 +61,29 @@ class BrandingLogoPromptComposerTest {
                 "mark", "Shop", null, "teal", "not-a-color", BrandingLogoPromptComposer.Theme.LIGHT);
         assertThat(out).doesNotContain("Brand colours");
         assertThat(out).doesNotContain("teal");
+    }
+
+    @Test
+    void faviconAndOgPromptsStayOnTheirAsset() {
+        String favicon = BrandingLogoPromptComposer.compose(
+                "A green leaf in a circle",
+                "Kilimani Greens",
+                "Fresh market",
+                "#0D9488",
+                null,
+                BrandingLogoPromptComposer.Theme.FAVICON);
+        String og = BrandingLogoPromptComposer.compose(
+                "A green leaf in a circle",
+                "Kilimani Greens",
+                null,
+                "#0D9488",
+                null,
+                BrandingLogoPromptComposer.Theme.OG);
+        assertThat(favicon).contains("Asset: FAVICON");
+        assertThat(favicon).contains("No wordmark");
+        assertThat(favicon).doesNotContain("Asset: LOGO for LIGHT chrome");
+        assertThat(og).contains("Asset: SOCIAL SHARE IMAGE");
+        assertThat(og).contains("Kilimani Greens");
+        assertThat(og).doesNotContain("Asset: FAVICON");
     }
 }

@@ -2,7 +2,7 @@ package zelisline.ub.ai.api.dto;
 
 import java.util.List;
 
-/** Light and dark PNG (or JPEG) variants as Base64 so the client can preview both. */
+/** Brand kit as Base64 so the client can preview, save, and download each file. */
 public record BrandingLogoGenerateResponse(
         String requestId,
         List<BrandingLogoVariantDto> logos

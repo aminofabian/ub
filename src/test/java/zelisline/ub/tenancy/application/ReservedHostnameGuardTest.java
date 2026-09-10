@@ -11,13 +11,19 @@ import org.springframework.web.server.ResponseStatusException;
 class ReservedHostnameGuardTest {
 
     private final ReservedHostnameGuard guard = new ReservedHostnameGuard(
-            List.of("kiosk.ke", "www.kiosk.ke", "palmart.co.ke"),
+            List.of("kiosk.ke", "www.kiosk.ke"),
             "kiosk.ke"
     );
 
     @Test
     void allowsNormalCustomHostname() {
         assertThatCode(() -> guard.assertClaimable("shop.mama-njeri.co.ke"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void allowsTenantCustomDomain() {
+        assertThatCode(() -> guard.assertClaimable("palmart.co.ke"))
                 .doesNotThrowAnyException();
     }
 

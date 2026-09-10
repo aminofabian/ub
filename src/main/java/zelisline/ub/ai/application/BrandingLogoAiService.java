@@ -1,6 +1,9 @@
 package zelisline.ub.ai.application;
 
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -10,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 
 import zelisline.ub.ai.api.dto.BrandingLogoGenerateRequest;
 import zelisline.ub.ai.api.dto.BrandingLogoGenerateResponse;
+import zelisline.ub.ai.api.dto.BrandingLogoVariantDto;
 import zelisline.ub.ai.application.provider.OpenAiImageClient;
 import zelisline.ub.ai.application.provider.OpenRouterImageClient;
 import zelisline.ub.ai.config.SokoMindProperties;
@@ -19,8 +23,8 @@ import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
 /**
- * One-shot shop logo from a merchant prompt. Returns PNG bytes; the client
- * previews and uploads through the existing branding logo path.
+ * Two shop marks from one merchant prompt: light chrome and dark chrome.
+ * Returns PNG bytes; the client previews and uploads through branding.
  */
 @Service
 @RequiredArgsConstructor
@@ -62,17 +66,10 @@ public class BrandingLogoAiService {
         String primary = body == null ? null : body.primaryColor();
         String accent = body == null ? null : body.accentColor();
 
-        if (!BrandingLogoPromptComposer.hasEnoughInput(prompt, shopName)) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST, "Describe the logo, or set a shop name first.");
-        }
-
-        String composed;
-        try {
-            composed = BrandingLogoPromptComposer.compose(prompt, shopName, shopType, primary, accent);
-        } catch (IllegalArgumentException ex) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
-        }
+        String lightPrompt = BrandingLogoPromptComposer.compose(
+                prompt, shopName, shopType, primary, accent, BrandingLogoPromptComposer.Theme.LIGHT);
+        String darkPrompt = BrandingLogoPromptComposer.compose(
+                prompt, shopName, shopType, primary, accent, BrandingLogoPromptComposer.Theme.DARK);
 
         String imageProvider = config.imageProvider();
         String requestId = UUID.randomUUID().toString();
@@ -87,25 +84,24 @@ public class BrandingLogoAiService {
         log.setProvider(imageProvider.isBlank() ? "openai" : imageProvider);
 
         try {
-            OpenAiImageClient.GeneratedImage image;
-            if ("openrouter".equals(imageProvider)) {
-                String model = firstNonBlank(
-                        config.openrouterImageModel(),
-                        properties.openrouter() == null ? null : properties.openrouter().imageModel(),
-                        "google/gemini-2.5-flash-image");
-                image = openRouterImageClient.generate(config, model, composed);
-            } else {
-                String model = properties.openai() == null ? "gpt-image-1" : properties.openai().imageModel();
-                image = imageClient.generate(config, model, composed);
-            }
+            CompletableFuture<OpenAiImageClient.GeneratedImage> lightFuture =
+                    CompletableFuture.supplyAsync(() -> generateOne(config, imageProvider, lightPrompt));
+            CompletableFuture<OpenAiImageClient.GeneratedImage> darkFuture =
+                    CompletableFuture.supplyAsync(() -> generateOne(config, imageProvider, darkPrompt));
+            OpenAiImageClient.GeneratedImage light = unwrap(lightFuture);
+            OpenAiImageClient.GeneratedImage dark = unwrap(darkFuture);
             long latency = System.currentTimeMillis() - started;
             log.setSuccess(true);
-            log.setModel(image.model());
-            log.setPromptTokens(image.promptTokens());
-            log.setCompletionTokens(image.completionTokens());
+            log.setModel(firstNonBlank(light.model(), dark.model()));
+            log.setPromptTokens(sumTokens(light.promptTokens(), dark.promptTokens()));
+            log.setCompletionTokens(sumTokens(light.completionTokens(), dark.completionTokens()));
             log.setLatencyMs((int) Math.min(latency, Integer.MAX_VALUE));
             requestLogRepository.save(log);
-            return new BrandingLogoGenerateResponse(requestId, image.mimeType(), image.base64());
+            return new BrandingLogoGenerateResponse(
+                    requestId,
+                    List.of(
+                            new BrandingLogoVariantDto("light", light.mimeType(), light.base64()),
+                            new BrandingLogoVariantDto("dark", dark.mimeType(), dark.base64())));
         } catch (RuntimeException ex) {
             long latency = System.currentTimeMillis() - started;
             log.setSuccess(false);
@@ -114,6 +110,46 @@ public class BrandingLogoAiService {
             requestLogRepository.save(log);
             throw ex;
         }
+    }
+
+    private OpenAiImageClient.GeneratedImage generateOne(
+            ResolvedSokoMindConfig config,
+            String imageProvider,
+            String composed
+    ) {
+        if ("openrouter".equals(imageProvider)) {
+            String model = firstNonBlank(
+                    config.openrouterImageModel(),
+                    properties.openrouter() == null ? null : properties.openrouter().imageModel(),
+                    "google/gemini-2.5-flash-image");
+            return openRouterImageClient.generate(config, model, composed);
+        }
+        String model = properties.openai() == null ? "gpt-image-1" : properties.openai().imageModel();
+        return imageClient.generate(config, model, composed);
+    }
+
+    private static OpenAiImageClient.GeneratedImage unwrap(
+            CompletableFuture<OpenAiImageClient.GeneratedImage> future
+    ) {
+        try {
+            return future.join();
+        } catch (CompletionException ex) {
+            Throwable cause = ex.getCause() == null ? ex : ex.getCause();
+            if (cause instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    cause.getMessage() == null ? "Logo generation failed." : cause.getMessage(),
+                    cause);
+        }
+    }
+
+    private static Integer sumTokens(Integer a, Integer b) {
+        if (a == null && b == null) {
+            return null;
+        }
+        return Integer.valueOf((a == null ? 0 : a) + (b == null ? 0 : b));
     }
 
     private static String firstNonBlank(String a, String b) {

@@ -3,9 +3,8 @@ package zelisline.ub.ai.api.dto;
 import jakarta.validation.constraints.Size;
 
 /**
- * Merchant request to generate a shop logo from a prompt.
- * {@code prompt} may be empty when {@code shopName} is present — the model
- * then invents a simple mark from the name and shop type.
+ * Merchant request to generate a shop logo pair (light + dark).
+ * {@code prompt} may be empty — the model then uses the platform default brief.
  */
 public record BrandingLogoGenerateRequest(
         @Size(max = 600) String prompt,

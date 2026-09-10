@@ -33,6 +33,7 @@ class EmailVerificationBrandingContextTest {
                         "UzaPoint POS",
                         "https://cdn.example/logo.png",
                         null,
+                        null,
                         "#111827",
                         "#F97316",
                         null,

@@ -14,6 +14,8 @@ public record BrandingPatchRequest(
     @Size(max = 255) String displayName,
     @Size(max = 1024) String logoUrl,
     @Size(max = 255) String logoPublicId,
+    @Size(max = 1024) String logoDarkUrl,
+    @Size(max = 255) String logoDarkPublicId,
     @Size(max = 1024) String faviconUrl,
     @Pattern(
         regexp = "^$|^#[0-9a-fA-F]{6}$",

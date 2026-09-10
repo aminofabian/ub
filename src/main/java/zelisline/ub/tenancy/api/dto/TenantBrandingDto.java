@@ -11,6 +11,7 @@ import java.util.List;
 public record TenantBrandingDto(
     String displayName,
     String logoUrl,
+    String logoDarkUrl,
     String faviconUrl,
     String primaryColor,
     String accentColor,
@@ -32,6 +33,7 @@ public record TenantBrandingDto(
     public static TenantBrandingDto defaults(String displayName) {
         return new TenantBrandingDto(
             displayName,
+            null,
             null,
             null,
             null,

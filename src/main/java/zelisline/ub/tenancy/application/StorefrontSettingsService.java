@@ -186,6 +186,7 @@ public class StorefrontSettingsService {
         return new TenantBrandingDto(
             display != null ? display : fallbackDisplayName,
             textOrNull(node.get("logoUrl")),
+            textOrNull(node.get("logoDarkUrl")),
             textOrNull(node.get("faviconUrl")),
             textOrNull(node.get("primaryColor")),
             textOrNull(node.get("accentColor")),
@@ -554,6 +555,8 @@ public class StorefrontSettingsService {
         putOrRemoveString(branding, "displayName", patch.displayName());
         putOrRemoveString(branding, "logoUrl", patch.logoUrl());
         putOrRemoveString(branding, "logoPublicId", patch.logoPublicId());
+        putOrRemoveString(branding, "logoDarkUrl", patch.logoDarkUrl());
+        putOrRemoveString(branding, "logoDarkPublicId", patch.logoDarkPublicId());
         putOrRemoveString(branding, "faviconUrl", patch.faviconUrl());
         if (patch.faviconUrl() != null && patch.faviconUrl().trim().isEmpty()) {
             branding.remove("faviconPublicId");

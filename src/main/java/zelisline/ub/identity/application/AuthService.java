@@ -44,6 +44,7 @@ import zelisline.ub.identity.domain.UserStatus;
 import zelisline.ub.identity.repository.PasswordResetTokenRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.identity.repository.UserSessionRepository;
+import zelisline.ub.platform.application.PlatformAuthSettingsService;
 import zelisline.ub.platform.security.JwtTokenService;
 import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.tenancy.api.TenantRequestIds;
@@ -113,6 +114,7 @@ public class AuthService {
     private final AuditEventBuilder auditEventBuilder;
     private final TillDeviceService tillDeviceService;
     private final ObjectProvider<zelisline.ub.billing.application.SubscriptionRenewalService> subscriptionRenewalService;
+    private final PlatformAuthSettingsService platformAuthSettingsService;
 
     @Value("${app.jwt.access-ttl-minutes:60}")
     private long accessTtlMinutes;
@@ -741,7 +743,15 @@ public class AuthService {
             throw invalidCredentials();
         }
         if (user.statusAsEnum() == UserStatus.INVITED) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, LOGIN_EMAIL_NOT_VERIFIED_DETAIL);
+            // Self-signup accounts that already set a password can sign in when
+            // super-admin has turned email verification off. Staff invites with
+            // no password still need their invite link.
+            if (user.getPasswordHash() != null && !platformAuthSettingsService.isEmailVerificationRequired()) {
+                user.setStatus(UserStatus.ACTIVE);
+                userRepository.save(user);
+            } else {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, LOGIN_EMAIL_NOT_VERIFIED_DETAIL);
+            }
         }
         if (user.statusAsEnum() != UserStatus.ACTIVE) {
             throw invalidCredentials();

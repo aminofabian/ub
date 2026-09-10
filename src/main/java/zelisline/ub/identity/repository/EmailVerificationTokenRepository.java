@@ -14,6 +14,8 @@ public interface EmailVerificationTokenRepository extends JpaRepository<EmailVer
 
     Optional<EmailVerificationToken> findByTokenHashAndUsedAtIsNull(String tokenHash);
 
+    List<EmailVerificationToken> findByOtpHashAndUsedAtIsNull(String otpHash);
+
     @Modifying
     @Query("""
            delete from EmailVerificationToken t

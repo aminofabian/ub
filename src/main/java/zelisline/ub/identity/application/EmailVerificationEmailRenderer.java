@@ -44,7 +44,7 @@ public class EmailVerificationEmailRenderer {
             EmailVerificationBrandingContext branding,
             String recipientEmail,
             String verifyLink) {
-        return renderPlainText(branding, null, recipientEmail, verifyLink);
+        return renderPlainText(branding, null, recipientEmail, verifyLink, null);
     }
 
     public String renderPlainText(
@@ -52,8 +52,24 @@ public class EmailVerificationEmailRenderer {
             String recipientName,
             String recipientEmail,
             String verifyLink) {
+        return renderPlainText(branding, recipientName, recipientEmail, verifyLink, null);
+    }
+
+    public String renderPlainText(
+            EmailVerificationBrandingContext branding,
+            String recipientName,
+            String recipientEmail,
+            String verifyLink,
+            String otpCode) {
         String brand = brandWordmark(branding);
         String greeting = greetingLine(recipientName);
+        String codeBlock = blankToNull(otpCode) == null
+                ? ""
+                : """
+
+                Your verification code:
+                %s
+                """.formatted(otpCode.strip());
         return """
                 %s — verify your email
 
@@ -63,7 +79,7 @@ public class EmailVerificationEmailRenderer {
 
                 Confirm your email:
                 %s
-
+                %s
                 If you did not request this, no worries — simply ignore this message.
 
                 — %s
@@ -73,6 +89,7 @@ public class EmailVerificationEmailRenderer {
                 recipientEmail,
                 brand,
                 verifyLink,
+                codeBlock,
                 brand).strip();
     }
 
@@ -80,7 +97,7 @@ public class EmailVerificationEmailRenderer {
             EmailVerificationBrandingContext branding,
             String recipientEmail,
             String verifyLink) {
-        return renderHtml(branding, null, recipientEmail, verifyLink);
+        return renderHtml(branding, null, recipientEmail, verifyLink, null);
     }
 
     public String renderHtml(
@@ -88,6 +105,15 @@ public class EmailVerificationEmailRenderer {
             String recipientName,
             String recipientEmail,
             String verifyLink) {
+        return renderHtml(branding, recipientName, recipientEmail, verifyLink, null);
+    }
+
+    public String renderHtml(
+            EmailVerificationBrandingContext branding,
+            String recipientName,
+            String recipientEmail,
+            String verifyLink,
+            String otpCode) {
         Palette palette = Palette.from(branding);
         String brand = brandWordmark(branding);
         String tagline = brandTagline(branding);
@@ -130,7 +156,7 @@ public class EmailVerificationEmailRenderer {
                 BORDER,
                 renderHeader(brand, tagline, branding, palette),
                 renderHero(recipientName, brand, palette),
-                renderBody(email, link, brand, palette),
+                renderBody(email, link, brand, palette, otpCode),
                 renderFooter(brand, hostLine));
     }
 
@@ -214,7 +240,33 @@ public class EmailVerificationEmailRenderer {
                 FONT_SANS, MUTED, TEXT, escape(brand));
     }
 
-    private String renderBody(String email, String link, String brand, Palette palette) {
+    private String renderBody(
+            String email, String link, String brand, Palette palette, String otpCode) {
+        String codeBlock = "";
+        String otp = blankToNull(otpCode);
+        if (otp != null) {
+            codeBlock = """
+                    <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="margin:20px 0 4px;border:1px solid %s;border-radius:4px;background-color:%s;">
+                      <tr>
+                        <td style="padding:18px 20px;text-align:center;">
+                          <div style="font-family:%s;font-size:10px;font-weight:600;color:%s;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:10px;">
+                            Your verification code
+                          </div>
+                          <div style="font-family:%s;font-size:28px;font-weight:700;color:%s;letter-spacing:0.28em;line-height:1.2;" data-verification-code="%s">
+                            %s
+                          </div>
+                          <div style="font-family:%s;font-size:12px;font-weight:400;color:%s;line-height:1.5;margin-top:10px;">
+                            Optional — tap the button below, or type this code on the verify page.
+                          </div>
+                        </td>
+                      </tr>
+                    </table>
+                    """.formatted(
+                    BORDER, PAGE_BG,
+                    FONT_SANS, MUTED,
+                    FONT_MONO, TEXT, escape(otp), escape(otp),
+                    FONT_SANS, MUTED);
+        }
         return """
                 <tr>
                   <td style="background-color:%s;padding:24px 36px 28px;">
@@ -230,7 +282,7 @@ public class EmailVerificationEmailRenderer {
                         </td>
                       </tr>
                     </table>
-
+                    %s
                     <table role="presentation" cellpadding="0" cellspacing="0" width="100%%" style="margin:24px 0 20px;">
                       <tr>
                         <td align="center" style="border-radius:4px;background-color:%s;">
@@ -254,9 +306,18 @@ public class EmailVerificationEmailRenderer {
                 BORDER, PAGE_BG,
                 FONT_SANS, MUTED,
                 FONT_MONO, TEXT, email,
+                codeBlock,
                 palette.primary, link, FONT_SANS,
                 FONT_SANS, MUTED,
                 FONT_MONO, MUTED, link, palette.primary, link);
+    }
+
+    static String blankToNull(String s) {
+        if (s == null) {
+            return null;
+        }
+        String t = s.strip();
+        return t.isEmpty() ? null : t;
     }
 
     private String renderFooter(String brand, String hostLine) {

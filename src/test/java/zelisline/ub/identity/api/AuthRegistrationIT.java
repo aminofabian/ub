@@ -51,6 +51,9 @@ class AuthRegistrationIT {
     @Autowired
     private UserRepository userRepository;
 
+    @Autowired
+    private zelisline.ub.platform.application.PlatformAuthSettingsService platformAuthSettingsService;
+
     @MockitoBean
     private NotificationService notificationService;
 
@@ -85,6 +88,9 @@ class AuthRegistrationIT {
         viewer.setName("Viewer");
         viewer.setSystem(true);
         roleRepository.save(viewer);
+
+        platformAuthSettingsService.update(
+                new zelisline.ub.platform.api.dto.UpdatePlatformAuthSettingsRequest(true));
     }
 
     @Test
@@ -149,7 +155,9 @@ class AuthRegistrationIT {
                 org.mockito.ArgumentMatchers.eq("new@example.com"),
                 org.mockito.ArgumentMatchers.contains("Welcome to Kiosk"),
                 anyString());
-        String rawToken = extractToken(bodyCaptor.getValue());
+        String emailBody = bodyCaptor.getValue();
+        assertThat(emailBody).contains("Your verification code");
+        String rawToken = extractToken(emailBody);
 
         mockMvc.perform(post("/api/v1/auth/verify-email")
                         .header("X-Tenant-Id", TENANT)
@@ -168,11 +176,51 @@ class AuthRegistrationIT {
                 .andExpect(jsonPath("$.accessToken").isString());
     }
 
+    @Test
+    void registerVerifyWithInboxCodeThenLogin() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .header("X-Tenant-Id", TENANT)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"email":"otp@example.com","name":"Otp User","password":"secretpass"}
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("invited"));
+
+        ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(notificationService).sendEmailVerificationEmail(anyString(), anyString(), bodyCaptor.capture());
+        String otp = extractOtp(bodyCaptor.getValue());
+
+        mockMvc.perform(post("/api/v1/auth/verify-email")
+                        .header("X-Tenant-Id", TENANT)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"token\":\"" + otp + "\"}"))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(post("/api/v1/auth/verify-email")
+                        .header("X-Tenant-Id", TENANT)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"token\":\"" + otp + "\",\"email\":\"otp@example.com\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessToken").isString());
+    }
+
     private static String extractToken(String emailBody) {
         Matcher m = TOKEN_IN_LINK.matcher(emailBody);
         if (!m.find()) {
             throw new IllegalStateException("No token= in body: " + emailBody);
         }
         return m.group(1).trim();
+    }
+
+    private static final Pattern OTP_IN_BODY =
+            Pattern.compile("data-verification-code=\"(\\d{6})\"");
+
+    private static String extractOtp(String emailBody) {
+        Matcher m = OTP_IN_BODY.matcher(emailBody);
+        if (!m.find()) {
+            throw new IllegalStateException("No 6-digit code in body: " + emailBody);
+        }
+        return m.group(1);
     }
 }

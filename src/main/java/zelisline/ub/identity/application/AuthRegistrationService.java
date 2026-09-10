@@ -13,7 +13,6 @@ import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.env.Environment;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -46,8 +45,9 @@ import zelisline.ub.tenancy.application.PublicHostResolverService;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
 /**
- * Tenant-scoped self-service signup. When {@code app.auth.email-verification-required}
- * is true (default), new users are {@link UserStatus#INVITED} until verify-email;
+ * Tenant-scoped self-service signup. When email verification is required
+ * (super-admin platform setting, defaulting to {@code app.auth.email-verification-required}),
+ * new users are {@link UserStatus#INVITED} until verify-email;
  * otherwise they are {@link UserStatus#ACTIVE} immediately (local dev without SMTP).
  *
  * <p>The first user in a tenant (no other non-deleted users) receives the system
@@ -73,8 +73,8 @@ public class AuthRegistrationService {
     private final PublicHostResolverService publicHostResolverService;
     private final FrontendAuthLinkBuilder frontendAuthLinkBuilder;
     private final AuthService authService;
-    private final Environment environment;
     private final ObjectMapper objectMapper;
+    private final zelisline.ub.platform.application.PlatformAuthSettingsService platformAuthSettingsService;
     private final zelisline.ub.onboarding.sequence.application.MerchantOnboardingSequenceService
             onboardingSequenceService;
     private final zelisline.ub.support.application.SupportService supportService;
@@ -221,12 +221,55 @@ public class AuthRegistrationService {
     /**
      * Activates an invited user and issues a web session so they can continue
      * onboarding without signing in again.
+     *
+     * <p>{@code token} may be the long URL token or a 6-digit inbox code. Codes
+     * require {@code email} so they can be scoped to that signup.
      */
     @Transactional
     public LoginResponse verifyEmail(HttpServletRequest http, VerifyEmailRequest request) {
-        String hash = TokenHasher.sha256Hex(request.token());
+        String raw = request.token() == null ? "" : request.token().strip();
+        if (isOtpCode(raw)) {
+            return activateFromTokenRow(http, resolveOtpToken(http, raw, request.email()));
+        }
+        if (raw.length() < 16) {
+            throw invalidToken();
+        }
+        String hash = TokenHasher.sha256Hex(raw);
         var row = emailVerificationTokenRepository.findByTokenHashAndUsedAtIsNull(hash)
                 .orElseThrow(() -> invalidToken());
+        return activateFromTokenRow(http, row);
+    }
+
+    private EmailVerificationToken resolveOtpToken(
+            HttpServletRequest http, String otp, String rawEmail) {
+        if (rawEmail == null || rawEmail.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Enter the email this code was sent to.");
+        }
+        String email = normaliseEmail(rawEmail);
+        String hash = TokenHasher.sha256Hex(otp);
+        String requestBusinessId = TenantRequestIds.resolveBusinessIdOrNull(http);
+        for (EmailVerificationToken row : emailVerificationTokenRepository.findByOtpHashAndUsedAtIsNull(hash)) {
+            if (row.getExpiresAt().isBefore(Instant.now())) {
+                continue;
+            }
+            User user = userRepository.findById(row.getUserId()).orElse(null);
+            if (user == null || user.getDeletedAt() != null) {
+                continue;
+            }
+            if (!email.equalsIgnoreCase(user.getEmail())) {
+                continue;
+            }
+            if (requestBusinessId != null && !user.getBusinessId().equals(requestBusinessId)) {
+                continue;
+            }
+            return row;
+        }
+        throw invalidToken();
+    }
+
+    private LoginResponse activateFromTokenRow(HttpServletRequest http, EmailVerificationToken row) {
         if (row.getExpiresAt().isBefore(Instant.now())) {
             throw invalidToken();
         }
@@ -351,24 +394,9 @@ public class AuthRegistrationService {
 
     /** @return full verification URL (for optional UI exposure when mail is unavailable). */
     private String issueVerificationEmail(User user, HttpServletRequest http) {
-        emailVerificationTokenRepository.deleteUnusedByUserId(user.getId());
-        String raw = newRawToken();
-        EmailVerificationToken token = new EmailVerificationToken();
-        token.setUserId(user.getId());
-        token.setTokenHash(TokenHasher.sha256Hex(raw));
-        token.setExpiresAt(Instant.now().plus(emailVerificationTtlHours, ChronoUnit.HOURS));
-        emailVerificationTokenRepository.save(token);
-        String link = frontendAuthLinkBuilder.verificationLink(http, user.getBusinessId(), raw);
-        String frontendHost = frontendAuthLinkBuilder.resolveFrontendHost(http);
-        var branding = EmailVerificationBrandingContext.fromHost(
-                frontendHost != null
-                        ? publicHostResolverService.resolveByHost(frontendHost)
-                        : Optional.empty(),
-                frontendHost);
-        String subject = emailVerificationEmailRenderer.renderSubject(branding);
-        String htmlBody = emailVerificationEmailRenderer.renderHtml(
-                branding, user.getName(), user.getEmail(), link);
-        notificationService.sendEmailVerificationEmail(user.getEmail(), subject, htmlBody);
+        IssuedVerification issued = issueVerificationToken(user);
+        String link = frontendAuthLinkBuilder.verificationLink(http, user.getBusinessId(), issued.rawToken());
+        sendVerificationMail(user, http, link, issued.otpCode());
         return link;
     }
 
@@ -393,14 +421,8 @@ public class AuthRegistrationService {
     }
 
     private String issueVerificationEmailForBusiness(User user) {
-        emailVerificationTokenRepository.deleteUnusedByUserId(user.getId());
-        String raw = newRawToken();
-        EmailVerificationToken token = new EmailVerificationToken();
-        token.setUserId(user.getId());
-        token.setTokenHash(TokenHasher.sha256Hex(raw));
-        token.setExpiresAt(Instant.now().plus(emailVerificationTtlHours, ChronoUnit.HOURS));
-        emailVerificationTokenRepository.save(token);
-        String link = frontendAuthLinkBuilder.verificationLinkForBusiness(user.getBusinessId(), raw);
+        IssuedVerification issued = issueVerificationToken(user);
+        String link = frontendAuthLinkBuilder.verificationLinkForBusiness(user.getBusinessId(), issued.rawToken());
         String host = frontendAuthLinkBuilder.tenantOrigin(user.getBusinessId());
         String hostname = null;
         try {
@@ -415,9 +437,35 @@ public class AuthRegistrationService {
                 hostname);
         String subject = emailVerificationEmailRenderer.renderSubject(branding);
         String htmlBody = emailVerificationEmailRenderer.renderHtml(
-                branding, user.getName(), user.getEmail(), link);
+                branding, user.getName(), user.getEmail(), link, issued.otpCode());
         notificationService.sendEmailVerificationEmail(user.getEmail(), subject, htmlBody);
         return link;
+    }
+
+    private void sendVerificationMail(User user, HttpServletRequest http, String link, String otpCode) {
+        String frontendHost = frontendAuthLinkBuilder.resolveFrontendHost(http);
+        var branding = EmailVerificationBrandingContext.fromHost(
+                frontendHost != null
+                        ? publicHostResolverService.resolveByHost(frontendHost)
+                        : Optional.empty(),
+                frontendHost);
+        String subject = emailVerificationEmailRenderer.renderSubject(branding);
+        String htmlBody = emailVerificationEmailRenderer.renderHtml(
+                branding, user.getName(), user.getEmail(), link, otpCode);
+        notificationService.sendEmailVerificationEmail(user.getEmail(), subject, htmlBody);
+    }
+
+    private IssuedVerification issueVerificationToken(User user) {
+        emailVerificationTokenRepository.deleteUnusedByUserId(user.getId());
+        String raw = newRawToken();
+        String otp = newOtpCode();
+        EmailVerificationToken token = new EmailVerificationToken();
+        token.setUserId(user.getId());
+        token.setTokenHash(TokenHasher.sha256Hex(raw));
+        token.setOtpHash(TokenHasher.sha256Hex(otp));
+        token.setExpiresAt(Instant.now().plus(emailVerificationTtlHours, ChronoUnit.HOURS));
+        emailVerificationTokenRepository.save(token);
+        return new IssuedVerification(raw, otp);
     }
 
     /**
@@ -426,14 +474,8 @@ public class AuthRegistrationService {
      */
     @Transactional
     public String issueVerificationLinkOnly(User user) {
-        emailVerificationTokenRepository.deleteUnusedByUserId(user.getId());
-        String raw = newRawToken();
-        EmailVerificationToken token = new EmailVerificationToken();
-        token.setUserId(user.getId());
-        token.setTokenHash(TokenHasher.sha256Hex(raw));
-        token.setExpiresAt(Instant.now().plus(emailVerificationTtlHours, ChronoUnit.HOURS));
-        emailVerificationTokenRepository.save(token);
-        return frontendAuthLinkBuilder.verificationLinkForBusiness(user.getBusinessId(), raw);
+        IssuedVerification issued = issueVerificationToken(user);
+        return frontendAuthLinkBuilder.verificationLinkForBusiness(user.getBusinessId(), issued.rawToken());
     }
 
     private static String normaliseEmail(String email) {
@@ -446,11 +488,21 @@ public class AuthRegistrationService {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(rnd);
     }
 
+    private static String newOtpCode() {
+        return String.format("%06d", new SecureRandom().nextInt(1_000_000));
+    }
+
+    private static boolean isOtpCode(String raw) {
+        return raw != null && raw.length() == 6 && raw.chars().allMatch(Character::isDigit);
+    }
+
     private static ResponseStatusException invalidToken() {
         return new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid or expired verification token");
     }
 
     private boolean isEmailVerificationRequired() {
-        return environment.getProperty("app.auth.email-verification-required", Boolean.class, Boolean.TRUE);
+        return platformAuthSettingsService.isEmailVerificationRequired();
     }
+
+    private record IssuedVerification(String rawToken, String otpCode) {}
 }

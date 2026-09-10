@@ -27,6 +27,10 @@ public class EmailVerificationToken {
     @Column(name = "token_hash", nullable = false, unique = true, length = 64)
     private String tokenHash;
 
+    /** SHA-256 of the 6-digit inbox code. Nullable for tokens issued before OTP existed. */
+    @Column(name = "otp_hash", length = 64)
+    private String otpHash;
+
     @Column(name = "expires_at", nullable = false)
     private Instant expiresAt;
 

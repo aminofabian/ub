@@ -14,8 +14,10 @@ class EmailVerificationEmailRendererTest {
         var branding = EmailVerificationBrandingContext.platformDefault();
         String actual = renderer.renderPlainText(
                 branding,
+                null,
                 "owner@example.com",
-                "http://localhost:5173/verify-email?token=abc");
+                "http://localhost:5173/verify-email?token=abc",
+                "123456");
         String expected = new String(
                 getClass().getResourceAsStream("/golden/email-verification-email.txt").readAllBytes(),
                 StandardCharsets.UTF_8
@@ -30,12 +32,15 @@ class EmailVerificationEmailRendererTest {
                 java.util.Optional.empty(),
                 "uzapoint.kiosk.ke");
         String link = "https://uzapoint.kiosk.ke/verify-email?token=abc";
-        String html = renderer.renderHtml(branding, "Jane Owner", "owner@example.com", link);
+        String html = renderer.renderHtml(branding, "Jane Owner", "owner@example.com", link, "482917");
 
         assertThat(html).contains("<!DOCTYPE html>");
         assertThat(html).contains("Email verification");
         assertThat(html).contains("Confirm it");
         assertThat(html).contains("Confirm your email");
+        assertThat(html).contains("Your verification code");
+        assertThat(html).contains("data-verification-code=\"482917\"");
+        assertThat(html).contains("482917");
         assertThat(html).contains("Hi Jane");
         assertThat(html).contains(EmailVerificationEmailRenderer.PAGE_BG);
         assertThat(html).contains(EmailVerificationEmailRenderer.GREEN);
@@ -58,6 +63,8 @@ class EmailVerificationEmailRendererTest {
         String html = renderer.renderHtml(branding, "owner@example.com", "https://example.com/v");
         assertThat(html).contains(">UB<");
         assertThat(html).contains("Point of sale, inventory, and online storefront.");
+        assertThat(html).doesNotContain("Your verification code");
+        assertThat(html).doesNotContain("data-verification-code");
     }
 
     @Test

@@ -1919,6 +1919,7 @@ public class ItemCatalogService {
                 i.isWebPublished(),
                 i.getVariantOfItemId(),
                 groupLabelOnly,
+                i.isSellable(),
                 stockQty,
                 i.isPackageVariant(),
                 packageVariantStockResolver.unitsPerPackage(i),

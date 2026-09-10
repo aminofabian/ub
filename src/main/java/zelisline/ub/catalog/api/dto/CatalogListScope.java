@@ -10,8 +10,9 @@ public enum CatalogListScope {
     PARENTS_ONLY,
     VARIANTS_ONLY,
     /**
-     * Sellable catalog lines only: option SKUs and standalone products.
-     * Group-only parents (they have variant children) are omitted.
+     * Sellable catalog lines only: option SKUs and standalone products
+     * with {@code sellable = true}. Family/group parents (including empty
+     * groups with no children yet) are omitted.
      */
     SKUS_ONLY
 }

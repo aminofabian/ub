@@ -516,6 +516,31 @@ class ItemCatalogIT {
     }
 
     @Test
+    void skusOnlyOmitsNonSellableFamilyParentsEvenWithoutChildren() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        String family = createItemViaService(TENANT_A, gid, "SKU-EMPTY-FAM", "Empty family till leak");
+        createItemViaService(TENANT_A, gid, "SKU-EMPTY-SOLO", "Empty family till leak solo");
+        mockMvc.perform(patch("/api/v1/items/" + family)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"isSellable\":false}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/items")
+                        .param("catalogScope", "SKUS_ONLY")
+                        .param("search", "Empty family till leak")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].sku").value("SKU-EMPTY-SOLO"))
+                .andExpect(jsonPath("$.content[0].isSellable").value(true));
+    }
+
+    @Test
     void listItemsCatalogRowTypesFilterAndCounts() throws Exception {
         String gid = goodsTypeId(TENANT_A);
         String parent = createItemViaService(TENANT_A, gid, "SKU-ROWTYPE-P", "Row type parent marker");

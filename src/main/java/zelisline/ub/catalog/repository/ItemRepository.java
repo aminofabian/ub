@@ -188,7 +188,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                             and ch.deletedAt is null
                         ))
                     or (:variantsOnly = true and i.variantOfItemId is not null)
-                    or (:skusOnly = true and (
+                    or (:skusOnly = true and i.sellable = true and (
                          i.variantOfItemId is not null
                          or not exists (
                            select 1 from Item ch
@@ -323,7 +323,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                             and ch.deletedAt is null
                         ))
                     or (:variantsOnly = true and i.variantOfItemId is not null)
-                    or (:skusOnly = true and (
+                    or (:skusOnly = true and i.sellable = true and (
                          i.variantOfItemId is not null
                          or not exists (
                            select 1 from Item ch
@@ -394,7 +394,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                             and ch.deletedAt is null
                         ))
                     or (:variantsOnly = true and i.variantOfItemId is not null)
-                    or (:skusOnly = true and (
+                    or (:skusOnly = true and i.sellable = true and (
                          i.variantOfItemId is not null
                          or not exists (
                            select 1 from Item ch
@@ -463,7 +463,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                             and ch.deletedAt is null
                         ))
                     or (:variantsOnly = true and i.variantOfItemId is not null)
-                    or (:skusOnly = true and (
+                    or (:skusOnly = true and i.sellable = true and (
                          i.variantOfItemId is not null
                          or not exists (
                            select 1 from Item ch
@@ -532,7 +532,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                             and ch.deletedAt is null
                         ))
                     or (:variantsOnly = true and i.variantOfItemId is not null)
-                    or (:skusOnly = true and (
+                    or (:skusOnly = true and i.sellable = true and (
                          i.variantOfItemId is not null
                          or not exists (
                            select 1 from Item ch
@@ -624,7 +624,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                             and ch.deletedAt is null
                         ))
                     or (:variantsOnly = true and i.variantOfItemId is not null)
-                    or (:skusOnly = true and (
+                    or (:skusOnly = true and i.sellable = true and (
                          i.variantOfItemId is not null
                          or not exists (
                            select 1 from Item ch

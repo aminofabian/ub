@@ -16,6 +16,7 @@ public record SokoMindProperties(
         String defaultLocale,
         OpenAi openai,
         Anthropic anthropic,
+        OpenRouter openrouter,
         DeepSeek deepseek,
         boolean industryCompareEnabled,
         int industryCompareMinTwins,
@@ -34,6 +35,14 @@ public record SokoMindProperties(
         }
         if (anthropic == null) {
             anthropic = new Anthropic("", "", "claude-haiku-4-5-20251001", "claude-sonnet-4-5-20250929");
+        }
+        if (openrouter == null) {
+            openrouter = new OpenRouter(
+                    "",
+                    "https://openrouter.ai/api/v1",
+                    "z-ai/glm-5.3-flash",
+                    "z-ai/glm-4.6",
+                    "google/gemini-2.5-flash-image");
         }
         if (deepseek == null) {
             deepseek = new DeepSeek(
@@ -62,6 +71,33 @@ public record SokoMindProperties(
         public OpenAi {
             if (imageModel == null || imageModel.isBlank()) {
                 imageModel = "gpt-image-1";
+            }
+        }
+
+        public boolean configured() {
+            return apiKey != null && !apiKey.isBlank();
+        }
+    }
+
+    public record OpenRouter(
+            String apiKey,
+            String baseUrl,
+            String miniModel,
+            String smartModel,
+            String imageModel
+    ) {
+        public OpenRouter {
+            if (baseUrl == null || baseUrl.isBlank()) {
+                baseUrl = "https://openrouter.ai/api/v1";
+            }
+            if (miniModel == null || miniModel.isBlank()) {
+                miniModel = "z-ai/glm-5.3-flash";
+            }
+            if (smartModel == null || smartModel.isBlank()) {
+                smartModel = "z-ai/glm-4.6";
+            }
+            if (imageModel == null || imageModel.isBlank()) {
+                imageModel = "google/gemini-2.5-flash-image";
             }
         }
 

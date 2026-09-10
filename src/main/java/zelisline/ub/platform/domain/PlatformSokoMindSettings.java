@@ -19,6 +19,7 @@ public class PlatformSokoMindSettings {
 
     public static final String PROVIDER_OPENAI = "openai";
     public static final String PROVIDER_ANTHROPIC = "anthropic";
+    public static final String PROVIDER_OPENROUTER = "openrouter";
     public static final String PROVIDER_DEEPSEEK = "deepseek";
     public static final String PROVIDER_RAPIDAPI_DEEPSEEK = "rapidapi_deepseek";
 
@@ -76,6 +77,21 @@ public class PlatformSokoMindSettings {
 
     @Column(name = "rapidapi_deepseek_api_key_enc", columnDefinition = "TEXT")
     private String rapidapiDeepseekApiKeyEnc;
+
+    @Column(name = "openrouter_api_key_enc", columnDefinition = "TEXT")
+    private String openrouterApiKeyEnc;
+
+    @Column(name = "openrouter_base_url", length = 512)
+    private String openrouterBaseUrl;
+
+    @Column(name = "openrouter_mini_model", length = 128)
+    private String openrouterMiniModel;
+
+    @Column(name = "openrouter_smart_model", length = 128)
+    private String openrouterSmartModel;
+
+    @Column(name = "openrouter_image_model", length = 128)
+    private String openrouterImageModel;
 
     @Column(name = "deepseek_base_url", length = 512)
     private String deepseekBaseUrl;

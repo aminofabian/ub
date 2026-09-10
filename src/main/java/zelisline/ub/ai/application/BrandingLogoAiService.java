@@ -11,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.ai.api.dto.BrandingLogoGenerateRequest;
 import zelisline.ub.ai.api.dto.BrandingLogoGenerateResponse;
 import zelisline.ub.ai.application.provider.OpenAiImageClient;
+import zelisline.ub.ai.application.provider.OpenRouterImageClient;
 import zelisline.ub.ai.config.SokoMindProperties;
 import zelisline.ub.ai.domain.AiRequestLog;
 import zelisline.ub.ai.repository.AiRequestLogRepository;
@@ -30,6 +31,7 @@ public class BrandingLogoAiService {
     private final SokoMindRuntimeService runtimeService;
     private final SokoMindProperties properties;
     private final OpenAiImageClient imageClient;
+    private final OpenRouterImageClient openRouterImageClient;
     private final BusinessRepository businessRepository;
     private final AiRequestLogRepository requestLogRepository;
 
@@ -51,7 +53,7 @@ public class BrandingLogoAiService {
         if (!config.imageGenerationAvailable()) {
             throw new ResponseStatusException(
                     HttpStatus.SERVICE_UNAVAILABLE,
-                    "Logo generation needs an OpenAI key. Set it in Super Admin → Platform → SokoMind.");
+                    "Logo generation needs an OpenAI or OpenRouter key. Set it in Super Admin → Platform → SokoMind.");
         }
 
         String prompt = body == null ? null : body.prompt();
@@ -72,6 +74,7 @@ public class BrandingLogoAiService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
         }
 
+        String imageProvider = config.imageProvider();
         String requestId = UUID.randomUUID().toString();
         long started = System.currentTimeMillis();
         AiRequestLog log = new AiRequestLog();
@@ -81,11 +84,20 @@ public class BrandingLogoAiService {
         log.setSkill(SKILL);
         log.setSurface("onboarding");
         log.setRoutePath("onboarding/branding");
-        log.setProvider("openai");
+        log.setProvider(imageProvider.isBlank() ? "openai" : imageProvider);
 
         try {
-            String model = properties.openai() == null ? "gpt-image-1" : properties.openai().imageModel();
-            OpenAiImageClient.GeneratedImage image = imageClient.generate(config, model, composed);
+            OpenAiImageClient.GeneratedImage image;
+            if ("openrouter".equals(imageProvider)) {
+                String model = firstNonBlank(
+                        config.openrouterImageModel(),
+                        properties.openrouter() == null ? null : properties.openrouter().imageModel(),
+                        "google/gemini-2.5-flash-image");
+                image = openRouterImageClient.generate(config, model, composed);
+            } else {
+                String model = properties.openai() == null ? "gpt-image-1" : properties.openai().imageModel();
+                image = imageClient.generate(config, model, composed);
+            }
             long latency = System.currentTimeMillis() - started;
             log.setSuccess(true);
             log.setModel(image.model());
@@ -109,6 +121,11 @@ public class BrandingLogoAiService {
             return a.trim();
         }
         return b;
+    }
+
+    private static String firstNonBlank(String a, String b, String c) {
+        String first = firstNonBlank(a, b);
+        return firstNonBlank(first, c);
     }
 
     private static String truncate(String value, int max) {

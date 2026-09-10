@@ -53,6 +53,7 @@ public class AiProviderRouter {
         String provider = config.primaryProvider() == null ? "" : config.primaryProvider().toLowerCase();
         return switch (provider) {
             case "anthropic" -> config.anthropicMiniModel();
+            case "openrouter" -> config.openrouterMiniModel();
             case "deepseek", "rapidapi_deepseek" -> config.deepseekModel();
             default -> config.openaiMiniModel();
         };
@@ -62,6 +63,7 @@ public class AiProviderRouter {
         String provider = config.primaryProvider() == null ? "" : config.primaryProvider().toLowerCase();
         return switch (provider) {
             case "anthropic" -> config.anthropicSmartModel();
+            case "openrouter" -> config.openrouterSmartModel();
             case "deepseek", "rapidapi_deepseek" -> config.deepseekModel();
             default -> config.openaiSmartModel();
         };

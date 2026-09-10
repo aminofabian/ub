@@ -15,14 +15,26 @@ class ResolvedSokoMindConfigTest {
             String deepseekKey,
             String rapidapiKey
     ) {
+        return config(provider, "", deepseekKey, rapidapiKey, "");
+    }
+
+    private static ResolvedSokoMindConfig config(
+            String provider,
+            String openaiKey,
+            String deepseekKey,
+            String rapidapiKey,
+            String openrouterKey
+    ) {
         return new ResolvedSokoMindConfig(
                 true, true, false, false,
                 provider, "en-KE",
-                "", "", "gpt-4o-mini", "gpt-4.1", "gpt-4o",
+                openaiKey, "", "gpt-4o-mini", "gpt-4.1", "gpt-4o",
                 "", "", "claude-haiku", "claude-sonnet",
                 deepseekKey, "https://api.deepseek.com/chat/completions",
                 "deepseek-v31.p.rapidapi.com", "DeepSeek-V3-0324",
                 rapidapiKey,
+                openrouterKey, "https://openrouter.ai/api/v1",
+                "z-ai/glm-5.3-flash", "z-ai/glm-4.6", "google/gemini-2.5-flash-image",
                 false, 8, null, 8, null);
     }
 
@@ -45,17 +57,29 @@ class ResolvedSokoMindConfigTest {
     }
 
     @Test
-    void imageGenerationNeedsEnabledOpenaiKey() {
-        ResolvedSokoMindConfig withKey = new ResolvedSokoMindConfig(
-                true, true, false, false,
-                "deepseek", "en-KE",
-                "sk-openai", "", "gpt-4o-mini", "gpt-4.1", "gpt-4o",
-                "", "", "claude-haiku", "claude-sonnet",
-                "sk-direct", "https://api.deepseek.com/chat/completions",
-                "deepseek-v31.p.rapidapi.com", "DeepSeek-V3-0324",
-                "",
-                false, 8, null, 8, null);
-        assertThat(withKey.imageGenerationAvailable()).isTrue();
+    void openrouterNeedsTheOpenrouterKey() {
+        assertThat(config("openrouter", "", "", "", "sk-or-v1").primaryProviderConfigured()).isTrue();
+        assertThat(config("openrouter", "sk-openai", "sk-direct", "", "").primaryProviderConfigured()).isFalse();
+    }
+
+    @Test
+    void imageGenerationNeedsEnabledOpenaiOrOpenrouterKey() {
+        ResolvedSokoMindConfig withOpenai = config("deepseek", "sk-openai", "sk-direct", "", "");
+        assertThat(withOpenai.imageGenerationAvailable()).isTrue();
+        assertThat(withOpenai.imageProvider()).isEqualTo("openai");
+
+        ResolvedSokoMindConfig withOpenrouter = config("openrouter", "", "", "", "sk-or-v1");
+        assertThat(withOpenrouter.imageGenerationAvailable()).isTrue();
+        assertThat(withOpenrouter.imageProvider()).isEqualTo("openrouter");
+
         assertThat(config("openai", "", "").imageGenerationAvailable()).isFalse();
+        assertThat(config("openai", "", "").imageProvider()).isEmpty();
+    }
+
+    @Test
+    void openrouterPrimaryPrefersOpenrouterImagesEvenIfOpenaiIsKeyed() {
+        ResolvedSokoMindConfig both = config("openrouter", "sk-openai", "", "", "sk-or-v1");
+        assertThat(both.imageProvider()).isEqualTo("openrouter");
+        assertThat(config("openai", "sk-openai", "", "", "sk-or-v1").imageProvider()).isEqualTo("openai");
     }
 }

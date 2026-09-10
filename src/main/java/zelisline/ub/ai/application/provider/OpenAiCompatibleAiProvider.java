@@ -32,6 +32,7 @@ public class OpenAiCompatibleAiProvider implements AiProvider {
     private static final Logger log = LoggerFactory.getLogger(OpenAiCompatibleAiProvider.class);
     private static final Set<String> IDS = Set.of(
             PlatformSokoMindSettings.PROVIDER_OPENAI,
+            PlatformSokoMindSettings.PROVIDER_OPENROUTER,
             PlatformSokoMindSettings.PROVIDER_DEEPSEEK,
             PlatformSokoMindSettings.PROVIDER_RAPIDAPI_DEEPSEEK);
 
@@ -95,6 +96,16 @@ public class OpenAiCompatibleAiProvider implements AiProvider {
                     model = config.deepseekModel();
                 }
             }
+            case PlatformSokoMindSettings.PROVIDER_OPENROUTER -> {
+                apiKey = config.openrouterApiKey();
+                String base = ensureScheme(firstNonBlank(
+                        config.openrouterBaseUrl(),
+                        "https://openrouter.ai/api/v1"));
+                url = chatCompletionsUrl(base);
+                if (model == null || model.isBlank()) {
+                    model = config.openrouterMiniModel();
+                }
+            }
             default -> {
                 apiKey = config.openaiApiKey();
                 String base = ensureScheme(firstNonBlank(config.openaiBaseUrl(), "https://api.openai.com/v1"));
@@ -139,6 +150,10 @@ public class OpenAiCompatibleAiProvider implements AiProvider {
                     .header("x-rapidapi-key", apiKey.strip());
         } else {
             post = post.header("Authorization", "Bearer " + apiKey.strip());
+            if (PlatformSokoMindSettings.PROVIDER_OPENROUTER.equals(provider)) {
+                post = post.header("HTTP-Referer", "https://kiosk.ke")
+                        .header("X-Title", "Kiosk SokoMind");
+            }
         }
 
         HttpResponse<String> response;
@@ -236,6 +251,20 @@ public class OpenAiCompatibleAiProvider implements AiProvider {
             return trimmed;
         }
         return "https://" + trimmed;
+    }
+
+    static String chatCompletionsUrl(String base) {
+        if (base == null || base.isBlank()) {
+            return "https://openrouter.ai/api/v1/chat/completions";
+        }
+        String trimmed = base.trim();
+        if (trimmed.endsWith("/chat/completions")) {
+            return trimmed;
+        }
+        if (trimmed.endsWith("/")) {
+            return trimmed + "chat/completions";
+        }
+        return trimmed + "/chat/completions";
     }
 
     /** Host fields must be scheme-less; drop any scheme a user pasted in. */

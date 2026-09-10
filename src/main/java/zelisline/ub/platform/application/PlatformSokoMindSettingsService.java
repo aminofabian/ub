@@ -23,6 +23,7 @@ public class PlatformSokoMindSettingsService {
     private static final Set<String> PROVIDERS = Set.of(
             PlatformSokoMindSettings.PROVIDER_OPENAI,
             PlatformSokoMindSettings.PROVIDER_ANTHROPIC,
+            PlatformSokoMindSettings.PROVIDER_OPENROUTER,
             PlatformSokoMindSettings.PROVIDER_DEEPSEEK,
             PlatformSokoMindSettings.PROVIDER_RAPIDAPI_DEEPSEEK);
 
@@ -31,6 +32,10 @@ public class PlatformSokoMindSettingsService {
     private static final String DEFAULT_OPENAI_VISION = "gpt-4o";
     private static final String DEFAULT_ANTHROPIC_MINI = "claude-haiku-4-5-20251001";
     private static final String DEFAULT_ANTHROPIC_SMART = "claude-sonnet-4-5-20250929";
+    private static final String DEFAULT_OPENROUTER_URL = "https://openrouter.ai/api/v1";
+    private static final String DEFAULT_OPENROUTER_MINI = "z-ai/glm-5.3-flash";
+    private static final String DEFAULT_OPENROUTER_SMART = "z-ai/glm-4.6";
+    private static final String DEFAULT_OPENROUTER_IMAGE = "google/gemini-2.5-flash-image";
     private static final String DEFAULT_DEEPSEEK_MODEL = "DeepSeek-V3-0324";
     private static final String DEFAULT_DEEPSEEK_HOST = "deepseek-v31.p.rapidapi.com";
     /** Direct DeepSeek API — NOT the RapidAPI proxy (that caused wrong-key 401s). */
@@ -125,6 +130,22 @@ public class PlatformSokoMindSettingsService {
             row.setDeepseekModel(blankToNull(body.deepseekModel()));
         }
 
+        if (body.openrouterApiKey() != null) {
+            row.setOpenrouterApiKeyEnc(encryptOrClear(body.openrouterApiKey()));
+        }
+        if (body.openrouterBaseUrl() != null) {
+            row.setOpenrouterBaseUrl(normalizeUrl(blankToNull(body.openrouterBaseUrl())));
+        }
+        if (body.openrouterMiniModel() != null) {
+            row.setOpenrouterMiniModel(blankToNull(body.openrouterMiniModel()));
+        }
+        if (body.openrouterSmartModel() != null) {
+            row.setOpenrouterSmartModel(blankToNull(body.openrouterSmartModel()));
+        }
+        if (body.openrouterImageModel() != null) {
+            row.setOpenrouterImageModel(blankToNull(body.openrouterImageModel()));
+        }
+
         if (body.industryCompareEnabled() != null) {
             row.setIndustryCompareEnabled(body.industryCompareEnabled());
         }
@@ -159,6 +180,7 @@ public class PlatformSokoMindSettingsService {
         var env = envProperties;
         var openaiEnv = env.openai();
         var anthropicEnv = env.anthropic();
+        var openrouterEnv = env.openrouter();
         var deepseekEnv = env.deepseek();
 
         // Master switch: Super Admin DB OR emergency env force-enable.
@@ -180,6 +202,10 @@ public class PlatformSokoMindSettingsService {
                 secrets.readable
                         ? firstNonBlank(secrets.rapidapiDeepseekApiKey, deepseekEnv.rapidapiApiKey())
                         : blankToNull(deepseekEnv.rapidapiApiKey());
+        String openrouterKey =
+                secrets.readable
+                        ? firstNonBlank(secrets.openrouterApiKey, openrouterEnv.apiKey())
+                        : blankToNull(openrouterEnv.apiKey());
 
         String provider =
                 firstNonBlank(
@@ -230,6 +256,23 @@ public class PlatformSokoMindSettingsService {
                         deepseekEnv.model(),
                         DEFAULT_DEEPSEEK_MODEL),
                 rapidapiDeepseekKey,
+                openrouterKey,
+                firstNonBlank(
+                        trimToNull(row.getOpenrouterBaseUrl()),
+                        openrouterEnv.baseUrl(),
+                        DEFAULT_OPENROUTER_URL),
+                firstNonBlank(
+                        trimToNull(row.getOpenrouterMiniModel()),
+                        openrouterEnv.miniModel(),
+                        DEFAULT_OPENROUTER_MINI),
+                firstNonBlank(
+                        trimToNull(row.getOpenrouterSmartModel()),
+                        openrouterEnv.smartModel(),
+                        DEFAULT_OPENROUTER_SMART),
+                firstNonBlank(
+                        trimToNull(row.getOpenrouterImageModel()),
+                        openrouterEnv.imageModel(),
+                        DEFAULT_OPENROUTER_IMAGE),
                 row.isIndustryCompareEnabled(),
                 row.getIndustryCompareMinTwins() > 0
                         ? row.getIndustryCompareMinTwins()
@@ -247,6 +290,7 @@ public class PlatformSokoMindSettingsService {
         var env = envProperties;
         var openaiEnv = env.openai();
         var anthropicEnv = env.anthropic();
+        var openrouterEnv = env.openrouter();
         var deepseekEnv = env.deepseek();
 
         return new SokoMindSettingsResponse(
@@ -295,6 +339,23 @@ public class PlatformSokoMindSettingsService {
                         trimToNull(row.getDeepseekModel()),
                         deepseekEnv.model(),
                         DEFAULT_DEEPSEEK_MODEL),
+                secrets.hasOpenrouterApiKey,
+                firstNonBlank(
+                        trimToNull(row.getOpenrouterBaseUrl()),
+                        openrouterEnv.baseUrl(),
+                        DEFAULT_OPENROUTER_URL),
+                firstNonBlank(
+                        trimToNull(row.getOpenrouterMiniModel()),
+                        openrouterEnv.miniModel(),
+                        DEFAULT_OPENROUTER_MINI),
+                firstNonBlank(
+                        trimToNull(row.getOpenrouterSmartModel()),
+                        openrouterEnv.smartModel(),
+                        DEFAULT_OPENROUTER_SMART),
+                firstNonBlank(
+                        trimToNull(row.getOpenrouterImageModel()),
+                        openrouterEnv.imageModel(),
+                        DEFAULT_OPENROUTER_IMAGE),
                 row.isIndustryCompareEnabled(),
                 row.getIndustryCompareMinTwins(),
                 row.getDailyTokenBudgetPerTenant(),
@@ -303,6 +364,7 @@ public class PlatformSokoMindSettingsService {
                 openaiEnv.configured(),
                 anthropicEnv.configured(),
                 deepseekEnv.configured() || deepseekEnv.rapidapiConfigured(),
+                openrouterEnv.configured(),
                 secrets.readable,
                 secrets.errorMessage,
                 encryptionService.usesEphemeralKey(),
@@ -336,10 +398,12 @@ public class PlatformSokoMindSettingsService {
                     hasEncrypted(row.getAnthropicApiKeyEnc()),
                     hasEncrypted(row.getDeepseekApiKeyEnc()),
                     hasEncrypted(row.getRapidapiDeepseekApiKeyEnc()),
+                    hasEncrypted(row.getOpenrouterApiKeyEnc()),
                     decryptOrNull(row.getOpenaiApiKeyEnc()),
                     decryptOrNull(row.getAnthropicApiKeyEnc()),
                     decryptOrNull(row.getDeepseekApiKeyEnc()),
                     decryptOrNull(row.getRapidapiDeepseekApiKeyEnc()),
+                    decryptOrNull(row.getOpenrouterApiKeyEnc()),
                     persistenceHint);
         } catch (RuntimeException ex) {
             return new SecretRead(
@@ -348,6 +412,8 @@ public class PlatformSokoMindSettingsService {
                     hasEncrypted(row.getAnthropicApiKeyEnc()),
                     hasEncrypted(row.getDeepseekApiKeyEnc()),
                     hasEncrypted(row.getRapidapiDeepseekApiKeyEnc()),
+                    hasEncrypted(row.getOpenrouterApiKeyEnc()),
+                    null,
                     null,
                     null,
                     null,
@@ -431,10 +497,12 @@ public class PlatformSokoMindSettingsService {
             boolean hasAnthropicApiKey,
             boolean hasDeepseekApiKey,
             boolean hasRapidapiDeepseekApiKey,
+            boolean hasOpenrouterApiKey,
             String openaiApiKey,
             String anthropicApiKey,
             String deepseekApiKey,
             String rapidapiDeepseekApiKey,
+            String openrouterApiKey,
             String errorMessage
     ) {}
 }

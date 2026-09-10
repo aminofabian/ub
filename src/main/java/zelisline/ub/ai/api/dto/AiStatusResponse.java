@@ -7,5 +7,6 @@ public record AiStatusResponse(
         boolean eyeEnabled,
         boolean providerConfigured,
         String primaryProvider,
-        String defaultLocale
+        String defaultLocale,
+        boolean imageGenerationAvailable
 ) {}

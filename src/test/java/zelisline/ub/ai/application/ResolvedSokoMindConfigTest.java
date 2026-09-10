@@ -43,4 +43,19 @@ class ResolvedSokoMindConfigTest {
         assertThat(config("openai", "", "").primaryProviderConfigured()).isFalse();
         assertThat(config("unknown", "sk-direct", "").primaryProviderConfigured()).isFalse();
     }
+
+    @Test
+    void imageGenerationNeedsEnabledOpenaiKey() {
+        ResolvedSokoMindConfig withKey = new ResolvedSokoMindConfig(
+                true, true, false, false,
+                "deepseek", "en-KE",
+                "sk-openai", "", "gpt-4o-mini", "gpt-4.1", "gpt-4o",
+                "", "", "claude-haiku", "claude-sonnet",
+                "sk-direct", "https://api.deepseek.com/chat/completions",
+                "deepseek-v31.p.rapidapi.com", "DeepSeek-V3-0324",
+                "",
+                false, 8, null, 8, null);
+        assertThat(withKey.imageGenerationAvailable()).isTrue();
+        assertThat(config("openai", "", "").imageGenerationAvailable()).isFalse();
+    }
 }

@@ -41,4 +41,9 @@ public record ResolvedSokoMindConfig(
             default -> false;
         };
     }
+
+    /** Logo generation uses the OpenAI Images API, even when chat uses another provider. */
+    public boolean imageGenerationAvailable() {
+        return enabled() && openaiApiKey != null && !openaiApiKey.isBlank();
+    }
 }

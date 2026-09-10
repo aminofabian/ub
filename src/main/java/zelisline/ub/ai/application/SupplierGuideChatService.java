@@ -41,23 +41,26 @@ public class SupplierGuideChatService {
 
     @Transactional(readOnly = true)
     public AiStatusResponse status() {
+        ResolvedSokoMindConfig config = runtimeService.config();
         return runtimeService.isGuideEnabled()
                 ? new AiStatusResponse(
                         true,
                         true,
                         false,
                         false,
-                        runtimeService.config().primaryProviderConfigured(),
-                        runtimeService.config().primaryProvider(),
-                        runtimeService.config().defaultLocale())
+                        config.primaryProviderConfigured(),
+                        config.primaryProvider(),
+                        config.defaultLocale(),
+                        config.imageGenerationAvailable())
                 : new AiStatusResponse(
-                        runtimeService.config().enabled(),
+                        config.enabled(),
                         false,
                         false,
                         false,
-                        runtimeService.config().primaryProviderConfigured(),
-                        runtimeService.config().primaryProvider(),
-                        runtimeService.config().defaultLocale());
+                        config.primaryProviderConfigured(),
+                        config.primaryProvider(),
+                        config.defaultLocale(),
+                        config.imageGenerationAvailable());
     }
 
     @Transactional

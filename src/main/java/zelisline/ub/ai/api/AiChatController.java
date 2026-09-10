@@ -18,11 +18,14 @@ import zelisline.ub.ai.api.dto.AiChatResponse;
 import zelisline.ub.ai.api.dto.AiFeedbackRequest;
 import zelisline.ub.ai.api.dto.AiRouteGuideResponse;
 import zelisline.ub.ai.api.dto.AiStatusResponse;
+import zelisline.ub.ai.api.dto.BrandingLogoGenerateRequest;
+import zelisline.ub.ai.api.dto.BrandingLogoGenerateResponse;
 import zelisline.ub.ai.api.dto.PriceRadarResponse;
 import zelisline.ub.ai.api.dto.ProductPolishRequest;
 import zelisline.ub.ai.api.dto.ProductPolishResponse;
 import zelisline.ub.ai.api.dto.StorefrontDesignSuggestRequest;
 import zelisline.ub.ai.api.dto.StorefrontDesignSuggestResponse;
+import zelisline.ub.ai.application.BrandingLogoAiService;
 import zelisline.ub.ai.application.GuideChatService;
 import zelisline.ub.ai.application.PriceRadarService;
 import zelisline.ub.ai.application.ProductPolishService;
@@ -43,6 +46,7 @@ public class AiChatController {
     private final PriceRadarService priceRadarService;
     private final StorefrontDesignAiService storefrontDesignAiService;
     private final ProductPolishService productPolishService;
+    private final BrandingLogoAiService brandingLogoAiService;
 
     @GetMapping("/status")
     @PreAuthorize("isAuthenticated()")
@@ -119,5 +123,16 @@ public class AiChatController {
         TenantPrincipal user = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         return storefrontDesignAiService.suggest(businessId, user.userId(), body);
+    }
+
+    @PostMapping("/branding/logo/generate")
+    @PreAuthorize("isAuthenticated()")
+    public BrandingLogoGenerateResponse generateLogo(
+            @Valid @RequestBody BrandingLogoGenerateRequest body,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal user = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return brandingLogoAiService.generate(businessId, user.userId(), body);
     }
 }

@@ -50,7 +50,8 @@ public class GuideChatService {
                 config.enabled() && config.eyeEnabled(),
                 config.primaryProviderConfigured(),
                 config.primaryProvider(),
-                config.defaultLocale());
+                config.defaultLocale(),
+                config.imageGenerationAvailable());
     }
 
     @Transactional

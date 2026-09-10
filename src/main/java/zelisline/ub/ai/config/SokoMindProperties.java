@@ -30,7 +30,7 @@ public record SokoMindProperties(
             defaultLocale = "en-KE";
         }
         if (openai == null) {
-            openai = new OpenAi("", "", "gpt-4o-mini", "gpt-4.1", "gpt-4o");
+            openai = new OpenAi("", "", "gpt-4o-mini", "gpt-4.1", "gpt-4o", "gpt-image-1");
         }
         if (anthropic == null) {
             anthropic = new Anthropic("", "", "claude-haiku-4-5-20251001", "claude-sonnet-4-5-20250929");
@@ -56,8 +56,15 @@ public record SokoMindProperties(
             String baseUrl,
             String miniModel,
             String smartModel,
-            String visionModel
+            String visionModel,
+            String imageModel
     ) {
+        public OpenAi {
+            if (imageModel == null || imageModel.isBlank()) {
+                imageModel = "gpt-image-1";
+            }
+        }
+
         public boolean configured() {
             return apiKey != null && !apiKey.isBlank();
         }

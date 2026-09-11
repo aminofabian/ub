@@ -11,6 +11,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -48,6 +50,7 @@ import zelisline.ub.platform.application.PlatformAuthSettingsService;
 import zelisline.ub.platform.security.JwtTokenService;
 import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.tenancy.api.TenantRequestIds;
+import zelisline.ub.till.application.TillAccessRequestService;
 import zelisline.ub.till.application.TillDeviceService;
 
 /**
@@ -57,6 +60,8 @@ import zelisline.ub.till.application.TillDeviceService;
 @Service
 @RequiredArgsConstructor
 public class AuthService {
+
+    private static final Logger log = LoggerFactory.getLogger(AuthService.class);
 
     private static final int FAILED_ATTEMPTS_SOFT_LOCK = 5;
     private static final int SOFT_LOCK_MINUTES = 15;
@@ -113,6 +118,7 @@ public class AuthService {
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
     private final TillDeviceService tillDeviceService;
+    private final TillAccessRequestService tillAccessRequestService;
     private final ObjectProvider<zelisline.ub.billing.application.SubscriptionRenewalService> subscriptionRenewalService;
     private final PlatformAuthSettingsService platformAuthSettingsService;
 
@@ -187,6 +193,7 @@ public class AuthService {
             tillDeviceService.assertPinLoginAllowed(businessId, branchId, tillDeviceKey);
         } catch (ResponseStatusException ex) {
             publishPinLoginDenied(user, http, tillDeviceKey, ex.getReason());
+            notifyTillAccessIfDenied(user, branchId, tillDeviceKey, http);
             throw ex;
         }
         recordLoginSuccess(user);
@@ -245,6 +252,7 @@ public class AuthService {
             tillDeviceService.assertPinLoginAllowed(businessId, branchId, tillDeviceKey);
         } catch (ResponseStatusException ex) {
             publishPinLoginDenied(user, http, tillDeviceKey, ex.getReason());
+            notifyTillAccessIfDenied(user, branchId, tillDeviceKey, http);
             throw ex;
         }
 
@@ -704,6 +712,20 @@ public class AuthService {
                 .reason(reason != null ? reason : TillDeviceService.TILL_DEVICE_NOT_REGISTERED_DETAIL)
                 .metadata(metadata)
                 .build());
+    }
+
+    private void notifyTillAccessIfDenied(
+            User user,
+            String branchId,
+            String tillDeviceKey,
+            HttpServletRequest http
+    ) {
+        try {
+            tillAccessRequestService.recordPinDenied(
+                    user, branchId, tillDeviceKey, http.getHeader("User-Agent"));
+        } catch (RuntimeException ex) {
+            log.warn("Failed to record till access request for user {}", user.getId(), ex);
+        }
     }
 
     private void publishSecurityEventSync(User user, HttpServletRequest http, String eventType, String reason) {

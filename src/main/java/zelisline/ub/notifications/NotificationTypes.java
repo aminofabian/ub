@@ -34,6 +34,7 @@ public final class NotificationTypes {
     public static final String ONBOARDING_WEB_ORDER = "onboarding.web_order";
     public static final String DRAWOUT_APPROVAL_REQUESTED = "drawout.approval_requested";
     public static final String DRAWOUT_RECORDED = "drawout.recorded";
+    public static final String TILL_ACCESS_REQUESTED = "till.access_requested";
 
     private NotificationTypes() {
     }

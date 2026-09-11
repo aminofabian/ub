@@ -170,6 +170,23 @@ class CatalogSearchSupportTest {
     }
 
     @Test
+    void score_matchesSkuAndBarcode() {
+        var text = CatalogSearchSupport.SearchableText.of(
+                "Molped 14s", null, "F11301", "6161101234567", null);
+        assertThat(CatalogSearchSupport.score(text, "f11301")).isGreaterThan(0);
+        assertThat(CatalogSearchSupport.score(text, "F11301")).isGreaterThan(0);
+        assertThat(CatalogSearchSupport.score(text, "6161101234567")).isGreaterThan(0);
+    }
+
+    @Test
+    void score_matchesHyphenatedManufacturerCode() {
+        var text = CatalogSearchSupport.SearchableText.of(
+                "Molped 14s", null, "F11301", null, null);
+        assertThat(CatalogSearchSupport.score(text, "F-11301")).isGreaterThan(0);
+        assertThat(CatalogSearchSupport.dbCandidateTokens("F-11301")).contains("f11301");
+    }
+
+    @Test
     void score_matchesVariantViaParentName() {
         var text = CatalogSearchSupport.SearchableText.of(
                 "444",

@@ -526,6 +526,8 @@ public class SalesIntelligenceService {
                      WHERE sp2.sale_id = s.id) AS payment_methods,
                    sil.item_id,
                    i.name AS item_name,
+                   i.sku AS item_sku,
+                   i.barcode AS item_barcode,
                    i.variant_name AS variant_name,
                    parent.name AS parent_name,
                    sil.quantity,
@@ -585,6 +587,8 @@ public class SalesIntelligenceService {
                    'online' AS payment_methods,
                    wol.item_id,
                    wol.item_name,
+                   i.sku AS item_sku,
+                   i.barcode AS item_barcode,
                    wol.quantity,
                    wol.unit_price,
                    wol.line_total,
@@ -593,6 +597,9 @@ public class SalesIntelligenceService {
                    'online_store' AS channel
               FROM web_order_lines wol
               JOIN web_orders wo ON wo.id = wol.order_id
+         LEFT JOIN items i ON i.id = wol.item_id
+                          AND i.business_id = wo.business_id
+                          AND i.deleted_at IS NULL
              WHERE wo.business_id = ?
                AND CAST(wo.created_at AS DATE) BETWEEN ? AND ?
                AND (? IS NULL OR wo.catalog_branch_id = ?)
@@ -911,6 +918,8 @@ public class SalesIntelligenceService {
                             rs.getString("payment_methods"),
                             rs.getString("item_id"),
                             composedItemName(rs),
+                            rs.getString("item_sku"),
+                            rs.getString("item_barcode"),
                             rs.getBigDecimal("quantity").setScale(4, RoundingMode.HALF_UP),
                             rs.getBigDecimal("unit_price").setScale(4, RoundingMode.HALF_UP),
                             rs.getBigDecimal("line_total").setScale(2, RoundingMode.HALF_UP),
@@ -1437,6 +1446,8 @@ public class SalesIntelligenceService {
                             rs.getString("payment_methods"),
                             rs.getString("item_id"),
                             rs.getString("item_name"),
+                            rs.getString("item_sku"),
+                            rs.getString("item_barcode"),
                             rs.getBigDecimal("quantity").setScale(4, RoundingMode.HALF_UP),
                             rs.getBigDecimal("unit_price").setScale(4, RoundingMode.HALF_UP),
                             rs.getBigDecimal("line_total").setScale(2, RoundingMode.HALF_UP),

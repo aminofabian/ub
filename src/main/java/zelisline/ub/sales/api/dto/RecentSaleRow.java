@@ -16,6 +16,10 @@ public record RecentSaleRow(
         String paymentMethods,
         String itemId,
         String itemName,
+        /** Catalog SKU at query time; used so cashiers can find a sale by manufacturer code. */
+        String itemSku,
+        /** Catalog barcode at query time. */
+        String itemBarcode,
         BigDecimal quantity,
         BigDecimal unitPrice,
         BigDecimal lineTotal,

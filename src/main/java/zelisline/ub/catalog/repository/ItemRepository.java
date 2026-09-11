@@ -219,6 +219,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                     or lower(coalesce(p.name, '')) like lower(concat('%', :q, '%'))
                     or lower(i.sku) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.barcode, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(i.brand, '')) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.description, '')) like lower(concat('%', :q, '%')))
                and (:excludeLinkedSupplierId is null
                     or not exists (
@@ -340,6 +341,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                     or lower(coalesce(p.name, '')) like lower(concat('%', :q, '%'))
                     or lower(i.sku) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.barcode, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(i.brand, '')) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.description, '')) like lower(concat('%', :q, '%')))
                and (:excludeLinkedSupplierId is null
                     or not exists (
@@ -413,6 +415,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                     or lower(coalesce(p.name, '')) like lower(concat('%', :q, '%'))
                     or lower(i.sku) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.barcode, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(i.brand, '')) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.description, '')) like lower(concat('%', :q, '%')))
                and (:excludeLinkedSupplierId is null
                     or not exists (
@@ -484,6 +487,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                     or lower(coalesce(p.name, '')) like lower(concat('%', :q, '%'))
                     or lower(i.sku) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.barcode, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(i.brand, '')) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.description, '')) like lower(concat('%', :q, '%')))
                and (:excludeLinkedSupplierId is null
                     or not exists (
@@ -555,6 +559,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                     or lower(coalesce(p.name, '')) like lower(concat('%', :q, '%'))
                     or lower(i.sku) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.barcode, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(i.brand, '')) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.description, '')) like lower(concat('%', :q, '%')))
                and (:excludeLinkedSupplierId is null
                     or not exists (
@@ -665,6 +670,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                     or lower(coalesce(p.name, '')) like lower(concat('%', :q, '%'))
                     or lower(i.sku) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.barcode, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(i.brand, '')) like lower(concat('%', :q, '%'))
                     or lower(coalesce(i.description, '')) like lower(concat('%', :q, '%')))
                and (:excludeLinkedSupplierId is null
                     or not exists (

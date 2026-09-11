@@ -138,6 +138,10 @@ public final class CatalogSearchSupport {
         if (primary != null) {
             out.add(primary);
         }
+        String compactQuery = compact(norm(query));
+        if (compactQuery.length() >= 3) {
+            out.add(compactQuery);
+        }
         for (String token : tokenize(query)) {
             List<String> expansions = ALIASES.get(token);
             if (expansions != null) {
@@ -210,6 +214,7 @@ public final class CatalogSearchSupport {
         String parent = norm(item.parentName());
         String phrase = String.join(" ", tokens);
         String compactPhrase = compact(phrase);
+        String queryCompact = compact(norm(query));
 
         String primaryHaystack = joinHaystack(name, variant, brand, size, parent);
         String haystack = joinHaystack(name, variant, brand, size, sku, barcode, description, parent);
@@ -244,10 +249,7 @@ public final class CatalogSearchSupport {
         if (!compactPhrase.isBlank() && compact(primaryHaystack).contains(compactPhrase)) {
             best = Math.max(best, 38_000);
         }
-        if (!sku.isBlank() && (sku.equals(phrase) || sku.startsWith(phrase))) {
-            best = Math.max(best, 42_000);
-        }
-        if (!barcode.isBlank() && (barcode.equals(phrase) || barcode.startsWith(phrase))) {
+        if (codeMatches(sku, phrase, queryCompact) || codeMatches(barcode, phrase, queryCompact)) {
             best = Math.max(best, 42_000);
         }
 
@@ -700,6 +702,27 @@ public final class CatalogSearchSupport {
             return "";
         }
         return value.replaceAll("[^a-z0-9]", "");
+    }
+
+    /**
+     * Manufacturer codes (SKU / barcode) should match even when the cashier
+     * types hyphens, spaces, or mixed case — {@code F-11301} ≡ {@code f11301}.
+     */
+    private static boolean codeMatches(String code, String phrase, String queryCompact) {
+        if (code == null || code.isBlank()) {
+            return false;
+        }
+        if (!phrase.isBlank() && (code.equals(phrase) || code.startsWith(phrase))) {
+            return true;
+        }
+        if (queryCompact.length() < 3) {
+            return false;
+        }
+        String compactCode = compact(code);
+        if (compactCode.equals(queryCompact) || compactCode.startsWith(queryCompact)) {
+            return true;
+        }
+        return queryCompact.length() >= 4 && compactCode.contains(queryCompact);
     }
 
     private static Map<String, List<String>> buildAliases() {

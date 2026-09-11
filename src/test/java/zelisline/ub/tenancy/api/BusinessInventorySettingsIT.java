@@ -120,7 +120,7 @@ class BusinessInventorySettingsIT {
                 .andExpect(jsonPath("$.inventory.stockLevels.allowStockEditForGroceryClerk")
                         .value(true))
                 .andExpect(jsonPath("$.inventory.stockLevels.allowNegativeStock")
-                        .value(false))
+                        .value(true))
                 .andExpect(jsonPath("$.inventory.stockLevels.allowActivityForStockManager")
                         .value(true))
                 .andExpect(jsonPath("$.inventory.stockLevels.allowStockPageForStockManager")
@@ -275,11 +275,11 @@ class BusinessInventorySettingsIT {
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
                         .contentType(APPLICATION_JSON)
                         .content("""
-                                {"inventory":{"stockLevels":{"allowNegativeStock":true}}}
+                                {"inventory":{"stockLevels":{"allowNegativeStock":false}}}
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.inventory.stockLevels.allowNegativeStock")
-                        .value(true));
+                        .value(false));
 
         entityManager.clear();
 
@@ -289,7 +289,7 @@ class BusinessInventorySettingsIT {
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.inventory.stockLevels.allowNegativeStock")
-                        .value(true));
+                        .value(false));
     }
 
     @Test

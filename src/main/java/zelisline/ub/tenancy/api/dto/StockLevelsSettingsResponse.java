@@ -7,6 +7,10 @@ public record StockLevelsSettingsResponse(
          * admin can turn off in business settings.
          */
         boolean allowStockEditForGroceryClerk,
+        /**
+         * Cashiers may complete sales when on-hand is zero (stock goes negative).
+         * Default on — admin can turn off in business settings.
+         */
         boolean allowNegativeStock,
         /** Activity page (`/analytics/activity`) for stock managers. Default on. */
         boolean allowActivityForStockManager,
@@ -36,6 +40,6 @@ public record StockLevelsSettingsResponse(
 ) {
     public static StockLevelsSettingsResponse defaults() {
         return new StockLevelsSettingsResponse(
-                false, true, false, true, true, true, true, true, true, true);
+                false, true, true, true, true, true, true, true, true, true);
     }
 }

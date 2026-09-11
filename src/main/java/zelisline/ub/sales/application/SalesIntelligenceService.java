@@ -12,6 +12,7 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -41,6 +42,7 @@ import zelisline.ub.reporting.repository.MvSalesDailyRepository.ItemVelocityPast
 import zelisline.ub.credits.domain.MaskedMsisdn;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.BranchCogsRow;
+import zelisline.ub.sales.api.dto.CaptureHealthResponse;
 import zelisline.ub.sales.api.dto.CategoryDailyRevenueRow;
 import zelisline.ub.sales.api.dto.CustomerProductSegmentRow;
 import zelisline.ub.sales.api.dto.CustomerSpendResponse;
@@ -825,7 +827,8 @@ public class SalesIntelligenceService {
                       FROM customer_phones p
                      WHERE p.customer_id = c.id
                      ORDER BY p.is_primary DESC, p.created_at ASC
-                     LIMIT 1) AS phone_verified
+                     LIMIT 1) AS phone_verified,
+                   COALESCE(c.tags LIKE '%\"wholesale\"%', FALSE) AS wholesale_pinned
               FROM sales s
             """ + JOIN_SALE_MPESA_PAYER
             + "    LEFT JOIN customers c ON c.id = " + PAYER_CUSTOMER_ID + """
@@ -838,7 +841,7 @@ public class SalesIntelligenceService {
                   AND """ + PAYER_IDENTIFIED
             + " GROUP BY " + PAYER_GROUP_KEY + """
             ,
-                     c.id, c.customer_no, c.name, c.first_name, c.last_name, c.origin
+                     c.id, c.customer_no, c.name, c.first_name, c.last_name, c.origin, c.tags
             """;
 
     private static final String Q_CUSTOMER_VISIT_DAYS = "SELECT " + PAYER_GROUP_KEY + """
@@ -866,6 +869,31 @@ public class SalesIntelligenceService {
                   AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
                   AND (? IS NULL OR s.branch_id = ?)
                   AND NOT """ + PAYER_IDENTIFIED;
+
+    private static final String Q_CAPTURE_TOTAL = """
+            SELECT COUNT(*) AS total_sales,
+               COALESCE(SUM(CASE WHEN NULLIF(TRIM(s.customer_id), '') IS NOT NULL
+                                 THEN 1 ELSE 0 END), 0) AS identified_sales
+              FROM sales s
+             WHERE s.business_id = ?
+               AND s.status IN (?, ?)
+               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND (? IS NULL OR s.branch_id = ?)
+            """;
+
+    private static final String Q_CAPTURE_BY_TENDER = """
+            SELECT sp.method,
+                   COUNT(DISTINCT s.id) AS total_sales,
+                   COUNT(DISTINCT CASE WHEN NULLIF(TRIM(s.customer_id), '') IS NOT NULL
+                                       THEN s.id END) AS identified_sales
+              FROM sale_payments sp
+              JOIN sales s ON s.id = sp.sale_id
+             WHERE s.business_id = ?
+               AND s.status IN (?, ?)
+               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND (? IS NULL OR s.branch_id = ?)
+             GROUP BY sp.method
+            """;
 
     @Transactional(readOnly = true)
     public List<RecentSaleRow> recentSales(
@@ -1812,7 +1840,8 @@ public class SalesIntelligenceService {
                 LocalDate firstVisit,
                 LocalDate lastVisit,
                 String maskedMsisdn,
-                Boolean phoneVerified
+                Boolean phoneVerified,
+                boolean wholesalePinned
         ) {
         }
 
@@ -1840,7 +1869,8 @@ public class SalesIntelligenceService {
                             first == null ? null : first.toLocalDate(),
                             last == null ? null : last.toLocalDate(),
                             rs.getString("masked_msisdn"),
-                            phoneVerified));
+                            phoneVerified,
+                            rs.getBoolean("wholesale_pinned")));
                 },
                 businessId,
                 SalesConstants.SALE_STATUS_COMPLETED,
@@ -1937,7 +1967,8 @@ public class SalesIntelligenceService {
                     rhythm.longestWeekStreak(),
                     rhythm.cadence(),
                     rhythm.favoriteWeekday(),
-                    cohort));
+                    cohort,
+                    agg.wholesalePinned()));
         }
 
         built.sort(Comparator
@@ -1972,7 +2003,8 @@ public class SalesIntelligenceService {
                     row.longestWeekStreak(),
                     row.cadence(),
                     row.favoriteWeekday(),
-                    row.cohort()));
+                    row.cohort(),
+                    row.wholesalePinned()));
         }
 
         return new CustomerSpendResponse(
@@ -1984,6 +2016,98 @@ public class SalesIntelligenceService {
                 walkInSpend,
                 truncated,
                 ranked);
+    }
+
+    /** Capture health (scope §8.5): % of completed sales carrying a customer, by tender. */
+    @Transactional(readOnly = true)
+    public CaptureHealthResponse captureHealth(
+            String businessId,
+            LocalDate fromInclusive,
+            LocalDate toInclusive,
+            String branchId
+    ) {
+        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
+        Date from = Date.valueOf(w[0]);
+        Date to = Date.valueOf(w[1]);
+        String branchFilter = blankToNull(branchId);
+
+        long[] totals = {0L, 0L};
+        jdbc.query(
+                Q_CAPTURE_TOTAL,
+                rs -> {
+                    totals[0] = rs.getLong("total_sales");
+                    totals[1] = rs.getLong("identified_sales");
+                },
+                businessId,
+                SalesConstants.SALE_STATUS_COMPLETED,
+                SalesConstants.SALE_STATUS_REFUNDED,
+                from,
+                to,
+                branchFilter,
+                branchFilter);
+
+        // Tender buckets: cash / mpesa / tab, everything else lumped together.
+        // A split-tender sale counts in every bucket it used.
+        Map<String, long[]> byTender = new LinkedHashMap<>();
+        jdbc.query(
+                Q_CAPTURE_BY_TENDER,
+                rs -> {
+                    String bucket = tenderBucket(rs.getString("method"));
+                    long[] agg = byTender.computeIfAbsent(bucket, k -> new long[2]);
+                    agg[0] += rs.getLong("total_sales");
+                    agg[1] += rs.getLong("identified_sales");
+                },
+                businessId,
+                SalesConstants.SALE_STATUS_COMPLETED,
+                SalesConstants.SALE_STATUS_REFUNDED,
+                from,
+                to,
+                branchFilter,
+                branchFilter);
+
+        List<CaptureHealthResponse.TenderSplit> tenders = new ArrayList<>();
+        for (String bucket : List.of("cash", "mpesa", "tab", "other")) {
+            long[] agg = byTender.get(bucket);
+            if (agg == null || agg[0] <= 0) {
+                continue;
+            }
+            tenders.add(new CaptureHealthResponse.TenderSplit(
+                    bucket,
+                    agg[0],
+                    agg[1],
+                    linkedPct(agg[1], agg[0])));
+        }
+
+        return new CaptureHealthResponse(
+                w[0],
+                w[1],
+                totals[0],
+                totals[1],
+                linkedPct(totals[1], totals[0]),
+                List.copyOf(tenders));
+    }
+
+    private static BigDecimal linkedPct(long identified, long total) {
+        if (total <= 0) {
+            return BigDecimal.ZERO.setScale(1, RoundingMode.HALF_UP);
+        }
+        return BigDecimal.valueOf(identified)
+                .multiply(BigDecimal.valueOf(100))
+                .divide(BigDecimal.valueOf(total), 1, RoundingMode.HALF_UP);
+    }
+
+    private static String tenderBucket(String method) {
+        String m = method == null ? "" : method.trim().toLowerCase();
+        if (m.equals(SalesConstants.PAYMENT_METHOD_CASH)) {
+            return "cash";
+        }
+        if (m.contains("mpesa")) {
+            return "mpesa";
+        }
+        if (m.equals(SalesConstants.PAYMENT_METHOD_CUSTOMER_CREDIT)) {
+            return "tab";
+        }
+        return "other";
     }
 
     private static final String Q_CUSTOMERS_BY_PRODUCT = """

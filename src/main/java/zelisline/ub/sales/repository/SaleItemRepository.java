@@ -191,4 +191,39 @@ public interface SaleItemRepository extends JpaRepository<SaleItem, String> {
             @Param("itemIds") Collection<String> itemIds,
             @Param("from") Instant from
     );
+
+    @Query("""
+            select distinct s.customerId
+              from SaleItem si
+              join Sale s on s.id = si.saleId
+              join Item i on i.id = si.itemId
+             where s.businessId = :businessId
+               and i.itemTypeId = :itemTypeId
+               and s.status = 'completed'
+               and s.voidedAt is null
+               and s.customerId is not null
+            """)
+    List<String> customerIdsWhoBoughtItemType(
+            @Param("businessId") String businessId,
+            @Param("itemTypeId") String itemTypeId
+    );
+
+    @Query("""
+            select distinct s.customerId
+              from SaleItem si
+              join Sale s on s.id = si.saleId
+             where s.businessId = :businessId
+               and si.itemId = :itemId
+               and s.status = 'completed'
+               and s.voidedAt is null
+               and s.customerId is not null
+               and s.soldAt >= :from
+               and s.soldAt < :to
+            """)
+    List<String> customerIdsWhoBoughtItemBetween(
+            @Param("businessId") String businessId,
+            @Param("itemId") String itemId,
+            @Param("from") Instant from,
+            @Param("to") Instant to
+    );
 }

@@ -112,6 +112,7 @@ public class RestockDigestService {
     private final StockTakeLineRepository stockTakeLineRepository;
     private final PathAPurchaseService pathAPurchaseService;
     private final PurchaseOrderRepository purchaseOrderRepository;
+    private final RestockIdentifiedDemandLoader restockIdentifiedDemandLoader;
 
     // ------------------------------------------------------------------ generate
 
@@ -164,6 +165,8 @@ public class RestockDigestService {
         Set<String> snoozedItemIds = loadSnoozedItemIds(businessId, branchId, effectiveDate);
         // Phase-4 learning: bias par toward what the reviewer actually accepted.
         Map<String, BigDecimal> parBiases = loadParBiases(businessId, branchId);
+        Map<String, RestockIdentifiedDemandMath.Demand> identifiedByItem =
+                restockIdentifiedDemandLoader.load(businessId, branchId, candidateIds, effectiveDate);
 
         RestockRun run = new RestockRun();
         run.setId(UUID.randomUUID().toString()); // pre-assign so suggestion rows can reference it
@@ -214,7 +217,8 @@ public class RestockDigestService {
                     onHand,
                     inbound,
                     reorderLevel,
-                    computed));
+                    computed,
+                    identifiedByItem.get(itemId)));
         }
 
         applyCounts(run, suggestions);
@@ -336,7 +340,9 @@ public class RestockDigestService {
                             s.getSuggestedQty(),
                             s.getReasonCode(),
                             s.getEvidence(),
-                            s.getConfidence());
+                            s.getConfidence(),
+                            s.getIdentifiedDueQty(),
+                            s.getIdentifiedExplain());
                 })
                 .toList();
         return new RestockDigestDtos.RestockPrepResponse(
@@ -1059,7 +1065,8 @@ public class RestockDigestService {
             BigDecimal onHand,
             BigDecimal inbound,
             BigDecimal reorderLevel,
-            RestockDigestFormula.Computed computed
+            RestockDigestFormula.Computed computed,
+            RestockIdentifiedDemandMath.Demand identified
     ) {
         RestockSuggestion row = new RestockSuggestion();
         row.setRunId(run.getId());
@@ -1073,11 +1080,24 @@ public class RestockDigestService {
         row.setInbound(inbound);
         row.setReorderLevel(reorderLevel);
         row.setPar(computed.par());
-        row.setSuggestedQty(computed.suggestedQty());
+        row.setSuggestedQty(applyIdentifiedNudge(computed.suggestedQty(), identified, link));
         row.setReasonCode(computed.reasonCode());
         row.setEvidence(computed.evidence());
         row.setConfidence(computed.confidence());
         row.setStatus(InventoryConstants.DIGEST_SUGGESTION_PENDING);
+        if (identified != null && identified.regularCount() > 0) {
+            row.setIdentifiedDueQty(identified.identifiedDueQty());
+            String explain = identified.explain();
+            if (identified.shouldNudge(computed.suggestedQty())
+                    && row.getSuggestedQty() != null
+                    && computed.suggestedQty() != null
+                    && row.getSuggestedQty().compareTo(computed.suggestedQty()) > 0) {
+                explain = explain == null
+                        ? "Qty raised to cover due regulars"
+                        : explain + " · qty raised to cover due regulars";
+            }
+            row.setIdentifiedExplain(explain);
+        }
         if (link != null) {
             row.setSupplierId(link.getSupplierId());
             row.setUnitCost(resolveUnitCost(link, item));
@@ -1087,6 +1107,28 @@ public class RestockDigestService {
             row.setUnitCost(item.getBuyingPrice());
         }
         return row;
+    }
+
+    private static BigDecimal applyIdentifiedNudge(
+            BigDecimal velocityQty,
+            RestockIdentifiedDemandMath.Demand identified,
+            ItemLinkRow link
+    ) {
+        if (identified == null || !identified.shouldNudge(velocityQty)) {
+            return velocityQty;
+        }
+        BigDecimal suggested = identified.identifiedDueQty();
+        BigDecimal pack = link != null && link.getPackSize() != null && link.getPackSize().signum() > 0
+                ? link.getPackSize()
+                : null;
+        if (suggested.signum() > 0 && pack != null) {
+            suggested = RestockDigestFormula.roundUpToPack(suggested, pack);
+        }
+        if (suggested.signum() > 0
+                && link != null && link.getMinOrderQty() != null && link.getMinOrderQty().signum() > 0) {
+            suggested = suggested.max(link.getMinOrderQty());
+        }
+        return suggested;
     }
 
     private static BigDecimal resolveUnitCost(ItemLinkRow link, Item item) {
@@ -1233,7 +1275,9 @@ public class RestockDigestService {
                 r.getSnoozeUntil(),
                 r.getPurchaseOrderId(),
                 r.getOrderPadItemId(),
-                r.getCreatedAt());
+                r.getCreatedAt(),
+                r.getIdentifiedDueQty(),
+                r.getIdentifiedExplain());
     }
 
     private RestockDigestDtos.RestockRunResponse toRunResponse(

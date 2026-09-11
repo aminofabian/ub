@@ -42,7 +42,9 @@ public final class RestockDigestDtos {
             LocalDate snoozeUntil,
             String purchaseOrderId,
             String orderPadItemId,
-            Instant createdAt
+            Instant createdAt,
+            BigDecimal identifiedDueQty,
+            String identifiedExplain
     ) {}
 
     public record RestockRunResponse(
@@ -143,7 +145,9 @@ public final class RestockDigestDtos {
             BigDecimal suggestedQty,
             String reasonCode,
             String evidence,
-            String confidence
+            String confidence,
+            BigDecimal identifiedDueQty,
+            String identifiedExplain
     ) {}
 
     public record RestockPrepResponse(

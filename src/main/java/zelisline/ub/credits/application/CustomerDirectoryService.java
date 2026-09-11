@@ -294,6 +294,9 @@ public class CustomerDirectoryService {
         if (patch.notes() != null) {
             customer.setNotes(blankToNull(patch.notes()));
         }
+        if (patch.tags() != null) {
+            customer.setTags(CustomerTags.serialize(patch.tags()));
+        }
         customerRepository.save(customer);
 
         Map<String, Object> newState = customerSnapshot(customer);
@@ -503,6 +506,7 @@ public class CustomerDirectoryService {
                 c.getOrigin(),
                 c.getEmail(),
                 c.getNotes(),
+                CustomerTags.parse(c.getTags()),
                 c.getVersion(),
                 c.getCreatedAt(),
                 c.getUpdatedAt(),
@@ -674,6 +678,7 @@ public class CustomerDirectoryService {
         snapshot.put("name", customer.getName());
         snapshot.put("email", customer.getEmail());
         snapshot.put("notes", customer.getNotes());
+        snapshot.put("tags", CustomerTags.parse(customer.getTags()));
         return snapshot;
     }
 

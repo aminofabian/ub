@@ -12,6 +12,8 @@ import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Getter
 @Setter
@@ -58,6 +60,11 @@ public class Customer {
 
     @Column(name = "notes")
     private String notes;
+
+    /** Owner-pinned shop labels as a JSON array string, e.g. ["wholesale"]. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "tags", columnDefinition = "json")
+    private String tags;
 
     @Version
     @Column(name = "version", nullable = false)

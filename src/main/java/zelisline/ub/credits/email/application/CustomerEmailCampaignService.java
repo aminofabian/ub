@@ -67,7 +67,8 @@ public class CustomerEmailCampaignService {
                 audience.excludedCount(),
                 audience.finalCount(),
                 audienceService.sample(audience.eligible()),
-                audienceService.sample(audience.excluded()));
+                audienceService.sample(audience.excluded()),
+                audience.smsCustomerIds(500));
     }
 
     @Transactional

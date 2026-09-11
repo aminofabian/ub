@@ -35,6 +35,7 @@ import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
+import zelisline.ub.credits.domain.Customer;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.finance.repository.JournalEntryRepository;
@@ -57,7 +58,9 @@ import zelisline.ub.platform.security.TestAuthenticationFilter;
 import zelisline.ub.purchasing.domain.InventoryBatch;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.purchasing.repository.StockMovementRepository;
+import zelisline.ub.sales.api.dto.CaptureHealthResponse;
 import zelisline.ub.sales.api.dto.CustomerSpendResponse;
+import zelisline.ub.sales.api.dto.CustomerSpendRow;
 import zelisline.ub.sales.api.dto.RevenueByCategoryRow;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.SaleItem;
@@ -474,6 +477,121 @@ class SalesIntelligenceIT {
         assertThat(lines).hasSize(1);
         assertThat(lines.get(0).get("customerName").asText()).isEqualTo("WANJIKU KAMAU");
         assertThat(lines.get(0).get("saleId").asText()).isEqualTo(splitSaleId);
+    }
+
+    @Test
+    void customerSpend_flagsPinnedWholesaleTag() throws Exception {
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+
+        Customer pinned = new Customer();
+        pinned.setBusinessId(TENANT);
+        pinned.setName("Big Buyer Ltd");
+        pinned.setTags("[\"wholesale\"]");
+        customerRepository.save(pinned);
+
+        Customer plain = new Customer();
+        plain.setBusinessId(TENANT);
+        plain.setName("Small Buyer");
+        customerRepository.save(plain);
+
+        String pinnedSaleId = seedSale(2001, new BigDecimal("500.00"));
+        Sale pinnedSale = saleRepository.findById(pinnedSaleId).orElseThrow();
+        pinnedSale.setCustomerId(pinned.getId());
+        saleRepository.save(pinnedSale);
+
+        String plainSaleId = seedSale(2002, new BigDecimal("50.00"));
+        Sale plainSale = saleRepository.findById(plainSaleId).orElseThrow();
+        plainSale.setCustomerId(plain.getId());
+        saleRepository.save(plainSale);
+
+        MvcResult report = mockMvc.perform(get("/api/v1/sales/intelligence/customer-spend")
+                        .param("from", today.minusDays(2).toString())
+                        .param("to", today.plusDays(2).toString())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, user.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ID))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        CustomerSpendResponse res = objectMapper.readValue(
+                report.getResponse().getContentAsString(), CustomerSpendResponse.class);
+
+        var byName = res.rows().stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        CustomerSpendRow::name, java.util.function.Function.identity()));
+        assertThat(byName.get("Big Buyer Ltd").wholesalePinned()).isTrue();
+        assertThat(byName.get("Small Buyer").wholesalePinned()).isFalse();
+    }
+
+    @Test
+    void captureHealth_splitsLinkedShareByTender() throws Exception {
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+
+        Customer named = new Customer();
+        named.setBusinessId(TENANT);
+        named.setName("Named Shopper");
+        customerRepository.save(named);
+
+        // Cash walk-in — anonymous on purpose.
+        String cashWalkIn = seedSale(3001, new BigDecimal("50.00"));
+        seedPayment(cashWalkIn, 0, new BigDecimal("50.00"), null);
+
+        // Cash, named.
+        String cashNamed = seedSale(3002, new BigDecimal("80.00"));
+        seedPayment(cashNamed, 0, new BigDecimal("80.00"), null);
+        linkCustomer(cashNamed, named.getId());
+
+        // M-Pesa, named.
+        String mpesaNamed = seedSale(3003, new BigDecimal("120.00"));
+        seedPayment(mpesaNamed, 0, new BigDecimal("120.00"), "RCPT-CH");
+        linkCustomer(mpesaNamed, named.getId());
+
+        // Tab — always carries a customer.
+        String tabSale = seedSale(3004, new BigDecimal("200.00"));
+        seedTabPayment(tabSale, new BigDecimal("200.00"));
+        linkCustomer(tabSale, named.getId());
+
+        MvcResult report = mockMvc.perform(get("/api/v1/sales/intelligence/capture-health")
+                        .param("from", today.minusDays(2).toString())
+                        .param("to", today.plusDays(2).toString())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, user.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ID))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        CaptureHealthResponse res = objectMapper.readValue(
+                report.getResponse().getContentAsString(), CaptureHealthResponse.class);
+
+        assertThat(res.totalSales()).isEqualTo(4L);
+        assertThat(res.identifiedSales()).isEqualTo(3L);
+        assertThat(res.identifiedPct()).isEqualByComparingTo("75.0");
+
+        var byTender = res.tenders().stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        CaptureHealthResponse.TenderSplit::tender,
+                        java.util.function.Function.identity()));
+        assertThat(byTender.get("cash").totalSales()).isEqualTo(2L);
+        assertThat(byTender.get("cash").identifiedSales()).isEqualTo(1L);
+        assertThat(byTender.get("cash").identifiedPct()).isEqualByComparingTo("50.0");
+        assertThat(byTender.get("mpesa").totalSales()).isEqualTo(1L);
+        assertThat(byTender.get("mpesa").identifiedSales()).isEqualTo(1L);
+        assertThat(byTender.get("tab").identifiedPct()).isEqualByComparingTo("100.0");
+    }
+
+    private void linkCustomer(String saleId, String customerId) {
+        Sale sale = saleRepository.findById(saleId).orElseThrow();
+        sale.setCustomerId(customerId);
+        saleRepository.save(sale);
+    }
+
+    private void seedTabPayment(String saleId, BigDecimal amount) {
+        SalePayment payment = new SalePayment();
+        payment.setSaleId(saleId);
+        payment.setMethod(SalesConstants.PAYMENT_METHOD_CUSTOMER_CREDIT);
+        payment.setAmount(amount);
+        payment.setSortOrder(0);
+        salePaymentRepository.save(payment);
     }
 
     private void seedSaleItem(String saleId, String itemId, BigDecimal lineTotal) {

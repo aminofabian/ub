@@ -23,6 +23,7 @@ public record CustomerSpendRow(
         int longestWeekStreak,
         String cadence,
         String favoriteWeekday,
-        String cohort
+        String cohort,
+        boolean wholesalePinned
 ) {
 }

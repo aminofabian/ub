@@ -173,4 +173,34 @@ public interface SaleRepository extends JpaRepository<Sale, String> {
              group by s.customerId
             """)
     List<Object[]> aggregatePurchaseStatsByCustomer(@Param("businessId") String businessId);
+
+    @Query("""
+            select distinct s.customerId
+              from Sale s
+             where s.businessId = :businessId
+               and s.status = 'completed'
+               and s.voidedAt is null
+               and s.customerId is not null
+               and s.soldAt >= :from
+               and s.soldAt < :to
+            """)
+    List<String> customerIdsWithSaleBetween(
+            @Param("businessId") String businessId,
+            @Param("from") java.time.Instant from,
+            @Param("to") java.time.Instant to
+    );
+
+    @Query("""
+            select distinct s.customerId
+              from Sale s
+             where s.businessId = :businessId
+               and s.branchId = :branchId
+               and s.status = 'completed'
+               and s.voidedAt is null
+               and s.customerId is not null
+            """)
+    List<String> customerIdsWithSaleAtBranch(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId
+    );
 }

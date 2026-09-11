@@ -33,6 +33,7 @@ import zelisline.ub.credits.api.dto.CustomerBulkMessageResponse;
 import zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse;
 import zelisline.ub.credits.api.dto.CustomerResponse;
 import zelisline.ub.credits.api.dto.IssuePaymentClaimResponse;
+import zelisline.ub.credits.api.dto.LastSaleSummaryResponse;
 import zelisline.ub.credits.api.dto.OutstandingTabRowResponse;
 import zelisline.ub.credits.api.dto.PatchCustomerRequest;
 import zelisline.ub.credits.api.dto.RemindPaymentRequest;
@@ -261,19 +262,32 @@ public class CustomersController {
         return creditCustomerStatementService.assemble(businessId, resolved);
     }
 
-    @GetMapping("/{customerId}/tab-purchases")
+    @GetMapping({"/{customerId}/tab-purchases", "/{customerId}/purchases"})
     @PreAuthorize("hasPermission(null, 'credits.customers.read')")
     public TabPurchasesPageResponse tabPurchases(
             @PathVariable String customerId,
             @RequestParam(defaultValue = "0") int offset,
             @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) String q,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         String resolved = customerDirectoryService.resolveCustomerIdOrThrow(businessId, customerId);
         return customerTabPurchasesService.listPage(
-                businessId, resolved, offset, limit);
+                businessId, resolved, offset, limit, q);
+    }
+
+    @GetMapping("/{customerId}/last-sale-summary")
+    @PreAuthorize("hasPermission(null, 'credits.customers.read')")
+    public LastSaleSummaryResponse lastSaleSummary(
+            @PathVariable String customerId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String resolved = customerDirectoryService.resolveCustomerIdOrThrow(businessId, customerId);
+        return customerTabPurchasesService.lastSaleSummary(businessId, resolved);
     }
 
     @PostMapping("/bulk-message")

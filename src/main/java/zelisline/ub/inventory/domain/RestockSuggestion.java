@@ -99,6 +99,14 @@ public class RestockSuggestion {
     @Column(name = "order_pad_item_id", length = 36)
     private String orderPadItemId;
 
+    /** Identified due units this week (regulars). Null when none. */
+    @Column(name = "identified_due_qty", precision = 14, scale = 4)
+    private BigDecimal identifiedDueQty;
+
+    /** Shop copy: "12 regulars usually buy this every ~14 days; 4 are due this week". */
+    @Column(name = "identified_explain", length = 512)
+    private String identifiedExplain;
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;

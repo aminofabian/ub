@@ -2,6 +2,7 @@ package zelisline.ub.credits.application;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -24,6 +25,7 @@ import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.credits.CreditTxnTypes;
 import zelisline.ub.credits.WalletTxnTypes;
+import zelisline.ub.credits.api.dto.LastSaleSummaryResponse;
 import zelisline.ub.credits.api.dto.TabPurchaseLineResponse;
 import zelisline.ub.credits.api.dto.TabPurchasesPageResponse;
 import zelisline.ub.credits.api.dto.TabPurchaseRowResponse;
@@ -48,7 +50,10 @@ public class CustomerTabPurchasesService {
     private static final int QTY_SCALE = 4;
     private static final int DEFAULT_LIMIT = 40;
     private static final int MAX_LIMIT = 100;
-    private static final int MAX_FETCH = 250;
+    /** Latest visits kept in memory for pagination / search. A year of a regular. */
+    private static final int MAX_FETCH = 2000;
+    private static final ZoneId ZONE = ZoneId.of("Africa/Nairobi");
+    private static final int HINT_NAME_LIMIT = 3;
 
     private final CustomerRepository customerRepository;
     private final CreditAccountRepository creditAccountRepository;
@@ -61,7 +66,7 @@ public class CustomerTabPurchasesService {
 
     @Transactional(readOnly = true)
     public List<TabPurchaseRowResponse> list(String businessId, String customerId) {
-        return listPage(businessId, customerId, 0, DEFAULT_LIMIT).rows();
+        return listPage(businessId, customerId, 0, DEFAULT_LIMIT, null).rows();
     }
 
     @Transactional(readOnly = true)
@@ -71,16 +76,86 @@ public class CustomerTabPurchasesService {
             int offset,
             Integer limit
     ) {
+        return listPage(businessId, customerId, offset, limit, null);
+    }
+
+    @Transactional(readOnly = true)
+    public TabPurchasesPageResponse listPage(
+            String businessId,
+            String customerId,
+            int offset,
+            Integer limit,
+            String q
+    ) {
         int safeOffset = Math.max(0, offset);
         int pageSize = limit == null ? DEFAULT_LIMIT : Math.max(1, Math.min(limit, MAX_LIMIT));
-        int fetchCap = Math.min(safeOffset + pageSize + 1, MAX_FETCH);
+        boolean searching = q != null && !q.isBlank();
+        int fetchCap = searching
+                ? MAX_FETCH
+                : Math.min(safeOffset + pageSize + 1, MAX_FETCH);
         List<TabPurchaseRowResponse> merged = buildRows(businessId, customerId, fetchCap);
+        if (searching) {
+            merged = merged.stream()
+                    .filter(row -> PurchaseHistorySearch.matches(row, q))
+                    .toList();
+        }
         boolean hasMore = merged.size() > safeOffset + pageSize;
         int end = Math.min(safeOffset + pageSize, merged.size());
         List<TabPurchaseRowResponse> slice = safeOffset >= merged.size()
                 ? List.of()
                 : List.copyOf(merged.subList(safeOffset, end));
         return new TabPurchasesPageResponse(slice, safeOffset, pageSize, hasMore);
+    }
+
+    /**
+     * Thin last-basket card for the till. Does not load the full history page.
+     * Missing customer → 404; no sales → empty payload (till fail-open).
+     */
+    @Transactional(readOnly = true)
+    public LastSaleSummaryResponse lastSaleSummary(String businessId, String customerId) {
+        customerRepository.findByIdAndBusinessIdAndDeletedAtIsNull(customerId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Customer not found"));
+        List<Sale> sales = saleRepository.findByBusinessIdAndCustomerIdOrderBySoldAtDesc(
+                businessId, customerId, PageRequest.of(0, 1));
+        if (sales.isEmpty()) {
+            return LastSaleSummaryResponse.empty();
+        }
+        Sale sale = sales.get(0);
+        List<SaleItem> lines = saleItemRepository.findBySaleIdOrderByLineIndexAsc(sale.getId());
+        Set<String> itemIds = new HashSet<>();
+        for (SaleItem line : lines) {
+            if (line.getItemId() != null && !line.getItemId().isBlank()) {
+                itemIds.add(line.getItemId());
+            }
+        }
+        Map<String, String> itemNames = new HashMap<>();
+        if (!itemIds.isEmpty()) {
+            for (Item item : itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)) {
+                String name = item.getName() != null && !item.getName().isBlank()
+                        ? item.getName().trim()
+                        : "Item";
+                itemNames.put(item.getId(), name);
+            }
+        }
+        List<String> names = new ArrayList<>();
+        for (SaleItem line : lines) {
+            if (names.size() >= HINT_NAME_LIMIT) {
+                break;
+            }
+            String name = line.isAirtime()
+                    ? (line.getLineLabel() != null && !line.getLineLabel().isBlank()
+                            ? line.getLineLabel().trim()
+                            : "Airtime")
+                    : itemNames.getOrDefault(line.getItemId(), "Item");
+            if (!name.isBlank()) {
+                names.add(name);
+            }
+        }
+        return new LastSaleSummaryResponse(
+                sale.getSoldAt(),
+                List.copyOf(names),
+                lines.size(),
+                LastSaleSummaryFormat.hint(names, sale.getSoldAt(), ZONE));
     }
 
     private List<TabPurchaseRowResponse> buildRows(String businessId, String customerId, int fetchLimit) {
@@ -188,6 +263,7 @@ public class CustomerTabPurchasesService {
 
         Map<String, String> itemNames = new HashMap<>();
         Map<String, String> itemSkus = new HashMap<>();
+        Map<String, String> itemBarcodes = new HashMap<>();
         if (!itemIds.isEmpty()) {
             for (Item item : itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)) {
                 itemNames.put(item.getId(), item.getName() != null && !item.getName().isBlank()
@@ -195,6 +271,9 @@ public class CustomerTabPurchasesService {
                         : "Item");
                 if (item.getSku() != null && !item.getSku().isBlank()) {
                     itemSkus.put(item.getId(), item.getSku().trim());
+                }
+                if (item.getBarcode() != null && !item.getBarcode().isBlank()) {
+                    itemBarcodes.put(item.getId(), item.getBarcode().trim());
                 }
             }
         }
@@ -214,6 +293,7 @@ public class CustomerTabPurchasesService {
                                         : "Airtime")
                                 : itemNames.getOrDefault(si.getItemId(), "Item"),
                         si.isAirtime() ? null : itemSkus.get(si.getItemId()),
+                        si.isAirtime() ? null : itemBarcodes.get(si.getItemId()),
                         scaleQty(si.getQuantity()),
                         scaleUnitPrice(si.getUnitPrice()),
                         scaleMoney(si.getLineTotal())));
@@ -267,6 +347,7 @@ public class CustomerTabPurchasesService {
                     BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP),
                     List.of(new TabPurchaseLineResponse(
                             network + " airtime · " + phone,
+                            null,
                             null,
                             BigDecimal.ONE.setScale(QTY_SCALE, RoundingMode.HALF_UP),
                             scaleUnitPrice(order.getAmount()),

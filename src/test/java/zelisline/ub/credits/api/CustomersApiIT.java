@@ -279,6 +279,52 @@ class CustomersApiIT {
     }
 
     @Test
+    void patchCanPinAndUnpinWholesaleTag() throws Exception {
+        MvcResult created = mockMvc.perform(post("/api/v1/customers")
+                        .contentType(APPLICATION_JSON)
+                        .content(createBody("Wholesale buyer", "0700111333", true))
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.tags").isEmpty())
+                .andReturn();
+        String id = objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText();
+
+        // Pin wholesale (plus a free tag to prove the list round-trips).
+        mockMvc.perform(patch("/api/v1/customers/" + id)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"tags\":[\"wholesale\",\"family\"]}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.tags.length()").value(2))
+                .andExpect(jsonPath("$.tags[0]").value("wholesale"))
+                .andExpect(jsonPath("$.tags[1]").value("family"));
+
+        // Omitting tags leaves them unchanged.
+        mockMvc.perform(patch("/api/v1/customers/" + id)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"notes\":\"big basket buyer\"}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.tags.length()").value(2));
+
+        // Empty list clears all tags.
+        mockMvc.perform(patch("/api/v1/customers/" + id)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"tags\":[]}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.tags").isEmpty());
+    }
+
+    @Test
     void readOnlyRoleCannotCreate() throws Exception {
         mockMvc.perform(post("/api/v1/customers")
                         .contentType(APPLICATION_JSON)

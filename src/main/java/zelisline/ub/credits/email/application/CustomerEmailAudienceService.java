@@ -1,11 +1,14 @@
 package zelisline.ub.credits.email.application;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -34,7 +37,10 @@ import zelisline.ub.credits.email.domain.CustomerEmailCampaign;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
+import zelisline.ub.credits.application.CustomerTags;
 import zelisline.ub.identity.application.FrontendAuthLinkBuilder;
+import zelisline.ub.sales.application.CustomerSpendMath;
+import zelisline.ub.sales.application.WholesaleShapedMath;
 import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.storefront.application.ShopperPhoneEmails;
@@ -78,6 +84,20 @@ public class CustomerEmailAudienceService {
 
         public int finalCount() {
             return eligible.size();
+        }
+
+        public List<String> smsCustomerIds(int max) {
+            int cap = Math.max(0, max);
+            List<String> out = new ArrayList<>();
+            for (AudienceRecipientRow row : matched) {
+                if (out.size() >= cap) {
+                    break;
+                }
+                if (row.phone() != null && !row.phone().isBlank()) {
+                    out.add(row.customerId());
+                }
+            }
+            return out;
         }
     }
 
@@ -254,7 +274,7 @@ public class CustomerEmailAudienceService {
         Map<String, CreditAccount> credits = creditsByCustomer(base);
         Map<String, List<CustomerPhone>> phones = phonesByCustomer(base);
         Map<String, PurchaseStats> purchases = purchaseStats(businessId);
-        Set<String> boughtProductIds = boughtProductCustomerIds(businessId, filter.conditions());
+        FilterEvalCtx ctx = buildFilterCtx(businessId, filter.conditions(), purchases);
 
         List<Customer> out = new ArrayList<>();
         for (Customer customer : base) {
@@ -266,7 +286,7 @@ public class CustomerEmailAudienceService {
                         credits.get(customer.getId()),
                         phones.getOrDefault(customer.getId(), List.of()),
                         purchases.getOrDefault(customer.getId(), PurchaseStats.empty()),
-                        boughtProductIds);
+                        ctx);
                 if (any) {
                     if (ok) {
                         match = true;
@@ -290,7 +310,7 @@ public class CustomerEmailAudienceService {
             CreditAccount credit,
             List<CustomerPhone> phones,
             PurchaseStats purchases,
-            Set<String> boughtProductIds
+            FilterEvalCtx ctx
     ) {
         String field = condition.field() == null ? "" : condition.field().trim().toLowerCase(Locale.ROOT);
         String op = condition.op() == null ? "" : condition.op().trim().toLowerCase(Locale.ROOT);
@@ -323,11 +343,43 @@ public class CustomerEmailAudienceService {
             case "loyalty_points" ->
                     matchLong(credit == null ? 0 : credit.getLoyaltyPoints(), op, condition);
             case "bought_product" -> {
-                String itemId = condition.itemId() != null ? condition.itemId() : condition.value();
-                yield itemId != null && !itemId.isBlank() && boughtProductIds.contains(customer.getId());
+                String itemId = condition.itemId() != null && !condition.itemId().isBlank()
+                        ? condition.itemId().trim()
+                        : condition.value();
+                yield itemId != null && !itemId.isBlank()
+                        && ctx.buyersByItem().getOrDefault(itemId, Set.of()).contains(customer.getId());
+            }
+            case "bought_category" -> {
+                String typeId = condition.value() == null ? "" : condition.value().trim();
+                yield !typeId.isBlank()
+                        && ctx.buyersByCategory().getOrDefault(typeId, Set.of()).contains(customer.getId());
+            }
+            case "cohort" -> matchCohort(customer.getId(), purchases, condition.value(), ctx);
+            case "wholesale_shaped" -> {
+                boolean want = boolValue(condition.value());
+                yield want == isWholesaleShaped(purchases, ctx.medianBasket());
+            }
+            // "wholesale" = owner-pinned tag OR the heuristic (scope §8.4 "pinned or heuristic").
+            case "wholesale" -> {
+                boolean want = boolValue(condition.value());
+                yield want == (CustomerTags.has(customer.getTags(), CustomerTags.WHOLESALE)
+                        || isWholesaleShaped(purchases, ctx.medianBasket()));
+            }
+            case "same_month_last_year" -> {
+                String itemId = condition.itemId() != null && !condition.itemId().isBlank()
+                        ? condition.itemId().trim()
+                        : "";
+                Set<String> buyers = itemId.isBlank()
+                        ? ctx.sameMonthAny()
+                        : ctx.sameMonthByItem().getOrDefault(itemId, Set.of());
+                yield buyers.contains(customer.getId());
+            }
+            case "branch" -> {
+                String branchId = condition.value() == null ? "" : condition.value().trim();
+                yield !branchId.isBlank()
+                        && ctx.buyersByBranch().getOrDefault(branchId, Set.of()).contains(customer.getId());
             }
             case "marketing_eligibility" -> {
-                // Until preference centre ships: eligible ≈ usable email + not excluded structurally.
                 boolean eligible = eligibilitySkipReason(customer) == null;
                 yield eqIgnoreCase(condition.value(), eligible ? "eligible" : "not_eligible");
             }
@@ -468,54 +520,214 @@ public class CustomerEmailAudienceService {
         return out;
     }
 
-    private Set<String> boughtProductCustomerIds(String businessId, List<FilterCondition> conditions) {
-        Set<String> out = new HashSet<>();
+    private record FilterEvalCtx(
+            Set<String> championIds,
+            BigDecimal medianBasket,
+            Map<String, Set<String>> buyersByItem,
+            Map<String, Set<String>> buyersByCategory,
+            Set<String> sameMonthAny,
+            Map<String, Set<String>> sameMonthByItem,
+            Map<String, Set<String>> buyersByBranch
+    ) {
+    }
+
+    private FilterEvalCtx buildFilterCtx(
+            String businessId,
+            List<FilterCondition> conditions,
+            Map<String, PurchaseStats> purchases
+    ) {
+        LocalDate asOf = LocalDate.now(ZONE);
+        boolean needCohort = false;
+        boolean needWholesale = false;
+        boolean needSameMonthAny = false;
+        Set<String> productIds = new HashSet<>();
+        Set<String> categoryIds = new HashSet<>();
+        Set<String> sameMonthItems = new HashSet<>();
+        Set<String> branchIds = new HashSet<>();
+        Map<String, Instant[]> productWindows = new HashMap<>();
         for (FilterCondition condition : conditions) {
             if (condition == null || condition.field() == null) {
                 continue;
             }
-            if (!"bought_product".equalsIgnoreCase(condition.field().trim())) {
-                continue;
-            }
-            String itemId = condition.itemId() != null ? condition.itemId() : condition.value();
-            if (itemId == null || itemId.isBlank()) {
-                continue;
-            }
-            Instant from = null;
-            Instant toExclusive = null;
-            if (condition.value() != null && condition.valueTo() != null
-                    && condition.itemId() != null) {
-                LocalDate fromDay = parseDate(condition.value());
-                LocalDate toDay = parseDate(condition.valueTo());
-                if (fromDay != null) {
-                    from = fromDay.atStartOfDay(ZONE).toInstant();
-                }
-                if (toDay != null) {
-                    toExclusive = toDay.plusDays(1).atStartOfDay(ZONE).toInstant();
-                }
-            }
-            List<Object[]> buyers = saleItemRepository.buyersOfItem(
-                    businessId, List.of(itemId.trim()), PageRequest.of(0, 5000));
-            for (Object[] row : buyers) {
-                if (row != null && row[0] != null) {
-                    // Optional date window is applied client-side on last purchase when provided.
-                    if (from != null || toExclusive != null) {
-                        Instant last = row[4] instanceof Instant i ? i : null;
-                        if (last == null) {
-                            continue;
+            String field = condition.field().trim().toLowerCase(Locale.ROOT);
+            switch (field) {
+                case "cohort" -> needCohort = true;
+                case "wholesale_shaped", "wholesale" -> needWholesale = true;
+                case "bought_product" -> {
+                    String itemId = condition.itemId() != null && !condition.itemId().isBlank()
+                            ? condition.itemId().trim()
+                            : condition.value();
+                    if (itemId != null && !itemId.isBlank()) {
+                        productIds.add(itemId);
+                        Instant from = null;
+                        Instant toExclusive = null;
+                        if (condition.itemId() != null && condition.value() != null && condition.valueTo() != null) {
+                            LocalDate fromDay = parseDate(condition.value());
+                            LocalDate toDay = parseDate(condition.valueTo());
+                            if (fromDay != null) {
+                                from = fromDay.atStartOfDay(ZONE).toInstant();
+                            }
+                            if (toDay != null) {
+                                toExclusive = toDay.plusDays(1).atStartOfDay(ZONE).toInstant();
+                            }
                         }
-                        if (from != null && last.isBefore(from)) {
-                            continue;
-                        }
-                        if (toExclusive != null && !last.isBefore(toExclusive)) {
-                            continue;
-                        }
+                        productWindows.put(itemId, new Instant[] {from, toExclusive});
                     }
-                    out.add(row[0].toString());
+                }
+                case "bought_category" -> {
+                    if (condition.value() != null && !condition.value().isBlank()) {
+                        categoryIds.add(condition.value().trim());
+                    }
+                }
+                case "same_month_last_year" -> {
+                    String itemId = condition.itemId() != null ? condition.itemId().trim() : "";
+                    if (itemId.isBlank()) {
+                        needSameMonthAny = true;
+                    } else {
+                        sameMonthItems.add(itemId);
+                    }
+                }
+                case "branch" -> {
+                    if (condition.value() != null && !condition.value().isBlank()) {
+                        branchIds.add(condition.value().trim());
+                    }
+                }
+                default -> {
                 }
             }
         }
+
+        Set<String> champions = needCohort ? championIds(purchases, asOf) : Set.of();
+        BigDecimal medianBasket = needWholesale ? medianBasket(purchases) : BigDecimal.ZERO;
+
+        Map<String, Set<String>> buyersByItem = new HashMap<>();
+        for (String itemId : productIds) {
+            Instant[] window = productWindows.getOrDefault(itemId, new Instant[] {null, null});
+            buyersByItem.put(itemId, buyersOfItem(businessId, itemId, window[0], window[1]));
+        }
+
+        Map<String, Set<String>> buyersByCategory = new HashMap<>();
+        for (String typeId : categoryIds) {
+            buyersByCategory.put(typeId, new HashSet<>(
+                    saleItemRepository.customerIdsWhoBoughtItemType(businessId, typeId)));
+        }
+
+        YearMonth lastYearMonth = YearMonth.from(asOf).minusYears(1);
+        Instant monthFrom = lastYearMonth.atDay(1).atStartOfDay(ZONE).toInstant();
+        Instant monthTo = lastYearMonth.plusMonths(1).atDay(1).atStartOfDay(ZONE).toInstant();
+        Set<String> sameMonthAny = needSameMonthAny
+                ? new HashSet<>(saleRepository.customerIdsWithSaleBetween(businessId, monthFrom, monthTo))
+                : Set.of();
+        Map<String, Set<String>> sameMonthByItem = new HashMap<>();
+        for (String itemId : sameMonthItems) {
+            sameMonthByItem.put(itemId, new HashSet<>(
+                    saleItemRepository.customerIdsWhoBoughtItemBetween(businessId, itemId, monthFrom, monthTo)));
+        }
+
+        Map<String, Set<String>> buyersByBranch = new HashMap<>();
+        for (String branchId : branchIds) {
+            buyersByBranch.put(branchId, new HashSet<>(
+                    saleRepository.customerIdsWithSaleAtBranch(businessId, branchId)));
+        }
+
+        return new FilterEvalCtx(
+                champions,
+                medianBasket,
+                buyersByItem,
+                buyersByCategory,
+                sameMonthAny,
+                sameMonthByItem,
+                buyersByBranch);
+    }
+
+    private Set<String> buyersOfItem(String businessId, String itemId, Instant from, Instant toExclusive) {
+        Set<String> out = new HashSet<>();
+        List<Object[]> buyers = saleItemRepository.buyersOfItem(
+                businessId, List.of(itemId), PageRequest.of(0, 5000));
+        for (Object[] row : buyers) {
+            if (row == null || row[0] == null) {
+                continue;
+            }
+            if (from != null || toExclusive != null) {
+                Instant last = row[4] instanceof Instant i ? i : null;
+                if (last == null) {
+                    continue;
+                }
+                if (from != null && last.isBefore(from)) {
+                    continue;
+                }
+                if (toExclusive != null && !last.isBefore(toExclusive)) {
+                    continue;
+                }
+            }
+            out.add(row[0].toString());
+        }
         return out;
+    }
+
+    private static boolean matchCohort(
+            String customerId,
+            PurchaseStats purchases,
+            String wantedRaw,
+            FilterEvalCtx ctx
+    ) {
+        String wanted = wantedRaw == null ? "" : wantedRaw.trim().toLowerCase(Locale.ROOT);
+        if (wanted.isBlank()) {
+            return false;
+        }
+        LocalDate asOf = LocalDate.now(ZONE);
+        LocalDate first = purchases.firstPurchaseAt() == null
+                ? null
+                : LocalDate.ofInstant(purchases.firstPurchaseAt(), ZONE);
+        LocalDate last = purchases.lastPurchaseAt() == null
+                ? null
+                : LocalDate.ofInstant(purchases.lastPurchaseAt(), ZONE);
+        if ("champion".equals(wanted)) {
+            return ctx.championIds().contains(customerId);
+        }
+        String cohort = CustomerSpendMath.cohort(purchases.purchaseCount(), first, last, asOf);
+        return wanted.equals(cohort);
+    }
+
+    private static boolean isWholesaleShaped(PurchaseStats purchases, BigDecimal medianBasket) {
+        BigDecimal avg = WholesaleShapedMath.avgBasket(purchases.totalAmount(), purchases.purchaseCount());
+        return WholesaleShapedMath.matches(avg, purchases.purchaseCount(), medianBasket);
+    }
+
+    private static Set<String> championIds(Map<String, PurchaseStats> purchases, LocalDate asOf) {
+        List<CustomerSpendMath.SpendRank> ranks = new ArrayList<>();
+        for (Map.Entry<String, PurchaseStats> e : purchases.entrySet()) {
+            PurchaseStats stats = e.getValue();
+            if (stats.purchaseCount() <= 0 || stats.lastPurchaseAt() == null) {
+                continue;
+            }
+            ranks.add(new CustomerSpendMath.SpendRank(
+                    e.getKey(),
+                    stats.totalAmount(),
+                    stats.purchaseCount(),
+                    LocalDate.ofInstant(stats.lastPurchaseAt(), ZONE)));
+        }
+        return CustomerSpendMath.championIds(ranks, asOf);
+    }
+
+    private static BigDecimal medianBasket(Map<String, PurchaseStats> purchases) {
+        List<BigDecimal> baskets = new ArrayList<>();
+        for (PurchaseStats stats : purchases.values()) {
+            if (stats.purchaseCount() <= 0) {
+                continue;
+            }
+            baskets.add(WholesaleShapedMath.avgBasket(stats.totalAmount(), stats.purchaseCount()));
+        }
+        if (baskets.isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        Collections.sort(baskets);
+        int mid = baskets.size() / 2;
+        if (baskets.size() % 2 == 1) {
+            return baskets.get(mid);
+        }
+        return baskets.get(mid - 1).add(baskets.get(mid))
+                .divide(new BigDecimal("2"), 2, RoundingMode.HALF_UP);
     }
 
     private Map<String, CreditAccount> creditsByCustomer(List<Customer> customers) {

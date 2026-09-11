@@ -51,7 +51,8 @@ public final class CustomerEmailCampaignDtos {
             int automaticallyExcluded,
             int finalRecipients,
             List<AudienceRecipientRow> sample,
-            List<AudienceRecipientRow> excludedSample
+            List<AudienceRecipientRow> excludedSample,
+            List<String> smsCustomerIds
     ) {
     }
 

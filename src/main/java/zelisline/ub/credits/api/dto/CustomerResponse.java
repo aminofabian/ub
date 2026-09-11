@@ -12,6 +12,7 @@ public record CustomerResponse(
         String origin,
         String email,
         String notes,
+        List<String> tags,
         long version,
         Instant createdAt,
         Instant updatedAt,

@@ -16,6 +16,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.sales.api.dto.BranchCogsRow;
+import zelisline.ub.sales.api.dto.CaptureHealthResponse;
 import zelisline.ub.sales.api.dto.CategoryDailyRevenueRow;
 import zelisline.ub.sales.api.dto.CustomerProductSegmentRow;
 import zelisline.ub.sales.api.dto.CustomerSpendResponse;
@@ -28,7 +29,11 @@ import zelisline.ub.sales.api.dto.PaymentMethodBreakdownRow;
 import zelisline.ub.sales.api.dto.RecentSaleRow;
 import zelisline.ub.sales.api.dto.RevenueByCategoryRow;
 import zelisline.ub.sales.api.dto.StaffPerformanceRow;
+import zelisline.ub.sales.api.dto.CustomerItemRhythmResponse;
+import zelisline.ub.sales.api.dto.ItemSeasonalityResponse;
+import zelisline.ub.sales.api.dto.SimilarBuyersResponse;
 import zelisline.ub.sales.application.SalesIntelligenceService;
+import zelisline.ub.sales.application.WarehouseIntelligenceService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
 @Validated
@@ -38,6 +43,7 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class SalesIntelligenceController {
 
     private final SalesIntelligenceService salesIntelligenceService;
+    private final WarehouseIntelligenceService warehouseIntelligenceService;
 
     @GetMapping("/revenue-by-category")
     @PreAuthorize("hasPermission(null, 'sales.intelligence.read')")
@@ -200,6 +206,19 @@ public class SalesIntelligenceController {
                 TenantRequestIds.resolveBusinessId(request), from, to, branchId, limit);
     }
 
+    @GetMapping("/capture-health")
+    @PreAuthorize("hasPermission(null, 'sales.intelligence.read')")
+    public CaptureHealthResponse captureHealth(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) String branchId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return salesIntelligenceService.captureHealth(
+                TenantRequestIds.resolveBusinessId(request), from, to, branchId);
+    }
+
     @GetMapping("/customers-by-product")
     @PreAuthorize("hasPermission(null, 'sales.intelligence.read')")
     public List<CustomerProductSegmentRow> customersByProduct(
@@ -254,5 +273,45 @@ public class SalesIntelligenceController {
         CurrentTenantUser.require(request);
         return salesIntelligenceService.itemActivity(
                 TenantRequestIds.resolveBusinessId(request), itemId, branchId, from, to);
+    }
+
+    @GetMapping("/customer-item-rhythm")
+    @PreAuthorize("hasPermission(null, 'sales.intelligence.read')")
+    public CustomerItemRhythmResponse customerItemRhythm(
+            @RequestParam String customerId,
+            @RequestParam(required = false) String itemId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return warehouseIntelligenceService.customerItemRhythm(
+                TenantRequestIds.resolveBusinessId(request), customerId, itemId);
+    }
+
+    @GetMapping("/item-seasonality")
+    @PreAuthorize("hasPermission(null, 'sales.intelligence.read')")
+    public ItemSeasonalityResponse itemSeasonality(
+            @RequestParam String itemId,
+            @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) String view,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return warehouseIntelligenceService.itemSeasonality(
+                TenantRequestIds.resolveBusinessId(request), itemId, branchId, view);
+    }
+
+    @GetMapping("/similar-buyers")
+    @PreAuthorize("hasPermission(null, 'sales.intelligence.read')")
+    public SimilarBuyersResponse similarBuyers(
+            @RequestParam String itemId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) Integer limit,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return warehouseIntelligenceService.similarBuyers(
+                TenantRequestIds.resolveBusinessId(request), itemId, from, to, branchId, limit);
     }
 }

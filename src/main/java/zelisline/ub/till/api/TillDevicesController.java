@@ -37,8 +37,12 @@ public class TillDevicesController {
     private final TillDeviceService tillDeviceService;
     private final BranchResolutionService branchResolutionService;
 
+    /**
+     * Any signed-in till user can bind this computer. List, patch, and revoke
+     * stay on {@code business.manage_settings}.
+     */
     @PostMapping
-    @PreAuthorize("hasPermission(null, 'business.manage_settings')")
+    @PreAuthorize("isAuthenticated()")
     public ResponseEntity<TillDeviceResponse> register(
             @Valid @RequestBody RegisterTillDeviceRequest body,
             HttpServletRequest request

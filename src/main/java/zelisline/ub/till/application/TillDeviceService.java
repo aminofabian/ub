@@ -30,7 +30,7 @@ public class TillDeviceService {
      * tills and this browser is not among them.
      */
     public static final String TILL_DEVICE_NOT_REGISTERED_DETAIL =
-            "This till is not registered for this branch. Ask a manager to register it under Business Settings → Trusted tills.";
+            "This till is not registered for this branch. Register this computer so sales, shifts, and receipts stay on this counter.";
 
     private static final Pattern DEVICE_KEY_PATTERN =
             Pattern.compile("^[A-Za-z0-9._-]{8,64}$");

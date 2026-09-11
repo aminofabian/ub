@@ -112,6 +112,34 @@ public class MyBrandingController {
     }
 
     @PostMapping(
+        value = "/app-icon",
+        consumes = MediaType.MULTIPART_FORM_DATA_VALUE
+    )
+    @PreAuthorize(MANAGE_SETTINGS)
+    public ResponseEntity<BusinessResponse> uploadAppIcon(
+        @RequestPart("file") MultipartFile file,
+        HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        byte[] bytes = readUploadBytes(file, "app-icon");
+        BusinessResponse body = tenancyService.uploadBrandingAppIcon(
+            TenantRequestIds.resolveBusinessId(request),
+            bytes,
+            file.getOriginalFilename()
+        );
+        return ResponseEntity.status(HttpStatus.CREATED).body(body);
+    }
+
+    @DeleteMapping("/app-icon")
+    @PreAuthorize(MANAGE_SETTINGS)
+    public BusinessResponse clearAppIcon(HttpServletRequest request) {
+        CurrentTenantUser.require(request);
+        return tenancyService.clearBrandingAppIcon(
+            TenantRequestIds.resolveBusinessId(request)
+        );
+    }
+
+    @PostMapping(
         value = "/og-image",
         consumes = MediaType.MULTIPART_FORM_DATA_VALUE
     )

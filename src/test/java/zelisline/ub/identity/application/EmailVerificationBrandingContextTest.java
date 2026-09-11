@@ -34,6 +34,7 @@ class EmailVerificationBrandingContextTest {
                         "https://cdn.example/logo.png",
                         null,
                         null,
+                        null,
                         "#111827",
                         "#F97316",
                         null,

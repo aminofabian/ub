@@ -19,6 +19,28 @@ class OpenRouterImageClientTest {
     }
 
     @Test
+    void payloadCanAttachAReferenceLogoAndStayOpaque() {
+        var payload = OpenRouterImageClient.buildPayload(
+                "google/gemini-2.5-flash-image",
+                "a leaf",
+                "data:image/png;base64,abcd",
+                false);
+        assertThat(payload.get("image")).isEqualTo(java.util.List.of("data:image/png;base64,abcd"));
+        assertThat(payload).doesNotContainKey("background");
+    }
+
+    @Test
+    void payloadCanAttachAReferenceLogoAndStayTransparent() {
+        var payload = OpenRouterImageClient.buildPayload(
+                "google/gemini-2.5-flash-image",
+                "a leaf",
+                "data:image/png;base64,abcd",
+                true);
+        assertThat(payload.get("image")).isEqualTo(java.util.List.of("data:image/png;base64,abcd"));
+        assertThat(payload.get("background")).isEqualTo("transparent");
+    }
+
+    @Test
     void imagesUrlAppendsImagesAndStripsChatCompletions() {
         assertThat(OpenRouterImageClient.imagesUrl(null))
                 .isEqualTo("https://openrouter.ai/api/v1/images");

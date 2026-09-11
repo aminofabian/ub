@@ -17,6 +17,8 @@ public record BrandingPatchRequest(
     @Size(max = 1024) String logoDarkUrl,
     @Size(max = 255) String logoDarkPublicId,
     @Size(max = 1024) String faviconUrl,
+    @Size(max = 1024) String appIconUrl,
+    @Size(max = 255) String appIconPublicId,
     @Pattern(
         regexp = "^$|^#[0-9a-fA-F]{6}$",
         message = "primaryColor must be #RRGGBB"

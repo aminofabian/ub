@@ -638,6 +638,63 @@ public class TenancyService {
     }
 
     @Transactional
+    public BusinessResponse uploadBrandingAppIcon(
+        String tenantBusinessId,
+        byte[] fileBytes,
+        String originalFilename
+    ) {
+        Business business = requireTenantBusiness(tenantBusinessId);
+        String previousPublicId =
+            storefrontSettingsService.readBrandingAppIconPublicId(
+                business.getSettings()
+            );
+        String folder = "ub/" + tenantBusinessId + "/branding/app-icon";
+        CloudinaryUploadResult uploaded =
+            cloudinaryImageService.uploadImageToFolder(
+                fileBytes,
+                originalFilename,
+                folder,
+                false
+            );
+        business.setSettings(
+            storefrontSettingsService.mergeBrandingAppIcon(
+                business.getSettings(),
+                uploaded.secureUrl(),
+                uploaded.publicId()
+            )
+        );
+        BusinessResponse out = toResponse(businessRepository.save(business));
+        if (
+            previousPublicId != null &&
+            !previousPublicId.equals(uploaded.publicId())
+        ) {
+            cloudinaryImageService.destroyImage(previousPublicId);
+        }
+        return out;
+    }
+
+    @Transactional
+    public BusinessResponse clearBrandingAppIcon(String tenantBusinessId) {
+        Business business = requireTenantBusiness(tenantBusinessId);
+        String previousPublicId =
+            storefrontSettingsService.readBrandingAppIconPublicId(
+                business.getSettings()
+            );
+        business.setSettings(
+            storefrontSettingsService.mergeBrandingAppIcon(
+                business.getSettings(),
+                null,
+                null
+            )
+        );
+        BusinessResponse out = toResponse(businessRepository.save(business));
+        if (previousPublicId != null) {
+            cloudinaryImageService.destroyImage(previousPublicId);
+        }
+        return out;
+    }
+
+    @Transactional
     public BusinessResponse uploadBrandingOgImage(
         String tenantBusinessId,
         byte[] fileBytes,

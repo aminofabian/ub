@@ -269,6 +269,31 @@ class MyBrandingIT {
         verify(cloudinaryImageService, times(1)).destroyImage("ub/" + TENANT + "/branding/favicon/x");
     }
 
+    @Test
+    void uploadAppIconPersistsSecureUrlAndDestroysPrevious() throws Exception {
+        when(cloudinaryImageService.uploadImageToFolder(any(), anyString(), anyString(), anyBoolean()))
+                .thenReturn(uploadResult("ub/" + TENANT + "/branding/app-icon/a", "https://res.cloudinary.com/x/icon-a.png"))
+                .thenReturn(uploadResult("ub/" + TENANT + "/branding/app-icon/b", "https://res.cloudinary.com/x/icon-b.png"));
+
+        mockMvc.perform(multipart("/api/v1/businesses/me/branding/app-icon")
+                        .file(new MockMultipartFile("file", "icon.png", "image/png", new byte[]{1, 2}))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.branding.appIconUrl").value("https://res.cloudinary.com/x/icon-a.png"));
+
+        mockMvc.perform(multipart("/api/v1/businesses/me/branding/app-icon")
+                        .file(new MockMultipartFile("file", "icon2.png", "image/png", new byte[]{3, 4}))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.branding.appIconUrl").value("https://res.cloudinary.com/x/icon-b.png"));
+
+        verify(cloudinaryImageService, atLeastOnce()).destroyImage("ub/" + TENANT + "/branding/app-icon/a");
+    }
+
     private static CloudinaryUploadResult uploadResult(String publicId, String secureUrl) {
         return new CloudinaryUploadResult(
                 publicId,

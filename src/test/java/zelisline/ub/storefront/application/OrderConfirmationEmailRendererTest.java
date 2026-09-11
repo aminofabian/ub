@@ -25,6 +25,7 @@ class OrderConfirmationEmailRendererTest {
                 null,
                 null,
                 null,
+                null,
                 "#0B6E4F",
                 "#08A045",
                 null,
@@ -49,6 +50,7 @@ class OrderConfirmationEmailRendererTest {
     void substitutesAreaPlaceholderWithLocation() {
         TenantBrandingDto branding = new TenantBrandingDto(
                 "Palmart | Groceries & Essentials in [Area], Kenya",
+                null,
                 null,
                 null,
                 null,

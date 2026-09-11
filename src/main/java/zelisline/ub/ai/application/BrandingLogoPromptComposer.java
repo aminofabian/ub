@@ -13,7 +13,8 @@ final class BrandingLogoPromptComposer {
         LIGHT,
         DARK,
         FAVICON,
-        OG
+        OG,
+        APP_ICON
     }
 
     private static final int MAX_PROMPT = 4_000;
@@ -22,8 +23,8 @@ final class BrandingLogoPromptComposer {
 
     /**
      * Used when the merchant taps Generate without describing the mark.
-     * Separate image calls apply this brief (one per asset) so each
-     * file is usable on its own, not a labeled comparison sheet.
+     * Applied only to the canonical light logo; every other asset is stamped
+     * from that file so the kit stays one mark.
      */
     static final String DEFAULT_CONCEPT = """
             Generate a professional, visually appealing logo that fits the overall brand identity \
@@ -82,39 +83,68 @@ final class BrandingLogoPromptComposer {
             sb.append('\n');
         }
         sb.append('\n');
-        if (!ask.isEmpty()) {
+        if (isDerived(resolved)) {
+            if (!ask.isEmpty()) {
+                sb.append("Original brief for this mark (do not invent a new one):\n")
+                        .append(ask)
+                        .append("\n\n");
+            }
+        } else if (!ask.isEmpty()) {
             sb.append("Merchant's description:\n").append(ask).append("\n\n");
         } else {
             sb.append(DEFAULT_CONCEPT.strip()).append("\n\n");
         }
         switch (resolved) {
             case LIGHT -> sb.append("""
-                    Asset: LOGO for LIGHT chrome
+                    Asset: LOGO for LIGHT chrome (canonical mark)
                     Isolated mark only. Darker ink and brand colour. Must sit on white UI, \
-                    receipts, and emails with no extra plate.
+                    receipts, and emails with no extra plate. This file is the source: dark \
+                    logo, favicon, home-screen icon, and share image will all be stamped \
+                    from this exact shape, so keep the silhouette simple and readable in \
+                    one colour.
 
                     """);
             case DARK -> sb.append("""
-                    Asset: LOGO for DARK chrome
-                    Isolated mark only. Lighter ink (white, cream, or a bright brand tint). \
-                    Must sit on navy, black, or deep brand panels with no extra plate. \
+                    Asset: DARK VARIANT of the attached light logo
+                    The attached image is the shop's light-chrome logo. Recolor it only. \
+                    Keep every shape, letter, layout, spacing, and proportion identical. \
+                    Do not redesign, simplify, add, or remove anything. \
+                    Swap ink to white, cream, or a bright brand tint so it reads on navy, \
+                    black, or deep brand panels. Transparent background. No extra plate. \
                     Never a light mark trapped inside a white square.
 
                     """);
             case FAVICON -> sb.append("""
-                    Asset: FAVICON / APP ICON
-                    A simplified sibling of the same mark, built as a browser tab icon. \
-                    Fill a rounded square edge to edge. Solid brand-primary tile. \
-                    High-contrast glyph centred (white or cream). No wordmark, no tagline, \
-                    no photo, no letterboxing. Must read at 16 pixels.
+                    Asset: FAVICON / TAB ICON from the attached logo
+                    The attached image is the shop's light-chrome logo. Do not invent a \
+                    new symbol. Extract the core glyph: drop any wordmark or tagline. \
+                    Stamp it as a browser tab icon: fill a rounded square edge to edge \
+                    with a solid brand-primary field. Centre the glyph in white or cream \
+                    with a little padding. Must read at 16 pixels. Opaque. No photo, \
+                    no letterboxing, no new iconography.
+
+                    """);
+            case APP_ICON -> sb.append("""
+                    Asset: HOME SCREEN APP ICON from the attached logo
+                    The attached image is the shop's existing light-chrome logo. Keep that \
+                    exact glyph. Do not invent a new mark. Rebuild it as an iOS/Android \
+                    home-screen icon: opaque rounded-square that fills the frame. \
+                    Solid brand-primary field. Glyph centred with ~20 percent safe inset \
+                    so a circular mask will not crop it. If the logo includes lettering, \
+                    drop the wordmark and keep the symbol; if it is only lettering, keep \
+                    the letterforms. High contrast. No fake phone, no browser chrome, \
+                    no transparency.
 
                     """);
             case OG -> sb.append("""
-                    Asset: SOCIAL SHARE IMAGE
-                    Square link-preview card for WhatsApp and Facebook. Brand-primary field \
-                    (not white, not a photo of a website). The same mark large and centred \
-                    in light ink so it reads on that dark or saturated field. \
-                    Shop name in one clean sans-serif line under the mark if it fits. \
+                    Asset: SOCIAL SHARE IMAGE from the attached logo
+                    The attached image is the shop's light-chrome logo. Use that exact \
+                    mark. Do not draw a different one. Compose a square WhatsApp/Facebook \
+                    link-preview card. Brand-primary field (not white, not a photo of a \
+                    website). Place the mark large and centred in light ink so it reads \
+                    on that saturated field. Shop name in one clean sans-serif line under \
+                    the mark if it fits. Optional: a very faint enlarged echo of the same \
+                    glyph in the background, under 8 percent opacity, never a second logo. \
                     Generous padding. No browser chrome, no phone mockup, no white card \
                     behind the logo.
 
@@ -134,14 +164,31 @@ final class BrandingLogoPromptComposer {
                     - Include the shop name as lettering only if the merchant asked for text
                     - No extra slogans or taglines
                     """);
+            if (resolved == Theme.DARK) {
+                sb.append("""
+                    - The attached light logo is the source of truth. Recolor ink only.
+                    """);
+            }
+        } else if (resolved == Theme.APP_ICON) {
+            sb.append("""
+                    Design rules:
+                    - Output THIS asset only. Do not draw a comparison sheet. Do not label the image.
+                    - Square 1:1, fills the frame, no empty letterbox bars
+                    - Opaque PNG. No alpha. No white rectangle behind the mark.
+                    - Flat vector look. Not a photograph, not 3D, not a mockup of a phone
+                    - No watermarks, no UI chrome, no business cards
+                    - The attached light logo is the source of truth. Stamp that glyph; do not invent.
+                    """);
         } else {
             sb.append("""
                     Design rules:
                     - Output THIS asset only. Do not draw a comparison sheet. Do not label the image.
                     - Square 1:1, fills the frame, no empty letterbox bars
+                    - Opaque PNG. No alpha. No white rectangle behind the mark.
                     - Flat vector look. Not a photograph, not 3D, not a mockup of a browser
                     - No watermarks, no UI chrome, no business cards
                     - Never put a white rectangle behind the mark
+                    - The attached light logo is the source of truth. Stamp that glyph; do not invent.
                     """);
         }
 
@@ -151,6 +198,10 @@ final class BrandingLogoPromptComposer {
 
     static boolean hasEnoughInput(String prompt, String shopName) {
         return true;
+    }
+
+    private static boolean isDerived(Theme theme) {
+        return theme != Theme.LIGHT;
     }
 
     private static String hexOrEmpty(String value) {

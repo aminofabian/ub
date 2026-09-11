@@ -1,10 +1,13 @@
 package zelisline.ub.ai.application;
 
+import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -23,13 +26,15 @@ import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
 /**
- * Brand kit from one merchant prompt: light logo, dark logo, favicon, and
- * social share image. Returns PNG bytes; the client previews and uploads.
+ * Brand kit from one merchant prompt: one light mark, then dark ink, favicon,
+ * home-screen icon, and share image stamped from that file. Returns PNG bytes;
+ * the client previews and uploads.
  */
 @Service
 @RequiredArgsConstructor
 public class BrandingLogoAiService {
 
+    private static final Logger log = LoggerFactory.getLogger(BrandingLogoAiService.class);
     private static final String SKILL = "branding_logo";
 
     private final SokoMindRuntimeService runtimeService;
@@ -72,6 +77,8 @@ public class BrandingLogoAiService {
                 prompt, shopName, shopType, primary, accent, BrandingLogoPromptComposer.Theme.DARK);
         String faviconPrompt = BrandingLogoPromptComposer.compose(
                 prompt, shopName, shopType, primary, accent, BrandingLogoPromptComposer.Theme.FAVICON);
+        String appIconPrompt = BrandingLogoPromptComposer.compose(
+                prompt, shopName, shopType, primary, accent, BrandingLogoPromptComposer.Theme.APP_ICON);
         String ogPrompt = BrandingLogoPromptComposer.compose(
                 prompt, shopName, shopType, primary, accent, BrandingLogoPromptComposer.Theme.OG);
 
@@ -88,27 +95,38 @@ public class BrandingLogoAiService {
         log.setProvider(imageProvider.isBlank() ? "openai" : imageProvider);
 
         try {
-            CompletableFuture<OpenAiImageClient.GeneratedImage> lightFuture =
-                    CompletableFuture.supplyAsync(() -> generateOne(config, imageProvider, lightPrompt));
+            OpenAiImageClient.GeneratedImage light = generateOne(config, imageProvider, lightPrompt);
             CompletableFuture<OpenAiImageClient.GeneratedImage> darkFuture =
-                    CompletableFuture.supplyAsync(() -> generateOne(config, imageProvider, darkPrompt));
+                    CompletableFuture.supplyAsync(
+                            () -> generateFromReference(config, imageProvider, darkPrompt, light, true));
             CompletableFuture<OpenAiImageClient.GeneratedImage> faviconFuture =
-                    CompletableFuture.supplyAsync(() -> generateOne(config, imageProvider, faviconPrompt));
+                    CompletableFuture.supplyAsync(
+                            () -> generateFromReference(config, imageProvider, faviconPrompt, light, false));
+            CompletableFuture<OpenAiImageClient.GeneratedImage> appIconFuture =
+                    CompletableFuture.supplyAsync(
+                            () -> generateFromReference(config, imageProvider, appIconPrompt, light, false));
             CompletableFuture<OpenAiImageClient.GeneratedImage> ogFuture =
-                    CompletableFuture.supplyAsync(() -> generateOne(config, imageProvider, ogPrompt));
-            OpenAiImageClient.GeneratedImage light = unwrap(lightFuture);
+                    CompletableFuture.supplyAsync(
+                            () -> generateFromReference(config, imageProvider, ogPrompt, light, false));
             OpenAiImageClient.GeneratedImage dark = unwrap(darkFuture);
             OpenAiImageClient.GeneratedImage favicon = unwrap(faviconFuture);
+            OpenAiImageClient.GeneratedImage appIcon = unwrap(appIconFuture);
             OpenAiImageClient.GeneratedImage og = unwrap(ogFuture);
             long latency = System.currentTimeMillis() - started;
             log.setSuccess(true);
-            log.setModel(firstNonBlank(light.model(), dark.model(), favicon.model(), og.model()));
+            log.setModel(firstNonBlank(
+                    light.model(), dark.model(), favicon.model(), appIcon.model(), og.model()));
             log.setPromptTokens(sumTokens(
-                    light.promptTokens(), dark.promptTokens(), favicon.promptTokens(), og.promptTokens()));
+                    light.promptTokens(),
+                    dark.promptTokens(),
+                    favicon.promptTokens(),
+                    appIcon.promptTokens(),
+                    og.promptTokens()));
             log.setCompletionTokens(sumTokens(
                     light.completionTokens(),
                     dark.completionTokens(),
                     favicon.completionTokens(),
+                    appIcon.completionTokens(),
                     og.completionTokens()));
             log.setLatencyMs((int) Math.min(latency, Integer.MAX_VALUE));
             requestLogRepository.save(log);
@@ -118,6 +136,7 @@ public class BrandingLogoAiService {
                             new BrandingLogoVariantDto("light", light.mimeType(), light.base64()),
                             new BrandingLogoVariantDto("dark", dark.mimeType(), dark.base64()),
                             new BrandingLogoVariantDto("favicon", favicon.mimeType(), favicon.base64()),
+                            new BrandingLogoVariantDto("appIcon", appIcon.mimeType(), appIcon.base64()),
                             new BrandingLogoVariantDto("og", og.mimeType(), og.base64())));
         } catch (RuntimeException ex) {
             long latency = System.currentTimeMillis() - started;
@@ -143,6 +162,65 @@ public class BrandingLogoAiService {
         }
         String model = properties.openai() == null ? "gpt-image-1" : properties.openai().imageModel();
         return imageClient.generate(config, model, composed);
+    }
+
+    private OpenAiImageClient.GeneratedImage generateFromReference(
+            ResolvedSokoMindConfig config,
+            String imageProvider,
+            String composed,
+            OpenAiImageClient.GeneratedImage source,
+            boolean transparent
+    ) {
+        if ("openrouter".equals(imageProvider)) {
+            String model = firstNonBlank(
+                    config.openrouterImageModel(),
+                    properties.openrouter() == null ? null : properties.openrouter().imageModel(),
+                    "google/gemini-2.5-flash-image");
+            try {
+                if (transparent) {
+                    return openRouterImageClient.generateWithReference(
+                            config, model, composed, dataUrl(source));
+                }
+                return openRouterImageClient.generateOpaqueWithReference(
+                        config, model, composed, dataUrl(source));
+            } catch (ResponseStatusException ex) {
+                log.warn("OpenRouter derived-asset failed, falling back to generate: {}", ex.getReason());
+                return transparent
+                        ? openRouterImageClient.generate(config, model, composed)
+                        : openRouterImageClient.generateOpaque(config, model, composed);
+            }
+        }
+        String model = properties.openai() == null ? "gpt-image-1" : properties.openai().imageModel();
+        try {
+            return imageClient.edit(
+                    config, model, composed, decodePng(source), "light-logo.png", transparent);
+        } catch (ResponseStatusException ex) {
+            log.warn("OpenAI derived-asset failed, falling back to generate: {}", ex.getReason());
+            return transparent
+                    ? imageClient.generate(config, model, composed)
+                    : imageClient.generateOpaque(config, model, composed);
+        }
+    }
+
+    private static String dataUrl(OpenAiImageClient.GeneratedImage image) {
+        String mime = image.mimeType() == null || image.mimeType().isBlank() ? "image/png" : image.mimeType();
+        String b64 = image.base64() == null ? "" : image.base64().replaceAll("\\s", "");
+        return "data:" + mime + ";base64," + b64;
+    }
+
+    private static byte[] decodePng(OpenAiImageClient.GeneratedImage image) {
+        String raw = image.base64() == null ? "" : image.base64().replaceAll("\\s", "");
+        try {
+            byte[] bytes = Base64.getDecoder().decode(raw);
+            if (bytes.length < 32) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_GATEWAY, "The generated logo could not be read.");
+            }
+            return bytes;
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY, "The generated logo could not be read.", ex);
+        }
     }
 
     private static OpenAiImageClient.GeneratedImage unwrap(
@@ -173,6 +251,10 @@ public class BrandingLogoAiService {
         return sumTokens(sumTokens(a, b), sumTokens(c, d));
     }
 
+    private static Integer sumTokens(Integer a, Integer b, Integer c, Integer d, Integer e) {
+        return sumTokens(sumTokens(a, b, c, d), e);
+    }
+
     private static String firstNonBlank(String a, String b) {
         if (a != null && !a.isBlank()) {
             return a.trim();
@@ -187,6 +269,10 @@ public class BrandingLogoAiService {
 
     private static String firstNonBlank(String a, String b, String c, String d) {
         return firstNonBlank(firstNonBlank(a, b), firstNonBlank(c, d));
+    }
+
+    private static String firstNonBlank(String a, String b, String c, String d, String e) {
+        return firstNonBlank(firstNonBlank(a, b, c, d), e);
     }
 
     private static String truncate(String value, int max) {

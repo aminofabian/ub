@@ -13,6 +13,11 @@ public record TenantBrandingDto(
     String logoUrl,
     String logoDarkUrl,
     String faviconUrl,
+    /**
+     * Home-screen / PWA icon. Distinct from the tiny browser-tab favicon:
+     * square, opaque, sized for 180–512px masks.
+     */
+    String appIconUrl,
     String primaryColor,
     String accentColor,
 
@@ -33,6 +38,7 @@ public record TenantBrandingDto(
     public static TenantBrandingDto defaults(String displayName) {
         return new TenantBrandingDto(
             displayName,
+            null,
             null,
             null,
             null,

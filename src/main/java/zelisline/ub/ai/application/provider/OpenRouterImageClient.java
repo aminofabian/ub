@@ -37,7 +37,48 @@ public class OpenRouterImageClient {
 
     private final ObjectMapper objectMapper;
 
-    public OpenAiImageClient.GeneratedImage generate(ResolvedSokoMindConfig config, String model, String prompt) {
+    public OpenAiImageClient.GeneratedImage generate(
+            ResolvedSokoMindConfig config,
+            String model,
+            String prompt
+    ) {
+        return generate(config, model, prompt, null, true);
+    }
+
+    public OpenAiImageClient.GeneratedImage generateOpaque(
+            ResolvedSokoMindConfig config,
+            String model,
+            String prompt
+    ) {
+        return generate(config, model, prompt, null, false);
+    }
+
+    public OpenAiImageClient.GeneratedImage generateOpaqueWithReference(
+            ResolvedSokoMindConfig config,
+            String model,
+            String prompt,
+            String imageDataUrl
+    ) {
+        return generate(config, model, prompt, imageDataUrl, false);
+    }
+
+    /** Recolor an existing mark (light → dark logo) while keeping a transparent PNG. */
+    public OpenAiImageClient.GeneratedImage generateWithReference(
+            ResolvedSokoMindConfig config,
+            String model,
+            String prompt,
+            String imageDataUrl
+    ) {
+        return generate(config, model, prompt, imageDataUrl, true);
+    }
+
+    private OpenAiImageClient.GeneratedImage generate(
+            ResolvedSokoMindConfig config,
+            String model,
+            String prompt,
+            String imageDataUrl,
+            boolean transparent
+    ) {
         String apiKey = config.openrouterApiKey();
         if (apiKey == null || apiKey.isBlank()) {
             throw new ResponseStatusException(
@@ -49,7 +90,7 @@ public class OpenRouterImageClient {
                 ? "google/gemini-2.5-flash-image"
                 : model.trim();
         String url = imagesUrl(config.openrouterBaseUrl());
-        Map<String, Object> payload = buildPayload(resolvedModel, prompt);
+        Map<String, Object> payload = buildPayload(resolvedModel, prompt, imageDataUrl, transparent);
 
         final String json;
         try {
@@ -93,13 +134,27 @@ public class OpenRouterImageClient {
     }
 
     static Map<String, Object> buildPayload(String model, String prompt) {
+        return buildPayload(model, prompt, null, true);
+    }
+
+    static Map<String, Object> buildPayload(
+            String model,
+            String prompt,
+            String imageDataUrl,
+            boolean transparent
+    ) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("model", model);
         payload.put("prompt", prompt);
         payload.put("n", 1);
         payload.put("aspect_ratio", "1:1");
         payload.put("output_format", "png");
-        payload.put("background", "transparent");
+        if (transparent) {
+            payload.put("background", "transparent");
+        }
+        if (imageDataUrl != null && !imageDataUrl.isBlank()) {
+            payload.put("image", java.util.List.of(imageDataUrl.strip()));
+        }
         return payload;
     }
 

@@ -188,6 +188,7 @@ public class StorefrontSettingsService {
             textOrNull(node.get("logoUrl")),
             textOrNull(node.get("logoDarkUrl")),
             textOrNull(node.get("faviconUrl")),
+            textOrNull(node.get("appIconUrl")),
             textOrNull(node.get("primaryColor")),
             textOrNull(node.get("accentColor")),
             textOrNull(node.get("metaTitle")),
@@ -506,6 +507,64 @@ public class StorefrontSettingsService {
         }
     }
 
+    public String readBrandingLogoUrl(String currentSettings) {
+        if (currentSettings == null || currentSettings.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode root = parseSettingsDocument(currentSettings);
+            JsonNode branding = root.path(KEY_BRANDING);
+            if (!branding.isObject()) {
+                return null;
+            }
+            String logo = textOrNull(branding.get("logoUrl"));
+            if (logo != null) {
+                return logo;
+            }
+            return textOrNull(branding.get("logoDarkUrl"));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public String mergeBrandingAppIcon(
+        String currentSettings,
+        String secureUrl,
+        String publicId
+    ) {
+        ObjectNode root = parseRoot(currentSettings);
+        ObjectNode branding = copyNamespace(root, KEY_BRANDING);
+        if (secureUrl == null || secureUrl.isBlank()) {
+            branding.remove("appIconUrl");
+            branding.remove("appIconPublicId");
+        } else {
+            branding.put("appIconUrl", secureUrl);
+            if (publicId != null && !publicId.isBlank()) {
+                branding.put("appIconPublicId", publicId.trim());
+            } else {
+                branding.remove("appIconPublicId");
+            }
+        }
+        root.set(KEY_BRANDING, branding);
+        return writeRoot(root);
+    }
+
+    public String readBrandingAppIconPublicId(String currentSettings) {
+        if (currentSettings == null || currentSettings.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode root = parseSettingsDocument(currentSettings);
+            JsonNode branding = root.path(KEY_BRANDING);
+            if (!branding.isObject()) {
+                return null;
+            }
+            return textOrNull(branding.get("appIconPublicId"));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     /**
      * Replaces {@code branding.ogImage}/{@code ogImagePublicId} after a
      * Cloudinary upload. Returns the merged settings JSON.
@@ -560,6 +619,11 @@ public class StorefrontSettingsService {
         putOrRemoveString(branding, "faviconUrl", patch.faviconUrl());
         if (patch.faviconUrl() != null && patch.faviconUrl().trim().isEmpty()) {
             branding.remove("faviconPublicId");
+        }
+        putOrRemoveString(branding, "appIconUrl", patch.appIconUrl());
+        putOrRemoveString(branding, "appIconPublicId", patch.appIconPublicId());
+        if (patch.appIconUrl() != null && patch.appIconUrl().trim().isEmpty()) {
+            branding.remove("appIconPublicId");
         }
         putOrRemoveString(branding, "primaryColor", patch.primaryColor());
         putOrRemoveString(branding, "accentColor", patch.accentColor());

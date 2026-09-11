@@ -41,7 +41,20 @@ public class OpenAiImageClient {
             Integer completionTokens
     ) {}
 
+    public GeneratedImage generateOpaque(ResolvedSokoMindConfig config, String model, String prompt) {
+        return generateWithBackground(config, model, prompt, false);
+    }
+
     public GeneratedImage generate(ResolvedSokoMindConfig config, String model, String prompt) {
+        return generateWithBackground(config, model, prompt, true);
+    }
+
+    private GeneratedImage generateWithBackground(
+            ResolvedSokoMindConfig config,
+            String model,
+            String prompt,
+            boolean transparent
+    ) {
         String apiKey = config.openaiApiKey();
         if (apiKey == null || apiKey.isBlank()) {
             throw new ResponseStatusException(
@@ -51,7 +64,7 @@ public class OpenAiImageClient {
 
         String resolvedModel = (model == null || model.isBlank()) ? "gpt-image-1" : model.trim();
         String url = imagesUrl(config.openaiBaseUrl());
-        Map<String, Object> payload = buildPayload(resolvedModel, prompt);
+        Map<String, Object> payload = buildPayload(resolvedModel, prompt, transparent);
 
         final String json;
         try {
@@ -86,7 +99,90 @@ public class OpenAiImageClient {
         return parse(response.getBody(), resolvedModel);
     }
 
+    /**
+     * Image-to-image: rebuild {@code imageBytes} as a home-screen icon.
+     * Uses {@code /v1/images/edits} so the shop's logo stays the same mark.
+     */
+    public GeneratedImage edit(
+            ResolvedSokoMindConfig config,
+            String model,
+            String prompt,
+            byte[] imageBytes,
+            String filename
+    ) {
+        return edit(config, model, prompt, imageBytes, filename, false);
+    }
+
+    /**
+     * Image-to-image edit. Pass {@code transparent=true} to recolor a logo
+     * (light → dark) without an opaque plate.
+     */
+    public GeneratedImage edit(
+            ResolvedSokoMindConfig config,
+            String model,
+            String prompt,
+            byte[] imageBytes,
+            String filename,
+            boolean transparent
+    ) {
+        String apiKey = config.openaiApiKey();
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Logo generation needs an OpenAI key. Set it in Super Admin → Platform → SokoMind.");
+        }
+        if (imageBytes == null || imageBytes.length < 32) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The shop logo could not be read.");
+        }
+
+        String resolvedModel = (model == null || model.isBlank()) ? "gpt-image-1" : model.trim();
+        String url = editsUrl(config.openaiBaseUrl());
+        String safeName = filename == null || filename.isBlank() ? "logo.png" : filename.trim();
+
+        HttpResponse<String> response;
+        try {
+            var request = Unirest.post(url)
+                    .header("Authorization", "Bearer " + apiKey.strip())
+                    .connectTimeout(CONNECT_MS)
+                    .socketTimeout(SOCKET_MS)
+                    .field("model", resolvedModel)
+                    .field("prompt", prompt)
+                    .field("n", "1")
+                    .field("size", "1024x1024");
+            if (!isDallE(resolvedModel)) {
+                request = request
+                        .field("background", transparent ? "transparent" : "opaque")
+                        .field("output_format", "png");
+            }
+            response = request
+                    .field(
+                            "image",
+                            new java.io.ByteArrayInputStream(imageBytes),
+                            kong.unirest.ContentType.APPLICATION_OCTET_STREAM,
+                            safeName)
+                    .asString();
+        } catch (Exception ex) {
+            log.warn("OpenAI image edit request to {} failed", url, ex);
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "OpenAI image service unreachable. Try again in a moment.");
+        }
+
+        if (response.getStatus() < 200 || response.getStatus() >= 300) {
+            String body = truncate(response.getBody());
+            log.warn("OpenAI image edit HTTP {} from {}: {}", response.getStatus(), url, body);
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY, userFacingImageError(response.getStatus(), body));
+        }
+
+        return parse(response.getBody(), resolvedModel);
+    }
+
     static Map<String, Object> buildPayload(String model, String prompt) {
+        return buildPayload(model, prompt, true);
+    }
+
+    static Map<String, Object> buildPayload(String model, String prompt, boolean transparent) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("model", model);
         payload.put("prompt", prompt);
@@ -97,7 +193,7 @@ public class OpenAiImageClient {
             payload.put("response_format", "b64_json");
         } else {
             payload.put("quality", "medium");
-            payload.put("background", "transparent");
+            payload.put("background", transparent ? "transparent" : "opaque");
             payload.put("output_format", "png");
         }
         return payload;
@@ -180,6 +276,15 @@ public class OpenAiImageClient {
             return base + "images/generations";
         }
         return base + "/images/generations";
+    }
+
+    static String editsUrl(String baseUrl) {
+        String generations = imagesUrl(baseUrl);
+        if (generations.endsWith("/images/generations")) {
+            return generations.substring(0, generations.length() - "/images/generations".length())
+                    + "/images/edits";
+        }
+        return generations.replace("/images/generations", "/images/edits");
     }
 
     private static String ensureScheme(String value) {

@@ -19,6 +19,18 @@ class OpenAiImageClientTest {
     }
 
     @Test
+    void opaquePayloadDropsTransparentBackground() {
+        var payload = OpenAiImageClient.buildPayload("gpt-image-1", "a leaf", false);
+        assertThat(payload.get("background")).isEqualTo("opaque");
+    }
+
+    @Test
+    void editsUrlSitsBesideGenerations() {
+        assertThat(OpenAiImageClient.editsUrl("https://api.openai.com/v1"))
+                .isEqualTo("https://api.openai.com/v1/images/edits");
+    }
+
+    @Test
     void dallEPayloadUsesB64ResponseFormat() {
         var payload = OpenAiImageClient.buildPayload("dall-e-3", "a leaf");
         assertThat(payload.get("response_format")).isEqualTo("b64_json");

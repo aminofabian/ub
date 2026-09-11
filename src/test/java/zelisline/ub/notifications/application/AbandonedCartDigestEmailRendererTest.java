@@ -21,6 +21,7 @@ class AbandonedCartDigestEmailRendererTest {
                 "https://cdn.example.com/palmart-logo.png",
                 null,
                 null,
+                null,
                 "#0B6E4F",
                 "#08A045",
                 null,
@@ -75,6 +76,7 @@ class AbandonedCartDigestEmailRendererTest {
     void subjectUsesTenantWordmark() {
         TenantBrandingDto branding = new TenantBrandingDto(
                 "Palmart | Groceries in [Area]",
+                null,
                 null,
                 null,
                 null,

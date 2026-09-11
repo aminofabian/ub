@@ -293,7 +293,7 @@ class ItemCatalogIT {
     }
 
     @Test
-    void patchParentNamePreservesVariantDisplayNamesAndListReturnsParentName() throws Exception {
+    void patchParentNameRecomputesVariantDisplayNamesAndListReturnsParentName() throws Exception {
         String gid = goodsTypeId(TENANT_A);
         String parentId = createItemViaService(TENANT_A, gid, "SKU-RENAME-P", "Old Family");
         String variantBody = mockMvc.perform(post("/api/v1/items/" + parentId + "/variants")
@@ -303,7 +303,7 @@ class ItemCatalogIT {
                         .contentType(APPLICATION_JSON)
                         .content("{\"variantName\":\"500ml\"}"))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.name").value("500ml"))
+                .andExpect(jsonPath("$.name").value("Old Family 500ml"))
                 .andReturn()
                 .getResponse()
                 .getContentAsString();
@@ -322,7 +322,7 @@ class ItemCatalogIT {
                         .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.name").value("500ml"))
+                .andExpect(jsonPath("$.name").value("New Family 500ml"))
                 .andExpect(jsonPath("$.variantName").value("500ml"));
 
         mockMvc.perform(get("/api/v1/items")
@@ -332,7 +332,7 @@ class ItemCatalogIT {
                         .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content[0].name").value("500ml"))
+                .andExpect(jsonPath("$.content[0].name").value("New Family 500ml"))
                 .andExpect(jsonPath("$.content[0].parentName").value("New Family"));
     }
 
@@ -347,7 +347,7 @@ class ItemCatalogIT {
                         .contentType(APPLICATION_JSON)
                         .content("{\"variantName\":\"2.0\",\"name\":\"Legacy Family\"}"))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.name").value("Legacy Family"))
+                .andExpect(jsonPath("$.name").value("Legacy Family 2.0"))
                 .andReturn()
                 .getResponse()
                 .getContentAsString();
@@ -366,12 +366,12 @@ class ItemCatalogIT {
                         .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.name").value("2.0"))
+                .andExpect(jsonPath("$.name").value("Healed Family 2.0"))
                 .andExpect(jsonPath("$.variantName").value("2.0"));
     }
 
     @Test
-    void patchParentNameLeavesCustomizedVariantDisplayNameAlone() throws Exception {
+    void patchParentNameRecomputesVariantDisplayNameFromFamilyAndOption() throws Exception {
         String gid = goodsTypeId(TENANT_A);
         String parentId = createItemViaService(TENANT_A, gid, "SKU-KEEP-P", "Family");
         String variantBody = mockMvc.perform(post("/api/v1/items/" + parentId + "/variants")
@@ -381,7 +381,7 @@ class ItemCatalogIT {
                         .contentType(APPLICATION_JSON)
                         .content("{\"variantName\":\"3.0\",\"name\":\"BRS-B.NICKEL 3.0\"}"))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.name").value("BRS-B.NICKEL 3.0"))
+                .andExpect(jsonPath("$.name").value("Family 3.0"))
                 .andReturn()
                 .getResponse()
                 .getContentAsString();
@@ -400,7 +400,7 @@ class ItemCatalogIT {
                         .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.name").value("BRS-B.NICKEL 3.0"));
+                .andExpect(jsonPath("$.name").value("Family Renamed 3.0"));
     }
 
     @Test

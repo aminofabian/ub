@@ -840,14 +840,12 @@ public class ItemCatalogService {
             item.setPluCode(next);
         }
         if (patch.name() != null && !patch.name().isBlank()) {
-            String previousName = item.getName();
-            String nextName = patch.name().trim();
-            item.setName(nextName);
-            if (item.getVariantOfItemId() == null
-                    && itemRepository.existsByBusinessIdAndVariantOfItemIdAndDeletedAtIsNull(
-                            businessId, item.getId())) {
-                propagateParentNameToVariants(businessId, item.getId(), previousName, nextName);
+            if (item.getVariantOfItemId() == null) {
+                String nextName = patch.name().trim();
+                item.setName(nextName);
             }
+            // Variant display names are composed from family + option below —
+            // a client-supplied name is ignored so receipts, POS, and sales stay aligned.
         }
         if (patch.description() != null) {
             item.setDescription(blankToNull(patch.description()));
@@ -971,6 +969,14 @@ public class ItemCatalogService {
         }
 
         ItemWeightValidation.validate(item);
+
+        if (item.getVariantOfItemId() != null && !item.getVariantOfItemId().isBlank()) {
+            String parentName = parentNamesById(businessId, List.of(item.getVariantOfItemId()))
+                    .get(item.getVariantOfItemId());
+            syncVariantStoredDisplayName(item, parentName);
+        } else if (patch.name() != null && !patch.name().isBlank()) {
+            propagateParentNameToVariants(businessId, item.getId(), item.getName());
+        }
 
         try {
             itemRepository.save(item);
@@ -1134,16 +1140,9 @@ public class ItemCatalogService {
         child.setBusinessId(businessId);
         child.setSku(sku);
         child.setBarcode(barcode);
-        // Display name defaults to the variant label so backend lists / history can tell
-        // siblings apart without a second manual edit. Explicit request.name still wins.
-        // Receipts and POS keep joining live parentName + variantName separately.
-        child.setName(firstNonBlank(
-                request.name(),
-                request.variantName(),
-                parent.getName()));
-        child.setDescription(firstNonBlank(request.description(), parent.getDescription()));
         child.setVariantOfItemId(parent.getId());
         child.setVariantName(request.variantName().trim());
+        child.setDescription(firstNonBlank(request.description(), parent.getDescription()));
         child.setItemTypeId(parent.getItemTypeId());
         child.setCategoryId(resolveOptionalCategory(businessId, request.categoryId(), parent.getCategoryId()));
         child.setAisleId(resolveOptionalAisle(businessId, request.aisleId(), parent.getAisleId()));
@@ -1198,6 +1197,7 @@ public class ItemCatalogService {
         child.setBrand(firstNonBlank(request.brand(), parent.getBrand()));
         child.setSize(firstNonBlank(request.size(), parent.getSize()));
         child.setWebPublished(true);
+        syncVariantStoredDisplayName(child, parent.getName());
 
         try {
             itemRepository.save(child);
@@ -1265,6 +1265,7 @@ public class ItemCatalogService {
             Map<String, Object> oldState = itemSnapshot(child);
             child.setVariantOfItemId(parent.getId());
             child.setVariantName(line.variantName().trim());
+            syncVariantStoredDisplayName(child, parent.getName());
             // Keep department aligned with the family when attaching / moving.
             if (parent.getItemTypeId() != null && !parent.getItemTypeId().isBlank()) {
                 child.setItemTypeId(parent.getItemTypeId());
@@ -1909,7 +1910,7 @@ public class ItemCatalogService {
                 i.getId(),
                 i.getSku(),
                 i.getBarcode(),
-                i.getName(),
+                ProductDisplayName.forVariant(i, parentName),
                 i.getVariantName(),
                 i.getCategoryId(),
                 categoryName,
@@ -1950,19 +1951,12 @@ public class ItemCatalogService {
     }
 
     /**
-     * Keeps denormalized family copies in sync when the parent is renamed — but only for
-     * variants that still carry the old family title. Custom display names (and names that
-     * already match {@code variantName}) are left alone so a parent rename does not wipe
-     * per-size labels that clerks use in history / backend lists.
-     * <p>
-     * Variants that still have the old parent name and also have a {@code variantName} are
-     * healed to that label instead of copying the new family title, so existing catalogs
-     * become identifiable the next time the product name is touched.
+     * Variant display names are always family + option (with duplicate-family
+     * folding), matching PDF receipts and POS. Parent renames recompute every child.
      */
     private void propagateParentNameToVariants(
             String businessId,
             String parentId,
-            String previousName,
             String nextName
     ) {
         List<Item> variants = itemRepository.findByBusinessIdAndVariantOfItemIdAndDeletedAtIsNullOrderBySkuAsc(
@@ -1970,24 +1964,27 @@ public class ItemCatalogService {
         if (variants.isEmpty()) {
             return;
         }
-        String oldFamily = previousName == null ? "" : previousName.trim();
         List<Item> toSave = new ArrayList<>();
         for (Item variant : variants) {
-            String current = variant.getName() == null ? "" : variant.getName().trim();
-            boolean stillSyncedFamily = current.isEmpty()
-                    || (!oldFamily.isEmpty() && current.equalsIgnoreCase(oldFamily));
-            if (!stillSyncedFamily) {
-                continue;
-            }
-            String option = variant.getVariantName() == null ? "" : variant.getVariantName().trim();
-            String resolved = !option.isEmpty() ? option : nextName;
-            if (!current.equals(resolved)) {
-                variant.setName(resolved);
+            String current = variant.getName();
+            syncVariantStoredDisplayName(variant, nextName);
+            if (!Objects.equals(current, variant.getName())) {
                 toSave.add(variant);
             }
         }
         if (!toSave.isEmpty()) {
             itemRepository.saveAll(toSave);
+        }
+    }
+
+    /** Persist the same title PDF receipts print: join(family, option), never duplicated. */
+    private static void syncVariantStoredDisplayName(Item variant, String parentName) {
+        if (variant.getVariantOfItemId() == null || variant.getVariantOfItemId().isBlank()) {
+            return;
+        }
+        String composed = ProductDisplayName.forVariant(variant, parentName);
+        if (!composed.isBlank()) {
+            variant.setName(composed);
         }
     }
 
@@ -1997,12 +1994,18 @@ public class ItemCatalogService {
             BigDecimal stockQty,
             BigDecimal baseStockQty
     ) {
+        String parentName = null;
+        if (i.getVariantOfItemId() != null && !i.getVariantOfItemId().isBlank()
+                && i.getBusinessId() != null) {
+            parentName = parentNamesById(i.getBusinessId(), List.of(i.getVariantOfItemId()))
+                    .get(i.getVariantOfItemId());
+        }
         return new ItemResponse(
                 i.getId(),
                 i.getSku(),
                 i.getBarcode(),
                 i.getPluCode(),
-                i.getName(),
+                ProductDisplayName.forVariant(i, parentName),
                 i.getDescription(),
                 i.getVariantOfItemId(),
                 i.getVariantName(),

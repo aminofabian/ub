@@ -94,6 +94,24 @@ class ProductDisplayNameTest {
     }
 
     @Test
+    void neverRepeatsAFamilyAlreadyInTheOption() {
+        assertEquals("molped 14's", ProductDisplayName.join("molped", "molped 14's"));
+        assertEquals("Molped 14's", ProductDisplayName.join("Molped", "Molped 14's"));
+        assertEquals("210 Maize Flour 2kg", ProductDisplayName.join("210", "Maize Flour 2kg"));
+    }
+
+    @Test
+    void forVariantDoesNotAppendSkuWhenStoredNameAlreadyMatchesOption() {
+        Item variant = new Item();
+        variant.setName("molped 14's");
+        variant.setVariantName("molped 14's");
+        variant.setVariantOfItemId("parent-1");
+        variant.setSku("MOLPED-14");
+        assertEquals("molped 14's", ProductDisplayName.forVariant(variant, "molped"));
+        assertEquals("molped 14's", ProductDisplayName.forItem(variant));
+    }
+
+    @Test
     void forVariantUsesLiveParentNameOverStaleChildCopy() {
         Item variant = new Item();
         variant.setName("Old Bread Name");

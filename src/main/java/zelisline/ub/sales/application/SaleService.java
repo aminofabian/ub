@@ -37,6 +37,8 @@ import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.inventory.api.dto.BatchAllocationLine;
 import zelisline.ub.inventory.application.InventoryBatchPickerService;
 import zelisline.ub.catalog.application.ItemSellability;
+import zelisline.ub.catalog.application.ProductDisplayName;
+import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.credits.application.BusinessCreditSettingsService;
 import zelisline.ub.credits.application.CreditSaleDebtService;
@@ -1117,15 +1119,41 @@ public class SaleService {
                 .filter(id -> id != null && !id.isBlank())
                 .distinct()
                 .toList();
-        Map<String, String> itemNames = itemIds.isEmpty()
-                ? Map.of()
-                : itemRepository
-                .findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)
-                .stream()
-                .collect(java.util.stream.Collectors.toMap(
-                        zelisline.ub.catalog.domain.Item::getId,
-                        item -> item.getName() != null ? item.getName() : "Item",
-                        (a, b) -> a));
+        final Map<String, String> itemNames;
+        if (itemIds.isEmpty()) {
+            itemNames = Map.of();
+        } else {
+            List<Item> catalogItems = itemRepository
+                    .findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId);
+            java.util.LinkedHashSet<String> parentIds = new java.util.LinkedHashSet<>();
+            for (Item item : catalogItems) {
+                if (item.getVariantOfItemId() != null && !item.getVariantOfItemId().isBlank()) {
+                    parentIds.add(item.getVariantOfItemId());
+                }
+            }
+            Map<String, String> parentNames = parentIds.isEmpty()
+                    ? Map.of()
+                    : itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(parentIds, businessId)
+                    .stream()
+                    .collect(java.util.stream.Collectors.toMap(
+                            Item::getId,
+                            item -> item.getName() != null ? item.getName() : "",
+                            (a, b) -> a));
+            itemNames = catalogItems.stream()
+                    .collect(java.util.stream.Collectors.toMap(
+                            Item::getId,
+                            item -> {
+                                String parent = item.getVariantOfItemId() != null
+                                        ? parentNames.get(item.getVariantOfItemId())
+                                        : null;
+                                String composed = ProductDisplayName.forVariant(item, parent);
+                                if (composed != null && !composed.isBlank()) {
+                                    return composed;
+                                }
+                                return item.getName() != null ? item.getName() : "Item";
+                            },
+                            (a, b) -> a));
+        }
         return saleItems.stream()
                 .collect(java.util.stream.Collectors.groupingBy(
                         SaleItem::getLineIndex,

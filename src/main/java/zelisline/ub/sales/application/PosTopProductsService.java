@@ -18,6 +18,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.api.dto.CatalogListScope;
 import zelisline.ub.catalog.api.dto.ItemSummaryResponse;
 import zelisline.ub.catalog.application.ItemCatalogService;
+import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.sales.api.dto.PosTopProductResponse;
@@ -97,7 +98,13 @@ public class PosTopProductsService {
             if (item == null || groupParentIds.contains(itemId) || !item.isSellable()) {
                 continue;
             }
-            String name = item.getName() != null ? item.getName() : itemId;
+            String parentName = item.getVariantOfItemId() != null
+                    ? parentNameById.get(item.getVariantOfItemId())
+                    : null;
+            String name = ProductDisplayName.forVariant(item, parentName);
+            if (name == null || name.isBlank()) {
+                name = item.getName() != null ? item.getName() : itemId;
+            }
             String sku = item.getSku();
             String thumb = thumbs.get(itemId);
             long saleCount = ((Number) row[1]).longValue();
@@ -106,9 +113,6 @@ public class PosTopProductsService {
                     : BigDecimal.valueOf(((Number) row[2]).doubleValue());
             Instant lastAt = (Instant) row[3];
             BigDecimal packUnits = item.getPackagingUnitQty();
-            String parentName = item.getVariantOfItemId() != null
-                    ? parentNameById.get(item.getVariantOfItemId())
-                    : null;
             out.add(new PosTopProductResponse(
                     itemId,
                     name,

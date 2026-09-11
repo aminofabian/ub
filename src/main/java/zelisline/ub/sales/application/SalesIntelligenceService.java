@@ -25,6 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
@@ -160,6 +161,8 @@ public class SalesIntelligenceService {
     private static final String Q_ITEMS = """
             SELECT sil.item_id,
                    i.name AS item_name,
+                   i.variant_name AS variant_name,
+                   parent.name AS parent_name,
                    i.sku,
                    COALESCE(SUM(sil.quantity), 0) AS qty_sold,
                    COALESCE(SUM(sil.line_total), 0) AS gross,
@@ -167,11 +170,14 @@ public class SalesIntelligenceService {
               FROM sale_items sil
               JOIN sales s ON s.id = sil.sale_id
               JOIN items i ON i.id = sil.item_id AND i.business_id = s.business_id AND i.deleted_at IS NULL
+         LEFT JOIN items parent ON parent.id = i.variant_of_item_id
+                               AND parent.business_id = i.business_id
+                               AND parent.deleted_at IS NULL
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
                AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
                AND i.category_id = ?
-          GROUP BY sil.item_id, i.name, i.sku
+          GROUP BY sil.item_id, i.name, i.sku, i.variant_name, parent.name
             """;
 
     private static final String Q_ITEMS_REFUNDS = """
@@ -366,7 +372,7 @@ public class SalesIntelligenceService {
                 Q_ITEMS,
                 rs -> {
                     String id = rs.getString("item_id");
-                    String name = rs.getString("item_name");
+                    String name = composedItemName(rs);
                     String sku = rs.getString("sku");
                     BigDecimal qty = rs.getBigDecimal("qty_sold").setScale(4, RoundingMode.HALF_UP);
                     BigDecimal gross = rs.getBigDecimal("gross").setScale(2, RoundingMode.HALF_UP);
@@ -520,6 +526,8 @@ public class SalesIntelligenceService {
                      WHERE sp2.sale_id = s.id) AS payment_methods,
                    sil.item_id,
                    i.name AS item_name,
+                   i.variant_name AS variant_name,
+                   parent.name AS parent_name,
                    sil.quantity,
                    sil.unit_price,
                    sil.line_total,
@@ -551,6 +559,9 @@ public class SalesIntelligenceService {
               FROM sale_items sil
               JOIN sales s ON s.id = sil.sale_id
               JOIN items i ON i.id = sil.item_id AND i.business_id = s.business_id AND i.deleted_at IS NULL
+         LEFT JOIN items parent ON parent.id = i.variant_of_item_id
+                               AND parent.business_id = i.business_id
+                               AND parent.deleted_at IS NULL
          LEFT JOIN users u ON u.id = s.sold_by AND u.business_id = s.business_id AND u.deleted_at IS NULL
             """ + JOIN_SALE_MPESA_PAYER + """
          LEFT JOIN customers cu ON cu.id = """ + PAYER_CUSTOMER_ID + """
@@ -683,6 +694,8 @@ public class SalesIntelligenceService {
     private static final String Q_ITEMS_FILTERED = """
             SELECT sil.item_id,
                    i.name AS item_name,
+                   i.variant_name AS variant_name,
+                   parent.name AS parent_name,
                    i.sku,
                    COALESCE(SUM(sil.quantity), 0) AS qty_sold,
                    COALESCE(SUM(sil.line_total), 0) AS gross,
@@ -690,13 +703,16 @@ public class SalesIntelligenceService {
               FROM sale_items sil
               JOIN sales s ON s.id = sil.sale_id
               JOIN items i ON i.id = sil.item_id AND i.business_id = s.business_id AND i.deleted_at IS NULL
+         LEFT JOIN items parent ON parent.id = i.variant_of_item_id
+                               AND parent.business_id = i.business_id
+                               AND parent.deleted_at IS NULL
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
                AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
                AND (? IS NULL OR i.category_id = ?)
                AND (? IS NULL OR s.branch_id = ?)
                AND (? IS NULL OR i.item_type_id = ?)
-          GROUP BY sil.item_id, i.name, i.sku
+          GROUP BY sil.item_id, i.name, i.sku, i.variant_name, parent.name
             """;
 
     private static final String Q_ITEMS_REFUNDS_FILTERED = """
@@ -894,7 +910,7 @@ public class SalesIntelligenceService {
                             rs.getString("payment_method"),
                             rs.getString("payment_methods"),
                             rs.getString("item_id"),
-                            rs.getString("item_name"),
+                            composedItemName(rs),
                             rs.getBigDecimal("quantity").setScale(4, RoundingMode.HALF_UP),
                             rs.getBigDecimal("unit_price").setScale(4, RoundingMode.HALF_UP),
                             rs.getBigDecimal("line_total").setScale(2, RoundingMode.HALF_UP),
@@ -1083,7 +1099,7 @@ public class SalesIntelligenceService {
 
         ItemActivitySummary summary = new ItemActivitySummary(
                 item.getId(),
-                item.getName(),
+                composedItemName(item),
                 item.getSku(),
                 resolveItemDisplayStock(businessId, branchFilter, item),
                 moneyOrZero(item.getBuyingPrice()),
@@ -1258,7 +1274,7 @@ public class SalesIntelligenceService {
             }
             meta.put(item.getId(), new ItemMeta(
                     item.getId(),
-                    item.getName(),
+                    composedItemName(item),
                     item.getSku(),
                     qtyOrZero(item.getCurrentStock()),
                     moneyOrZero(item.getBuyingPrice()),
@@ -1589,7 +1605,7 @@ public class SalesIntelligenceService {
                 Q_ITEMS_FILTERED,
                 rs -> {
                     String id = rs.getString("item_id");
-                    String name = rs.getString("item_name");
+                    String name = composedItemName(rs);
                     String sku = rs.getString("sku");
                     BigDecimal qty = rs.getBigDecimal("qty_sold").setScale(4, RoundingMode.HALF_UP);
                     BigDecimal gross = rs.getBigDecimal("gross").setScale(2, RoundingMode.HALF_UP);
@@ -2060,6 +2076,38 @@ public class SalesIntelligenceService {
 
     private static String blankToNull(String value) {
         return value != null && !value.isBlank() ? value.trim() : null;
+    }
+
+    /** Same family + option folding as PDF receipts so sales lists never drift. */
+    private static String composedItemName(java.sql.ResultSet rs) throws java.sql.SQLException {
+        return ProductDisplayName.join(
+                firstNonBlank(rs.getString("parent_name"), rs.getString("item_name")),
+                rs.getString("variant_name"));
+    }
+
+    private String composedItemName(Item item) {
+        if (item == null) {
+            return "";
+        }
+        String parentName = null;
+        String parentId = item.getVariantOfItemId();
+        if (parentId != null && !parentId.isBlank() && item.getBusinessId() != null) {
+            parentName = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(parentId, item.getBusinessId())
+                    .map(Item::getName)
+                    .orElse(null);
+        }
+        String composed = ProductDisplayName.forVariant(item, parentName);
+        return composed.isBlank() ? (item.getName() != null ? item.getName() : "") : composed;
+    }
+
+    private static String firstNonBlank(String preferred, String fallback) {
+        if (preferred != null && !preferred.isBlank()) {
+            return preferred.trim();
+        }
+        if (fallback != null && !fallback.isBlank()) {
+            return fallback.trim();
+        }
+        return "";
     }
 
     private static LocalDate[] resolveWindow(LocalDate fromInclusive, LocalDate toInclusive) {

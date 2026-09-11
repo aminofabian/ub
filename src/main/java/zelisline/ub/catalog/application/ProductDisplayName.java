@@ -52,8 +52,13 @@ public final class ProductDisplayName {
         if (item == null) {
             return "";
         }
-        String family = normalize(firstNonBlank(parentName, item.getName()));
-        String option = descriptiveOption(item);
+        boolean isVariant = isVariantRow(item);
+        String family = normalize(isVariant
+                ? firstNonBlank(parentName, item.getName())
+                : firstNonBlank(item.getName(), parentName));
+        // Distinctness for the option must use the live family name — never the stored
+        // display name, which is already the composed title (family + option).
+        String option = descriptiveOption(item, isVariant ? parentName : family);
         if (!option.isEmpty()) {
             return join(family, option);
         }
@@ -75,7 +80,7 @@ public final class ProductDisplayName {
         if (item == null) {
             return "";
         }
-        String option = descriptiveOption(item);
+        String option = descriptiveOption(item, isVariantRow(item) ? null : normalize(item.getName()));
         if (!option.isEmpty()) {
             return option;
         }
@@ -154,8 +159,8 @@ public final class ProductDisplayName {
                 || haystack.contains(" " + needle + " ");
     }
 
-    private static String descriptiveOption(Item item) {
-        String family = normalize(item.getName());
+    private static String descriptiveOption(Item item, String familyName) {
+        String family = normalize(familyName);
         String option = firstDistinct(family, meaningful(item.getVariantName()));
         if (option.isEmpty()) {
             option = firstDistinct(family, normalize(item.getSize()));
@@ -167,6 +172,11 @@ public final class ProductDisplayName {
             option = firstDistinct(family, normalize(item.getBundleName()));
         }
         return option;
+    }
+
+    private static boolean isVariantRow(Item item) {
+        String parent = item.getVariantOfItemId();
+        return parent != null && !parent.isBlank();
     }
 
     private static String packLabel(Item item) {

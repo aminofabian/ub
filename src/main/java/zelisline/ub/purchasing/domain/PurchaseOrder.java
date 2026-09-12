@@ -55,8 +55,8 @@ public class PurchaseOrder {
     @Column(name = "supplier_response_at")
     private Instant supplierResponseAt;
 
-    /** not_shipped | in_transit | delivered */
-    @Column(name = "delivery_status", nullable = false, length = 16)
+    /** not_shipped | in_transit | partially_delivered | delivered */
+    @Column(name = "delivery_status", nullable = false, length = 32)
     private String deliveryStatus = "not_shipped";
 
     @Version

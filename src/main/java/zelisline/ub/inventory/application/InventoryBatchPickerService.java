@@ -83,20 +83,13 @@ public class InventoryBatchPickerService {
         Item item = requireStockedItem(businessId, pick.stockItemId());
         List<InventoryBatch> batches = loadActiveBatchesReadOnly(businessId, catalogItem, branchId);
         List<InventoryBatch> working = new ArrayList<>(batches);
-        // ── Exclude expired batches BEFORE sorting ────────────────────────
-        working = new ArrayList<>(BatchAllocationPlanner.excludeExpired(working));
         if (working.isEmpty()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "No non-expired stock available for " + itemLabel(catalogItem)
+                    "Out of stock for " + itemLabel(catalogItem)
             );
         }
-        BatchAllocationPlanner.sortBatchesForPick(
-                working,
-                item,
-                costMethodForTenant(businessId)
-        );
-        return BatchAllocationPlanner.allocateInOrder(working, pick.stockQuantity());
+        return allocateOrExplain(working, item, catalogItem, businessId, pick.stockQuantity());
     }
 
     /**
@@ -212,8 +205,9 @@ public class InventoryBatchPickerService {
         List<InventoryBatch> locked = lockActiveBatchesForPool(
                 businessId, branchId, catalogItem);
         List<InventoryBatch> working = new ArrayList<>(locked);
-        // ── Exclude expired batches BEFORE sorting ────────────────────────
-        working = new ArrayList<>(BatchAllocationPlanner.excludeExpired(working));
+        // Keep expired lots in the pool. FEFO still sells freshest first; expired
+        // remainder is what is physically on the shelf (produce 3-for-20 packs, etc.).
+        // Excluding it made POS show stock while checkout failed.
 
         // Items never received at this branch (e.g. POS quick-create before opening stock)
         // have no active/depleted batches — seed opening stock for this sale so checkout can proceed.
@@ -227,7 +221,7 @@ public class InventoryBatchPickerService {
                     userId
             );
             locked = lockActiveBatchesForPool(businessId, branchId, catalogItem);
-            working = new ArrayList<>(BatchAllocationPlanner.excludeExpired(new ArrayList<>(locked)));
+            working = new ArrayList<>(locked);
         }
 
         List<BatchAllocationLine> batchLines;
@@ -236,25 +230,24 @@ public class InventoryBatchPickerService {
             if (!allowNegativeStock) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_REQUEST,
-                        "No non-expired stock available for " + itemLabel(catalogItem)
+                        "Out of stock for " + itemLabel(catalogItem)
                 );
             }
             batchLines = List.of();
             unallocated = pick.stockQuantity();
-        } else {
+        } else if (allowNegativeStock) {
             BatchAllocationPlanner.sortBatchesForPick(
                     working,
                     item,
                     costMethodForTenant(businessId)
             );
-            if (allowNegativeStock) {
-                BatchAllocationPlanner.AllocationResult allocation =
-                        BatchAllocationPlanner.allocateInOrderAllowShortage(working, pick.stockQuantity());
-                batchLines = allocation.lines();
-                unallocated = allocation.unallocated();
-            } else {
-                batchLines = BatchAllocationPlanner.allocateInOrder(working, pick.stockQuantity());
-            }
+            BatchAllocationPlanner.AllocationResult allocation =
+                    BatchAllocationPlanner.allocateInOrderAllowShortage(working, pick.stockQuantity());
+            batchLines = allocation.lines();
+            unallocated = allocation.unallocated();
+        } else {
+            batchLines = allocateOrExplain(
+                    working, item, catalogItem, businessId, pick.stockQuantity());
         }
 
         applyAllocatedDecrements(
@@ -530,6 +523,35 @@ public class InventoryBatchPickerService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item is not stocked");
         }
         return item;
+    }
+
+    /**
+     * FEFO/FIFO allocate; rewrite the generic shortage message so cashiers see the SKU.
+     */
+    private List<BatchAllocationLine> allocateOrExplain(
+            List<InventoryBatch> working,
+            Item item,
+            Item catalogItem,
+            String businessId,
+            BigDecimal stockQuantity
+    ) {
+        BatchAllocationPlanner.sortBatchesForPick(
+                working,
+                item,
+                costMethodForTenant(businessId)
+        );
+        try {
+            return BatchAllocationPlanner.allocateInOrder(working, stockQuantity);
+        } catch (ResponseStatusException ex) {
+            if (ex.getStatusCode() == HttpStatus.BAD_REQUEST
+                    && "Insufficient stock for pick".equals(ex.getReason())) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Insufficient stock for " + itemLabel(catalogItem)
+                );
+            }
+            throw ex;
+        }
     }
 
     /** Cashier-facing label: name, optionally with SKU. */

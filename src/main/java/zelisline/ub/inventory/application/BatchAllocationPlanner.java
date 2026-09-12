@@ -24,7 +24,8 @@ public final class BatchAllocationPlanner {
 
     /**
      * Filters out batches that have passed their expiry date.
-     * Call this BEFORE sorting/allocating.
+     * Sale picks keep expired lots as last-resort on-hand (FEFO sorts them last);
+     * restock / preview helpers may still call this to count only fresh stock.
      */
     public static List<InventoryBatch> excludeExpired(List<InventoryBatch> batches) {
         LocalDate today = LocalDate.now();
@@ -61,8 +62,8 @@ public final class BatchAllocationPlanner {
         LocalDate today = LocalDate.now();
         return Comparator
                 .comparing((InventoryBatch b) -> {
-                    // Expired batches sort to the END (sale picks filter them out;
-                    // stock-take write-downs may still consume them last).
+                    // Expired batches sort to the END so fresh sells first; remaining
+                    // on-shelf lots (produce packs, etc.) can still complete the pick.
                     if (b.getExpiryDate() != null && b.getExpiryDate().isBefore(today)) {
                         return LocalDate.MAX;
                     }

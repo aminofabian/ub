@@ -28,14 +28,18 @@ import zelisline.ub.suppliers.api.dto.CreateSupplierContactRequest;
 import zelisline.ub.suppliers.api.dto.CreateSupplierRequest;
 import zelisline.ub.suppliers.api.dto.PatchSupplierContactRequest;
 import zelisline.ub.suppliers.api.dto.PatchSupplierRequest;
+import zelisline.ub.suppliers.api.dto.SendSupplierPayoutPhoneVerificationResponse;
 import zelisline.ub.suppliers.api.dto.SupplierContactResponse;
 import zelisline.ub.suppliers.api.dto.SupplierDuplicateCheckRequest;
 import zelisline.ub.suppliers.api.dto.SupplierDuplicateCheckResponse;
 import zelisline.ub.suppliers.api.dto.SupplierPurchaseHistoryResponse;
 import zelisline.ub.suppliers.api.dto.SupplierResponse;
 import zelisline.ub.suppliers.api.dto.SupplierItemLinkResponse;
+import zelisline.ub.suppliers.api.dto.VerifySupplierPayoutPhoneRequest;
+import zelisline.ub.suppliers.api.dto.VerifySupplierPayoutPhoneResponse;
 import zelisline.ub.suppliers.application.ItemSupplierLinkService;
 import zelisline.ub.suppliers.application.SupplierPurchaseHistoryService;
+import zelisline.ub.suppliers.application.SupplierPayoutPhoneVerificationService;
 import zelisline.ub.suppliers.application.SupplierService;
 import zelisline.ub.suppliers.application.TenantSupplierPortalInviteService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
@@ -51,6 +55,7 @@ public class SuppliersController {
     private final SupplierPurchaseHistoryService supplierPurchaseHistoryService;
     private final SupplierDuplicateCheckService supplierDuplicateCheckService;
     private final TenantSupplierPortalInviteService tenantSupplierPortalInviteService;
+    private final SupplierPayoutPhoneVerificationService payoutPhoneVerificationService;
 
     @PostMapping("/duplicate-check")
     @PreAuthorize("hasPermission(null, 'suppliers.write')")
@@ -147,6 +152,31 @@ public class SuppliersController {
                 supplierId,
                 CurrentTenantUser.auditActorId(request),
                 sendSms);
+    }
+
+    @PostMapping("/{supplierId}/payout-phone-verifications")
+    @PreAuthorize("hasPermission(null, 'suppliers.write')")
+    public SendSupplierPayoutPhoneVerificationResponse sendPayoutPhoneVerification(
+            @PathVariable String supplierId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return payoutPhoneVerificationService.send(
+                TenantRequestIds.resolveBusinessId(request), supplierId);
+    }
+
+    @PostMapping("/{supplierId}/payout-phone-verifications/verify")
+    @PreAuthorize("hasPermission(null, 'suppliers.write')")
+    public VerifySupplierPayoutPhoneResponse verifyPayoutPhone(
+            @PathVariable String supplierId,
+            @Valid @RequestBody VerifySupplierPayoutPhoneRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return payoutPhoneVerificationService.verify(
+                TenantRequestIds.resolveBusinessId(request),
+                supplierId,
+                body.code());
     }
 
     @GetMapping("/{supplierId}/item-links")

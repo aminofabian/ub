@@ -48,11 +48,13 @@ import zelisline.ub.payments.domain.GatewayStatus;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
 import zelisline.ub.payments.domain.PaymentWebhookEvent;
+import zelisline.ub.payments.domain.PlatformDarajaSettings;
 import zelisline.ub.payments.domain.PlatformKioskPaySettings;
 import zelisline.ub.payments.domain.StkPushContextType;
 import zelisline.ub.payments.domain.spi.StkStatusResponse;
 import zelisline.ub.payments.domain.spi.WebhookResult;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
+import zelisline.ub.payments.infrastructure.DarajaPaymentGateway;
 import zelisline.ub.payments.infrastructure.KopokopoPaymentGateway;
 import zelisline.ub.payments.repository.GatewayStkPushRepository;
 import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
@@ -99,6 +101,7 @@ public class GatewayStkPushService {
     private final MpesaPayerIdentityService mpesaPayerIdentityService;
     private final CredentialEncryptionService encryptionService;
     private final KopokopoPaymentGateway kopokopoGateway;
+    private final DarajaPaymentGateway darajaGateway;
     private final ObjectMapper objectMapper;
     private final NotificationOutboxService notificationOutboxService;
     private final WebOrderFulfillmentService webOrderFulfillmentService;
@@ -108,6 +111,7 @@ public class GatewayStkPushService {
     private final ObjectProvider<zelisline.ub.tenancy.application.DomainPurchaseService> domainPurchaseService;
     private final ObjectProvider<zelisline.ub.platform.application.PlatformDomainSettingsService> platformDomainSettingsService;
     private final ObjectProvider<PlatformKioskPaySettingsService> platformKioskPaySettingsService;
+    private final ObjectProvider<PlatformDarajaSettingsService> platformDarajaSettingsService;
     private final ObjectProvider<KioskPayWalletService> kioskPayWalletService;
     private final ObjectProvider<zelisline.ub.airtime.application.AirtimeSaleService> airtimeSaleService;
     private final InboundTillPaymentService inboundTillPaymentService;
@@ -346,6 +350,47 @@ public class GatewayStkPushService {
     }
 
     /**
+     * Safaricom Daraja STK / C2B callback. Matches by CheckoutRequestID globally,
+     * then by merchant reference when C2B BillRefNumber is present.
+     */
+    @Transactional
+    public boolean processDarajaWebhook(WebhookResult parsed) {
+        if (parsed == null) {
+            return false;
+        }
+        String eventId = parsed.webhookEventId() != null && !parsed.webhookEventId().isBlank()
+                ? parsed.webhookEventId()
+                : parsed.gatewayTransactionId();
+        if (eventId != null && !eventId.isBlank()
+                && webhookEventRepository.existsByGatewayTypeAndGatewayEventId(GatewayType.DARAJA, eventId)) {
+            log.info("Daraja webhook duplicate ignored: eventId={}", eventId);
+            return true;
+        }
+
+        Optional<GatewayStkPush> push = Optional.empty();
+        if (parsed.gatewayCheckoutId() != null && !parsed.gatewayCheckoutId().isBlank()) {
+            push = pushRepository.findByGatewayTypeAndGatewayCheckoutId(
+                    GatewayType.DARAJA, parsed.gatewayCheckoutId().trim());
+        }
+        if (push.isEmpty() && parsed.reference() != null && !parsed.reference().isBlank()) {
+            String ref = parsed.reference().trim();
+            push = pushRepository.findFirstByMerchantReferenceAndStatusAndGatewayType(
+                    ref, GatewayStkPushStatuses.PENDING, GatewayType.DARAJA);
+            if (push.isEmpty()) {
+                // Truncated AccountReference may be a prefix of merchant reference
+                push = pushRepository.findFirstByMerchantReferenceStartingWithAndStatusAndGatewayType(
+                        ref, GatewayStkPushStatuses.PENDING, GatewayType.DARAJA);
+            }
+        }
+        if (push.isEmpty()) {
+            log.warn("Daraja webhook: no matching STK push checkout={} ref={} success={}",
+                    parsed.gatewayCheckoutId(), parsed.reference(), parsed.success());
+            return true;
+        }
+        return settleMatchedWebhook(push.get(), push.get().getBusinessId(), eventId, parsed);
+    }
+
+    /**
      * Webhook authenticated with Palmart platform KopoKopo credentials (domain-order STK).
      * Resolves the push by checkout id globally (business id comes from the push row).
      */
@@ -437,7 +482,7 @@ public class GatewayStkPushService {
             try {
                 PaymentWebhookEvent audit = new PaymentWebhookEvent();
                 audit.setBusinessId(businessId);
-                audit.setGatewayType(GatewayType.KOPOKOPO);
+                audit.setGatewayType(push.getGatewayType() != null ? push.getGatewayType() : GatewayType.KOPOKOPO);
                 audit.setGatewayEventId(eventId);
                 audit.setTopic(parsed.topic());
                 audit.setRawPayload(parsed.rawPayload());
@@ -511,7 +556,9 @@ public class GatewayStkPushService {
             return Optional.of(push);
         }
 
-        var status = kopokopoGateway.queryStkStatus(push.getGatewayCheckoutId(), creds);
+        var status = push.getGatewayType() == GatewayType.DARAJA
+                ? darajaGateway.queryStkStatus(push.getGatewayCheckoutId(), creds)
+                : kopokopoGateway.queryStkStatus(push.getGatewayCheckoutId(), creds);
         return Optional.of(self.getObject().applyPollResult(push.getId(), status));
     }
 
@@ -523,7 +570,8 @@ public class GatewayStkPushService {
     public static boolean isPollableAtGateway(GatewayStkPush push) {
         return push != null
                 && GatewayStkPushStatuses.PENDING.equals(push.getStatus())
-                && push.getGatewayType() == GatewayType.KOPOKOPO
+                && (push.getGatewayType() == GatewayType.KOPOKOPO
+                        || push.getGatewayType() == GatewayType.DARAJA)
                 && !isTillAwaitCheckout(push.getGatewayCheckoutId())
                 && !isStorefrontTillAwaitCheckout(push.getGatewayCheckoutId());
     }
@@ -545,9 +593,17 @@ public class GatewayStkPushService {
         if (status.completed()) {
             String receipt = status.mpesaReceipt();
             if (receipt == null || receipt.isBlank()) {
-                log.warn("STK poll completed without M-Pesa receipt — leaving pending pushId={}",
-                        push.getId());
-                return push;
+                // Daraja STK query returns ResultCode 0 without CallbackMetadata / receipt.
+                // Settle on checkout id so POS is not stuck waiting only for the callback race.
+                if (push.getGatewayType() == GatewayType.DARAJA
+                        && push.getGatewayCheckoutId() != null
+                        && !push.getGatewayCheckoutId().isBlank()) {
+                    receipt = push.getGatewayCheckoutId();
+                } else {
+                    log.warn("STK poll completed without M-Pesa receipt — leaving pending pushId={}",
+                            push.getId());
+                    return push;
+                }
             }
             confirmPush(push, receipt.trim(), push.getAmount());
             return pushRepository.findById(push.getId()).orElse(push);
@@ -647,15 +703,15 @@ public class GatewayStkPushService {
             if (!localPending && !recentFailed) {
                 continue;
             }
-            if (push.getGatewayType() != GatewayType.KOPOKOPO) {
+            if (push.getGatewayType() != GatewayType.KOPOKOPO
+                    && push.getGatewayType() != GatewayType.DARAJA) {
                 if (localPending) {
                     gatewayPending = true;
                 }
                 continue;
             }
 
-            PaymentGatewayConfig cfg = resolveConfig(push);
-            Map<String, String> creds = cfg != null ? decryptCredentials(cfg) : null;
+            Map<String, String> creds = resolveCredentialsForPush(push);
             if (creds == null) {
                 if (localPending) {
                     gatewayPending = true;
@@ -663,7 +719,9 @@ public class GatewayStkPushService {
                 continue;
             }
 
-            var status = kopokopoGateway.queryStkStatus(push.getGatewayCheckoutId(), creds);
+            var status = push.getGatewayType() == GatewayType.DARAJA
+                    ? darajaGateway.queryStkStatus(push.getGatewayCheckoutId(), creds)
+                    : kopokopoGateway.queryStkStatus(push.getGatewayCheckoutId(), creds);
             if (localPending) {
                 push.setLastPolledAt(Instant.now());
                 push.setPollCount(push.getPollCount() + 1);
@@ -1378,7 +1436,8 @@ public class GatewayStkPushService {
         if (push.getConfigId() != null && !push.getConfigId().isBlank()) {
             if (zelisline.ub.platform.application.PlatformDomainSettingsService.PLATFORM_DOMAIN_STK_CONFIG_ID
                     .equals(push.getConfigId())
-                    || PlatformKioskPaySettings.PLATFORM_KOPOKOPO_CONFIG_ID.equals(push.getConfigId())) {
+                    || PlatformKioskPaySettings.PLATFORM_KOPOKOPO_CONFIG_ID.equals(push.getConfigId())
+                    || PlatformDarajaSettings.PLATFORM_DARAJA_CONFIG_ID.equals(push.getConfigId())) {
                 return null;
             }
             PaymentGatewayConfig cfg = configRepository.findById(push.getConfigId()).orElse(null);
@@ -1411,6 +1470,14 @@ public class GatewayStkPushService {
                 return null;
             }
             return kiosk.kopokopoCredentials().orElse(null);
+        }
+        if (push.getConfigId() != null
+                && PlatformDarajaSettings.PLATFORM_DARAJA_CONFIG_ID.equals(push.getConfigId())) {
+            PlatformDarajaSettingsService daraja = platformDarajaSettingsService.getIfAvailable();
+            if (daraja == null) {
+                return null;
+            }
+            return daraja.credentials().orElse(null);
         }
         PaymentGatewayConfig cfg = resolveConfig(push);
         if (cfg == null) {

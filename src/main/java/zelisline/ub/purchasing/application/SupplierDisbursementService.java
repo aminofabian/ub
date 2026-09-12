@@ -154,9 +154,13 @@ public class SupplierDisbursementService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
 
         if (!hasAutomatedPayoutDestination(supplier)) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Supplier needs a KopoKopo payout destination (M-Pesa phone, till, or paybill)");
+            String hint = SupplierPayoutTypes.MOBILE_WALLET.equals(supplier.getPayoutType())
+                    && supplier.getPayoutPhone() != null
+                    && !supplier.getPayoutPhone().isBlank()
+                    && supplier.getPayoutPhoneVerifiedAt() == null
+                    ? "Verify the supplier M-Pesa payout phone with an SMS code first (Suppliers → payout)."
+                    : "Supplier needs a KopoKopo payout destination (M-Pesa phone, till, or paybill)";
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, hint);
         }
 
         PaymentGatewayConfig cfg = supplierPayoutSettingsService.resolveActivePayoutConfig(businessId)
@@ -473,7 +477,8 @@ public class SupplierDisbursementService {
         }
         String type = supplier.getPayoutType();
         if (SupplierPayoutTypes.MOBILE_WALLET.equals(type)) {
-            return supplier.getPayoutPhone() != null && !supplier.getPayoutPhone().isBlank();
+            return supplier.getPayoutPhone() != null && !supplier.getPayoutPhone().isBlank()
+                    && supplier.getPayoutPhoneVerifiedAt() != null;
         }
         if (SupplierPayoutTypes.TILL.equals(type)) {
             return supplier.getPayoutTillNumber() != null && !supplier.getPayoutTillNumber().isBlank();

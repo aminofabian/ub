@@ -5,6 +5,7 @@ import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -14,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.domain.GatewayStatus;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
+import zelisline.ub.payments.domain.PlatformDarajaSettings;
 import zelisline.ub.payments.domain.PlatformPaymentGateway;
 import zelisline.ub.payments.domain.spi.PaymentGateway;
 import zelisline.ub.payments.domain.spi.StkPushRequest;
@@ -41,6 +43,7 @@ public class PaymentGatewayStkService {
     private final PaymentGatewayRegistry gatewayRegistry;
     private final CredentialEncryptionService encryptionService;
     private final ObjectMapper objectMapper;
+    private final ObjectProvider<PlatformDarajaSettingsService> platformDarajaSettingsService;
 
     @Value("${app.public.api-base-url:http://localhost:5050}")
     private String publicApiBaseUrl;
@@ -104,8 +107,42 @@ public class PaymentGatewayStkService {
             return lastOutcome;
         }
 
+        // Platform Daraja (SA credentials) — Party B = platform shortcode / Paybill.
+        StkPushOutcome platformDaraja = tryPlatformDaraja(
+                businessId, phoneNumber, amount, reference, description);
+        if (platformDaraja != null) {
+            return platformDaraja;
+        }
+
         log.warn("No ACTIVE online STK gateway for business={} (check tenant id, platform enable, Activate)", businessId);
         return StkPushOutcome.rejected(null, "NO_GATEWAY", "Online payment is not available right now.");
+    }
+
+    private StkPushOutcome tryPlatformDaraja(
+            String businessId,
+            String phoneNumber,
+            BigDecimal amount,
+            String reference,
+            String description
+    ) {
+        PlatformDarajaSettingsService daraja = platformDarajaSettingsService.getIfAvailable();
+        if (daraja == null || !daraja.isEnabledAndConfigured()) {
+            return null;
+        }
+        var creds = daraja.credentials().orElse(null);
+        if (creds == null || creds.isEmpty()) {
+            return null;
+        }
+        log.info("STK via platform Daraja for business={} partyB={}", businessId, creds.get("shortcode"));
+        return initiateWithCredentials(
+                GatewayType.DARAJA.name(),
+                PlatformDarajaSettings.PLATFORM_DARAJA_CONFIG_ID,
+                businessId,
+                creds,
+                phoneNumber,
+                amount,
+                reference,
+                description);
     }
 
     /**

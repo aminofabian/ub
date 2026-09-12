@@ -83,6 +83,13 @@ public class Supplier {
     @Column(name = "payout_paybill_account", length = 64)
     private String payoutPaybillAccount;
 
+    /**
+     * When set, {@code payout_phone} was OTP-verified for automated Send Money.
+     * Cleared when payout type or phone changes.
+     */
+    @Column(name = "payout_phone_verified_at")
+    private Instant payoutPhoneVerifiedAt;
+
     @Column(name = "kopokopo_external_recipient_url", length = 512)
     private String kopokopoExternalRecipientUrl;
 

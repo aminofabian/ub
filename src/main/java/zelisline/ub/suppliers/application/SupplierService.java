@@ -216,6 +216,8 @@ public class SupplierService {
                 || patch.payoutPaybillNumber() != null
                 || patch.payoutPaybillAccount() != null
                 || patch.kopokopoExternalRecipientUrl() != null) {
+            String previousPhone = s.getPayoutPhone();
+            String previousType = s.getPayoutType();
             applyPayoutFields(
                     s,
                     patch.payoutType(),
@@ -224,6 +226,7 @@ public class SupplierService {
                     patch.payoutPaybillNumber(),
                     patch.payoutPaybillAccount(),
                     patch.kopokopoExternalRecipientUrl());
+            SupplierPayoutPhoneVerificationService.clearIfPhoneChanged(s, previousPhone, previousType);
             if (patch.payoutPhone() != null && s.getPayoutPhone() != null) {
                 contactUniquenessService.assertPhoneAvailable(businessId, s.getPayoutPhone(), supplierId);
             }
@@ -580,6 +583,7 @@ public class SupplierService {
                 s.getPayoutTillNumber(),
                 s.getPayoutPaybillNumber(),
                 s.getPayoutPaybillAccount(),
+                s.getPayoutPhoneVerifiedAt(),
                 s.getKopokopoExternalRecipientUrl(),
                 s.getMarketplaceSupplierId(),
                 supplierNumber,

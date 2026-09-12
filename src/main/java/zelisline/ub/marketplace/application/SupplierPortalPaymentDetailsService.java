@@ -24,7 +24,9 @@ import zelisline.ub.marketplace.repository.MarketplaceSupplierRepository;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.platform.application.PlatformSupplierPortalSettingsService;
 import zelisline.ub.platform.domain.PlatformSupplierPortalSettings;
+import zelisline.ub.suppliers.application.SupplierPayoutPhoneVerificationService;
 import zelisline.ub.suppliers.domain.Supplier;
+import zelisline.ub.suppliers.domain.SupplierPayoutTypes;
 import zelisline.ub.suppliers.repository.SupplierRepository;
 
 @Service
@@ -164,6 +166,9 @@ public class SupplierPortalPaymentDetailsService {
             if (local == null) {
                 continue;
             }
+            String previousPhone = local.getPayoutPhone();
+            String previousType = local.getPayoutType();
+
             if (m.getPreferredPaymentMethod() != null) {
                 local.setPaymentMethodPreferred(m.getPreferredPaymentMethod());
             }
@@ -173,16 +178,99 @@ public class SupplierPortalPaymentDetailsService {
                     local.setPaymentDetails(details);
                 }
             }
-            if (m.getMobileMoney() != null) {
-                local.setPayoutPhone(m.getMobileMoney());
-            } else if (m.getContactPhone() != null) {
-                local.setPayoutPhone(m.getContactPhone());
-            }
+
+            applyPortalPayoutToLocal(local, m);
+            SupplierPayoutPhoneVerificationService.clearIfPhoneChanged(local, previousPhone, previousType);
+
             if (m.getTaxPin() != null) {
                 local.setVatPin(m.getTaxPin());
             }
             supplierRepository.save(local);
         }
+    }
+
+    /**
+     * Map portal free-text payment fields onto local automated payout columns.
+     * Prefer preferred method when it clearly names a rail; otherwise pick the
+     * richest filled destination (mobile → till → paybill).
+     */
+    private static void applyPortalPayoutToLocal(Supplier local, MarketplaceSupplier m) {
+        String preferred = m.getPreferredPaymentMethod() != null
+                ? m.getPreferredPaymentMethod().trim().toLowerCase()
+                : "";
+        String mobile = StkPhoneNormalizer.normalize(m.getMobileMoney());
+        String till = digitsOnly(m.getTillNumber());
+        String paybill = digitsOnly(m.getPaybill());
+
+        boolean wantMobile = preferred.contains("mobile") || preferred.contains("mpesa")
+                || preferred.contains("m-pesa") || preferred.contains("wallet");
+        boolean wantTill = preferred.contains("till") || preferred.contains("buy goods");
+        boolean wantPaybill = preferred.contains("paybill") || preferred.contains("pay bill");
+
+        if (wantMobile && mobile != null) {
+            local.setPayoutType(SupplierPayoutTypes.MOBILE_WALLET);
+            local.setPayoutPhone(mobile);
+            local.setPayoutTillNumber(null);
+            local.setPayoutPaybillNumber(null);
+            local.setPayoutPaybillAccount(null);
+            return;
+        }
+        if (wantTill && till != null) {
+            local.setPayoutType(SupplierPayoutTypes.TILL);
+            local.setPayoutTillNumber(till);
+            local.setPayoutPhone(null);
+            local.setPayoutPaybillNumber(null);
+            local.setPayoutPaybillAccount(null);
+            return;
+        }
+        if (wantPaybill && paybill != null) {
+            local.setPayoutType(SupplierPayoutTypes.PAYBILL);
+            local.setPayoutPaybillNumber(paybill);
+            // Keep existing account if portal did not send one (portal has no account field).
+            if (local.getPayoutPaybillAccount() == null || local.getPayoutPaybillAccount().isBlank()) {
+                local.setPayoutPaybillAccount(paybill);
+            }
+            local.setPayoutPhone(null);
+            local.setPayoutTillNumber(null);
+            return;
+        }
+
+        if (mobile != null) {
+            local.setPayoutType(SupplierPayoutTypes.MOBILE_WALLET);
+            local.setPayoutPhone(mobile);
+            local.setPayoutTillNumber(null);
+            local.setPayoutPaybillNumber(null);
+            local.setPayoutPaybillAccount(null);
+            return;
+        }
+        if (till != null) {
+            local.setPayoutType(SupplierPayoutTypes.TILL);
+            local.setPayoutTillNumber(till);
+            local.setPayoutPhone(null);
+            local.setPayoutPaybillNumber(null);
+            local.setPayoutPaybillAccount(null);
+            return;
+        }
+        if (paybill != null) {
+            local.setPayoutType(SupplierPayoutTypes.PAYBILL);
+            local.setPayoutPaybillNumber(paybill);
+            if (local.getPayoutPaybillAccount() == null || local.getPayoutPaybillAccount().isBlank()) {
+                local.setPayoutPaybillAccount(paybill);
+            }
+            local.setPayoutPhone(null);
+            local.setPayoutTillNumber(null);
+        }
+    }
+
+    private static String digitsOnly(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String digits = raw.replaceAll("[^0-9]", "");
+        if (digits.length() < 5 || digits.length() > 12) {
+            return null;
+        }
+        return digits;
     }
 
     private static String buildPaymentDetailsText(MarketplaceSupplier m) {

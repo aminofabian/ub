@@ -15,6 +15,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.marketplace.application.MarketplaceEscrowService;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.KioskPayWithdrawService;
 import zelisline.ub.payments.application.PlatformKioskPaySettingsService;
@@ -50,6 +51,7 @@ public class KopokopoWebhookController {
     private final ObjectProvider<PlatformDomainSettingsService> platformDomainSettingsService;
     private final ObjectProvider<PlatformKioskPaySettingsService> kioskPaySettingsService;
     private final ObjectProvider<KioskPayWithdrawService> kioskPayWithdrawService;
+    private final ObjectProvider<MarketplaceEscrowService> marketplaceEscrowService;
     private final ObjectMapper objectMapper;
 
     @PostMapping("/payment")
@@ -107,8 +109,15 @@ public class KopokopoWebhookController {
                 if (!kioskCreds.isEmpty() && signatureMatches(kioskCreds, rawBody, signature)) {
                     log.info("KopoKopo webhook: signature matched platform Kiosk Pay credentials");
                     if ("send_money".equalsIgnoreCase(result.topic())) {
+                        boolean handled = false;
                         if (withdrawService != null) {
-                            withdrawService.handleSendMoneyWebhook(result);
+                            handled = withdrawService.handleSendMoneyWebhook(result);
+                        }
+                        if (!handled) {
+                            MarketplaceEscrowService escrow = marketplaceEscrowService.getIfAvailable();
+                            if (escrow != null) {
+                                escrow.handleSendMoneyWebhook(result);
+                            }
                         }
                     } else {
                         gatewayStkPushService.processKioskPayKopokopoWebhook(result);

@@ -24,6 +24,13 @@ public final class KioskPayLedgerEntryTypes {
     /** Merchant's margin on a delivered airtime sale. */
     public static final String AIRTIME_COMMISSION = "AIRTIME_COMMISSION";
 
+    /** Marketplace escrow: available → pending (supplier-bound hold). */
+    public static final String ESCROW_HOLD = "ESCROW_HOLD";
+    /** Marketplace escrow: pending cleared after platform Send Money to supplier. */
+    public static final String ESCROW_SETTLE = "ESCROW_SETTLE";
+    /** Marketplace escrow: pending → available (cancel / failed settle). */
+    public static final String ESCROW_RELEASE = "ESCROW_RELEASE";
+
     public static final String CREDIT = "CREDIT";
     public static final String DEBIT = "DEBIT";
 

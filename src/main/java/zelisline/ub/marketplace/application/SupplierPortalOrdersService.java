@@ -60,6 +60,7 @@ public class SupplierPortalOrdersService {
     private final SupplierProductRepository supplierProductRepository;
     private final PathAPurchaseService pathAPurchaseService;
     private final BranchResolutionService branchResolutionService;
+    private final MarketplaceEscrowService marketplaceEscrowService;
     private final ObjectMapper objectMapper;
 
     @Transactional
@@ -243,6 +244,8 @@ public class SupplierPortalOrdersService {
             po.setNotes(existing.isBlank() ? tracking : existing + "\n" + tracking);
         }
         purchaseOrderRepository.save(po);
+        marketplaceEscrowService.onDeliveryStatusChanged(
+                po.getBusinessId(), po.getId(), request.deliveryStatus());
         logPerformanceEvent(marketplaceSupplierId, po.getBusinessId(), "po_delivery_" + request.deliveryStatus(), po.getId());
         return toDetail(po);
     }

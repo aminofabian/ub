@@ -32,6 +32,18 @@ public interface WebOrderRepository extends JpaRepository<WebOrder, String> {
 
     Optional<WebOrder> findByIdAndBusinessId(String id, String businessId);
 
+    /**
+     * Recent unpaid storefront orders — used by Daraja C2B BillRef auto-settle
+     * (scan + {@code WebOrderCodes} match; bounded by {@code since} + pageable).
+     */
+    @Query("""
+            select w from WebOrder w
+             where w.status in ('pending_payment', 'payment_failed')
+               and w.createdAt >= :since
+             order by w.createdAt desc
+            """)
+    List<WebOrder> findRecentPayableOrders(@Param("since") Instant since, Pageable pageable);
+
     /** Cloud → till orders pull: orders touched at/after the cursor. */
     @Query("""
             select w from WebOrder w

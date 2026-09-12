@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -15,6 +16,21 @@ public interface GroceryInvoiceRepository extends JpaRepository<GroceryInvoice, 
     Optional<GroceryInvoice> findByIdAndBusinessId(String id, String businessId);
 
     Optional<GroceryInvoice> findByBarcodeCodeAndBusinessId(String barcodeCode, String businessId);
+
+    /**
+     * Pending remote bills for Daraja C2B BillRef settle (barcode may be truncated / punctuation-stripped).
+     */
+    @Query("""
+            select gi from GroceryInvoice gi
+             where gi.status = :status
+               and gi.remote = true
+               and gi.createdAt >= :since
+             order by gi.createdAt desc
+            """)
+    List<GroceryInvoice> findRecentPendingRemote(
+            @Param("status") String status,
+            @Param("since") Instant since,
+            Pageable pageable);
 
     @Query("""
             select gi from GroceryInvoice gi

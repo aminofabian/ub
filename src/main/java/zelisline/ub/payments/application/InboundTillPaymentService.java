@@ -66,15 +66,40 @@ public class InboundTillPaymentService {
                 || !parsed.topic().equalsIgnoreCase("buygoods_transaction_received")) {
             return Optional.empty();
         }
+        return persistUnmatchedInbound(businessId, GatewayType.KOPOKOPO, parsed, extractTillNumber(parsed.rawPayload()));
+    }
 
-        String eventId = resolveEventId(parsed);
-        if (eventId == null) {
-            log.warn("Buygoods webhook missing event id — not persisting business={}", businessId);
+    /**
+     * Daraja C2B confirmation that did not match an STK push or BillRef order/invoice.
+     * BillRef is stored on {@code tillNumber} for ops recon.
+     */
+    @Transactional
+    public Optional<InboundTillPayment> persistUnmatchedDarajaC2b(String businessId, WebhookResult parsed) {
+        if (parsed == null || !parsed.success() || parsed.amount() == null) {
             return Optional.empty();
         }
-        if (inboundRepository.existsByGatewayTypeAndGatewayEventId(GatewayType.KOPOKOPO, eventId)) {
+        if (parsed.topic() == null || !parsed.topic().equalsIgnoreCase("c2b_confirmation")) {
+            return Optional.empty();
+        }
+        String billRef = trimOrNull(parsed.reference());
+        return persistUnmatchedInbound(businessId, GatewayType.DARAJA, parsed, billRef);
+    }
+
+    private Optional<InboundTillPayment> persistUnmatchedInbound(
+            String businessId,
+            GatewayType gatewayType,
+            WebhookResult parsed,
+            String tillOrBillRef
+    ) {
+        String eventId = resolveEventId(parsed);
+        if (eventId == null) {
+            log.warn("Inbound webhook missing event id — not persisting business={} gateway={}",
+                    businessId, gatewayType);
+            return Optional.empty();
+        }
+        if (inboundRepository.existsByGatewayTypeAndGatewayEventId(gatewayType, eventId)) {
             Optional<InboundTillPayment> existing = inboundRepository
-                    .findByGatewayTypeAndGatewayEventId(GatewayType.KOPOKOPO, eventId);
+                    .findByGatewayTypeAndGatewayEventId(gatewayType, eventId);
             existing.ifPresent(row -> ensurePayerLinked(businessId, row, parsed));
             return existing;
         }
@@ -92,7 +117,7 @@ public class InboundTillPaymentService {
 
         InboundTillPayment row = new InboundTillPayment();
         row.setBusinessId(businessId);
-        row.setGatewayType(GatewayType.KOPOKOPO);
+        row.setGatewayType(gatewayType);
         row.setGatewayEventId(eventId);
         row.setMpesaReceipt(receipt);
         row.setPhone(parsed.phoneIsMasked() ? null : StkPhoneNormalizer.normalize(parsed.phoneNumber()));
@@ -100,7 +125,7 @@ public class InboundTillPaymentService {
         row.setPayerLastName(parsed.lastName());
         row.setMaskedMsisdn(parsed.maskedPhone());
         row.setAmount(parsed.amount().setScale(2, RoundingMode.HALF_UP));
-        row.setTillNumber(extractTillNumber(parsed.rawPayload()));
+        row.setTillNumber(tillOrBillRef);
         row.setRawPayload(parsed.rawPayload());
         row.setStatus(InboundTillPaymentStatuses.PENDING);
         try {
@@ -108,8 +133,9 @@ public class InboundTillPaymentService {
             payer.ifPresent(c -> row.setLinkedCustomerId(c.getId()));
             return Optional.of(inboundRepository.save(row));
         } catch (DataIntegrityViolationException e) {
-            log.info("Inbound till payment duplicate ignored eventId={} business={}", eventId, businessId);
-            return inboundRepository.findByGatewayTypeAndGatewayEventId(GatewayType.KOPOKOPO, eventId)
+            log.info("Inbound payment duplicate ignored eventId={} business={} gateway={}",
+                    eventId, businessId, gatewayType);
+            return inboundRepository.findByGatewayTypeAndGatewayEventId(gatewayType, eventId)
                     .or(() -> receipt == null
                             ? Optional.empty()
                             : inboundRepository.findFirstByBusinessIdAndMpesaReceiptIgnoreCase(

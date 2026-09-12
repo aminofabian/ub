@@ -493,6 +493,101 @@ public class KioskPayWalletService {
     }
 
     /**
+     * Marketplace escrow — earmark available balance for a supplier-bound hold.
+     * Shop cannot withdraw these funds until settle or release.
+     */
+    @Transactional
+    public void holdForEscrow(
+            KioskPayAccount account,
+            BigDecimal amount,
+            String currency,
+            String holdId,
+            String reference
+    ) {
+        if (account.getAvailableBalance().compareTo(amount) < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Not enough Kiosk Pay balance to fund this escrow hold — top up first");
+        }
+        String cur = currency == null || currency.isBlank() ? "KES" : currency;
+        applyDelta(account, amount.negate(), amount);
+        accountRepository.save(account);
+        writeEntry(
+                account,
+                KioskPayLedgerEntryTypes.ESCROW_HOLD,
+                KioskPayLedgerEntryTypes.DEBIT,
+                amount,
+                cur,
+                amount.negate(),
+                amount,
+                reference,
+                "MARKETPLACE_ESCROW",
+                holdId,
+                null,
+                null,
+                "Marketplace escrow hold");
+        publishBalance(account, cur, "ESCROW_HOLD");
+    }
+
+    /** Escrow settled to supplier via platform Send Money — pending leaves the wallet. */
+    @Transactional
+    public void settleEscrow(
+            KioskPayAccount account,
+            BigDecimal amount,
+            String currency,
+            String holdId,
+            String reference
+    ) {
+        String cur = currency == null || currency.isBlank() ? "KES" : currency;
+        applyDelta(account, BigDecimal.ZERO, amount.negate());
+        account.setLifetimeOut(account.getLifetimeOut().add(amount));
+        accountRepository.save(account);
+        writeEntry(
+                account,
+                KioskPayLedgerEntryTypes.ESCROW_SETTLE,
+                KioskPayLedgerEntryTypes.DEBIT,
+                amount,
+                cur,
+                BigDecimal.ZERO,
+                amount.negate(),
+                reference,
+                "MARKETPLACE_ESCROW",
+                holdId,
+                null,
+                null,
+                "Marketplace escrow settled to supplier");
+        publishBalance(account, cur, "ESCROW_SETTLE");
+    }
+
+    /** Escrow cancelled or Send Money failed — return pending to available. */
+    @Transactional
+    public void releaseEscrowHold(
+            KioskPayAccount account,
+            BigDecimal amount,
+            String currency,
+            String holdId,
+            String reference
+    ) {
+        String cur = currency == null || currency.isBlank() ? "KES" : currency;
+        applyDelta(account, amount, amount.negate());
+        accountRepository.save(account);
+        writeEntry(
+                account,
+                KioskPayLedgerEntryTypes.ESCROW_RELEASE,
+                KioskPayLedgerEntryTypes.CREDIT,
+                amount,
+                cur,
+                amount,
+                amount.negate(),
+                reference,
+                "MARKETPLACE_ESCROW",
+                holdId,
+                null,
+                null,
+                "Marketplace escrow released to shop");
+        publishBalance(account, cur, "ESCROW_RELEASE");
+    }
+
+    /**
      * Super-admin manual wallet adjustment (reversal / correction). Positive delta
      * credits available balance; negative debits it (must not go below zero).
      */

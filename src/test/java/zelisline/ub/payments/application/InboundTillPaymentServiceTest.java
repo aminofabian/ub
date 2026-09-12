@@ -100,6 +100,38 @@ class InboundTillPaymentServiceTest {
     }
 
     @Test
+    void persistUnmatchedDarajaC2b_storesBillRefOnTillNumber() {
+        when(inboundRepository.existsByGatewayTypeAndGatewayEventId(GatewayType.DARAJA, "NLJ7RT61SV"))
+                .thenReturn(false);
+        when(inboundRepository.findFirstByBusinessIdAndMpesaReceiptIgnoreCase("biz-1", "NLJ7RT61SV"))
+                .thenReturn(Optional.empty());
+        when(inboundRepository.save(any(InboundTillPayment.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        WebhookResult parsed = new WebhookResult(
+                null,
+                "NLJ7RT61SV",
+                "254708374149",
+                new BigDecimal("10.00"),
+                "55440000",
+                true,
+                false,
+                null,
+                "NLJ7RT61SV",
+                "c2b_confirmation",
+                "{\"BusinessShortCode\":\"600426\",\"BillRefNumber\":\"55440000\"}");
+
+        Optional<InboundTillPayment> saved = service.persistUnmatchedDarajaC2b("biz-1", parsed);
+
+        assertThat(saved).isPresent();
+        ArgumentCaptor<InboundTillPayment> cap = ArgumentCaptor.forClass(InboundTillPayment.class);
+        verify(inboundRepository).save(cap.capture());
+        InboundTillPayment row = cap.getValue();
+        assertThat(row.getGatewayType()).isEqualTo(GatewayType.DARAJA);
+        assertThat(row.getTillNumber()).isEqualTo("55440000");
+        assertThat(row.getMpesaReceipt()).isEqualTo("NLJ7RT61SV");
+    }
+
+    @Test
     void persistUnmatchedBuygoods_dedupesByEventId() {
         InboundTillPayment existing = pending("in-1", "OJL7OW3J59", "254714282874", "150.00");
         when(inboundRepository.existsByGatewayTypeAndGatewayEventId(GatewayType.KOPOKOPO, "evt-1"))

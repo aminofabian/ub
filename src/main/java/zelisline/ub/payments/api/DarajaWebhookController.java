@@ -53,7 +53,8 @@ public class DarajaWebhookController {
     }
 
     /**
-     * C2B confirmation — Paybill/Till money-in. Matches pending STK by BillRefNumber when possible.
+     * C2B confirmation — Paybill/Till money-in. Matches pending STK by BillRefNumber,
+     * else unique pending web order / remote grocery invoice, else unmatched inbound.
      */
     @PostMapping("/c2b/confirmation")
     public ResponseEntity<Map<String, Object>> c2bConfirmation(HttpServletRequest request) {

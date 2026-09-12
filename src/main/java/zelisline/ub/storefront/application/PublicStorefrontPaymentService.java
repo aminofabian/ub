@@ -14,6 +14,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.payments.application.DarajaAccountReferences;
 import zelisline.ub.payments.application.GatewayCheckoutService;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.KioskPayWalletService;
@@ -30,6 +31,7 @@ import zelisline.ub.payments.domain.PaymentGatewayConfig;
 import zelisline.ub.payments.domain.PlatformPaymentGateway;
 import zelisline.ub.payments.domain.spi.DisplayInstructions;
 import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
+import zelisline.ub.storefront.WebOrderCodes;
 import zelisline.ub.storefront.WebOrderStatuses;
 import zelisline.ub.storefront.api.dto.PublicCheckoutPaymentOptions;
 import zelisline.ub.storefront.api.dto.PublicOnlinePaymentMethod;
@@ -270,18 +272,22 @@ public class PublicStorefrontPaymentService {
                 preferredConfigId,
                 phone,
                 order.getGrandTotal(),
-                order.getId(),
-                "Web order " + order.getId()
+                // Daraja AccountReference ≤12 chars; use canonical order code so C2B BillRef matches.
+                WebOrderCodes.code(order.getId()),
+                "Web order " + WebOrderCodes.code(order.getId())
         );
 
         if (outcome.accepted()) {
             GatewayType gatewayType = GatewayType.valueOf(outcome.gatewayType());
+            String merchantRef = GatewayType.DARAJA.equals(gatewayType)
+                    ? DarajaAccountReferences.forWebOrder(order.getId())
+                    : order.getId();
             gatewayStkPushService.registerPush(
                     business.getId(),
                     gatewayType,
                     outcome.configId(),
                     outcome.checkoutRequestId(),
-                    order.getId(),
+                    merchantRef,
                     StkPushContextType.WEB_ORDER,
                     order.getId(),
                     order.getGrandTotal(),

@@ -40,7 +40,10 @@ import zelisline.ub.credits.domain.CreditAccount;
 import zelisline.ub.credits.domain.MpesaStkIntent;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.MpesaStkIntentRepository;
+import zelisline.ub.grocery.GroceryConstants;
 import zelisline.ub.grocery.application.GroceryInvoiceService;
+import zelisline.ub.grocery.domain.GroceryInvoice;
+import zelisline.ub.grocery.repository.GroceryInvoiceRepository;
 import zelisline.ub.notifications.application.NotificationOutboxService;
 import zelisline.ub.payments.domain.GatewayStkPush;
 import zelisline.ub.payments.domain.GatewayStkPushStatuses;
@@ -61,10 +64,13 @@ import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
 import zelisline.ub.payments.repository.PaymentWebhookEventRepository;
 import zelisline.ub.messaging.application.CreditTabPaymentConfirmationEvent;
 import zelisline.ub.platform.realtime.RealtimeBridge;
+import zelisline.ub.storefront.WebOrderCodes;
 import zelisline.ub.storefront.WebOrderStatuses;
 import zelisline.ub.storefront.application.WebOrderFulfillmentService;
 import zelisline.ub.storefront.domain.WebOrder;
 import zelisline.ub.storefront.repository.WebOrderRepository;
+
+import org.springframework.data.domain.PageRequest;
 
 @Service
 @RequiredArgsConstructor
@@ -92,6 +98,7 @@ public class GatewayStkPushService {
     private final PaymentWebhookEventRepository webhookEventRepository;
     private final PaymentGatewayConfigRepository configRepository;
     private final WebOrderRepository webOrderRepository;
+    private final GroceryInvoiceRepository groceryInvoiceRepository;
     private final MpesaStkIntentRepository mpesaStkIntentRepository;
     private final CreditAccountRepository creditAccountRepository;
     private final WalletLedgerService walletLedgerService;
@@ -383,11 +390,193 @@ public class GatewayStkPushService {
             }
         }
         if (push.isEmpty()) {
-            log.warn("Daraja webhook: no matching STK push checkout={} ref={} success={}",
-                    parsed.gatewayCheckoutId(), parsed.reference(), parsed.success());
+            if (parsed.success()
+                    && parsed.reference() != null
+                    && !parsed.reference().isBlank()
+                    && "c2b_confirmation".equalsIgnoreCase(parsed.topic())) {
+                Optional<GatewayStkPush> synthetic = trySettleDarajaC2bByBillRef(parsed, eventId);
+                if (synthetic.isPresent()) {
+                    return settleMatchedWebhook(synthetic.get(), synthetic.get().getBusinessId(), eventId, parsed);
+                }
+                String businessId = resolveBusinessIdForUnmatchedDarajaC2b(parsed);
+                if (businessId != null) {
+                    inboundTillPaymentService.persistUnmatchedDarajaC2b(businessId, parsed);
+                } else {
+                    log.warn(
+                            "Daraja C2B unmatched (no STK / order / invoice): ref={} amount={} receipt={} shortcode={}",
+                            parsed.reference(),
+                            parsed.amount(),
+                            parsed.gatewayTransactionId(),
+                            extractBusinessShortCode(parsed));
+                }
+            } else {
+                log.warn("Daraja webhook: no matching STK push checkout={} ref={} success={}",
+                        parsed.gatewayCheckoutId(), parsed.reference(), parsed.success());
+            }
             return true;
         }
         return settleMatchedWebhook(push.get(), push.get().getBusinessId(), eventId, parsed);
+    }
+
+    /**
+     * Model C / missed-STK path: BillRefNumber → unique pending web order or remote grocery invoice.
+     * Registers a synthetic push so settlement reuses {@link #confirmPush}.
+     */
+    private Optional<GatewayStkPush> trySettleDarajaC2bByBillRef(WebhookResult parsed, String eventId) {
+        String billRef = parsed.reference().trim();
+        Instant since = Instant.now().minus(Duration.ofHours(48));
+        PageRequest page = PageRequest.of(0, 400);
+
+        List<WebOrder> orderHits = webOrderRepository.findRecentPayableOrders(since, page).stream()
+                .filter(o -> WebOrderCodes.matches(billRef, o.getId()))
+                .filter(o -> parsed.amount() == null || amountsClose(o.getGrandTotal(), parsed.amount()))
+                .toList();
+        if (orderHits.size() == 1) {
+            WebOrder order = orderHits.get(0);
+            return Optional.of(registerSyntheticDarajaC2bPush(
+                    order.getBusinessId(),
+                    eventId,
+                    DarajaAccountReferences.forWebOrder(order.getId()),
+                    StkPushContextType.WEB_ORDER,
+                    order.getId(),
+                    order.getGrandTotal(),
+                    parsed.phoneNumber()));
+        }
+        if (orderHits.size() > 1) {
+            log.warn("Daraja C2B BillRef={} matched {} web orders — refusing auto-settle", billRef, orderHits.size());
+            return Optional.empty();
+        }
+
+        List<GroceryInvoice> invoiceHits = groceryInvoiceRepository
+                .findRecentPendingRemote(GroceryConstants.STATUS_PENDING_PAYMENT, since, page)
+                .stream()
+                .filter(gi -> DarajaAccountReferences.groceryBarcodeMatches(billRef, gi.getBarcodeCode()))
+                .filter(gi -> parsed.amount() == null || amountsClose(gi.getGrandTotal(), parsed.amount()))
+                .toList();
+        if (invoiceHits.size() == 1) {
+            GroceryInvoice invoice = invoiceHits.get(0);
+            return Optional.of(registerSyntheticDarajaC2bPush(
+                    invoice.getBusinessId(),
+                    eventId,
+                    DarajaAccountReferences.forGroceryBarcode(invoice.getBarcodeCode()),
+                    StkPushContextType.GROCERY_INVOICE,
+                    invoice.getId(),
+                    invoice.getGrandTotal(),
+                    parsed.phoneNumber() != null ? parsed.phoneNumber() : invoice.getCustomerPhone()));
+        }
+        if (invoiceHits.size() > 1) {
+            log.warn("Daraja C2B BillRef={} matched {} grocery invoices — refusing auto-settle",
+                    billRef, invoiceHits.size());
+        }
+        return Optional.empty();
+    }
+
+    private GatewayStkPush registerSyntheticDarajaC2bPush(
+            String businessId,
+            String eventId,
+            String merchantReference,
+            StkPushContextType contextType,
+            String contextId,
+            BigDecimal amount,
+            String phone
+    ) {
+        String checkoutId = "c2b-" + (eventId != null && !eventId.isBlank()
+                ? eventId.trim()
+                : java.util.UUID.randomUUID());
+        String configId = resolveDarajaConfigIdForBusiness(businessId);
+        return registerPush(
+                businessId,
+                GatewayType.DARAJA,
+                configId,
+                checkoutId,
+                merchantReference,
+                contextType,
+                contextId,
+                amount != null ? amount.setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO,
+                phone != null ? phone : "");
+    }
+
+    private String resolveDarajaConfigIdForBusiness(String businessId) {
+        return configRepository
+                .findByBusinessIdAndGatewayTypeAndStatus(businessId, GatewayType.DARAJA, GatewayStatus.ACTIVE)
+                .stream()
+                .findFirst()
+                .map(PaymentGatewayConfig::getId)
+                .orElse(PlatformDarajaSettings.PLATFORM_DARAJA_CONFIG_ID);
+    }
+
+    private String resolveBusinessIdForUnmatchedDarajaC2b(WebhookResult parsed) {
+        String shortcode = extractBusinessShortCode(parsed);
+        if (shortcode == null || shortcode.isBlank()) {
+            return null;
+        }
+        PlatformDarajaSettingsService platformDaraja = platformDarajaSettingsService.getIfAvailable();
+        if (platformDaraja != null) {
+            try {
+                PlatformDarajaSettings settings = platformDaraja.loadSingleton();
+                if (settings.getShortcode() != null
+                        && settings.getShortcode().replaceAll("\\D", "").equals(shortcode.replaceAll("\\D", ""))) {
+                    // Platform Paybill — no single tenant; leave for ops log unless a BillRef hit.
+                    return null;
+                }
+            } catch (Exception ignored) {
+                // fall through to tenant scan
+            }
+        }
+        List<PaymentGatewayConfig> darajaConfigs =
+                configRepository.findByGatewayTypeAndStatus(GatewayType.DARAJA, GatewayStatus.ACTIVE);
+        for (PaymentGatewayConfig cfg : darajaConfigs) {
+            try {
+                String decrypted = encryptionService.decrypt(cfg.getCredentialsJson());
+                @SuppressWarnings("unchecked")
+                Map<String, String> creds = objectMapper.readValue(decrypted, Map.class);
+                String cfgShort = firstNonBlank(
+                        creds.get("shortcode"), creds.get("tillNumber"), creds.get("businessShortCode"));
+                if (cfgShort != null
+                        && cfgShort.replaceAll("\\D", "").equals(shortcode.replaceAll("\\D", ""))) {
+                    return cfg.getBusinessId();
+                }
+            } catch (Exception e) {
+                log.debug("Daraja C2B shortcode resolve skipped config={}: {}", cfg.getId(), e.getMessage());
+            }
+        }
+        return null;
+    }
+
+    private String extractBusinessShortCode(WebhookResult parsed) {
+        if (parsed == null || parsed.rawPayload() == null || parsed.rawPayload().isBlank()) {
+            return null;
+        }
+        try {
+            var root = objectMapper.readTree(parsed.rawPayload());
+            String sc = textOrNull(root, "BusinessShortCode");
+            if (sc == null) {
+                sc = textOrNull(root, "ShortCode");
+            }
+            return sc != null ? sc.trim() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static String textOrNull(com.fasterxml.jackson.databind.JsonNode root, String field) {
+        if (root == null || !root.has(field) || root.get(field).isNull()) {
+            return null;
+        }
+        String v = root.get(field).asText();
+        return v == null || v.isBlank() ? null : v;
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String v : values) {
+            if (v != null && !v.isBlank()) {
+                return v.trim();
+            }
+        }
+        return null;
     }
 
     /**

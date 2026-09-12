@@ -471,7 +471,7 @@ public class SupplierDisbursementService {
         return "Payment declined by KopoKopo. Check till balance, Send Money permissions, and the payout destination in your KopoKopo dashboard.";
     }
 
-    static boolean hasAutomatedPayoutDestination(Supplier supplier) {
+    public static boolean hasAutomatedPayoutDestination(Supplier supplier) {
         if (supplier == null || !SupplierPayoutTypes.isAutomated(supplier.getPayoutType())) {
             return false;
         }

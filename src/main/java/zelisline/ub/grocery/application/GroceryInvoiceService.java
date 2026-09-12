@@ -45,6 +45,7 @@ import zelisline.ub.grocery.repository.GroceryInvoiceLineRepository;
 import zelisline.ub.grocery.repository.GroceryInvoiceRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.messaging.application.CreditSaleReminderLineItem;
+import zelisline.ub.payments.application.DarajaAccountReferences;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.PaymentGatewayStkService;
 import zelisline.ub.payments.application.StkPushRetryHelper;
@@ -901,8 +902,7 @@ public class GroceryInvoiceService {
         if (phone == null || phone.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invoice has no customer phone");
         }
-        String reference = "gi-" + invoice.getId().replace("-", "").substring(0, 16)
-                + "-" + UUID.randomUUID().toString().substring(0, 6);
+        String reference = DarajaAccountReferences.forGroceryBarcode(invoice.getBarcodeCode());
         String description = "Bill " + invoice.getBarcodeCode();
 
         PaymentGatewayStkService.StkPushOutcome outcome = stkPushRetryHelper.initiateAfterClearingPhone(

@@ -55,6 +55,7 @@ import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.sales.repository.SalePaymentRepository;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
+import zelisline.ub.suppliers.application.SupplierPayoutPhoneVerificationService;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierContact;
 import zelisline.ub.suppliers.repository.SupplierContactRepository;
@@ -1366,11 +1367,16 @@ public class DesktopSyncPullService {
         s.setNotes(d.notes());
         s.setPaymentMethodPreferred(d.paymentMethodPreferred());
         s.setPaymentDetails(d.paymentDetails());
+        String prevPayoutType = s.getPayoutType();
+        String prevPayoutPhone = s.getPayoutPhone();
         s.setPayoutType(d.payoutType() == null ? "manual" : d.payoutType());
         s.setPayoutPhone(d.payoutPhone());
         s.setPayoutTillNumber(d.payoutTillNumber());
         s.setPayoutPaybillNumber(d.payoutPaybillNumber());
         s.setPayoutPaybillAccount(d.payoutPaybillAccount());
+        // Pull-sync bypasses the portal/patch paths — a changed payout destination
+        // must not keep a stale OTP-verified flag.
+        SupplierPayoutPhoneVerificationService.clearIfPhoneChanged(s, prevPayoutPhone, prevPayoutType);
         if (d.prepaymentBalance() != null) {
             s.setPrepaymentBalance(d.prepaymentBalance());
         }

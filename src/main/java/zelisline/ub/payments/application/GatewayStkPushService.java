@@ -359,6 +359,13 @@ public class GatewayStkPushService {
     /**
      * Safaricom Daraja STK / C2B callback. Matches by CheckoutRequestID globally,
      * then by merchant reference when C2B BillRefNumber is present.
+     *
+     * <p>Both webhook endpoints are unauthenticated ({@code /webhooks/**} is permitAll)
+     * and CheckoutRequestIDs / BillRefNumbers are known to callers, so nothing in the
+     * payload alone proves money moved. Every settlement is therefore verified
+     * server-side: STK successes are re-confirmed with Daraja's STK query, C2B
+     * confirmations must carry a TransAmount, and a payload shortcode may never
+     * settle a push bound to a different shortcode.
      */
     @Transactional
     public boolean processDarajaWebhook(WebhookResult parsed) {
@@ -374,6 +381,15 @@ public class GatewayStkPushService {
             return true;
         }
 
+        boolean c2bConfirmation = "c2b_confirmation".equalsIgnoreCase(parsed.topic());
+        if (c2bConfirmation && parsed.success() && parsed.amount() == null) {
+            // A confirmation without TransAmount can never be amount-checked — refuse to
+            // settle (or record) anything derived from it.
+            log.warn("Daraja C2B confirmation without TransAmount refused: ref={} receipt={}",
+                    parsed.reference(), parsed.gatewayTransactionId());
+            return true;
+        }
+
         Optional<GatewayStkPush> push = Optional.empty();
         if (parsed.gatewayCheckoutId() != null && !parsed.gatewayCheckoutId().isBlank()) {
             push = pushRepository.findByGatewayTypeAndGatewayCheckoutId(
@@ -384,7 +400,9 @@ public class GatewayStkPushService {
             push = pushRepository.findFirstByMerchantReferenceAndStatusAndGatewayType(
                     ref, GatewayStkPushStatuses.PENDING, GatewayType.DARAJA);
             if (push.isEmpty()) {
-                // Truncated AccountReference may be a prefix of merchant reference
+                // Truncated AccountReference may be a prefix of merchant reference.
+                // Safe to keep only because settlement below still requires an exact
+                // amount match and a shortcode match.
                 push = pushRepository.findFirstByMerchantReferenceStartingWithAndStatusAndGatewayType(
                         ref, GatewayStkPushStatuses.PENDING, GatewayType.DARAJA);
             }
@@ -396,6 +414,12 @@ public class GatewayStkPushService {
                     && "c2b_confirmation".equalsIgnoreCase(parsed.topic())) {
                 Optional<GatewayStkPush> synthetic = trySettleDarajaC2bByBillRef(parsed, eventId);
                 if (synthetic.isPresent()) {
+                    String mismatch = darajaShortcodeMismatch(synthetic.get(), parsed);
+                    if (mismatch != null) {
+                        log.warn("Daraja C2B shortcode mismatch — refusing synthetic settle push={}: {}",
+                                synthetic.get().getId(), mismatch);
+                        return true;
+                    }
                     return settleMatchedWebhook(synthetic.get(), synthetic.get().getBusinessId(), eventId, parsed);
                 }
                 String businessId = resolveBusinessIdForUnmatchedDarajaC2b(parsed);
@@ -415,7 +439,103 @@ public class GatewayStkPushService {
             }
             return true;
         }
+        if (!safeToSettleDarajaPush(push.get(), parsed)) {
+            return true;
+        }
         return settleMatchedWebhook(push.get(), push.get().getBusinessId(), eventId, parsed);
+    }
+
+    /**
+     * Server-side verification before a Daraja webhook settles a push. STK callbacks
+     * are re-confirmed with Daraja's STK query (CheckoutRequestIDs are handed to
+     * unauthenticated callers, so a success callback alone proves nothing); C2B
+     * confirmations must not cross shortcodes. Returns false when the push must not
+     * settle now — it is left pending for the poller, or marked failed.
+     */
+    private boolean safeToSettleDarajaPush(GatewayStkPush push, WebhookResult parsed) {
+        String mismatch = darajaShortcodeMismatch(push, parsed);
+        if (mismatch != null) {
+            log.warn("Daraja webhook shortcode mismatch — refusing settle push={}: {}", push.getId(), mismatch);
+            return false;
+        }
+        boolean stkCallback = "stk_callback".equalsIgnoreCase(parsed.topic());
+        if (stkCallback && parsed.success()) {
+            return verifyDarajaStkSuccess(push);
+        }
+        if (stkCallback && parsed.terminalFailure()) {
+            // An unauthenticated failure callback must not kill a pending push on its own.
+            return verifyDarajaStkFailure(push);
+        }
+        return true;
+    }
+
+    /** Payload shortcode must match the shortcode the push was initiated with. */
+    private String darajaShortcodeMismatch(GatewayStkPush push, WebhookResult parsed) {
+        String payloadShortcode = extractBusinessShortCode(parsed);
+        if (payloadShortcode == null || payloadShortcode.isBlank()) {
+            return null; // STK callbacks carry no shortcode — nothing to compare
+        }
+        Map<String, String> creds = resolveCredentialsForPush(push);
+        String expected = creds == null
+                ? null
+                : firstNonBlank(creds.get("shortcode"), creds.get("tillNumber"), creds.get("businessShortCode"));
+        if (expected == null || expected.isBlank()) {
+            return null; // cannot determine the expected shortcode — skip rather than block
+        }
+        if (!expected.replaceAll("\\D", "").equals(payloadShortcode.replaceAll("\\D", ""))) {
+            return "push config shortcode=" + expected + " payload shortcode=" + payloadShortcode;
+        }
+        return null;
+    }
+
+    /**
+     * STK success callbacks are only a hint: confirm with Daraja's query before
+     * settling. Inconclusive queries leave the push pending for the poller.
+     */
+    private boolean verifyDarajaStkSuccess(GatewayStkPush push) {
+        Map<String, String> creds = resolveCredentialsForPush(push);
+        if (creds == null || creds.isEmpty()) {
+            log.warn("Daraja STK success callback cannot be verified (no credentials) — leaving pending push={}",
+                    push.getId());
+            return false;
+        }
+        try {
+            StkStatusResponse status = darajaGateway.queryStkStatus(push.getGatewayCheckoutId(), creds);
+            if (status != null && status.completed()) {
+                return true;
+            }
+            if (status != null && status.failed()) {
+                log.warn("Daraja STK query contradicts success callback push={} desc={} — marking failed",
+                        push.getId(), status.resultDescription());
+                markFailed(push, "Daraja query reports failure: " + status.resultDescription());
+                return false;
+            }
+            log.info("Daraja STK success callback not yet confirmed by query push={} code={} — leaving pending",
+                    push.getId(), status != null ? status.resultCode() : "null");
+            return false;
+        } catch (Exception e) {
+            log.warn("Daraja STK verification query failed push={} — leaving pending: {}",
+                    push.getId(), e.getMessage());
+            return false;
+        }
+    }
+
+    /** Trust a failure callback only when Daraja's query confirms it. */
+    private boolean verifyDarajaStkFailure(GatewayStkPush push) {
+        Map<String, String> creds = resolveCredentialsForPush(push);
+        if (creds == null || creds.isEmpty()) {
+            return false; // cannot verify — leave pending rather than trust an unauthenticated failure
+        }
+        try {
+            StkStatusResponse status = darajaGateway.queryStkStatus(push.getGatewayCheckoutId(), creds);
+            if (status != null && status.completed()) {
+                return false; // query says paid — let the success path settle it instead
+            }
+            return status != null && status.failed();
+        } catch (Exception e) {
+            log.warn("Daraja STK failure verification failed push={}: {}", push.getId(), e.getMessage());
+            return false;
+        }
     }
 
     /**
@@ -429,7 +549,7 @@ public class GatewayStkPushService {
 
         List<WebOrder> orderHits = webOrderRepository.findRecentPayableOrders(since, page).stream()
                 .filter(o -> WebOrderCodes.matches(billRef, o.getId()))
-                .filter(o -> parsed.amount() == null || amountsClose(o.getGrandTotal(), parsed.amount()))
+                .filter(o -> parsed.amount() != null && amountsClose(o.getGrandTotal(), parsed.amount()))
                 .toList();
         if (orderHits.size() == 1) {
             WebOrder order = orderHits.get(0);
@@ -451,7 +571,7 @@ public class GatewayStkPushService {
                 .findRecentPendingRemote(GroceryConstants.STATUS_PENDING_PAYMENT, since, page)
                 .stream()
                 .filter(gi -> DarajaAccountReferences.groceryBarcodeMatches(billRef, gi.getBarcodeCode()))
-                .filter(gi -> parsed.amount() == null || amountsClose(gi.getGrandTotal(), parsed.amount()))
+                .filter(gi -> parsed.amount() != null && amountsClose(gi.getGrandTotal(), parsed.amount()))
                 .toList();
         if (invoiceHits.size() == 1) {
             GroceryInvoice invoice = invoiceHits.get(0);

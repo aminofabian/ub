@@ -3,6 +3,7 @@ package zelisline.ub.tenancy.api.dto;
 public record ReceiveStockPatchRequest(
         Boolean allowReceiveForCashier,
         Boolean allowReceiveForStockManager,
-        Boolean allowReceiveForGroceryClerk
+        Boolean allowReceiveForGroceryClerk,
+        Boolean twoStepDelivery
 ) {
 }

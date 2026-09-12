@@ -3,6 +3,8 @@ package zelisline.ub.purchasing.application;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Instant;
+
 import org.junit.jupiter.api.Test;
 
 import zelisline.ub.suppliers.domain.Supplier;
@@ -16,6 +18,9 @@ class SupplierPayoutDestinationTest {
         s.setPayoutType(SupplierPayoutTypes.MOBILE_WALLET);
         assertFalse(SupplierDisbursementService.hasAutomatedPayoutDestination(s));
         s.setPayoutPhone("254710514157");
+        // OTP verification is required before automated mobile-wallet payouts
+        assertFalse(SupplierDisbursementService.hasAutomatedPayoutDestination(s));
+        s.setPayoutPhoneVerifiedAt(Instant.now());
         assertTrue(SupplierDisbursementService.hasAutomatedPayoutDestination(s));
     }
 

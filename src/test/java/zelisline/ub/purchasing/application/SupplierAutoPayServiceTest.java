@@ -177,6 +177,9 @@ class SupplierAutoPayServiceTest {
         s.setName("Supplier " + id);
         s.setPayoutType(payoutType);
         s.setPayoutPhone(phone);
+        if (phone != null) {
+            s.setPayoutPhoneVerifiedAt(java.time.Instant.now());
+        }
         return s;
     }
 }

@@ -171,6 +171,15 @@ public class KioskPayWithdrawService {
             // Do not throw — ResponseStatusException would roll back FAILED + hold release.
             String raw = result.message() != null ? result.message() : "Send Money rejected";
             noteProviderFailure(row, raw, result.responseCode());
+            if ("NETWORK_ERROR".equals(result.responseCode())) {
+                // Ambiguous: the request may have reached KopoKopo before the failure and
+                // Send Money is irreversible. Keep the hold — releasing funds on an unknown
+                // outcome can double-pay. The reconciler leaves these for manual resolution.
+                row.setFailureReason("NETWORK_ERROR: provider outcome unknown — funds held pending manual reconcile");
+                withdrawalRepository.save(row);
+                log.error("Kiosk Pay withdraw NETWORK_ERROR id={} — funds held for manual reconcile", row.getId());
+                return toTenantResponse(row);
+            }
             markFailed(row, account, amount, raw);
             return toTenantResponse(row);
         }
@@ -276,6 +285,12 @@ public class KioskPayWithdrawService {
                 Instant started = row.getRequestedAt() != null ? row.getRequestedAt() : row.getCreatedAt();
                 boolean noProviderId = row.getKopokopoSendMoneyId() == null
                         || row.getKopokopoSendMoneyId().isBlank();
+                if (row.getFailureReason() != null && row.getFailureReason().startsWith("NETWORK_ERROR:")) {
+                    // Initiation outcome unknown — the transfer may have proceeded, so the
+                    // hold must not be auto-released. Surface for ops instead.
+                    log.error("Kiosk Pay withdraw stuck after NETWORK_ERROR id={} — needs manual reconcile", row.getId());
+                    continue;
+                }
                 if (noProviderId || (started != null && started.isBefore(now.minus(STALE_REQUESTED)))) {
                     markFailed(row, account, row.getAmount(),
                             "Withdraw abandoned before provider accepted — funds released");

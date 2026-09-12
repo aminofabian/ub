@@ -11,6 +11,8 @@ public record PathAPurchaseOrderListRow(
         String poNumber,
         LocalDate expectedDate,
         String status,
+        /** not_shipped | in_transit | delivered — arrival only; stock still needs GRN. */
+        String deliveryStatus,
         int lineCount,
         BigDecimal totalOrdered,
         BigDecimal totalReceived,

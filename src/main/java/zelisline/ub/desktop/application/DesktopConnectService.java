@@ -40,6 +40,7 @@ import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.pricing.domain.TaxRate;
 import zelisline.ub.pricing.repository.TaxRateRepository;
 import zelisline.ub.sales.api.dto.PostOpenShiftRequest;
+import zelisline.ub.suppliers.application.SupplierPayoutPhoneVerificationService;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierContact;
 import zelisline.ub.suppliers.repository.SupplierContactRepository;
@@ -576,11 +577,16 @@ public class DesktopConnectService {
                 supplier.setNotes(d.notes());
                 supplier.setPaymentMethodPreferred(d.paymentMethodPreferred());
                 supplier.setPaymentDetails(d.paymentDetails());
+                String prevPayoutType = supplier.getPayoutType();
+                String prevPayoutPhone = supplier.getPayoutPhone();
                 supplier.setPayoutType(d.payoutType() == null ? "manual" : d.payoutType());
                 supplier.setPayoutPhone(d.payoutPhone());
                 supplier.setPayoutTillNumber(d.payoutTillNumber());
                 supplier.setPayoutPaybillNumber(d.payoutPaybillNumber());
                 supplier.setPayoutPaybillAccount(d.payoutPaybillAccount());
+                // Desktop seeding bypasses the portal/patch paths — a changed payout
+                // destination must not keep a stale OTP-verified flag.
+                SupplierPayoutPhoneVerificationService.clearIfPhoneChanged(supplier, prevPayoutPhone, prevPayoutType);
                 if (d.prepaymentBalance() != null) {
                     supplier.setPrepaymentBalance(d.prepaymentBalance());
                 }

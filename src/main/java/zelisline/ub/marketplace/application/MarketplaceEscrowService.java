@@ -324,6 +324,14 @@ public class MarketplaceEscrowService {
             }
             Instant started = hold.getReleasedAt() != null ? hold.getReleasedAt() : hold.getCreatedAt();
             if (started != null && started.isBefore(cutoff)) {
+                if (sendMoneyId == null || sendMoneyId.isBlank()) {
+                    // No send money id → initiation outcome unknown (e.g. network error at
+                    // the gateway). The transfer may have proceeded; auto-refunding would
+                    // double-pay. Leave for ops reconciliation.
+                    log.error("Escrow hold stuck SETTLING without sendMoneyId hold={} — needs manual reconcile",
+                            hold.getId());
+                    continue;
+                }
                 finalizeSendMoneyFailed(hold, "Escrow Send Money timed out — funds returned to shop");
                 changed++;
             }
@@ -402,8 +410,20 @@ public class MarketplaceEscrowService {
                 metadata);
 
         SendMoneyResult result = kopokopoPaymentGateway.sendMoney(request);
-        if (!result.accepted() || result.sendMoneyId() == null || result.sendMoneyId().isBlank()) {
-            String msg = result.message() != null ? result.message() : "KopoKopo Send Money declined";
+        if (result != null && !result.accepted() && "NETWORK_ERROR".equals(result.responseCode())) {
+            // Ambiguous outcome: the request may have reached KopoKopo before the failure,
+            // and Send Money is irreversible. Never refund on an unknown outcome — stay in
+            // SETTLING without a send money id; the reconciler will not auto-refund it and
+            // ops can resolve against the KopoKopo dashboard using the escrowHoldId metadata.
+            hold.setFailureReason("KopoKopo unreachable during Send Money — outcome unknown, needs ops reconcile");
+            holdRepository.save(hold);
+            log.error("Escrow Send Money NETWORK_ERROR hold={} — held in SETTLING for manual reconcile", hold.getId());
+            return;
+        }
+        if (result == null || !result.accepted() || result.sendMoneyId() == null || result.sendMoneyId().isBlank()) {
+            String msg = result != null && result.message() != null
+                    ? result.message()
+                    : "KopoKopo Send Money declined";
             log.warn("Escrow Send Money declined hold={}: {}", hold.getId(), msg);
             finalizeSendMoneyFailed(hold, msg);
             return;

@@ -13,6 +13,11 @@ public record PostGoodsReceiptRequest(
         @NotBlank String branchId,
         @NotNull Instant receivedAt,
         String notes,
-        @NotEmpty @Valid List<PostGoodsReceiptLineInput> lines
+        @NotEmpty @Valid List<PostGoodsReceiptLineInput> lines,
+        /**
+         * When business has two-step delivery on, set true to unpack into stock
+         * without Mark arrived first.
+         */
+        Boolean overrideArrival
 ) {
 }

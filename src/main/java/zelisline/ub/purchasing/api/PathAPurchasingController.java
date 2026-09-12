@@ -176,6 +176,21 @@ public class PathAPurchasingController {
         return pathAPurchaseService.cancelPurchaseOrder(TenantRequestIds.resolveBusinessId(request), purchaseOrderId);
     }
 
+    /**
+     * Physical arrival only — crates at the door. Does not raise stock.
+     * Unpack quantities via POST /goods-receipts.
+     */
+    @PostMapping("/purchase-orders/{purchaseOrderId}/mark-arrived")
+    @PreAuthorize("hasPermission(null, 'purchasing.path_a.write')")
+    public PathAPurchaseOrderDetailResponse markArrived(
+            @PathVariable String purchaseOrderId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return pathAPurchaseService.markPurchaseOrderArrived(
+                TenantRequestIds.resolveBusinessId(request), purchaseOrderId);
+    }
+
     @PostMapping("/goods-receipts")
     @PreAuthorize("hasPermission(null, 'purchasing.path_a.write')")
     public PostGoodsReceiptResponse postGoodsReceipt(
@@ -187,7 +202,8 @@ public class PathAPurchasingController {
         String validatedBranch = branchResolutionService.requireBranchForLockedRole(
                 principal.roleId(), principal.branchId(), body.branchId());
         PostGoodsReceiptRequest safe = new PostGoodsReceiptRequest(
-                body.purchaseOrderId(), validatedBranch, body.receivedAt(), body.notes(), body.lines());
+                body.purchaseOrderId(), validatedBranch, body.receivedAt(), body.notes(), body.lines(),
+                body.overrideArrival());
         return pathAPurchaseService.postGoodsReceipt(
                 TenantRequestIds.resolveBusinessId(request),
                 safe,

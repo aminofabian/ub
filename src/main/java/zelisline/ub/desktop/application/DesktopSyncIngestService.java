@@ -29,6 +29,7 @@ import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.sales.repository.SalePaymentRepository;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
+import zelisline.ub.suppliers.application.SupplierPayoutPhoneVerificationService;
 import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierContact;
 import zelisline.ub.suppliers.repository.SupplierContactRepository;
@@ -246,11 +247,16 @@ public class DesktopSyncIngestService {
         supplier.setNotes(data.notes());
         supplier.setPaymentMethodPreferred(data.paymentMethodPreferred());
         supplier.setPaymentDetails(data.paymentDetails());
+        String prevPayoutType = supplier.getPayoutType();
+        String prevPayoutPhone = supplier.getPayoutPhone();
         supplier.setPayoutType(data.payoutType() == null ? "manual" : data.payoutType());
         supplier.setPayoutPhone(data.payoutPhone());
         supplier.setPayoutTillNumber(data.payoutTillNumber());
         supplier.setPayoutPaybillNumber(data.payoutPaybillNumber());
         supplier.setPayoutPaybillAccount(data.payoutPaybillAccount());
+        // Till-side edits bypass the portal/patch paths — a synced phone change must
+        // not ride a stale OTP-verified flag into automated Send Money.
+        SupplierPayoutPhoneVerificationService.clearIfPhoneChanged(supplier, prevPayoutPhone, prevPayoutType);
         // Flush BEFORE contacts are queued — Hibernate does not order
         // unassociated inserts, so supplier_contacts (alphabetically first)
         // would hit the suppliers FK before the row exists.

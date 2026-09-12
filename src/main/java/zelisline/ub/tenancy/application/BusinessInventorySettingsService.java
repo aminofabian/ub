@@ -80,6 +80,7 @@ public class BusinessInventorySettingsService {
             "allowReceiveForStockManager";
     private static final String KEY_ALLOW_RECEIVE_GROCERY_CLERK =
             "allowReceiveForGroceryClerk";
+    private static final String KEY_TWO_STEP_DELIVERY = "twoStepDelivery";
     private static final String KEY_ALLOW_SPOILS_GROCERY_CLERK =
             "allowSpoilsForGroceryClerk";
     private static final String KEY_ALLOW_MIN_STOCK_GROCERY_CLERK =
@@ -307,7 +308,8 @@ public class BusinessInventorySettingsService {
         return new ReceiveStockSettingsResponse(
                 receiveStock.path(KEY_ALLOW_RECEIVE_CASHIER).asBoolean(true),
                 receiveStock.path(KEY_ALLOW_RECEIVE_STOCK_MANAGER).asBoolean(true),
-                receiveStock.path(KEY_ALLOW_RECEIVE_GROCERY_CLERK).asBoolean(true)
+                receiveStock.path(KEY_ALLOW_RECEIVE_GROCERY_CLERK).asBoolean(true),
+                receiveStock.path(KEY_TWO_STEP_DELIVERY).asBoolean(false)
         );
     }
 
@@ -464,6 +466,9 @@ public class BusinessInventorySettingsService {
                     KEY_ALLOW_RECEIVE_GROCERY_CLERK,
                     patch.allowReceiveForGroceryClerk()
             );
+        }
+        if (patch.twoStepDelivery() != null) {
+            receiveStock.put(KEY_TWO_STEP_DELIVERY, patch.twoStepDelivery());
         }
     }
 

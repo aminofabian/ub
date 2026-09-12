@@ -37,6 +37,7 @@ import zelisline.ub.finance.domain.JournalEntry;
 import zelisline.ub.identity.application.TokenHasher;
 import zelisline.ub.inventory.domain.SupplyBatch;
 import zelisline.ub.inventory.repository.SupplyBatchRepository;
+import zelisline.ub.marketplace.application.MarketplaceEscrowService;
 import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.api.dto.AddPathAPurchaseOrderLineRequest;
 import zelisline.ub.purchasing.api.dto.CreatePathAPurchaseOrderRequest;
@@ -102,6 +103,7 @@ public class PathAPurchaseService {
     private final PackageVariantStockResolver packageVariantStockResolver;
     private final ApplicationEventPublisher eventPublisher;
     private final SupplierPaymentService supplierPaymentService;
+    private final MarketplaceEscrowService marketplaceEscrowService;
 
     public static String postGrnRoute() {
         return "POST /api/v1/purchasing/path-a/goods-receipts";
@@ -143,6 +145,9 @@ public class PathAPurchaseService {
                 po.getPoNumber(),
                 po.getExpectedDate(),
                 po.getStatus(),
+                po.getDeliveryStatus() == null
+                        ? PurchasingConstants.DELIVERY_NOT_SHIPPED
+                        : po.getDeliveryStatus(),
                 lines.size(),
                 totalOrdered.setScale(4, RoundingMode.HALF_UP),
                 totalReceived.setScale(4, RoundingMode.HALF_UP),
@@ -262,6 +267,37 @@ public class PathAPurchaseService {
         return detailOf(po);
     }
 
+    /**
+     * Step 1 of delivery: physical arrival only. Does not raise stock — that happens on GRN
+     * (unpack / confirm quantities).
+     */
+    @Transactional
+    public PathAPurchaseOrderDetailResponse markPurchaseOrderArrived(String businessId, String purchaseOrderId) {
+        PurchaseOrder po = loadPo(businessId, purchaseOrderId);
+        if (PurchasingConstants.PO_CANCELLED.equals(po.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Purchase order is cancelled");
+        }
+        if (!PurchasingConstants.PO_SENT.equals(po.getStatus())
+                && !PurchasingConstants.PO_DRAFT.equals(po.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Purchase order cannot be marked arrived");
+        }
+        if (PurchasingConstants.PO_DRAFT.equals(po.getStatus())) {
+            long n = purchaseOrderLineRepository.findByPurchaseOrderIdOrderBySortOrderAscIdAsc(po.getId()).size();
+            if (n == 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Purchase order has no lines");
+            }
+            po.setStatus(PurchasingConstants.PO_SENT);
+        }
+        if (PurchasingConstants.DELIVERY_DELIVERED.equals(po.getDeliveryStatus())) {
+            return detailOf(po);
+        }
+        po.setDeliveryStatus(PurchasingConstants.DELIVERY_DELIVERED);
+        purchaseOrderRepository.save(po);
+        marketplaceEscrowService.onDeliveryStatusChanged(
+                businessId, po.getId(), PurchasingConstants.DELIVERY_DELIVERED);
+        return detailOf(po);
+    }
+
     @Transactional
     public PostGoodsReceiptResponse postGoodsReceipt(String businessId, PostGoodsReceiptRequest req, String idemKey) {
         if (idemKey != null && !idemKey.isBlank()) {
@@ -341,6 +377,7 @@ public class PathAPurchaseService {
         }
         assertBranchInBusiness(businessId, req.branchId());
         validateGrnLineIds(req);
+        assertArrivalBeforeUnpack(businessId, po, Boolean.TRUE.equals(req.overrideArrival()));
 
         GoodsReceipt grn = new GoodsReceipt();
         grn.setBusinessId(businessId);
@@ -466,6 +503,14 @@ public class PathAPurchaseService {
         grn.setGrniAmount(grniScaled);
         grn.setStatus(PurchasingConstants.GRN_POSTED);
         goodsReceiptRepository.save(grn);
+
+        // Same-day local receive can skip "Mark arrived"; stock post still records arrival.
+        if (!PurchasingConstants.DELIVERY_DELIVERED.equals(po.getDeliveryStatus())) {
+            po.setDeliveryStatus(PurchasingConstants.DELIVERY_DELIVERED);
+            purchaseOrderRepository.save(po);
+            marketplaceEscrowService.onDeliveryStatusChanged(
+                    businessId, po.getId(), PurchasingConstants.DELIVERY_DELIVERED);
+        }
 
         return new PostGoodsReceiptResponse(grn.getId(), grniScaled, createdLines.size());
     }
@@ -702,6 +747,35 @@ public class PathAPurchaseService {
         } catch (JsonProcessingException e) {
             return PurchasingConstants.THREE_WAY_OFF;
         }
+    }
+
+    /** Prefer inventory.receiveStock.twoStepDelivery; default off (one-step). */
+    private boolean twoStepDeliveryEnabled(String businessId) {
+        String raw = businessRepository.findSettingsJsonById(businessId).orElse("{}");
+        try {
+            JsonNode n = objectMapper.readTree(raw.isBlank() ? "{}" : raw);
+            if (n.isTextual()) {
+                n = objectMapper.readTree(n.asText());
+            }
+            return n.path("inventory").path("receiveStock").path("twoStepDelivery").asBoolean(false);
+        } catch (JsonProcessingException e) {
+            return false;
+        }
+    }
+
+    private void assertArrivalBeforeUnpack(String businessId, PurchaseOrder po, boolean overrideArrival) {
+        if (!twoStepDeliveryEnabled(businessId)) {
+            return;
+        }
+        if (PurchasingConstants.DELIVERY_DELIVERED.equals(po.getDeliveryStatus())) {
+            return;
+        }
+        if (overrideArrival) {
+            return;
+        }
+        throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Mark arrived first, or override to unpack into stock now");
     }
 
     private void touchSupplierProduct(String supplierId, String itemId, BigDecimal unitCost) {

@@ -262,6 +262,9 @@ public class PathAPurchaseService {
         if (PurchasingConstants.PO_CANCELLED.equals(po.getStatus())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Purchase order already cancelled");
         }
+        if (PurchasingConstants.PO_RECEIVED.equals(po.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Purchase order already received");
+        }
         po.setStatus(PurchasingConstants.PO_CANCELLED);
         purchaseOrderRepository.save(po);
         return detailOf(po);
@@ -366,7 +369,8 @@ public class PathAPurchaseService {
 
     private PostGoodsReceiptResponse executePostGrn(String businessId, PostGoodsReceiptRequest req) {
         PurchaseOrder po = loadPo(businessId, req.purchaseOrderId());
-        if (!PurchasingConstants.PO_SENT.equals(po.getStatus())) {
+        if (!PurchasingConstants.PO_SENT.equals(po.getStatus())
+                && !PurchasingConstants.PO_RECEIVED.equals(po.getStatus())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Purchase order must be sent to receive goods");
         }
         if (req.lines().isEmpty()) {
@@ -504,13 +508,24 @@ public class PathAPurchaseService {
         grn.setStatus(PurchasingConstants.GRN_POSTED);
         goodsReceiptRepository.save(grn);
 
-        // Same-day local receive can skip "Mark arrived"; stock post still records arrival.
-        if (!PurchasingConstants.DELIVERY_DELIVERED.equals(po.getDeliveryStatus())) {
-            po.setDeliveryStatus(PurchasingConstants.DELIVERY_DELIVERED);
-            purchaseOrderRepository.save(po);
-            marketplaceEscrowService.onDeliveryStatusChanged(
-                    businessId, po.getId(), PurchasingConstants.DELIVERY_DELIVERED);
+        // Delivery phase follows receipt completeness: a partial receipt keeps the order
+        // pending (partially_delivered); the final receipt marks it delivered and closes the PO.
+        boolean fullyReceived = purchaseOrderLineRepository
+                .findByPurchaseOrderIdOrderBySortOrderAscIdAsc(po.getId()).stream()
+                .allMatch(l -> l.getQtyReceived().compareTo(l.getQtyOrdered()) >= 0);
+        String targetDelivery = fullyReceived
+                ? PurchasingConstants.DELIVERY_DELIVERED
+                : PurchasingConstants.DELIVERY_PARTIALLY_DELIVERED;
+        if (!targetDelivery.equals(po.getDeliveryStatus())) {
+            po.setDeliveryStatus(targetDelivery);
+            if (PurchasingConstants.DELIVERY_DELIVERED.equals(targetDelivery)) {
+                marketplaceEscrowService.onDeliveryStatusChanged(businessId, po.getId(), targetDelivery);
+            }
         }
+        if (fullyReceived && !PurchasingConstants.PO_RECEIVED.equals(po.getStatus())) {
+            po.setStatus(PurchasingConstants.PO_RECEIVED);
+        }
+        purchaseOrderRepository.save(po);
 
         return new PostGoodsReceiptResponse(grn.getId(), grniScaled, createdLines.size());
     }
@@ -767,7 +782,8 @@ public class PathAPurchaseService {
         if (!twoStepDeliveryEnabled(businessId)) {
             return;
         }
-        if (PurchasingConstants.DELIVERY_DELIVERED.equals(po.getDeliveryStatus())) {
+        if (PurchasingConstants.DELIVERY_DELIVERED.equals(po.getDeliveryStatus())
+                || PurchasingConstants.DELIVERY_PARTIALLY_DELIVERED.equals(po.getDeliveryStatus())) {
             return;
         }
         if (overrideArrival) {

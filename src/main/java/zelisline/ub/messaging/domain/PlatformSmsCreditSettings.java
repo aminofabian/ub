@@ -27,6 +27,8 @@ public class PlatformSmsCreditSettings {
     public static final int DEFAULT_MAX_PURCHASE = 500;
     public static final int DEFAULT_LOW_BALANCE_THRESHOLD = 5;
     public static final String DEFAULT_CYCLE_TIMEZONE = "Africa/Nairobi";
+    public static final int DEFAULT_AI_LOGO_FREE_ALLOWANCE = 1;
+    public static final int DEFAULT_AI_LOGO_CREDIT_COST = 50;
 
     @Id
     @Column(name = "id", nullable = false, length = 36)
@@ -49,6 +51,14 @@ public class PlatformSmsCreditSettings {
 
     @Column(name = "cycle_timezone", nullable = false, length = 64)
     private String cycleTimezone = DEFAULT_CYCLE_TIMEZONE;
+
+    /** How many AI brand kits a new shop may generate before credits are required. */
+    @Column(name = "ai_logo_free_allowance", nullable = false)
+    private int aiLogoFreeAllowance = DEFAULT_AI_LOGO_FREE_ALLOWANCE;
+
+    /** Purchased credits charged per AI brand kit after the free allowance. */
+    @Column(name = "ai_logo_credit_cost", nullable = false)
+    private int aiLogoCreditCost = DEFAULT_AI_LOGO_CREDIT_COST;
 
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt = Instant.now();

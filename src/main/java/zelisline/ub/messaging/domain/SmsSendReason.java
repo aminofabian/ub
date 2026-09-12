@@ -11,7 +11,9 @@ public enum SmsSendReason {
     CREDIT_REMINDER("credit_reminder"),
     OPS_ALERT("ops_alert"),
     PAYROLL("payroll"),
-    NOTIFICATION("notification");
+    NOTIFICATION("notification"),
+    /** AI brand kit (logos + favicon + share image) after the free allowance. */
+    AI_LOGO("ai_logo");
 
     private final String code;
 

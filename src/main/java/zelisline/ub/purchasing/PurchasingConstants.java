@@ -18,6 +18,7 @@ public final class PurchasingConstants {
 
     public static final String PO_DRAFT = "draft";
     public static final String PO_SENT = "sent";
+    public static final String PO_RECEIVED = "received";
     public static final String PO_CANCELLED = "cancelled";
 
     public static final String PO_SOURCE_MANUAL = "manual";
@@ -31,6 +32,7 @@ public final class PurchasingConstants {
 
     public static final String DELIVERY_NOT_SHIPPED = "not_shipped";
     public static final String DELIVERY_IN_TRANSIT = "in_transit";
+    public static final String DELIVERY_PARTIALLY_DELIVERED = "partially_delivered";
     public static final String DELIVERY_DELIVERED = "delivered";
 
     public static final String GRN_DRAFT = "draft";

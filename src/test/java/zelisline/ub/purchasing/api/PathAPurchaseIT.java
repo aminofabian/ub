@@ -360,6 +360,12 @@ class PathAPurchaseIT {
         assertThat(itemRepository.findById(itemId).orElseThrow().getCurrentStock())
                 .isEqualByComparingTo(new BigDecimal("40.0000"));
 
+        // Partial receipt: order stays open, delivery phase is partially_delivered.
+        JsonNode poAfterPartial = getPo(poId);
+        assertThat(poAfterPartial.get("status").asText()).isEqualTo("sent");
+        assertThat(poAfterPartial.get("deliveryStatus").asText())
+                .isEqualTo("partially_delivered");
+
         List<JournalLine> grnJ = journalLineRepository.findByJournalEntryId(
                 journalEntryRepository.findAll().stream()
                         .filter(e -> grnId.equals(e.getSourceId()))
@@ -403,6 +409,59 @@ class PathAPurchaseIT {
 
         assertThat(itemRepository.findById(itemId).orElseThrow().getCurrentStock().setScale(2, RoundingMode.HALF_UP))
                 .isEqualByComparingTo(new BigDecimal("100.00"));
+
+        // Final receipt: delivery complete and the order closes itself.
+        JsonNode poAfterFull = getPo(poId);
+        assertThat(poAfterFull.get("status").asText()).isEqualTo("received");
+        assertThat(poAfterFull.get("deliveryStatus").asText()).isEqualTo("delivered");
+
+        // A received order can no longer be cancelled.
+        mockMvc.perform(post("/api/v1/purchasing/path-a/purchase-orders/" + poId + "/cancel")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void receivedPurchaseOrder_acceptsBackorderReceipt_andStaysReceived() throws Exception {
+        String poId = createPo();
+        String poLineId = addPoLine(poId, "100", "10");
+        sendPo(poId);
+
+        String grnBody = """
+                {"purchaseOrderId":"%s","branchId":"%s","receivedAt":"%s","lines":[
+                  {"purchaseOrderLineId":"%s","qtyReceived":100}
+                ]}
+                """.formatted(poId, branchId, Instant.parse("2026-05-10T08:00:00Z"), poLineId);
+        mockMvc.perform(post("/api/v1/purchasing/path-a/goods-receipts")
+                        .contentType(APPLICATION_JSON)
+                        .content(grnBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+        assertThat(getPo(poId).get("status").asText()).isEqualTo("received");
+
+        // Supplier tops up the delivery after closure: confirm-supply raises the ordered qty.
+        String topUpBody = """
+                {"purchaseOrderId":"%s","branchId":"%s","receivedAt":"%s","lines":[
+                  {"purchaseOrderLineId":"%s","qtyReceived":5}
+                ]}
+                """.formatted(poId, branchId, Instant.parse("2026-05-12T08:00:00Z"), poLineId);
+        mockMvc.perform(post("/api/v1/purchasing/path-a/goods-receipts")
+                        .contentType(APPLICATION_JSON)
+                        .content(topUpBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        JsonNode po = getPo(poId);
+        assertThat(po.get("status").asText()).isEqualTo("received");
+        assertThat(po.get("deliveryStatus").asText()).isEqualTo("delivered");
+        assertThat(itemRepository.findById(itemId).orElseThrow().getCurrentStock().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo(new BigDecimal("105.00"));
     }
 
     @Test
@@ -799,6 +858,16 @@ class PathAPurchaseIT {
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk());
+    }
+
+    private JsonNode getPo(String poId) throws Exception {
+        MvcResult r = mockMvc.perform(get("/api/v1/purchasing/path-a/purchase-orders/" + poId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        return objectMapper.readTree(r.getResponse().getContentAsString());
     }
 
     private static void assertDebitCreditEqual(List<JournalLine> lines) {

@@ -43,6 +43,7 @@ public class BrandingLogoAiService {
     private final OpenRouterImageClient openRouterImageClient;
     private final BusinessRepository businessRepository;
     private final AiRequestLogRepository requestLogRepository;
+    private final AiLogoCreditService aiLogoCreditService;
 
     public BrandingLogoGenerateResponse generate(
             String businessId,
@@ -64,6 +65,8 @@ public class BrandingLogoAiService {
                     HttpStatus.SERVICE_UNAVAILABLE,
                     "Logo generation needs an OpenAI or OpenRouter key. Set it in Super Admin → Platform → SokoMind.");
         }
+
+        AiLogoCreditService.Reservation reservation = aiLogoCreditService.reserve(businessId);
 
         String prompt = body == null ? null : body.prompt();
         String shopName = firstNonBlank(body == null ? null : body.shopName(), business.getName());
@@ -130,6 +133,9 @@ public class BrandingLogoAiService {
                     og.completionTokens()));
             log.setLatencyMs((int) Math.min(latency, Integer.MAX_VALUE));
             requestLogRepository.save(log);
+            if (!reservation.free()) {
+                aiLogoCreditService.commitPaid(businessId, requestId);
+            }
             return new BrandingLogoGenerateResponse(
                     requestId,
                     List.of(
@@ -139,6 +145,16 @@ public class BrandingLogoAiService {
                             new BrandingLogoVariantDto("appIcon", appIcon.mimeType(), appIcon.base64()),
                             new BrandingLogoVariantDto("og", og.mimeType(), og.base64())));
         } catch (RuntimeException ex) {
+            if (reservation.free()) {
+                try {
+                    aiLogoCreditService.releaseFree(businessId);
+                } catch (RuntimeException releaseEx) {
+                    BrandingLogoAiService.log.warn(
+                            "Failed to release free AI logo reservation business={}: {}",
+                            businessId,
+                            releaseEx.getMessage());
+                }
+            }
             long latency = System.currentTimeMillis() - started;
             log.setSuccess(false);
             log.setLatencyMs((int) Math.min(latency, Integer.MAX_VALUE));

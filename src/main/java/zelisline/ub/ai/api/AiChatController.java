@@ -13,6 +13,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
+import zelisline.ub.ai.api.dto.AiLogoQuotaResponse;
 import zelisline.ub.ai.api.dto.AiChatRequest;
 import zelisline.ub.ai.api.dto.AiChatResponse;
 import zelisline.ub.ai.api.dto.AiFeedbackRequest;
@@ -27,6 +28,7 @@ import zelisline.ub.ai.api.dto.ProductPolishRequest;
 import zelisline.ub.ai.api.dto.ProductPolishResponse;
 import zelisline.ub.ai.api.dto.StorefrontDesignSuggestRequest;
 import zelisline.ub.ai.api.dto.StorefrontDesignSuggestResponse;
+import zelisline.ub.ai.application.AiLogoCreditService;
 import zelisline.ub.ai.application.BrandingAppIconAiService;
 import zelisline.ub.ai.application.BrandingLogoAiService;
 import zelisline.ub.ai.application.GuideChatService;
@@ -51,6 +53,7 @@ public class AiChatController {
     private final ProductPolishService productPolishService;
     private final BrandingLogoAiService brandingLogoAiService;
     private final BrandingAppIconAiService brandingAppIconAiService;
+    private final AiLogoCreditService aiLogoCreditService;
 
     @GetMapping("/status")
     @PreAuthorize("isAuthenticated()")
@@ -127,6 +130,13 @@ public class AiChatController {
         TenantPrincipal user = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         return storefrontDesignAiService.suggest(businessId, user.userId(), body);
+    }
+
+    @GetMapping("/branding/logo/quota")
+    @PreAuthorize("isAuthenticated()")
+    public AiLogoQuotaResponse logoQuota(HttpServletRequest request) {
+        CurrentTenantUser.requireHuman(request);
+        return aiLogoCreditService.quota(TenantRequestIds.resolveBusinessId(request));
     }
 
     @PostMapping("/branding/logo/generate")

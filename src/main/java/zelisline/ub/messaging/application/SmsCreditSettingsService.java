@@ -74,6 +74,16 @@ public class SmsCreditSettingsService {
         if (body.cycleTimezone() != null && !body.cycleTimezone().isBlank()) {
             row.setCycleTimezone(body.cycleTimezone().trim());
         }
+        if (body.aiLogoFreeAllowance() != null) {
+            row.setAiLogoFreeAllowance(nonNegative(body.aiLogoFreeAllowance(), "AI logo free allowance"));
+        }
+        if (body.aiLogoCreditCost() != null) {
+            int cost = body.aiLogoCreditCost();
+            if (cost <= 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "AI logo credit cost must be positive");
+            }
+            row.setAiLogoCreditCost(cost);
+        }
         row.setUpdatedAt(Instant.now());
         return toSettingsResponse(settingsRepository.save(row));
     }
@@ -144,6 +154,8 @@ public class SmsCreditSettingsService {
                 row.getMaxPurchaseCredits(),
                 row.getLowBalanceThreshold(),
                 row.getCycleTimezone(),
+                row.getAiLogoFreeAllowance(),
+                row.getAiLogoCreditCost(),
                 row.getUpdatedAt());
     }
 }

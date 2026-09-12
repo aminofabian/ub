@@ -218,6 +218,75 @@ public class SmsCreditService {
         return after;
     }
 
+    /**
+     * Pre-flight for multi-credit spends (AI logos). Uses purchased balance only —
+     * monthly included SMS allowance is not spent on AI generation.
+     */
+    @Transactional
+    public void requirePurchasedAvailable(String businessId, int amount) {
+        if (amount <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "amount must be positive");
+        }
+        PlatformSmsCreditSettings settings = settingsService.loadSingleton();
+        BusinessSmsCreditAccount account = ensureExists(businessId, settings);
+        if (account.getPurchasedBalance() < amount) {
+            throw purchasedShort(account, settings, amount);
+        }
+    }
+
+    /**
+     * Atomically debit {@code amount} from purchased balance only. Used for AI logo
+     * kits so SMS monthly included quota is never consumed by image generation.
+     *
+     * @return new purchased balance
+     */
+    @Transactional
+    public int debitPurchased(
+            String businessId,
+            int amount,
+            SmsSendReason reason,
+            String referenceId
+    ) {
+        if (amount <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "amount must be positive");
+        }
+        PlatformSmsCreditSettings settings = settingsService.loadSingleton();
+        BusinessSmsCreditAccount account = lockOrCreate(businessId, settings);
+        if (account.getPurchasedBalance() < amount) {
+            throw purchasedShort(account, settings, amount);
+        }
+        account.setPurchasedBalance(account.getPurchasedBalance() - amount);
+        int allowance = allowanceFor(account, businessId);
+        int after = account.available(allowance);
+        accountRepository.save(account);
+        ledgerRepository.save(newEntry(
+                businessId,
+                -amount,
+                after,
+                SmsCreditLedgerKind.PURCHASED_SPEND,
+                reason != null ? reason.code() : null,
+                referenceId,
+                null));
+        publishBalanceEvent(businessId, account, allowance, SmsCreditLedgerKind.PURCHASED_SPEND);
+        return account.getPurchasedBalance();
+    }
+
+    private SmsCreditsDepletedException purchasedShort(
+            BusinessSmsCreditAccount account,
+            PlatformSmsCreditSettings settings,
+            int needed
+    ) {
+        int allowance = allowanceFor(account, account.getBusinessId());
+        return new SmsCreditsDepletedException(
+                "Not enough credits for an AI logo. Each kit costs "
+                        + needed
+                        + " credits. Buy credits to continue.",
+                account.available(allowance),
+                account.includedRemaining(allowance),
+                account.getPurchasedBalance(),
+                settings.getUnitPriceKes());
+    }
+
     /** Add purchased credits (STK purchase, SA grant, refund). Kind guards intent. */
     @Transactional
     public int credit(

@@ -14,6 +14,8 @@ public record PlatformSmsCreditSettingsDtos() {
             int maxPurchaseCredits,
             int lowBalanceThreshold,
             String cycleTimezone,
+            int aiLogoFreeAllowance,
+            int aiLogoCreditCost,
             Instant updatedAt
     ) {
     }
@@ -24,7 +26,9 @@ public record PlatformSmsCreditSettingsDtos() {
             Integer minPurchaseCredits,
             Integer maxPurchaseCredits,
             Integer lowBalanceThreshold,
-            String cycleTimezone
+            String cycleTimezone,
+            Integer aiLogoFreeAllowance,
+            Integer aiLogoCreditCost
     ) {
     }
 

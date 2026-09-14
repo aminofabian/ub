@@ -19,6 +19,10 @@ public record StaffPaySelfResponse(
         BigDecimal advancesOutstanding,
         List<StaffPaySelfAdvanceRow> advances,
         List<StaffPaySelfPayslipRow> payslips,
-        String sharePath
+        String sharePath,
+        /** Own-data fields for the printable payslip — account is masked server-side. */
+        String employeeCode,
+        String bankName,
+        String bankAccountMasked
 ) {
 }

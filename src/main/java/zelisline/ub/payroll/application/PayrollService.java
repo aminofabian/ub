@@ -1,5 +1,7 @@
 package zelisline.ub.payroll.application;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
@@ -88,6 +90,7 @@ public class PayrollService {
     private final BranchRepository branchRepository;
     private final BusinessRepository businessRepository;
     private final ExpenseService expenseService;
+    private final ObjectMapper objectMapper;
     /** Proxied self-reference so {@link #payAll} pays each person in its own transaction. */
     private final ObjectProvider<PayrollService> self;
 
@@ -760,6 +763,8 @@ public class PayrollService {
         String phone = resolveStaffPhone(profile, user);
         String sharePath = buildStaffPaySharePath(phone);
 
+        Map<String, Object> bank = readBankDetails(profile.getBankDetails());
+
         return new StaffPaySelfResponse(
                 display,
                 profile.getTitle(),
@@ -771,7 +776,10 @@ public class PayrollService {
                 advancesOutstanding,
                 advances,
                 payslips,
-                sharePath
+                sharePath,
+                blankToNull(profile.getEmployeeCode()),
+                blankToNull((String) bank.get("bankName")),
+                maskBankAccount((String) bank.get("account"))
         );
     }
 
@@ -1185,6 +1193,28 @@ public class PayrollService {
                 p.getNote(),
                 p.getPaymentMethod()
         );
+    }
+
+    private Map<String, Object> readBankDetails(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(raw, new TypeReference<Map<String, Object>>() {
+            });
+        } catch (Exception ex) {
+            return Map.of();
+        }
+    }
+
+    /** Keeps only the last four characters so payslips never expose full account numbers. */
+    private static String maskBankAccount(String account) {
+        if (account == null || account.isBlank()) {
+            return null;
+        }
+        String trimmed = account.trim();
+        int keep = Math.min(4, trimmed.length());
+        return "\u2022\u2022\u2022\u2022 " + trimmed.substring(trimmed.length() - keep);
     }
 
     private static String resolveStaffPhone(StaffProfile profile, User user) {

@@ -5,6 +5,7 @@ import java.time.Instant;
 
 public record PayslipResponse(
         String id,
+        String payslipNumber,
         String staffProfileId,
         String userId,
         String displayName,

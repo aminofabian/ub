@@ -6,6 +6,7 @@ import java.time.Instant;
 /** Payslip row scoped to the authenticated staff member only. */
 public record StaffPaySelfPayslipRow(
         String id,
+        String payslipNumber,
         int periodYear,
         int periodMonth,
         BigDecimal baseSalary,

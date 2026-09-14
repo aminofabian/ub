@@ -26,6 +26,10 @@ public class Payslip {
     @Column(name = "business_id", nullable = false, length = 36)
     private String businessId;
 
+    /** Human-friendly reference, e.g. PAL-2026-09-0042. Null for pre-numbering payslips. */
+    @Column(name = "payslip_number", length = 40)
+    private String payslipNumber;
+
     @Column(name = "staff_profile_id", nullable = false, length = 36)
     private String staffProfileId;
 

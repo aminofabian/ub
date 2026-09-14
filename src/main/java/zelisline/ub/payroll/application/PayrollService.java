@@ -561,6 +561,7 @@ public class PayrollService {
         payslip.setPaidAt(Instant.now());
         String payslipNote = buildPayslipNote(body.note(), arrearPeriods);
         payslip.setNote(payslipNote);
+        payslip.setPayslipNumber(assignPayslipNumber(businessId, year, month));
         payslip.setCreatedBy(actorId);
         try {
             // Flush now so a concurrent pay for the same person+period surfaces as a
@@ -1044,6 +1045,7 @@ public class PayrollService {
         payslip.setStaffProfileId(staffProfileId);
         payslip.setPeriodYear(arrear.year());
         payslip.setPeriodMonth(arrear.month());
+        payslip.setPayslipNumber(assignPayslipNumber(businessId, arrear.year(), arrear.month()));
         payslip.setBaseSalary(arrear.baseSalary());
         payslip.setAdvancesDeducted(ZERO_MONEY);
         payslip.setOtherDeductions(ZERO_MONEY);
@@ -1121,6 +1123,32 @@ public class PayrollService {
         return user != null ? user.getName() : "Staff";
     }
 
+    /**
+     * Human-friendly payslip reference, e.g. {@code PAL-2026-09-0042} — business
+     * prefix from the slug, then year, month, and the per-month sequence. The
+     * locking count serializes assignment across concurrent pays.
+     */
+    private String assignPayslipNumber(String businessId, int year, int month) {
+        String prefix = payslipNumberPrefix(businessId);
+        long seq = payslipRepository.countForPeriodLocked(businessId, year, month) + 1;
+        return String.format("%s-%d-%02d-%04d", prefix, year, month, seq);
+    }
+
+    private String payslipNumberPrefix(String businessId) {
+        return businessRepository.findById(businessId)
+                .map(b -> {
+                    String source = b.getSlug() != null && !b.getSlug().isBlank()
+                            ? b.getSlug()
+                            : b.getName();
+                    String alnum = source == null ? "" : source.replaceAll("[^A-Za-z0-9]", "");
+                    if (alnum.isEmpty()) {
+                        return "PSL";
+                    }
+                    return alnum.substring(0, Math.min(3, alnum.length())).toUpperCase();
+                })
+                .orElse("PSL");
+    }
+
     private SalaryResponse toSalaryResponse(Salary s, String userId) {
         return new SalaryResponse(
                 s.getId(),
@@ -1156,6 +1184,7 @@ public class PayrollService {
     private PayslipResponse toPayslipResponse(Payslip p, String userId, String displayName) {
         return new PayslipResponse(
                 p.getId(),
+                p.getPayslipNumber(),
                 p.getStaffProfileId(),
                 userId,
                 displayName,
@@ -1179,6 +1208,7 @@ public class PayrollService {
     private StaffPaySelfPayslipRow toSelfPayslipRow(Payslip p) {
         return new StaffPaySelfPayslipRow(
                 p.getId(),
+                p.getPayslipNumber(),
                 p.getPeriodYear(),
                 p.getPeriodMonth(),
                 p.getBaseSalary(),

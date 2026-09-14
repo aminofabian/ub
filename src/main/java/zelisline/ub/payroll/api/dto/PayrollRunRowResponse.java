@@ -16,9 +16,17 @@ public record PayrollRunRowResponse(
         String employmentStatus,
         String branchName,
         String branchId,
-        /** Base salary for the selected pay period only. */
+        /** Payable base for the selected pay period (prorated when mid-month join). */
         BigDecimal baseSalary,
-        /** Effective-from date of the salary row used for {@code baseSalary}, if any. */
+        /** Full contractual monthly amount before proration; zero when no salary. */
+        BigDecimal monthlySalary,
+        /**
+         * Payable days / days in month when prorated; null when full month or no salary.
+         */
+        BigDecimal prorationFactor,
+        /** When false, mid-month join proration is disabled for this staff member. */
+        boolean prorateJoinMonth,
+        /** Effective-from date of the salary row used for {@code monthlySalary}, if any. */
         LocalDate salaryEffectiveFrom,
         /** Sum of base salaries from consecutive unpaid prior months. */
         BigDecimal arrearsBaseTotal,

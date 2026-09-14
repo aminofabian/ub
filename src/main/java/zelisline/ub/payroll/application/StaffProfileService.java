@@ -120,6 +120,9 @@ public class StaffProfileService {
         if (body.includeInPayroll() != null) {
             profile.setIncludeInPayroll(body.includeInPayroll());
         }
+        if (body.prorateJoinMonth() != null) {
+            profile.setProrateJoinMonth(body.prorateJoinMonth());
+        }
         if (body.phone() != null) {
             profile.setPhone(blankToNull(body.phone()));
         }
@@ -158,6 +161,7 @@ public class StaffProfileService {
         profile.setPhone(user.getPhone());
         profile.setEmploymentStatus(EmploymentStatus.ACTIVE);
         profile.setIncludeInPayroll(true);
+        profile.setProrateJoinMonth(true);
         return staffProfileRepository.save(profile);
     }
 
@@ -183,7 +187,8 @@ public class StaffProfileService {
                 profile.getPhotoUrl(),
                 profile.getStartDate(),
                 profile.getEmploymentStatus(),
-                profile.isIncludeInPayroll()
+                profile.isIncludeInPayroll(),
+                profile.isProrateJoinMonth()
         );
 
         StaffProfileResponse.PrivateFields priv = null;
@@ -222,6 +227,7 @@ public class StaffProfileService {
                 null,
                 null,
                 EmploymentStatus.ACTIVE,
+                true,
                 true
         );
         StaffProfileResponse.PrivateFields priv = null;

@@ -52,6 +52,14 @@ public class StaffProfile {
     @Column(name = "include_in_payroll", nullable = false)
     private boolean includeInPayroll = true;
 
+    /**
+     * When true (default), mid-month joins are paid calendar-day prorated for the join month.
+     * When false, the full monthly amount is used whenever a salary is effective for the period
+     * (unless the join date is after month-end).
+     */
+    @Column(name = "prorate_join_month", nullable = false)
+    private boolean prorateJoinMonth = true;
+
     @Column(name = "phone", length = 50)
     private String phone;
 

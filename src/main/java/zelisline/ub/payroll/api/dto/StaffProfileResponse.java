@@ -26,7 +26,8 @@ public record StaffProfileResponse(
             String photoUrl,
             LocalDate startDate,
             String employmentStatus,
-            boolean includeInPayroll
+            boolean includeInPayroll,
+            boolean prorateJoinMonth
     ) {
     }
 

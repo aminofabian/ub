@@ -19,6 +19,11 @@ public record PayRunRequest(
         /** Cap advance deductions this run (cannot exceed available pool after statutory/other). */
         BigDecimal advancesToDeduct,
         /** When true (default), pay consecutive unpaid prior months before the selected period. */
-        Boolean includeArrears
+        Boolean includeArrears,
+        /**
+         * When true, pay the full monthly amount for this period even if join-month proration
+         * would otherwise apply (one-off override; does not change the staff profile setting).
+         */
+        Boolean skipProration
 ) {
 }

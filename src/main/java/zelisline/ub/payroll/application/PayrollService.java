@@ -269,8 +269,12 @@ public class PayrollService {
             }
 
             var currentSalary = salaryRepository.findCurrent(businessId, profile.getId(), asOf);
-            BigDecimal base = currentSalary.map(Salary::getAmount).orElse(ZERO_MONEY);
+            BigDecimal monthly = currentSalary.map(Salary::getAmount).map(PayrollService::money).orElse(ZERO_MONEY);
             LocalDate salaryEffectiveFrom = currentSalary.map(Salary::getEffectiveFrom).orElse(null);
+            LocalDate joinDate = SalaryProration.resolveJoinDate(profile.getStartDate(), salaryEffectiveFrom);
+            SalaryProration.Result proration = SalaryProration.apply(
+                    monthly, year, month, joinDate, profile.isProrateJoinMonth());
+            BigDecimal base = proration.payableAmount();
 
             StatutoryBreakdown statutoryBreakdown = statutory && base.signum() > 0
                     ? KenyaPayrollStatutoryCalculator.calculate(base)
@@ -282,7 +286,13 @@ public class PayrollService {
             BigDecimal outstanding = outstandingTotal(businessId, profile.getId());
 
             List<PayrollArrearPeriodResponse> arrearPeriods = findArrearPeriods(
-                    businessId, profile.getId(), year, month, statutory
+                    businessId,
+                    profile.getId(),
+                    profile.getStartDate(),
+                    profile.isProrateJoinMonth(),
+                    year,
+                    month,
+                    statutory
             );
             BigDecimal arrearsBaseTotal = arrearPeriods.stream()
                     .map(PayrollArrearPeriodResponse::baseSalary)
@@ -318,6 +328,9 @@ public class PayrollService {
                     branchName,
                     user.getBranchId(),
                     base,
+                    proration.monthlyAmount(),
+                    proration.prorationFactor(),
+                    profile.isProrateJoinMonth(),
                     salaryEffectiveFrom,
                     arrearsBaseTotal,
                     arrearPeriods,
@@ -371,7 +384,14 @@ public class PayrollService {
         boolean includeArrears = body.includeArrears() == null || Boolean.TRUE.equals(body.includeArrears());
         boolean applyStatutory = Boolean.TRUE.equals(body.applyStatutory());
         List<PayrollArrearPeriodResponse> arrearPeriods = includeArrears
-                ? findArrearPeriods(businessId, profile.getId(), year, month, applyStatutory)
+                ? findArrearPeriods(
+                        businessId,
+                        profile.getId(),
+                        profile.getStartDate(),
+                        profile.isProrateJoinMonth() && !Boolean.TRUE.equals(body.skipProration()),
+                        year,
+                        month,
+                        applyStatutory)
                 : List.of();
 
         User user = userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(userId, businessId)
@@ -403,12 +423,22 @@ public class PayrollService {
         LocalDate asOf = LocalDate.of(year, month, 1).withDayOfMonth(
                 LocalDate.of(year, month, 1).lengthOfMonth()
         );
-        BigDecimal base = salaryRepository.findCurrent(businessId, profile.getId(), asOf)
-                .map(Salary::getAmount)
+        Salary salary = salaryRepository.findCurrent(businessId, profile.getId(), asOf)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.BAD_REQUEST,
                         "No salary effective for this period"
                 ));
+        LocalDate joinDate = SalaryProration.resolveJoinDate(profile.getStartDate(), salary.getEffectiveFrom());
+        boolean prorate = profile.isProrateJoinMonth() && !Boolean.TRUE.equals(body.skipProration());
+        SalaryProration.Result proration = SalaryProration.apply(
+                money(salary.getAmount()), year, month, joinDate, prorate);
+        BigDecimal base = proration.payableAmount();
+        if (base.signum() <= 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "No payable salary for this period (join date is after month-end)"
+            );
+        }
 
         StatutoryBreakdown statutoryBreakdown = applyStatutory
                 ? KenyaPayrollStatutoryCalculator.calculate(base)
@@ -731,6 +761,7 @@ public class PayrollService {
                         body.paymentMethod(),
                         body.branchId(),
                         null,
+                        null,
                         null
                 ), actorId);
                 paid++;
@@ -843,6 +874,8 @@ public class PayrollService {
     private List<PayrollArrearPeriodResponse> findArrearPeriods(
             String businessId,
             String staffProfileId,
+            LocalDate profileStartDate,
+            boolean prorateJoinMonth,
             int targetYear,
             int targetMonth,
             boolean statutory
@@ -865,9 +898,15 @@ public class PayrollService {
             LocalDate asOf = LocalDate.of(year, month, 1).withDayOfMonth(
                     LocalDate.of(year, month, 1).lengthOfMonth()
             );
-            BigDecimal base = salaryRepository.findCurrent(businessId, staffProfileId, asOf)
-                    .map(Salary::getAmount)
-                    .orElse(ZERO_MONEY);
+            var currentSalary = salaryRepository.findCurrent(businessId, staffProfileId, asOf);
+            if (currentSalary.isEmpty()) {
+                break;
+            }
+            Salary salary = currentSalary.get();
+            LocalDate joinDate = SalaryProration.resolveJoinDate(profileStartDate, salary.getEffectiveFrom());
+            SalaryProration.Result proration = SalaryProration.apply(
+                    money(salary.getAmount()), year, month, joinDate, prorateJoinMonth);
+            BigDecimal base = proration.payableAmount();
             if (base.signum() <= 0) {
                 break;
             }

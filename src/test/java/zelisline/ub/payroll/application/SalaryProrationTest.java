@@ -24,19 +24,20 @@ class SalaryProrationTest {
     }
 
     @Test
-    void fullMonthWhenJoinIsOnFirst() {
+    void fullPeriodWhenJoinIsOnCycleStart() {
+        // Sep period = Aug 25–Sep 24 (31 days)
         var result = SalaryProration.prorate(
-                new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 9, 1));
+                new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 8, 25));
 
         assertThat(result.payableAmount()).isEqualByComparingTo("13000.00");
         assertThat(result.monthlyAmount()).isEqualByComparingTo("13000.00");
         assertThat(result.prorationFactor()).isNull();
-        assertThat(result.payableDays()).isEqualTo(30);
+        assertThat(result.payableDays()).isEqualTo(31);
         assertThat(result.isProrated()).isFalse();
     }
 
     @Test
-    void fullMonthWhenJoinIsBeforePeriod() {
+    void fullPeriodWhenJoinIsBeforeCycle() {
         var result = SalaryProration.prorate(
                 new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 8, 20));
 
@@ -45,7 +46,7 @@ class SalaryProrationTest {
     }
 
     @Test
-    void fullMonthWhenJoinDateIsNull() {
+    void fullPeriodWhenJoinDateIsNull() {
         var result = SalaryProration.prorate(new BigDecimal("13000.00"), 2026, 9, null);
 
         assertThat(result.payableAmount()).isEqualByComparingTo("13000.00");
@@ -53,31 +54,22 @@ class SalaryProrationTest {
     }
 
     @Test
-    void midMonthStartOnFifteenthInSeptember() {
-        // Sep 15–30 = 16 days → 16/30 × 13000 = 6933.33
+    void midCycleStartOnFifteenthInSeptember() {
+        // Sep period Aug 25–Sep 24; join Sep 15 → Sep 15–24 = 10 days → 10/31 × 13000
         var result = SalaryProration.prorate(
                 new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 9, 15));
 
-        assertThat(result.payableDays()).isEqualTo(16);
-        assertThat(result.daysInMonth()).isEqualTo(30);
-        assertThat(result.payableAmount()).isEqualByComparingTo("6933.33");
-        assertThat(result.prorationFactor()).isEqualByComparingTo("0.53333333");
+        assertThat(result.payableDays()).isEqualTo(10);
+        assertThat(result.daysInMonth()).isEqualTo(31);
+        assertThat(result.payableAmount()).isEqualByComparingTo("4193.55");
         assertThat(result.isProrated()).isTrue();
     }
 
     @Test
-    void midMonthStartOnSixteenthIsExactlyHalfInSeptember() {
+    void joinOnCycleStartOfNextPeriodYieldsZeroForThisPeriod() {
+        // Sep 25 starts the October cycle — not payable in September
         var result = SalaryProration.prorate(
-                new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 9, 16));
-
-        assertThat(result.payableDays()).isEqualTo(15);
-        assertThat(result.payableAmount()).isEqualByComparingTo("6500.00");
-    }
-
-    @Test
-    void startAfterMonthEndYieldsZero() {
-        var result = SalaryProration.prorate(
-                new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 10, 1));
+                new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 9, 25));
 
         assertThat(result.payableAmount()).isEqualByComparingTo("0.00");
         assertThat(result.payableDays()).isZero();
@@ -85,14 +77,12 @@ class SalaryProrationTest {
     }
 
     @Test
-    void thirtyOneDayMonthProratesCorrectly() {
-        // Jul 16–31 = 16 days → 16/31 × 31000 = 16000.00
+    void joinOnSeptember25IsFullOctoberCycleStart() {
         var result = SalaryProration.prorate(
-                new BigDecimal("31000.00"), 2026, 7, LocalDate.of(2026, 7, 16));
+                new BigDecimal("13000.00"), 2026, 10, LocalDate.of(2026, 9, 25));
 
-        assertThat(result.daysInMonth()).isEqualTo(31);
-        assertThat(result.payableDays()).isEqualTo(16);
-        assertThat(result.payableAmount()).isEqualByComparingTo("16000.00");
+        assertThat(result.payableAmount()).isEqualByComparingTo("13000.00");
+        assertThat(result.prorationFactor()).isNull();
     }
 
     @Test
@@ -104,7 +94,7 @@ class SalaryProrationTest {
     }
 
     @Test
-    void overrideDisabledPaysFullMonthForMidMonthJoin() {
+    void overrideDisabledPaysFullPeriodForMidCycleJoin() {
         var result = SalaryProration.apply(
                 new BigDecimal("13000.00"),
                 2026,
@@ -119,12 +109,12 @@ class SalaryProrationTest {
     }
 
     @Test
-    void overrideDisabledStillZeroWhenJoinAfterMonthEnd() {
+    void overrideDisabledStillZeroWhenJoinAfterPeriodEnd() {
         var result = SalaryProration.apply(
                 new BigDecimal("13000.00"),
                 2026,
                 9,
-                LocalDate.of(2026, 10, 1),
+                LocalDate.of(2026, 9, 25),
                 false
         );
 

@@ -6,11 +6,11 @@ import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 
 /**
- * Calendar-day proration of a monthly salary for mid-month joins.
+ * Calendar-day proration of a monthly salary for mid-cycle joins.
  *
- * <p>Payable days run from {@code max(periodStart, joinDate)} through month-end.
- * Join date is typically {@code staff_profiles.start_date}, falling back to the
- * salary row's {@code effective_from}.
+ * <p>Pay periods run {@link PayrollPeriod#CYCLE_START_DAY} of the previous month
+ * through {@link PayrollPeriod#CYCLE_END_DAY} of the labeled month. Payable days
+ * run from {@code max(periodStart, joinDate)} through period end.
  */
 public final class SalaryProration {
 
@@ -29,10 +29,10 @@ public final class SalaryProration {
 
     /**
      * @param monthlyAmount  contractual monthly salary (must already be money-scaled)
-     * @param year           pay period year
+     * @param year           pay period year (labeled month)
      * @param month          pay period month (1–12)
-     * @param joinDate       first day employed / salary starts; {@code null} means full month
-     * @param prorateEnabled when false, pay full month (override) unless join is after month-end
+     * @param joinDate       first day employed / salary starts; {@code null} means full period
+     * @param prorateEnabled when false, pay full period unless join is after period end
      */
     public static Result apply(
             BigDecimal monthlyAmount,
@@ -45,56 +45,71 @@ public final class SalaryProration {
             return Result.none();
         }
         BigDecimal monthly = monthlyAmount.setScale(MONEY_SCALE, MONEY_ROUNDING);
-        LocalDate periodStart = LocalDate.of(year, month, 1);
-        int daysInMonth = periodStart.lengthOfMonth();
-        LocalDate periodEnd = periodStart.withDayOfMonth(daysInMonth);
+        PayrollPeriod.Bounds period = PayrollPeriod.bounds(year, month);
 
-        if (joinDate != null && joinDate.isAfter(periodEnd)) {
-            return new Result(monthly, BigDecimal.ZERO.setScale(MONEY_SCALE, MONEY_ROUNDING), null, 0, daysInMonth);
+        if (joinDate != null && joinDate.isAfter(period.end())) {
+            return new Result(
+                    monthly,
+                    BigDecimal.ZERO.setScale(MONEY_SCALE, MONEY_ROUNDING),
+                    null,
+                    0,
+                    period.dayCount()
+            );
         }
         if (!prorateEnabled) {
-            return Result.full(monthly, daysInMonth);
+            return Result.full(monthly, period.dayCount());
         }
-        return prorate(monthly, year, month, joinDate);
+        return prorate(monthly, period, joinDate);
     }
 
     /**
      * @param monthlyAmount contractual monthly salary (must already be money-scaled)
-     * @param year          pay period year
+     * @param year          pay period year (labeled month)
      * @param month         pay period month (1–12)
-     * @param joinDate      first day employed / salary starts; {@code null} means full month
+     * @param joinDate      first day employed / salary starts; {@code null} means full period
      */
     public static Result prorate(BigDecimal monthlyAmount, int year, int month, LocalDate joinDate) {
         if (monthlyAmount == null || monthlyAmount.signum() <= 0) {
             return Result.none();
         }
         BigDecimal monthly = monthlyAmount.setScale(MONEY_SCALE, MONEY_ROUNDING);
-        LocalDate periodStart = LocalDate.of(year, month, 1);
-        int daysInMonth = periodStart.lengthOfMonth();
-        LocalDate periodEnd = periodStart.withDayOfMonth(daysInMonth);
+        return prorate(monthly, PayrollPeriod.bounds(year, month), joinDate);
+    }
+
+    private static Result prorate(BigDecimal monthly, PayrollPeriod.Bounds period, LocalDate joinDate) {
+        int daysInPeriod = period.dayCount();
+        LocalDate periodStart = period.start();
+        LocalDate periodEnd = period.end();
 
         if (joinDate == null || !joinDate.isAfter(periodStart)) {
-            return Result.full(monthly, daysInMonth);
+            return Result.full(monthly, daysInPeriod);
         }
         if (joinDate.isAfter(periodEnd)) {
-            return new Result(monthly, BigDecimal.ZERO.setScale(MONEY_SCALE, MONEY_ROUNDING), null, 0, daysInMonth);
+            return new Result(
+                    monthly,
+                    BigDecimal.ZERO.setScale(MONEY_SCALE, MONEY_ROUNDING),
+                    null,
+                    0,
+                    daysInPeriod
+            );
         }
 
         int payableDays = (int) ChronoUnit.DAYS.between(joinDate, periodEnd) + 1;
         BigDecimal factor = BigDecimal.valueOf(payableDays)
-                .divide(BigDecimal.valueOf(daysInMonth), 8, MONEY_ROUNDING);
+                .divide(BigDecimal.valueOf(daysInPeriod), 8, MONEY_ROUNDING);
         BigDecimal payable = monthly
                 .multiply(BigDecimal.valueOf(payableDays))
-                .divide(BigDecimal.valueOf(daysInMonth), MONEY_SCALE, MONEY_ROUNDING);
-        return new Result(monthly, payable, factor, payableDays, daysInMonth);
+                .divide(BigDecimal.valueOf(daysInPeriod), MONEY_SCALE, MONEY_ROUNDING);
+        return new Result(monthly, payable, factor, payableDays, daysInPeriod);
     }
 
     public record Result(
             BigDecimal monthlyAmount,
             BigDecimal payableAmount,
-            /** Ratio payableDays/daysInMonth; null when no salary or full month. */
+            /** Ratio payableDays/daysInPeriod; null when no salary or full period. */
             BigDecimal prorationFactor,
             int payableDays,
+            /** Length of the 25th→24th pay cycle in days. */
             int daysInMonth
     ) {
         static Result none() {
@@ -102,8 +117,8 @@ public final class SalaryProration {
             return new Result(zero, zero, null, 0, 0);
         }
 
-        static Result full(BigDecimal monthly, int daysInMonth) {
-            return new Result(monthly, monthly, null, daysInMonth, daysInMonth);
+        static Result full(BigDecimal monthly, int daysInPeriod) {
+            return new Result(monthly, monthly, null, daysInPeriod, daysInPeriod);
         }
 
         public boolean isProrated() {

@@ -256,9 +256,7 @@ public class PayrollService {
             boolean statutory
     ) {
         validatePeriod(year, month);
-        LocalDate asOf = LocalDate.of(year, month, 1).withDayOfMonth(
-                LocalDate.of(year, month, 1).lengthOfMonth()
-        );
+        LocalDate asOf = PayrollPeriod.asOf(year, month);
 
         List<User> users = userRepository.pageByBusiness(businessId, Pageable.unpaged()).getContent();
         Map<String, Branch> branches = branchRepository
@@ -450,9 +448,7 @@ public class PayrollService {
             );
         }
 
-        LocalDate asOf = LocalDate.of(year, month, 1).withDayOfMonth(
-                LocalDate.of(year, month, 1).lengthOfMonth()
-        );
+        LocalDate asOf = PayrollPeriod.asOf(year, month);
         Salary salary = salaryRepository.findCurrent(businessId, profile.getId(), asOf)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.BAD_REQUEST,
@@ -466,7 +462,7 @@ public class PayrollService {
         if (base.signum() <= 0) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "No payable salary for this period (join date is after month-end)"
+                    "No payable salary for this period (join date is after the 24th — starts next cycle on the 25th)"
             );
         }
 
@@ -939,9 +935,7 @@ public class PayrollService {
                 break;
             }
 
-            LocalDate asOf = LocalDate.of(year, month, 1).withDayOfMonth(
-                    LocalDate.of(year, month, 1).lengthOfMonth()
-            );
+            LocalDate asOf = PayrollPeriod.asOf(year, month);
             var currentSalary = salaryRepository.findCurrent(businessId, staffProfileId, asOf);
             if (currentSalary.isEmpty()) {
                 break;

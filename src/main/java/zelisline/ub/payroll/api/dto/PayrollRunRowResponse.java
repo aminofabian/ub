@@ -24,8 +24,14 @@ public record PayrollRunRowResponse(
          * Payable days / days in month when prorated; null when full month or no salary.
          */
         BigDecimal prorationFactor,
-        /** When false, mid-month join proration is disabled for this staff member. */
-        boolean prorateJoinMonth,
+        /**
+         * Join-month pay mode once unlocked: full, half, or prorate.
+         */
+        String joinPayMode,
+        /**
+         * False until the 25th of the labeled month — payable base is zero until then.
+         */
+        boolean salaryReleased,
         /** Employment start / join date from the staff profile, if set. */
         LocalDate startDate,
         /** Effective-from date of the salary row used for {@code monthlySalary}, if any. */

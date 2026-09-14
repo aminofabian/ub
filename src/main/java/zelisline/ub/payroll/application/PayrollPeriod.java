@@ -5,19 +5,16 @@ import java.time.YearMonth;
 import java.time.temporal.ChronoUnit;
 
 /**
- * Pay periods run from the 25th of the previous calendar month through the 24th
- * of the labeled month (inclusive).
+ * Calendar-month pay periods unlock on the 25th of that month.
  *
- * <p>Example: September 2026 = 2026-08-25 … 2026-09-24. Salary for that run starts
- * counting on the 25th; a join on/after the 25th falls into the next period.
+ * <p>Until then, the labeled month shows zero payable salary. From the 25th onward
+ * (and for all past months), salaries are released — full, half, or prorated by
+ * join-pay mode.
  */
 public final class PayrollPeriod {
 
-    /** First day of each pay cycle (previous calendar month). */
-    public static final int CYCLE_START_DAY = 25;
-
-    /** Last day of each pay cycle (labeled calendar month). */
-    public static final int CYCLE_END_DAY = 24;
+    /** Day of the labeled month when that month's salaries become payable. */
+    public static final int SALARY_UNLOCK_DAY = 25;
 
     private PayrollPeriod() {
     }
@@ -25,17 +22,27 @@ public final class PayrollPeriod {
     public record Bounds(LocalDate start, LocalDate end, int dayCount) {
     }
 
+    /** Calendar month bounds for the labeled pay period. */
     public static Bounds bounds(int year, int month) {
-        YearMonth labeled = YearMonth.of(year, month);
-        YearMonth previous = labeled.minusMonths(1);
-        LocalDate start = previous.atDay(Math.min(CYCLE_START_DAY, previous.lengthOfMonth()));
-        LocalDate end = labeled.atDay(Math.min(CYCLE_END_DAY, labeled.lengthOfMonth()));
+        YearMonth ym = YearMonth.of(year, month);
+        LocalDate start = ym.atDay(1);
+        LocalDate end = ym.atEndOfMonth();
         int days = (int) ChronoUnit.DAYS.between(start, end) + 1;
         return new Bounds(start, end, days);
     }
 
-    /** Salary rate snapshot date for the period (cycle end). */
+    /** Salary rate snapshot = last day of the labeled month. */
     public static LocalDate asOf(int year, int month) {
         return bounds(year, month).end();
+    }
+
+    public static LocalDate unlockDate(int year, int month) {
+        YearMonth ym = YearMonth.of(year, month);
+        return ym.atDay(Math.min(SALARY_UNLOCK_DAY, ym.lengthOfMonth()));
+    }
+
+    /** True once today is on/after the 25th of the labeled month (or the month is in the past). */
+    public static boolean isReleased(int year, int month, LocalDate today) {
+        return !today.isBefore(unlockDate(year, month));
     }
 }

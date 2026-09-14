@@ -7,128 +7,72 @@ import java.time.LocalDate;
 
 import org.junit.jupiter.api.Test;
 
+import zelisline.ub.payroll.domain.JoinPayMode;
+
 class SalaryProrationTest {
 
     @Test
     void resolveJoinDatePrefersStartDate() {
         assertThat(SalaryProration.resolveJoinDate(
-                LocalDate.of(2026, 9, 15),
+                LocalDate.of(2026, 9, 14),
                 LocalDate.of(2026, 9, 1)
-        )).isEqualTo(LocalDate.of(2026, 9, 15));
+        )).isEqualTo(LocalDate.of(2026, 9, 14));
     }
 
     @Test
-    void resolveJoinDateFallsBackToSalaryEffectiveFrom() {
-        assertThat(SalaryProration.resolveJoinDate(null, LocalDate.of(2026, 9, 15)))
-                .isEqualTo(LocalDate.of(2026, 9, 15));
-    }
-
-    @Test
-    void fullPeriodWhenJoinIsOnCycleStart() {
-        // Sep period = Aug 25–Sep 24 (31 days)
-        var result = SalaryProration.prorate(
-                new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 8, 25));
-
-        assertThat(result.payableAmount()).isEqualByComparingTo("13000.00");
-        assertThat(result.monthlyAmount()).isEqualByComparingTo("13000.00");
-        assertThat(result.prorationFactor()).isNull();
-        assertThat(result.payableDays()).isEqualTo(31);
-        assertThat(result.isProrated()).isFalse();
-    }
-
-    @Test
-    void fullPeriodWhenJoinIsBeforeCycle() {
-        var result = SalaryProration.prorate(
-                new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 8, 20));
+    void fullModePaysFullEvenForMidMonthJoin() {
+        var result = SalaryProration.apply(
+                new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 9, 14), JoinPayMode.FULL);
 
         assertThat(result.payableAmount()).isEqualByComparingTo("13000.00");
         assertThat(result.prorationFactor()).isNull();
     }
 
     @Test
-    void fullPeriodWhenJoinDateIsNull() {
-        var result = SalaryProration.prorate(new BigDecimal("13000.00"), 2026, 9, null);
+    void halfModePaysHalfForMidMonthJoin() {
+        var result = SalaryProration.apply(
+                new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 9, 14), JoinPayMode.HALF);
+
+        assertThat(result.payableAmount()).isEqualByComparingTo("6500.00");
+        assertThat(result.prorationFactor()).isEqualByComparingTo("0.5");
+    }
+
+    @Test
+    void halfModePaysFullWhenJoinedOnFirst() {
+        var result = SalaryProration.apply(
+                new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 9, 1), JoinPayMode.HALF);
 
         assertThat(result.payableAmount()).isEqualByComparingTo("13000.00");
         assertThat(result.prorationFactor()).isNull();
     }
 
     @Test
-    void midCycleStartOnFifteenthInSeptember() {
-        // Sep period Aug 25–Sep 24; join Sep 15 → Sep 15–24 = 10 days → 10/31 × 13000
-        var result = SalaryProration.prorate(
-                new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 9, 15));
+    void prorateModeUsesCalendarDays() {
+        // Sep 14–30 = 17 days → 17/30 × 13000 = 7366.67
+        var result = SalaryProration.apply(
+                new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 9, 14), JoinPayMode.PRORATE);
 
-        assertThat(result.payableDays()).isEqualTo(10);
-        assertThat(result.daysInMonth()).isEqualTo(31);
-        assertThat(result.payableAmount()).isEqualByComparingTo("4193.55");
-        assertThat(result.isProrated()).isTrue();
+        assertThat(result.payableDays()).isEqualTo(17);
+        assertThat(result.daysInMonth()).isEqualTo(30);
+        assertThat(result.payableAmount()).isEqualByComparingTo("7366.67");
     }
 
     @Test
-    void joinOnCycleStartOfNextPeriodYieldsZeroForThisPeriod() {
-        // Sep 25 starts the October cycle — not payable in September
-        var result = SalaryProration.prorate(
-                new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 9, 25));
+    void lockedZerosPayableButKeepsMonthly() {
+        var open = SalaryProration.apply(
+                new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 9, 14), JoinPayMode.HALF);
+        var locked = open.locked();
+
+        assertThat(locked.monthlyAmount()).isEqualByComparingTo("13000.00");
+        assertThat(locked.payableAmount()).isEqualByComparingTo("0.00");
+        assertThat(locked.prorationFactor()).isNull();
+    }
+
+    @Test
+    void joinAfterMonthEndYieldsZero() {
+        var result = SalaryProration.apply(
+                new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 10, 1), JoinPayMode.HALF);
 
         assertThat(result.payableAmount()).isEqualByComparingTo("0.00");
-        assertThat(result.payableDays()).isZero();
-        assertThat(result.prorationFactor()).isNull();
-    }
-
-    @Test
-    void joinOnSeptember25IsFullOctoberCycleStart() {
-        var result = SalaryProration.prorate(
-                new BigDecimal("13000.00"), 2026, 10, LocalDate.of(2026, 9, 25));
-
-        assertThat(result.payableAmount()).isEqualByComparingTo("13000.00");
-        assertThat(result.prorationFactor()).isNull();
-    }
-
-    @Test
-    void zeroOrNullAmountReturnsNone() {
-        assertThat(SalaryProration.prorate(BigDecimal.ZERO, 2026, 9, LocalDate.of(2026, 9, 15))
-                .payableAmount()).isEqualByComparingTo("0.00");
-        assertThat(SalaryProration.prorate(null, 2026, 9, LocalDate.of(2026, 9, 15))
-                .payableAmount()).isEqualByComparingTo("0.00");
-    }
-
-    @Test
-    void overrideDisabledPaysFullPeriodForMidCycleJoin() {
-        var result = SalaryProration.apply(
-                new BigDecimal("13000.00"),
-                2026,
-                9,
-                LocalDate.of(2026, 9, 15),
-                false
-        );
-
-        assertThat(result.payableAmount()).isEqualByComparingTo("13000.00");
-        assertThat(result.prorationFactor()).isNull();
-        assertThat(result.isProrated()).isFalse();
-    }
-
-    @Test
-    void overrideDisabledStillZeroWhenJoinAfterPeriodEnd() {
-        var result = SalaryProration.apply(
-                new BigDecimal("13000.00"),
-                2026,
-                9,
-                LocalDate.of(2026, 9, 25),
-                false
-        );
-
-        assertThat(result.payableAmount()).isEqualByComparingTo("0.00");
-    }
-
-    @Test
-    void applyEnabledMatchesProrate() {
-        var enabled = SalaryProration.apply(
-                new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 9, 15), true);
-        var direct = SalaryProration.prorate(
-                new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 9, 15));
-
-        assertThat(enabled.payableAmount()).isEqualByComparingTo(direct.payableAmount());
-        assertThat(enabled.prorationFactor()).isEqualByComparingTo(direct.prorationFactor());
     }
 }

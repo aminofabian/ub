@@ -9,30 +9,20 @@ import org.junit.jupiter.api.Test;
 class PayrollPeriodTest {
 
     @Test
-    void septemberRunsFromAugust25ThroughSeptember24() {
+    void septemberBoundsAreCalendarMonth() {
         var bounds = PayrollPeriod.bounds(2026, 9);
 
-        assertThat(bounds.start()).isEqualTo(LocalDate.of(2026, 8, 25));
-        assertThat(bounds.end()).isEqualTo(LocalDate.of(2026, 9, 24));
-        assertThat(bounds.dayCount()).isEqualTo(31);
-        assertThat(PayrollPeriod.asOf(2026, 9)).isEqualTo(LocalDate.of(2026, 9, 24));
+        assertThat(bounds.start()).isEqualTo(LocalDate.of(2026, 9, 1));
+        assertThat(bounds.end()).isEqualTo(LocalDate.of(2026, 9, 30));
+        assertThat(bounds.dayCount()).isEqualTo(30);
+        assertThat(PayrollPeriod.asOf(2026, 9)).isEqualTo(LocalDate.of(2026, 9, 30));
     }
 
     @Test
-    void januaryRunsFromDecember25ThroughJanuary24() {
-        var bounds = PayrollPeriod.bounds(2026, 1);
-
-        assertThat(bounds.start()).isEqualTo(LocalDate.of(2025, 12, 25));
-        assertThat(bounds.end()).isEqualTo(LocalDate.of(2026, 1, 24));
-        assertThat(bounds.dayCount()).isEqualTo(31);
-    }
-
-    @Test
-    void februaryCycleUsesFebruary24() {
-        var bounds = PayrollPeriod.bounds(2026, 2);
-
-        assertThat(bounds.start()).isEqualTo(LocalDate.of(2026, 1, 25));
-        assertThat(bounds.end()).isEqualTo(LocalDate.of(2026, 2, 24));
-        assertThat(bounds.dayCount()).isEqualTo(31);
+    void unlocksOnThe25th() {
+        assertThat(PayrollPeriod.unlockDate(2026, 9)).isEqualTo(LocalDate.of(2026, 9, 25));
+        assertThat(PayrollPeriod.isReleased(2026, 9, LocalDate.of(2026, 9, 14))).isFalse();
+        assertThat(PayrollPeriod.isReleased(2026, 9, LocalDate.of(2026, 9, 25))).isTrue();
+        assertThat(PayrollPeriod.isReleased(2026, 8, LocalDate.of(2026, 9, 14))).isTrue();
     }
 }

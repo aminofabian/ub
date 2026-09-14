@@ -13,6 +13,7 @@ public record UpdateStaffProfileRequest(
         @Size(max = 32) String employmentStatus,
         Boolean includeInPayroll,
         Boolean prorateJoinMonth,
+        String joinPayMode,
         @Size(max = 50) String phone,
         @Size(max = 500) String address,
         @Size(max = 64) String nationalId,

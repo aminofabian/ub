@@ -53,12 +53,18 @@ public class StaffProfile {
     private boolean includeInPayroll = true;
 
     /**
-     * When true (default), mid-month joins are paid calendar-day prorated for the join month.
-     * When false, the full monthly amount is used whenever a salary is effective for the period
-     * (unless the join date is after month-end).
+     * When true (legacy), mid-month joins were calendar-day prorated.
+     * Prefer {@link #joinPayMode}.
      */
     @Column(name = "prorate_join_month", nullable = false)
     private boolean prorateJoinMonth = true;
+
+    /**
+     * How the join month is paid once salaries unlock on the 25th:
+     * {@code full}, {@code half}, or {@code prorate}.
+     */
+    @Column(name = "join_pay_mode", nullable = false, length = 16)
+    private String joinPayMode = JoinPayMode.HALF;
 
     @Column(name = "phone", length = 50)
     private String phone;

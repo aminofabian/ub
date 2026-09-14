@@ -23,6 +23,7 @@ import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.payroll.api.dto.StaffProfileResponse;
 import zelisline.ub.payroll.api.dto.UpdateStaffProfileRequest;
 import zelisline.ub.payroll.domain.EmploymentStatus;
+import zelisline.ub.payroll.domain.JoinPayMode;
 import zelisline.ub.payroll.domain.StaffProfile;
 import zelisline.ub.payroll.repository.StaffProfileRepository;
 import zelisline.ub.platform.security.TenantPrincipal;
@@ -128,6 +129,18 @@ public class StaffProfileService {
         }
         if (body.prorateJoinMonth() != null) {
             profile.setProrateJoinMonth(body.prorateJoinMonth());
+            if (body.joinPayMode() == null) {
+                profile.setJoinPayMode(JoinPayMode.fromLegacyProrateFlag(body.prorateJoinMonth()));
+            }
+        }
+        if (body.joinPayMode() != null) {
+            try {
+                String mode = JoinPayMode.normalize(body.joinPayMode());
+                profile.setJoinPayMode(mode);
+                profile.setProrateJoinMonth(JoinPayMode.PRORATE.equals(mode));
+            } catch (IllegalArgumentException ex) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+            }
         }
         if (body.phone() != null) {
             profile.setPhone(blankToNull(body.phone()));
@@ -167,7 +180,8 @@ public class StaffProfileService {
         profile.setPhone(user.getPhone());
         profile.setEmploymentStatus(EmploymentStatus.ACTIVE);
         profile.setIncludeInPayroll(true);
-        profile.setProrateJoinMonth(true);
+        profile.setProrateJoinMonth(false);
+        profile.setJoinPayMode(JoinPayMode.HALF);
         try {
             // Flush inside the try so a concurrent first-touch (e.g. two requests
             // materialising the same new profile) surfaces as a retryable error
@@ -202,7 +216,8 @@ public class StaffProfileService {
                 profile.getStartDate(),
                 profile.getEmploymentStatus(),
                 profile.isIncludeInPayroll(),
-                profile.isProrateJoinMonth()
+                profile.isProrateJoinMonth(),
+                resolveJoinPayMode(profile)
         );
 
         StaffProfileResponse.PrivateFields priv = null;
@@ -242,7 +257,8 @@ public class StaffProfileService {
                 null,
                 EmploymentStatus.ACTIVE,
                 true,
-                true
+                true,
+                JoinPayMode.HALF
         );
         StaffProfileResponse.PrivateFields priv = null;
         if (includePrivate) {
@@ -288,6 +304,14 @@ public class StaffProfileService {
         return roleRepository.findByIdAndDeletedAtIsNull(roleId)
                 .map(Role::getName)
                 .orElse(null);
+    }
+
+    private static String resolveJoinPayMode(StaffProfile profile) {
+        String mode = profile.getJoinPayMode();
+        if (JoinPayMode.isValid(mode)) {
+            return JoinPayMode.normalize(mode);
+        }
+        return JoinPayMode.fromLegacyProrateFlag(profile.isProrateJoinMonth());
     }
 
     private Map<String, Object> readJson(String raw) {

@@ -53,6 +53,7 @@ import zelisline.ub.payroll.domain.AdvanceStatus;
 import zelisline.ub.payroll.domain.SalaryAdvanceRepayment;
 import zelisline.ub.payroll.repository.SalaryAdvanceRepaymentRepository;
 import zelisline.ub.payroll.domain.EmploymentStatus;
+import zelisline.ub.payroll.domain.JoinPayMode;
 import zelisline.ub.payroll.domain.Payslip;
 import zelisline.ub.payroll.domain.Salary;
 import zelisline.ub.payroll.domain.SalaryAdvance;
@@ -257,6 +258,8 @@ public class PayrollService {
     ) {
         validatePeriod(year, month);
         LocalDate asOf = PayrollPeriod.asOf(year, month);
+        LocalDate today = LocalDate.now();
+        boolean salaryReleased = PayrollPeriod.isReleased(year, month, today);
 
         List<User> users = userRepository.pageByBusiness(businessId, Pageable.unpaged()).getContent();
         Map<String, Branch> branches = branchRepository
@@ -292,8 +295,12 @@ public class PayrollService {
             BigDecimal monthly = currentSalary.map(Salary::getAmount).map(PayrollService::money).orElse(ZERO_MONEY);
             LocalDate salaryEffectiveFrom = currentSalary.map(Salary::getEffectiveFrom).orElse(null);
             LocalDate joinDate = SalaryProration.resolveJoinDate(profile.getStartDate(), salaryEffectiveFrom);
+            String joinPayMode = resolveJoinPayMode(profile);
             SalaryProration.Result proration = SalaryProration.apply(
-                    monthly, year, month, joinDate, profile.isProrateJoinMonth());
+                    monthly, year, month, joinDate, joinPayMode);
+            if (!salaryReleased) {
+                proration = proration.locked();
+            }
             BigDecimal base = proration.payableAmount();
 
             StatutoryBreakdown statutoryBreakdown = statutory && base.signum() > 0
@@ -309,7 +316,7 @@ public class PayrollService {
                     businessId,
                     profile.getId(),
                     profile.getStartDate(),
-                    profile.isProrateJoinMonth(),
+                    joinPayMode,
                     year,
                     month,
                     statutory
@@ -352,7 +359,8 @@ public class PayrollService {
                     base,
                     proration.monthlyAmount(),
                     proration.prorationFactor(),
-                    profile.isProrateJoinMonth(),
+                    joinPayMode,
+                    salaryReleased,
                     profile.getStartDate(),
                     salaryEffectiveFrom,
                     arrearsBaseTotal,
@@ -406,12 +414,15 @@ public class PayrollService {
 
         boolean includeArrears = body.includeArrears() == null || Boolean.TRUE.equals(body.includeArrears());
         boolean applyStatutory = Boolean.TRUE.equals(body.applyStatutory());
+        String joinPayMode = Boolean.TRUE.equals(body.skipProration())
+                ? JoinPayMode.FULL
+                : resolveJoinPayMode(profile);
         List<PayrollArrearPeriodResponse> arrearPeriods = includeArrears
                 ? findArrearPeriods(
                         businessId,
                         profile.getId(),
                         profile.getStartDate(),
-                        profile.isProrateJoinMonth() && !Boolean.TRUE.equals(body.skipProration()),
+                        joinPayMode,
                         year,
                         month,
                         applyStatutory)
@@ -448,6 +459,13 @@ public class PayrollService {
             );
         }
 
+        if (!PayrollPeriod.isReleased(year, month, LocalDate.now())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Salaries for this month unlock on the 25th — pay is not available yet"
+            );
+        }
+
         LocalDate asOf = PayrollPeriod.asOf(year, month);
         Salary salary = salaryRepository.findCurrent(businessId, profile.getId(), asOf)
                 .orElseThrow(() -> new ResponseStatusException(
@@ -455,14 +473,13 @@ public class PayrollService {
                         "No salary effective for this period"
                 ));
         LocalDate joinDate = SalaryProration.resolveJoinDate(profile.getStartDate(), salary.getEffectiveFrom());
-        boolean prorate = profile.isProrateJoinMonth() && !Boolean.TRUE.equals(body.skipProration());
         SalaryProration.Result proration = SalaryProration.apply(
-                money(salary.getAmount()), year, month, joinDate, prorate);
+                money(salary.getAmount()), year, month, joinDate, joinPayMode);
         BigDecimal base = proration.payableAmount();
         if (base.signum() <= 0) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "No payable salary for this period (join date is after the 24th — starts next cycle on the 25th)"
+                    "No payable salary for this period"
             );
         }
 
@@ -915,7 +932,7 @@ public class PayrollService {
             String businessId,
             String staffProfileId,
             LocalDate profileStartDate,
-            boolean prorateJoinMonth,
+            String joinPayMode,
             int targetYear,
             int targetMonth,
             boolean statutory
@@ -923,11 +940,16 @@ public class PayrollService {
         List<PayrollArrearPeriodResponse> arrears = new ArrayList<>();
         int year = targetYear;
         int month = targetMonth;
+        LocalDate today = LocalDate.now();
 
         while (arrears.size() < MAX_ARREAR_MONTHS) {
             int[] prev = previousPeriod(year, month);
             year = prev[0];
             month = prev[1];
+
+            if (!PayrollPeriod.isReleased(year, month, today)) {
+                break;
+            }
 
             if (payslipRepository.findByBusinessIdAndStaffProfileIdAndPeriodYearAndPeriodMonth(
                     businessId, staffProfileId, year, month
@@ -943,7 +965,7 @@ public class PayrollService {
             Salary salary = currentSalary.get();
             LocalDate joinDate = SalaryProration.resolveJoinDate(profileStartDate, salary.getEffectiveFrom());
             SalaryProration.Result proration = SalaryProration.apply(
-                    money(salary.getAmount()), year, month, joinDate, prorateJoinMonth);
+                    money(salary.getAmount()), year, month, joinDate, joinPayMode);
             BigDecimal base = proration.payableAmount();
             if (base.signum() <= 0) {
                 break;
@@ -971,6 +993,14 @@ public class PayrollService {
         }
 
         return arrears;
+    }
+
+    private static String resolveJoinPayMode(StaffProfile profile) {
+        String mode = profile.getJoinPayMode();
+        if (JoinPayMode.isValid(mode)) {
+            return JoinPayMode.normalize(mode);
+        }
+        return JoinPayMode.fromLegacyProrateFlag(profile.isProrateJoinMonth());
     }
 
     private void persistArrearPayslip(

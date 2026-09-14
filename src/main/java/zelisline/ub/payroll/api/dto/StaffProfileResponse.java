@@ -27,7 +27,8 @@ public record StaffProfileResponse(
             LocalDate startDate,
             String employmentStatus,
             boolean includeInPayroll,
-            boolean prorateJoinMonth
+            boolean prorateJoinMonth,
+            String joinPayMode
     ) {
     }
 

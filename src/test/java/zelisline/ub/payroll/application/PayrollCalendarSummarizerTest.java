@@ -100,6 +100,7 @@ class PayrollCalendarSummarizerTest {
                 amount,
                 amount,
                 null,
+                "half",
                 true,
                 null,
                 null,

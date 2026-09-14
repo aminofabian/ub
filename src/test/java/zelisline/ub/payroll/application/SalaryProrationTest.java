@@ -75,4 +75,23 @@ class SalaryProrationTest {
 
         assertThat(result.payableAmount()).isEqualByComparingTo("0.00");
     }
+
+    @Test
+    void deferredModeKeepsJoinMonthAtZero() {
+        var result = SalaryProration.apply(
+                new BigDecimal("13000.00"), 2026, 9, LocalDate.of(2026, 9, 14), JoinPayMode.DEFERRED);
+
+        assertThat(result.monthlyAmount()).isEqualByComparingTo("13000.00");
+        assertThat(result.payableAmount()).isEqualByComparingTo("0.00");
+        assertThat(result.prorationFactor()).isNull();
+    }
+
+    @Test
+    void deferredModePaysFullFromNextMonth() {
+        var result = SalaryProration.apply(
+                new BigDecimal("13000.00"), 2026, 10, LocalDate.of(2026, 9, 14), JoinPayMode.DEFERRED);
+
+        assertThat(result.payableAmount()).isEqualByComparingTo("13000.00");
+        assertThat(result.prorationFactor()).isNull();
+    }
 }

@@ -44,6 +44,8 @@ import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.identity.repository.UserSessionRepository;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
 import zelisline.ub.payroll.domain.EmploymentStatus;
+import zelisline.ub.payroll.domain.JoinPayMode;
+import zelisline.ub.payroll.domain.StaffProfile;
 import zelisline.ub.payroll.repository.StaffProfileRepository;
 
 /**
@@ -250,6 +252,31 @@ public class IdentityService {
         user.setRoleId(newRole.getId());
         User saved = userRepository.save(user);
         return toResponse(saved, newRole);
+    }
+
+    /**
+     * Applies the join-month pay mode chosen at employee creation. Creates the
+     * staff profile eagerly when it does not exist yet so the choice is never
+     * lost to lazy defaults.
+     */
+    private void applyJoinPayMode(String businessId, User user, String joinPayMode) {
+        String mode = JoinPayMode.normalize(joinPayMode);
+        StaffProfile profile = staffProfileRepository
+                .findByBusinessIdAndUserId(businessId, user.getId())
+                .orElseGet(() -> {
+                    StaffProfile created = new StaffProfile();
+                    created.setBusinessId(businessId);
+                    created.setUserId(user.getId());
+                    created.setDisplayName(user.getName());
+                    created.setPhone(user.getPhone());
+                    created.setEmploymentStatus(EmploymentStatus.ACTIVE);
+                    created.setIncludeInPayroll(true);
+                    created.setProrateJoinMonth(true);
+                    return created;
+                });
+        profile.setJoinPayMode(mode);
+        profile.setProrateJoinMonth(JoinPayMode.PRORATE.equals(mode));
+        staffProfileRepository.save(profile);
     }
 
     /**

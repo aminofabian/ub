@@ -102,6 +102,7 @@ class PayrollCalendarSummarizerTest {
                 null,
                 true,
                 null,
+                null,
                 BigDecimal.ZERO,
                 List.of(),
                 BigDecimal.ZERO,

@@ -9,6 +9,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -46,6 +47,11 @@ public class StaffProfileService {
     public StaffProfile ensureProfile(String businessId, String userId) {
         return staffProfileRepository.findByBusinessIdAndUserId(businessId, userId)
                 .orElseGet(() -> createDefault(businessId, userId));
+    }
+
+    @Transactional
+    public StaffProfile save(StaffProfile profile) {
+        return staffProfileRepository.save(profile);
     }
 
     @Transactional(readOnly = true)
@@ -162,7 +168,15 @@ public class StaffProfileService {
         profile.setEmploymentStatus(EmploymentStatus.ACTIVE);
         profile.setIncludeInPayroll(true);
         profile.setProrateJoinMonth(true);
-        return staffProfileRepository.save(profile);
+        try {
+            // Flush inside the try so a concurrent first-touch (e.g. two requests
+            // materialising the same new profile) surfaces as a retryable error
+            // instead of a raw constraint-violation 500 at commit time.
+            return staffProfileRepository.saveAndFlush(profile);
+        } catch (DataIntegrityViolationException ex) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Staff profile was just created by another action — try again");
+        }
     }
 
     private User requireUser(String businessId, String userId) {

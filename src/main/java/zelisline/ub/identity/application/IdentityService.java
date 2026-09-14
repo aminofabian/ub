@@ -187,8 +187,10 @@ public class IdentityService {
         if (request.name() != null && !request.name().isBlank()) {
             user.setName(request.name().trim());
         }
+        String previousPhone = user.getPhone();
         if (request.phone() != null) {
             user.setPhone(blankToNull(request.phone()));
+            syncProfilePhone(businessId, user, previousPhone);
         }
         if (request.branchId() != null) {
             user.setBranchId(blankToNull(request.branchId()));
@@ -236,6 +238,24 @@ public class IdentityService {
         user.setRoleId(newRole.getId());
         User saved = userRepository.save(user);
         return toResponse(saved, newRole);
+    }
+
+    /**
+     * Staff profiles snapshot the phone at creation, which silently breaks payslip
+     * SMS when the account phone changes later. Re-sync when the profile phone is
+     * blank or still mirrors the previous account phone; a deliberate HR override
+     * (a different number) is left untouched.
+     */
+    private void syncProfilePhone(String businessId, User user, String previousPhone) {
+        String newPhone = user.getPhone();
+        staffProfileRepository.findByBusinessIdAndUserId(businessId, user.getId())
+                .ifPresent(profile -> {
+                    String current = profile.getPhone();
+                    if (current == null || current.isBlank() || current.equals(previousPhone)) {
+                        profile.setPhone(newPhone);
+                        staffProfileRepository.save(profile);
+                    }
+                });
     }
 
     @Transactional
@@ -409,8 +429,10 @@ public class IdentityService {
         if (request.name() != null && !request.name().isBlank()) {
             user.setName(request.name().trim());
         }
+        String previousPhone = user.getPhone();
         if (request.phone() != null) {
             user.setPhone(blankToNull(request.phone()));
+            syncProfilePhone(businessId, user, previousPhone);
         }
         User saved = userRepository.save(user);
         Role role = roleRepository.findById(saved.getRoleId()).orElse(null);

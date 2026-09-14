@@ -11,15 +11,18 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.domain.User;
+import zelisline.ub.identity.domain.UserStatus;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.payroll.api.dto.CreateSalaryAdvanceRequest;
@@ -84,6 +87,8 @@ public class PayrollService {
     private final BranchRepository branchRepository;
     private final BusinessRepository businessRepository;
     private final ExpenseService expenseService;
+    /** Proxied self-reference so {@link #payAll} pays each person in its own transaction. */
+    private final ObjectProvider<PayrollService> self;
 
     private static final BigDecimal ZERO_MONEY = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
     private static final int MAX_ARREAR_MONTHS = 12;
@@ -107,6 +112,18 @@ public class PayrollService {
         List<Salary> history = salaryRepository
                 .findByBusinessIdAndStaffProfileIdOrderByEffectiveFromDescCreatedAtDesc(
                         businessId, profile.getId());
+
+        // First salary must cover the join month: if they joined on the 15th, do not let
+        // "effective from" slip to next month (which would skip the join month entirely).
+        if (history.isEmpty() && profile.getStartDate() != null
+                && effectiveFrom.isAfter(profile.getStartDate())) {
+            effectiveFrom = profile.getStartDate();
+        }
+        // Keep join date and first salary aligned when start date was never set.
+        if (profile.getStartDate() == null) {
+            profile.setStartDate(effectiveFrom);
+            staffProfileService.save(profile);
+        }
 
         if (!history.isEmpty()) {
             Salary latest = history.get(0);
@@ -257,6 +274,11 @@ public class PayrollService {
             if ("buyer".equalsIgnoreCase(roleKeys.getOrDefault(user.getRoleId(), ""))) {
                 continue;
             }
+            UserStatus userStatus = user.statusAsEnum();
+            if (userStatus == UserStatus.INVITED || userStatus == UserStatus.SUSPENDED) {
+                // Never-joined or deactivated accounts must not appear in runs.
+                continue;
+            }
             if (branchFilter != null && !branchFilter.equals(user.getBranchId())) {
                 continue;
             }
@@ -303,7 +325,9 @@ public class PayrollService {
 
             BigDecimal combinedBase = base.add(arrearsBaseTotal);
             BigDecimal combinedStatutory = statutoryTotal.add(arrearsStatutoryTotal);
-            BigDecimal availableForAdvances = combinedBase.subtract(combinedStatutory).max(ZERO_MONEY);
+            // Arrears are disbursed in full as their own payslips, so advances can only
+            // be recovered from the current month's pay — keep this in sync with pay().
+            BigDecimal availableForAdvances = base.subtract(statutoryTotal).max(ZERO_MONEY);
             BigDecimal scheduled = allocatedAdvanceDeduction(
                     businessId, profile.getId(), availableForAdvances
             );
@@ -331,6 +355,7 @@ public class PayrollService {
                     proration.monthlyAmount(),
                     proration.prorationFactor(),
                     profile.isProrateJoinMonth(),
+                    profile.getStartDate(),
                     salaryEffectiveFrom,
                     arrearsBaseTotal,
                     arrearPeriods,
@@ -396,6 +421,11 @@ public class PayrollService {
 
         User user = userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(userId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+        UserStatus userStatus = user.statusAsEnum();
+        if (userStatus == UserStatus.INVITED || userStatus == UserStatus.SUSPENDED) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "This person's account is not active — reactivate them before paying");
+        }
         String display = displayName(profile, user);
 
         BigDecimal other = body.otherDeductions() == null
@@ -461,7 +491,10 @@ public class PayrollService {
 
         BigDecimal combinedBase = base.add(arrearsBaseTotal);
         BigDecimal combinedStatutory = statutoryTotal.add(arrearsStatutoryTotal);
-        BigDecimal availableForAdvances = combinedBase.subtract(combinedStatutory).subtract(other).max(ZERO_MONEY);
+        // Arrear payslips are disbursed in full as separate payslips, so advances can only
+        // be recovered from the current month's pay. Sizing the pool from combinedBase would
+        // reduce advance balances without actually withholding that money.
+        BigDecimal availableForAdvances = base.subtract(statutoryTotal).subtract(other).max(ZERO_MONEY);
         if (body.advancesToDeduct() != null) {
             BigDecimal cap = money(body.advancesToDeduct());
             if (cap.signum() < 0) {
@@ -511,7 +544,13 @@ public class PayrollService {
         String payslipNote = buildPayslipNote(body.note(), arrearPeriods);
         payslip.setNote(payslipNote);
         payslip.setCreatedBy(actorId);
-        payslipRepository.save(payslip);
+        try {
+            // Flush now so a concurrent pay for the same person+period surfaces as a
+            // clean 409 instead of a raw constraint violation at commit time.
+            payslipRepository.saveAndFlush(payslip);
+        } catch (DataIntegrityViolationException ex) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Payslip already exists for this period");
+        }
 
         if (Boolean.TRUE.equals(body.postExpense()) && totalDisbursement.signum() > 0) {
             String paymentMethod = normalizePaymentMethod(body.paymentMethod());
@@ -631,7 +670,7 @@ public class PayrollService {
                 .toList();
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public PayrollCalendarResponse calendarYear(String businessId, int year, String branchId) {
         if (year < 2000 || year > 2100) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid year");
@@ -655,7 +694,7 @@ public class PayrollService {
         return new PayrollCalendarResponse(year, months);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public StaffPaySelfResponse getSelfPortal(String businessId, String userId) {
         StaffProfile profile = staffProfileService.ensureProfile(businessId, userId);
         if (EmploymentStatus.TERMINATED.equals(profile.getEmploymentStatus())) {
@@ -721,7 +760,12 @@ public class PayrollService {
         );
     }
 
-    @Transactional
+    /**
+     * Deliberately not {@code @Transactional}: each staff member is paid through the
+     * proxied {@link #pay} so a failure rolls back only that person. Running the loop
+     * in one shared transaction would let a nested call (profile creation, expense
+     * posting) mark it rollback-only and silently discard the whole run at commit.
+     */
     public PayAllRunResponse payAll(String businessId, PayAllRunRequest body, String actorId) {
         int year = body.year();
         int month = body.month();
@@ -751,7 +795,7 @@ public class PayrollService {
                 continue;
             }
             try {
-                pay(businessId, row.userId(), new PayRunRequest(
+                self.getObject().pay(businessId, row.userId(), new PayRunRequest(
                         year,
                         month,
                         null,
@@ -1006,7 +1050,9 @@ public class PayrollService {
                 .map(a -> a.month() + "/" + a.year())
                 .collect(Collectors.joining(", "));
         String suffix = "Includes arrears: " + arrearLabel;
-        return base == null ? suffix : base + " · " + suffix;
+        String full = base == null ? suffix : base + " · " + suffix;
+        // payslips.note is VARCHAR(500); the DTO check only covers the raw note.
+        return full.length() > 500 ? full.substring(0, 500) : full;
     }
 
     /** Returns {@code [year, month]} for the calendar month before the given period. */

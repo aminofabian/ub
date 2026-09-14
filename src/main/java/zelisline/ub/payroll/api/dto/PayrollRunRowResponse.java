@@ -26,6 +26,8 @@ public record PayrollRunRowResponse(
         BigDecimal prorationFactor,
         /** When false, mid-month join proration is disabled for this staff member. */
         boolean prorateJoinMonth,
+        /** Employment start / join date from the staff profile, if set. */
+        LocalDate startDate,
         /** Effective-from date of the salary row used for {@code monthlySalary}, if any. */
         LocalDate salaryEffectiveFrom,
         /** Sum of base salaries from consecutive unpaid prior months. */

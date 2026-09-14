@@ -74,30 +74,29 @@ public final class KenyaPayrollStatutoryCalculator {
         BigDecimal slice = remaining.min(band1);
         tax = tax.add(slice.multiply(new BigDecimal("0.10")));
         remaining = remaining.subtract(slice);
-        if (remaining.signum() <= 0) {
-            return money(tax);
+
+        if (remaining.signum() > 0) {
+            slice = remaining.min(band2);
+            tax = tax.add(slice.multiply(new BigDecimal("0.25")));
+            remaining = remaining.subtract(slice);
         }
 
-        slice = remaining.min(band2);
-        tax = tax.add(slice.multiply(new BigDecimal("0.25")));
-        remaining = remaining.subtract(slice);
-        if (remaining.signum() <= 0) {
-            return money(tax);
+        if (remaining.signum() > 0) {
+            slice = remaining.min(band3);
+            tax = tax.add(slice.multiply(new BigDecimal("0.30")));
+            remaining = remaining.subtract(slice);
         }
 
-        slice = remaining.min(band3);
-        tax = tax.add(slice.multiply(new BigDecimal("0.30")));
-        remaining = remaining.subtract(slice);
-        if (remaining.signum() <= 0) {
-            return money(tax);
+        if (remaining.signum() > 0) {
+            slice = remaining.min(band4);
+            tax = tax.add(slice.multiply(new BigDecimal("0.325")));
+            remaining = remaining.subtract(slice);
         }
 
-        slice = remaining.min(band4);
-        tax = tax.add(slice.multiply(new BigDecimal("0.325")));
-        remaining = remaining.subtract(slice);
         if (remaining.signum() > 0) {
             tax = tax.add(remaining.multiply(new BigDecimal("0.35")));
         }
+
         return money(tax.subtract(PERSONAL_RELIEF).max(BigDecimal.ZERO));
     }
 

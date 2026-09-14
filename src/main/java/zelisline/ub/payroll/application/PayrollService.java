@@ -412,6 +412,14 @@ public class PayrollService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Payslip already exists for this period");
         }
 
+        if (!PayrollPeriod.isReleased(year, month, LocalDate.now())) {
+            // Fail fast, before any arrear payslips are touched.
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Salaries for this month unlock on the 25th — pay is not available yet"
+            );
+        }
+
         boolean includeArrears = body.includeArrears() == null || Boolean.TRUE.equals(body.includeArrears());
         boolean applyStatutory = Boolean.TRUE.equals(body.applyStatutory());
         String joinPayMode = Boolean.TRUE.equals(body.skipProration())
@@ -456,13 +464,6 @@ public class PayrollService {
                     false,
                     null,
                     null
-            );
-        }
-
-        if (!PayrollPeriod.isReleased(year, month, LocalDate.now())) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Salaries for this month unlock on the 25th — pay is not available yet"
             );
         }
 

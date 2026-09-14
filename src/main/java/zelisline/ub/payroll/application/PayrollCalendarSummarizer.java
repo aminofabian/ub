@@ -6,6 +6,7 @@ import java.util.List;
 
 import zelisline.ub.payroll.api.dto.PayrollCalendarMonthResponse;
 import zelisline.ub.payroll.api.dto.PayrollRunRowResponse;
+import zelisline.ub.payroll.domain.JoinPayMode;
 
 /**
  * Derives calendar month status from a payroll run preview.
@@ -30,8 +31,12 @@ public final class PayrollCalendarSummarizer {
     ) {
         int headcount = rows.size();
         int paidCount = (int) rows.stream().filter(PayrollRunRowResponse::alreadyPaid).count();
+        boolean released = PayrollPeriod.isReleased(year, month, today);
+        // Rows locked before the 25th are zero by design, and deferred join
+        // months stay zero deliberately — neither is a "missing salary".
         int missingSalaryCount = (int) rows.stream()
                 .filter(r -> r.baseSalary().signum() <= 0)
+                .filter(r -> released && !isDeferredJoinMonth(r, year, month))
                 .count();
         int onLeaveCount = (int) rows.stream()
                 .filter(r -> "on_leave".equalsIgnoreCase(r.employmentStatus()))
@@ -39,8 +44,9 @@ public final class PayrollCalendarSummarizer {
         int pendingCount = (int) rows.stream()
                 .filter(r ->
                         !r.alreadyPaid()
-                                && r.baseSalary().signum() > 0
                                 && !"on_leave".equalsIgnoreCase(r.employmentStatus())
+                                && !isDeferredJoinMonth(r, year, month)
+                                && (r.baseSalary().signum() > 0 || !r.salaryReleased())
                 )
                 .count();
 
@@ -56,6 +62,14 @@ public final class PayrollCalendarSummarizer {
                 onLeaveCount,
                 totalNetPaid
         );
+    }
+
+    private static boolean isDeferredJoinMonth(PayrollRunRowResponse row, int year, int month) {
+        if (row.startDate() == null || !JoinPayMode.DEFERRED.equals(row.joinPayMode())) {
+            return false;
+        }
+        LocalDate start = row.startDate();
+        return start.getYear() == year && start.getMonthValue() == month;
     }
 
     static String deriveStatus(

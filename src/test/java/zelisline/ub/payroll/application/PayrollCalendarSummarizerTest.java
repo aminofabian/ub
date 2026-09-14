@@ -87,7 +87,76 @@ class PayrollCalendarSummarizerTest {
         assertThat(month.pendingCount()).isZero();
     }
 
+    @Test
+    void lockedMonthIsPendingNotMissingSalary() {
+        // Before the 25th every row is locked to zero by design.
+        var month = PayrollCalendarSummarizer.summarize(
+                2026,
+                8,
+                List.of(row(false, "0", "active", false), row(false, "0", "active", false)),
+                BigDecimal.ZERO,
+                LocalDate.of(2026, 8, 14)
+        );
+
+        assertThat(month.status()).isEqualTo(PayrollCalendarSummarizer.STATUS_PENDING);
+        assertThat(month.missingSalaryCount()).isZero();
+        assertThat(month.pendingCount()).isEqualTo(2);
+    }
+
+    @Test
+    void deferredJoinMonthIsNotMissingSalary() {
+        var deferredJoiner = new PayrollRunRowResponse(
+                "user-2",
+                "profile-2",
+                "Jo",
+                "Clerk",
+                "active",
+                "Main",
+                "branch-1",
+                BigDecimal.ZERO,
+                new BigDecimal("13000"),
+                null,
+                "deferred",
+                true,
+                LocalDate.of(2026, 7, 14),
+                null,
+                BigDecimal.ZERO,
+                List.of(),
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                false,
+                null,
+                null
+        );
+        var month = PayrollCalendarSummarizer.summarize(
+                2026,
+                7,
+                List.of(deferredJoiner, row(true, "12000", "active")),
+                new BigDecimal("12000.00"),
+                TODAY
+        );
+
+        assertThat(month.status()).isEqualTo(PayrollCalendarSummarizer.STATUS_PAID);
+        assertThat(month.missingSalaryCount()).isZero();
+    }
+
     private static PayrollRunRowResponse row(boolean paid, String base, String status) {
+        return row(paid, base, status, true);
+    }
+
+    private static PayrollRunRowResponse row(
+            boolean paid,
+            String base,
+            String status,
+            boolean salaryReleased
+    ) {
         BigDecimal amount = new BigDecimal(base);
         return new PayrollRunRowResponse(
                 "user-1",
@@ -101,7 +170,7 @@ class PayrollCalendarSummarizerTest {
                 amount,
                 null,
                 "half",
-                true,
+                salaryReleased,
                 null,
                 null,
                 BigDecimal.ZERO,

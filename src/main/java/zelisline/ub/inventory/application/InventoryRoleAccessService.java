@@ -106,9 +106,14 @@ public class InventoryRoleAccessService {
         return readStockLevels(businessId).allowParLevelForGroceryClerk();
     }
 
-    /** Path A confirm / receive — and supplier Order place — on grocery. */
+    /** Path A order / confirm / receive — grocery counter when toggles on;
+     * stock managers when receive-stock is enabled (same gate as walk-in). */
     public boolean grantsDelegatedPathAAccess(String businessId, String roleId) {
-        if (!isGroceryCounterRole(resolveRoleKey(roleId))) {
+        String key = resolveRoleKey(roleId);
+        if (STOCK_MANAGER.equals(key)) {
+            return readReceiveStock(businessId).allowReceiveForStockManager();
+        }
+        if (!isGroceryCounterRole(key)) {
             return false;
         }
         StockLevelsSettingsResponse settings = readStockLevels(businessId);

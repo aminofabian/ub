@@ -77,6 +77,22 @@ class InventoryRoleAccessServiceTest {
                 .isTrue();
     }
 
+    @Test
+    void stockManagerGetsPathAWhenReceiveEnabled() {
+        stubRole("stock_manager");
+        stubReceiveStock(true);
+
+        assertThat(service.grantsDelegatedPathAAccess(BUSINESS_ID, ROLE_ID)).isTrue();
+    }
+
+    @Test
+    void stockManagerDeniedPathAWhenReceiveDisabled() {
+        stubRole("stock_manager");
+        stubReceiveStock(false);
+
+        assertThat(service.grantsDelegatedPathAAccess(BUSINESS_ID, ROLE_ID)).isFalse();
+    }
+
     private void stubRole(String roleKey) {
         Role role = new Role();
         role.setId(ROLE_ID);
@@ -102,6 +118,28 @@ class InventoryRoleAccessServiceTest {
                         null,
                         null,
                         null,
+                        null,
+                        CheckoutSettingsResponse.defaults(),
+                        CatalogSettingsResponse.defaults()
+                ));
+    }
+
+    private void stubReceiveStock(boolean allowStockManager) {
+        Business business = new Business();
+        business.setId(BUSINESS_ID);
+        business.setSettings("{}");
+        when(businessRepository.findById(BUSINESS_ID)).thenReturn(Optional.of(business));
+        when(businessInventorySettingsService.readFromSettingsJson(any()))
+                .thenReturn(new InventorySettingsResponse(
+                        StocktakeSettingsResponse.defaults(),
+                        null,
+                        null,
+                        new zelisline.ub.tenancy.api.dto.ReceiveStockSettingsResponse(
+                                true,
+                                allowStockManager,
+                                true,
+                                false
+                        ),
                         null,
                         CheckoutSettingsResponse.defaults(),
                         CatalogSettingsResponse.defaults()

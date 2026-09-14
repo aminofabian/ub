@@ -38,6 +38,9 @@ import zelisline.ub.identity.repository.UserItemTypeRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.identity.repository.UserSessionRepository;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
+import zelisline.ub.payroll.domain.EmploymentStatus;
+import zelisline.ub.payroll.domain.StaffProfile;
+import zelisline.ub.payroll.repository.StaffProfileRepository;
 
 /**
  * Unit tests for {@link IdentityService} invariants
@@ -52,6 +55,7 @@ class IdentityServiceTest {
     private static final String TENANT_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 
     private static final String ROLE_OWNER = "22222222-0000-0000-0000-000000000001";
+    private static final String ROLE_ADMIN = "22222222-0000-0000-0000-000000000002";
     private static final String ROLE_CASHIER = "22222222-0000-0000-0000-000000000004";
 
     @Mock private UserRepository userRepository;
@@ -61,6 +65,7 @@ class IdentityServiceTest {
     @Mock private UserItemTypeRepository userItemTypeRepository;
     @Mock private ItemTypeRepository itemTypeRepository;
     @Mock private UserSessionRepository userSessionRepository;
+    @Mock private StaffProfileRepository staffProfileRepository;
     @Mock private PasswordEncoder passwordEncoder;
     @Mock private CredentialEncryptionService credentialEncryptionService;
 
@@ -68,11 +73,13 @@ class IdentityServiceTest {
     private IdentityService identityService;
 
     private Role ownerRole;
+    private Role adminRole;
     private Role cashierRole;
 
     @BeforeEach
     void seedRoles() {
         ownerRole = systemRole(ROLE_OWNER, "owner");
+        adminRole = systemRole(ROLE_ADMIN, "admin");
         cashierRole = systemRole(ROLE_CASHIER, "cashier");
     }
 
@@ -233,6 +240,87 @@ class IdentityServiceTest {
 
         assertThat(response.status()).isEqualTo("suspended");
         verify(userSessionRepository).revokeAllActiveForUser(eq(user.getId()), any(Instant.class));
+    }
+
+    // ---------- deleteUser --------------------------------------------------
+
+    @Test
+    void deleteUserSoftDeletesAndTerminatesPayrollProfile() {
+        User user = ownerUserOf(TENANT_A);
+        user.setRoleId(ROLE_CASHIER);
+        user.setPinHash("hash");
+        user.setPinEnc("enc");
+        StaffProfile profile = new StaffProfile();
+        profile.setId("profile-1");
+        profile.setBusinessId(TENANT_A);
+        profile.setUserId(user.getId());
+        profile.setEmploymentStatus(EmploymentStatus.ACTIVE);
+
+        given(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(user.getId(), TENANT_A))
+                .willReturn(Optional.of(user));
+        given(roleRepository.findById(ROLE_CASHIER)).willReturn(Optional.of(cashierRole));
+        given(userRepository.save(any(User.class))).willAnswer(inv -> inv.getArgument(0));
+        given(staffProfileRepository.findByBusinessIdAndUserId(TENANT_A, user.getId()))
+                .willReturn(Optional.of(profile));
+
+        identityService.deleteUser(TENANT_A, user.getId(), "actor-2");
+
+        assertThat(user.getDeletedAt()).isNotNull();
+        assertThat(user.getAnonymisedAt()).isNotNull();
+        assertThat(user.getEmail()).isEqualTo(IdentityService.deletedEmailPlaceholder(user.getId()));
+        assertThat(user.getPasswordHash()).isNull();
+        assertThat(user.getPinHash()).isNull();
+        assertThat(user.getPinEnc()).isNull();
+        assertThat(user.statusAsEnum()).isEqualTo(UserStatus.SUSPENDED);
+        assertThat(profile.getEmploymentStatus()).isEqualTo(EmploymentStatus.TERMINATED);
+        verify(userSessionRepository).revokeAllActiveForUser(eq(user.getId()), any(Instant.class));
+        verify(staffProfileRepository).save(profile);
+    }
+
+    @Test
+    void deleteUserBlocksOwner() {
+        User user = ownerUserOf(TENANT_A);
+        given(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(user.getId(), TENANT_A))
+                .willReturn(Optional.of(user));
+        given(roleRepository.findById(ROLE_OWNER)).willReturn(Optional.of(ownerRole));
+
+        ResponseStatusException ex = catchThrowableOfType(
+                () -> identityService.deleteUser(TENANT_A, user.getId(), "actor-2"),
+                ResponseStatusException.class);
+
+        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        verify(userRepository, never()).save(any(User.class));
+    }
+
+    @Test
+    void deleteUserBlocksAdmin() {
+        User user = ownerUserOf(TENANT_A);
+        user.setRoleId(ROLE_ADMIN);
+        given(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(user.getId(), TENANT_A))
+                .willReturn(Optional.of(user));
+        given(roleRepository.findById(ROLE_ADMIN)).willReturn(Optional.of(adminRole));
+
+        ResponseStatusException ex = catchThrowableOfType(
+                () -> identityService.deleteUser(TENANT_A, user.getId(), "actor-2"),
+                ResponseStatusException.class);
+
+        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        verify(userRepository, never()).save(any(User.class));
+    }
+
+    @Test
+    void deleteUserBlocksSelf() {
+        User user = ownerUserOf(TENANT_A);
+        user.setRoleId(ROLE_CASHIER);
+        given(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(user.getId(), TENANT_A))
+                .willReturn(Optional.of(user));
+
+        ResponseStatusException ex = catchThrowableOfType(
+                () -> identityService.deleteUser(TENANT_A, user.getId(), user.getId()),
+                ResponseStatusException.class);
+
+        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        verify(userRepository, never()).save(any(User.class));
     }
 
     // ---------- revokeUserSessions ------------------------------------------

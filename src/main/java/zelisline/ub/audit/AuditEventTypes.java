@@ -51,6 +51,7 @@ public final class AuditEventTypes {
     public static final String USER_CREATED = "user.created";
     public static final String USER_UPDATED = "user.updated";
     public static final String USER_DEACTIVATED = "user.deactivated";
+    public static final String USER_DELETED = "user.deleted";
     public static final String USER_ACTIVATED = "user.activated";
     public static final String USER_ANONYMISED = "user.anonymised";
 

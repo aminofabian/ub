@@ -9,6 +9,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -226,6 +227,33 @@ public class UsersController {
                 .newState(map("status", deactivated.status()))
                 .build());
         return deactivated;
+    }
+
+    /**
+     * Soft-deletes the user (gone from directory + payroll). Owner and admin
+     * accounts are rejected by the service.
+     */
+    @DeleteMapping("/{userId}")
+    @PreAuthorize("hasPermission(null, 'users.deactivate')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteUser(@PathVariable String userId, HttpServletRequest request) {
+        CurrentTenantUser.require(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String actorId = CurrentTenantUser.auditActorId(request);
+        UserResponse before = identityService.getUser(businessId, userId);
+        identityService.deleteUser(businessId, userId, actorId);
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.STAFF, AuditEventTypes.USER_DELETED, AuditEventSeverity.WARN)
+                .businessId(businessId)
+                .branchId(before.branchId())
+                .actor(actorId, AuditEventActorType.USER)
+                .target("user", before.id())
+                .targetLabel(before.email())
+                .ipAddress(clientIp(request))
+                .userAgent(request.getHeader("User-Agent"))
+                .source("web_admin")
+                .oldState(map("status", before.status(), "email", before.email()))
+                .newState(map("status", "deleted"))
+                .build());
     }
 
     /**

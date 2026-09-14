@@ -43,6 +43,8 @@ import zelisline.ub.identity.repository.UserItemTypeRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.identity.repository.UserSessionRepository;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
+import zelisline.ub.payroll.domain.EmploymentStatus;
+import zelisline.ub.payroll.repository.StaffProfileRepository;
 
 /**
  * Use-case orchestration for Slice 2 — Identity primitives
@@ -61,6 +63,9 @@ public class IdentityService {
     /** System role key that triggers the last-owner guard (§2.4 invariant 1). */
     public static final String OWNER_ROLE_KEY = "owner";
 
+    /** System role key that cannot be deleted from the tenant users console. */
+    public static final String ADMIN_ROLE_KEY = "admin";
+
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final PermissionRepository permissionRepository;
@@ -68,6 +73,7 @@ public class IdentityService {
     private final UserItemTypeRepository userItemTypeRepository;
     private final ItemTypeRepository itemTypeRepository;
     private final UserSessionRepository userSessionRepository;
+    private final StaffProfileRepository staffProfileRepository;
     private final PasswordEncoder passwordEncoder;
     private final CredentialEncryptionService credentialEncryptionService;
     private final ObjectProvider<zelisline.ub.onboarding.progress.application.SetupProgressInvalidatePublisher>
@@ -252,6 +258,52 @@ public class IdentityService {
         userSessionRepository.revokeAllActiveForUser(saved.getId(), Instant.now());
         Role role = roleRepository.findById(saved.getRoleId()).orElse(null);
         return toResponse(saved, role);
+    }
+
+    /**
+     * Soft-deletes a tenant user so they disappear from the users directory and
+     * payroll runs. Owner and admin accounts cannot be deleted. History rows that
+     * reference {@code users.id} stay intact; the email is freed so the same
+     * address can be re-invited.
+     */
+    @Transactional
+    public void deleteUser(String businessId, String userId, String actorUserId) {
+        User user = requireTenantUser(businessId, userId);
+
+        if (actorUserId != null && actorUserId.equals(user.getId())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Cannot delete your own account");
+        }
+
+        String roleKey = roleRepository.findById(user.getRoleId())
+                .map(Role::getRoleKey)
+                .orElse("");
+        if (OWNER_ROLE_KEY.equalsIgnoreCase(roleKey) || ADMIN_ROLE_KEY.equalsIgnoreCase(roleKey)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Owner and admin accounts cannot be deleted");
+        }
+
+        Instant now = Instant.now();
+        user.setStatus(UserStatus.SUSPENDED);
+        user.setDeletedAt(now);
+        user.setAnonymisedAt(now);
+        user.setEmail(deletedEmailPlaceholder(user.getId()));
+        user.setPhone(null);
+        user.setPasswordHash(null);
+        user.setPinHash(null);
+        user.setPinEnc(null);
+        userRepository.save(user);
+        userSessionRepository.revokeAllActiveForUser(user.getId(), now);
+
+        staffProfileRepository.findByBusinessIdAndUserId(businessId, user.getId())
+                .ifPresent(profile -> {
+                    profile.setEmploymentStatus(EmploymentStatus.TERMINATED);
+                    staffProfileRepository.save(profile);
+                });
+    }
+
+    /** Deterministic unique placeholder so {@code (business_id, email)} can be reused. */
+    static String deletedEmailPlaceholder(String userId) {
+        return "deleted." + userId + "@invalid.ub";
     }
 
     /**

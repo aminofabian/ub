@@ -1126,12 +1126,21 @@ public class PayrollService {
     /**
      * Human-friendly payslip reference, e.g. {@code PAL-2026-09-0042} — business
      * prefix from the slug, then year, month, and the per-month sequence. The
-     * locking count serializes assignment across concurrent pays.
+     * sequence skips numbers already taken; the unique index on payslip_number
+     * is the final guarantee against duplicates.
      */
     private String assignPayslipNumber(String businessId, int year, int month) {
         String prefix = payslipNumberPrefix(businessId);
-        long seq = payslipRepository.countForPeriodLocked(businessId, year, month) + 1;
-        return String.format("%s-%d-%02d-%04d", prefix, year, month, seq);
+        long issued = payslipRepository.countByBusinessIdAndPeriodYearAndPeriodMonth(
+                businessId, year, month);
+        for (long seq = issued + 1; seq <= issued + 200; seq++) {
+            String candidate = String.format("%s-%d-%02d-%04d", prefix, year, month, seq);
+            if (!payslipRepository.existsByPayslipNumber(candidate)) {
+                return candidate;
+            }
+        }
+        // Extremely unlikely: fall back to a time-suffixed reference that is still unique.
+        return String.format("%s-%d-%02d-%d", prefix, year, month, System.currentTimeMillis());
     }
 
     private String payslipNumberPrefix(String businessId) {

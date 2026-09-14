@@ -78,19 +78,11 @@ class InventoryRoleAccessServiceTest {
     }
 
     @Test
-    void stockManagerGetsPathAWhenReceiveEnabled() {
-        stubRole("stock_manager");
-        stubReceiveStock(true);
-
-        assertThat(service.grantsDelegatedPathAAccess(BUSINESS_ID, ROLE_ID)).isTrue();
-    }
-
-    @Test
-    void stockManagerDeniedPathAWhenReceiveDisabled() {
+    void stockManagerAlwaysGetsPathA() {
         stubRole("stock_manager");
         stubReceiveStock(false);
 
-        assertThat(service.grantsDelegatedPathAAccess(BUSINESS_ID, ROLE_ID)).isFalse();
+        assertThat(service.grantsDelegatedPathAAccess(BUSINESS_ID, ROLE_ID)).isTrue();
     }
 
     private void stubRole(String roleKey) {

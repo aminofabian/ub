@@ -106,12 +106,15 @@ public class InventoryRoleAccessService {
         return readStockLevels(businessId).allowParLevelForGroceryClerk();
     }
 
-    /** Path A order / confirm / receive — grocery counter when toggles on;
-     * stock managers when receive-stock is enabled (same gate as walk-in). */
+    /**
+     * Path A order / confirm / receive. Stock managers always get this (buying
+     * floor role); grocery counter when order-pad / confirm toggles are on.
+     * Walk-in Path B stays gated by {@link #grantsDelegatedPathBWrite}.
+     */
     public boolean grantsDelegatedPathAAccess(String businessId, String roleId) {
         String key = resolveRoleKey(roleId);
         if (STOCK_MANAGER.equals(key)) {
-            return readReceiveStock(businessId).allowReceiveForStockManager();
+            return true;
         }
         if (!isGroceryCounterRole(key)) {
             return false;

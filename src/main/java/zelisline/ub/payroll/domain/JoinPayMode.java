@@ -2,12 +2,16 @@ package zelisline.ub.payroll.domain;
 
 /**
  * How the join month is paid once salaries unlock on the 25th.
+ *
+ * <p>{@link #DEFERRED} keeps the join month at zero — salary starts from the
+ * next payroll cycle.
  */
 public final class JoinPayMode {
 
     public static final String FULL = "full";
     public static final String HALF = "half";
     public static final String PRORATE = "prorate";
+    public static final String DEFERRED = "deferred";
 
     private JoinPayMode() {
     }
@@ -20,7 +24,9 @@ public final class JoinPayMode {
             case FULL -> FULL;
             case HALF -> HALF;
             case PRORATE -> PRORATE;
-            default -> throw new IllegalArgumentException("joinPayMode must be full, half, or prorate");
+            case DEFERRED -> DEFERRED;
+            default -> throw new IllegalArgumentException(
+                    "joinPayMode must be full, half, prorate, or deferred");
         };
     }
 
@@ -29,7 +35,7 @@ public final class JoinPayMode {
             return false;
         }
         String v = raw.trim().toLowerCase();
-        return FULL.equals(v) || HALF.equals(v) || PRORATE.equals(v);
+        return FULL.equals(v) || HALF.equals(v) || PRORATE.equals(v) || DEFERRED.equals(v);
     }
 
     /** Map legacy boolean: prorate on → prorate, off → full. */

@@ -189,10 +189,14 @@ public class IdentityService {
         }
         if (request.status() != null && !request.status().isBlank()) {
             UserStatus newStatus = parseStatus(request.status(), user.statusAsEnum());
+            UserStatus previous = user.statusAsEnum();
             if (newStatus != UserStatus.ACTIVE
-                    && user.statusAsEnum() == UserStatus.ACTIVE
+                    && previous == UserStatus.ACTIVE
                     && hasOwnerRole(user.getRoleId())) {
                 guardLastOwner(businessId, "deactivate the last owner");
+            }
+            if (occupiesStaffSeat(newStatus) && !occupiesStaffSeat(previous)) {
+                assertStaffSeatAvailable(businessId, user.getRoleId());
             }
             user.setStatus(newStatus);
         }
@@ -213,6 +217,14 @@ public class IdentityService {
 
         if (hasOwnerRole(user.getRoleId()) && !OWNER_ROLE_KEY.equals(newRole.getRoleKey())) {
             guardLastOwner(businessId, "demote the last owner");
+        }
+
+        Role previousRole = roleRepository.findById(user.getRoleId()).orElse(null);
+        boolean wasBuyer = previousRole != null
+                && SubscriptionPlanFit.BUYER_ROLE_KEY.equalsIgnoreCase(previousRole.getRoleKey());
+        boolean becomesStaff = !SubscriptionPlanFit.BUYER_ROLE_KEY.equalsIgnoreCase(newRole.getRoleKey());
+        if (wasBuyer && becomesStaff && occupiesStaffSeat(user.statusAsEnum())) {
+            assertStaffSeatAvailable(businessId, newRole.getId());
         }
 
         user.setRoleId(newRole.getId());
@@ -438,6 +450,21 @@ public class IdentityService {
         return roleRepository.findById(roleId)
                 .map(r -> OWNER_ROLE_KEY.equals(r.getRoleKey()))
                 .orElse(false);
+    }
+
+    private static boolean occupiesStaffSeat(UserStatus status) {
+        return status == UserStatus.ACTIVE || status == UserStatus.INVITED;
+    }
+
+    private void assertStaffSeatAvailable(String businessId, String roleId) {
+        Role role = roleRepository.findById(roleId).orElse(null);
+        if (role != null && SubscriptionPlanFit.BUYER_ROLE_KEY.equalsIgnoreCase(role.getRoleKey())) {
+            return;
+        }
+        var guard = planLimitGuard != null ? planLimitGuard.getIfAvailable() : null;
+        if (guard != null) {
+            guard.assertCanAddUser(businessId);
+        }
     }
 
     private void guardLastOwner(String businessId, String action) {

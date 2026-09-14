@@ -99,6 +99,8 @@ public class TenancyService {
     private final ObjectMapper objectMapper;
     private final ObjectProvider<zelisline.ub.onboarding.progress.application.SetupProgressInvalidatePublisher>
             setupProgressInvalidate;
+    private final ObjectProvider<zelisline.ub.billing.application.SubscriptionPlanLimitGuard>
+            planLimitGuard;
     private final PosReceiptSequenceSettingsService posReceiptSequenceSettingsService;
 
     @Transactional
@@ -1248,6 +1250,9 @@ public class TenancyService {
                         HttpStatus.CONFLICT,
                         "Email verification can't be skipped. Resend the inbox link — they have to tap it.");
             }
+            if (occupiesStaffSeat(next) && !occupiesStaffSeat(current)) {
+                assertStaffSeatAvailable(businessId, user.getRoleId());
+            }
             if (next != UserStatus.ACTIVE && current == UserStatus.ACTIVE) {
                 if (hasOwnerRole(user.getRoleId())) {
                     guardLastActiveOwner(businessId);
@@ -1306,6 +1311,23 @@ public class TenancyService {
         return roleRepository.findById(roleId)
                 .map(r -> "owner".equals(r.getRoleKey()))
                 .orElse(false);
+    }
+
+    private static boolean occupiesStaffSeat(UserStatus status) {
+        return status == UserStatus.ACTIVE || status == UserStatus.INVITED;
+    }
+
+    private void assertStaffSeatAvailable(String businessId, String roleId) {
+        Role role = roleRepository.findById(roleId).orElse(null);
+        if (role != null
+                && zelisline.ub.billing.application.SubscriptionPlanFit.BUYER_ROLE_KEY
+                        .equalsIgnoreCase(role.getRoleKey())) {
+            return;
+        }
+        var guard = planLimitGuard != null ? planLimitGuard.getIfAvailable() : null;
+        if (guard != null) {
+            guard.assertCanAddUser(businessId);
+        }
     }
 
     private void guardLastActiveOwner(String businessId) {

@@ -233,6 +233,9 @@ public class PayrollService {
             if (EmploymentStatus.TERMINATED.equals(profile.getEmploymentStatus())) {
                 continue;
             }
+            if (!profile.isIncludeInPayroll()) {
+                continue;
+            }
 
             BigDecimal base = salaryRepository.findCurrent(businessId, profile.getId(), asOf)
                     .map(Salary::getAmount)
@@ -322,6 +325,9 @@ public class PayrollService {
         }
         if (EmploymentStatus.ON_LEAVE.equals(profile.getEmploymentStatus())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cannot pay an employee on leave");
+        }
+        if (!profile.isIncludeInPayroll()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "This person is not included in payroll");
         }
 
         if (payslipRepository.findByBusinessIdAndStaffProfileIdAndPeriodYearAndPeriodMonth(

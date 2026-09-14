@@ -117,6 +117,9 @@ public class StaffProfileService {
             }
             profile.setEmploymentStatus(status);
         }
+        if (body.includeInPayroll() != null) {
+            profile.setIncludeInPayroll(body.includeInPayroll());
+        }
         if (body.phone() != null) {
             profile.setPhone(blankToNull(body.phone()));
         }
@@ -154,6 +157,7 @@ public class StaffProfileService {
         profile.setDisplayName(user.getName());
         profile.setPhone(user.getPhone());
         profile.setEmploymentStatus(EmploymentStatus.ACTIVE);
+        profile.setIncludeInPayroll(true);
         return staffProfileRepository.save(profile);
     }
 
@@ -178,7 +182,8 @@ public class StaffProfileService {
                 profile.getTitle(),
                 profile.getPhotoUrl(),
                 profile.getStartDate(),
-                profile.getEmploymentStatus()
+                profile.getEmploymentStatus(),
+                profile.isIncludeInPayroll()
         );
 
         StaffProfileResponse.PrivateFields priv = null;
@@ -216,7 +221,8 @@ public class StaffProfileService {
                 null,
                 null,
                 null,
-                EmploymentStatus.ACTIVE
+                EmploymentStatus.ACTIVE,
+                true
         );
         StaffProfileResponse.PrivateFields priv = null;
         if (includePrivate) {

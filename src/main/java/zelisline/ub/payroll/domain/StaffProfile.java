@@ -48,6 +48,10 @@ public class StaffProfile {
     @Column(name = "employment_status", nullable = false, length = 32)
     private String employmentStatus = EmploymentStatus.ACTIVE;
 
+    /** When false, the person is omitted from payroll preview/pay-all (without terminating employment). */
+    @Column(name = "include_in_payroll", nullable = false)
+    private boolean includeInPayroll = true;
+
     @Column(name = "phone", length = 50)
     private String phone;
 

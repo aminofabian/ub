@@ -25,7 +25,8 @@ public record StaffProfileResponse(
             String title,
             String photoUrl,
             LocalDate startDate,
-            String employmentStatus
+            String employmentStatus,
+            boolean includeInPayroll
     ) {
     }
 

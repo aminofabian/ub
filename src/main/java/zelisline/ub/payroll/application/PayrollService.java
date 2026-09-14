@@ -101,11 +101,42 @@ public class PayrollService {
     @Transactional
     public SalaryResponse addSalary(String businessId, String userId, CreateSalaryRequest body, String actorId) {
         StaffProfile profile = staffProfileService.ensureProfile(businessId, userId);
+        BigDecimal amount = money(body.amount());
+        LocalDate effectiveFrom = body.effectiveFrom();
+
+        List<Salary> history = salaryRepository
+                .findByBusinessIdAndStaffProfileIdOrderByEffectiveFromDescCreatedAtDesc(
+                        businessId, profile.getId());
+
+        if (!history.isEmpty()) {
+            Salary latest = history.get(0);
+            // Same amount as the latest row → correct that row's effective date (do not append a duplicate).
+            if (latest.getAmount().compareTo(amount) == 0) {
+                for (Salary other : history) {
+                    if (!other.getId().equals(latest.getId())
+                            && other.getEffectiveFrom().equals(effectiveFrom)) {
+                        salaryRepository.delete(other);
+                    }
+                }
+                latest.setEffectiveFrom(effectiveFrom);
+                salaryRepository.save(latest);
+                return toSalaryResponse(latest, userId);
+            }
+            // Same effective date, different amount → amend that history row in place.
+            for (Salary existing : history) {
+                if (existing.getEffectiveFrom().equals(effectiveFrom)) {
+                    existing.setAmount(amount);
+                    salaryRepository.save(existing);
+                    return toSalaryResponse(existing, userId);
+                }
+            }
+        }
+
         Salary salary = new Salary();
         salary.setBusinessId(businessId);
         salary.setStaffProfileId(profile.getId());
-        salary.setAmount(money(body.amount()));
-        salary.setEffectiveFrom(body.effectiveFrom());
+        salary.setAmount(amount);
+        salary.setEffectiveFrom(effectiveFrom);
         salary.setCreatedBy(actorId);
         salaryRepository.save(salary);
         return toSalaryResponse(salary, userId);
@@ -237,9 +268,9 @@ public class PayrollService {
                 continue;
             }
 
-            BigDecimal base = salaryRepository.findCurrent(businessId, profile.getId(), asOf)
-                    .map(Salary::getAmount)
-                    .orElse(ZERO_MONEY);
+            var currentSalary = salaryRepository.findCurrent(businessId, profile.getId(), asOf);
+            BigDecimal base = currentSalary.map(Salary::getAmount).orElse(ZERO_MONEY);
+            LocalDate salaryEffectiveFrom = currentSalary.map(Salary::getEffectiveFrom).orElse(null);
 
             StatutoryBreakdown statutoryBreakdown = statutory && base.signum() > 0
                     ? KenyaPayrollStatutoryCalculator.calculate(base)
@@ -287,6 +318,7 @@ public class PayrollService {
                     branchName,
                     user.getBranchId(),
                     base,
+                    salaryEffectiveFrom,
                     arrearsBaseTotal,
                     arrearPeriods,
                     outstanding,

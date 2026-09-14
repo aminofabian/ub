@@ -2,6 +2,7 @@ package zelisline.ub.payroll.api.dto;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -17,6 +18,8 @@ public record PayrollRunRowResponse(
         String branchId,
         /** Base salary for the selected pay period only. */
         BigDecimal baseSalary,
+        /** Effective-from date of the salary row used for {@code baseSalary}, if any. */
+        LocalDate salaryEffectiveFrom,
         /** Sum of base salaries from consecutive unpaid prior months. */
         BigDecimal arrearsBaseTotal,
         /** Unpaid prior months included in this run (oldest first). */

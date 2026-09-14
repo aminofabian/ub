@@ -98,6 +98,7 @@ class PayrollCalendarSummarizerTest {
                 "Main",
                 "branch-1",
                 amount,
+                null,
                 BigDecimal.ZERO,
                 List.of(),
                 BigDecimal.ZERO,

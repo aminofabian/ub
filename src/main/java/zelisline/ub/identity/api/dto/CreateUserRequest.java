@@ -22,6 +22,12 @@ public record CreateUserRequest(
         @Size(max = 32) String status,
         @Size(min = 8, max = 191) String password,
         @Pattern(regexp = "\\d{4,6}", message = "PIN must be 4 to 6 digits") String pin,
-        Boolean sendInvite
+        Boolean sendInvite,
+        /**
+         * How the join month is paid once salaries unlock on the 25th:
+         * full, half, prorate, or deferred (no salary until next payroll).
+         * Stored on the staff profile; omitted → profile default (half).
+         */
+        @Size(max = 16) String joinPayMode
 ) {
 }

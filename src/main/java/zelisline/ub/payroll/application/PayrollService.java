@@ -477,10 +477,11 @@ public class PayrollService {
                 money(salary.getAmount()), year, month, joinDate, joinPayMode);
         BigDecimal base = proration.payableAmount();
         if (base.signum() <= 0) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "No payable salary for this period"
-            );
+            String reason = proration.monthlyAmount().signum() > 0
+                    && JoinPayMode.DEFERRED.equals(proration.joinPayMode())
+                    ? "Join-month pay is set to 'no salary until next payroll' — this month stays at zero"
+                    : "No payable salary for this period";
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, reason);
         }
 
         StatutoryBreakdown statutoryBreakdown = applyStatutory
@@ -800,10 +801,18 @@ public class PayrollService {
             }
             if (row.baseSalary().signum() <= 0) {
                 skipped++;
+                String reason;
+                if (!row.salaryReleased()) {
+                    reason = "Salary unlocks on the 25th";
+                } else if (JoinPayMode.DEFERRED.equals(row.joinPayMode())) {
+                    reason = "Join-month pay is 'no salary until next payroll'";
+                } else {
+                    reason = "No salary effective for this period";
+                }
                 failures.add(new PayAllRunResponse.PayAllRunFailure(
                         row.userId(),
                         row.displayName(),
-                        "No salary effective for this period"
+                        reason
                 ));
                 continue;
             }

@@ -8,7 +8,8 @@ import java.time.temporal.ChronoUnit;
 import zelisline.ub.payroll.domain.JoinPayMode;
 
 /**
- * Join-month pay for a calendar month: full, half, or day-prorated.
+ * Join-month pay for a calendar month: full, half, day-prorated, or deferred
+ * (zero for the join month, salary starts next payroll cycle).
  *
  * <p>Callers must also gate on {@link PayrollPeriod#isReleased} — before the 25th
  * of the labeled month, payable salary stays zero for everyone.
@@ -30,7 +31,8 @@ public final class SalaryProration {
      * @param year          labeled pay month year
      * @param month         labeled pay month (1–12)
      * @param joinDate      employment / salary start; null → treat as full month
-     * @param joinPayMode   {@link JoinPayMode#FULL}, {@link JoinPayMode#HALF}, or {@link JoinPayMode#PRORATE}
+     * @param joinPayMode   {@link JoinPayMode#FULL}, {@link JoinPayMode#HALF},
+     *                      {@link JoinPayMode#PRORATE}, or {@link JoinPayMode#DEFERRED}
      */
     public static Result apply(
             BigDecimal monthlyAmount,
@@ -68,12 +70,15 @@ public final class SalaryProration {
                         mode
                 );
             }
+            // Deferred: join month stays at zero; salary starts next payroll cycle.
+            case JoinPayMode.DEFERRED -> new Result(monthly, zero(), null, 0, period.dayCount(), mode);
             case JoinPayMode.PRORATE -> prorate(monthly, period, joinDate, mode);
             default -> Result.full(monthly, period.dayCount(), mode);
         };
     }
 
     /** @deprecated use {@link #apply(BigDecimal, int, int, LocalDate, String)} */
+    @Deprecated
     public static Result apply(
             BigDecimal monthlyAmount,
             int year,

@@ -113,6 +113,15 @@ public class IdentityService {
         // until they accept the email invite and set their own password.
         UserStatus status = parseStatus(request.status(), invite ? UserStatus.INVITED : UserStatus.ACTIVE);
 
+        String joinPayMode = blankToNull(request.joinPayMode());
+        if (joinPayMode != null) {
+            try {
+                JoinPayMode.normalize(joinPayMode);
+            } catch (IllegalArgumentException ex) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+            }
+        }
+
         User user = new User();
         user.setBusinessId(businessId);
         user.setBranchId(blankToNull(request.branchId()));
@@ -130,6 +139,9 @@ public class IdentityService {
         }
 
         User saved = userRepository.save(user);
+        if (joinPayMode != null) {
+            applyJoinPayMode(businessId, saved, joinPayMode);
+        }
         var progress = setupProgressInvalidate != null ? setupProgressInvalidate.getIfAvailable() : null;
         if (progress != null) {
             progress.invalidate(businessId);

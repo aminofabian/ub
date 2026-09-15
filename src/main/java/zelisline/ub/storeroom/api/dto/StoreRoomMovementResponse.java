@@ -9,9 +9,12 @@ import java.time.Instant;
  * @param storeItemName  the register row's name at read time (may be null if deleted)
  * @param itemName       the linked catalogue product's name, when there is one
  * @param stockEffect    {@code none} | {@code decrease} | {@code increase}
+ * @param status         {@code applied} | {@code pending} | {@code rejected}. Only
+ *                       {@code pending} means stock has <em>not</em> moved yet.
  * @param movementId     the {@code stock_movements.id} this produced, if any
  * @param movementCount  how many ledger rows were written (a wastage can split)
  * @param createdByName  who did it, resolved for display
+ * @param decidedByName  who approved or rejected it, when applicable
  */
 public record StoreRoomMovementResponse(
         String id,
@@ -22,6 +25,7 @@ public record StoreRoomMovementResponse(
         String direction,
         String reason,
         String stockEffect,
+        String status,
         BigDecimal quantity,
         String note,
         String movementId,
@@ -29,6 +33,10 @@ public record StoreRoomMovementResponse(
         String branchId,
         Instant createdAt,
         String createdBy,
-        String createdByName
+        String createdByName,
+        Instant decidedAt,
+        String decidedBy,
+        String decidedByName,
+        String decisionNote
 ) {
 }

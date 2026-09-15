@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -50,6 +51,7 @@ import zelisline.ub.storeroom.domain.StoreItem;
 import zelisline.ub.storeroom.domain.StoreRoomDirection;
 import zelisline.ub.storeroom.domain.StoreRoomMode;
 import zelisline.ub.storeroom.domain.StoreRoomMovement;
+import zelisline.ub.storeroom.domain.StoreRoomMovementStatus;
 import zelisline.ub.storeroom.domain.StoreRoomSettings;
 import zelisline.ub.storeroom.domain.StoreRoomStockEffect;
 import zelisline.ub.storeroom.repository.StoreItemRepository;
@@ -426,6 +428,159 @@ class StoreRoomMovementIT {
     }
 
     // ------------------------------------------------------------------
+    // Approval for large decreases
+    // ------------------------------------------------------------------
+
+    @Test
+    void largeTakeOutAboveThreshold_waitsForApprovalAndMovesNothing() throws Exception {
+        setThreshold("5");
+
+        String id = recordAndGetId(owner, ROLE_OWNER, linkedRowId, "spoilage", "6");
+
+        // The whole point of pending: no stock, no ledger row.
+        assertThat(currentStock()).isEqualByComparingTo("20");
+        assertThat(batchRemaining()).isEqualByComparingTo("20");
+        assertThat(stockMovementRepository.findAll()).isEmpty();
+
+        StoreRoomMovement row = storeRoomMovementRepository.findById(id).orElseThrow();
+        assertThat(row.getStatus()).isEqualTo(StoreRoomMovementStatus.PENDING);
+        assertThat(row.getMovementId()).isNull();
+        assertThat(row.getMovementCount()).isZero();
+    }
+
+    @Test
+    void approvingAPendingTakeOut_movesStockExactlyOnce() throws Exception {
+        setThreshold("5");
+        String id = recordAndGetId(owner, ROLE_OWNER, linkedRowId, "spoilage", "6");
+
+        decide(owner, ROLE_OWNER, id, true, "checked the crate")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("applied"))
+                .andExpect(jsonPath("$.decidedByName").value("Owner"))
+                .andExpect(jsonPath("$.decisionNote").value("checked the crate"));
+
+        assertThat(currentStock()).isEqualByComparingTo("14");
+        assertThat(stockMovementRepository.findAll()).hasSize(1);
+        assertThat(storeRoomMovementRepository.findById(id).orElseThrow().getMovementId())
+                .isNotBlank();
+    }
+
+    @Test
+    void decidingTwice_isRefused() throws Exception {
+        setThreshold("5");
+        String id = recordAndGetId(owner, ROLE_OWNER, linkedRowId, "spoilage", "6");
+
+        decide(owner, ROLE_OWNER, id, true, null).andExpect(status().isOk());
+        // Re-approving must not take another 6 off the shelf.
+        decide(owner, ROLE_OWNER, id, true, null).andExpect(status().isConflict());
+
+        assertThat(currentStock()).isEqualByComparingTo("14");
+        assertThat(stockMovementRepository.findAll()).hasSize(1);
+    }
+
+    @Test
+    void rejectingAPendingTakeOut_leavesStockAlone() throws Exception {
+        setThreshold("5");
+        String id = recordAndGetId(owner, ROLE_OWNER, linkedRowId, "spoilage", "6");
+
+        decide(owner, ROLE_OWNER, id, false, "count was wrong")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("rejected"));
+
+        assertThat(currentStock()).isEqualByComparingTo("20");
+        assertThat(stockMovementRepository.findAll()).isEmpty();
+        assertThat(storeRoomMovementRepository.findById(id).orElseThrow().getDecisionNote())
+                .isEqualTo("count was wrong");
+    }
+
+    @Test
+    void takeOutAtTheThreshold_appliesImmediately() throws Exception {
+        // "More than" N needs approval, so exactly N does not.
+        setThreshold("5");
+
+        recordAndGetId(owner, ROLE_OWNER, linkedRowId, "spoilage", "5");
+
+        assertThat(currentStock()).isEqualByComparingTo("15");
+        assertThat(storeRoomMovementRepository.findAll().getFirst().getStatus())
+                .isEqualTo(StoreRoomMovementStatus.APPLIED);
+    }
+
+    @Test
+    void thresholdDoesNotGateLocalCounts() throws Exception {
+        // A back-room count is low stakes; the threshold is about stock.
+        setThreshold("1");
+
+        recordAndGetId(owner, ROLE_OWNER, standaloneRowId, "staff_use", "3");
+
+        assertThat(storeItemRepository.findById(standaloneRowId).orElseThrow().getQuantity())
+                .isEqualTo(2);
+        assertThat(storeRoomMovementRepository.findAll().getFirst().getStatus())
+                .isEqualTo(StoreRoomMovementStatus.APPLIED);
+    }
+
+    @Test
+    void decidingNeedsInventoryWrite() throws Exception {
+        setThreshold("1");
+        String id = recordAndGetId(owner, ROLE_OWNER, linkedRowId, "spoilage", "2");
+
+        // A stock manager without the delegation toggle cannot approve either.
+        decide(stockManager, ROLE_STOCK_MANAGER, id, true, null)
+                .andExpect(status().isForbidden());
+
+        assertThat(currentStock()).isEqualByComparingTo("20");
+    }
+
+    // ------------------------------------------------------------------
+    // Filters
+    // ------------------------------------------------------------------
+
+    @Test
+    void filtersNarrowTheListButNotTheHeadline() throws Exception {
+        setThreshold("5");
+        record(owner, ROLE_OWNER, linkedRowId, "out", "spoilage", "3", null)
+                .andExpect(status().isCreated());
+        record(owner, ROLE_OWNER, linkedRowId, "out", "theft", "6", null)
+                .andExpect(status().isCreated());
+
+        String from = Instant.now().minusSeconds(3600).toString();
+        String to = Instant.now().plusSeconds(3600).toString();
+
+        mockMvc.perform(get(MOVEMENTS_PATH)
+                        .param("from", from)
+                        .param("to", to)
+                        .param("reason", "theft")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                // One row in the list...
+                .andExpect(jsonPath("$.movements.length()").value(1))
+                .andExpect(jsonPath("$.movements[0].reason").value("theft"))
+                // ...but the window's headline still counts both.
+                .andExpect(jsonPath("$.summary.total").value(2))
+                // Only the applied spoilage has actually left the shop.
+                .andExpect(jsonPath("$.summary.stockLossQuantity").value(3))
+                .andExpect(jsonPath("$.summary.pending").value(1))
+                // Facets cover the window, so the other reason is still offered.
+                .andExpect(jsonPath("$.facets.reasons.length()").value(2))
+                .andExpect(jsonPath("$.facets.actors[0].name").value("Owner"));
+    }
+
+    @Test
+    void statusFilterIsolatesWhatNeedsDeciding() throws Exception {
+        setThreshold("5");
+        recordAndGetId(owner, ROLE_OWNER, linkedRowId, "spoilage", "6");
+        record(owner, ROLE_OWNER, linkedRowId, "out", "spoilage", "1", null)
+                .andExpect(status().isCreated());
+
+        safeGet("pending")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.movements.length()").value(1))
+                .andExpect(jsonPath("$.movements[0].status").value("pending"))
+                .andExpect(jsonPath("$.movements[0].quantity").value(6));
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
 
@@ -453,6 +608,62 @@ class StoreRoomMovementIT {
                 .header(TestAuthenticationFilter.HEADER_USER_ID, actor.getId())
                 .header(TestAuthenticationFilter.HEADER_ROLE_ID, roleId)
                 .header(TestAuthenticationFilter.HEADER_BRANCH_ID, actor.getBranchId()));
+    }
+
+    private void setThreshold(String value) throws Exception {
+        mockMvc.perform(put("/api/v1/store-items/settings")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"approvalThreshold\":" + value + "}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .header(TestAuthenticationFilter.HEADER_BRANCH_ID, owner.getBranchId()))
+                .andExpect(status().isOk());
+    }
+
+    /** Records a take-out that is expected to succeed, and returns its movement id. */
+    private String recordAndGetId(
+            User actor,
+            String roleId,
+            String storeItemId,
+            String reason,
+            String quantity
+    ) throws Exception {
+        record(actor, roleId, storeItemId, "out", reason, quantity, null)
+                .andExpect(status().isCreated());
+        return storeRoomMovementRepository.findAll().getFirst().getId();
+    }
+
+    private ResultActions decide(
+            User actor,
+            String roleId,
+            String movementId,
+            boolean approve,
+            String note
+    ) throws Exception {
+        Map<String, Object> body = new LinkedHashMap<>();
+        if (note != null) {
+            body.put("note", note);
+        }
+        return mockMvc.perform(post(MOVEMENTS_PATH + "/" + movementId + "/"
+                        + (approve ? "approve" : "reject"))
+                .contentType(APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(body))
+                .header("X-Tenant-Id", TENANT)
+                .header(TestAuthenticationFilter.HEADER_USER_ID, actor.getId())
+                .header(TestAuthenticationFilter.HEADER_ROLE_ID, roleId)
+                .header(TestAuthenticationFilter.HEADER_BRANCH_ID, actor.getBranchId()));
+    }
+
+    /** The activity read for the surrounding hour, filtered by status. */
+    private ResultActions safeGet(String status) throws Exception {
+        return mockMvc.perform(get(MOVEMENTS_PATH)
+                .param("from", Instant.now().minusSeconds(3600).toString())
+                .param("to", Instant.now().plusSeconds(3600).toString())
+                .param("status", status)
+                .header("X-Tenant-Id", TENANT)
+                .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER));
     }
 
     private Business withDelegationOn() {

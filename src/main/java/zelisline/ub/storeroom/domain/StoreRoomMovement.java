@@ -61,6 +61,21 @@ public class StoreRoomMovement {
     @Column(name = "note", length = 255)
     private String note;
 
+    /** {@link StoreRoomMovementStatus#PENDING} means stock has NOT moved yet. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false, length = 16)
+    private StoreRoomMovementStatus status = StoreRoomMovementStatus.APPLIED;
+
+    @Column(name = "decided_by", length = 36)
+    private String decidedBy;
+
+    @Column(name = "decided_at")
+    private Instant decidedAt;
+
+    /** Why it was approved or turned down. */
+    @Column(name = "decision_note", length = 255)
+    private String decisionNote;
+
     /** {@code stock_movements.id} this movement produced, if it moved stock. */
     @Column(name = "movement_id", length = 36)
     private String movementId;

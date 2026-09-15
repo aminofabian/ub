@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -28,7 +29,6 @@ import zelisline.ub.inventory.api.dto.PostStandaloneWastageRequest;
 import zelisline.ub.inventory.application.InventoryBatchPickerService;
 import zelisline.ub.inventory.application.InventoryLedgerService;
 import zelisline.ub.platform.security.CurrentUserPermissions;
-import zelisline.ub.purchasing.domain.StockMovement;
 import zelisline.ub.purchasing.repository.StockMovementRepository;
 import zelisline.ub.storeroom.api.dto.CreateStoreRoomMovementRequest;
 import zelisline.ub.storeroom.api.dto.StoreRoomActivityResponse;
@@ -37,14 +37,17 @@ import zelisline.ub.storeroom.domain.StoreItem;
 import zelisline.ub.storeroom.domain.StoreRoomDirection;
 import zelisline.ub.storeroom.domain.StoreRoomMode;
 import zelisline.ub.storeroom.domain.StoreRoomMovement;
+import zelisline.ub.storeroom.domain.StoreRoomMovementStatus;
 import zelisline.ub.storeroom.domain.StoreRoomReason;
+import zelisline.ub.storeroom.domain.StoreRoomSettings;
 import zelisline.ub.storeroom.domain.StoreRoomStockEffect;
 import zelisline.ub.storeroom.repository.StoreItemRepository;
 import zelisline.ub.storeroom.repository.StoreRoomMovementRepository;
 import zelisline.ub.tenancy.application.BranchResolutionService;
 
 /**
- * Records take-outs and put-ins from the store room.
+ * Records take-outs and put-ins from the store room, and decides on the ones that
+ * need approval.
  *
  * <p>The rule that matters: <b>only Class B reasons move stock</b>. Class A
  * ("restock to shelf", prep, counter transfer) leave the shop's stock alone — the
@@ -75,6 +78,18 @@ public class StoreRoomMovementService {
     private final ItemRepository itemRepository;
     private final UserRepository userRepository;
     private final CurrentUserPermissions permissions;
+
+    /** Filters for the activity read. All optional. */
+    public record ActivityQuery(
+            Instant from,
+            Instant to,
+            Integer limit,
+            String reason,
+            String createdBy,
+            String direction,
+            String status
+    ) {
+    }
 
     @Transactional
     public StoreRoomMovementResponse record(
@@ -127,11 +142,27 @@ public class StoreRoomMovementService {
         row.setQuantity(quantity);
         row.setNote(note);
         row.setCreatedBy(actorId);
+        row.setStatus(StoreRoomMovementStatus.APPLIED);
 
-        if (movesStock) {
+        if (movesStock && linked && exceedsApprovalThreshold(businessId, quantity)) {
+            // Nothing moves until somebody says yes. The reason class still records the
+            // intent, so an approver can see what they are approving.
+            row.setStatus(StoreRoomMovementStatus.PENDING);
+        } else if (movesStock) {
             if (linked) {
                 applyInventoryDecrease(
-                        businessId, item, quantity, reason, request, actorId, actorRoleId, sessionBranchId, row);
+                        businessId,
+                        item.getItemId(),
+                        item.getName(),
+                        item.getBuyingPrice(),
+                        quantity,
+                        reason,
+                        request.branchId(),
+                        note,
+                        actorId,
+                        actorRoleId,
+                        sessionBranchId,
+                        row);
             } else {
                 applyLocalDecrease(item, quantity);
             }
@@ -142,44 +173,161 @@ public class StoreRoomMovementService {
     }
 
     /**
+     * Approve or turn down a pending movement.
+     *
+     * <p>Approving is where stock actually moves, so it carries the same
+     * {@code inventory.write} requirement as the take-out would have. Rejecting
+     * changes nothing, but a decision is still an inventory decision, so it takes the
+     * same key rather than a weaker one.
+     */
+    @Transactional
+    public StoreRoomMovementResponse decide(
+            String businessId,
+            String movementId,
+            String actorId,
+            String actorRoleId,
+            String sessionBranchId,
+            boolean approve,
+            String decisionNote
+    ) {
+        permissions.require("inventory.write");
+
+        StoreRoomMovement row = movementRepository.findByIdAndBusinessId(movementId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Movement not found"));
+        if (row.getStatus() != StoreRoomMovementStatus.PENDING) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "That movement has already been decided (" + row.getStatus().wireValue() + ").");
+        }
+
+        if (approve) {
+            if (row.getItemId() == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "This movement has no product to apply against any more.");
+            }
+            StoreItem item = row.getStoreItemId() == null
+                    ? null
+                    : storeItemRepository.findByIdAndBusinessId(row.getStoreItemId(), businessId)
+                            .orElse(null);
+            // Post to the branch the take-out was raised against, so approval cannot
+            // silently move the stock to a different shop.
+            applyInventoryDecrease(
+                    businessId,
+                    row.getItemId(),
+                    item == null ? null : item.getName(),
+                    item == null ? null : item.getBuyingPrice(),
+                    row.getQuantity(),
+                    row.getReason(),
+                    row.getBranchId(),
+                    row.getNote(),
+                    actorId,
+                    actorRoleId,
+                    sessionBranchId,
+                    row);
+            row.setStatus(StoreRoomMovementStatus.APPLIED);
+        } else {
+            row.setStatus(StoreRoomMovementStatus.REJECTED);
+        }
+        row.setDecidedBy(actorId);
+        row.setDecidedAt(Instant.now());
+        row.setDecisionNote(normalizeNote(decisionNote));
+        movementRepository.save(row);
+
+        return decorate(businessId, List.of(row)).get(0);
+    }
+
+    /**
      * The activity trail for a window.
      *
-     * <p>The caller supplies the window because the dashboard knows its own local
-     * day; the server has no opinion about what "today" means for the shop.
+     * <p>The caller supplies the window because the dashboard knows its own local day;
+     * the server has no opinion about what "today" means for the shop.
      *
-     * <p>The summary is computed from the movements actually returned, which is
-     * capped at {@value #MAX_PAGE}. A shop recording more than that in one window
-     * would need the counts moved to aggregate queries.
+     * <p>The summary and filter options describe the whole window, while
+     * {@code movements} is the filtered view — so the headline does not move while
+     * somebody narrows the list, and the offered filters stay truthful. Filtering
+     * happens in memory because the window is capped and facets have to be computed
+     * over it anyway.
      */
     @Transactional(readOnly = true)
-    public StoreRoomActivityResponse activity(String businessId, Instant from, Instant to, Integer limit) {
-        Instant end = to != null ? to : Instant.now();
-        Instant start = from != null ? from : end.minus(Duration.ofHours(24));
-        int page = limit == null || limit <= 0 ? DEFAULT_PAGE : Math.min(limit, MAX_PAGE);
+    public StoreRoomActivityResponse activity(String businessId, ActivityQuery query) {
+        Instant end = query.to() != null ? query.to() : Instant.now();
+        Instant start = query.from() != null ? query.from() : end.minus(Duration.ofHours(24));
+        int page = query.limit() == null || query.limit() <= 0
+                ? DEFAULT_PAGE
+                : Math.min(query.limit(), MAX_PAGE);
 
-        List<StoreRoomMovement> rows = movementRepository
+        List<StoreRoomMovement> window = movementRepository
                 .findByBusinessIdAndCreatedAtGreaterThanEqualAndCreatedAtLessThanOrderByCreatedAtDesc(
-                        businessId, start, end, PageRequest.of(0, page));
+                        businessId, start, end, PageRequest.of(0, MAX_PAGE));
 
         int takeOuts = 0;
         int putIns = 0;
+        int pending = 0;
         BigDecimal stockLoss = ZERO;
-        for (StoreRoomMovement row : rows) {
+        Map<String, Integer> actorsSeen = new LinkedHashMap<>();
+        Map<String, Integer> reasonsSeen = new LinkedHashMap<>();
+        for (StoreRoomMovement row : window) {
             if (row.getDirection() == StoreRoomDirection.OUT) {
                 takeOuts++;
             } else {
                 putIns++;
             }
-            if (row.getStockEffect() == StoreRoomStockEffect.DECREASE) {
+            if (row.getStatus() == StoreRoomMovementStatus.PENDING) {
+                pending++;
+            }
+            // Pending stock has not left the shop, so it is not a loss yet.
+            if (row.getStockEffect() == StoreRoomStockEffect.DECREASE
+                    && row.getStatus() == StoreRoomMovementStatus.APPLIED) {
                 stockLoss = stockLoss.add(row.getQuantity());
             }
+            if (row.getCreatedBy() != null) {
+                actorsSeen.merge(row.getCreatedBy(), 1, Integer::sum);
+            }
+            reasonsSeen.merge(row.getReason().wireValue(), 1, Integer::sum);
         }
+
+        List<StoreRoomMovement> filtered = window.stream()
+                .filter(row -> matches(query.reason(), row.getReason().wireValue()))
+                .filter(row -> matches(query.direction(), row.getDirection().wireValue()))
+                .filter(row -> matches(query.status(), row.getStatus().wireValue()))
+                .filter(row -> matches(query.createdBy(), row.getCreatedBy()))
+                .limit(page)
+                .toList();
+
+        Map<String, String> userNames = userNames(actorsSeen.keySet());
+        List<StoreRoomActivityResponse.ActorFacet> actors = actorsSeen.entrySet().stream()
+                .map(entry -> new StoreRoomActivityResponse.ActorFacet(
+                        entry.getKey(),
+                        userNames.getOrDefault(entry.getKey(), "Unknown"),
+                        entry.getValue()))
+                .toList();
+        List<StoreRoomActivityResponse.ReasonFacet> reasons = reasonsSeen.entrySet().stream()
+                .map(entry -> new StoreRoomActivityResponse.ReasonFacet(
+                        entry.getKey(), entry.getValue()))
+                .toList();
 
         return new StoreRoomActivityResponse(
                 start,
                 end,
-                new StoreRoomActivityResponse.Summary(rows.size(), takeOuts, putIns, stockLoss),
-                decorate(businessId, rows));
+                new StoreRoomActivityResponse.Summary(
+                        window.size(), takeOuts, putIns, stockLoss, pending),
+                new StoreRoomActivityResponse.Facets(actors, reasons),
+                decorate(businessId, filtered));
+    }
+
+    private static boolean matches(String filter, String value) {
+        if (filter == null || filter.isBlank()) {
+            return true;
+        }
+        return filter.equals(value);
+    }
+
+    /** True when this take-out is big enough to need a second pair of eyes. */
+    private boolean exceedsApprovalThreshold(String businessId, BigDecimal quantity) {
+        StoreRoomSettings settings = storeRoomSettingsService.settingsRow(businessId);
+        BigDecimal threshold = settings == null ? null : settings.getApprovalThreshold();
+        return threshold != null && quantity.compareTo(threshold) > 0;
     }
 
     // ------------------------------------------------------------------
@@ -208,24 +356,30 @@ public class StoreRoomMovementService {
      * Linked rows change real stock. The inventory ledger is the stock of record, so
      * the write goes through it — FEFO allocation, batch depletion and the shrinkage
      * journal all stay in one place.
+     *
+     * <p>Takes the catalogue item's details rather than the register row, because
+     * approving a movement must still work after the register row has been deleted.
      */
     private void applyInventoryDecrease(
             String businessId,
-            StoreItem item,
+            String catalogItemId,
+            String itemName,
+            BigDecimal preferredUnitCost,
             BigDecimal quantity,
             StoreRoomReason reason,
-            CreateStoreRoomMovementRequest request,
+            String requestedBranchId,
+            String note,
             String actorId,
             String actorRoleId,
             String sessionBranchId,
             StoreRoomMovement row
     ) {
-        String branchId = resolveBranch(businessId, sessionBranchId, actorRoleId, request.branchId());
+        String branchId = resolveBranch(businessId, sessionBranchId, actorRoleId, requestedBranchId);
 
         // Preview first: it both proves there is enough stock at this shop and gives
         // the per-batch allocation a plain decrease needs.
         List<BatchAllocationLine> lines =
-                batchPickerService.previewAllocation(businessId, item.getItemId(), branchId, quantity);
+                batchPickerService.previewAllocation(businessId, catalogItemId, branchId, quantity);
         BigDecimal available = ZERO;
         for (BatchAllocationLine line : lines) {
             if (line.quantity() != null) {
@@ -236,10 +390,11 @@ public class StoreRoomMovementService {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Only " + available.stripTrailingZeros().toPlainString()
-                            + " of \"" + item.getName() + "\" at this shop.");
+                            + " of \"" + (itemName == null ? catalogItemId : itemName)
+                            + "\" at this shop.");
         }
 
-        String ledgerNote = ledgerNote(reason, row.getNote());
+        String ledgerNote = ledgerNote(reason, note);
         row.setBranchId(branchId);
 
         if (reason.usesWastagePath()) {
@@ -247,9 +402,9 @@ public class StoreRoomMovementService {
                     businessId,
                     new PostStandaloneWastageRequest(
                             branchId,
-                            item.getItemId(),
+                            catalogItemId,
                             quantity,
-                            wasteCost(item, lines),
+                            wasteCost(preferredUnitCost, lines),
                             ledgerNote,
                             null,
                             reason.wastageReason().name()),
@@ -282,12 +437,11 @@ public class StoreRoomMovementService {
 
     /**
      * The ledger validates {@code unitCost} but values a write-off from each batch's
-     * own cost, so this only has to be positive. Prefer the price the merchant typed.
+     * own cost, so this only has to be positive.
      */
-    private static BigDecimal wasteCost(StoreItem item, List<BatchAllocationLine> lines) {
-        BigDecimal typed = item.getBuyingPrice();
-        if (typed != null && typed.signum() > 0) {
-            return typed;
+    private static BigDecimal wasteCost(BigDecimal preferred, List<BatchAllocationLine> lines) {
+        if (preferred != null && preferred.signum() > 0) {
+            return preferred;
         }
         for (BatchAllocationLine line : lines) {
             if (line.unitCost() != null && line.unitCost().signum() > 0) {
@@ -356,6 +510,9 @@ public class StoreRoomMovementService {
             if (row.getCreatedBy() != null) {
                 userIds.add(row.getCreatedBy());
             }
+            if (row.getDecidedBy() != null) {
+                userIds.add(row.getDecidedBy());
+            }
         }
 
         Map<String, String> storeItemNames = new HashMap<>();
@@ -370,10 +527,7 @@ public class StoreRoomMovementService {
                 itemNames.put(item.getId(), item.getName());
             }
         }
-        Map<String, String> userNames = new HashMap<>();
-        for (User user : userRepository.findLiveByIds(userIds)) {
-            userNames.put(user.getId(), user.getName());
-        }
+        Map<String, String> userNames = userNames(userIds);
 
         List<StoreRoomMovementResponse> out = new ArrayList<>(rows.size());
         for (StoreRoomMovement row : rows) {
@@ -386,6 +540,7 @@ public class StoreRoomMovementService {
                     row.getDirection().wireValue(),
                     row.getReason().wireValue(),
                     row.getStockEffect().wireValue(),
+                    row.getStatus().wireValue(),
                     row.getQuantity(),
                     row.getNote(),
                     row.getMovementId(),
@@ -393,9 +548,24 @@ public class StoreRoomMovementService {
                     row.getBranchId(),
                     row.getCreatedAt(),
                     row.getCreatedBy(),
-                    userNames.get(row.getCreatedBy())));
+                    userNames.get(row.getCreatedBy()),
+                    row.getDecidedAt(),
+                    row.getDecidedBy(),
+                    userNames.get(row.getDecidedBy()),
+                    row.getDecisionNote()));
         }
         return out;
+    }
+
+    private Map<String, String> userNames(Set<String> ids) {
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> names = new HashMap<>();
+        for (User user : userRepository.findLiveByIds(ids)) {
+            names.put(user.getId(), user.getName());
+        }
+        return names;
     }
 
     private static String normalizeNote(String raw) {

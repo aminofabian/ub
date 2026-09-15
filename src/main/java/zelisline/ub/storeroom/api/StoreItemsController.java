@@ -50,18 +50,19 @@ public class StoreItemsController {
     }
 
     /**
-     * Records the merchant's choice. Choosing {@code connected} auto-links rows to
-     * products by barcode and starts reporting live counts.
+     * A partial update: choose the mode, set or clear the approval threshold, or both.
+     * Choosing {@code connected} auto-links rows to products by barcode and starts
+     * reporting live counts.
      */
     @PutMapping("/settings")
     @PreAuthorize("hasPermission(null, 'catalog.items.write')")
-    public StoreRoomSettingsResponse chooseMode(
+    public StoreRoomSettingsResponse updateSettings(
             @Valid @RequestBody UpdateStoreRoomSettingsRequest body,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        return storeRoomSettingsService.chooseMode(
-                TenantRequestIds.resolveBusinessId(request), body.mode());
+        return storeRoomSettingsService.updateSettings(
+                TenantRequestIds.resolveBusinessId(request), body);
     }
 
     @GetMapping

@@ -1,13 +1,20 @@
 package zelisline.ub.storeroom.api.dto;
 
-import jakarta.validation.constraints.NotBlank;
+import java.math.BigDecimal;
+
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Size;
 
 /**
- * The merchant's answer to "should your store room follow inventory?". Accepted as a
- * string rather than an enum so an unknown value produces a readable 400.
+ * A partial update of the store room's settings. At least one field must be set.
+ *
+ * @param mode                  choose {@code standalone} or {@code connected}
+ * @param approvalThreshold     ask before more than this leaves stock
+ * @param clearApprovalThreshold stop asking
  */
 public record UpdateStoreRoomSettingsRequest(
-        @NotBlank @Size(max = 16) String mode
+        @Size(max = 16) String mode,
+        @DecimalMin(value = "0.0", inclusive = false) BigDecimal approvalThreshold,
+        Boolean clearApprovalThreshold
 ) {
 }

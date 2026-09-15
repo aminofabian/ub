@@ -1,6 +1,7 @@
 package zelisline.ub.storeroom.application;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.HashMap;
@@ -20,6 +21,7 @@ import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.storeroom.api.dto.StoreRoomSettingsResponse;
+import zelisline.ub.storeroom.api.dto.UpdateStoreRoomSettingsRequest;
 import zelisline.ub.storeroom.domain.StoreItem;
 import zelisline.ub.storeroom.domain.StoreRoomMode;
 import zelisline.ub.storeroom.domain.StoreRoomSettings;
@@ -55,6 +57,12 @@ public class StoreRoomSettingsService {
                 .orElse(null);
     }
 
+    /** The settings row, or {@code null} before the merchant has chosen anything. */
+    @Transactional(readOnly = true)
+    public StoreRoomSettings settingsRow(String businessId) {
+        return settingsRepository.findById(businessId).orElse(null);
+    }
+
     @Transactional(readOnly = true)
     public StoreRoomSettingsResponse settings(String businessId) {
         StoreRoomSettings row = settingsRepository.findById(businessId).orElse(null);
@@ -62,27 +70,47 @@ public class StoreRoomSettingsService {
     }
 
     /**
-     * Records the merchant's choice. Switching to {@link StoreRoomMode#CONNECTED}
-     * auto-links every row it can by barcode; switching back to
-     * {@link StoreRoomMode#STANDALONE} leaves existing links in place so a
-     * re-connect is instant.
+     * A partial update. Choosing {@link StoreRoomMode#CONNECTED} auto-links rows to
+     * products by barcode; switching back to
+     * {@link StoreRoomMode#STANDALONE} leaves links in place so a re-connect is instant.
      */
     @Transactional
-    public StoreRoomSettingsResponse chooseMode(String businessId, String rawMode) {
-        StoreRoomMode mode = StoreRoomMode.fromWire(rawMode);
+    public StoreRoomSettingsResponse updateSettings(
+            String businessId,
+            UpdateStoreRoomSettingsRequest request
+    ) {
+        String rawMode = request.mode();
+        boolean hasMode = rawMode != null && !rawMode.isBlank();
+        boolean hasThreshold = request.approvalThreshold() != null;
+        boolean clearsThreshold = Boolean.TRUE.equals(request.clearApprovalThreshold());
+        if (!hasMode && !hasThreshold && !clearsThreshold) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nothing to update");
+        }
 
         StoreRoomSettings row = settingsRepository.findById(businessId).orElseGet(() -> {
             StoreRoomSettings fresh = new StoreRoomSettings();
             fresh.setBusinessId(businessId);
             return fresh;
         });
-        row.setMode(mode);
-        if (mode == StoreRoomMode.CONNECTED && row.getConnectedAt() == null) {
-            row.setConnectedAt(Instant.now());
+
+        int linkedNow = 0;
+        if (hasMode) {
+            StoreRoomMode mode = StoreRoomMode.fromWire(rawMode);
+            row.setMode(mode);
+            if (mode == StoreRoomMode.CONNECTED && row.getConnectedAt() == null) {
+                row.setConnectedAt(Instant.now());
+            }
+        }
+        if (clearsThreshold) {
+            row.setApprovalThreshold(null);
+        } else if (hasThreshold) {
+            row.setApprovalThreshold(request.approvalThreshold().setScale(4, RoundingMode.HALF_UP));
         }
         settingsRepository.save(row);
 
-        int linkedNow = mode == StoreRoomMode.CONNECTED ? autoLinkByBarcode(businessId) : 0;
+        if (hasMode && row.getMode() == StoreRoomMode.CONNECTED) {
+            linkedNow = autoLinkByBarcode(businessId);
+        }
         return census(businessId, row, linkedNow);
     }
 
@@ -167,6 +195,7 @@ public class StoreRoomSettingsService {
         return new StoreRoomSettingsResponse(
                 mode == null ? null : mode.wireValue(),
                 row == null ? null : row.getConnectedAt(),
+                row == null ? null : row.getApprovalThreshold(),
                 total,
                 linked,
                 Math.max(0, total - linked),

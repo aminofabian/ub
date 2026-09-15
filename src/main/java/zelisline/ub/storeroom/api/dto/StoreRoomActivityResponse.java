@@ -7,13 +7,15 @@ import java.util.List;
 /**
  * Answers "what left the store room?" for a window.
  *
- * @param summary counts and totals across the returned movements — see the note on
- *                {@code StoreRoomMovementService.activity} about page capping
+ * <p>The {@code summary} and {@code facets} describe the whole window; {@code movements}
+ * is the filtered view. That way the headline does not shift while somebody narrows
+ * the list, and the filter options stay truthful.
  */
 public record StoreRoomActivityResponse(
         Instant from,
         Instant to,
         Summary summary,
+        Facets facets,
         List<StoreRoomMovementResponse> movements
 ) {
 
@@ -21,8 +23,23 @@ public record StoreRoomActivityResponse(
             int total,
             int takeOuts,
             int putIns,
-            /** Total quantity that actually left the shop (Class B take-outs). */
-            BigDecimal stockLossQuantity
+            /** Applied quantity that actually left the shop (Class B, not pending). */
+            BigDecimal stockLossQuantity,
+            /** Waiting on an approval decision — stock has NOT moved for these. */
+            int pending
     ) {
+    }
+
+    /** Filter options actually present in the window. */
+    public record Facets(
+            List<ActorFacet> actors,
+            List<ReasonFacet> reasons
+    ) {
+    }
+
+    public record ActorFacet(String userId, String name, int count) {
+    }
+
+    public record ReasonFacet(String reason, int count) {
     }
 }

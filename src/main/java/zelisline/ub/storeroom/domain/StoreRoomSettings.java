@@ -1,5 +1,6 @@
 package zelisline.ub.storeroom.domain;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 
 import jakarta.persistence.Column;
@@ -34,6 +35,13 @@ public class StoreRoomSettings {
 
     @Column(name = "connected_at")
     private Instant connectedAt;
+
+    /**
+     * Ask for approval before more than this leaves stock. {@code null} = never ask.
+     * Only applies to linked rows in connected mode — a local count is low stakes.
+     */
+    @Column(name = "approval_threshold", precision = 14, scale = 4)
+    private BigDecimal approvalThreshold;
 
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;

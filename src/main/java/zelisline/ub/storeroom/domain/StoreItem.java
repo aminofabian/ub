@@ -33,6 +33,18 @@ public class StoreItem {
     @Column(name = "barcode", length = 191)
     private String barcode;
 
+    /**
+     * Catalogue product this row mirrors, or {@code null} while the row stands alone.
+     * Set when the business connects the store room to inventory (auto-linked by
+     * barcode, or picked by hand).
+     */
+    @Column(name = "item_id", length = 36)
+    private String itemId;
+
+    /**
+     * Manual count. Dormant while {@link #itemId} is set and the store room is
+     * connected — the live inventory count wins and this field is ignored.
+     */
     @Column(name = "quantity", nullable = false)
     private int quantity;
 

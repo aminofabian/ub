@@ -16,4 +16,11 @@ public interface StoreItemRepository extends JpaRepository<StoreItem, String> {
     boolean existsByBusinessIdAndBarcode(String businessId, String barcode);
 
     boolean existsByBusinessIdAndBarcodeAndIdNot(String businessId, String barcode, String id);
+
+    /** Rows still waiting on a catalogue link — candidates for barcode auto-linking. */
+    List<StoreItem> findByBusinessIdAndItemIdIsNullOrderByNameAsc(String businessId);
+
+    long countByBusinessId(String businessId);
+
+    long countByBusinessIdAndItemIdIsNotNull(String businessId);
 }

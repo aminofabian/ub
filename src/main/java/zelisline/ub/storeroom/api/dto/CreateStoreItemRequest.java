@@ -14,6 +14,8 @@ public record CreateStoreItemRequest(
         @Size(max = 191) String barcode,
         @NotNull @Min(0) Integer quantity,
         LocalDate expiryDate,
-        @DecimalMin(value = "0.0", inclusive = true) BigDecimal buyingPrice
+        @DecimalMin(value = "0.0", inclusive = true) BigDecimal buyingPrice,
+        /** Optional catalogue product to mirror straight away (connected mode). */
+        @Size(max = 36) String itemId
 ) {
 }

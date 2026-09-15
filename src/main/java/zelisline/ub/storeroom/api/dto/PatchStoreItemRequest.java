@@ -14,6 +14,10 @@ public record PatchStoreItemRequest(
         LocalDate expiryDate,
         Boolean clearExpiryDate,
         @DecimalMin(value = "0.0", inclusive = true) BigDecimal buyingPrice,
-        Boolean clearBuyingPrice
+        Boolean clearBuyingPrice,
+        /** Catalogue product to mirror, or null to leave the link alone. */
+        @Size(max = 36) String itemId,
+        /** When true, drop the catalogue link and go back to a manual count. */
+        Boolean clearItemId
 ) {
 }

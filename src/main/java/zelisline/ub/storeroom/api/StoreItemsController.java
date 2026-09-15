@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -22,7 +23,10 @@ import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.storeroom.api.dto.CreateStoreItemRequest;
 import zelisline.ub.storeroom.api.dto.PatchStoreItemRequest;
 import zelisline.ub.storeroom.api.dto.StoreItemResponse;
+import zelisline.ub.storeroom.api.dto.StoreRoomSettingsResponse;
+import zelisline.ub.storeroom.api.dto.UpdateStoreRoomSettingsRequest;
 import zelisline.ub.storeroom.application.StoreItemService;
+import zelisline.ub.storeroom.application.StoreRoomSettingsService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
 @Validated
@@ -32,6 +36,33 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class StoreItemsController {
 
     private final StoreItemService storeItemService;
+    private final StoreRoomSettingsService storeRoomSettingsService;
+
+    /**
+     * Whether this business's store room stands alone or follows inventory.
+     * {@code mode} is null until the merchant answers the first-run prompt.
+     */
+    @GetMapping("/settings")
+    @PreAuthorize("hasPermission(null, 'catalog.items.read')")
+    public StoreRoomSettingsResponse settings(HttpServletRequest request) {
+        CurrentTenantUser.require(request);
+        return storeRoomSettingsService.settings(TenantRequestIds.resolveBusinessId(request));
+    }
+
+    /**
+     * Records the merchant's choice. Choosing {@code connected} auto-links rows to
+     * products by barcode and starts reporting live counts.
+     */
+    @PutMapping("/settings")
+    @PreAuthorize("hasPermission(null, 'catalog.items.write')")
+    public StoreRoomSettingsResponse chooseMode(
+            @Valid @RequestBody UpdateStoreRoomSettingsRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return storeRoomSettingsService.chooseMode(
+                TenantRequestIds.resolveBusinessId(request), body.mode());
+    }
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'catalog.items.read')")

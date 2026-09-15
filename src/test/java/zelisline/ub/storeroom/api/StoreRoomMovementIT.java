@@ -126,6 +126,8 @@ class StoreRoomMovementIT {
     private DomainMappingRepository domainMappingRepository;
 
     private User owner;
+    /** A second owner-role user — holds inventory.write, so can approve someone else's take-out. */
+    private User boss;
     private User stockManager;
     private String branchId;
     private String itemId;
@@ -185,6 +187,7 @@ class StoreRoomMovementIT {
         grant(ROLE_STOCK_MANAGER, P_CAT_READ);
 
         owner = user("owner@test", "Owner", ROLE_OWNER, branchId);
+        boss = user("boss@test", "Boss", ROLE_OWNER, branchId);
         stockManager = user("manager@test", "Stock Manager", ROLE_STOCK_MANAGER, branchId);
 
         Item item = new Item();
@@ -581,6 +584,57 @@ class StoreRoomMovementIT {
     }
 
     // ------------------------------------------------------------------
+    // Separation of duties (§10 D7)
+    // ------------------------------------------------------------------
+
+    @Test
+    void approvingYourOwnTakeOutIsAllowedByDefault() throws Exception {
+        // The default must not change behaviour for a one-person shop.
+        setThreshold("5");
+        String id = recordAndGetId(owner, ROLE_OWNER, linkedRowId, "spoilage", "6");
+
+        decide(owner, ROLE_OWNER, id, true, null).andExpect(status().isOk());
+
+        assertThat(currentStock()).isEqualByComparingTo("14");
+    }
+
+    @Test
+    void separateApproverPolicyBlocksApprovingYourOwn() throws Exception {
+        setThreshold("5");
+        requireSeparateApprover();
+        String id = recordAndGetId(owner, ROLE_OWNER, linkedRowId, "spoilage", "6");
+
+        decide(owner, ROLE_OWNER, id, true, null)
+                .andExpect(status().isForbidden());
+
+        // Nothing moved, and it is still waiting for somebody else.
+        assertThat(currentStock()).isEqualByComparingTo("20");
+        assertThat(stockMovementRepository.findAll()).isEmpty();
+        assertThat(storeRoomMovementRepository.findById(id).orElseThrow().getStatus())
+                .isEqualTo(StoreRoomMovementStatus.PENDING);
+
+        // But you may still withdraw your own request — that moves no stock.
+        decide(owner, ROLE_OWNER, id, false, "never mind")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("rejected"));
+        assertThat(currentStock()).isEqualByComparingTo("20");
+    }
+
+    @Test
+    void separateApproverPolicyLetsSomeoneElseApprove() throws Exception {
+        setThreshold("5");
+        requireSeparateApprover();
+        String id = recordAndGetId(owner, ROLE_OWNER, linkedRowId, "spoilage", "6");
+
+        decide(boss, ROLE_OWNER, id, true, "counted it myself")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("applied"))
+                .andExpect(jsonPath("$.decidedByName").value("Boss"));
+
+        assertThat(currentStock()).isEqualByComparingTo("14");
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
 
@@ -610,15 +664,24 @@ class StoreRoomMovementIT {
                 .header(TestAuthenticationFilter.HEADER_BRANCH_ID, actor.getBranchId()));
     }
 
-    private void setThreshold(String value) throws Exception {
+    private void putSettings(String json) throws Exception {
         mockMvc.perform(put("/api/v1/store-items/settings")
                         .contentType(APPLICATION_JSON)
-                        .content("{\"approvalThreshold\":" + value + "}")
+                        .content(json)
                         .header("X-Tenant-Id", TENANT)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
                         .header(TestAuthenticationFilter.HEADER_BRANCH_ID, owner.getBranchId()))
                 .andExpect(status().isOk());
+    }
+
+    private void setThreshold(String value) throws Exception {
+        putSettings("{\"approvalThreshold\":" + value + "}");
+    }
+
+    /** §10 D7: nobody may approve a take-out they raised themselves. */
+    private void requireSeparateApprover() throws Exception {
+        putSettings("{\"requireSeparateApprover\":true}");
     }
 
     /** Records a take-out that is expected to succeed, and returns its movement id. */

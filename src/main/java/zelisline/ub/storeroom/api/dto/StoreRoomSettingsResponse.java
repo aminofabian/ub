@@ -12,6 +12,7 @@ import java.time.Instant;
  *                          when the merchant has not chosen yet
  * @param connectedAt       when the business first connected, if ever
  * @param approvalThreshold ask before more than this leaves stock; {@code null} = never ask
+ * @param requireSeparateApprover nobody may approve a take-out they raised themselves
  * @param itemCount         total store-room rows
  * @param linkedCount       rows tied to a catalogue product
  * @param unlinkedCount     rows with no catalogue product
@@ -22,6 +23,7 @@ public record StoreRoomSettingsResponse(
         String mode,
         Instant connectedAt,
         BigDecimal approvalThreshold,
+        boolean requireSeparateApprover,
         int itemCount,
         int linkedCount,
         int unlinkedCount,

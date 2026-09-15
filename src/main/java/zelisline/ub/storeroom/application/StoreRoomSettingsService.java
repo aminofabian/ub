@@ -83,7 +83,8 @@ public class StoreRoomSettingsService {
         boolean hasMode = rawMode != null && !rawMode.isBlank();
         boolean hasThreshold = request.approvalThreshold() != null;
         boolean clearsThreshold = Boolean.TRUE.equals(request.clearApprovalThreshold());
-        if (!hasMode && !hasThreshold && !clearsThreshold) {
+        boolean hasSeparateApprover = request.requireSeparateApprover() != null;
+        if (!hasMode && !hasThreshold && !clearsThreshold && !hasSeparateApprover) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nothing to update");
         }
 
@@ -105,6 +106,9 @@ public class StoreRoomSettingsService {
             row.setApprovalThreshold(null);
         } else if (hasThreshold) {
             row.setApprovalThreshold(request.approvalThreshold().setScale(4, RoundingMode.HALF_UP));
+        }
+        if (hasSeparateApprover) {
+            row.setRequireSeparateApprover(Boolean.TRUE.equals(request.requireSeparateApprover()));
         }
         settingsRepository.save(row);
 
@@ -196,6 +200,7 @@ public class StoreRoomSettingsService {
                 mode == null ? null : mode.wireValue(),
                 row == null ? null : row.getConnectedAt(),
                 row == null ? null : row.getApprovalThreshold(),
+                row != null && row.isRequireSeparateApprover(),
                 total,
                 linked,
                 Math.max(0, total - linked),

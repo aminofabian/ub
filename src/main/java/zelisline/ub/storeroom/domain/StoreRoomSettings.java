@@ -43,6 +43,13 @@ public class StoreRoomSettings {
     @Column(name = "approval_threshold", precision = 14, scale = 4)
     private BigDecimal approvalThreshold;
 
+    /**
+     * When true, nobody may approve a take-out they raised themselves (§10 D7). Default
+     * off, because a one-person shop has no second person to ask.
+     */
+    @Column(name = "require_separate_approver", nullable = false)
+    private boolean requireSeparateApprover;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 

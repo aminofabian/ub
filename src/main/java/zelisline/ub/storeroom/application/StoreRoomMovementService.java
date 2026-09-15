@@ -179,6 +179,11 @@ public class StoreRoomMovementService {
      * {@code inventory.write} requirement as the take-out would have. Rejecting
      * changes nothing, but a decision is still an inventory decision, so it takes the
      * same key rather than a weaker one.
+     *
+     * <p>When the store room asks for a second pair of eyes (§10 D7), nobody may
+     * approve a take-out they raised themselves. Rejecting your own is still allowed —
+     * withdrawing a request moves no stock, and needing a colleague to witness you
+     * cancelling your own mistake would be perverse.
      */
     @Transactional
     public StoreRoomMovementResponse decide(
@@ -201,6 +206,14 @@ public class StoreRoomMovementService {
         }
 
         if (approve) {
+            StoreRoomSettings settings = storeRoomSettingsService.settingsRow(businessId);
+            if (settings != null && settings.isRequireSeparateApprover()
+                    && actorId != null && actorId.equals(row.getCreatedBy())) {
+                throw new ResponseStatusException(
+                        HttpStatus.FORBIDDEN,
+                        "This store room asks for a second person. You raised this take-out, "
+                                + "so somebody else has to approve it — or you can turn it down.");
+            }
             if (row.getItemId() == null) {
                 throw new ResponseStatusException(
                         HttpStatus.CONFLICT,

@@ -11,10 +11,12 @@ import jakarta.validation.constraints.Size;
  * @param mode                  choose {@code standalone} or {@code connected}
  * @param approvalThreshold     ask before more than this leaves stock
  * @param clearApprovalThreshold stop asking
+ * @param requireSeparateApprover stop people approving their own take-outs
  */
 public record UpdateStoreRoomSettingsRequest(
         @Size(max = 16) String mode,
         @DecimalMin(value = "0.0", inclusive = false) BigDecimal approvalThreshold,
-        Boolean clearApprovalThreshold
+        Boolean clearApprovalThreshold,
+        Boolean requireSeparateApprover
 ) {
 }

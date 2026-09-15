@@ -1,0 +1,536 @@
+package zelisline.ub.storeroom.api;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.http.MediaType.APPLICATION_JSON;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import zelisline.ub.catalog.application.CatalogBootstrapService;
+import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.catalog.repository.ItemTypeRepository;
+import zelisline.ub.identity.domain.Permission;
+import zelisline.ub.identity.domain.Role;
+import zelisline.ub.identity.domain.RolePermission;
+import zelisline.ub.identity.domain.User;
+import zelisline.ub.identity.domain.UserStatus;
+import zelisline.ub.identity.repository.PermissionRepository;
+import zelisline.ub.identity.repository.RolePermissionRepository;
+import zelisline.ub.identity.repository.RoleRepository;
+import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.inventory.InventoryConstants;
+import zelisline.ub.platform.security.TestAuthenticationFilter;
+import zelisline.ub.purchasing.domain.InventoryBatch;
+import zelisline.ub.purchasing.domain.StockMovement;
+import zelisline.ub.purchasing.repository.InventoryBatchRepository;
+import zelisline.ub.purchasing.repository.StockMovementRepository;
+import zelisline.ub.storeroom.domain.StoreItem;
+import zelisline.ub.storeroom.domain.StoreRoomDirection;
+import zelisline.ub.storeroom.domain.StoreRoomMode;
+import zelisline.ub.storeroom.domain.StoreRoomMovement;
+import zelisline.ub.storeroom.domain.StoreRoomSettings;
+import zelisline.ub.storeroom.domain.StoreRoomStockEffect;
+import zelisline.ub.storeroom.repository.StoreItemRepository;
+import zelisline.ub.storeroom.repository.StoreRoomMovementRepository;
+import zelisline.ub.storeroom.repository.StoreRoomSettingsRepository;
+import zelisline.ub.tenancy.domain.Branch;
+import zelisline.ub.tenancy.domain.Business;
+import zelisline.ub.tenancy.repository.BranchRepository;
+import zelisline.ub.tenancy.repository.BusinessRepository;
+import zelisline.ub.tenancy.repository.DomainMappingRepository;
+
+/**
+ * Store-room take-outs and put-ins.
+ *
+ * <p>The test that matters most is {@link #linkedTakeOut_movesStockExactlyOnce}:
+ * a linked take-out must reduce on-hand by the taken quantity and no more. Get the
+ * reason classes wrong and that drifts silently — the count falls every time
+ * somebody restocks a shelf.
+ */
+@SpringBootTest
+@AutoConfigureMockMvc
+@ActiveProfiles("test")
+@TestPropertySource(properties = "spring.jpa.hibernate.ddl-auto=create-drop")
+class StoreRoomMovementIT {
+
+    private static final String TENANT = "ffffffff-ffff-ffff-ffff-fffffffffffa";
+    private static final String P_CAT_READ = "11111111-0000-0000-0000-000000000040";
+    private static final String P_CAT_WRITE = "11111111-0000-0000-0000-000000000041";
+    private static final String P_INV_WRITE = "11111111-0000-0000-0000-000000000055";
+    private static final String ROLE_OWNER = "22222222-0000-0000-0000-0000000000a1";
+    private static final String ROLE_STOCK_MANAGER = "22222222-0000-0000-0000-0000000000a2";
+    private static final String BATCH_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1";
+    private static final String MOVEMENTS_PATH = "/api/v1/store-room/movements";
+    private static final String DELEGATION_ON =
+            "{\"inventory\":{\"stockLevels\":{\"allowStockEditForStockManager\":true}}}";
+
+    @Autowired
+    private MockMvc mockMvc;
+    @Autowired
+    private ObjectMapper objectMapper;
+    @Autowired
+    private BusinessRepository businessRepository;
+    @Autowired
+    private BranchRepository branchRepository;
+    @Autowired
+    private UserRepository userRepository;
+    @Autowired
+    private PermissionRepository permissionRepository;
+    @Autowired
+    private RoleRepository roleRepository;
+    @Autowired
+    private RolePermissionRepository rolePermissionRepository;
+    @Autowired
+    private ItemTypeRepository itemTypeRepository;
+    @Autowired
+    private ItemRepository itemRepository;
+    @Autowired
+    private CatalogBootstrapService catalogBootstrapService;
+    @Autowired
+    private InventoryBatchRepository inventoryBatchRepository;
+    @Autowired
+    private StockMovementRepository stockMovementRepository;
+    @Autowired
+    private StoreItemRepository storeItemRepository;
+    @Autowired
+    private StoreRoomSettingsRepository storeRoomSettingsRepository;
+    @Autowired
+    private StoreRoomMovementRepository storeRoomMovementRepository;
+
+    @MockitoBean
+    @SuppressWarnings("unused")
+    private DomainMappingRepository domainMappingRepository;
+
+    private User owner;
+    private User stockManager;
+    private String branchId;
+    private String itemId;
+    /** A store-room row that mirrors the catalogue product. */
+    private String linkedRowId;
+    /** A store-room row that stands alone, with its own count. */
+    private String standaloneRowId;
+
+    @BeforeEach
+    void seed() {
+        // Children before parents — H2 enforces the FKs create-drop generates.
+        storeRoomMovementRepository.deleteAll();
+        storeItemRepository.deleteAll();
+        storeRoomSettingsRepository.deleteAll();
+        stockMovementRepository.deleteAll();
+        inventoryBatchRepository.deleteAll();
+        itemRepository.deleteAll();
+        itemTypeRepository.deleteAll();
+        userRepository.deleteAll();
+        rolePermissionRepository.deleteAll();
+        roleRepository.deleteAll();
+        permissionRepository.deleteAll();
+        branchRepository.deleteAll();
+        businessRepository.deleteAll();
+
+        Business business = new Business();
+        business.setId(TENANT);
+        business.setName("Store Room Shop");
+        business.setSlug("store-room-shop");
+        // Deliberately without the stock-manager delegation toggle; the access tests
+        // turn it on to prove the delegated write path.
+        business.setSettings("{}");
+        businessRepository.save(business);
+
+        Branch branch = new Branch();
+        branch.setBusinessId(TENANT);
+        branch.setName("Main");
+        branchRepository.save(branch);
+        branchId = branch.getId();
+
+        catalogBootstrapService.seedDefaultItemTypesIfMissing(TENANT);
+        String itemTypeId = itemTypeRepository.findByBusinessIdOrderBySortOrderAsc(TENANT)
+                .getFirst().getId();
+
+        permissionRepository.save(perm(P_CAT_READ, "catalog.items.read", "read catalogue"));
+        permissionRepository.save(perm(P_CAT_WRITE, "catalog.items.write", "write catalogue"));
+        permissionRepository.save(perm(P_INV_WRITE, "inventory.write", "write inventory"));
+
+        roleRepository.save(role(ROLE_OWNER, "owner", "Owner"));
+        for (String pid : List.of(P_CAT_READ, P_CAT_WRITE, P_INV_WRITE)) {
+            grant(ROLE_OWNER, pid);
+        }
+
+        // A stock manager can see the store room (catalog.items.read) but holds no
+        // write capability until an owner delegates it.
+        roleRepository.save(role(ROLE_STOCK_MANAGER, "stock_manager", "Stock Manager"));
+        grant(ROLE_STOCK_MANAGER, P_CAT_READ);
+
+        owner = user("owner@test", "Owner", ROLE_OWNER, branchId);
+        stockManager = user("manager@test", "Stock Manager", ROLE_STOCK_MANAGER, branchId);
+
+        Item item = new Item();
+        item.setId(UUID.randomUUID().toString());
+        item.setBusinessId(TENANT);
+        item.setSku("SRV-1");
+        item.setName("Milk 500ml");
+        item.setBarcode("6001000000017");
+        item.setItemTypeId(itemTypeId);
+        item.setWeighed(false);
+        item.setSellable(true);
+        item.setStocked(true);
+        item.setActive(true);
+        item.setCurrentStock(new BigDecimal("20.0000"));
+        itemRepository.save(item);
+        itemId = item.getId();
+
+        inventoryBatchRepository.save(batch(BATCH_ID, new BigDecimal("20.0000")));
+
+        StoreRoomSettings settings = new StoreRoomSettings();
+        settings.setBusinessId(TENANT);
+        settings.setMode(StoreRoomMode.CONNECTED);
+        settings.setConnectedAt(Instant.now());
+        storeRoomSettingsRepository.save(settings);
+
+        linkedRowId = storeRow("Cartons of milk", 0, itemId);
+        standaloneRowId = storeRow("Cleaning cloths", 5, null);
+    }
+
+    // ------------------------------------------------------------------
+    // The stock-effect rule
+    // ------------------------------------------------------------------
+
+    @Test
+    void linkedTakeOut_movesStockExactlyOnce() throws Exception {
+        record(owner, ROLE_OWNER, linkedRowId, "out", "spoilage", "3", "crate leaked")
+                .andExpect(status().isCreated());
+
+        // The ledger is the stock of record: 20 - 3, and no more.
+        assertThat(currentStock()).isEqualByComparingTo("17");
+        assertThat(batchRemaining()).isEqualByComparingTo("17");
+
+        List<StoreRoomMovement> log = storeRoomMovementRepository.findAll();
+        assertThat(log).hasSize(1);
+        StoreRoomMovement entry = log.getFirst();
+        assertThat(entry.getStockEffect()).isEqualTo(StoreRoomStockEffect.DECREASE);
+        assertThat(entry.getDirection()).isEqualTo(StoreRoomDirection.OUT);
+        assertThat(entry.getQuantity()).isEqualByComparingTo("3");
+        assertThat(entry.getItemId()).isEqualTo(itemId);
+        // The branch the ledger actually posted against must be recorded.
+        assertThat(entry.getBranchId()).isEqualTo(branchId);
+        assertThat(entry.getMovementId()).isNotBlank();
+        assertThat(entry.getMovementCount()).isEqualTo(1);
+
+        // One ledger row, and it is traceable back to the store room.
+        List<StockMovement> movements = stockMovementRepository.findAll();
+        assertThat(movements).hasSize(1);
+        StockMovement movement = movements.getFirst();
+        assertThat(movement.getQuantityDelta()).isEqualByComparingTo("-3");
+        assertThat(movement.getBranchId()).isEqualTo(branchId);
+        assertThat(movement.getId()).isEqualTo(entry.getMovementId());
+        // These ledger paths put the caller's text in `notes` — `reason` is left unset.
+        assertThat(movement.getNotes()).contains("Store room");
+        assertThat(movement.getCreatedBy()).isEqualTo(owner.getId());
+    }
+
+    @Test
+    void classAReason_logsButLeavesStockAlone() throws Exception {
+        // "Restocked the shelf" is a move within the shop, not a loss. Booking it as a
+        // decrement is how a back room quietly drains the stock count.
+        record(owner, ROLE_OWNER, linkedRowId, "out", "restock_to_shelf", "4", null)
+                .andExpect(status().isCreated());
+
+        assertThat(currentStock()).isEqualByComparingTo("20");
+        assertThat(batchRemaining()).isEqualByComparingTo("20");
+        assertThat(stockMovementRepository.findAll()).isEmpty();
+
+        List<StoreRoomMovement> log = storeRoomMovementRepository.findAll();
+        assertThat(log).hasSize(1);
+        assertThat(log.getFirst().getStockEffect()).isEqualTo(StoreRoomStockEffect.NONE);
+        assertThat(log.getFirst().getMovementId()).isNull();
+        assertThat(log.getFirst().getMovementCount()).isZero();
+    }
+
+    @Test
+    void standaloneTakeOut_touchesOnlyTheLocalCount() throws Exception {
+        record(owner, ROLE_OWNER, standaloneRowId, "out", "staff_use", "2", null)
+                .andExpect(status().isCreated());
+
+        assertThat(storeItemRepository.findById(standaloneRowId).orElseThrow().getQuantity())
+                .isEqualTo(3);
+        // Nothing in the catalogue moved, and no ledger row was written.
+        assertThat(currentStock()).isEqualByComparingTo("20");
+        assertThat(stockMovementRepository.findAll()).isEmpty();
+        assertThat(storeRoomMovementRepository.findAll().getFirst().getItemId()).isNull();
+    }
+
+    @Test
+    void putIn_logsWithoutChangingStock() throws Exception {
+        record(owner, ROLE_OWNER, standaloneRowId, "in", "received_into_room", "5", "returned")
+                .andExpect(status().isCreated());
+
+        assertThat(storeItemRepository.findById(standaloneRowId).orElseThrow().getQuantity())
+                .isEqualTo(5);
+        assertThat(currentStock()).isEqualByComparingTo("20");
+        assertThat(storeRoomMovementRepository.findAll().getFirst().getDirection())
+                .isEqualTo(StoreRoomDirection.IN);
+    }
+
+    // ------------------------------------------------------------------
+    // Rejections
+    // ------------------------------------------------------------------
+
+    @Test
+    void reasonThatDoesNotSuitTheDirection_isRejected() throws Exception {
+        record(owner, ROLE_OWNER, standaloneRowId, "in", "spoilage", "1", null)
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void otherReasonWithoutANote_isRejected() throws Exception {
+        record(owner, ROLE_OWNER, standaloneRowId, "out", "other", "1", null)
+                .andExpect(status().isBadRequest());
+
+        assertThat(storeRoomMovementRepository.findAll()).isEmpty();
+    }
+
+    @Test
+    void standaloneTakeOut_rejectsAFractionalQuantity() throws Exception {
+        // store_items.quantity is INT; refuse rather than silently round.
+        record(owner, ROLE_OWNER, standaloneRowId, "out", "staff_use", "1.5", null)
+                .andExpect(status().isBadRequest());
+
+        assertThat(storeItemRepository.findById(standaloneRowId).orElseThrow().getQuantity())
+                .isEqualTo(5);
+    }
+
+    @Test
+    void standaloneTakeOut_rejectsMoreThanIsOnTheList() throws Exception {
+        record(owner, ROLE_OWNER, standaloneRowId, "out", "staff_use", "99", null)
+                .andExpect(status().isBadRequest());
+
+        assertThat(storeItemRepository.findById(standaloneRowId).orElseThrow().getQuantity())
+                .isEqualTo(5);
+    }
+
+    @Test
+    void linkedTakeOut_rejectsMoreThanTheShopHas() throws Exception {
+        record(owner, ROLE_OWNER, linkedRowId, "out", "spoilage", "999", null)
+                .andExpect(status().isBadRequest());
+
+        // Nothing moved, and the rejected attempt left no trace.
+        assertThat(currentStock()).isEqualByComparingTo("20");
+        assertThat(storeRoomMovementRepository.findAll()).isEmpty();
+    }
+
+    // ------------------------------------------------------------------
+    // Access — the D1 decision, proved rather than asserted
+    // ------------------------------------------------------------------
+
+    @Test
+    void stockManagerWithoutDelegation_cannotTakeOut() throws Exception {
+        // This is why the nav item is gated on the same setting: without it the page
+        // would be visible and every take-out would 403.
+        record(stockManager, ROLE_STOCK_MANAGER, linkedRowId, "out", "spoilage", "1", null)
+                .andExpect(status().isForbidden());
+
+        assertThat(currentStock()).isEqualByComparingTo("20");
+    }
+
+    @Test
+    void stockManagerWithDelegatedWrite_canTakeOut() throws Exception {
+        businessRepository.save(withDelegationOn());
+
+        record(stockManager, ROLE_STOCK_MANAGER, linkedRowId, "out", "spoilage", "2", null)
+                .andExpect(status().isCreated());
+
+        assertThat(currentStock()).isEqualByComparingTo("18");
+        assertThat(storeRoomMovementRepository.findAll().getFirst().getBranchId())
+                .isEqualTo(branchId);
+    }
+
+    @Test
+    void stockManagerCanMoveAStandaloneRow_whenDelegated() throws Exception {
+        // A delegated stock manager has inventory.write but never catalog.items.write;
+        // the local case must accept either, or the back room is half-usable.
+        businessRepository.save(withDelegationOn());
+
+        record(stockManager, ROLE_STOCK_MANAGER, standaloneRowId, "out", "staff_use", "1", null)
+                .andExpect(status().isCreated());
+
+        assertThat(storeItemRepository.findById(standaloneRowId).orElseThrow().getQuantity())
+                .isEqualTo(4);
+    }
+
+    // ------------------------------------------------------------------
+    // The trail
+    // ------------------------------------------------------------------
+
+    @Test
+    void activityAnswersWhatLeftToday() throws Exception {
+        record(owner, ROLE_OWNER, linkedRowId, "out", "spoilage", "3", "crate leaked")
+                .andExpect(status().isCreated());
+        // A shelf restock is a take-out too, but it is not a loss.
+        record(owner, ROLE_OWNER, linkedRowId, "out", "restock_to_shelf", "4", null)
+                .andExpect(status().isCreated());
+
+        String from = Instant.now().minusSeconds(3600).toString();
+        String to = Instant.now().plusSeconds(3600).toString();
+
+        mockMvc.perform(get(MOVEMENTS_PATH)
+                        .param("from", from)
+                        .param("to", to)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.summary.total").value(2))
+                .andExpect(jsonPath("$.summary.takeOuts").value(2))
+                .andExpect(jsonPath("$.summary.putIns").value(0))
+                // Only the spoilage counts as stock that left the shop.
+                .andExpect(jsonPath("$.summary.stockLossQuantity").value(3))
+                .andExpect(jsonPath("$.movements.length()").value(2))
+                .andExpect(jsonPath("$.movements[0].reason").value("restock_to_shelf"))
+                .andExpect(jsonPath("$.movements[0].storeItemName").value("Cartons of milk"))
+                // "Who" is part of the answer, so the feed must name the actor.
+                .andExpect(jsonPath("$.movements[0].createdByName").value("Owner"))
+                .andExpect(jsonPath("$.movements[1].note").value("crate leaked"));
+    }
+
+    @Test
+    void deletingTheRegisterRowKeepsItsHistory() throws Exception {
+        record(owner, ROLE_OWNER, linkedRowId, "out", "spoilage", "1", null)
+                .andExpect(status().isCreated());
+
+        storeItemRepository.deleteById(linkedRowId);
+
+        StoreRoomMovement surviving = storeRoomMovementRepository.findAll().getFirst();
+        assertThat(surviving.getItemId()).isEqualTo(itemId);
+        assertThat(surviving.getQuantity()).isEqualByComparingTo("1");
+    }
+
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
+
+    private ResultActions record(
+            User actor,
+            String roleId,
+            String storeItemId,
+            String direction,
+            String reason,
+            String quantity,
+            String note
+    ) throws Exception {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("storeItemId", storeItemId);
+        body.put("direction", direction);
+        body.put("reason", reason);
+        body.put("quantity", quantity);
+        if (note != null) {
+            body.put("note", note);
+        }
+        return mockMvc.perform(post(MOVEMENTS_PATH)
+                .contentType(APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(body))
+                .header("X-Tenant-Id", TENANT)
+                .header(TestAuthenticationFilter.HEADER_USER_ID, actor.getId())
+                .header(TestAuthenticationFilter.HEADER_ROLE_ID, roleId)
+                .header(TestAuthenticationFilter.HEADER_BRANCH_ID, actor.getBranchId()));
+    }
+
+    private Business withDelegationOn() {
+        Business business = businessRepository.findById(TENANT).orElseThrow();
+        business.setSettings(DELEGATION_ON);
+        return business;
+    }
+
+    private BigDecimal currentStock() {
+        return itemRepository.findById(itemId).orElseThrow().getCurrentStock();
+    }
+
+    private BigDecimal batchRemaining() {
+        return inventoryBatchRepository.findById(BATCH_ID).orElseThrow().getQuantityRemaining();
+    }
+
+    private String storeRow(String name, int quantity, String linkedItemId) {
+        StoreItem row = new StoreItem();
+        row.setId(UUID.randomUUID().toString());
+        row.setBusinessId(TENANT);
+        row.setName(name);
+        row.setQuantity(quantity);
+        row.setItemId(linkedItemId);
+        storeItemRepository.save(row);
+        return row.getId();
+    }
+
+    private InventoryBatch batch(String id, BigDecimal qty) {
+        InventoryBatch b = new InventoryBatch();
+        b.setId(id);
+        b.setBusinessId(TENANT);
+        b.setBranchId(branchId);
+        b.setItemId(itemId);
+        b.setSupplierId(null);
+        b.setBatchNumber("SRC-1");
+        b.setSourceType("test");
+        b.setSourceId(UUID.randomUUID().toString());
+        b.setInitialQuantity(qty);
+        b.setQuantityRemaining(qty);
+        b.setUnitCost(new BigDecimal("3.5000"));
+        b.setReceivedAt(Instant.parse("2026-03-01T12:00:00Z"));
+        b.setStatus(InventoryConstants.BATCH_STATUS_ACTIVE);
+        return b;
+    }
+
+    private User user(String email, String name, String roleId, String userBranchId) {
+        User u = new User();
+        u.setBusinessId(TENANT);
+        u.setEmail(email);
+        u.setName(name);
+        u.setRoleId(roleId);
+        u.setBranchId(userBranchId);
+        u.setStatus(UserStatus.ACTIVE);
+        u.setPasswordHash("$2a$10$stubstubstubstubstubstubstubstubst");
+        return userRepository.save(u);
+    }
+
+    private static Role role(String id, String key, String name) {
+        Role r = new Role();
+        r.setId(id);
+        r.setBusinessId(null);
+        r.setRoleKey(key);
+        r.setName(name);
+        r.setSystem(true);
+        return r;
+    }
+
+    private void grant(String roleId, String permissionId) {
+        RolePermission rp = new RolePermission();
+        rp.setId(new RolePermission.Id(roleId, permissionId));
+        rolePermissionRepository.save(rp);
+    }
+
+    private static Permission perm(String id, String key, String description) {
+        Permission p = new Permission();
+        p.setId(id);
+        p.setPermissionKey(key);
+        p.setDescription(description);
+        return p;
+    }
+}

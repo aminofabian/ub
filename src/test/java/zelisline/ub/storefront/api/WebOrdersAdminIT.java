@@ -169,7 +169,7 @@ class WebOrdersAdminIT {
     @Test
     void list_requiresPermission_andReturnsRows() throws Exception {
         mockMvc.perform(get("/api/v1/web-orders").header("X-Tenant-Id", TENANT))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
 
         mockMvc.perform(
                         get("/api/v1/web-orders")

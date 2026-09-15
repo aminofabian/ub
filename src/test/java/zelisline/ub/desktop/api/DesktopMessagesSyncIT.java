@@ -252,13 +252,13 @@ class DesktopMessagesSyncIT {
     void desktopSyncEndpointsRequireAuth() throws Exception {
         mockMvc.perform(get("/api/v1/desktop/sync/messages")
                         .header("X-Tenant-Id", TENANT_A))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
 
         mockMvc.perform(post("/api/v1/desktop/sync/message-replies")
                         .header("X-Tenant-Id", TENANT_A)
                         .contentType(APPLICATION_JSON)
                         .content("{\"replies\":[]}"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     private void business(String tenantId, String name) {

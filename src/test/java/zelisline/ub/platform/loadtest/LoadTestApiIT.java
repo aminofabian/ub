@@ -99,10 +99,11 @@ class LoadTestApiIT {
     @Test
     void statusRequiresSuperAdmin() throws Exception {
         // Unauthenticated calls are rejected before the controller runs. The
-        // stateless security chain answers 403 for anonymous access (no entry
-        // point is configured); invalid Bearer tokens get 401 from the JWT filter.
+        // stateless security chain answers 401 for anonymous access (the entry
+        // point lets the web client's silent refresh recovery kick in); invalid
+        // Bearer tokens get 401 from the JWT filter too.
         mockMvc.perform(get("/api/v1/super-admin/load-test/status"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test

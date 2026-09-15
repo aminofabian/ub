@@ -172,7 +172,7 @@ class SuperAdminEmailCampaignIT {
     void refusesAnonymousAccess() throws Exception {
         mockMvc.perform(get("/api/v1/super-admin/email-recipients")
                         .param("segment", "stuck_signup"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     private Business business(String name, String slug, String settings) {

@@ -634,6 +634,35 @@ class StoreRoomMovementIT {
         assertThat(currentStock()).isEqualByComparingTo("14");
     }
 
+    /**
+     * The policy has to be a switch, not a one-way door. Turning it off must work, the
+     * read must report it so the settings dialog can render the current state, and
+     * {@code false} on its own must count as a real update rather than a 400 — the
+     * guard tests the field for null, not for truth.
+     */
+    @Test
+    void separateApproverPolicyCanBeTurnedBackOff() throws Exception {
+        setThreshold("5");
+        requireSeparateApprover();
+
+        fetchSettings()
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.requireSeparateApprover").value(true))
+                .andExpect(jsonPath("$.approvalThreshold").exists());
+
+        String id = recordAndGetId(owner, ROLE_OWNER, linkedRowId, "spoilage", "6");
+        decide(owner, ROLE_OWNER, id, true, null).andExpect(status().isForbidden());
+
+        putSettings("{\"requireSeparateApprover\":false}");
+        fetchSettings().andExpect(jsonPath("$.requireSeparateApprover").value(false));
+
+        // With the policy off again, the same person may approve what they raised.
+        decide(owner, ROLE_OWNER, id, true, null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("applied"));
+        assertThat(currentStock()).isEqualByComparingTo("14");
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
@@ -673,6 +702,14 @@ class StoreRoomMovementIT {
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
                         .header(TestAuthenticationFilter.HEADER_BRANCH_ID, owner.getBranchId()))
                 .andExpect(status().isOk());
+    }
+
+    private ResultActions fetchSettings() throws Exception {
+        return mockMvc.perform(get("/api/v1/store-items/settings")
+                .header("X-Tenant-Id", TENANT)
+                .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                .header(TestAuthenticationFilter.HEADER_BRANCH_ID, owner.getBranchId()));
     }
 
     private void setThreshold(String value) throws Exception {

@@ -115,4 +115,18 @@ public interface BusinessRepository extends JpaRepository<Business, String> {
            and lower(b.subscriptionTier) <> 'free'
         """)
     java.util.List<Business> findPaidTierByBillingStatus(@Param("status") SubscriptionBillingStatus status);
+
+    /**
+     * Aged live tenants — candidates for abandoned create-business GC (still
+     * filtered to zero users in {@code AbandonedBusinessGcService}).
+     */
+    @Query("""
+        select b from Business b
+         where b.deletedAt is null
+           and b.createdAt <= :cutoff
+         order by b.createdAt asc
+        """)
+    java.util.List<Business> findLiveCreatedOnOrBefore(
+            @Param("cutoff") java.time.Instant cutoff,
+            org.springframework.data.domain.Pageable pageable);
 }

@@ -16,7 +16,6 @@ import java.util.List;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
 import zelisline.ub.identity.api.dto.EmailLookupRequest;
 import zelisline.ub.identity.api.dto.EmailLookupResponse;
 import zelisline.ub.identity.api.dto.LoginPinRequest;
@@ -48,9 +47,6 @@ public class AuthController {
     private final LoginBranchDirectoryService loginBranchDirectoryService;
     private final RefreshTokenCookieSupport refreshTokenCookieSupport;
 
-    @Value("${app.auth.return-verification-link-in-register-response:false}")
-    private boolean returnVerificationLinkInRegisterResponse;
-
     @PostMapping("/register")
     @ResponseStatus(HttpStatus.CREATED)
     public RegisterResponse register(@Valid @RequestBody RegisterRequest body, HttpServletRequest http) {
@@ -75,13 +71,14 @@ public class AuthController {
 
     /**
      * Same anti-enumeration contract as {@link #passwordForgot}: missing/unknown email → {@code 204}.
-     * When {@code app.auth.return-verification-link-in-register-response} is true and a new token is issued,
-     * returns {@code 200} with {@link ResendVerificationLinkResponse} so the UI can show the link without mail.
+     * When a new token is issued and the deployment would expose the link on register
+     * (explicit flag or no mail provider), returns {@code 200} with
+     * {@link ResendVerificationLinkResponse} so the UI can show the link without mail.
      */
     @PostMapping("/resend-verification")
     public ResponseEntity<?> resendVerification(HttpServletRequest http, @RequestBody(required = false) PasswordForgotRequest body) {
         var link = authRegistrationService.resendVerification(http, body);
-        if (returnVerificationLinkInRegisterResponse) {
+        if (authRegistrationService.shouldExposeVerificationLinkInApiResponse()) {
             return link.<ResponseEntity<?>>map(url -> ResponseEntity.ok(new ResendVerificationLinkResponse(url)))
                     .orElse(ResponseEntity.noContent().build());
         }

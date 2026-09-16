@@ -71,6 +71,33 @@ public interface UserRepository extends JpaRepository<User, String> {
     List<User> findAllActiveByEmail(@Param("email") String email);
 
     /**
+     * Apex destination lookup: active shops plus unverified ({@code invited})
+     * self-signups so the landing sheet can route owners to verify-email
+     * instead of claiming "no shop found".
+     */
+    @Query("""
+        select u from User u
+         where u.email = :email
+           and u.deletedAt is null
+           and u.status in ('active', 'invited')
+         order by u.createdAt asc
+        """)
+    List<User> findAllSignInEligibleByEmail(@Param("email") String email);
+
+    /**
+     * Landing "find my shop by email": prefer an active membership, else the
+     * oldest invited signup so an unverified owner still reaches their host.
+     */
+    @Query("""
+        select u from User u
+         where u.email = :email
+           and u.deletedAt is null
+           and u.status in ('active', 'invited')
+         order by case when u.status = 'active' then 0 else 1 end, u.createdAt asc
+        """)
+    Optional<User> findFirstSignInEligibleByEmail(@Param("email") String email);
+
+    /**
      * Active staff/buyer rows whose phone matches any of the normalized forms
      * (used after platform phone OTP on the apex).
      */

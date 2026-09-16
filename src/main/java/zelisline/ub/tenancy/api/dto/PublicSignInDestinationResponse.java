@@ -7,17 +7,19 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  *
  * <p>{@code door} tells the frontend which login surface to open on the shop
  * host (or the platform supplier portal): {@code STAFF}, {@code SHOPPER},
- * {@code SUPPLIER}, or {@code SUPPLIER_CLAIM} for a supplier the platform
- * knows but who has never opened a portal account. Shop rows carry
+ * {@code SUPPLIER}, {@code SUPPLIER_CLAIM}, {@code STAFF_UNVERIFIED}, or
+ * {@code SHOPPER_UNVERIFIED}. Shop rows carry
  * {@code slug} / {@code primaryHost}; supplier rows may omit both and are
- * opened on the apex origin.
+ * opened on the apex origin. Unverified doors mean the membership is still
+ * {@code INVITED} — open verify-email on the shop host, not password login.
  *
  * @param slug        tenant URL slug, or {@code null} for platform portals
  * @param name        display name (shop or portal)
  * @param logoUrl     branding logo when set
  * @param primaryHost tenant primary host when mapped
- * @param door        {@code STAFF}, {@code SHOPPER}, {@code SUPPLIER}, or
- *                    {@code SUPPLIER_CLAIM}
+ * @param door        {@code STAFF}, {@code SHOPPER}, {@code SUPPLIER},
+ *                    {@code SUPPLIER_CLAIM}, {@code STAFF_UNVERIFIED}, or
+ *                    {@code SHOPPER_UNVERIFIED}
  * @param hint        one line describing what opening this pass asks for
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -33,4 +35,8 @@ public record PublicSignInDestinationResponse(
     public static final String DOOR_SHOPPER = "SHOPPER";
     public static final String DOOR_SUPPLIER = "SUPPLIER";
     public static final String DOOR_SUPPLIER_CLAIM = "SUPPLIER_CLAIM";
+    /** Owner/staff membership waiting on email verification. */
+    public static final String DOOR_STAFF_UNVERIFIED = "STAFF_UNVERIFIED";
+    /** Buyer membership waiting on email verification. */
+    public static final String DOOR_SHOPPER_UNVERIFIED = "SHOPPER_UNVERIFIED";
 }

@@ -90,7 +90,7 @@ public class PublicHostResolverService {
         if (email == null || email.isBlank()) {
             return Optional.empty();
         }
-        return userRepository.findFirstActiveByEmail(email.trim().toLowerCase())
+        return userRepository.findFirstSignInEligibleByEmail(email.trim().toLowerCase())
                 .map(user -> businessRepository.findByIdAndDeletedAtIsNull(user.getBusinessId()))
                 .flatMap(opt -> opt)
                 .map(this::toResponse);

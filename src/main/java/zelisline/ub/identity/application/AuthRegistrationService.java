@@ -212,6 +212,15 @@ public class AuthRegistrationService {
     }
 
     /**
+     * Whether a just-issued verification link may be returned in an API
+     * response (register or resend). Same rules for both: explicit flag, or
+     * no mail provider configured.
+     */
+    public boolean shouldExposeVerificationLinkInApiResponse() {
+        return shouldExposeVerificationLinkOnRegister();
+    }
+
+    /**
      * Whether the just-issued verification link may be returned in the register
      * response.
      *
@@ -221,9 +230,10 @@ public class AuthRegistrationService {
      * unreachable forever while the UI claimed an email was sent, so the caller
      * gets the link and can show it on screen.
      *
-     * <p>The response goes to the caller who just chose this account's password,
-     * so exposing it here leaks nothing. {@code /auth/resend-verification} is
-     * deliberately left flag-gated to keep its anti-enumeration contract.
+     * <p>The response goes to the caller who just chose this account's password
+     * (register) or already knows the address (resend). Exposing the link here
+     * does not widen enumeration beyond the existing 204 contract when no token
+     * is issued.
      */
     private boolean shouldExposeVerificationLinkOnRegister() {
         if (returnVerificationLinkInRegisterResponse) {

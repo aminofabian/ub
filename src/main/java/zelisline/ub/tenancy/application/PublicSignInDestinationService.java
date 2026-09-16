@@ -12,6 +12,7 @@ import zelisline.ub.credits.domain.KenyanPhoneForms;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.domain.User;
+import zelisline.ub.identity.domain.UserStatus;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.marketplace.application.SupplierSignInDoorService;
@@ -45,7 +46,7 @@ public class PublicSignInDestinationService {
         String email = rawEmail.trim().toLowerCase(Locale.ROOT);
         LinkedHashMap<String, PublicSignInDestinationResponse> out = new LinkedHashMap<>();
 
-        for (User user : userRepository.findAllActiveByEmail(email)) {
+        for (User user : userRepository.findAllSignInEligibleByEmail(email)) {
             addUserDestination(out, user);
         }
 
@@ -112,28 +113,39 @@ public class PublicSignInDestinationService {
         if (out.size() >= MAX_RESULTS) {
             return;
         }
-        String door = doorForRole(user.getRoleId());
+        boolean unverified = user.statusAsEnum() == UserStatus.INVITED;
+        String door = doorForRole(user.getRoleId(), unverified);
+        String hint = unverified
+                ? "Verify your email before signing in"
+                : null;
         publicShopsSearchService.byBusinessIds(List.of(user.getBusinessId())).stream()
                 .findFirst()
-                .ifPresent(row -> putShop(out, row, door));
+                .ifPresent(row -> putShop(out, row, door, hint));
     }
 
-    private String doorForRole(String roleId) {
-        if (roleId == null || roleId.isBlank()) {
-            return PublicSignInDestinationResponse.DOOR_STAFF;
+    private String doorForRole(String roleId, boolean unverified) {
+        boolean buyer = false;
+        if (roleId != null && !roleId.isBlank()) {
+            buyer = roleRepository.findByIdAndDeletedAtIsNull(roleId)
+                    .map(Role::getRoleKey)
+                    .map(key -> "buyer".equalsIgnoreCase(key))
+                    .orElse(false);
         }
-        return roleRepository.findByIdAndDeletedAtIsNull(roleId)
-                .map(Role::getRoleKey)
-                .map(key -> "buyer".equalsIgnoreCase(key)
-                        ? PublicSignInDestinationResponse.DOOR_SHOPPER
-                        : PublicSignInDestinationResponse.DOOR_STAFF)
-                .orElse(PublicSignInDestinationResponse.DOOR_STAFF);
+        if (unverified) {
+            return buyer
+                    ? PublicSignInDestinationResponse.DOOR_SHOPPER_UNVERIFIED
+                    : PublicSignInDestinationResponse.DOOR_STAFF_UNVERIFIED;
+        }
+        return buyer
+                ? PublicSignInDestinationResponse.DOOR_SHOPPER
+                : PublicSignInDestinationResponse.DOOR_STAFF;
     }
 
     private static void putShop(
             LinkedHashMap<String, PublicSignInDestinationResponse> out,
             PublicShopsSearchResponse row,
-            String door
+            String door,
+            String hint
     ) {
         if (out.size() >= MAX_RESULTS || row == null || row.slug() == null || row.slug().isBlank()) {
             return;
@@ -145,7 +157,15 @@ public class PublicSignInDestinationService {
                 row.logoUrl(),
                 row.primaryHost(),
                 door,
-                null));
+                hint));
+    }
+
+    private static void putShop(
+            LinkedHashMap<String, PublicSignInDestinationResponse> out,
+            PublicShopsSearchResponse row,
+            String door
+    ) {
+        putShop(out, row, door, null);
     }
 
     private static void putSupplier(

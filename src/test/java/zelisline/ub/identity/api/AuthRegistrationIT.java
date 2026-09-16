@@ -149,6 +149,28 @@ class AuthRegistrationIT {
     }
 
     @Test
+    void resendReturnsVerificationLinkWhenNoMailProviderCanDeliver() throws Exception {
+        org.mockito.Mockito.when(notificationService.canDeliverEmail()).thenReturn(false);
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .header("X-Tenant-Id", TENANT)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"email":"nomail-resend@example.com","name":"No Mail Resend","password":"secretpass"}
+                                """))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/v1/auth/resend-verification")
+                        .header("X-Tenant-Id", TENANT)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"email":"nomail-resend@example.com"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.verificationUrl").isNotEmpty());
+    }
+
+    @Test
     void registerOmitsVerificationLinkWhenMailIsDeliverable() throws Exception {
         // Same request, mail working and the flag off: the link must not be
         // exposed in the response.

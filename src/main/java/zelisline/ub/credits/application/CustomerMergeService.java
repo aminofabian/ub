@@ -103,6 +103,7 @@ public class CustomerMergeService {
         for (Customer absorb : absorbs) {
             String absorbId = absorb.getId();
             phonesMoved += movePhones(keepId, absorbId);
+            entityManager.flush();
 
             CreditAccount absorbAcc = creditAccountRepository
                     .findByCustomerIdAndBusinessIdForUpdate(absorbId, businessId)
@@ -114,15 +115,9 @@ public class CustomerMergeService {
                 foldCreditAccount(keepAcc, absorbAcc);
             }
 
-            salesMoved += repointCustomerId("Sale", "customerId", businessId, keepId, absorbId);
-            repointCustomerId("InboundTillPayment", "linkedCustomerId", businessId, keepId, absorbId);
-            repointCustomerId("AirtimeOrder", "customerId", businessId, keepId, absorbId);
-            repointCustomerId("GroceryInvoice", "customerId", businessId, keepId, absorbId);
-            repointCustomerId("PosDraft", "customerId", businessId, keepId, absorbId);
-            repointCustomerId("CreditSaleReminderDispatch", "customerId", businessId, keepId, absorbId);
-            repointCustomerId("WalletCreditNotificationDispatch", "customerId", businessId, keepId, absorbId);
-            // Email campaign recipients stay on the soft-deleted absorb row to avoid
-            // unique (campaign, customer) collisions when both were already listed.
+            salesMoved += nativeUpdate(
+                    "UPDATE sales SET customer_id = ?1 WHERE business_id = ?2 AND customer_id = ?3",
+                    keepId, businessId, absorbId);
 
             mergeProfile(keep, absorb);
             absorb.setMpesaIdentityKey(null);
@@ -206,20 +201,29 @@ public class CustomerMergeService {
     }
 
     private void foldCreditAccount(CreditAccount keep, CreditAccount absorb) {
-        String absorbId = absorb.getId();
-        String keepId = keep.getId();
+        String absorbAccountId = absorb.getId();
+        String keepAccountId = keep.getId();
 
         // Drop absorb reminder markers — unique on (account, week); keep's stay.
-        entityManager.createQuery(
-                        "delete from CreditReminderRecord r where r.creditAccountId = :absorbId")
-                .setParameter("absorbId", absorbId)
-                .executeUpdate();
+        nativeUpdate(
+                "DELETE FROM credit_reminders WHERE credit_account_id = ?1",
+                absorbAccountId);
 
-        repointAccountId("CreditTransaction", absorbId, keepId);
-        repointAccountId("WalletTransaction", absorbId, keepId);
-        repointAccountId("LoyaltyTransaction", absorbId, keepId);
-        repointAccountId("PublicPaymentClaim", absorbId, keepId);
-        repointAccountId("MpesaStkIntent", absorbId, keepId);
+        nativeUpdate(
+                "UPDATE credit_transactions SET credit_account_id = ?1 WHERE credit_account_id = ?2",
+                keepAccountId, absorbAccountId);
+        nativeUpdate(
+                "UPDATE wallet_transactions SET credit_account_id = ?1 WHERE credit_account_id = ?2",
+                keepAccountId, absorbAccountId);
+        nativeUpdate(
+                "UPDATE loyalty_transactions SET credit_account_id = ?1 WHERE credit_account_id = ?2",
+                keepAccountId, absorbAccountId);
+        nativeUpdate(
+                "UPDATE public_payment_claims SET credit_account_id = ?1 WHERE credit_account_id = ?2",
+                keepAccountId, absorbAccountId);
+        nativeUpdate(
+                "UPDATE mpesa_stk_intents SET credit_account_id = ?1 WHERE credit_account_id = ?2",
+                keepAccountId, absorbAccountId);
 
         keep.setBalanceOwed(nz(keep.getBalanceOwed()).add(nz(absorb.getBalanceOwed())));
         keep.setWalletBalance(nz(keep.getWalletBalance()).add(nz(absorb.getWalletBalance())));
@@ -243,7 +247,6 @@ public class CustomerMergeService {
             keep.setLastActivityAt(absorbActivity);
         }
 
-        // Page seal: prefer keep's sealed page; if keep isn't sealed and absorb is, copy seal.
         if (!keep.isPageSealed() && absorb.isPageSealed()) {
             keep.setPageSealed(true);
             keep.setPagePinHash(absorb.getPagePinHash());
@@ -256,28 +259,12 @@ public class CustomerMergeService {
         entityManager.flush();
     }
 
-    private void repointAccountId(String entity, String absorbAccountId, String keepAccountId) {
-        entityManager.createQuery(
-                        "update " + entity + " t set t.creditAccountId = :keep where t.creditAccountId = :absorb")
-                .setParameter("keep", keepAccountId)
-                .setParameter("absorb", absorbAccountId)
-                .executeUpdate();
-    }
-
-    private int repointCustomerId(
-            String entity,
-            String field,
-            String businessId,
-            String keepId,
-            String absorbId
-    ) {
-        return entityManager.createQuery(
-                        "update " + entity + " e set e." + field + " = :keep "
-                                + "where e.businessId = :businessId and e." + field + " = :absorb")
-                .setParameter("keep", keepId)
-                .setParameter("absorb", absorbId)
-                .setParameter("businessId", businessId)
-                .executeUpdate();
+    private int nativeUpdate(String sql, Object... params) {
+        var q = entityManager.createNativeQuery(sql);
+        for (int i = 0; i < params.length; i++) {
+            q.setParameter(i + 1, params[i]);
+        }
+        return q.executeUpdate();
     }
 
     private void mergeProfile(Customer keep, Customer absorb) {

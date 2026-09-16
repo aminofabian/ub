@@ -25,4 +25,6 @@ public interface StoreRoomMovementRepository extends JpaRepository<StoreRoomMove
             Instant to,
             Pageable pageable
     );
+
+    boolean existsByBusinessIdAndNoteStartingWith(String businessId, String notePrefix);
 }

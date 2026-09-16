@@ -47,6 +47,12 @@ import zelisline.ub.purchasing.domain.InventoryBatch;
 import zelisline.ub.purchasing.domain.StockMovement;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.purchasing.repository.StockMovementRepository;
+import zelisline.ub.purchasing.domain.PurchaseOrder;
+import zelisline.ub.purchasing.domain.PurchaseOrderLine;
+import zelisline.ub.purchasing.repository.PurchaseOrderLineRepository;
+import zelisline.ub.purchasing.repository.PurchaseOrderRepository;
+import zelisline.ub.suppliers.domain.Supplier;
+import zelisline.ub.suppliers.repository.SupplierRepository;
 import zelisline.ub.storeroom.domain.StoreItem;
 import zelisline.ub.storeroom.domain.StoreRoomDirection;
 import zelisline.ub.storeroom.domain.StoreRoomMode;
@@ -120,6 +126,12 @@ class StoreRoomMovementIT {
     private StoreRoomSettingsRepository storeRoomSettingsRepository;
     @Autowired
     private StoreRoomMovementRepository storeRoomMovementRepository;
+    @Autowired
+    private PurchaseOrderRepository purchaseOrderRepository;
+    @Autowired
+    private PurchaseOrderLineRepository purchaseOrderLineRepository;
+    @Autowired
+    private SupplierRepository supplierRepository;
 
     @MockitoBean
     @SuppressWarnings("unused")
@@ -144,6 +156,9 @@ class StoreRoomMovementIT {
         storeRoomSettingsRepository.deleteAll();
         stockMovementRepository.deleteAll();
         inventoryBatchRepository.deleteAll();
+        purchaseOrderLineRepository.deleteAll();
+        purchaseOrderRepository.deleteAll();
+        supplierRepository.deleteAll();
         itemRepository.deleteAll();
         itemTypeRepository.deleteAll();
         userRepository.deleteAll();
@@ -295,6 +310,140 @@ class StoreRoomMovementIT {
         assertThat(currentStock()).isEqualByComparingTo("20");
         assertThat(storeRoomMovementRepository.findAll().getFirst().getDirection())
                 .isEqualTo(StoreRoomDirection.IN);
+    }
+
+    @Test
+    void inheritOrder_logsPutInWithoutMovingInventory() throws Exception {
+        String poId = sentPurchaseOrder("PO-STORE-1", "4");
+
+        mockMvc.perform(post("/api/v1/store-room/inherit-order")
+                        .contentType(APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "purchaseOrderId", poId,
+                                "lines", List.of(Map.of(
+                                        "purchaseOrderLineId",
+                                        purchaseOrderLineRepository
+                                                .findByPurchaseOrderIdOrderBySortOrderAscIdAsc(poId)
+                                                .getFirst()
+                                                .getId(),
+                                        "quantity", "4")))))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .header(TestAuthenticationFilter.HEADER_BRANCH_ID, owner.getBranchId()))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.movements").value(1))
+                .andExpect(jsonPath("$.poNumber").value("PO-STORE-1"));
+
+        assertThat(currentStock()).isEqualByComparingTo("20");
+        assertThat(stockMovementRepository.findAll()).isEmpty();
+        List<StoreRoomMovement> log = storeRoomMovementRepository.findAll();
+        assertThat(log).hasSize(1);
+        assertThat(log.getFirst().getDirection()).isEqualTo(StoreRoomDirection.IN);
+        assertThat(log.getFirst().getStockEffect()).isEqualTo(StoreRoomStockEffect.NONE);
+        assertThat(log.getFirst().getNote()).contains(poId);
+        assertThat(log.getFirst().getItemId()).isEqualTo(itemId);
+    }
+
+    @Test
+    void inheritOrder_previewSeedsRemainingWithoutUnpacking() throws Exception {
+        String poId = sentPurchaseOrder("PO-STORE-0", "6");
+        String lineId = purchaseOrderLineRepository
+                .findByPurchaseOrderIdOrderBySortOrderAscIdAsc(poId)
+                .getFirst()
+                .getId();
+
+        mockMvc.perform(get("/api/v1/store-room/inherit-order")
+                        .param("purchaseOrderId", poId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.poNumber").value("PO-STORE-0"))
+                .andExpect(jsonPath("$.alreadyInherited").value(false))
+                .andExpect(jsonPath("$.unpacked").value(false))
+                .andExpect(jsonPath("$.lines[0].purchaseOrderLineId").value(lineId))
+                .andExpect(jsonPath("$.lines[0].remaining").value(6.0))
+                .andExpect(jsonPath("$.lines[0].onList").value(true));
+
+        assertThat(currentStock()).isEqualByComparingTo("20");
+        assertThat(stockMovementRepository.findAll()).isEmpty();
+    }
+
+    @Test
+    void inheritOrder_againNeedsConfirmation() throws Exception {
+        String poId = sentPurchaseOrder("PO-STORE-2", "2");
+        String lineId = purchaseOrderLineRepository
+                .findByPurchaseOrderIdOrderBySortOrderAscIdAsc(poId)
+                .getFirst()
+                .getId();
+        Map<String, Object> body = Map.of(
+                "purchaseOrderId", poId,
+                "lines", List.of(Map.of("purchaseOrderLineId", lineId, "quantity", "2")));
+
+        mockMvc.perform(post("/api/v1/store-room/inherit-order")
+                        .contentType(APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .header(TestAuthenticationFilter.HEADER_BRANCH_ID, owner.getBranchId()))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/v1/store-room/inherit-order")
+                        .contentType(APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .header(TestAuthenticationFilter.HEADER_BRANCH_ID, owner.getBranchId()))
+                .andExpect(status().isConflict());
+
+        Map<String, Object> again = new LinkedHashMap<>(body);
+        again.put("confirmDuplicate", true);
+        mockMvc.perform(post("/api/v1/store-room/inherit-order")
+                        .contentType(APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(again))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .header(TestAuthenticationFilter.HEADER_BRANCH_ID, owner.getBranchId()))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.movements").value(1));
+
+        assertThat(currentStock()).isEqualByComparingTo("20");
+        assertThat(storeRoomMovementRepository.findAll()).hasSize(2);
+    }
+
+    @Test
+    void inheritOrder_standaloneAddsToTheLocalCount() throws Exception {
+        StoreRoomSettings settings = storeRoomSettingsRepository.findById(TENANT).orElseThrow();
+        settings.setMode(StoreRoomMode.STANDALONE);
+        storeRoomSettingsRepository.save(settings);
+
+        String poId = sentPurchaseOrder("PO-STORE-3", "3");
+        String lineId = purchaseOrderLineRepository
+                .findByPurchaseOrderIdOrderBySortOrderAscIdAsc(poId)
+                .getFirst()
+                .getId();
+
+        mockMvc.perform(post("/api/v1/store-room/inherit-order")
+                        .contentType(APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "purchaseOrderId", poId,
+                                "lines", List.of(Map.of(
+                                        "purchaseOrderLineId", lineId,
+                                        "quantity", "3")))))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .header(TestAuthenticationFilter.HEADER_BRANCH_ID, owner.getBranchId()))
+                .andExpect(status().isCreated());
+
+        assertThat(storeItemRepository.findById(linkedRowId).orElseThrow().getQuantity())
+                .isEqualTo(3);
+        assertThat(currentStock()).isEqualByComparingTo("20");
+        assertThat(stockMovementRepository.findAll()).isEmpty();
     }
 
     // ------------------------------------------------------------------
@@ -778,6 +927,35 @@ class StoreRoomMovementIT {
 
     private BigDecimal batchRemaining() {
         return inventoryBatchRepository.findById(BATCH_ID).orElseThrow().getQuantityRemaining();
+    }
+
+    private String sentPurchaseOrder(String poNumber, String qty) {
+        Supplier supplier = new Supplier();
+        supplier.setBusinessId(TENANT);
+        supplier.setName("Store Foods");
+        supplier.setSupplierType("distributor");
+        supplier.setStatus("active");
+        supplierRepository.save(supplier);
+
+        PurchaseOrder po = new PurchaseOrder();
+        po.setBusinessId(TENANT);
+        po.setSupplierId(supplier.getId());
+        po.setBranchId(branchId);
+        po.setPoNumber(poNumber);
+        po.setStatus("sent");
+        po.setSource("manual");
+        po.setDeliveryStatus("delivered");
+        purchaseOrderRepository.save(po);
+
+        PurchaseOrderLine line = new PurchaseOrderLine();
+        line.setPurchaseOrderId(po.getId());
+        line.setSortOrder(0);
+        line.setItemId(itemId);
+        line.setQtyOrdered(new BigDecimal(qty));
+        line.setQtyReceived(BigDecimal.ZERO);
+        line.setUnitEstimatedCost(new BigDecimal("10.0000"));
+        purchaseOrderLineRepository.save(line);
+        return po.getId();
     }
 
     private String storeRow(String name, int quantity, String linkedItemId) {

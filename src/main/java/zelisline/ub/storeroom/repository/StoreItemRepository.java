@@ -23,4 +23,6 @@ public interface StoreItemRepository extends JpaRepository<StoreItem, String> {
     long countByBusinessId(String businessId);
 
     long countByBusinessIdAndItemIdIsNotNull(String businessId);
+
+    List<StoreItem> findByBusinessIdAndItemId(String businessId, String itemId);
 }

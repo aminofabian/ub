@@ -8,9 +8,11 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -708,11 +710,22 @@ public class PathAPurchaseService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Invoice number already exists");
         }
 
+        Set<String> invoiceItemIds = new HashSet<>();
+        for (PostGrnSupplierInvoiceLineInput il : req.lines()) {
+            invoiceItemIds.add(il.itemId());
+        }
+        Map<String, String> itemNames = itemRepository
+                .findByIdInAndBusinessIdAndDeletedAtIsNull(invoiceItemIds, businessId)
+                .stream()
+                .collect(Collectors.toMap(Item::getId, Item::getName, (a, b) -> a));
+
         int sort = 0;
         for (PostGrnSupplierInvoiceLineInput il : req.lines()) {
             SupplierInvoiceLine sil = new SupplierInvoiceLine();
             sil.setInvoiceId(inv.getId());
-            sil.setDescription("Path A — " + il.itemId());
+            String name = itemNames.get(il.itemId());
+            sil.setDescription(
+                    name != null && !name.isBlank() ? name.trim() : il.itemId());
             sil.setItemId(il.itemId());
             sil.setQty(il.qty());
             sil.setUnitCost(il.unitCost());

@@ -3,7 +3,11 @@ package zelisline.ub.purchasing.application;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -12,6 +16,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.inventory.domain.SupplyBatch;
 import zelisline.ub.inventory.domain.SupplyBatchExpense;
 import zelisline.ub.inventory.repository.SupplyBatchExpenseRepository;
@@ -52,6 +58,7 @@ public class SupplyInvoiceEditService {
     private final SupplyBatchRepository supplyBatchRepository;
     private final SupplyBatchExpenseRepository supplyBatchExpenseRepository;
     private final PathBAssociatedCostService pathBAssociatedCostService;
+    private final ItemRepository itemRepository;
 
     @Transactional(readOnly = true)
     public PathBSupplyInvoiceDetailDto getPathBInvoiceDetail(String businessId, String invoiceId) {
@@ -174,6 +181,7 @@ public class SupplyInvoiceEditService {
 
         boolean pathB = isPathB(inv);
         List<SupplierInvoiceLine> dbLines = supplierInvoiceLineRepository.findByInvoiceIdOrderBySortOrderAsc(inv.getId());
+        Map<String, String> catalogNames = resolveCatalogNamesForPathAPlaceholders(businessId, dbLines);
         List<PathBSupplyInvoiceLineDto> lines = new ArrayList<>(dbLines.size());
         for (SupplierInvoiceLine sil : dbLines) {
             BigDecimal usable = BigDecimal.ZERO;
@@ -192,7 +200,7 @@ public class SupplyInvoiceEditService {
             }
             lines.add(new PathBSupplyInvoiceLineDto(
                     sil.getId(),
-                    sil.getDescription(),
+                    displayLineDescription(sil, catalogNames),
                     sil.getItemId(),
                     sil.getQty(),
                     sil.getUnitCost(),
@@ -234,6 +242,44 @@ public class SupplyInvoiceEditService {
                     e.getDescription()));
         }
         return expenses;
+    }
+
+    private Map<String, String> resolveCatalogNamesForPathAPlaceholders(
+            String businessId,
+            List<SupplierInvoiceLine> dbLines
+    ) {
+        Set<String> itemIds = new HashSet<>();
+        for (SupplierInvoiceLine sil : dbLines) {
+            if (isPathAPlaceholderDescription(sil.getDescription()) && hasText(sil.getItemId())) {
+                itemIds.add(sil.getItemId());
+            }
+        }
+        if (itemIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> names = new HashMap<>();
+        for (Item item : itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)) {
+            if (item.getName() != null && !item.getName().isBlank()) {
+                names.put(item.getId(), item.getName().trim());
+            }
+        }
+        return names;
+    }
+
+    private static String displayLineDescription(SupplierInvoiceLine sil, Map<String, String> catalogNames) {
+        String desc = sil.getDescription();
+        if (isPathAPlaceholderDescription(desc) && hasText(sil.getItemId())) {
+            String name = catalogNames.get(sil.getItemId());
+            if (name != null && !name.isBlank()) {
+                return name;
+            }
+        }
+        return desc;
+    }
+
+    /** Legacy Path A invoices stored {@code Path A — <itemId>} instead of the catalog name. */
+    private static boolean isPathAPlaceholderDescription(String description) {
+        return description != null && description.startsWith("Path A — ");
     }
 
     private static void requireSupplyBoardInvoice(SupplierInvoice inv) {

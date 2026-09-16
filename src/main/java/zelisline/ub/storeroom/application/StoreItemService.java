@@ -30,15 +30,15 @@ public class StoreItemService {
     private final StoreRoomSettingsService storeRoomSettingsService;
 
     @Transactional(readOnly = true)
-    public List<StoreItemResponse> list(String businessId) {
+    public List<StoreItemResponse> list(String businessId, String branchId) {
         List<StoreItem> rows = storeItemRepository.findByBusinessIdOrderByNameAsc(businessId);
         StoreRoomMode mode = storeRoomSettingsService.currentMode(businessId);
-        Map<String, LinkedStock> stock = liveStockFor(businessId, mode, rows);
+        Map<String, LinkedStock> stock = liveStockFor(businessId, mode, rows, branchId);
         return rows.stream().map(row -> toResponse(row, stock)).toList();
     }
 
     @Transactional
-    public StoreItemResponse create(String businessId, CreateStoreItemRequest request) {
+    public StoreItemResponse create(String businessId, CreateStoreItemRequest request, String branchId) {
         String barcode = normalizeBarcode(request.barcode());
         assertBarcodeAvailable(businessId, barcode, null);
 
@@ -60,11 +60,16 @@ public class StoreItemService {
         row.setBuyingPrice(normalizeMoney(request.buyingPrice()));
         storeItemRepository.save(row);
 
-        return toResponse(row, liveStockFor(businessId, mode, List.of(row)));
+        return toResponse(row, liveStockFor(businessId, mode, List.of(row), branchId));
     }
 
     @Transactional
-    public StoreItemResponse update(String businessId, String id, PatchStoreItemRequest request) {
+    public StoreItemResponse update(
+            String businessId,
+            String id,
+            PatchStoreItemRequest request,
+            String branchId
+    ) {
         StoreItem row = storeItemRepository.findByIdAndBusinessId(id, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Store item not found"));
 
@@ -107,7 +112,7 @@ public class StoreItemService {
         }
 
         storeItemRepository.save(row);
-        return toResponse(row, liveStockFor(businessId, mode, List.of(row)));
+        return toResponse(row, liveStockFor(businessId, mode, List.of(row), branchId));
     }
 
     @Transactional
@@ -120,8 +125,14 @@ public class StoreItemService {
     /**
      * Reads live on-hand for the rows that mirror a product. Only worth doing while the
      * business is connected — a standalone register has no catalogue to read from.
+     * Prefer branch batch stock when {@code branchId} is set so the count matches Save.
      */
-    private Map<String, LinkedStock> liveStockFor(String businessId, StoreRoomMode mode, List<StoreItem> rows) {
+    private Map<String, LinkedStock> liveStockFor(
+            String businessId,
+            StoreRoomMode mode,
+            List<StoreItem> rows,
+            String branchId
+    ) {
         if (mode != StoreRoomMode.CONNECTED) {
             return Map.of();
         }
@@ -131,7 +142,7 @@ public class StoreItemService {
                 itemIds.add(row.getItemId());
             }
         }
-        return storeRoomSettingsService.liveStock(businessId, itemIds);
+        return storeRoomSettingsService.liveStock(businessId, itemIds, branchId);
     }
 
     /**

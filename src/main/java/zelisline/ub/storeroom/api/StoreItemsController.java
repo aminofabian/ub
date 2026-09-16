@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -67,9 +68,12 @@ public class StoreItemsController {
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'catalog.items.read')")
-    public List<StoreItemResponse> list(HttpServletRequest request) {
+    public List<StoreItemResponse> list(
+            @RequestParam(required = false) String branchId,
+            HttpServletRequest request
+    ) {
         CurrentTenantUser.require(request);
-        return storeItemService.list(TenantRequestIds.resolveBusinessId(request));
+        return storeItemService.list(TenantRequestIds.resolveBusinessId(request), branchId);
     }
 
     @PostMapping
@@ -77,10 +81,12 @@ public class StoreItemsController {
     @ResponseStatus(HttpStatus.CREATED)
     public StoreItemResponse create(
             @Valid @RequestBody CreateStoreItemRequest body,
+            @RequestParam(required = false) String branchId,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        return storeItemService.create(TenantRequestIds.resolveBusinessId(request), body);
+        return storeItemService.create(
+                TenantRequestIds.resolveBusinessId(request), body, branchId);
     }
 
     @PatchMapping("/{id}")
@@ -88,10 +94,12 @@ public class StoreItemsController {
     public StoreItemResponse patch(
             @PathVariable String id,
             @Valid @RequestBody PatchStoreItemRequest body,
+            @RequestParam(required = false) String branchId,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        return storeItemService.update(TenantRequestIds.resolveBusinessId(request), id, body);
+        return storeItemService.update(
+                TenantRequestIds.resolveBusinessId(request), id, body, branchId);
     }
 
     @DeleteMapping("/{id}")

@@ -20,6 +20,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.storeroom.api.dto.StoreRoomSettingsResponse;
 import zelisline.ub.storeroom.api.dto.UpdateStoreRoomSettingsRequest;
 import zelisline.ub.storeroom.domain.StoreItem;
@@ -27,14 +28,15 @@ import zelisline.ub.storeroom.domain.StoreRoomMode;
 import zelisline.ub.storeroom.domain.StoreRoomSettings;
 import zelisline.ub.storeroom.repository.StoreItemRepository;
 import zelisline.ub.storeroom.repository.StoreRoomSettingsRepository;
+import zelisline.ub.tenancy.repository.BranchRepository;
 
 /**
  * Owns the store room's optional link to the catalogue: which mode the business
  * chose, which rows point at a product, and what those products currently hold.
  *
- * <p>Counts are read from {@code items.current_stock} — the business-wide on-hand
- * figure that every sale path already maintains — so a connected store room moves
- * on its own as products sell, with no extra write path to keep in sync.
+ * <p>When a branch is selected, counts come from that branch's active inventory
+ * batches — the same source Save / Take out mutate. Without a branch, counts
+ * fall back to {@code items.current_stock} (business-wide).
  */
 @Service
 @RequiredArgsConstructor
@@ -44,6 +46,8 @@ public class StoreRoomSettingsService {
     private final StoreItemRepository storeItemRepository;
     private final ItemRepository itemRepository;
     private final PackageVariantStockResolver stockResolver;
+    private final InventoryBatchRepository inventoryBatchRepository;
+    private final BranchRepository branchRepository;
 
     /** A linked product's live state, as the store room should display it. */
     public record LinkedStock(BigDecimal quantity, String itemName) {
@@ -121,9 +125,21 @@ public class StoreRoomSettingsService {
     /**
      * Resolves live on-hand for linked catalogue products, keyed by catalogue item id.
      * Package variants report the count held by the product they draw stock from.
+     *
+     * @param branchId when present, use that branch's batch on-hand (matches stock edits);
+     *                 when blank, fall back to business-wide {@code current_stock}.
      */
     @Transactional(readOnly = true)
     public Map<String, LinkedStock> liveStock(String businessId, Collection<String> itemIds) {
+        return liveStock(businessId, itemIds, null);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, LinkedStock> liveStock(
+            String businessId,
+            Collection<String> itemIds,
+            String branchId
+    ) {
         if (itemIds == null || itemIds.isEmpty()) {
             return Map.of();
         }
@@ -132,20 +148,65 @@ public class StoreRoomSettingsService {
             return Map.of();
         }
 
-        // A package variant holds no stock of its own — its parent does.
-        Set<String> holderIds = new HashSet<>();
-        for (Item product : productsById.values()) {
-            holderIds.add(stockResolver.stockHolderItemId(product));
+        String stockBranch = blankToNull(branchId);
+        Map<String, BigDecimal> branchStockByItemId = Map.of();
+        if (stockBranch != null) {
+            branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(stockBranch, businessId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Branch not found"));
+            Set<String> poolIds = new HashSet<>();
+            for (Item product : productsById.values()) {
+                poolIds.addAll(stockResolver.branchStockPoolItemIds(businessId, product));
+            }
+            branchStockByItemId = branchStockMap(businessId, stockBranch, poolIds);
+        } else {
+            // Holders only needed for the current_stock fallback path.
+            Set<String> holderIds = new HashSet<>();
+            for (Item product : productsById.values()) {
+                holderIds.add(stockResolver.stockHolderItemId(product));
+            }
+            Map<String, Item> holdersById = loadBusinessItems(businessId, holderIds);
+            Map<String, LinkedStock> stock = new HashMap<>();
+            for (Item product : productsById.values()) {
+                Item holder = holdersById.getOrDefault(stockResolver.stockHolderItemId(product), product);
+                BigDecimal quantity = stockResolver.displayStockQty(product, holder.getCurrentStock());
+                stock.put(product.getId(), new LinkedStock(quantity, product.getName()));
+            }
+            return stock;
         }
-        Map<String, Item> holdersById = loadBusinessItems(businessId, holderIds);
 
         Map<String, LinkedStock> stock = new HashMap<>();
         for (Item product : productsById.values()) {
-            Item holder = holdersById.getOrDefault(stockResolver.stockHolderItemId(product), product);
-            BigDecimal quantity = stockResolver.displayStockQty(product, holder.getCurrentStock());
+            BigDecimal holderQty = stockResolver.sumPoolStock(product, branchStockByItemId);
+            BigDecimal quantity = stockResolver.displayStockQty(product, holderQty);
             stock.put(product.getId(), new LinkedStock(quantity, product.getName()));
         }
         return stock;
+    }
+
+    private Map<String, BigDecimal> branchStockMap(
+            String businessId,
+            String branchId,
+            Collection<String> itemIds
+    ) {
+        if (itemIds == null || itemIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, BigDecimal> stockByItemId = new HashMap<>();
+        for (Object[] row : inventoryBatchRepository.sumQuantityRemainingForItemsAtBranch(
+                businessId,
+                branchId,
+                "active",
+                itemIds)) {
+            stockByItemId.put((String) row[0], (BigDecimal) row[1]);
+        }
+        return stockByItemId;
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
     }
 
     /** @throws ResponseStatusException 400 when the product is not this business's. */

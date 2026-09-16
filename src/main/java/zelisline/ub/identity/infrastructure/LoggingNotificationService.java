@@ -45,8 +45,18 @@ public class LoggingNotificationService implements NotificationService {
             log.warn(
                     "[mail] NO MAIL PROVIDER ACTIVE — emails will only be logged. "
                             + "Set RESEND_API_KEY (+ RESEND_DOMAIN or RESEND_FROM), or MAILGUN_PRIVATE_API_KEY (+ MAILGUN_DOMAIN), "
-                            + "or activate the `smtp` profile with MAILGUN_SMTP_*. RESTART the JVM after changing env vars.");
+                            + "or activate the `smtp` profile with MAILGUN_SMTP_*. RESTART the JVM after changing env vars. "
+                            + "CONSEQUENCE: signup verification links are returned in the register response instead of "
+                            + "being emailed (see AuthRegistrationService.shouldExposeVerificationLink), so the UI shows "
+                            + "the link on screen. Fix the credentials above to send real mail.");
         }
+    }
+
+    @Override
+    public boolean canDeliverEmail() {
+        return javaMailSender.getIfAvailable() != null
+                || resendMailClient.isConfigured()
+                || mailgunMailClient.isConfigured();
     }
 
     @Override

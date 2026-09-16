@@ -346,7 +346,8 @@ public class SetupProgressService {
                 done,
                 done ? 15 : 0,
                 15,
-                "/cashier",
+                // FE deep-link: register till (if needed) + open-shift gate.
+                "/cashier?activate=first-sale",
                 null,
                 List.of(sub("sale", "Complete a till sale", 15, done)));
     }

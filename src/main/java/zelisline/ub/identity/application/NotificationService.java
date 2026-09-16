@@ -17,6 +17,18 @@ public interface NotificationService {
     void sendWelcomeEmail(String toEmail, String subject, String htmlBody);
 
     /**
+     * Whether this deployment can actually deliver outbound email.
+     *
+     * <p>Callers that promise a user an email (signup verification) must check
+     * this: with no provider configured every send silently no-ops, so the UI
+     * would claim a mail was sent that can never arrive. Defaults to true so
+     * existing and test implementations keep their behaviour.
+     */
+    default boolean canDeliverEmail() {
+        return true;
+    }
+
+    /**
      * @param fromDisplayName tenant store name for the From header (e.g. {@code Palmart});
      *                        may be null to keep the provider default
      */

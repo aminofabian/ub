@@ -102,27 +102,101 @@ public class FrontendAuthLinkBuilder {
         if (frontendHost == null) {
             return staticUrlPrefix;
         }
-
-        String scheme = http.getHeader("X-Forwarded-Proto");
-        if (scheme == null || scheme.isBlank()) {
-            scheme = http.getScheme();
+        String hostname = hostnameOnly(frontendHost);
+        if (hostname.isEmpty()) {
+            return staticUrlPrefix;
         }
 
-        int port = http.getServerPort();
-        if (frontendHost.endsWith(".localhost") || "localhost".equalsIgnoreCase(frontendHost)) {
+        // Scheme and port must describe the SAME origin as `hostname`.
+        //
+        // The host is the browser's (X-Tenant-Host), but the old code took the
+        // scheme and port from the API's own connection. Behind the Next.js BFF
+        // that connection is plain HTTP on the app's listening port, so every
+        // link came out as `http://shop.example:5050/verify-email?...` — a URL
+        // no user can open. Prefer an explicit forwarded value, then fall back
+        // by host kind: local dev keeps the connection's values, anything else
+        // is treated as a public HTTPS origin.
+        boolean local = isLocalHost(hostname);
+        String forwardedProto = headerFirstValue(http, "X-Forwarded-Proto");
+        String scheme = forwardedProto != null
+                ? forwardedProto
+                : (local ? http.getScheme() : "https");
+
+        Integer port = explicitPort(frontendHost);
+        if (port == null) {
+            port = parsePort(headerFirstValue(http, "X-Forwarded-Port"));
+        }
+        if (port == null && local) {
             port = 3000;
         }
-        boolean defaultPort = (port == 80 && "http".equals(scheme))
-                || (port == 443 && "https".equals(scheme));
+
+        boolean defaultPort = port != null
+                && ((port == 80 && "http".equals(scheme))
+                        || (port == 443 && "https".equals(scheme)));
 
         StringBuilder prefix = new StringBuilder(scheme)
                 .append("://")
-                .append(frontendHost);
-        if (!defaultPort) {
+                .append(hostname);
+        if (port != null && !defaultPort) {
             prefix.append(":").append(port);
         }
         prefix.append("/").append(pagePath).append("?token=");
         return prefix.toString();
+    }
+
+    /** First value of a possibly comma-separated forwarded header, or null. */
+    private static String headerFirstValue(HttpServletRequest http, String name) {
+        String raw = http.getHeader(name);
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String first = raw.split(",")[0].trim();
+        return first.isEmpty() ? null : first;
+    }
+
+    /** Lowercased host without its port (IPv6 literals keep their brackets). */
+    private static String hostnameOnly(String host) {
+        String h = host == null ? "" : host.trim().toLowerCase(Locale.ROOT);
+        if (h.isEmpty()) {
+            return "";
+        }
+        if (h.startsWith("[")) {
+            int close = h.indexOf(']');
+            return close > 0 ? h.substring(0, close + 1) : h;
+        }
+        int colon = h.indexOf(':');
+        return colon >= 0 ? h.substring(0, colon) : h;
+    }
+
+    /** Port explicitly present in a {@code host:port} value, else null. */
+    private static Integer explicitPort(String host) {
+        String h = host == null ? "" : host.trim();
+        if (h.isEmpty() || h.startsWith("[")) {
+            return null;
+        }
+        int colon = h.lastIndexOf(':');
+        return colon < 0 ? null : parsePort(h.substring(colon + 1));
+    }
+
+    private static Integer parsePort(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        try {
+            int port = Integer.parseInt(raw.trim());
+            return (port >= 1 && port <= 65535) ? port : null;
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    private static boolean isLocalHost(String hostname) {
+        String h = hostname == null ? "" : hostname.toLowerCase(Locale.ROOT);
+        return "localhost".equals(h)
+                || "127.0.0.1".equals(h)
+                || "::1".equals(h)
+                || "[::1]".equals(h)
+                || h.endsWith(".localhost");
     }
 
     /** Shop origin for a tenant (slug host). Used by platform email campaigns. */

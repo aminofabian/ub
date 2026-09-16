@@ -134,7 +134,7 @@ public class AuthRegistrationService {
                     saved.getId(),
                     saved.getEmail(),
                     UserStatus.INVITED.wire(),
-                    returnVerificationLinkInRegisterResponse ? link : null);
+                    shouldExposeVerificationLinkOnRegister() ? link : null);
         }
         user.setStatus(UserStatus.ACTIVE);
         User saved = userRepository.save(user);
@@ -210,6 +210,37 @@ public class AuthRegistrationService {
                 "MEDIUM",
                 json);
     }
+
+    /**
+     * Whether the just-issued verification link may be returned in the register
+     * response.
+     *
+     * <p>True when explicitly enabled ({@code app.auth.return-verification-link-in-register-response},
+     * the desktop profile relies on this) <em>or</em> when this deployment cannot
+     * deliver mail at all. In the latter case the account would otherwise be
+     * unreachable forever while the UI claimed an email was sent, so the caller
+     * gets the link and can show it on screen.
+     *
+     * <p>The response goes to the caller who just chose this account's password,
+     * so exposing it here leaks nothing. {@code /auth/resend-verification} is
+     * deliberately left flag-gated to keep its anti-enumeration contract.
+     */
+    private boolean shouldExposeVerificationLinkOnRegister() {
+        if (returnVerificationLinkInRegisterResponse) {
+            return true;
+        }
+        boolean deliverable = notificationService.canDeliverEmail();
+        if (!deliverable && !warnedNoMailProvider) {
+            warnedNoMailProvider = true;
+            log.warn(
+                    "[register] no mail provider is configured — returning the verification link in the "
+                            + "register response so signups can still be activated. Fix RESEND_*/MAILGUN_*/SMTP to email it.");
+        }
+        return !deliverable;
+    }
+
+    /** One-shot guard so the degraded-mail warning is not logged on every signup. */
+    private volatile boolean warnedNoMailProvider;
 
     private void pushWelcomeSupportChat(User user, String businessId, String businessName) {
         supportService.postPlatformWelcome(

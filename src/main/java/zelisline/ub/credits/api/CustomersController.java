@@ -34,6 +34,7 @@ import zelisline.ub.credits.api.dto.CreditSaleReminderTestResponse;
 import zelisline.ub.credits.api.dto.CustomerResponse;
 import zelisline.ub.credits.api.dto.IssuePaymentClaimResponse;
 import zelisline.ub.credits.api.dto.LastSaleSummaryResponse;
+import zelisline.ub.credits.api.dto.MergeCustomersRequest;
 import zelisline.ub.credits.api.dto.OutstandingTabRowResponse;
 import zelisline.ub.credits.api.dto.PatchCustomerRequest;
 import zelisline.ub.credits.api.dto.RemindPaymentRequest;
@@ -50,6 +51,7 @@ import zelisline.ub.credits.application.CustomerBulkSmsService;
 import zelisline.ub.credits.application.CreditCustomerStatementService;
 import zelisline.ub.credits.application.CreditCustomerStatementService.CreditStatement;
 import zelisline.ub.credits.application.CustomerDirectoryService;
+import zelisline.ub.credits.application.CustomerMergeService;
 import zelisline.ub.credits.application.CustomerPhoneVerificationService;
 import zelisline.ub.credits.application.CustomerTabPurchasesService;
 import zelisline.ub.credits.application.OverdueDebtReminderService;
@@ -69,6 +71,7 @@ public class CustomersController {
     private static final ZoneId LIST_ZONE = ZoneId.of("Africa/Nairobi");
 
     private final CustomerDirectoryService customerDirectoryService;
+    private final CustomerMergeService customerMergeService;
     private final CreditCustomerStatementService creditCustomerStatementService;
     private final CustomerTabPurchasesService customerTabPurchasesService;
     private final WalletLedgerService walletLedgerService;
@@ -183,6 +186,25 @@ public class CustomersController {
                 body,
                 CurrentTenantUser.auditActorId(request)
         );
+    }
+
+    @PostMapping("/merge")
+    @PreAuthorize("hasPermission(null, 'credits.customers.write')")
+    public CustomerResponse merge(
+            @Valid @RequestBody MergeCustomersRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String keepId = customerDirectoryService.resolveCustomerIdOrThrow(businessId, body.keepId());
+        List<String> absorbIds = body.absorbIds().stream()
+                .map(id -> customerDirectoryService.resolveCustomerIdOrThrow(businessId, id))
+                .toList();
+        return customerMergeService.merge(
+                businessId,
+                keepId,
+                absorbIds,
+                CurrentTenantUser.auditActorId(request));
     }
 
     @PatchMapping("/{customerId}")

@@ -120,6 +120,7 @@ public final class AuditEventTypes {
     public static final String CUSTOMER_CREDIT_LIMIT_CHANGED = "customer.credit_limit_changed";
     public static final String CUSTOMER_CREDIT_SUSPENDED = "customer.credit_suspended";
     public static final String CUSTOMER_DELETED = "customer.deleted";
+    public static final String CUSTOMER_MERGED = "customer.merged";
     public static final String CUSTOMER_CREDIT_TRANSACTION = "customer.credit_transaction";
     public static final String CUSTOMER_WALLET_TRANSACTION = "customer.wallet_transaction";
     public static final String CUSTOMER_LOYALTY_TRANSACTION = "customer.loyalty_transaction";

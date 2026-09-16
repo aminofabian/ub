@@ -67,6 +67,13 @@ class AuthRegistrationIT {
         roleRepository.deleteAll();
         businessRepository.deleteAll();
 
+        // A normal deployment: mail is deliverable, so the register response must
+        // NOT carry the verification link unless the flag turns it on. Stated
+        // explicitly because a Mockito mock returns `false` for the
+        // NotificationService.canDeliverEmail() default, which would silently
+        // put these tests on the no-mail degraded path.
+        org.mockito.Mockito.when(notificationService.canDeliverEmail()).thenReturn(true);
+
         Business business = new Business();
         business.setId(TENANT);
         business.setName("Tenant A");
@@ -120,6 +127,40 @@ class AuthRegistrationIT {
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.registered").value(true));
+    }
+
+    @Test
+    void registerReturnsVerificationLinkWhenNoMailProviderCanDeliver() throws Exception {
+        // The link-exposure flag is off (application-test.properties), but this
+        // deployment cannot send mail at all. Returning null would leave the
+        // account unreachable forever while the UI claimed an email was sent,
+        // so the link comes back for the caller to show on screen.
+        org.mockito.Mockito.when(notificationService.canDeliverEmail()).thenReturn(false);
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .header("X-Tenant-Id", TENANT)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"email":"nomail@example.com","name":"No Mail","password":"secretpass"}
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("invited"))
+                .andExpect(jsonPath("$.verificationUrl").isNotEmpty());
+    }
+
+    @Test
+    void registerOmitsVerificationLinkWhenMailIsDeliverable() throws Exception {
+        // Same request, mail working and the flag off: the link must not be
+        // exposed in the response.
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .header("X-Tenant-Id", TENANT)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"email":"mailok@example.com","name":"Mail Ok","password":"secretpass"}
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("invited"))
+                .andExpect(jsonPath("$.verificationUrl").doesNotExist());
     }
 
     @Test

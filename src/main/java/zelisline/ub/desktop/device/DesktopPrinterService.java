@@ -32,7 +32,7 @@ public class DesktopPrinterService {
         }
         try {
             String json = Files.readString(file, StandardCharsets.UTF_8);
-            return objectMapper.readValue(json, PrinterConfig.class);
+            return normalize(objectMapper.readValue(json, PrinterConfig.class));
         } catch (IOException e) {
             log.warn("Could not read {}: {}", file, e.toString());
             return PrinterConfig.defaults();
@@ -42,9 +42,22 @@ public class DesktopPrinterService {
     public PrinterConfig saveConfig(PrinterConfig config) throws IOException {
         Path file = printerFile();
         Files.createDirectories(file.getParent());
-        String json = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(config);
+        PrinterConfig normalized = normalize(config);
+        String json = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(normalized);
         Files.writeString(file, json, StandardCharsets.UTF_8);
-        return config;
+        return normalized;
+    }
+
+    private static PrinterConfig normalize(PrinterConfig config) {
+        if (config == null) {
+            return PrinterConfig.defaults();
+        }
+        String mode = config.mode() != null && !config.mode().isBlank() ? config.mode().trim() : "file";
+        String host = config.host() != null ? config.host().trim() : "";
+        int port = config.port() > 0 ? config.port() : 9100;
+        String path = config.path() != null ? config.path().trim() : "";
+        String cupsName = config.cupsName() != null ? config.cupsName().trim() : "";
+        return new PrinterConfig(mode, host, port, path, cupsName);
     }
 
     private Path printerFile() {

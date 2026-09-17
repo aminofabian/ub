@@ -134,6 +134,9 @@ class DesktopSyncPullServiceTest {
             .thenReturn(Optional.of(mock(Item.class)));
         when(customerRepository.findByIdAndBusinessIdAndDeletedAtIsNull("customer-1", LOCAL_BUSINESS))
             .thenReturn(Optional.of(mock(Customer.class)));
+        when(mediaSyncService.restoreLocalBrandingUrls(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(mediaSyncService.collectPendingBranding(any())).thenReturn(List.of());
+        when(mediaSyncService.upsertMetadata(any(), any())).thenReturn(List.of());
 
         service = new DesktopSyncPullService(
             businessRepository, branchRepository, categoryRepository, itemRepository,
@@ -203,13 +206,15 @@ class DesktopSyncPullServiceTest {
     }
 
     @Test
-    void storeCloudPlanStampsTierAndStatusIntoDesktopNode() throws Exception {
+    void storeCloudPlanStampsTierStatusAndExpiryIntoDesktopNode() throws Exception {
+        Instant ends = Instant.parse("2027-01-15T00:00:00Z");
         String merged = DesktopSyncPullService.storeCloudPlan(
-            "{\"theme\":\"dark\"}", "Growth", "ACTIVE");
+            "{\"theme\":\"dark\"}", "Enterprise", "ACTIVE", ends);
 
         ObjectNode root = (ObjectNode) new ObjectMapper().readTree(merged);
-        assertEquals("growth", root.path("desktop").path("cloudPlanTier").asText());
+        assertEquals("enterprise", root.path("desktop").path("cloudPlanTier").asText());
         assertEquals("ACTIVE", root.path("desktop").path("cloudPlanStatus").asText());
+        assertEquals("2027-01-15T00:00:00Z", root.path("desktop").path("cloudPlanExpiresAt").asText());
         assertEquals("dark", root.path("theme").asText());
     }
 

@@ -43,12 +43,12 @@ public class DesktopLicenseGuard {
     }
 
     /**
-     * The license plan mirrors the shop's cloud subscription tier, but the plan
-     * inside the signed token is frozen at issue time. When the shop upgrades
-     * on the cloud (e.g. starter → growth) and the till pulls master data, the
-     * current tier is stamped into {@code settings.desktop.cloudPlanTier} —
-     * prefer it so the till never reports a stale plan. Offline shops with no
-     * stamp keep the token's plan.
+     * The license plan/expiry mirrors the shop's cloud subscription, but the
+     * values inside the signed token are frozen at issue time. When the shop
+     * upgrades or renews on the cloud and the till pulls master data, the
+     * current tier + period end are stamped into {@code settings.desktop} —
+     * prefer them so the till never reports a stale plan. Offline shops with
+     * no stamp keep the token's values.
      */
     private static LicenseStatus withCloudPlan(LicenseStatus status, String settings) {
         if (status == null || settings == null || settings.isBlank()) {
@@ -57,11 +57,18 @@ public class DesktopLicenseGuard {
         try {
             com.fasterxml.jackson.databind.ObjectMapper json =
                 new com.fasterxml.jackson.databind.ObjectMapper();
-            String tier = json.readTree(settings)
-                .path("desktop")
-                .path("cloudPlanTier")
-                .asText(null);
-            return status.withPlan(tier);
+            com.fasterxml.jackson.databind.JsonNode desktop = json.readTree(settings).path("desktop");
+            String tier = desktop.path("cloudPlanTier").asText(null);
+            String expiresRaw = desktop.path("cloudPlanExpiresAt").asText(null);
+            java.time.Instant cloudExpires = null;
+            if (expiresRaw != null && !expiresRaw.isBlank()) {
+                try {
+                    cloudExpires = java.time.Instant.parse(expiresRaw.trim());
+                } catch (Exception ignored) {
+                    // Corrupt stamp — fall back to the token expiry.
+                }
+            }
+            return status.withCloudSubscription(tier, cloudExpires);
         } catch (Exception ignored) {
             return status;
         }

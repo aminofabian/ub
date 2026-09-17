@@ -40,7 +40,12 @@ public record MasterDataSnapshot(
             /** The shop's cloud subscription tier (e.g. {@code growth}) — for the till's Sync view. */
             String subscriptionTier,
             /** The shop's cloud billing status ({@code ACTIVE}/{@code GRACE}/{@code SUSPENDED}). */
-            String subscriptionStatus
+            String subscriptionStatus,
+            /**
+             * Cloud billing period end ({@code businesses.current_period_end}).
+             * Null-tolerant for older clouds / free plans without a period.
+             */
+            java.time.Instant currentPeriodEnd
     ) {}
 
     public record BranchData(
@@ -110,9 +115,12 @@ public record MasterDataSnapshot(
 
     /**
      * A cloud user (staff member) the till mirrors so pushed sales can be
-     * attributed to the real cashier instead of the shop owner. Credentials are
-     * NOT synced — each local mirror gets a generated password and the till
-     * owner assigns local PINs.
+     * attributed to the real cashier instead of the shop owner.
+     *
+     * <p>{@code passwordHash} / {@code pinHash} are the cloud bcrypt hashes
+     * (never plaintext). Copying them lets the same email + password/PIN unlock
+     * the desktop till. {@code pinEnc} is <em>not</em> synced — it is keyed to
+     * the cloud's encryption secret and would be unreadable locally.
      */
     public record StaffData(
             String id,
@@ -121,7 +129,9 @@ public record MasterDataSnapshot(
             String email,
             String phone,
             String status,
-            String roleKey
+            String roleKey,
+            String passwordHash,
+            String pinHash
     ) {}
 
     /**

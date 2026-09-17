@@ -22,11 +22,11 @@ import zelisline.ub.identity.repository.UserRepository;
  * Sync now). Each cloud user keeps its cloud id locally, so a pushed sale's
  * {@code soldBy} already refers to the real cloud cashier.
  *
- * <p>Credentials are deliberately NOT synced: the cloud's password hash cannot
- * be reversed, and replicating PINs would be a security risk. Every mirrored
- * user gets a generated password so the row satisfies the
- * {@code chk_users_credentials} check and can be unlocked by the till owner,
- * who assigns local PINs from Settings → Users.
+ * <p>Credential <em>hashes</em> (password + PIN) are copied from the cloud so
+ * the same email and password/PIN unlock the till. Plaintext is never
+ * transmitted. When the cloud row has neither hash (rare), a generated
+ * password keeps the {@code chk_users_credentials} check happy until the
+ * owner sets a local PIN from Settings → Users.
  *
  * <p>Roles are remapped by {@code roleKey} to the local system roles (their ids
  * are stable across installs — see {@code V3__identity_seed.sql}). Unknown keys
@@ -45,8 +45,9 @@ public class DesktopStaffSyncService {
     private final PasswordEncoder passwordEncoder;
 
     /**
-     * Upsert every cloud staff row. Existing users keep their local credentials
-     * (password/PIN) — only identity fields and the role are refreshed.
+     * Upsert every cloud staff row. Existing users get identity + role refreshed
+     * and their password/PIN hashes replaced with the cloud copies so Sync now
+     * repairs tills where staff could not sign in after connect.
      *
      * @param validBranchIds branch ids present in the snapshot; staff assigned
      *     to a branch the cloud retired get a null branch instead of tripping
@@ -83,15 +84,16 @@ public class DesktopStaffSyncService {
                             .findByBusinessIdAndEmailAndDeletedAtIsNull(localId, email)
                             .orElse(null);
                 });
+            boolean created = false;
             if (user == null) {
+                created = true;
                 user = new User();
                 user.setId(d.id());
                 user.setBusinessId(localId);
                 user.setEmail(d.email());
                 user.setName(d.name() == null || d.name().isBlank() ? "Staff" : d.name().trim());
-                // Generated local credential; the owner assigns a real PIN later.
-                user.setPasswordHash(passwordEncoder.encode(generatePassword()));
             }
+            applyCredentials(user, d, created);
             applyIdentity(user, d, validBranchIds);
             userRepository.save(user);
             count++;
@@ -124,6 +126,37 @@ public class DesktopStaffSyncService {
             log.info("[DesktopSync] soft-deleted {} buyer account(s) from the local install", buyers.size());
         }
         return buyers.size();
+    }
+
+    /**
+     * Apply cloud password/PIN hashes. Hashes are bcrypt/argon strings from the
+     * cloud row — never re-encoded. Falls back to a generated password only when
+     * creating a row that has neither hash (satisfies chk_users_credentials).
+     */
+    private void applyCredentials(User user, MasterDataSnapshot.StaffData d, boolean created) {
+        String passwordHash = blankToNull(d.passwordHash());
+        String pinHash = blankToNull(d.pinHash());
+        if (passwordHash != null) {
+            user.setPasswordHash(passwordHash);
+        }
+        if (pinHash != null) {
+            user.setPinHash(pinHash);
+            // Cloud pinEnc uses a different encryption key — clear any stale
+            // local reveal ciphertext so admins re-set the PIN to view it.
+            user.setPinEnc(null);
+        }
+        if (created
+                && user.getPasswordHash() == null
+                && user.getPinHash() == null) {
+            user.setPasswordHash(passwordEncoder.encode(generatePassword()));
+        }
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value;
     }
 
     private void applyIdentity(

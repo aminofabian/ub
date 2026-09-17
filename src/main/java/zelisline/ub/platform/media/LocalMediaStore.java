@@ -186,6 +186,19 @@ public class LocalMediaStore implements MediaStore {
         }
     }
 
+    @Override
+    public boolean hasLocalObject(String publicId) {
+        if (publicId == null || publicId.isBlank()) {
+            return false;
+        }
+        try {
+            Path target = resolveSafely(parentOf(publicId), filenameOf(publicId));
+            return Files.isRegularFile(target);
+        } catch (ResponseStatusException e) {
+            return false;
+        }
+    }
+
     // ---- helpers ----
 
     private void validateBytes(byte[] fileBytes) {

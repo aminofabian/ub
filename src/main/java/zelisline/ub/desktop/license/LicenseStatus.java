@@ -1,6 +1,7 @@
 package zelisline.ub.desktop.license;
 
 import java.time.Instant;
+import java.util.Objects;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 
@@ -136,17 +137,35 @@ public record LicenseStatus(
      * tier (the token's plan is only a fallback for offline shops).
      */
     LicenseStatus withPlan(String newPlan) {
-        if (newPlan == null || newPlan.isBlank() || newPlan.equals(plan)) {
+        return withCloudSubscription(newPlan, null);
+    }
+
+    /**
+     * Overlay the cloud subscription tier and/or period end onto this status.
+     * Null arguments leave the corresponding field unchanged.
+     */
+    LicenseStatus withCloudSubscription(String newPlan, Instant cloudExpiresAt) {
+        String planOut = (newPlan == null || newPlan.isBlank()) ? plan : newPlan;
+        Instant expiresOut = cloudExpiresAt != null ? cloudExpiresAt : expiresAt;
+        Long daysOut = daysRemaining;
+        if (cloudExpiresAt != null) {
+            long days = java.time.Duration.between(Instant.now(), cloudExpiresAt).toDays();
+            daysOut = Math.max(0L, days);
+        }
+        if (Objects.equals(planOut, plan)
+                && Objects.equals(expiresOut, expiresAt)
+                && Objects.equals(daysOut, daysRemaining)) {
             return this;
         }
         String refreshedMessage = switch (state) {
-            case "active" -> "Licensed — " + newPlan + " plan"
-                    + (expiresAt != null ? " (expires " + expiresAt + ")" : "");
-            case "expired" -> newPlan + " license expired on " + expiresAt + ". Please renew to continue.";
+            case "active" -> "Licensed — " + planOut + " plan"
+                    + (expiresOut != null ? " (expires " + expiresOut + ")" : "");
+            case "expired" -> planOut + " license expired on " + expiresOut
+                    + ". Please renew to continue.";
             default -> message;
         };
         return new LicenseStatus(
-            state, refreshedMessage, newPlan, daysRemaining, expiresAt, readOnly, machineId,
+            state, refreshedMessage, planOut, daysOut, expiresOut, readOnly, machineId,
             keySource, keySyncedAt, keySyncOk);
     }
 

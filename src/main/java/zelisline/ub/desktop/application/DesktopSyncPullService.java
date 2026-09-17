@@ -159,10 +159,10 @@ public class DesktopSyncPullService {
             );
         }
 
-        // Re-host product photos in the background (network I/O must not hold
-        // the transaction OR the HTTP request open) and remember the mirrored
-        // staff ids so pushed sales can be attributed to the real cashier.
-        mediaSyncService.rehostAsync(localId, outcome.pendingImages());
+        // Re-host product photos + store branding in the background (network I/O
+        // must not hold the transaction OR the HTTP request open) and remember
+        // the mirrored staff ids so pushed sales can be attributed to the real cashier.
+        mediaSyncService.rehostAsync(localId, outcome.pendingImages(), outcome.pendingBranding());
         cloudSyncSession.persistStaffIds(fetch.session(), outcome.staffIds());
 
         PullResult result = outcome.result();
@@ -1085,15 +1085,23 @@ public class DesktopSyncPullService {
     private record UpsertOutcome(
         PullResult result,
         List<DesktopMediaSyncService.PendingImage> pendingImages,
+        List<DesktopMediaSyncService.PendingBrandingAsset> pendingBranding,
         List<String> staffIds
     ) {}
 
     private UpsertOutcome upsert(String localId, MasterDataSnapshot snapshot) {
         // Business row must exist (created at connect); refresh its settings.
+        final List<DesktopMediaSyncService.PendingBrandingAsset> pendingBranding =
+            new ArrayList<>();
         businessRepository
             .findByIdAndDeletedAtIsNull(localId)
             .ifPresentOrElse(
-                b -> applyBusiness(b, snapshot.business()),
+                b -> {
+                    applyBusiness(b, snapshot.business());
+                    b.setSettings(mediaSyncService.restoreLocalBrandingUrls(b.getSettings()));
+                    pendingBranding.addAll(
+                        mediaSyncService.collectPendingBranding(b.getSettings()));
+                },
                 () -> {
                     throw new ResponseStatusException(
                         HttpStatus.CONFLICT,
@@ -1263,6 +1271,7 @@ public class DesktopSyncPullService {
             new PullResult(branches, categories, items, taxRates, staffCount,
                 snapshot.images() == null ? 0 : snapshot.images().size(), suppliers),
             pending,
+            pendingBranding,
             staffIds
         );
     }
@@ -1446,7 +1455,12 @@ public class DesktopSyncPullService {
         // key, synced-key state) — replacing it wholesale would silently drop the
         // till's license on every master-data pull. Merge instead.
         String merged = mergeBusinessSettings(b.getSettings(), d.settings());
-        b.setSettings(storeCloudPlan(merged, d.subscriptionTier(), d.subscriptionStatus()));
+        b.setSettings(storeCloudPlan(
+            merged,
+            d.subscriptionTier(),
+            d.subscriptionStatus(),
+            d.currentPeriodEnd()
+        ));
     }
 
     /** Copy the cloud's settings but keep the local {@code desktop} node. */
@@ -1469,8 +1483,15 @@ public class DesktopSyncPullService {
         }
     }
 
-    /** Stamp the shop's cloud subscription tier/status into the local desktop node. */
-    static String storeCloudPlan(String settings, String tier, String status) {
+    /**
+     * Stamp the shop's cloud subscription tier/status/period-end into the local
+     * desktop node so the license banner and Sync view match kiosk.ke.
+     */
+    static String storeCloudPlan(
+            String settings,
+            String tier,
+            String status,
+            java.time.Instant currentPeriodEnd) {
         try {
             ObjectNode root = settings == null || settings.isBlank()
                 ? JSON.createObjectNode()
@@ -1482,11 +1503,19 @@ public class DesktopSyncPullService {
             if (status != null && !status.isBlank()) {
                 desktop.put("cloudPlanStatus", status.trim().toUpperCase(Locale.ROOT));
             }
+            if (currentPeriodEnd != null) {
+                desktop.put("cloudPlanExpiresAt", currentPeriodEnd.toString());
+            }
             return JSON.writeValueAsString(root);
         } catch (Exception e) {
             log.warn("[DesktopSync] could not store cloud plan: {}", e.getMessage());
             return settings;
         }
+    }
+
+    @Deprecated
+    static String storeCloudPlan(String settings, String tier, String status) {
+        return storeCloudPlan(settings, tier, status, null);
     }
 
     private static void applyBranch(Branch b, MasterDataSnapshot.BranchData d) {

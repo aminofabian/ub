@@ -346,11 +346,10 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * The setup wizard's "sign in if your account was already created" hint only
-     * makes sense on the setup/connect endpoints — on every other 500 it read
-     * like a mystery toast ("I don't know why it pops up"). Elsewhere the detail
-     * carries the correlation reference so the failing request can be found in
-     * the log (desktop: {@code backend.err.log} / cloud: platform logs).
+     * Setup/connect used to return a "sign in if your account was already
+     * created" hint for every unhandled 500 — that copy only applies when the
+     * failure is actually an existing-account conflict (which is a 409, not a
+     * 500). Point operators at the local log instead.
      */
     private static String unexpectedErrorDetail(String correlationId, HttpServletRequest request) {
         String ref = correlationId == null || correlationId.isBlank()
@@ -360,8 +359,9 @@ public class GlobalExceptionHandler {
         boolean setupFlow = path != null
                 && (path.contains("/desktop/setup") || path.contains("/desktop/connect"));
         if (setupFlow) {
-            return "Unexpected server error. Retry, or sign in if your account was already created."
-                    + ref;
+            return "Unexpected server error while setting up this PC"
+                    + ref
+                    + ". Retry — if it keeps happening, open backend.out.log in the app data folder.";
         }
         return "Unexpected server error" + ref
                 + ". Retry — if it keeps happening, the cause is in the app log.";

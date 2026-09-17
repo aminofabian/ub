@@ -202,14 +202,35 @@ public class DesktopConnectService {
 
         // 3. Seed the local MariaDB from the snapshot (atomic — the marker is
         // only written after every row is in place).
-        SeedResult seeded = transactionTemplate.execute(status -> {
-            try {
-                return seed(localId, snapshot, request, cloudOwnerName, cloudOwnerUserId);
-            } catch (RuntimeException e) {
-                status.setRollbackOnly();
-                throw e;
+        SeedResult seeded;
+        try {
+            seeded = transactionTemplate.execute(status -> {
+                try {
+                    return seed(localId, snapshot, request, cloudOwnerName, cloudOwnerUserId);
+                } catch (RuntimeException e) {
+                    status.setRollbackOnly();
+                    throw e;
+                }
+            });
+        } catch (ResponseStatusException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            // Surface the root cause instead of the generic setup-wizard toast —
+            // FK/null/check failures during seed previously looked like
+            // "sign in if your account was already created".
+            Throwable root = e;
+            while (root.getCause() != null && root.getCause() != root) {
+                root = root.getCause();
             }
-        });
+            String detail = root.getMessage() == null || root.getMessage().isBlank()
+                ? root.getClass().getSimpleName()
+                : root.getMessage();
+            log.error("[DesktopConnect] seed failed: {}", detail, e);
+            throw new ResponseStatusException(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "Could not copy shop data onto this PC: " + truncate(detail, 240)
+            );
+        }
         if (seeded == null) {
             throw new ResponseStatusException(
                 HttpStatus.INTERNAL_SERVER_ERROR,
@@ -239,7 +260,7 @@ public class DesktopConnectService {
         // is persisted, so connect returns fast even with thousands of images.
         // Rows keep their cloud URL until each local copy lands; a failed
         // photo is non-fatal, and the next Sync now re-downloads any gaps.
-        mediaSyncService.rehostAsync(localId, seeded.pendingImages());
+        mediaSyncService.rehostAsync(localId, seeded.pendingImages(), seeded.pendingBranding());
 
         log.info(
             "[DesktopConnect] connected business={} from cloud business={} ({} items, {} categories)",
@@ -362,10 +383,20 @@ public class DesktopConnectService {
         business.setCurrency(cloud.currency() == null ? "KES" : cloud.currency());
         business.setCountryCode(cloud.countryCode() == null ? "KE" : cloud.countryCode());
         business.setTimezone(cloud.timezone() == null ? "Africa/Nairobi" : cloud.timezone());
+        // Keep the local subscription_tier column as "desktop" so cloud billing
+        // jobs never treat this install as a SaaS tenant. The real cloud plan
+        // (tier / status / period end) lives under settings.desktop.cloudPlan*.
         business.setSubscriptionTier("desktop");
-        business.setSettings(cloud.settings() == null || cloud.settings().isBlank()
+        String seedSettings = cloud.settings() == null || cloud.settings().isBlank()
             ? "{}"
-            : cloud.settings());
+            : cloud.settings();
+        business.setSettings(DesktopSyncPullService.storeCloudPlan(
+            seedSettings,
+            cloud.subscriptionTier(),
+            cloud.subscriptionStatus(),
+            cloud.currentPeriodEnd()
+        ));
+        business.setSettings(mediaSyncService.restoreLocalBrandingUrls(business.getSettings()));
         businessRepository.save(business);
         catalogBootstrapService.seedDefaultItemTypesIfMissing(localId);
         ledgerBootstrapService.ensureStandardAccounts(localId);
@@ -542,7 +573,7 @@ public class DesktopConnectService {
         owner.setStatus(UserStatus.ACTIVE);
         User savedOwner = userRepository.save(owner);
 
-        // ── Staff mirrors (cloud ids preserved; credentials NOT synced) ─
+        // ── Staff mirrors (cloud ids + credential hashes preserved) ──
         // Only staff on branches present in the snapshot keep a branch id.
         java.util.Set<String> validBranchIds = snapshot.branches() == null
             ? java.util.Set.of()
@@ -614,6 +645,8 @@ public class DesktopConnectService {
         // ── Image metadata (files re-hosted after the transaction) ─────
         List<DesktopMediaSyncService.PendingImage> pendingImages =
             mediaSyncService.upsertMetadata(localId, snapshot.images());
+        List<DesktopMediaSyncService.PendingBrandingAsset> pendingBranding =
+            mediaSyncService.collectPendingBranding(business.getSettings());
 
         // ── Starter shift (mirrors the create-shop wizard) ─────────────
         String shiftId = null;
@@ -654,7 +687,7 @@ public class DesktopConnectService {
             );
         }
 
-        return new SeedResult(firstBranch.getId(), pendingImages);
+        return new SeedResult(firstBranch.getId(), pendingImages, pendingBranding);
     }
 
     /**
@@ -723,5 +756,19 @@ public class DesktopConnectService {
             .replaceAll("(^-|-$)", "");
     }
 
-    private record SeedResult(String branchId, List<DesktopMediaSyncService.PendingImage> pendingImages) {}
+    private static String truncate(String value, int max) {
+        if (value == null) {
+            return "";
+        }
+        String trimmed = value.trim();
+        if (trimmed.length() <= max) {
+            return trimmed;
+        }
+        return trimmed.substring(0, Math.max(0, max - 1)) + "…";
+    }
+
+    private record SeedResult(
+            String branchId,
+            List<DesktopMediaSyncService.PendingImage> pendingImages,
+            List<DesktopMediaSyncService.PendingBrandingAsset> pendingBranding) {}
 }

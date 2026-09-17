@@ -58,4 +58,14 @@ public interface MediaStore {
 
     /** Best-effort delete by {@code publicId}. Implementations swallow not-found errors. */
     void destroyImage(String publicId);
+
+    /**
+     * Whether a previously stored object still exists locally. Cloud stores
+     * always return {@code false} (objects live on a CDN); the desktop
+     * {@code LocalMediaStore} checks the on-disk file so media sync can retry
+     * missing photos after a failed download.
+     */
+    default boolean hasLocalObject(String publicId) {
+        return false;
+    }
 }

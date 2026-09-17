@@ -171,7 +171,8 @@ public class DesktopSyncController {
                 business.getSubscriptionTier(),
                 business.getSubscriptionBillingStatus() == null
                     ? null
-                    : business.getSubscriptionBillingStatus().name()
+                    : business.getSubscriptionBillingStatus().name(),
+                business.getCurrentPeriodEnd()
             ),
             branchRepository
                 .findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(businessId)
@@ -297,7 +298,9 @@ public class DesktopSyncController {
             u.getEmail(),
             u.getPhone(),
             u.getStatus(),
-            roleKey
+            roleKey,
+            u.getPasswordHash(),
+            u.getPinHash()
         );
     }
 

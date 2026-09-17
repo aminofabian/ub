@@ -21,6 +21,8 @@ import zelisline.ub.desktop.application.DesktopSyncPullService;
 import zelisline.ub.desktop.application.DesktopSyncPushService;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
+import java.time.Instant;
+
 /**
  * Sync triggers for the desktop install.
  *
@@ -101,33 +103,47 @@ public class DesktopSyncTriggerController {
     public DesktopSyncPlan cloudPlan() {
         String localId = desktopSetupService.getDesktopBusinessId();
         if (localId.isEmpty()) {
-            return new DesktopSyncPlan(null, null);
+            return new DesktopSyncPlan(null, null, null);
         }
         return businessRepository
             .findByIdAndDeletedAtIsNull(localId)
             .map(b -> readCloudPlan(b.getSettings()))
-            .orElseGet(() -> new DesktopSyncPlan(null, null));
+            .orElseGet(() -> new DesktopSyncPlan(null, null, null));
     }
 
     private static DesktopSyncPlan readCloudPlan(String settings) {
         if (settings == null || settings.isBlank()) {
-            return new DesktopSyncPlan(null, null);
+            return new DesktopSyncPlan(null, null, null);
         }
         try {
             JsonNode desktop = JSON.readTree(settings).path("desktop");
+            String expiresRaw = desktop.path("cloudPlanExpiresAt").asText(null);
+            Instant expiresAt = null;
+            if (expiresRaw != null && !expiresRaw.isBlank()) {
+                try {
+                    expiresAt = Instant.parse(expiresRaw.trim());
+                } catch (Exception ignored) {
+                    // Corrupt stamp — omit expiry rather than fail the whole plan read.
+                }
+            }
             return new DesktopSyncPlan(
                 desktop.path("cloudPlanTier").asText(null),
-                desktop.path("cloudPlanStatus").asText(null)
+                desktop.path("cloudPlanStatus").asText(null),
+                expiresAt
             );
         } catch (Exception e) {
-            return new DesktopSyncPlan(null, null);
+            return new DesktopSyncPlan(null, null, null);
         }
     }
 
     public record SyncStartResult(boolean started) {}
 
-    /** @param tier  cloud subscription tier (e.g. {@code growth}), null when unknown/not synced yet */
-    public record DesktopSyncPlan(String tier, String status) {}
+    /**
+     * @param tier       cloud subscription tier (e.g. {@code growth}), null when unknown/not synced yet
+     * @param status     cloud billing status ({@code ACTIVE}/{@code GRACE}/{@code SUSPENDED})
+     * @param expiresAt  cloud {@code current_period_end}, null when unknown/free
+     */
+    public record DesktopSyncPlan(String tier, String status, Instant expiresAt) {}
 
     private void runFullSync() {
         try {

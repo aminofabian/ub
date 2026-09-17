@@ -395,4 +395,17 @@ public class CloudSyncSession {
     private Path mappingFile() {
         return Path.of(appData).resolve("conf/cloud-sync.json");
     }
+
+    /** Drop the cloud↔till mapping so a fresh connect can write a new one. */
+    public void clear() {
+        Path file = mappingFile();
+        try {
+            if (Files.exists(file)) {
+                Files.delete(file);
+                log.info("[CloudSync] cleared {}", file);
+            }
+        } catch (IOException e) {
+            log.warn("[CloudSync] could not clear cloud-sync.json: {}", e.getMessage());
+        }
+    }
 }

@@ -20,8 +20,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.desktop.api.dto.DesktopSetupRequest;
-import zelisline.ub.finance.application.LedgerBootstrapService;
 import zelisline.ub.desktop.api.dto.DesktopSetupResponse;
+import zelisline.ub.finance.application.LedgerBootstrapService;
 import zelisline.ub.identity.application.IdentityService;
 import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.domain.User;
@@ -77,6 +77,7 @@ public class DesktopSetupService {
     private final LedgerBootstrapService ledgerBootstrapService;
     private final ShiftService shiftService;
     private final DesktopInitializationService initializationService;
+    private final CloudSyncSession cloudSyncSession;
 
     @Value("${app.desktop.business-id:}")
     private String desktopBusinessId;
@@ -100,6 +101,52 @@ public class DesktopSetupService {
             return false;
         }
         return businessRepository.findByIdAndDeletedAtIsNull(id).isEmpty();
+    }
+
+    /**
+     * Soft-delete the local shop + staff and clear the init marker so the
+     * merchant can run {@code /setup} again (wrong shop, wrong owner, etc.).
+     * Catalog rows for the old install stay in the DB but are unreachable
+     * once the business is soft-deleted; a fresh connect reuses the same
+     * local business id and overwrites identity.
+     */
+    @Transactional
+    public void resetForSetup() {
+        String id = getDesktopBusinessId();
+        if (id.isEmpty()) {
+            throw new ResponseStatusException(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "app.desktop.business-id is not configured"
+            );
+        }
+        Instant now = Instant.now();
+        int users = userRepository.softDeleteAllByBusinessId(id, now);
+        branchRepository.softDeleteAllByBusinessId(id, now);
+        businessRepository.findByIdAndDeletedAtIsNull(id).ifPresent(b -> {
+            b.setDeletedAt(now);
+            businessRepository.save(b);
+        });
+        // Also soft-delete if findById shows a live row that the null-filter missed.
+        businessRepository.findById(id).ifPresent(b -> {
+            if (b.getDeletedAt() == null) {
+                b.setDeletedAt(now);
+                businessRepository.save(b);
+            }
+        });
+        cloudSyncSession.clear();
+        try {
+            initializationService.clearInitialization();
+        } catch (IOException e) {
+            throw new ResponseStatusException(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "Could not clear the setup marker: " + e.getMessage()
+            );
+        }
+        log.info(
+            "[DesktopSetup] reset install business={} (soft-deleted {} staff) — wizard available again",
+            id,
+            users
+        );
     }
 
     @Transactional
@@ -130,8 +177,9 @@ public class DesktopSetupService {
 
         // ── Business ───────────────────────────────────────────────────
 
-        Business business = new Business();
+        Business business = businessRepository.findById(id).orElseGet(Business::new);
         business.setId(id);
+        business.setDeletedAt(null);
         business.setName(request.businessName().trim());
         business.setSlug(buildSlug(request));
         business.setCurrency(normalizeCode(request.currency(), "KES"));
@@ -168,16 +216,21 @@ public class DesktopSetupService {
         // ── Owner user ─────────────────────────────────────────────────
 
         String email = normaliseEmail(request.ownerEmail());
-        userRepository
-            .findByBusinessIdAndEmailAndDeletedAtIsNull(saved.getId(), email)
-            .ifPresent(u -> {
-                throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "An account with this email already exists for this business"
-                );
-            });
-
-        User owner = new User();
+        User owner = userRepository
+            .findAllByBusinessIdAndEmailIgnoreDeleted(saved.getId(), email)
+            .stream()
+            .findFirst()
+            .orElseGet(User::new);
+        if (owner.getDeletedAt() == null
+                && owner.getId() != null
+                && initializationService.isInitialized()) {
+            // Live owner on an already-finished install — should have been blocked above.
+            throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "An account with this email already exists for this business"
+            );
+        }
+        owner.setDeletedAt(null);
         owner.setBusinessId(saved.getId());
         owner.setEmail(email);
         owner.setName(request.ownerName().trim());

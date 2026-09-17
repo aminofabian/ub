@@ -42,6 +42,18 @@ public interface UserRepository extends JpaRepository<User, String> {
 
     Optional<User> findByBusinessIdAndEmailAndDeletedAtIsNull(String businessId, String email);
 
+    /** Includes soft-deleted rows — used when reviving a till after factory reset. */
+    @Query("""
+        select u from User u
+         where u.businessId = :businessId
+           and lower(u.email) = lower(:email)
+         order by case when u.deletedAt is null then 0 else 1 end, u.updatedAt desc
+        """)
+    List<User> findAllByBusinessIdAndEmailIgnoreDeleted(
+        @Param("businessId") String businessId,
+        @Param("email") String email
+    );
+
     List<User> findByBusinessIdAndPhoneAndDeletedAtIsNull(String businessId, String phone);
 
     /** Full staff list for a tenant — used by the desktop sync snapshot. */

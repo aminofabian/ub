@@ -164,6 +164,12 @@ public class DesktopConnectService {
                 "Could not sign in to the online shop — check your email and password"
             );
         }
+        if (refreshToken == null || refreshToken.isBlank()) {
+            throw new ResponseStatusException(
+                HttpStatus.UNAUTHORIZED,
+                "Signed in, but the online shop did not return a lasting session — try again"
+            );
+        }
         String cloudBusinessId = login.user() == null ? null : login.user().businessId();
         if (cloudBusinessId == null || cloudBusinessId.isBlank()) {
             throw new ResponseStatusException(
@@ -340,19 +346,29 @@ public class DesktopConnectService {
             );
         }
 
-        // Keep the staff-id mapping from the previous session so push
-        // attribution stays intact across a reconnect.
-        List<String> staffIds = cloudSyncSession
-            .load()
-            .map(CloudSyncSession.Session::staffIds)
-            .orElse(List.of());
+        // Keep staff-id mapping + pull cursors from the previous session so
+        // reconnect does not force a full historical re-pull.
+        CloudSyncSession.Session previous = cloudSyncSession.load().orElse(null);
+        List<String> staffIds = previous == null ? List.of() : previous.staffIds();
+        if (refreshToken == null || refreshToken.isBlank()) {
+            throw new ResponseStatusException(
+                HttpStatus.UNAUTHORIZED,
+                "Signed in, but the online shop did not return a lasting session — try again"
+            );
+        }
         cloudSyncSession.persist(
-            origin,
-            cloudBusinessId,
-            login.accessToken(),
-            refreshToken,
-            login.user() == null ? null : login.user().id(),
-            staffIds
+            new CloudSyncSession.Session(
+                origin,
+                cloudBusinessId,
+                login.accessToken(),
+                refreshToken,
+                login.user() == null ? null : login.user().id(),
+                staffIds,
+                previous == null ? null : previous.lastSalesPullAt(),
+                previous == null ? null : previous.lastMessagesPullAt(),
+                previous == null ? null : previous.lastSuppliesPullAt(),
+                previous == null ? null : previous.lastWebOrdersPullAt()
+            )
         );
         log.info("[DesktopConnect] reconnected business={} to cloud business={}", localId, cloudBusinessId);
         return new DesktopConnectResponse(localId, null, "Reconnected to your online shop");
@@ -376,8 +392,9 @@ public class DesktopConnectService {
             );
 
         // ── Business ───────────────────────────────────────────────────
-        Business business = new Business();
+        Business business = businessRepository.findById(localId).orElseGet(Business::new);
         business.setId(localId);
+        business.setDeletedAt(null);
         business.setName(cloud.name() == null ? "My Shop" : cloud.name().trim());
         business.setSlug(cloud.slug() == null ? "desktop" : cloud.slug());
         business.setCurrency(cloud.currency() == null ? "KES" : cloud.currency());
@@ -402,11 +419,20 @@ public class DesktopConnectService {
         ledgerBootstrapService.ensureStandardAccounts(localId);
 
         // ── Branches ───────────────────────────────────────────────────
+        // Re-connect after a till reset leaves catalog/branch rows behind —
+        // always load-or-create so we never INSERT with a stale @Version.
         Branch firstBranch = null;
         for (MasterDataSnapshot.BranchData b : snapshot.branches()) {
-            Branch branch = new Branch();
-            branch.setId(b.id());
-            branch.setBusinessId(localId);
+            Branch branch = branchRepository
+                .findById(b.id())
+                .filter(row -> localId.equals(row.getBusinessId()))
+                .orElseGet(() -> {
+                    Branch created = new Branch();
+                    created.setId(b.id());
+                    created.setBusinessId(localId);
+                    return created;
+                });
+            branch.setDeletedAt(null);
             branch.setName(b.name());
             branch.setAddress(b.address());
             branch.setReceiptSettings(b.receiptSettings());
@@ -417,18 +443,29 @@ public class DesktopConnectService {
             }
         }
         if (firstBranch == null) {
-            firstBranch = new Branch();
-            firstBranch.setBusinessId(localId);
-            firstBranch.setName("Main Branch");
-            firstBranch.setActive(true);
-            firstBranch = branchRepository.save(firstBranch);
+            firstBranch = branchRepository
+                .findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(localId)
+                .stream()
+                .findFirst()
+                .orElseGet(() -> {
+                    Branch created = new Branch();
+                    created.setBusinessId(localId);
+                    created.setName("Main Branch");
+                    created.setActive(true);
+                    return branchRepository.save(created);
+                });
         }
 
         // ── Tax rates ──────────────────────────────────────────────────
         for (MasterDataSnapshot.TaxRateData t : snapshot.taxRates()) {
-            TaxRate tax = new TaxRate();
-            tax.setId(t.id());
-            tax.setBusinessId(localId);
+            TaxRate tax = taxRateRepository
+                .findByIdAndBusinessId(t.id(), localId)
+                .orElseGet(() -> {
+                    TaxRate created = new TaxRate();
+                    created.setId(t.id());
+                    created.setBusinessId(localId);
+                    return created;
+                });
             tax.setName(t.name());
             tax.setRatePercent(t.ratePercent());
             tax.setInclusive(t.inclusive());
@@ -442,9 +479,14 @@ public class DesktopConnectService {
         // FK `fk_categories_parent` rejects an insert whose parent is absent.
         List<MasterDataSnapshot.CategoryData> categoryParents = new java.util.ArrayList<>();
         for (MasterDataSnapshot.CategoryData c : snapshot.categories()) {
-            Category category = new Category();
-            category.setId(c.id());
-            category.setBusinessId(localId);
+            Category category = categoryRepository
+                .findByIdAndBusinessId(c.id(), localId)
+                .orElseGet(() -> {
+                    Category created = new Category();
+                    created.setId(c.id());
+                    created.setBusinessId(localId);
+                    return created;
+                });
             category.setName(c.name());
             category.setSlug(c.slug() == null || c.slug().isBlank()
                 ? slugify(c.name())
@@ -480,9 +522,14 @@ public class DesktopConnectService {
             if (t.id() == null || t.id().isBlank()) {
                 continue;
             }
-            ItemType itemType = new ItemType();
-            itemType.setId(t.id());
-            itemType.setBusinessId(localId);
+            ItemType itemType = itemTypeRepository
+                .findByIdAndBusinessId(t.id(), localId)
+                .orElseGet(() -> {
+                    ItemType created = new ItemType();
+                    created.setId(t.id());
+                    created.setBusinessId(localId);
+                    return created;
+                });
             itemType.setTypeKey(t.typeKey());
             itemType.setLabel(t.label());
             itemType.setIcon(t.icon());
@@ -507,11 +554,22 @@ public class DesktopConnectService {
         // snapshot, and a parent soft-deleted on the cloud may be missing
         // entirely (the local FK would reject it). Phase 2 links only variants
         // whose parent actually landed locally.
+        //
+        // Load by primary key (including soft-deleted leftovers from a prior
+        // connect) — never `new Item()` with a cloud id that already exists,
+        // or Hibernate optimistic-locks on @Version.
         List<MasterDataSnapshot.ItemData> variantLinks = new java.util.ArrayList<>();
         for (MasterDataSnapshot.ItemData i : snapshot.items()) {
-            Item item = new Item();
-            item.setId(i.id());
-            item.setBusinessId(localId);
+            Item item = itemRepository
+                .findById(i.id())
+                .filter(row -> localId.equals(row.getBusinessId()))
+                .orElseGet(() -> {
+                    Item created = new Item();
+                    created.setId(i.id());
+                    created.setBusinessId(localId);
+                    return created;
+                });
+            item.setDeletedAt(null);
             item.setSku(i.sku());
             item.setBarcode(i.barcode());
             item.setPluCode(i.pluCode());
@@ -539,9 +597,11 @@ public class DesktopConnectService {
             }
         }
         for (MasterDataSnapshot.ItemData i : variantLinks) {
-            itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(i.variantOfItemId(), localId)
+            itemRepository.findById(i.variantOfItemId())
+                .filter(parent -> localId.equals(parent.getBusinessId()) && parent.getDeletedAt() == null)
                 .ifPresent(parent -> itemRepository
-                    .findByIdAndBusinessIdAndDeletedAtIsNull(i.id(), localId)
+                    .findById(i.id())
+                    .filter(item -> localId.equals(item.getBusinessId()) && item.getDeletedAt() == null)
                     .ifPresent(item -> {
                         item.setVariantOfItemId(parent.getId());
                         itemRepository.save(item);
@@ -553,18 +613,24 @@ public class DesktopConnectService {
         // stays consistent and the staff mirror (below) updates this row
         // instead of colliding on the unique (business_id, email) constraint.
         String email = request.email().trim().toLowerCase(java.util.Locale.ROOT);
-        if (userRepository
-                .findByBusinessIdAndEmailAndDeletedAtIsNull(localId, email)
-                .isPresent()) {
-            throw new ResponseStatusException(
-                HttpStatus.CONFLICT,
-                "An account with this email already exists for this business"
-            );
-        }
-        User owner = new User();
+        User owner = null;
         if (cloudOwnerUserId != null && !cloudOwnerUserId.isBlank()) {
-            owner.setId(cloudOwnerUserId);
+            owner = userRepository.findById(cloudOwnerUserId)
+                .filter(u -> localId.equals(u.getBusinessId()))
+                .orElse(null);
         }
+        if (owner == null) {
+            owner = userRepository
+                .findByBusinessIdAndEmailAndDeletedAtIsNull(localId, email)
+                .orElse(null);
+        }
+        if (owner == null) {
+            owner = new User();
+            if (cloudOwnerUserId != null && !cloudOwnerUserId.isBlank()) {
+                owner.setId(cloudOwnerUserId);
+            }
+        }
+        owner.setDeletedAt(null);
         owner.setBusinessId(localId);
         owner.setEmail(email);
         owner.setName(cloudOwnerName.trim());

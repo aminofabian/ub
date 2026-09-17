@@ -72,7 +72,8 @@ public class DesktopStaffSyncService {
                 continue;
             }
             User user = userRepository
-                .findByIdAndBusinessIdAndDeletedAtIsNull(d.id(), localId)
+                .findById(d.id())
+                .filter(u -> localId.equals(u.getBusinessId()))
                 .orElseGet(() -> {
                     // Fall back to the email match for rows the connect flow
                     // created under a different id (defensive; connect now
@@ -92,6 +93,9 @@ public class DesktopStaffSyncService {
                 user.setBusinessId(localId);
                 user.setEmail(d.email());
                 user.setName(d.name() == null || d.name().isBlank() ? "Staff" : d.name().trim());
+            } else {
+                // Revive staff soft-deleted by "Set up this till again".
+                user.setDeletedAt(null);
             }
             applyCredentials(user, d, created);
             applyIdentity(user, d, validBranchIds);

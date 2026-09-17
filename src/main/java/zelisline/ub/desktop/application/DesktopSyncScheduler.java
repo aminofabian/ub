@@ -10,16 +10,20 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * Desktop-only catch-up for the store-and-forward outbox: flushes pending
- * sales when the till starts, then re-tries every couple of minutes so a till
- * that comes online mid-shift (or comes back from an outage) pushes what
- * accumulated while it was offline — and pulls back sales made elsewhere
- * (web portal / other tills) so the till always mirrors the whole shop.
+ * Desktop-only sync catch-up.
  *
- * <p>Both runs are no-ops when the outboxes are empty, cheap when they aren't,
- * and never raise — an unreachable online shop just leaves the work pending
- * for the next run (per-sale {@code cloud_synced_at} markers are only stamped
- * after the cloud acknowledges).
+ * <ul>
+ *   <li>On boot: refresh the stored online-shop session, then kick a full
+ *       catalog/staff sync in the background (same work as Settings → Sync now).</li>
+ *   <li>Every couple of minutes: push/pull sales, supplies, web orders, and
+ *       Talk to Us messages.</li>
+ *   <li>Every half hour: another quiet full sync so product/price/staff changes
+ *       land without the merchant pressing Sync.</li>
+ * </ul>
+ *
+ * <p>All runs are no-ops when the till is not connected, cheap when there is
+ * nothing pending, and never raise — an unreachable online shop leaves work
+ * for the next run.
  */
 @Component
 @Profile("desktop")
@@ -28,6 +32,8 @@ public class DesktopSyncScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(DesktopSyncScheduler.class);
 
+    private final CloudSyncSession cloudSyncSession;
+    private final DesktopFullSyncService fullSyncService;
     private final DesktopSyncPushService syncPushService;
     private final DesktopSyncPullService syncPullService;
     private final DesktopMessagePushService messagePushService;
@@ -35,6 +41,16 @@ public class DesktopSyncScheduler {
 
     @EventListener(ApplicationReadyEvent.class)
     public void flushOnStartup() {
+        if (cloudSyncSession.load().isEmpty()) {
+            log.debug("[DesktopSync] startup: not connected to an online shop yet");
+            return;
+        }
+        fullSyncService.refreshSessionQuietly();
+        boolean started = fullSyncService.startFullSync(false);
+        if (started) {
+            log.info("[DesktopSync] startup: full sync started in the background");
+        }
+        // Incremental flush still runs so sales land even if full sync is busy.
         flush("startup");
     }
 
@@ -45,7 +61,27 @@ public class DesktopSyncScheduler {
         flush("scheduled");
     }
 
+    /**
+     * Periodic master-data refresh. Default every 30 minutes so cloud catalog
+     * and staff password/PIN changes reach the till without a manual Sync.
+     */
+    @Scheduled(
+            fixedDelayString = "${app.desktop.sync.full-interval-ms:1800000}",
+            initialDelayString = "${app.desktop.sync.full-initial-delay-ms:300000}")
+    public void scheduledFullSync() {
+        if (cloudSyncSession.load().isEmpty()) {
+            return;
+        }
+        fullSyncService.refreshSessionQuietly();
+        if (fullSyncService.startFullSync(false)) {
+            log.info("[DesktopSync] scheduled full sync started");
+        }
+    }
+
     private void flush(String reason) {
+        if (cloudSyncSession.load().isEmpty()) {
+            return;
+        }
         try {
             // Down first (cloud sales + supplies -> this till), then up (this
             // till's sales -> cloud): a sale made in the web portal lands on the

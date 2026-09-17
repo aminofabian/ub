@@ -1199,13 +1199,15 @@ public class DesktopSyncPullService {
         List<MasterDataSnapshot.ItemData> variantLinks = new ArrayList<>();
         for (MasterDataSnapshot.ItemData d : snapshot.items()) {
             Item item = itemRepository
-                .findByIdAndBusinessIdAndDeletedAtIsNull(d.id(), localId)
+                .findById(d.id())
+                .filter(row -> localId.equals(row.getBusinessId()))
                 .orElseGet(() -> {
                     Item created = new Item();
                     created.setId(d.id());
                     created.setBusinessId(localId);
                     return created;
                 });
+            item.setDeletedAt(null);
             applyItem(item, d, fallbackItemTypeId, itemTypeIds);
             itemRepository.save(item);
             items++;

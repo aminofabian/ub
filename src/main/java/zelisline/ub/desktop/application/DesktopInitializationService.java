@@ -50,6 +50,19 @@ public class DesktopInitializationService {
     }
 
     /**
+     * Removes the {@code .initialized} marker so the next boot routes back to
+     * {@code /setup}. Used when the merchant picked the wrong shop and wants
+     * to run the wizard again.
+     */
+    public void clearInitialization() throws IOException {
+        Path marker = initializedFile();
+        if (Files.exists(marker)) {
+            Files.delete(marker);
+            log.info("[DesktopInit] cleared {}", marker);
+        }
+    }
+
+    /**
      * Writes all post‑setup artefacts: the {@code .initialized} marker,
      * JVM opts, and MariaDB config for the given hardware tier.
      */

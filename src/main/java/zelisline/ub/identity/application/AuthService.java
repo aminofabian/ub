@@ -121,9 +121,23 @@ public class AuthService {
     private final TillAccessRequestService tillAccessRequestService;
     private final ObjectProvider<zelisline.ub.billing.application.SubscriptionRenewalService> subscriptionRenewalService;
     private final PlatformAuthSettingsService platformAuthSettingsService;
+    /**
+     * Desktop-only: cloud↔till mapping. Absent on cloud profiles
+     * ({@code ObjectProvider} stays empty). Used so synced PIN hashes — keyed
+     * to the online shop id — still verify on the local till business id.
+     */
+    private final ObjectProvider<zelisline.ub.desktop.application.CloudSyncSession> cloudSyncSession;
 
     @Value("${app.jwt.access-ttl-minutes:60}")
     private long accessTtlMinutes;
+
+    /**
+     * Non-blank only on the desktop SKU ({@code APP_DESKTOP_BUSINESS_ID}). When
+     * set, credential calls always target this local business — never a stale
+     * cloud {@code X-Tenant-Id} left in the webview from a browser session.
+     */
+    @Value("${app.desktop.business-id:}")
+    private String desktopBusinessId;
 
     @Value("${app.jwt.refresh-ttl-days:30}")
     private long refreshTtlDays;
@@ -184,8 +198,7 @@ public class AuthService {
         }
         String branchId = resolvePinBranchId(user, request.branchId());
         assertCanAuthenticate(user);
-        String pinPayload = businessId + ":" + request.pin();
-        if (!passwordEncoder.matches(pinPayload, user.getPinHash())) {
+        if (!pinMatches(user.getPinHash(), businessId, request.pin())) {
             recordLoginFailure(user, http, AuditEventTypes.LOGIN_FAILED, "Incorrect PIN");
             throw invalidCredentials();
         }
@@ -243,8 +256,7 @@ public class AuthService {
         String branchId = resolvePinBranchId(user, request.branchId());
         assertCanAuthenticate(user);
 
-        String pinPayload = businessId + ":" + request.pin();
-        if (!passwordEncoder.matches(pinPayload, user.getPinHash())) {
+        if (!pinMatches(user.getPinHash(), businessId, request.pin())) {
             recordLoginFailure(user, http, AuditEventTypes.LOGIN_FAILED, "Incorrect PIN");
             throw invalidCredentials();
         }
@@ -486,11 +498,22 @@ public class AuthService {
      * till — carry no tenant context, so the email's single active membership
      * stands in for it instead of failing the sign-in.
      *
+     * <p>On the desktop SKU the local {@code APP_DESKTOP_BUSINESS_ID} always
+     * wins. A stale cloud {@code X-Tenant-Id} in the webview (from a previous
+     * browser session) must not route password/PIN checks to a business id
+     * that does not exist in the till MariaDB — that surfaces as "wrong
+     * password" for the correct cloud credentials.
+     *
      * @throws ResponseStatusException {@code 401} when the email has no active
      *     membership, {@code 400} when it has several and only the caller can
      *     say which shop they meant.
      */
     private String resolveCredentialBusinessId(HttpServletRequest http, String email) {
+        String desktopId = desktopLocalBusinessId();
+        if (desktopId != null) {
+            TenantRequestIds.bindBusinessId(http, desktopId);
+            return desktopId;
+        }
         String resolved = TenantRequestIds.resolveBusinessIdOrNull(http);
         if (resolved != null) {
             return resolved;
@@ -509,6 +532,11 @@ public class AuthService {
 
     /** Same resolution as {@link #resolveCredentialBusinessId}, but silent (anti-enumeration flows). */
     private String resolveCredentialBusinessIdOrNull(HttpServletRequest http, String email) {
+        String desktopId = desktopLocalBusinessId();
+        if (desktopId != null) {
+            TenantRequestIds.bindBusinessId(http, desktopId);
+            return desktopId;
+        }
         String resolved = TenantRequestIds.resolveBusinessIdOrNull(http);
         if (resolved != null) {
             return resolved;
@@ -520,6 +548,45 @@ public class AuthService {
         String businessId = memberships.get(0).getBusinessId();
         TenantRequestIds.bindBusinessId(http, businessId);
         return businessId;
+    }
+
+    /** Local till business id, or {@code null} when this JVM is not a desktop install. */
+    private String desktopLocalBusinessId() {
+        if (desktopBusinessId == null || desktopBusinessId.isBlank()) {
+            return null;
+        }
+        return desktopBusinessId.trim();
+    }
+
+    /**
+     * PIN hashes are {@code bcrypt(businessId + ":" + pin)}. Cloud-synced staff
+     * rows keep the online shop's business id in that payload, while the till
+     * user row lives under {@code APP_DESKTOP_BUSINESS_ID}. Accept either.
+     */
+    private boolean pinMatches(String pinHash, String localBusinessId, String rawPin) {
+        if (pinHash == null || pinHash.isBlank() || rawPin == null) {
+            return false;
+        }
+        String pin = rawPin.trim();
+        if (pin.isEmpty()) {
+            return false;
+        }
+        if (passwordEncoder.matches(localBusinessId + ":" + pin, pinHash)) {
+            return true;
+        }
+        zelisline.ub.desktop.application.CloudSyncSession session = cloudSyncSession.getIfAvailable();
+        if (session == null) {
+            return false;
+        }
+        String cloudId = session.load()
+            .map(zelisline.ub.desktop.application.CloudSyncSession.Session::cloudBusinessId)
+            .map(String::trim)
+            .filter(id -> !id.isEmpty())
+            .orElse(null);
+        if (cloudId == null || cloudId.equals(localBusinessId)) {
+            return false;
+        }
+        return passwordEncoder.matches(cloudId + ":" + pin, pinHash);
     }
 
     /**

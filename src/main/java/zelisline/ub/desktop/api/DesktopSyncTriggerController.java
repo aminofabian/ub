@@ -3,21 +3,15 @@ package zelisline.ub.desktop.api;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
-import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
+import zelisline.ub.desktop.application.DesktopFullSyncService;
 import zelisline.ub.desktop.application.DesktopMediaSyncService;
-import zelisline.ub.desktop.application.DesktopMessagePullService;
-import zelisline.ub.desktop.application.DesktopMessagePushService;
 import zelisline.ub.desktop.application.DesktopSetupService;
 import zelisline.ub.desktop.application.DesktopSyncProgressService;
-import zelisline.ub.desktop.application.DesktopSyncPullService;
 import zelisline.ub.desktop.application.DesktopSyncPushService;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
@@ -30,10 +24,11 @@ import java.time.Instant;
  *   <li>{@code POST /api/v1/desktop/sync} — push-only, fired automatically
  *       after shift close (fast).</li>
  *   <li>{@code POST /api/v1/desktop/sync/full} — pull master-data refresh
- *       <em>and</em> push pending shifts; used by Settings → Sync now.</li>
+ *       <em>and</em> push pending shifts; used by Settings → Sync now (also
+ *       started automatically on boot / periodically by
+ *       {@link zelisline.ub.desktop.application.DesktopSyncScheduler}).</li>
  *   <li>{@code GET /api/v1/desktop/sync/status} — live progress of the
- *       background full sync (the pull can take minutes on a big shop, so the
- *       sync runs off the HTTP thread and the UI polls this).</li>
+ *       background full sync.</li>
  * </ul>
  * All require a local staff session.
  */
@@ -43,15 +38,9 @@ import java.time.Instant;
 @RequiredArgsConstructor
 public class DesktopSyncTriggerController {
 
-    private static final Logger log = LoggerFactory.getLogger(
-        DesktopSyncTriggerController.class
-    );
-
     private final DesktopSyncPushService syncPushService;
-    private final DesktopSyncPullService syncPullService;
     private final DesktopMediaSyncService mediaSyncService;
-    private final DesktopMessagePushService messagePushService;
-    private final DesktopMessagePullService messagePullService;
+    private final DesktopFullSyncService fullSyncService;
     private final DesktopSyncProgressService syncProgress;
     private final DesktopSetupService desktopSetupService;
     private final BusinessRepository businessRepository;
@@ -76,16 +65,8 @@ public class DesktopSyncTriggerController {
      */
     @PostMapping("/full")
     public SyncStartResult syncFull() {
-        if (syncProgress.isRunning()) {
-            throw new ResponseStatusException(
-                HttpStatus.CONFLICT,
-                "A sync is already in progress"
-            );
-        }
-        Thread worker = new Thread(this::runFullSync, "desktop-sync-full");
-        worker.setDaemon(true);
-        worker.start();
-        return new SyncStartResult(true);
+        boolean started = fullSyncService.startFullSync(true);
+        return new SyncStartResult(started);
     }
 
     /** Current phase + counts of the background full sync. */
@@ -144,34 +125,4 @@ public class DesktopSyncTriggerController {
      * @param expiresAt  cloud {@code current_period_end}, null when unknown/free
      */
     public record DesktopSyncPlan(String tier, String status, Instant expiresAt) {}
-
-    private void runFullSync() {
-        try {
-            DesktopSyncPullService.PullResult pull = syncPullService.pullMasterData();
-            // Mirror sales made in the web portal / other tills into this till.
-            int pulled = syncPullService.pullCloudSales();
-            // Mirror supplies posted in the web portal into this till.
-            int suppliesPulled = syncPullService.pullSupplies();
-            // Mirror web orders (status + fulfillment state) into this till.
-            int ordersPulled = syncPullService.pullWebOrders();
-            // Mirror the shop's Talk to Us inbox (messages + dashboard replies).
-            DesktopMessagePullService.MessagePullResult messagePull = messagePullService.pullMessages();
-            syncProgress.uploadStarted();
-            DesktopSyncPushService.SyncPushResult push = syncPushService.pushPending();
-            // Queued Talk to Us replies -> cloud, which sends them.
-            DesktopMessagePushService.MessagePushResult messagePush = messagePushService.pushPendingReplies();
-            syncProgress.done(pull, push, messagePull, messagePush, suppliesPulled, ordersPulled);
-            log.info(
-                "[DesktopSync] full sync finished: {} item(s) refreshed, {} cloud sale(s) pulled, "
-                    + "{} supply session(s) pulled, {} web order(s) pulled, {} sale(s) pushed, "
-                    + "{} supply session(s) pushed, {} order confirmation(s) pushed, "
-                    + "{} message(s) + {} reply(ies) pulled, {} reply(ies) relayed",
-                pull.items(), pulled, suppliesPulled, ordersPulled, push.salesPushed(),
-                push.suppliesPushed(), push.orderConfirmationsPushed(),
-                messagePull.messages(), messagePull.replies(), messagePush.repliesPushed());
-        } catch (Exception e) {
-            log.warn("[DesktopSync] full sync failed: {}", e.getMessage());
-            syncProgress.failed(e.getMessage());
-        }
-    }
 }

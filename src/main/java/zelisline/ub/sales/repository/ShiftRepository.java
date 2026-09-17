@@ -209,4 +209,6 @@ public interface ShiftRepository extends JpaRepository<Shift, String> {
 
     /** Whether a shift with the given status has ever existed for this business. */
     boolean existsByBusinessIdAndStatus(String businessId, String status);
+
+    List<Shift> findByBusinessIdAndStatus(String businessId, String status);
 }

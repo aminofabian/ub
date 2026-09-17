@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -31,6 +32,9 @@ import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.sales.api.dto.PostOpenShiftRequest;
 import zelisline.ub.sales.api.dto.ShiftResponse;
 import zelisline.ub.sales.application.ShiftService;
+import zelisline.ub.sales.SalesConstants;
+import zelisline.ub.sales.domain.Shift;
+import zelisline.ub.sales.repository.ShiftRepository;
 import zelisline.ub.tenancy.application.BusinessOnboardingSettingsService;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.domain.Business;
@@ -76,6 +80,7 @@ public class DesktopSetupService {
     private final CatalogBootstrapService catalogBootstrapService;
     private final LedgerBootstrapService ledgerBootstrapService;
     private final ShiftService shiftService;
+    private final ShiftRepository shiftRepository;
     private final DesktopInitializationService initializationService;
     private final CloudSyncSession cloudSyncSession;
 
@@ -122,6 +127,7 @@ public class DesktopSetupService {
         Instant now = Instant.now();
         int users = userRepository.softDeleteAllByBusinessId(id, now);
         branchRepository.softDeleteAllByBusinessId(id, now);
+        forceCloseOpenShifts(id, now);
         businessRepository.findByIdAndDeletedAtIsNull(id).ifPresent(b -> {
             b.setDeletedAt(now);
             businessRepository.save(b);
@@ -246,33 +252,29 @@ public class DesktopSetupService {
         User savedOwner = userRepository.save(owner);
 
         // ── Starter shift ──────────────────────────────────────────────
-
-        String shiftId = null;
-        try {
-            PostOpenShiftRequest shiftReq = new PostOpenShiftRequest(
-                mainBranch.getId(),
-                BigDecimal.ZERO, // opening cash — user counts later
-                "Initial shift — opened by first-run wizard",
-                Collections.emptyList()
-            );
-            ShiftResponse shift = shiftService.openShift(
-                saved.getId(),
-                shiftReq,
-                savedOwner.getId()
-            );
-            shiftId = shift.id();
-            log.info(
-                "[DesktopSetup] opened starter shift={} on branch={}",
-                shiftId,
-                mainBranch.getId()
-            );
-        } catch (Exception e) {
-            // Non-fatal: the owner can open a shift manually. Log and continue
-            // so the wizard doesn't fail on a transient shift-open edge case.
-            log.warn(
-                "[DesktopSetup] could not open starter shift: {}",
-                e.getMessage()
-            );
+        // Must run after this @Transactional method commits. openShift is
+        // itself @Transactional; catching a failure here would mark the
+        // outer TX rollback-only and then blow up on commit.
+        final String branchIdForShift = mainBranch.getId();
+        final String ownerIdForShift = savedOwner.getId();
+        final String businessIdForShift = saved.getId();
+        if (org.springframework.transaction.support.TransactionSynchronizationManager
+                .isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager
+                .registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            tryOpenStarterShift(
+                                businessIdForShift,
+                                branchIdForShift,
+                                ownerIdForShift
+                            );
+                        }
+                    }
+                );
+        } else {
+            tryOpenStarterShift(businessIdForShift, branchIdForShift, ownerIdForShift);
         }
 
         // ── Filesystem artefacts ───────────────────────────────────────
@@ -321,12 +323,11 @@ public class DesktopSetupService {
         }
 
         log.info(
-            "[DesktopSetup] seeded business={} owner={} role={} branch={} shift={} tier={}",
+            "[DesktopSetup] seeded business={} owner={} role={} branch={} tier={}",
             saved.getId(),
             savedOwner.getId(),
             ownerRole.getId(),
             mainBranch.getId(),
-            shiftId,
             fallback(request.hardwareTier(), "B")
         );
 
@@ -337,8 +338,48 @@ public class DesktopSetupService {
             savedOwner.getEmail(),
             ownerRole.getId(),
             mainBranch.getId(),
-            shiftId
+            null
         );
+    }
+
+    private void tryOpenStarterShift(String businessId, String branchId, String ownerUserId) {
+        try {
+            PostOpenShiftRequest shiftReq = new PostOpenShiftRequest(
+                branchId,
+                BigDecimal.ZERO,
+                "Initial shift — opened by first-run wizard",
+                Collections.emptyList()
+            );
+            ShiftResponse shift = shiftService.openShift(businessId, shiftReq, ownerUserId);
+            log.info(
+                "[DesktopSetup] opened starter shift={} on branch={}",
+                shift.id(),
+                branchId
+            );
+        } catch (Exception e) {
+            log.warn("[DesktopSetup] could not open starter shift: {}", e.getMessage());
+        }
+    }
+
+    /** Close leftover open shifts so a re-connect is not blocked by till conflict. */
+    private void forceCloseOpenShifts(String businessId, Instant now) {
+        List<Shift> open = shiftRepository.findByBusinessIdAndStatus(
+            businessId,
+            SalesConstants.SHIFT_STATUS_OPEN
+        );
+        for (Shift s : open) {
+            s.setStatus(SalesConstants.SHIFT_STATUS_CLOSED);
+            s.setClosedAt(now);
+            s.setClosingNotes("Closed automatically when this till was reset for setup");
+            shiftRepository.save(s);
+        }
+        if (!open.isEmpty()) {
+            log.info(
+                "[DesktopSetup] force-closed {} open shift(s) on business={}",
+                open.size(),
+                businessId
+            );
+        }
     }
 
     // ── helpers ────────────────────────────────────────────────────────────

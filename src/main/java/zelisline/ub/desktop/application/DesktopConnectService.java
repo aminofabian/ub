@@ -224,13 +224,9 @@ public class DesktopConnectService {
             // Surface the root cause instead of the generic setup-wizard toast —
             // FK/null/check failures during seed previously looked like
             // "sign in if your account was already created".
-            Throwable root = e;
-            while (root.getCause() != null && root.getCause() != root) {
-                root = root.getCause();
-            }
-            String detail = root.getMessage() == null || root.getMessage().isBlank()
-                ? root.getClass().getSimpleName()
-                : root.getMessage();
+            // Prefer the deepest useful message; skip the opaque Spring
+            // "rollback-only" wrapper when a nested failure caused it.
+            String detail = usefulSeedFailureDetail(e);
             log.error("[DesktopConnect] seed failed: {}", detail, e);
             throw new ResponseStatusException(
                 HttpStatus.INTERNAL_SERVER_ERROR,
@@ -242,6 +238,46 @@ public class DesktopConnectService {
                 HttpStatus.INTERNAL_SERVER_ERROR,
                 "Seeding failed — nothing was written"
             );
+        }
+
+        // Marker + starter shift run AFTER the DB commit. Opening a shift is
+        // @Transactional and used to run inside seed(); when it failed (e.g.
+        // leftover open shift after a till reset) Spring marked the outer
+        // transaction rollback-only, seed caught it as "non-fatal", then
+        // commit threw UnexpectedRollbackException — which is what merchants
+        // saw as "Transaction silently rolled back…".
+        try {
+            initializationService.completeInitialization(
+                localId,
+                DEFAULT_HARDWARE_TIER,
+                Instant.now()
+            );
+        } catch (IOException e) {
+            throw new ResponseStatusException(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "Connected, but could not finalize the install: " + e.getMessage()
+            );
+        }
+
+        try {
+            PostOpenShiftRequest shiftReq = new PostOpenShiftRequest(
+                seeded.branchId(),
+                BigDecimal.ZERO,
+                "Initial shift — opened by online-shop connect",
+                Collections.emptyList()
+            );
+            ShiftResponse shift = shiftService.openShift(
+                localId,
+                shiftReq,
+                seeded.ownerUserId()
+            );
+            log.info(
+                "[DesktopConnect] opened starter shift={} on branch={}",
+                shift.id(),
+                seeded.branchId()
+            );
+        } catch (Exception e) {
+            log.warn("[DesktopConnect] could not open starter shift: {}", e.getMessage());
         }
 
         // 4. Cloud mapping for future incremental sync runs. The mirrored
@@ -714,46 +750,15 @@ public class DesktopConnectService {
         List<DesktopMediaSyncService.PendingBrandingAsset> pendingBranding =
             mediaSyncService.collectPendingBranding(business.getSettings());
 
-        // ── Starter shift (mirrors the create-shop wizard) ─────────────
-        String shiftId = null;
-        try {
-            PostOpenShiftRequest shiftReq = new PostOpenShiftRequest(
-                firstBranch.getId(),
-                BigDecimal.ZERO, // opening cash — user counts later
-                "Initial shift — opened by online-shop connect",
-                Collections.emptyList()
-            );
-            ShiftResponse shift = shiftService.openShift(
-                localId,
-                shiftReq,
-                savedOwner.getId()
-            );
-            shiftId = shift.id();
-            log.info(
-                "[DesktopConnect] opened starter shift={} on branch={}",
-                shiftId,
-                firstBranch.getId()
-            );
-        } catch (Exception e) {
-            // Non-fatal: the owner can open a shift manually.
-            log.warn("[DesktopConnect] could not open starter shift: {}", e.getMessage());
-        }
+        // Starter shift + .initialized marker run in connect() after this
+        // transaction commits — see openShift / completeInitialization there.
 
-        // ── Filesystem artefacts (marker written last) ─────────────────
-        try {
-            initializationService.completeInitialization(
-                localId,
-                DEFAULT_HARDWARE_TIER,
-                Instant.now()
-            );
-        } catch (IOException e) {
-            throw new ResponseStatusException(
-                HttpStatus.INTERNAL_SERVER_ERROR,
-                "Connected, but could not finalize the install: " + e.getMessage()
-            );
-        }
-
-        return new SeedResult(firstBranch.getId(), pendingImages, pendingBranding);
+        return new SeedResult(
+            firstBranch.getId(),
+            savedOwner.getId(),
+            pendingImages,
+            pendingBranding
+        );
     }
 
     /**
@@ -812,6 +817,34 @@ public class DesktopConnectService {
         return null;
     }
 
+    /**
+     * Prefer a nested failure message over Spring's opaque
+     * {@code UnexpectedRollbackException} text when a swallowed nested
+     * {@code @Transactional} call marked the outer seed TX rollback-only.
+     */
+    private static String usefulSeedFailureDetail(Throwable e) {
+        String rollbackOnlyHint = "rollback-only";
+        Throwable best = e;
+        String bestMsg = e.getMessage();
+        Throwable cursor = e;
+        while (cursor != null) {
+            String msg = cursor.getMessage();
+            if (msg != null && !msg.isBlank()
+                    && !msg.toLowerCase(java.util.Locale.ROOT).contains(rollbackOnlyHint)) {
+                best = cursor;
+                bestMsg = msg;
+            }
+            cursor = cursor.getCause();
+            if (cursor == best) {
+                break;
+            }
+        }
+        if (bestMsg != null && !bestMsg.isBlank()) {
+            return bestMsg;
+        }
+        return best.getClass().getSimpleName();
+    }
+
     private static String slugify(String name) {
         if (name == null || name.isBlank()) {
             return "category";
@@ -835,6 +868,7 @@ public class DesktopConnectService {
 
     private record SeedResult(
             String branchId,
+            String ownerUserId,
             List<DesktopMediaSyncService.PendingImage> pendingImages,
             List<DesktopMediaSyncService.PendingBrandingAsset> pendingBranding) {}
 }

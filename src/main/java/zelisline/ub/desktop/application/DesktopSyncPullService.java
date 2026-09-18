@@ -385,18 +385,32 @@ public class DesktopSyncPullService {
             if (rawPurchaseSessionRepository.findByIdAndBusinessId(data.sessionId(), localId).isPresent()) {
                 continue;
             }
-            insertCloudSupply(localId, data);
-            inserted++;
+            try {
+                insertCloudSupply(localId, data);
+                inserted++;
+            } catch (Exception e) {
+                log.warn(
+                    "[DesktopSync] skipped supply {} (supplier={}): {}",
+                    data.sessionId(),
+                    data.supplierId(),
+                    e.getMessage()
+                );
+            }
         }
         return inserted;
     }
 
     /** Insert one cloud supply session (lines + invoice) as a till-local mirror. */
     private void insertCloudSupply(String localId, SupplySyncSnapshot.SupplyData data) {
+        // Incremental supplies pull can arrive before master-data has mirrored
+        // a brand-new cloud supplier/branch — stub them so fk_rps_* does not
+        // abort the whole sync with a toast.
+        ensureLocalSupplier(localId, data.supplierId());
+        ensureLocalBranch(localId, data.branchId());
+
         RawPurchaseSession session = new RawPurchaseSession();
         session.setId(data.sessionId());
         session.setBusinessId(localId);
-        // Suppliers are mirrored by the master-data pull, so the FK resolves.
         session.setSupplierId(data.supplierId());
         session.setBranchId(data.branchId());
         session.setReceivedAt(data.receivedAt());
@@ -486,6 +500,50 @@ public class DesktopSyncPullService {
         return itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, localId).isPresent()
             ? itemId
             : null;
+    }
+
+    /**
+     * Create a placeholder supplier when supplies arrive before master-data
+     * has mirrored the cloud supplier (avoids {@code fk_rps_supplier}).
+     */
+    private void ensureLocalSupplier(String localId, String supplierId) {
+        if (supplierId == null || supplierId.isBlank()) {
+            throw new IllegalArgumentException("supply session is missing supplierId");
+        }
+        if (supplierRepository.findByIdAndBusinessId(supplierId, localId).isPresent()) {
+            return;
+        }
+        Supplier stub = new Supplier();
+        stub.setId(supplierId);
+        stub.setBusinessId(localId);
+        stub.setName("Supplier (syncing…)");
+        stub.setSupplierType("distributor");
+        stub.setStatus("active");
+        stub.setTaxExempt(false);
+        stub.setPayoutType(zelisline.ub.suppliers.domain.SupplierPayoutTypes.MANUAL);
+        stub.setCloudSyncedAt(java.time.Instant.now());
+        supplierRepository.saveAndFlush(stub);
+        log.info("[DesktopSync] stubbed missing supplier {} until next master pull", supplierId);
+    }
+
+    /** Same race as suppliers — stub a branch so {@code fk_rps_branch} holds. */
+    private void ensureLocalBranch(String localId, String branchId) {
+        if (branchId == null || branchId.isBlank()) {
+            throw new IllegalArgumentException("supply session is missing branchId");
+        }
+        if (branchRepository.findById(branchId)
+                .filter(b -> localId.equals(b.getBusinessId()))
+                .isPresent()) {
+            return;
+        }
+        Branch stub = new Branch();
+        stub.setId(branchId);
+        stub.setBusinessId(localId);
+        stub.setName("Branch (syncing…)");
+        stub.setActive(true);
+        stub.setDeletedAt(null);
+        branchRepository.saveAndFlush(stub);
+        log.info("[DesktopSync] stubbed missing branch {} until next master pull", branchId);
     }
 
     /**

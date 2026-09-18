@@ -92,6 +92,13 @@ public class FeatureFlagService {
      */
     public static final String FLAG_POS_CASHIER_CLEAR_SALE = "pos.cashier_clear_sale";
 
+    /**
+     * When Clear sale / keypad Clear runs, void every open till tab (and its pending
+     * draft) in one action. Absent / false keeps single-tab clear so unfinished sales
+     * stay accountable via Sales → Unfinished sales.
+     */
+    public static final String FLAG_POS_CASHIER_CLEAR_ALL_SALES = "pos.cashier_clear_all_sales";
+
     /** Auto-add scanned barcodes straight to cart when the barcode resolves to
      * exactly one sellable product. When off, scanned barcodes fill the search
      * box (cashier must tap the hit). Independent of pos_drafts.enabled so

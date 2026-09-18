@@ -63,6 +63,7 @@ import zelisline.ub.tenancy.application.BranchResolutionService;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.till.repository.TillDeviceRepository;
+import zelisline.ub.posdraft.application.PosDraftService;
 
 @Service
 @RequiredArgsConstructor
@@ -87,6 +88,7 @@ public class ShiftService {
     private final ApplicationEventPublisher eventPublisher;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
+    private final PosDraftService posDraftService;
 
     // ========================================================================
     // OPEN SHIFT
@@ -330,6 +332,9 @@ public class ShiftService {
             s.setCloseJournalEntryId(postVarianceJournal(businessId, s.getId(), variance));
         }
         shiftRepository.save(s);
+
+        // Unfinished till carts for this shift must not linger after close.
+        posDraftService.cancelPendingForClosedShift(businessId, s, userId);
 
         // Backfill the ledger for in-flight pre-deploy shifts so the expected
         // denominations at close reconcile to expectedClosingCash.

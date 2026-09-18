@@ -12,6 +12,8 @@ public final class PosDraftConstants {
     public static final String AUDIT_REMOVE_LINE = "REMOVE_LINE";
     public static final String AUDIT_CANCEL = "CANCEL";
     public static final String AUDIT_COMPLETE = "COMPLETE";
+    /** Bulk cancel when the owning cash-drawer shift is closed. */
+    public static final String AUDIT_CANCEL_SHIFT_CLOSE = "CANCEL_SHIFT_CLOSE";
 
     public static final int DEFAULT_LIST_HOURS = 48;
     public static final int MONEY_SCALE = 2;

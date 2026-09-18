@@ -47,4 +47,32 @@ public interface PosDraftRepository extends JpaRepository<PosDraft, String> {
             @Param("createdBy") String createdBy,
             @Param("since") Instant since
     );
+
+    List<PosDraft> findByBusinessIdAndShiftIdAndStatus(
+            String businessId,
+            String shiftId,
+            String status
+    );
+
+    /**
+     * Untagged pending drafts at a branch updated during a shift window.
+     * When {@code createdBy} is null (shared branch shift), all creators match.
+     */
+    @Query("""
+            select d from PosDraft d
+             where d.businessId = :businessId
+               and d.branchId = :branchId
+               and d.status = :status
+               and d.shiftId is null
+               and d.updatedAt >= :since
+               and (:createdBy is null or d.createdBy = :createdBy)
+             order by d.updatedAt desc
+            """)
+    List<PosDraft> findUntaggedPendingForShiftClose(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("status") String status,
+            @Param("since") Instant since,
+            @Param("createdBy") String createdBy
+    );
 }

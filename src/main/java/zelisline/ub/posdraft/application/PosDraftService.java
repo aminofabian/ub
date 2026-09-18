@@ -74,7 +74,12 @@ public class PosDraftService {
     private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
-    public PosDraftResponse createDraft(String businessId, CreatePosDraftRequest request, String userId) {
+    public PosDraftResponse createDraft(
+            String businessId,
+            CreatePosDraftRequest request,
+            String userId,
+            String tillDeviceKey
+    ) {
         requireFeatureEnabled(businessId);
 
         String clientDraftId = normalizeClientDraftId(request.clientDraftId());
@@ -87,6 +92,7 @@ public class PosDraftService {
             // Completed/cancelled drafts must not be reused — cashier may still
             // hold the old clientDraftId after a finished sale (local mirror).
             if (draft.isPending()) {
+                attachOpenShiftIfMissing(draft, businessId, tillDeviceKey);
                 return toResponse(draft, loadActiveLines(draft.getId()));
             }
             clientDraftId = java.util.UUID.randomUUID().toString();
@@ -106,6 +112,11 @@ public class PosDraftService {
         draft.setCreatedBy(userId);
         draft.setClientDraftId(clientDraftId);
         draft.setCurrency(currency);
+        String openShiftId = openShiftResolver
+                .findOpen(businessId, draft.getBranchId(), tillDeviceKey)
+                .map(zelisline.ub.sales.domain.Shift::getId)
+                .orElse(null);
+        draft.setShiftId(openShiftId);
         draft = draftRepository.save(draft);
 
         List<PosDraftLine> lines = applyLineInputs(draft, request.lines(), businessId);
@@ -122,6 +133,12 @@ public class PosDraftService {
 
         publishDraftCreated(draft);
         return toResponse(draft, activeLines(lines));
+    }
+
+    /** Back-compat overload when the till header is unavailable. */
+    @Transactional
+    public PosDraftResponse createDraft(String businessId, CreatePosDraftRequest request, String userId) {
+        return createDraft(businessId, request, userId, null);
     }
 
     private void publishDraftCreated(PosDraft draft) {
@@ -206,10 +223,12 @@ public class PosDraftService {
             String businessId,
             String draftId,
             PatchPosDraftLinesRequest request,
-            String userId
+            String userId,
+            String tillDeviceKey
     ) {
         // Ungated — allow editing existing drafts even when feature is OFF.
         PosDraft draft = loadPendingDraftForUpdate(businessId, draftId, request.expectedVersion());
+        attachOpenShiftIfMissing(draft, businessId, tillDeviceKey);
         List<PosDraftLine> existing = new ArrayList<>(lineRepository.findByDraftIdOrderByLineIndexAsc(draftId));
 
         for (PosDraftLineInput input : request.lines()) {
@@ -221,6 +240,16 @@ public class PosDraftService {
         draft = draftRepository.save(draft);
         publishDraftUpdated(draft);
         return toResponse(draft, activeLines(existing));
+    }
+
+    @Transactional
+    public PosDraftResponse patchLines(
+            String businessId,
+            String draftId,
+            PatchPosDraftLinesRequest request,
+            String userId
+    ) {
+        return patchLines(businessId, draftId, request, userId, null);
     }
 
     @Transactional
@@ -428,6 +457,82 @@ public class PosDraftService {
         writeAudit(draft.getId(), userId, PosDraftConstants.AUDIT_CANCEL, null, null, null);
         publishDraftCancelled(draft);
         return toResponse(draft, loadActiveLines(draftId));
+    }
+
+    /**
+     * Voids every unfinished POS draft tied to a shift when that shift closes.
+     * Tagged drafts ({@code shift_id}) are always cancelled. Untagged legacy
+     * drafts at the same branch updated during the shift are cancelled too —
+     * scoped to the opener when the shift is till-specific so another till's
+     * carts are left alone.
+     *
+     * @return number of drafts cancelled
+     */
+    @Transactional
+    public int cancelPendingForClosedShift(String businessId, Shift shift, String closedByUserId) {
+        if (shift == null || shift.getId() == null || shift.getId().isBlank()) {
+            return 0;
+        }
+        Instant openedAt = shift.getOpenedAt() != null ? shift.getOpenedAt() : Instant.EPOCH;
+        String reason = "Voided automatically when shift closed";
+
+        java.util.LinkedHashMap<String, PosDraft> byId = new java.util.LinkedHashMap<>();
+        for (PosDraft draft : draftRepository.findByBusinessIdAndShiftIdAndStatus(
+                businessId, shift.getId(), PosDraftConstants.STATUS_PENDING)) {
+            byId.put(draft.getId(), draft);
+        }
+
+        // Till-scoped shifts: only the opener's untagged drafts.
+        // Shared branch shifts: every untagged pending draft at the branch.
+        String createdByFilter = shift.getTillDeviceKey() != null && !shift.getTillDeviceKey().isBlank()
+                ? shift.getOpenedBy()
+                : null;
+        for (PosDraft draft : draftRepository.findUntaggedPendingForShiftClose(
+                businessId,
+                shift.getBranchId(),
+                PosDraftConstants.STATUS_PENDING,
+                openedAt,
+                createdByFilter)) {
+            byId.putIfAbsent(draft.getId(), draft);
+        }
+
+        Instant now = Instant.now();
+        int cancelled = 0;
+        for (PosDraft draft : byId.values()) {
+            if (!draft.isPending()) {
+                continue;
+            }
+            draft.setStatus(PosDraftConstants.STATUS_CANCELLED);
+            draft.setCancelledBy(closedByUserId);
+            draft.setCancelledAt(now);
+            draft.setCancelledReason(reason);
+            if (draft.getShiftId() == null || draft.getShiftId().isBlank()) {
+                draft.setShiftId(shift.getId());
+            }
+            draftRepository.save(draft);
+            writeAudit(
+                    draft.getId(),
+                    closedByUserId,
+                    PosDraftConstants.AUDIT_CANCEL_SHIFT_CLOSE,
+                    null,
+                    null,
+                    "{\"shiftId\":\"" + shift.getId() + "\"}");
+            publishDraftCancelled(draft);
+            cancelled++;
+        }
+        return cancelled;
+    }
+
+    private void attachOpenShiftIfMissing(PosDraft draft, String businessId, String tillDeviceKey) {
+        if (draft.getShiftId() != null && !draft.getShiftId().isBlank()) {
+            return;
+        }
+        openShiftResolver
+                .findOpen(businessId, draft.getBranchId(), tillDeviceKey)
+                .ifPresent(shift -> {
+                    draft.setShiftId(shift.getId());
+                    draftRepository.save(draft);
+                });
     }
 
     @Transactional(readOnly = true)

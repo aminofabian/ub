@@ -23,6 +23,11 @@ public record FeatureFlagsPatchRequest(
         /** Show Clear sale on the cashier till (default on when absent). */
         Boolean posCashierClearSale,
         /**
+         * Allow Clear on the till to void every open tab/draft at once.
+         * Absent / false keeps single-tab clear (accountability default).
+         */
+        Boolean posCashierClearAllSales,
+        /**
          * Search-first hybrid POS catalog (list results + frequent chips).
          * Absent / false keeps the classic product grid.
          */

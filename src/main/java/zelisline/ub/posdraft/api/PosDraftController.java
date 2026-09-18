@@ -61,7 +61,11 @@ public class PosDraftController {
                 principal.roleId(), principal.branchId(), body.branchId());
         String clientDraftId = resolveClientDraftId(body.clientDraftId(), idempotencyKey);
         CreatePosDraftRequest safe = new CreatePosDraftRequest(validatedBranch, clientDraftId, body.lines());
-        PosDraftResponse response = service.createDraft(businessId, safe, principal.userId());
+        PosDraftResponse response = service.createDraft(
+                businessId,
+                safe,
+                principal.userId(),
+                request.getHeader(TillDeviceService.TILL_DEVICE_HEADER));
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
@@ -106,7 +110,8 @@ public class PosDraftController {
                 TenantRequestIds.resolveBusinessId(request),
                 id,
                 body,
-                principal.userId()
+                principal.userId(),
+                request.getHeader(TillDeviceService.TILL_DEVICE_HEADER)
         );
     }
 

@@ -349,7 +349,8 @@ public class GlobalExceptionHandler {
      * Setup/connect used to return a "sign in if your account was already
      * created" hint for every unhandled 500 — that copy only applies when the
      * failure is actually an existing-account conflict (which is a 409, not a
-     * 500). Point operators at the local log instead.
+     * 500). Point operators at the local log instead. Include the request path
+     * so desktop Sonner toasts identify which endpoint failed.
      */
     private static String unexpectedErrorDetail(String correlationId, HttpServletRequest request) {
         String ref = correlationId == null || correlationId.isBlank()
@@ -358,12 +359,14 @@ public class GlobalExceptionHandler {
         String path = request.getRequestURI();
         boolean setupFlow = path != null
                 && (path.contains("/desktop/setup") || path.contains("/desktop/connect"));
+        String where = path == null || path.isBlank() ? "" : " [" + path + "]";
         if (setupFlow) {
             return "Unexpected server error while setting up this PC"
                     + ref
+                    + where
                     + ". Retry — if it keeps happening, open backend.out.log in the app data folder.";
         }
-        return "Unexpected server error" + ref
+        return "Unexpected server error" + ref + where
                 + ". Retry — if it keeps happening, the cause is in the app log.";
     }
 

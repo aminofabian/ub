@@ -37,4 +37,18 @@ public class DesktopConnectController {
             @Valid @RequestBody DesktopConnectRequest request) {
         return desktopConnectService.reconnect(request);
     }
+
+    /**
+     * Refresh tokens from {@code cloud-sync.json} without a password. Returns
+     * 409 when refresh is impossible — UI then falls back to password reconnect.
+     */
+    @PostMapping("/reconnect/refresh")
+    public DesktopConnectResponse refreshStoredSession() {
+        return desktopConnectService
+            .refreshStoredSession()
+            .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.CONFLICT,
+                "Online session could not be refreshed — sign in again"
+            ));
+    }
 }

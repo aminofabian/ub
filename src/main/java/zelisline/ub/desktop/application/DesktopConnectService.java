@@ -410,6 +410,37 @@ public class DesktopConnectService {
         return new DesktopConnectResponse(localId, null, "Reconnected to your online shop");
     }
 
+    /**
+     * Refresh the stored online-shop tokens using the refresh token already on
+     * this PC — no password. Returns empty when there is no session or refresh
+     * fails (caller should fall back to password reconnect).
+     */
+    public java.util.Optional<DesktopConnectResponse> refreshStoredSession() {
+        return cloudSyncSession.load().flatMap(session -> {
+            if (session.origin() == null || session.origin().isBlank()) {
+                return java.util.Optional.empty();
+            }
+            if (session.refreshToken() == null || session.refreshToken().isBlank()) {
+                return java.util.Optional.empty();
+            }
+            String localId = desktopBusinessId == null ? "" : desktopBusinessId.trim();
+            try {
+                RestClient client = RestClient.builder().baseUrl(session.origin().trim()).build();
+                return cloudSyncSession.refresh(client, session).map(refreshed -> {
+                    log.info("[DesktopConnect] refreshed stored online-shop session for {}", localId);
+                    return new DesktopConnectResponse(
+                        localId,
+                        null,
+                        "Refreshed connection to your online shop"
+                    );
+                });
+            } catch (Exception e) {
+                log.warn("[DesktopConnect] stored-session refresh failed: {}", e.getMessage());
+                return java.util.Optional.empty();
+            }
+        });
+    }
+
     private SeedResult seed(
             String localId,
             MasterDataSnapshot snapshot,

@@ -120,6 +120,7 @@ public class GatewayStkPushService {
     private final ObjectProvider<PlatformKioskPaySettingsService> platformKioskPaySettingsService;
     private final ObjectProvider<PlatformDarajaSettingsService> platformDarajaSettingsService;
     private final ObjectProvider<KioskPayWalletService> kioskPayWalletService;
+    private final ObjectProvider<PlatformCustodySettlementService> custodySettlementService;
     private final ObjectProvider<zelisline.ub.airtime.application.AirtimeSaleService> airtimeSaleService;
     private final InboundTillPaymentService inboundTillPaymentService;
     private final ObjectProvider<zelisline.ub.messaging.application.SmsCreditPurchaseService> smsCreditPurchaseService;
@@ -1341,6 +1342,15 @@ public class GatewayStkPushService {
             case SUBSCRIPTION_RENEWAL -> confirmSubscriptionRenewal(push);
             default -> log.warn("Unknown STK context type: {}", push.getContextType());
         }
+
+        PlatformCustodySettlementService custody = custodySettlementService.getIfAvailable();
+        if (custody != null) {
+            try {
+                custody.onStkConfirmed(push);
+            } catch (Exception e) {
+                log.error("Platform custody settle enqueue failed push={}: {}", push.getId(), e.getMessage(), e);
+            }
+        }
     }
 
     /** Shopper paid for storefront airtime — the tenant's wallet can now fund the send. */
@@ -1790,6 +1800,25 @@ public class GatewayStkPushService {
         }
         PaymentGatewayConfig cfg = resolveConfig(push);
         if (cfg == null) {
+            return null;
+        }
+        // CUSTODY_MPESA stores destination only — STK uses platform credentials for the
+        // same rail that collected (push.gatewayType), never cross-rail.
+        if (cfg.getGatewayType() == GatewayType.CUSTODY_MPESA) {
+            if (push.getGatewayType() == GatewayType.KOPOKOPO) {
+                PlatformKioskPaySettingsService kiosk = platformKioskPaySettingsService.getIfAvailable();
+                if (kiosk == null) {
+                    return null;
+                }
+                return kiosk.kopokopoCredentials().orElse(null);
+            }
+            if (push.getGatewayType() == GatewayType.DARAJA) {
+                PlatformDarajaSettingsService daraja = platformDarajaSettingsService.getIfAvailable();
+                if (daraja == null) {
+                    return null;
+                }
+                return daraja.credentials().orElse(null);
+            }
             return null;
         }
         return decryptCredentials(cfg);

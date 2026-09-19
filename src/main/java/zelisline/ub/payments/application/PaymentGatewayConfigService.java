@@ -7,6 +7,7 @@ import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -49,6 +50,7 @@ public class PaymentGatewayConfigService {
     private final CredentialEncryptionService encryptionService;
     private final ObjectMapper objectMapper;
     private final KopokopoWebhookSubscriptionService webhookSubscriptionService;
+    private final ObjectProvider<PlatformCustodySettlementService> custodySettlementService;
 
     // ── Available gateways ────────────────────────────────────────
 
@@ -102,9 +104,9 @@ public class PaymentGatewayConfigService {
     @Transactional(readOnly = true)
     public GatewayCredentialSettingsResponse getCredentialSettings(String businessId, String configId) {
         PaymentGatewayConfig cfg = findOwn(businessId, configId);
-        if (cfg.getGatewayType() == GatewayType.MANUAL) {
+        if (cfg.getGatewayType() == GatewayType.MANUAL || cfg.getGatewayType() == GatewayType.CUSTODY_MPESA) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Manual payment methods do not use API credentials");
+                    "This payment method does not use API credentials");
         }
         CredentialReadResult read = tryReadCredentialsMap(cfg);
         if (!read.readable()) {
@@ -117,14 +119,22 @@ public class PaymentGatewayConfigService {
     public GatewayConfigResponse create(String businessId, GatewayConfigRequest request) {
         GatewayType type = GatewayType.fromWire(request.gatewayType());
 
-        // MANUAL is always available; other types require platform enablement
-        if (type != GatewayType.MANUAL) {
+        // MANUAL / CUSTODY_MPESA are always listed for tenants; other types need SA enablement
+        if (!type.isCredentialLess()) {
             List<PlatformPaymentGateway> enabled = platformService.listEnabled();
             boolean available = enabled.stream()
                     .anyMatch(pg -> pg.getGatewayType() == type);
             if (!available) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "Gateway type not available on this platform: " + type.name());
+            }
+        }
+
+        if (type == GatewayType.CUSTODY_MPESA) {
+            requireCustodyRailsReady();
+            String destErr = validateCustodyDestination(request.displayInstructionsJson());
+            if (destErr != null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, destErr);
             }
         }
 
@@ -138,7 +148,7 @@ public class PaymentGatewayConfigService {
         cfg.setGatewayType(type);
         cfg.setLabel(request.label());
         cfg.setDefault(request.isDefault());
-        cfg.setStatus(type == GatewayType.MANUAL ? GatewayStatus.ACTIVE : GatewayStatus.DRAFT);
+        cfg.setStatus(type.isCredentialLess() ? GatewayStatus.ACTIVE : GatewayStatus.DRAFT);
 
         if (request.credentialsJson() != null && !request.credentialsJson().isBlank()) {
             validatePaystackCredentialsIfNeeded(type, request.credentialsJson());
@@ -205,12 +215,21 @@ public class PaymentGatewayConfigService {
             }
         }
         if (request.displayInstructionsJson() != null) {
+            if (cfg.getGatewayType() == GatewayType.CUSTODY_MPESA
+                    || (request.gatewayType() != null
+                            && GatewayType.CUSTODY_MPESA.name().equalsIgnoreCase(request.gatewayType().trim()))) {
+                String destErr = validateCustodyDestination(request.displayInstructionsJson());
+                if (destErr != null) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, destErr);
+                }
+                requireCustodyRailsReady();
+            }
             cfg.setDisplayInstructionsJson(request.displayInstructionsJson());
         }
 
-        // Changing credentials or gateway type resets to DRAFT
+        // Changing credentials or gateway type resets to DRAFT (credential-less stay ACTIVE)
         if (credentialsChanged) {
-            cfg.setStatus(cfg.getGatewayType() == GatewayType.MANUAL ? GatewayStatus.ACTIVE : GatewayStatus.DRAFT);
+            cfg.setStatus(cfg.getGatewayType().isCredentialLess() ? GatewayStatus.ACTIVE : GatewayStatus.DRAFT);
             cfg.setLastTestedAt(null);
             cfg.setTestErrorJson(null);
         }
@@ -230,6 +249,11 @@ public class PaymentGatewayConfigService {
     @Transactional
     public TestConnectionResponse testConnection(String businessId, String configId) {
         PaymentGatewayConfig cfg = findOwn(businessId, configId);
+
+        if (cfg.getGatewayType().isCredentialLess()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "This payment method does not support a connection test.");
+        }
 
         if (!cfg.canTest()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -301,10 +325,17 @@ public class PaymentGatewayConfigService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Gateway is already ACTIVE.");
         }
-        // Manual methods can activate from any status (skip testing); API gateways require TESTED
-        if (cfg.getGatewayType() != GatewayType.MANUAL && !cfg.canActivate()) {
+        // Credential-less methods can activate without Test connection; API gateways require TESTED
+        if (!cfg.getGatewayType().isCredentialLess() && !cfg.canActivate()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Gateway must be in TESTED status to activate. Current: " + cfg.getStatus());
+        }
+        if (cfg.getGatewayType() == GatewayType.CUSTODY_MPESA) {
+            requireCustodyRailsReady();
+            String destErr = validateCustodyDestination(cfg.getDisplayInstructionsJson());
+            if (destErr != null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, destErr);
+            }
         }
         cfg.setStatus(GatewayStatus.ACTIVE);
         configRepository.save(cfg);
@@ -348,6 +379,10 @@ public class PaymentGatewayConfigService {
     }
 
     private GatewayConfigResponse toResponse(PaymentGatewayConfig cfg) {
+        String displayJson = null;
+        if (cfg.getGatewayType().isCredentialLess()) {
+            displayJson = cfg.getDisplayInstructionsJson();
+        }
         return new GatewayConfigResponse(
                 cfg.getId(),
                 cfg.getBusinessId(),
@@ -357,7 +392,8 @@ public class PaymentGatewayConfigService {
                 cfg.isDefault(),
                 cfg.getLastTestedAt(),
                 cfg.getCreatedAt(),
-                cfg.getUpdatedAt()
+                cfg.getUpdatedAt(),
+                displayJson
         );
     }
 
@@ -578,5 +614,22 @@ public class PaymentGatewayConfigService {
             return null;
         }
         return value.trim();
+    }
+
+    private void requireCustodyRailsReady() {
+        PlatformCustodySettlementService custody = custodySettlementService.getIfAvailable();
+        if (custody == null || !custody.platformRailsReady()) {
+            String msg = custody != null ? custody.railsNotReadyMessage()
+                    : "Kiosk-powered M-Pesa is not available yet.";
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, msg);
+        }
+    }
+
+    private String validateCustodyDestination(String displayInstructionsJson) {
+        PlatformCustodySettlementService custody = custodySettlementService.getIfAvailable();
+        if (custody == null) {
+            return "Kiosk-powered M-Pesa is not available yet.";
+        }
+        return custody.validateDestinationJson(displayInstructionsJson);
     }
 }

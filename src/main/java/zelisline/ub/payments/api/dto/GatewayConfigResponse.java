@@ -4,7 +4,8 @@ import java.time.Instant;
 
 /**
  * Response DTO for a tenant gateway configuration.
- * Credentials are never returned — clients only see redacted metadata.
+ * API secrets are never returned. {@code displayInstructionsJson} is included for
+ * MANUAL / CUSTODY_MPESA (till/paybill destination — not PSP secrets).
  */
 public record GatewayConfigResponse(
         String id,
@@ -15,6 +16,7 @@ public record GatewayConfigResponse(
         boolean isDefault,
         Instant lastTestedAt,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        String displayInstructionsJson
 ) {
 }

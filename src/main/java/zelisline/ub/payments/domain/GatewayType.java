@@ -6,6 +6,9 @@ package zelisline.ub.payments.domain;
  * <p>Stored as a {@code VARCHAR(32)} column via {@code @Enumerated(EnumType.STRING)}.
  * The {@code MANUAL} type is a special case — it is always available to every
  * tenant and does not appear in the {@code platform_payment_gateways} registry.
+ * {@code CUSTODY_MPESA} is likewise available when Super Admin sets a custody
+ * provider: tenant stores only till/paybill; collect and settle use that
+ * <strong>same</strong> platform rail (KopoKopo or Daraja — never mixed).
  */
 public enum GatewayType {
 
@@ -13,7 +16,9 @@ public enum GatewayType {
     PAYSTACK,
     DARAJA,
     PESAPAL,
-    MANUAL;
+    MANUAL,
+    /** Platform-powered STK + auto-settle to tenant till/paybill (no tenant API keys). */
+    CUSTODY_MPESA;
 
     public String wire() {
         return name().toLowerCase();
@@ -24,5 +29,10 @@ public enum GatewayType {
             throw new IllegalArgumentException("gatewayType must not be blank");
         }
         return GatewayType.valueOf(value.trim().toUpperCase());
+    }
+
+    /** No tenant API credentials; display / destination JSON only. */
+    public boolean isCredentialLess() {
+        return this == MANUAL || this == CUSTODY_MPESA;
     }
 }

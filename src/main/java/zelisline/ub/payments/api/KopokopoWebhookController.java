@@ -18,6 +18,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.marketplace.application.MarketplaceEscrowService;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.KioskPayWithdrawService;
+import zelisline.ub.payments.application.PlatformCustodySettlementService;
 import zelisline.ub.payments.application.PlatformKioskPaySettingsService;
 import zelisline.ub.payments.domain.GatewayStatus;
 import zelisline.ub.payments.domain.GatewayType;
@@ -51,6 +52,7 @@ public class KopokopoWebhookController {
     private final ObjectProvider<PlatformDomainSettingsService> platformDomainSettingsService;
     private final ObjectProvider<PlatformKioskPaySettingsService> kioskPaySettingsService;
     private final ObjectProvider<KioskPayWithdrawService> kioskPayWithdrawService;
+    private final ObjectProvider<PlatformCustodySettlementService> platformCustodySettlementService;
     private final ObjectProvider<MarketplaceEscrowService> marketplaceEscrowService;
     private final ObjectMapper objectMapper;
 
@@ -112,6 +114,13 @@ public class KopokopoWebhookController {
                         boolean handled = false;
                         if (withdrawService != null) {
                             handled = withdrawService.handleSendMoneyWebhook(result);
+                        }
+                        if (!handled) {
+                            PlatformCustodySettlementService custody =
+                                    platformCustodySettlementService.getIfAvailable();
+                            if (custody != null) {
+                                handled = custody.handleSendMoneyWebhook(result);
+                            }
                         }
                         if (!handled) {
                             MarketplaceEscrowService escrow = marketplaceEscrowService.getIfAvailable();

@@ -44,6 +44,7 @@ public class PaymentGatewayStkService {
     private final CredentialEncryptionService encryptionService;
     private final ObjectMapper objectMapper;
     private final ObjectProvider<PlatformDarajaSettingsService> platformDarajaSettingsService;
+    private final ObjectProvider<PlatformCustodySettlementService> custodySettlementService;
 
     @Value("${app.public.api-base-url:http://localhost:5050}")
     private String publicApiBaseUrl;
@@ -107,7 +108,16 @@ public class PaymentGatewayStkService {
             return lastOutcome;
         }
 
-        // Platform Daraja (SA credentials) — Party B = platform shortcode / Paybill.
+        // CUSTODY_MPESA: platform Daraja collect, tagged with tenant custody config id for auto-settle.
+        StkPushOutcome custody = tryCustodyMpesa(
+                businessId, phoneNumber, amount, reference, description);
+        if (custody != null) {
+            return custody;
+        }
+
+        // Platform Daraja (SA credentials) — Party B = platform shortcode / Paybill only.
+        // Never merge a tenant till/paybill into these credentials; that would promise
+        // direct-to-shop while collecting on the platform shortcode (or fail at Safaricom).
         StkPushOutcome platformDaraja = tryPlatformDaraja(
                 businessId, phoneNumber, amount, reference, description);
         if (platformDaraja != null) {
@@ -116,6 +126,38 @@ public class PaymentGatewayStkService {
 
         log.warn("No ACTIVE online STK gateway for business={} (check tenant id, platform enable, Activate)", businessId);
         return StkPushOutcome.rejected(null, "NO_GATEWAY", "Online payment is not available right now.");
+    }
+
+    private StkPushOutcome tryCustodyMpesa(
+            String businessId,
+            String phoneNumber,
+            BigDecimal amount,
+            String reference,
+            String description
+    ) {
+        PlatformCustodySettlementService custody = custodySettlementService.getIfAvailable();
+        if (custody == null || !custody.platformRailsReady()) {
+            return null;
+        }
+        PaymentGatewayConfig cfg = custody.findActiveCustodyConfig(businessId);
+        if (cfg == null) {
+            return null;
+        }
+        var rail = custody.resolveCollectRail().orElse(null);
+        if (rail == null || rail.credentials() == null || rail.credentials().isEmpty()) {
+            return null;
+        }
+        log.info("STK via platform {} (CUSTODY_MPESA) business={} config={}",
+                rail.provider(), businessId, cfg.getId());
+        return initiateWithCredentials(
+                rail.gatewayType().name(),
+                cfg.getId(),
+                businessId,
+                rail.credentials(),
+                phoneNumber,
+                amount,
+                reference,
+                description);
     }
 
     private StkPushOutcome tryPlatformDaraja(
@@ -133,6 +175,7 @@ public class PaymentGatewayStkService {
         if (creds == null || creds.isEmpty()) {
             return null;
         }
+        // Credentials are the platform singleton only — no tenant shortcode merge.
         log.info("STK via platform Daraja for business={} partyB={}", businessId, creds.get("shortcode"));
         return initiateWithCredentials(
                 GatewayType.DARAJA.name(),
@@ -180,7 +223,9 @@ public class PaymentGatewayStkService {
         if (cfg == null || !businessId.equals(cfg.getBusinessId())) {
             return null;
         }
-        if (cfg.getStatus() != GatewayStatus.ACTIVE || cfg.getGatewayType() == GatewayType.MANUAL) {
+        if (cfg.getStatus() != GatewayStatus.ACTIVE
+                || cfg.getGatewayType() == GatewayType.MANUAL
+                || cfg.getGatewayType() == GatewayType.CUSTODY_MPESA) {
             return null;
         }
         return pushWithConfig(cfg, phoneNumber, amount, reference, description);

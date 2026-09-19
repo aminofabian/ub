@@ -37,6 +37,9 @@ import zelisline.ub.payments.domain.spi.WebhookResult;
  * {@code shortcodeType} ({@code paybill}|{@code till}), {@code environment}.
  *
  * <p>Party A = customer MSISDN; Party B = shortcode (Paybill or Buy Goods till).
+ * Party B is always forced equal to {@code BusinessShortCode} from credentials —
+ * a separate {@code partyB} credential key is ignored (and logged) so callers cannot
+ * attempt “platform keys + tenant till” routing, which Safaricom does not support.
  */
 @Component
 public class DarajaPaymentGateway implements PaymentGateway {
@@ -95,7 +98,15 @@ public class DarajaPaymentGateway implements PaymentGateway {
 
         boolean paybill = isPaybill(creds);
         String transactionType = paybill ? "CustomerPayBillOnline" : "CustomerBuyGoodsOnline";
+        // Hard rule: PartyB === BusinessShortCode === credential shortcode. Never honor a
+        // divergent partyB / receivingAccount override (would imply impossible cross-merchant STK).
         String partyB = shortcode;
+        String overridePartyB = firstNonBlank(creds.get("partyB"), creds.get("PartyB"), creds.get("receivingShortcode"));
+        if (overridePartyB != null && !overridePartyB.equals(shortcode)) {
+            log.warn(
+                    "Ignoring Daraja partyB override={} — STK PartyB must equal BusinessShortCode={}",
+                    overridePartyB, shortcode);
+        }
         // AccountReference must stay short — Daraja caps ~12 chars for some shortcodes.
         String accountRef = truncate(request.reference() != null ? request.reference() : "Kiosk", 12);
         String description = truncate(

@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,7 +17,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.api.dto.PlatformDarajaSettingsResponse;
 import zelisline.ub.payments.api.dto.UpdatePlatformDarajaSettingsRequest;
+import zelisline.ub.payments.api.dto.UpdatePlatformMpesaCustodySettingsRequest;
 import zelisline.ub.payments.domain.PlatformDarajaSettings;
+import zelisline.ub.payments.domain.PlatformMpesaCustodyProviders;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
 import zelisline.ub.payments.infrastructure.DarajaPaymentGateway;
 import zelisline.ub.payments.repository.PlatformDarajaSettingsRepository;
@@ -29,6 +32,7 @@ public class PlatformDarajaSettingsService {
     private final CredentialEncryptionService encryptionService;
     private final ObjectMapper objectMapper;
     private final DarajaPaymentGateway darajaPaymentGateway;
+    private final ObjectProvider<PlatformMpesaCustodySettingsService> custodySettingsService;
 
     @Transactional(readOnly = true)
     public PlatformDarajaSettingsResponse getForSuperAdmin() {
@@ -56,6 +60,15 @@ public class PlatformDarajaSettingsService {
             row.setCredentialsEnc(null);
         } else {
             mergeCredentials(row, body);
+        }
+
+        // Clearing B2B removes the ability to settle custody payouts on Daraja — never leave
+        // Daraja selected as the custody provider in a state it cannot serve.
+        if (Boolean.TRUE.equals(body.clearDisburseCredentials())) {
+            PlatformMpesaCustodySettingsService custody = custodySettingsService.getIfAvailable();
+            if (custody != null && PlatformMpesaCustodyProviders.DARAJA.equals(custody.activeProvider())) {
+                custody.update(new UpdatePlatformMpesaCustodySettingsRequest("OFF"));
+            }
         }
 
         if (row.isEnabled()) {
@@ -111,11 +124,36 @@ public class PlatformDarajaSettingsService {
         });
     }
 
+    /** Daraja B2B is usable when enabled with an initiator + a sending shortcode. */
+    @Transactional(readOnly = true)
+    public boolean isB2bConfigured() {
+        PlatformDarajaSettings row = loadSingleton();
+        if (!row.isEnabled()) {
+            return false;
+        }
+        Map<String, String> creds = decryptMap(row.getCredentialsEnc()).orElse(Map.of());
+        String sendingShortcode = isPresent(creds, "b2bShortcode")
+                ? creds.get("b2bShortcode")
+                : row.getShortcode();
+        return isPresent(creds, "consumerKey")
+                && isPresent(creds, "consumerSecret")
+                && isPresent(creds, "initiatorName")
+                && isPresent(creds, "initiatorPassword")
+                && sendingShortcode != null && !sendingShortcode.isBlank();
+    }
+
     private void mergeCredentials(PlatformDarajaSettings row, UpdatePlatformDarajaSettingsRequest body) {
-        if (body.consumerKey() == null
-                && body.consumerSecret() == null
-                && body.passkey() == null) {
-            // Still sync shortcode / env into encrypted blob when present.
+        boolean clearDisburse = Boolean.TRUE.equals(body.clearDisburseCredentials());
+        boolean anyProvided = body.consumerKey() != null
+                || body.consumerSecret() != null
+                || body.passkey() != null
+                || body.initiatorName() != null
+                || body.initiatorPassword() != null
+                || body.b2bShortcode() != null
+                || body.b2bRequester() != null;
+
+        if (!anyProvided && !clearDisburse) {
+            // Still sync shortcode / env into the encrypted blob when present.
             if (row.getCredentialsEnc() == null || row.getCredentialsEnc().isBlank()) {
                 return;
             }
@@ -123,6 +161,7 @@ public class PlatformDarajaSettingsService {
             row.setCredentialsEnc(encryptionService.encrypt(writeJson(enrich(row, existing))));
             return;
         }
+
         Map<String, String> merged = decryptMap(row.getCredentialsEnc()).orElseGet(LinkedHashMap::new);
         if (body.consumerKey() != null && !body.consumerKey().isBlank()) {
             merged.put("consumerKey", body.consumerKey().trim());
@@ -132,6 +171,24 @@ public class PlatformDarajaSettingsService {
         }
         if (body.passkey() != null && !body.passkey().isBlank()) {
             merged.put("passkey", body.passkey().trim());
+        }
+        if (body.initiatorName() != null && !body.initiatorName().isBlank()) {
+            merged.put("initiatorName", body.initiatorName().trim());
+        }
+        if (body.initiatorPassword() != null && !body.initiatorPassword().isBlank()) {
+            merged.put("initiatorPassword", body.initiatorPassword().trim());
+        }
+        if (body.b2bShortcode() != null && !body.b2bShortcode().isBlank()) {
+            merged.put("b2bShortcode", digitsOnly(body.b2bShortcode()));
+        }
+        if (body.b2bRequester() != null && !body.b2bRequester().isBlank()) {
+            merged.put("b2bRequester", body.b2bRequester().trim());
+        }
+        if (clearDisburse) {
+            merged.remove("initiatorName");
+            merged.remove("initiatorPassword");
+            merged.remove("b2bShortcode");
+            merged.remove("b2bRequester");
         }
         row.setCredentialsEnc(encryptionService.encrypt(writeJson(enrich(row, merged))));
     }
@@ -177,6 +234,9 @@ public class PlatformDarajaSettingsService {
                 row.getShortcode(),
                 row.getCredentialsEnc() != null && !row.getCredentialsEnc().isBlank(),
                 hint,
+                isPresent(creds, "initiatorName") && isPresent(creds, "initiatorPassword"),
+                creds.get("initiatorName"),
+                isPresent(creds, "b2bShortcode") ? creds.get("b2bShortcode") : row.getShortcode(),
                 row.getUpdatedAt() != null ? row.getUpdatedAt() : Instant.now());
     }
 

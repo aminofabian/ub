@@ -1,8 +1,14 @@
 package zelisline.ub.payments.infrastructure;
 
+import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
+import java.security.PublicKey;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
+import java.security.spec.X509EncodedKeySpec;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Base64;
@@ -10,8 +16,11 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import javax.crypto.Cipher;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -52,6 +61,8 @@ public class DarajaPaymentGateway implements PaymentGateway {
     private static final String OAUTH_PATH = "/oauth/v1/generate?grant_type=client_credentials";
     private static final String STK_PUSH_PATH = "/mpesa/stkpush/v1/processrequest";
     private static final String STK_QUERY_PATH = "/mpesa/stkpushquery/v1/query";
+    /** Business-to-business transfer — used for custody settlement to a paybill/till. */
+    private static final String B2B_PATH = "/mpesa/b2b/v1/paymentrequest";
 
     private static final int HTTP_CONNECT_TIMEOUT_MS = 5_000;
     private static final int HTTP_SOCKET_TIMEOUT_MS = 15_000;
@@ -60,6 +71,13 @@ public class DarajaPaymentGateway implements PaymentGateway {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Map<String, CachedToken> tokenCache = new ConcurrentHashMap<>();
+
+    /** Safaricom public certificate (PEM) used to encrypt the B2B initiator password. */
+    @Value("${app.payments.daraja.security-certificate-pem:}")
+    private String securityCertificatePem;
+
+    @Value("${app.payments.daraja.security-certificate-pem-production:}")
+    private String securityCertificatePemProduction;
 
     @Override
     public String gatewayType() {
@@ -382,6 +400,234 @@ public class DarajaPaymentGateway implements PaymentGateway {
         ack.put("ResultCode", resultCode);
         ack.put("ResultDesc", resultDesc != null ? resultDesc : "Accepted");
         return ack;
+    }
+
+    // ── B2B disburse (custody settle to a paybill / Buy Goods till) ────
+
+    /** One B2B transfer. {@code destinationType} is {@code paybill} or {@code till}. */
+    public record B2BRequest(
+            Map<String, String> credentials,
+            String callbackBaseUrl,
+            String destinationType,
+            String partyB,
+            String accountReference,
+            BigDecimal amount,
+            String currency,
+            String remarks
+    ) {
+    }
+
+    public record B2BResult(
+            boolean accepted,
+            String conversationId,
+            String originatorConversationId,
+            String code,
+            String message
+    ) {
+        static B2BResult rejected(String code, String message) {
+            return new B2BResult(false, null, null, code, message);
+        }
+    }
+
+    /**
+     * Initiate a Business-to-Business transfer. For a paybill destination this is
+     * {@code BusinessPayBill} (needs AccountReference); for a Buy Goods till it is
+     * {@code BusinessBuyGoods}. Requires an initiator name/password in credentials and
+     * the Safaricom public certificate to build the SecurityCredential.
+     */
+    public B2BResult sendB2B(B2BRequest request) {
+        Map<String, String> creds = request.credentials();
+        if (creds == null || creds.isEmpty()) {
+            return B2BResult.rejected("NO_CREDENTIALS", "Daraja credentials are required");
+        }
+        String partyA = firstNonBlank(creds.get("b2bShortcode"), creds.get("shortcode"), creds.get("tillNumber"));
+        if (partyA == null) {
+            return B2BResult.rejected("MISSING_SHORTCODE", "A B2B shortcode is required");
+        }
+        String initiator = textOrNull(creds.get("initiatorName"));
+        if (initiator == null) {
+            return B2BResult.rejected("MISSING_INITIATOR", "initiatorName is required for Daraja B2B");
+        }
+        String initiatorPassword = textOrNull(creds.get("initiatorPassword"));
+        if (initiatorPassword == null) {
+            return B2BResult.rejected("MISSING_INITIATOR_PASSWORD", "initiatorPassword is required for Daraja B2B");
+        }
+        String partyB = digitsOnly(request.partyB());
+        if (partyB == null) {
+            return B2BResult.rejected("MISSING_PARTY_B", "The destination paybill/till number is required");
+        }
+        boolean paybill = isPaybillDestination(request.destinationType());
+        if (paybill && textOrNull(request.accountReference()) == null) {
+            return B2BResult.rejected("MISSING_ACCOUNT", "AccountReference is required for a paybill destination");
+        }
+        BigDecimal amount = request.amount() == null ? null : request.amount().setScale(0, RoundingMode.HALF_UP);
+        if (amount == null || amount.signum() <= 0) {
+            return B2BResult.rejected("INVALID_AMOUNT", "amount must be at least 1");
+        }
+
+        String securityCredential;
+        try {
+            securityCredential = buildSecurityCredential(initiatorPassword, creds);
+        } catch (Exception e) {
+            log.warn("Daraja B2B security credential failed: {}", e.getMessage());
+            return B2BResult.rejected("SECURITY_CREDENTIAL_FAILED",
+                    e.getMessage() != null ? e.getMessage() : "Could not build SecurityCredential");
+        }
+
+        String base = request.callbackBaseUrl() == null ? "" : request.callbackBaseUrl().replaceAll("/$", "");
+        String commandId = b2bCommandId(request.destinationType(), creds);
+        String requester = firstNonBlank(creds.get("b2bRequester"), partyA);
+        Map<String, Object> body = buildB2BRequestBody(
+                request, partyA, commandId, securityCredential, requester,
+                base + "/webhooks/daraja/b2b/result", base + "/webhooks/daraja/b2b/timeout");
+
+        try {
+            String accessToken = obtainAccessToken(creds);
+            HttpResponse<String> response = Unirest.post(baseUrl(creds) + B2B_PATH)
+                    .connectTimeout(HTTP_CONNECT_TIMEOUT_MS)
+                    .socketTimeout(HTTP_SOCKET_TIMEOUT_MS)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .body(objectMapper.writeValueAsString(body))
+                    .asString();
+
+            JsonNode root = objectMapper.readTree(response.getBody() != null ? response.getBody() : "{}");
+            String code = text(root, "ResponseCode");
+            String conversationId = text(root, "ConversationID");
+            String originator = text(root, "OriginatorConversationID");
+            String desc = text(root, "ResponseDescription");
+            if (response.getStatus() >= 200 && response.getStatus() < 300
+                    && ("0".equals(code) || conversationId != null)) {
+                log.info("Daraja B2B accepted: command={} conversationId={} partyB={}", commandId, conversationId, partyB);
+                return new B2BResult(true, conversationId, originator,
+                        code != null ? code : "0", desc != null ? desc : "Accepted");
+            }
+            String error = firstNonBlank(text(root, "errorMessage"), desc, response.getBody());
+            log.warn("Daraja B2B rejected: status={} body={}", response.getStatus(), response.getBody());
+            return B2BResult.rejected(code != null ? code : String.valueOf(response.getStatus()),
+                    error != null ? error : "B2B request declined");
+        } catch (Exception e) {
+            log.error("Daraja B2B failed", e);
+            return B2BResult.rejected("NETWORK_ERROR", e.getMessage() != null ? e.getMessage() : "Daraja B2B failed");
+        }
+    }
+
+    /** Parse a B2B result/timeout callback, or an immediate initiation response. */
+    public B2BResult parseB2BResult(String rawBody) {
+        if (rawBody == null || rawBody.isBlank()) {
+            return B2BResult.rejected("EMPTY", "Empty B2B payload");
+        }
+        try {
+            JsonNode root = objectMapper.readTree(rawBody);
+            JsonNode result = root.path("Result");
+            if (!result.isMissingNode() && !result.isNull()) {
+                String code = text(result, "ResultCode");
+                return new B2BResult(
+                        "0".equals(code),
+                        text(result, "ConversationID"),
+                        text(result, "OriginatorConversationID"),
+                        code,
+                        text(result, "ResultDesc"));
+            }
+            String code = text(root, "ResponseCode");
+            return new B2BResult(
+                    "0".equals(code),
+                    text(root, "ConversationID"),
+                    text(root, "OriginatorConversationID"),
+                    code,
+                    text(root, "ResponseDescription"));
+        } catch (Exception e) {
+            return B2BResult.rejected("PARSE_ERROR", e.getMessage());
+        }
+    }
+
+    public static String b2bCommandId(String destinationType, Map<String, String> creds) {
+        boolean paybill = isPaybillDestination(destinationType);
+        if (paybill) {
+            String override = creds != null ? textOrNull(creds.get("b2bPaybillCommand")) : null;
+            return override != null ? override : "BusinessPayBill";
+        }
+        String override = creds != null ? textOrNull(creds.get("b2bTillCommand")) : null;
+        return override != null ? override : "BusinessBuyGoods";
+    }
+
+    static Map<String, Object> buildB2BRequestBody(
+            B2BRequest request,
+            String partyA,
+            String commandId,
+            String securityCredential,
+            String requester,
+            String resultUrl,
+            String timeoutUrl
+    ) {
+        boolean paybill = isPaybillDestination(request.destinationType());
+        BigDecimal amount = request.amount().setScale(0, RoundingMode.HALF_UP);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("Initiator", request.credentials().get("initiatorName"));
+        body.put("SecurityCredential", securityCredential);
+        body.put("CommandID", commandId);
+        body.put("SenderIdentifierType", "4");
+        body.put("RecieverIdentifierType", "4");
+        body.put("Amount", amount.intValueExact());
+        body.put("PartyA", digitsOnly(partyA));
+        body.put("PartyB", digitsOnly(request.partyB()));
+        body.put("AccountReference", paybill
+                ? request.accountReference().trim()
+                : firstNonBlank(request.accountReference(), "Kiosk"));
+        body.put("Requester", requester);
+        body.put("Remarks", firstNonBlank(request.remarks(), "Kiosk custody settle"));
+        body.put("QueueTimeOutURL", timeoutUrl);
+        body.put("ResultURL", resultUrl);
+        return body;
+    }
+
+    static boolean isPaybillDestination(String destinationType) {
+        return destinationType == null || !"till".equalsIgnoreCase(destinationType.trim());
+    }
+
+    private String buildSecurityCredential(String initiatorPassword, Map<String, String> creds) throws Exception {
+        String override = textOrNull(creds.get("securityCertificatePem"));
+        String pem = override != null ? override
+                : (isProduction(creds) ? securityCertificatePemProduction : securityCertificatePem);
+        if (pem == null || pem.isBlank()) {
+            throw new IllegalStateException(
+                    "Safaricom security certificate not configured (app.payments.daraja.security-certificate-pem)");
+        }
+        PublicKey publicKey = loadPublicKey(pem);
+        Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+        cipher.init(Cipher.ENCRYPT_MODE, publicKey);
+        byte[] encrypted = cipher.doFinal(initiatorPassword.getBytes(StandardCharsets.UTF_8));
+        return Base64.getEncoder().encodeToString(encrypted);
+    }
+
+    private static PublicKey loadPublicKey(String pem) throws Exception {
+        String normalized = pem.replace("\\n", "\n").trim();
+        if (normalized.contains("BEGIN CERTIFICATE")) {
+            try (ByteArrayInputStream in = new ByteArrayInputStream(normalized.getBytes(StandardCharsets.UTF_8))) {
+                X509Certificate cert = (X509Certificate) CertificateFactory.getInstance("X.509")
+                        .generateCertificate(in);
+                return cert.getPublicKey();
+            }
+        }
+        String base64 = normalized
+                .replace("-----BEGIN PUBLIC KEY-----", "")
+                .replace("-----END PUBLIC KEY-----", "")
+                .replaceAll("\\s", "");
+        byte[] der = Base64.getDecoder().decode(base64);
+        return KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(der));
+    }
+
+    private static String digitsOnly(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String digits = raw.replaceAll("[^0-9]", "");
+        return digits.isBlank() ? null : digits;
+    }
+
+    private static String textOrNull(String raw) {
+        return raw == null || raw.isBlank() ? null : raw.trim();
     }
 
     // ── Internals ────────────────────────────────────────────────────

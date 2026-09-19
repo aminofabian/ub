@@ -4,6 +4,7 @@ import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -14,6 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.application.GatewayStkPushService;
+import zelisline.ub.payments.application.PlatformCustodySettlementService;
 import zelisline.ub.payments.domain.spi.WebhookResult;
 import zelisline.ub.payments.infrastructure.DarajaPaymentGateway;
 
@@ -34,6 +36,7 @@ public class DarajaWebhookController {
 
     private final DarajaPaymentGateway darajaGateway;
     private final GatewayStkPushService gatewayStkPushService;
+    private final ObjectProvider<PlatformCustodySettlementService> platformCustodySettlementService;
 
     @Value("${app.payments.daraja.webhook-allowed-ips:}")
     private String webhookAllowedIps;
@@ -84,6 +87,44 @@ public class DarajaWebhookController {
         WebhookResult result = darajaGateway.processWebhook(Map.of(), rawBody);
         gatewayStkPushService.processDarajaWebhook(result);
         return ResponseEntity.ok(DarajaPaymentGateway.c2bAck(0, "Accepted"));
+    }
+
+    /**
+     * Daraja B2B result — custody settle to a tenant paybill/till. Matched by ConversationID.
+     */
+    @PostMapping("/b2b/result")
+    public ResponseEntity<Map<String, Object>> b2bResult(HttpServletRequest request) {
+        if (!originAllowed(request)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("ResultCode", 1, "ResultDesc", "Rejected"));
+        }
+        String rawBody = readRawBody(request);
+        if (rawBody != null && !rawBody.isBlank()) {
+            log.info("Daraja B2B result: bytes={}", rawBody.length());
+            handleB2b(rawBody);
+        }
+        return ResponseEntity.ok(DarajaPaymentGateway.c2bAck(0, "Accepted"));
+    }
+
+    /** Daraja B2B queue timeout — resolve the settlement as failed for ops retry. */
+    @PostMapping("/b2b/timeout")
+    public ResponseEntity<Map<String, Object>> b2bTimeout(HttpServletRequest request) {
+        if (!originAllowed(request)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("ResultCode", 1, "ResultDesc", "Rejected"));
+        }
+        String rawBody = readRawBody(request);
+        if (rawBody != null && !rawBody.isBlank()) {
+            log.warn("Daraja B2B timeout: bytes={}", rawBody.length());
+            handleB2b(rawBody);
+        }
+        return ResponseEntity.ok(DarajaPaymentGateway.c2bAck(0, "Accepted"));
+    }
+
+    private void handleB2b(String rawBody) {
+        PlatformCustodySettlementService custody = platformCustodySettlementService.getIfAvailable();
+        if (custody == null) {
+            return;
+        }
+        custody.handleDarajaDisburseResult(darajaGateway.parseB2BResult(rawBody));
     }
 
     /**

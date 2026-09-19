@@ -38,6 +38,7 @@ import zelisline.ub.payments.domain.StkPushContextType;
 import zelisline.ub.payments.domain.spi.SendMoneyResult;
 import zelisline.ub.payments.domain.spi.ValidationResult;
 import zelisline.ub.payments.domain.spi.WebhookResult;
+import zelisline.ub.payments.infrastructure.DarajaPaymentGateway;
 import zelisline.ub.payments.infrastructure.KopokopoPaymentGateway;
 import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
 import zelisline.ub.payments.repository.PlatformCustodySettlementRepository;
@@ -53,14 +54,20 @@ class PlatformCustodySettlementServiceTest {
     private static final String CONFIG_ID = "cfg-custody";
     private static final Map<String, String> CREDS =
             Map.of("clientId", "c", "clientSecret", "s", "apiKey", "k", "tillNumber", "123456");
+    private static final Map<String, String> DARAJA_CREDS =
+            Map.of("consumerKey", "ck", "consumerSecret", "cs", "shortcode", "600000",
+                    "initiatorName", "kioskapi", "initiatorPassword", "pw");
 
     private PlatformCustodySettlementRepository settlementRepository;
     private PaymentGatewayConfigRepository configRepository;
     private KopokopoPaymentGateway kopokopoGateway;
+    private DarajaPaymentGateway darajaGateway;
     private PlatformMpesaCustodySettingsService custodySettings;
     private PlatformKioskPaySettingsService kioskPaySettings;
+    private PlatformDarajaSettingsService darajaSettings;
     private ObjectProvider<PlatformMpesaCustodySettingsService> custodySettingsProvider;
     private ObjectProvider<PlatformKioskPaySettingsService> kioskPaySettingsProvider;
+    private ObjectProvider<PlatformDarajaSettingsService> darajaSettingsProvider;
     private ObjectProvider<PlatformCustodySettlementService> selfProvider;
 
     private PlatformCustodySettlementService service;
@@ -72,18 +79,23 @@ class PlatformCustodySettlementServiceTest {
         settlementRepository = mock(PlatformCustodySettlementRepository.class);
         configRepository = mock(PaymentGatewayConfigRepository.class);
         kopokopoGateway = mock(KopokopoPaymentGateway.class);
+        darajaGateway = mock(DarajaPaymentGateway.class);
         custodySettings = mock(PlatformMpesaCustodySettingsService.class);
         kioskPaySettings = mock(PlatformKioskPaySettingsService.class);
+        darajaSettings = mock(PlatformDarajaSettingsService.class);
         custodySettingsProvider = mock(ObjectProvider.class);
         kioskPaySettingsProvider = mock(ObjectProvider.class);
+        darajaSettingsProvider = mock(ObjectProvider.class);
         selfProvider = mock(ObjectProvider.class);
 
         service = new PlatformCustodySettlementService(
                 settlementRepository,
                 configRepository,
                 kopokopoGateway,
+                darajaGateway,
                 custodySettingsProvider,
                 kioskPaySettingsProvider,
+                darajaSettingsProvider,
                 new ObjectMapper(),
                 selfProvider);
         ReflectionTestUtils.setField(service, "publicApiBaseUrl", "http://localhost:5050");
@@ -91,7 +103,9 @@ class PlatformCustodySettlementServiceTest {
         when(selfProvider.getObject()).thenReturn(service);
         when(custodySettingsProvider.getIfAvailable()).thenReturn(custodySettings);
         when(kioskPaySettingsProvider.getIfAvailable()).thenReturn(kioskPaySettings);
+        when(darajaSettingsProvider.getIfAvailable()).thenReturn(darajaSettings);
         when(kioskPaySettings.kopokopoCredentials()).thenReturn(Optional.of(CREDS));
+        when(darajaSettings.credentials()).thenReturn(Optional.of(DARAJA_CREDS));
 
         store.clear();
         when(settlementRepository.save(any(PlatformCustodySettlement.class))).thenAnswer(inv -> {
@@ -150,13 +164,41 @@ class PlatformCustodySettlementServiceTest {
     }
 
     @Test
-    void onStkConfirmed_darajaRail_isBlockedNoCrossRailSettle() {
+    void onStkConfirmed_darajaRail_settlesViaB2B() {
         when(configRepository.findById(CONFIG_ID)).thenReturn(Optional.of(custodyConfig()));
+        when(settlementRepository.findByStkPushId("push-1")).thenReturn(Optional.empty());
+        when(darajaGateway.sendB2B(any())).thenReturn(
+                new DarajaPaymentGateway.B2BResult(true, "conv-1", "orig-1", "0", "Accepted"));
 
         service.onStkConfirmed(custodyPush(GatewayType.DARAJA));
 
-        verify(settlementRepository, never()).save(any());
-        verify(kopokopoGateway, never()).sendMoney(any());
+        assertThat(store).hasSize(1);
+        PlatformCustodySettlement row = store.values().iterator().next();
+        assertThat(row.getProvider()).isEqualTo(PlatformMpesaCustodyProviders.DARAJA);
+        assertThat(row.getStatus()).isEqualTo(PlatformCustodySettlementStatuses.SETTLING);
+        assertThat(row.getDisbursementId()).isEqualTo("conv-1");
+        verify(darajaGateway).sendB2B(any());
+    }
+
+    @Test
+    void handleDarajaDisburseResult_settlesAndFails() {
+        PlatformCustodySettlement ok = settlement("pcs-d1", PlatformMpesaCustodyProviders.DARAJA);
+        ok.setDisbursementId("conv-ok");
+        store.put(ok.getId(), ok);
+        when(settlementRepository.findByDisbursementId("conv-ok")).thenReturn(Optional.of(ok));
+
+        service.handleDarajaDisburseResult(
+                new DarajaPaymentGateway.B2BResult(true, "conv-ok", "orig", "0", "Success"));
+        assertThat(ok.getStatus()).isEqualTo(PlatformCustodySettlementStatuses.SETTLED);
+
+        PlatformCustodySettlement bad = settlement("pcs-d2", PlatformMpesaCustodyProviders.DARAJA);
+        bad.setDisbursementId("conv-bad");
+        store.put(bad.getId(), bad);
+        when(settlementRepository.findByDisbursementId("conv-bad")).thenReturn(Optional.of(bad));
+
+        service.handleDarajaDisburseResult(
+                new DarajaPaymentGateway.B2BResult(false, "conv-bad", "orig", "2001", "Insufficient balance"));
+        assertThat(bad.getStatus()).isEqualTo(PlatformCustodySettlementStatuses.FAILED);
     }
 
     // ── Webhook matching ────────────────────────────────────────────
@@ -326,10 +368,14 @@ class PlatformCustodySettlementServiceTest {
     }
 
     @Test
-    void testActiveRail_darajaBlocked() {
+    void testActiveRail_darajaNotConfiguredFails() {
         when(custodySettings.activeProvider()).thenReturn(PlatformMpesaCustodyProviders.DARAJA);
+        when(darajaSettings.isEnabledAndConfigured()).thenReturn(false);
 
-        assertThat(service.testActiveRail().ok()).isFalse();
+        PlatformCustodySettlementService.RailTestResult res = service.testActiveRail();
+
+        assertThat(res.ok()).isFalse();
+        assertThat(res.code()).isEqualTo("DARAJA_NOT_READY");
     }
 
     @Test

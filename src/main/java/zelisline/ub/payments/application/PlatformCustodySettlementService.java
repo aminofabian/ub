@@ -41,6 +41,7 @@ import zelisline.ub.payments.domain.spi.SendMoneyRequest;
 import zelisline.ub.payments.domain.spi.SendMoneyResult;
 import zelisline.ub.payments.domain.spi.ValidationResult;
 import zelisline.ub.payments.domain.spi.WebhookResult;
+import zelisline.ub.payments.infrastructure.DarajaPaymentGateway;
 import zelisline.ub.payments.infrastructure.KopokopoPaymentGateway;
 import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
 import zelisline.ub.payments.repository.PlatformCustodySettlementRepository;
@@ -79,8 +80,10 @@ public class PlatformCustodySettlementService {
     private final PlatformCustodySettlementRepository settlementRepository;
     private final PaymentGatewayConfigRepository configRepository;
     private final KopokopoPaymentGateway kopokopoPaymentGateway;
+    private final DarajaPaymentGateway darajaPaymentGateway;
     private final ObjectProvider<PlatformMpesaCustodySettingsService> custodySettingsService;
     private final ObjectProvider<PlatformKioskPaySettingsService> platformKioskPaySettingsService;
+    private final ObjectProvider<PlatformDarajaSettingsService> platformDarajaSettingsService;
     private final ObjectMapper objectMapper;
     /** Own proxy, so each disburse attempt opens its own transaction. */
     private final ObjectProvider<PlatformCustodySettlementService> self;
@@ -125,8 +128,13 @@ public class PlatformCustodySettlementService {
                     .map(creds -> new CollectRail(GatewayType.KOPOKOPO, provider, creds));
         }
         if (PlatformMpesaCustodyProviders.DARAJA.equals(provider)) {
-            // Gated until Daraja disburse ships — custodyAvailableForTenants() is false.
-            return Optional.empty();
+            PlatformDarajaSettingsService daraja = platformDarajaSettingsService.getIfAvailable();
+            if (daraja == null) {
+                return Optional.empty();
+            }
+            return daraja.credentials()
+                    .filter(c -> !c.isEmpty())
+                    .map(creds -> new CollectRail(GatewayType.DARAJA, provider, creds));
         }
         return Optional.empty();
     }
@@ -161,10 +169,8 @@ public class PlatformCustodySettlementService {
         }
 
         String provider = resolveProviderFromPush(push);
-        if (PlatformMpesaCustodyProviders.OFF.equals(provider)
-                || PlatformMpesaCustodyProviders.DARAJA.equals(provider)) {
-            log.error("Custody settle blocked for push={} provider={} (Daraja disburse not available or Off)",
-                    push.getId(), provider);
+        if (PlatformMpesaCustodyProviders.OFF.equals(provider)) {
+            log.error("Custody settle blocked for push={} provider=OFF", push.getId());
             return;
         }
 
@@ -268,6 +274,12 @@ public class PlatformCustodySettlementService {
                         row.getId());
                 continue;
             }
+            if (!PlatformMpesaCustodyProviders.KOPOKOPO.equals(row.getProvider())) {
+                // Daraja B2B has no status-query API — surface for ops rather than poll.
+                log.error("Custody settlement stuck in SETTLING on {} — needs manual reconcile id={}",
+                        row.getProvider(), row.getId());
+                continue;
+            }
             try {
                 WebhookResult status = kopokopoPaymentGateway.querySendMoneyStatus(sendMoneyId, creds);
                 if (status == null) {
@@ -363,8 +375,26 @@ public class PlatformCustodySettlementService {
                     "Platform custody is Off. Ask Super Admin to set Platform custody provider to KopoKopo.");
         }
         if (PlatformMpesaCustodyProviders.DARAJA.equals(provider)) {
-            return new RailTestResult(false, "DARAJA_UNAVAILABLE",
-                    "Kiosk-powered till/paybill is not available on Daraja yet (disburse pending).");
+            PlatformDarajaSettingsService daraja = platformDarajaSettingsService.getIfAvailable();
+            if (daraja == null || !daraja.isEnabledAndConfigured()) {
+                return new RailTestResult(false, "DARAJA_NOT_READY",
+                        "Platform Daraja is not enabled/configured.");
+            }
+            if (!daraja.isB2bConfigured()) {
+                return new RailTestResult(false, "DARAJA_DISBURSE_NOT_READY",
+                        "Daraja B2B initiator name/password are missing in Super Admin → Payments.");
+            }
+            try {
+                ValidationResult result = darajaPaymentGateway.validateCredentials(
+                        daraja.credentials().orElse(Map.of()));
+                return result.valid()
+                        ? new RailTestResult(true, null, "Kiosk rail reachable — collect and settle on Daraja B2B.")
+                        : new RailTestResult(false,
+                                result.errorCode() != null ? result.errorCode() : "AUTH_FAILED",
+                                result.errorMessage() != null ? result.errorMessage() : "Platform Daraja could not be reached.");
+            } catch (Exception e) {
+                return new RailTestResult(false, "INTERNAL_ERROR", e.getMessage());
+            }
         }
         Map<String, String> creds = platformKopokopoCreds();
         if (creds.isEmpty()) {
@@ -420,11 +450,15 @@ public class PlatformCustodySettlementService {
         if (row.getDisbursementId() != null && !row.getDisbursementId().isBlank()) {
             return;
         }
-        if (!PlatformMpesaCustodyProviders.KOPOKOPO.equals(row.getProvider())) {
-            applyFailed(row, "Unsupported custody provider for disburse: " + row.getProvider());
+        if (PlatformMpesaCustodyProviders.KOPOKOPO.equals(row.getProvider())) {
+            attemptKopokopoSendMoney(row);
             return;
         }
-        attemptKopokopoSendMoney(row);
+        if (PlatformMpesaCustodyProviders.DARAJA.equals(row.getProvider())) {
+            attemptDarajaB2B(row);
+            return;
+        }
+        applyFailed(row, "Unsupported custody provider for disburse: " + row.getProvider());
     }
 
     private void attemptKopokopoSendMoney(PlatformCustodySettlement row) {
@@ -475,6 +509,95 @@ public class PlatformCustodySettlementService {
         row.setFailureReason(null);
         settlementRepository.save(row);
         log.info("Custody Send Money accepted: id={} disbursementId={}", row.getId(), result.sendMoneyId());
+    }
+
+    private void attemptDarajaB2B(PlatformCustodySettlement row) {
+        PlatformDarajaSettingsService daraja = platformDarajaSettingsService.getIfAvailable();
+        Map<String, String> creds = daraja == null ? Map.of() : daraja.credentials().orElse(Map.of());
+        if (creds.isEmpty()) {
+            row.setFailureReason("Platform Daraja credentials missing");
+            settlementRepository.save(row);
+            log.error("Custody settle blocked — no platform Daraja creds settlement={}", row.getId());
+            return;
+        }
+        boolean paybill = SendMoneyRequest.DEST_PAYBILL.equals(row.getDestinationType());
+        String partyB = paybill ? row.getDestinationPaybill() : row.getDestinationTill();
+
+        DarajaPaymentGateway.B2BRequest request = new DarajaPaymentGateway.B2BRequest(
+                creds,
+                callbackBase(),
+                row.getDestinationType(),
+                partyB,
+                row.getDestinationAccount(),
+                row.getAmount(),
+                row.getCurrency(),
+                "Custody settle " + row.getId().substring(0, Math.min(8, row.getId().length())));
+
+        row.setStatus(PlatformCustodySettlementStatuses.SETTLING);
+        settlementRepository.save(row);
+
+        DarajaPaymentGateway.B2BResult result = darajaPaymentGateway.sendB2B(request);
+        if (result == null || !result.accepted()) {
+            String msg = result != null && result.message() != null ? result.message() : "Daraja B2B declined";
+            if (result != null && "NETWORK_ERROR".equals(result.code())) {
+                row.setFailureReason("Daraja unreachable during B2B — outcome unknown, needs ops reconcile");
+                settlementRepository.save(row);
+                log.error("Custody Daraja B2B NETWORK_ERROR settlement={} — held in SETTLING", row.getId());
+                return;
+            }
+            noteProviderFailure(row, msg);
+            applyFailed(row, msg);
+            return;
+        }
+
+        String id = result.conversationId() != null && !result.conversationId().isBlank()
+                ? result.conversationId()
+                : result.originatorConversationId();
+        row.setDisbursementId(id);
+        row.setStatus(PlatformCustodySettlementStatuses.SETTLING);
+        row.setFailureReason(null);
+        settlementRepository.save(row);
+        log.info("Custody Daraja B2B accepted: id={} conversationId={} command={}",
+                row.getId(), id, DarajaPaymentGateway.b2bCommandId(row.getDestinationType(), creds));
+    }
+
+    /**
+     * Handle a Daraja B2B result/timeout callback for a custody settlement. Matched by the
+     * ConversationID (falling back to OriginatorConversationID) returned at initiation.
+     */
+    @Transactional
+    public boolean handleDarajaDisburseResult(DarajaPaymentGateway.B2BResult result) {
+        if (result == null) {
+            return false;
+        }
+        Optional<PlatformCustodySettlement> opt = findByDisbursementId(result.conversationId());
+        if (opt.isEmpty()) {
+            opt = findByDisbursementId(result.originatorConversationId());
+        }
+        if (opt.isEmpty()) {
+            return false;
+        }
+        PlatformCustodySettlement row = opt.get();
+        if (!PlatformMpesaCustodyProviders.DARAJA.equals(row.getProvider())) {
+            log.warn("Ignoring Daraja B2B callback for non-Daraja custody settlement={}", row.getId());
+            return false;
+        }
+        if (PlatformCustodySettlementStatuses.SETTLED.equals(row.getStatus())
+                || PlatformCustodySettlementStatuses.FAILED.equals(row.getStatus())) {
+            return true;
+        }
+        if (result.accepted()) {
+            applySettled(row);
+            return true;
+        }
+        String reason = result.message() != null ? result.message() : "Daraja B2B failed";
+        noteProviderFailure(row, reason);
+        applyFailed(row, reason);
+        return true;
+    }
+
+    private String callbackBase() {
+        return publicApiBaseUrl == null ? "" : publicApiBaseUrl.replaceAll("/+$", "");
     }
 
     private void applySettled(PlatformCustodySettlement row) {

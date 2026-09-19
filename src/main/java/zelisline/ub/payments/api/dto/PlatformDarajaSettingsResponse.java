@@ -9,6 +9,10 @@ public record PlatformDarajaSettingsResponse(
         String shortcode,
         boolean hasCredentials,
         String consumerKeyHint,
+        /** True when initiator name/password are set — enables Daraja B2B custody settle. */
+        boolean disburseConfigured,
+        String initiatorName,
+        String b2bShortcode,
         Instant updatedAt
 ) {
 }

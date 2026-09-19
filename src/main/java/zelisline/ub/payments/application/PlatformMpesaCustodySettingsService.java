@@ -62,7 +62,7 @@ public class PlatformMpesaCustodySettingsService {
             }
             if (!isDarajaDisburseAvailable()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "Platform Daraja custody is not available yet (disburse/B2C not implemented). Use KopoKopo for till/paybill-only, or leave Off.");
+                        "Platform Daraja disburse is not configured yet (enable Daraja, then add the B2B initiator name/password in Super Admin → Payments). Use KopoKopo for till/paybill-only, or leave Off.");
             }
         }
 
@@ -106,7 +106,7 @@ public class PlatformMpesaCustodySettingsService {
                 return "Platform Daraja is selected for custody but is not enabled.";
             }
             if (!isDarajaDisburseAvailable()) {
-                return "Platform Daraja custody is not available yet (disburse not implemented).";
+                return "Platform Daraja is selected for custody but B2B disburse credentials are missing.";
             }
         }
         return "Kiosk-powered till/paybill is not available.";
@@ -123,10 +123,12 @@ public class PlatformMpesaCustodySettingsService {
     }
 
     /**
-     * Daraja B2C/B2B disburse is not shipped — custody provider DARAJA stays gated.
+     * Daraja B2B disburse is available once the platform Daraja account has the B2B
+     * initiator credentials configured.
      */
     public boolean isDarajaDisburseAvailable() {
-        return false;
+        PlatformDarajaSettingsService daraja = darajaSettingsService.getIfAvailable();
+        return daraja != null && daraja.isB2bConfigured();
     }
 
     /** Read-only: falls back to a transient default (seeded by migration) without writing. */

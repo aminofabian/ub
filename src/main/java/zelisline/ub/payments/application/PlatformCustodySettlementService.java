@@ -39,6 +39,7 @@ import zelisline.ub.payments.domain.PlatformMpesaCustodyProviders;
 import zelisline.ub.payments.domain.StkPushContextType;
 import zelisline.ub.payments.domain.spi.SendMoneyRequest;
 import zelisline.ub.payments.domain.spi.SendMoneyResult;
+import zelisline.ub.payments.domain.spi.ValidationResult;
 import zelisline.ub.payments.domain.spi.WebhookResult;
 import zelisline.ub.payments.infrastructure.KopokopoPaymentGateway;
 import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
@@ -347,6 +348,46 @@ public class PlatformCustodySettlementService {
     private Map<String, String> platformKopokopoCreds() {
         PlatformKioskPaySettingsService kiosk = platformKioskPaySettingsService.getIfAvailable();
         return kiosk == null ? Map.of() : kiosk.kopokopoCredentials().orElse(Map.of());
+    }
+
+    /**
+     * Non-destructive health check of the active custody rail for the tenant-facing
+     * “Test” action on a till/paybill-only method. Confirms the SA rail is selected and
+     * that the platform KopoKopo credentials can authenticate.
+     */
+    @Transactional(readOnly = true)
+    public RailTestResult testActiveRail() {
+        String provider = activeProvider();
+        if (PlatformMpesaCustodyProviders.OFF.equals(provider)) {
+            return new RailTestResult(false, "CUSTODY_OFF",
+                    "Platform custody is Off. Ask Super Admin to set Platform custody provider to KopoKopo.");
+        }
+        if (PlatformMpesaCustodyProviders.DARAJA.equals(provider)) {
+            return new RailTestResult(false, "DARAJA_UNAVAILABLE",
+                    "Kiosk-powered till/paybill is not available on Daraja yet (disburse pending).");
+        }
+        Map<String, String> creds = platformKopokopoCreds();
+        if (creds.isEmpty()) {
+            return new RailTestResult(false, "NO_CREDENTIALS",
+                    "Platform KopoKopo credentials are not configured.");
+        }
+        try {
+            PaymentGatewayConfig probe = new PaymentGatewayConfig();
+            probe.setGatewayType(GatewayType.KOPOKOPO);
+            probe.setCredentialsJson(objectMapper.writeValueAsString(creds));
+            ValidationResult result = kopokopoPaymentGateway.validateConfiguration(probe);
+            if (result.valid()) {
+                return new RailTestResult(true, null,
+                        "Kiosk rail reachable — collect and settle on KopoKopo.");
+            }
+            return new RailTestResult(false,
+                    result.errorCode() != null ? result.errorCode() : "AUTH_FAILED",
+                    result.errorMessage() != null
+                            ? result.errorMessage()
+                            : "Platform KopoKopo could not be reached.");
+        } catch (Exception e) {
+            return new RailTestResult(false, "INTERNAL_ERROR", e.getMessage());
+        }
     }
 
     // ── Internals ───────────────────────────────────────────────────
@@ -668,5 +709,9 @@ public class PlatformCustodySettlementService {
     }
 
     public record CollectRail(GatewayType gatewayType, String provider, Map<String, String> credentials) {
+    }
+
+    /** Result of {@link #testActiveRail()}; {@code code} is null on success. */
+    public record RailTestResult(boolean ok, String code, String message) {
     }
 }

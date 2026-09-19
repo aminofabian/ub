@@ -36,6 +36,7 @@ import zelisline.ub.payments.domain.PlatformCustodySettlementStatuses;
 import zelisline.ub.payments.domain.PlatformMpesaCustodyProviders;
 import zelisline.ub.payments.domain.StkPushContextType;
 import zelisline.ub.payments.domain.spi.SendMoneyResult;
+import zelisline.ub.payments.domain.spi.ValidationResult;
 import zelisline.ub.payments.domain.spi.WebhookResult;
 import zelisline.ub.payments.infrastructure.KopokopoPaymentGateway;
 import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
@@ -310,6 +311,47 @@ class PlatformCustodySettlementServiceTest {
                 "{\"type\":\"paybill\",\"businessNumber\":\"247247\"}"))
                 .isNotNull();
         assertThat(service.validateDestinationJson(null)).isNotNull();
+    }
+
+    // ── Custody rail health check (tenant “Test” button) ────────────
+
+    @Test
+    void testActiveRail_offFails() {
+        when(custodySettings.activeProvider()).thenReturn(PlatformMpesaCustodyProviders.OFF);
+
+        PlatformCustodySettlementService.RailTestResult res = service.testActiveRail();
+
+        assertThat(res.ok()).isFalse();
+        assertThat(res.code()).isEqualTo("CUSTODY_OFF");
+    }
+
+    @Test
+    void testActiveRail_darajaBlocked() {
+        when(custodySettings.activeProvider()).thenReturn(PlatformMpesaCustodyProviders.DARAJA);
+
+        assertThat(service.testActiveRail().ok()).isFalse();
+    }
+
+    @Test
+    void testActiveRail_missingCredentialsFails() {
+        when(custodySettings.activeProvider()).thenReturn(PlatformMpesaCustodyProviders.KOPOKOPO);
+        when(kioskPaySettings.kopokopoCredentials()).thenReturn(Optional.empty());
+
+        PlatformCustodySettlementService.RailTestResult res = service.testActiveRail();
+
+        assertThat(res.ok()).isFalse();
+        assertThat(res.code()).isEqualTo("NO_CREDENTIALS");
+    }
+
+    @Test
+    void testActiveRail_kopokopoReachable() {
+        when(custodySettings.activeProvider()).thenReturn(PlatformMpesaCustodyProviders.KOPOKOPO);
+        when(kopokopoGateway.validateConfiguration(any())).thenReturn(ValidationResult.success());
+
+        PlatformCustodySettlementService.RailTestResult res = service.testActiveRail();
+
+        assertThat(res.ok()).isTrue();
+        assertThat(res.code()).isNull();
     }
 
     // ── Helpers ─────────────────────────────────────────────────────

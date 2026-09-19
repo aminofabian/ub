@@ -250,6 +250,10 @@ public class PaymentGatewayConfigService {
     public TestConnectionResponse testConnection(String businessId, String configId) {
         PaymentGatewayConfig cfg = findOwn(businessId, configId);
 
+        if (cfg.getGatewayType() == GatewayType.CUSTODY_MPESA) {
+            return testCustodyRail(cfg);
+        }
+
         if (cfg.getGatewayType().isCredentialLess()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "This payment method does not support a connection test.");
@@ -316,6 +320,38 @@ public class PaymentGatewayConfigService {
             return new TestConnectionResponse(false, cfg.getStatus().name(),
                     "INTERNAL_ERROR", e.getMessage());
         }
+    }
+
+    private TestConnectionResponse testCustodyRail(PaymentGatewayConfig cfg) {
+        PlatformCustodySettlementService custody = custodySettlementService.getIfAvailable();
+        String destErr = custody == null
+                ? "Kiosk-powered M-Pesa is not available yet."
+                : custody.validateDestinationJson(cfg.getDisplayInstructionsJson());
+        PlatformCustodySettlementService.RailTestResult rail =
+                custody == null ? null : custody.testActiveRail();
+
+        boolean ok = destErr == null && rail != null && rail.ok();
+        String code = destErr != null
+                ? "INVALID_DESTINATION"
+                : (rail != null ? rail.code() : "UNAVAILABLE");
+        String message = destErr != null
+                ? destErr
+                : (rail != null ? rail.message() : "Kiosk-powered M-Pesa is not available yet.");
+
+        // Custody stays ACTIVE throughout — a failed test never stops live payments.
+        cfg.setLastTestedAt(Instant.now());
+        if (ok) {
+            cfg.setTestErrorJson(null);
+        } else {
+            cfg.setTestErrorJson(toJson(Map.of(
+                    "code", code != null ? code : "UNKNOWN",
+                    "message", message != null ? message : "Test failed",
+                    "timestamp", Instant.now().toString()
+            )));
+        }
+        configRepository.save(cfg);
+        return new TestConnectionResponse(ok, cfg.getStatus().name(),
+                ok ? null : code, ok ? null : message);
     }
 
     @Transactional
@@ -399,7 +435,8 @@ public class PaymentGatewayConfigService {
                 cfg.getCreatedAt(),
                 cfg.getUpdatedAt(),
                 displayJson,
-                custodyProvider
+                custodyProvider,
+                cfg.getTestErrorJson()
         );
     }
 

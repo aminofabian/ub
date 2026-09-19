@@ -8,6 +8,7 @@ import java.time.Instant;
  * MANUAL / CUSTODY_MPESA (till/paybill destination — not PSP secrets).
  * {@code custodyProvider} is set only for CUSTODY_MPESA — the platform rail that will
  * collect and settle (so the UI can say “Settles via Kiosk · KopoKopo”).
+ * {@code testErrorJson} carries the last failed connection/rail test (code + message).
  */
 public record GatewayConfigResponse(
         String id,
@@ -20,6 +21,7 @@ public record GatewayConfigResponse(
         Instant createdAt,
         Instant updatedAt,
         String displayInstructionsJson,
-        String custodyProvider
+        String custodyProvider,
+        String testErrorJson
 ) {
 }

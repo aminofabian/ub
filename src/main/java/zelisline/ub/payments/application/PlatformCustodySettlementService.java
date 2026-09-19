@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -13,13 +14,21 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.payments.api.dto.PlatformCustodySettlementResponse;
 import zelisline.ub.payments.domain.GatewayStatus;
 import zelisline.ub.payments.domain.GatewayStkPush;
 import zelisline.ub.payments.domain.GatewayType;
@@ -39,6 +48,10 @@ import zelisline.ub.payments.repository.PlatformCustodySettlementRepository;
  * Model B auto-settle for {@link GatewayType#CUSTODY_MPESA}.
  * Collect and settle use the <strong>same</strong> SA custody provider
  * ({@link PlatformMpesaCustodyProviders}) — never Daraja STK + KopoKopo Send Money.
+ *
+ * <p>The Send Money HTTP call is never made inside the webhook/STK-confirmation
+ * transaction: the settlement row is persisted first and the disburse attempt runs
+ * in its own transaction after commit (or from the reconciler).
  */
 @Service
 @RequiredArgsConstructor
@@ -46,7 +59,21 @@ public class PlatformCustodySettlementService {
 
     private static final Logger log = LoggerFactory.getLogger(PlatformCustodySettlementService.class);
 
+    /** PENDING rows older than this are re-attempted by the reconciler. */
     private static final Duration RETRY_AGE = Duration.ofMinutes(2);
+    /** SETTLING rows older than this are polled at KopoKopo for their true status. */
+    private static final Duration STALE_SETTLING = Duration.ofMinutes(10);
+
+    /** KopoKopo rejection text when the platform till lacks liquid funds. */
+    private static final String[] FLOAT_INSUFFICIENT_MARKERS = {
+            "exceeds amount available to move",
+            "amount available to move",
+            "platform payment float",
+            "insufficient_funds",
+            "insufficient funds",
+    };
+
+    private static final long FLOAT_PAUSE_MINUTES = 10L;
 
     private final PlatformCustodySettlementRepository settlementRepository;
     private final PaymentGatewayConfigRepository configRepository;
@@ -54,6 +81,8 @@ public class PlatformCustodySettlementService {
     private final ObjectProvider<PlatformMpesaCustodySettingsService> custodySettingsService;
     private final ObjectProvider<PlatformKioskPaySettingsService> platformKioskPaySettingsService;
     private final ObjectMapper objectMapper;
+    /** Own proxy, so each disburse attempt opens its own transaction. */
+    private final ObjectProvider<PlatformCustodySettlementService> self;
 
     @Value("${app.public.api-base-url:http://localhost:5050}")
     private String publicApiBaseUrl;
@@ -101,6 +130,10 @@ public class PlatformCustodySettlementService {
         return Optional.empty();
     }
 
+    /**
+     * Persist the settlement for a confirmed custody STK, then disburse after commit.
+     * Never performs the outbound call inside this (caller's) transaction.
+     */
     @Transactional
     public void onStkConfirmed(GatewayStkPush push) {
         if (push == null || push.getConfigId() == null || push.getConfigId().isBlank()) {
@@ -148,28 +181,21 @@ public class PlatformCustodySettlementService {
         row.setStatus(PlatformCustodySettlementStatuses.PENDING);
         settlementRepository.save(row);
 
-        attemptDisburse(row);
+        scheduleDisburse(row.getId());
     }
 
+    /**
+     * Settle the KopoKopo Send Money callback for a custody settlement.
+     *
+     * <p>Matches on the Send Money <em>resource id</em> ({@code gatewayCheckoutId}) first —
+     * the {@code gatewayTransactionId} is the M-Pesa transaction reference and differs.
+     */
     @Transactional
     public boolean handleSendMoneyWebhook(WebhookResult parsed) {
         if (parsed == null) {
             return false;
         }
-        String sendMoneyId = parsed.gatewayTransactionId() != null
-                ? parsed.gatewayTransactionId()
-                : parsed.gatewayCheckoutId();
-        if (sendMoneyId == null || sendMoneyId.isBlank()) {
-            return false;
-        }
-        var opt = settlementRepository.findByDisbursementId(sendMoneyId);
-        if (opt.isEmpty()) {
-            String trimmed = sendMoneyId.trim();
-            int slash = trimmed.lastIndexOf('/');
-            if (slash >= 0 && slash < trimmed.length() - 1) {
-                opt = settlementRepository.findByDisbursementId(trimmed.substring(slash + 1));
-            }
-        }
+        var opt = resolveBySendMoneyId(parsed.gatewayCheckoutId(), parsed.gatewayTransactionId());
         if (opt.isEmpty()) {
             return false;
         }
@@ -183,26 +209,22 @@ public class PlatformCustodySettlementService {
             return true;
         }
         if (parsed.success()) {
-            row.setStatus(PlatformCustodySettlementStatuses.SETTLED);
-            row.setSettledAt(Instant.now());
-            row.setFailureReason(null);
-            settlementRepository.save(row);
-            log.info("Platform custody settled (KK): id={} disbursementId={}",
-                    row.getId(), row.getDisbursementId());
+            applySettled(row);
             return true;
         }
         if (parsed.terminalFailure()) {
             String raw = parsed.failureMessage() != null ? parsed.failureMessage() : "Send Money failed";
-            row.setStatus(PlatformCustodySettlementStatuses.FAILED);
-            row.setFailureReason(truncate(raw, 512));
-            settlementRepository.save(row);
-            log.warn("Platform custody Send Money failed: id={} reason={}", row.getId(), raw);
+            noteProviderFailure(row, raw);
+            applyFailed(row, raw);
             return true;
         }
         return true;
     }
 
-    @Transactional
+    /**
+     * Retry disburse for PENDING settlements never accepted by the provider.
+     * Not transactional: each attempt opens its own short transaction.
+     */
     public void reconcilePending() {
         Instant cutoff = Instant.now().minus(RETRY_AGE);
         List<PlatformCustodySettlement> pending =
@@ -212,7 +234,140 @@ public class PlatformCustodySettlementService {
             if (row.getDisbursementId() != null && !row.getDisbursementId().isBlank()) {
                 continue;
             }
-            attemptDisburse(row);
+            try {
+                self.getObject().attemptDisburse(row.getId());
+            } catch (Exception e) {
+                log.warn("Custody disburse retry failed settlement={}: {}", row.getId(), e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Poll SETTLING settlements that never got a webhook, so a missed callback cannot
+     * leave a payout stuck forever. The provider call runs outside a transaction; the
+     * result is written by {@code applyProviderStatus}.
+     */
+    public void reconcileInFlight() {
+        Instant cutoff = Instant.now().minus(STALE_SETTLING);
+        List<PlatformCustodySettlement> settling =
+                settlementRepository.findByStatusAndCreatedAtBefore(
+                        PlatformCustodySettlementStatuses.SETTLING, cutoff);
+        if (settling.isEmpty()) {
+            return;
+        }
+        PlatformKioskPaySettingsService kiosk = platformKioskPaySettingsService.getIfAvailable();
+        Map<String, String> creds = kiosk == null ? Map.of() : kiosk.kopokopoCredentials().orElse(Map.of());
+        if (creds.isEmpty()) {
+            return;
+        }
+        for (PlatformCustodySettlement row : settling) {
+            String sendMoneyId = row.getDisbursementId();
+            if (sendMoneyId == null || sendMoneyId.isBlank()) {
+                log.error("Custody settlement stuck in SETTLING with no provider id — needs manual reconcile id={}",
+                        row.getId());
+                continue;
+            }
+            try {
+                WebhookResult status = kopokopoPaymentGateway.querySendMoneyStatus(sendMoneyId, creds);
+                if (status == null) {
+                    continue;
+                }
+                if (status.success()) {
+                    self.getObject().applyProviderStatus(row.getId(), true, null);
+                } else if (status.terminalFailure()) {
+                    String raw = status.failureMessage() != null ? status.failureMessage() : "Send Money failed";
+                    self.getObject().applyProviderStatus(row.getId(), false, raw);
+                }
+            } catch (Exception e) {
+                log.warn("Custody Send Money status poll failed id={}: {}", row.getId(), e.getMessage());
+            }
+        }
+    }
+
+    /** Reload one settlement and attempt disburse in a fresh transaction. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void attemptDisburse(String settlementId) {
+        PlatformCustodySettlement row = settlementRepository.findById(settlementId).orElse(null);
+        if (row == null) {
+            return;
+        }
+        attemptDisburse(row);
+    }
+
+    /** Apply a polled provider status in its own short transaction. */
+    @Transactional
+    public void applyProviderStatus(String settlementId, boolean success, String failureMessage) {
+        PlatformCustodySettlement row = settlementRepository.findById(settlementId).orElse(null);
+        if (row == null
+                || PlatformCustodySettlementStatuses.SETTLED.equals(row.getStatus())
+                || PlatformCustodySettlementStatuses.FAILED.equals(row.getStatus())) {
+            return;
+        }
+        if (success) {
+            applySettled(row);
+        } else {
+            noteProviderFailure(row, failureMessage);
+            applyFailed(row, failureMessage);
+        }
+    }
+
+    // ── Ops ─────────────────────────────────────────────────────────
+
+    @Transactional(readOnly = true)
+    public List<PlatformCustodySettlementResponse> listForSuperAdmin(int limit) {
+        int capped = Math.min(Math.max(limit, 1), 200);
+        return settlementRepository
+                .findAll(PageRequest.of(0, capped, Sort.by(Sort.Direction.DESC, "createdAt")))
+                .stream()
+                .map(PlatformCustodySettlementService::toResponse)
+                .toList();
+    }
+
+    /**
+     * Ops retry for a terminal {@code FAILED} settlement (provider declined). Only FAILED
+     * rows are retryable: a SETTLING row may already have moved money.
+     */
+    @Transactional
+    public PlatformCustodySettlementResponse retry(String settlementId) {
+        PlatformCustodySettlement row = settlementRepository.findById(settlementId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Settlement not found"));
+        if (!PlatformCustodySettlementStatuses.FAILED.equals(row.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Only FAILED settlements can be retried. Current: " + row.getStatus());
+        }
+        row.setStatus(PlatformCustodySettlementStatuses.PENDING);
+        row.setFailureReason(null);
+        row.setDisbursementId(null);
+        settlementRepository.save(row);
+        scheduleDisburse(row.getId());
+        return toResponse(row);
+    }
+
+    /** Platform credentials for disburse (null if unavailable). */
+    private Map<String, String> platformKopokopoCreds() {
+        PlatformKioskPaySettingsService kiosk = platformKioskPaySettingsService.getIfAvailable();
+        return kiosk == null ? Map.of() : kiosk.kopokopoCredentials().orElse(Map.of());
+    }
+
+    // ── Internals ───────────────────────────────────────────────────
+
+    private void scheduleDisburse(String settlementId) {
+        Runnable attempt = () -> {
+            try {
+                self.getObject().attemptDisburse(settlementId);
+            } catch (Exception e) {
+                log.error("Custody disburse attempt failed settlement={}: {}", settlementId, e.getMessage(), e);
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    attempt.run();
+                }
+            });
+        } else {
+            attempt.run();
         }
     }
 
@@ -225,19 +380,14 @@ public class PlatformCustodySettlementService {
             return;
         }
         if (!PlatformMpesaCustodyProviders.KOPOKOPO.equals(row.getProvider())) {
-            row.setFailureReason("Unsupported custody provider for disburse: " + row.getProvider());
-            row.setStatus(PlatformCustodySettlementStatuses.FAILED);
-            settlementRepository.save(row);
+            applyFailed(row, "Unsupported custody provider for disburse: " + row.getProvider());
             return;
         }
         attemptKopokopoSendMoney(row);
     }
 
     private void attemptKopokopoSendMoney(PlatformCustodySettlement row) {
-        PlatformKioskPaySettingsService kiosk = platformKioskPaySettingsService.getIfAvailable();
-        Map<String, String> creds = kiosk == null
-                ? Map.of()
-                : kiosk.kopokopoCredentials().orElse(Map.of());
+        Map<String, String> creds = platformKopokopoCreds();
         if (creds.isEmpty()) {
             row.setFailureReason("Platform KopoKopo credentials missing");
             settlementRepository.save(row);
@@ -274,10 +424,8 @@ public class PlatformCustodySettlementService {
             String msg = result != null && result.message() != null
                     ? result.message()
                     : "KopoKopo Send Money declined";
-            row.setStatus(PlatformCustodySettlementStatuses.FAILED);
-            row.setFailureReason(truncate(msg, 512));
-            settlementRepository.save(row);
-            log.warn("Custody Send Money declined settlement={}: {}", row.getId(), msg);
+            noteProviderFailure(row, msg);
+            applyFailed(row, msg);
             return;
         }
 
@@ -288,6 +436,57 @@ public class PlatformCustodySettlementService {
         log.info("Custody Send Money accepted: id={} disbursementId={}", row.getId(), result.sendMoneyId());
     }
 
+    private void applySettled(PlatformCustodySettlement row) {
+        if (PlatformCustodySettlementStatuses.SETTLED.equals(row.getStatus())) {
+            return;
+        }
+        row.setStatus(PlatformCustodySettlementStatuses.SETTLED);
+        row.setSettledAt(Instant.now());
+        row.setFailureReason(null);
+        settlementRepository.save(row);
+        log.info("Platform custody settled (KK): id={} disbursementId={}",
+                row.getId(), row.getDisbursementId());
+    }
+
+    private void applyFailed(PlatformCustodySettlement row, String reason) {
+        if (PlatformCustodySettlementStatuses.SETTLED.equals(row.getStatus())
+                || PlatformCustodySettlementStatuses.FAILED.equals(row.getStatus())) {
+            return;
+        }
+        row.setStatus(PlatformCustodySettlementStatuses.FAILED);
+        row.setFailureReason(truncate(reason, 512));
+        settlementRepository.save(row);
+        log.error("Platform custody settlement FAILED: id={} business={} amount={} {} provider={} reason=\"{}\"",
+                row.getId(), row.getBusinessId(), row.getAmount(), row.getCurrency(),
+                row.getProvider(), reason);
+    }
+
+    /** Pause platform Send Money when the shared till is dry — mirrors Kiosk Pay withdraws. */
+    private void noteProviderFailure(PlatformCustodySettlement row, String raw) {
+        if (!isFloatInsufficient(raw)) {
+            return;
+        }
+        PlatformKioskPaySettingsService kiosk = platformKioskPaySettingsService.getIfAvailable();
+        if (kiosk != null) {
+            kiosk.markSendMoneyFloatConstrained(Duration.ofMinutes(FLOAT_PAUSE_MINUTES));
+        }
+        log.warn("Custody Send Money FLOAT — paused {} min | settlementId={} business={} amount={} provider=\"{}\"",
+                FLOAT_PAUSE_MINUTES, row.getId(), row.getBusinessId(), row.getAmount(), raw);
+    }
+
+    private static boolean isFloatInsufficient(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return false;
+        }
+        String lower = raw.toLowerCase(Locale.ROOT);
+        for (String marker : FLOAT_INSUFFICIENT_MARKERS) {
+            if (lower.contains(marker)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private String resolveProviderFromPush(GatewayStkPush push) {
         if (push.getGatewayType() == GatewayType.KOPOKOPO) {
             return PlatformMpesaCustodyProviders.KOPOKOPO;
@@ -296,6 +495,35 @@ public class PlatformCustodySettlementService {
             return PlatformMpesaCustodyProviders.DARAJA;
         }
         return activeProvider();
+    }
+
+    /**
+     * The KopoKopo Send Money resource id is carried in {@code gatewayCheckoutId}; the
+     * {@code gatewayTransactionId} is the M-Pesa transaction reference. Prefer the
+     * resource id, then fall back (and tolerate a stored URL with a trailing path).
+     */
+    private Optional<PlatformCustodySettlement> resolveBySendMoneyId(String checkoutId, String transactionId) {
+        Optional<PlatformCustodySettlement> found = findByDisbursementId(checkoutId);
+        if (found.isEmpty()) {
+            found = findByDisbursementId(transactionId);
+        }
+        return found;
+    }
+
+    private Optional<PlatformCustodySettlement> findByDisbursementId(String rawId) {
+        if (rawId == null || rawId.isBlank()) {
+            return Optional.empty();
+        }
+        String trimmed = rawId.trim();
+        Optional<PlatformCustodySettlement> direct = settlementRepository.findByDisbursementId(trimmed);
+        if (direct.isPresent()) {
+            return direct;
+        }
+        int slash = trimmed.lastIndexOf('/');
+        if (slash >= 0 && slash < trimmed.length() - 1) {
+            return settlementRepository.findByDisbursementId(trimmed.substring(slash + 1));
+        }
+        return Optional.empty();
     }
 
     private static SendMoneyRequest buildSendMoneyRequest(
@@ -376,6 +604,27 @@ public class PlatformCustodySettlementService {
             case WEB_ORDER, POS_PAYMENT, STOREFRONT_CART, GROCERY_INVOICE, CREDIT_AR, WALLET_INTENT -> true;
             default -> false;
         };
+    }
+
+    private static PlatformCustodySettlementResponse toResponse(PlatformCustodySettlement s) {
+        return new PlatformCustodySettlementResponse(
+                s.getId(),
+                s.getBusinessId(),
+                s.getGatewayConfigId(),
+                s.getStkPushId(),
+                s.getProvider(),
+                s.getAmount(),
+                s.getCurrency(),
+                s.getDestinationType(),
+                s.getDestinationTill(),
+                s.getDestinationPaybill(),
+                s.getDestinationAccount(),
+                s.getStatus(),
+                s.getDisbursementId(),
+                s.getFailureReason(),
+                s.getCreatedAt(),
+                s.getUpdatedAt(),
+                s.getSettledAt());
     }
 
     private static String text(JsonNode root, String field) {

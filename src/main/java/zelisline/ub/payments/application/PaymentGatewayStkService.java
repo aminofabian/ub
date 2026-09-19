@@ -1,6 +1,8 @@
 package zelisline.ub.payments.application;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 import org.slf4j.Logger;
@@ -12,6 +14,7 @@ import org.springframework.stereotype.Service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.payments.api.dto.PosStkRailResponse;
 import zelisline.ub.payments.domain.GatewayStatus;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
@@ -108,16 +111,12 @@ public class PaymentGatewayStkService {
             return lastOutcome;
         }
 
-        // CUSTODY_MPESA: platform Daraja collect, tagged with tenant custody config id for auto-settle.
         StkPushOutcome custody = tryCustodyMpesa(
                 businessId, phoneNumber, amount, reference, description);
         if (custody != null) {
             return custody;
         }
 
-        // Platform Daraja (SA credentials) — Party B = platform shortcode / Paybill only.
-        // Never merge a tenant till/paybill into these credentials; that would promise
-        // direct-to-shop while collecting on the platform shortcode (or fail at Safaricom).
         StkPushOutcome platformDaraja = tryPlatformDaraja(
                 businessId, phoneNumber, amount, reference, description);
         if (platformDaraja != null) {
@@ -126,6 +125,65 @@ public class PaymentGatewayStkService {
 
         log.warn("No ACTIVE online STK gateway for business={} (check tenant id, platform enable, Activate)", businessId);
         return StkPushOutcome.rejected(null, "NO_GATEWAY", "Online payment is not available right now.");
+    }
+
+    /**
+     * Rails the cashier / storefront can offer when more than one STK path is ACTIVE.
+     */
+    public List<PosStkRailResponse> listActiveStkRails(String businessId) {
+        List<PosStkRailResponse> rails = new ArrayList<>();
+        List<PlatformPaymentGateway> platformEnabled = platformPaymentGatewayService.listEnabled();
+        String defaultId = findDefaultActiveStkConfigId(businessId);
+
+        for (GatewayType type : STK_GATEWAY_PRIORITY) {
+            if (!isPlatformEnabled(type)) {
+                continue;
+            }
+            String displayName = platformEnabled.stream()
+                    .filter(pg -> pg.getGatewayType() == type)
+                    .map(PlatformPaymentGateway::getDisplayName)
+                    .findFirst()
+                    .orElse(type.name());
+            for (PaymentGatewayConfig cfg : configRepository.findByBusinessIdAndGatewayTypeAndStatus(
+                    businessId, type, GatewayStatus.ACTIVE)) {
+                String label = cfg.getLabel() != null && !cfg.getLabel().isBlank()
+                        ? cfg.getLabel()
+                        : displayName;
+                rails.add(new PosStkRailResponse(
+                        cfg.getId(),
+                        type.name(),
+                        label,
+                        displayName,
+                        cfg.getId().equals(defaultId) || cfg.isDefault()));
+            }
+        }
+
+        PlatformCustodySettlementService custody = custodySettlementService.getIfAvailable();
+        if (custody != null && custody.platformRailsReady()) {
+            for (PaymentGatewayConfig cfg : configRepository.findByBusinessIdAndGatewayTypeAndStatus(
+                    businessId, GatewayType.CUSTODY_MPESA, GatewayStatus.ACTIVE)) {
+                String label = cfg.getLabel() != null && !cfg.getLabel().isBlank()
+                        ? cfg.getLabel()
+                        : "Till / paybill via Kiosk";
+                rails.add(new PosStkRailResponse(
+                        cfg.getId(),
+                        GatewayType.CUSTODY_MPESA.name(),
+                        label,
+                        "Kiosk settles",
+                        cfg.getId().equals(defaultId) || cfg.isDefault()));
+            }
+        }
+
+        if (rails.stream().noneMatch(PosStkRailResponse::isDefault) && !rails.isEmpty()) {
+            PosStkRailResponse first = rails.getFirst();
+            rails.set(0, new PosStkRailResponse(
+                    first.configId(),
+                    first.gatewayType(),
+                    first.label(),
+                    first.displayName(),
+                    true));
+        }
+        return rails;
     }
 
     private StkPushOutcome tryCustodyMpesa(
@@ -143,16 +201,34 @@ public class PaymentGatewayStkService {
         if (cfg == null) {
             return null;
         }
+        return pushCustodyConfig(cfg, phoneNumber, amount, reference, description);
+    }
+
+    private StkPushOutcome pushCustodyConfig(
+            PaymentGatewayConfig cfg,
+            String phoneNumber,
+            BigDecimal amount,
+            String reference,
+            String description
+    ) {
+        PlatformCustodySettlementService custody = custodySettlementService.getIfAvailable();
+        if (custody == null || !custody.platformRailsReady()) {
+            return null;
+        }
+        if (cfg.getStatus() != GatewayStatus.ACTIVE
+                || cfg.getGatewayType() != GatewayType.CUSTODY_MPESA) {
+            return null;
+        }
         var rail = custody.resolveCollectRail().orElse(null);
         if (rail == null || rail.credentials() == null || rail.credentials().isEmpty()) {
             return null;
         }
         log.info("STK via platform {} (CUSTODY_MPESA) business={} config={}",
-                rail.provider(), businessId, cfg.getId());
+                rail.provider(), cfg.getBusinessId(), cfg.getId());
         return initiateWithCredentials(
                 rail.gatewayType().name(),
                 cfg.getId(),
-                businessId,
+                cfg.getBusinessId(),
                 rail.credentials(),
                 phoneNumber,
                 amount,
@@ -175,7 +251,6 @@ public class PaymentGatewayStkService {
         if (creds == null || creds.isEmpty()) {
             return null;
         }
-        // Credentials are the platform singleton only — no tenant shortcode merge.
         log.info("STK via platform Daraja for business={} partyB={}", businessId, creds.get("shortcode"));
         return initiateWithCredentials(
                 GatewayType.DARAJA.name(),
@@ -189,7 +264,7 @@ public class PaymentGatewayStkService {
     }
 
     /**
-     * First ACTIVE tenant config for an enabled platform STK gateway (same selection as storefront checkout).
+     * First ACTIVE tenant config for an enabled platform STK gateway, else custody if ready.
      */
     public String findDefaultActiveStkConfigId(String businessId) {
         for (GatewayType type : STK_GATEWAY_PRIORITY) {
@@ -198,8 +273,20 @@ public class PaymentGatewayStkService {
             }
             var configs = configRepository.findByBusinessIdAndGatewayTypeAndStatus(
                     businessId, type, GatewayStatus.ACTIVE);
+            for (PaymentGatewayConfig cfg : configs) {
+                if (cfg.isDefault()) {
+                    return cfg.getId();
+                }
+            }
             if (!configs.isEmpty()) {
                 return configs.getFirst().getId();
+            }
+        }
+        PlatformCustodySettlementService custody = custodySettlementService.getIfAvailable();
+        if (custody != null && custody.platformRailsReady()) {
+            PaymentGatewayConfig cfg = custody.findActiveCustodyConfig(businessId);
+            if (cfg != null) {
+                return cfg.getId();
             }
         }
         return null;
@@ -223,10 +310,11 @@ public class PaymentGatewayStkService {
         if (cfg == null || !businessId.equals(cfg.getBusinessId())) {
             return null;
         }
-        if (cfg.getStatus() != GatewayStatus.ACTIVE
-                || cfg.getGatewayType() == GatewayType.MANUAL
-                || cfg.getGatewayType() == GatewayType.CUSTODY_MPESA) {
+        if (cfg.getStatus() != GatewayStatus.ACTIVE || cfg.getGatewayType() == GatewayType.MANUAL) {
             return null;
+        }
+        if (cfg.getGatewayType() == GatewayType.CUSTODY_MPESA) {
+            return pushCustodyConfig(cfg, phoneNumber, amount, reference, description);
         }
         return pushWithConfig(cfg, phoneNumber, amount, reference, description);
     }
@@ -272,9 +360,6 @@ public class PaymentGatewayStkService {
         }
     }
 
-    /**
-     * Initiate STK with an explicit credential map (e.g. Palmart platform till for domain orders).
-     */
     public StkPushOutcome initiateWithCredentials(
             String gatewayType,
             String configId,

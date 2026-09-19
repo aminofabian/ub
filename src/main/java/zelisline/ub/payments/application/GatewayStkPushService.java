@@ -775,11 +775,27 @@ public class GatewayStkPushService {
             push = pushRepository.findByGatewayTypeAndGatewayCheckoutId(
                     GatewayType.KOPOKOPO, parsed.gatewayCheckoutId().trim());
         }
-        if (push.isEmpty() || !PlatformKioskPaySettings.PLATFORM_KOPOKOPO_CONFIG_ID.equals(push.get().getConfigId())) {
+        if (push.isEmpty() || !isPlatformKopokopoCredentialPush(push.get())) {
             log.warn("KopoKopo Kiosk Pay webhook: no platform push checkout={}", parsed.gatewayCheckoutId());
             return true;
         }
         return settleMatchedWebhook(push.get(), push.get().getBusinessId(), eventId, parsed);
+    }
+
+    /**
+     * A push authenticated with platform KopoKopo credentials is either the synthetic
+     * Kiosk Pay config or a tenant {@code CUSTODY_MPESA} config (Model B collect).
+     */
+    private boolean isPlatformKopokopoCredentialPush(GatewayStkPush push) {
+        String configId = push.getConfigId();
+        if (configId == null || configId.isBlank()) {
+            return false;
+        }
+        if (PlatformKioskPaySettings.PLATFORM_KOPOKOPO_CONFIG_ID.equals(configId)) {
+            return true;
+        }
+        PaymentGatewayConfig cfg = resolveConfig(push);
+        return cfg != null && cfg.getGatewayType() == GatewayType.CUSTODY_MPESA;
     }
 
     private boolean settleMatchedWebhook(
@@ -1187,6 +1203,14 @@ public class GatewayStkPushService {
             return Optional.empty();
         }
         return pushRepository.findByGatewayTypeAndGatewayCheckoutId(type, checkoutId.trim());
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<GatewayStkPush> findByBusinessCheckoutId(String businessId, String checkoutId) {
+        if (businessId == null || businessId.isBlank() || checkoutId == null || checkoutId.isBlank()) {
+            return Optional.empty();
+        }
+        return pushRepository.findFirstByBusinessIdAndGatewayCheckoutId(businessId.trim(), checkoutId.trim());
     }
 
     @Transactional(readOnly = true)

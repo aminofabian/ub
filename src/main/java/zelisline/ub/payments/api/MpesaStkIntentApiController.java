@@ -22,6 +22,7 @@ import zelisline.ub.credits.application.MpesaStkIntentService;
 import zelisline.ub.credits.domain.MpesaStkIntent;
 import zelisline.ub.payments.api.dto.PosStkPushRequest;
 import zelisline.ub.payments.api.dto.PosStkPushResponse;
+import zelisline.ub.payments.api.dto.PosStkRailResponse;
 import zelisline.ub.payments.api.dto.PosTillAwaitRequest;
 import zelisline.ub.payments.api.dto.PosTillAwaitResponse;
 import zelisline.ub.payments.api.dto.StkPushStatusResponse;
@@ -45,6 +46,7 @@ public class MpesaStkIntentApiController {
     private final MpesaStkIntentService mpesaStkIntentService;
     private final GatewayStkPushService gatewayStkPushService;
     private final StkPushRetryHelper stkPushRetryHelper;
+    private final PaymentGatewayStkService paymentGatewayStkService;
 
     @PostMapping("/intents")
     @PreAuthorize("hasPermission(null, 'payments.stk.initiate')")
@@ -95,7 +97,7 @@ public class MpesaStkIntentApiController {
                 .setScale(0, java.math.RoundingMode.HALF_UP);
         PaymentGatewayStkService.StkPushOutcome outcome = stkPushRetryHelper.initiateAfterClearingPhone(
                 businessId,
-                null,
+                body.configId(),
                 phone,
                 chargedAmount,
                 reference,
@@ -121,6 +123,14 @@ public class MpesaStkIntentApiController {
                 outcome.responseCode());
     }
 
+    /** Active STK / custody rails the cashier can choose before sending a prompt. */
+    @GetMapping("/rails")
+    @PreAuthorize("hasPermission(null, 'payments.stk.initiate')")
+    public java.util.List<PosStkRailResponse> rails(HttpServletRequest request) {
+        CurrentTenantUser.require(request);
+        return paymentGatewayStkService.listActiveStkRails(TenantRequestIds.resolveBusinessId(request));
+    }
+
     @GetMapping("/push/status")
     @PreAuthorize("hasPermission(null, 'payments.stk.initiate')")
     public StkPushStatusResponse pushStatus(
@@ -130,8 +140,7 @@ public class MpesaStkIntentApiController {
         CurrentTenantUser.require(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         GatewayStkPush push = gatewayStkPushService
-                .findByCheckoutId(GatewayType.KOPOKOPO, checkoutRequestId)
-                .filter(p -> businessId.equals(p.getBusinessId()))
+                .findByBusinessCheckoutId(businessId, checkoutRequestId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "STK push not found"));
 
         if (GatewayStkPushStatuses.PENDING.equals(push.getStatus())) {

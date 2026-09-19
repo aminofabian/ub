@@ -16,6 +16,11 @@ public interface GatewayStkPushRepository extends JpaRepository<GatewayStkPush, 
             String gatewayCheckoutId
     );
 
+    Optional<GatewayStkPush> findFirstByBusinessIdAndGatewayCheckoutId(
+            String businessId,
+            String gatewayCheckoutId
+    );
+
     Optional<GatewayStkPush> findFirstByBusinessIdAndMerchantReferenceAndStatus(
             String businessId,
             String merchantReference,

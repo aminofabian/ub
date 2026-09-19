@@ -23,7 +23,12 @@ public class PlatformCustodySettlementReconciler {
         try {
             custodySettlementService.reconcilePending();
         } catch (Exception e) {
-            log.warn("Platform custody reconcile failed: {}", e.getMessage());
+            log.warn("Platform custody reconcile (pending) failed: {}", e.getMessage());
+        }
+        try {
+            custodySettlementService.reconcileInFlight();
+        } catch (Exception e) {
+            log.warn("Platform custody reconcile (in-flight) failed: {}", e.getMessage());
         }
     }
 }

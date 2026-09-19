@@ -380,8 +380,13 @@ public class PaymentGatewayConfigService {
 
     private GatewayConfigResponse toResponse(PaymentGatewayConfig cfg) {
         String displayJson = null;
+        String custodyProvider = null;
         if (cfg.getGatewayType().isCredentialLess()) {
             displayJson = cfg.getDisplayInstructionsJson();
+        }
+        if (cfg.getGatewayType() == GatewayType.CUSTODY_MPESA) {
+            PlatformCustodySettlementService custody = custodySettlementService.getIfAvailable();
+            custodyProvider = custody != null ? custody.activeProvider() : null;
         }
         return new GatewayConfigResponse(
                 cfg.getId(),
@@ -393,7 +398,8 @@ public class PaymentGatewayConfigService {
                 cfg.getLastTestedAt(),
                 cfg.getCreatedAt(),
                 cfg.getUpdatedAt(),
-                displayJson
+                displayJson,
+                custodyProvider
         );
     }
 

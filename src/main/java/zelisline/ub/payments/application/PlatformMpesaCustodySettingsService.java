@@ -29,7 +29,17 @@ public class PlatformMpesaCustodySettingsService {
 
     @Transactional(readOnly = true)
     public PlatformMpesaCustodySettingsResponse getForSuperAdmin() {
-        return toResponse(loadSingleton());
+        return toResponse(resolveSingleton());
+    }
+
+    /** Tenant-facing readiness: whether till/paybill-only can be added right now. */
+    @Transactional(readOnly = true)
+    public zelisline.ub.payments.api.dto.MpesaCustodyAvailabilityResponse availabilityForTenant() {
+        boolean available = custodyAvailableForTenants();
+        return new zelisline.ub.payments.api.dto.MpesaCustodyAvailabilityResponse(
+                available,
+                activeProvider(),
+                available ? null : notAvailableMessage());
     }
 
     @Transactional
@@ -56,14 +66,14 @@ public class PlatformMpesaCustodySettingsService {
             }
         }
 
-        PlatformMpesaCustodySettings row = loadSingleton();
+        PlatformMpesaCustodySettings row = resolveSingletonForUpdate();
         row.setCustodyProvider(provider);
         return toResponse(repository.save(row));
     }
 
     @Transactional(readOnly = true)
     public String activeProvider() {
-        return PlatformMpesaCustodyProviders.normalize(loadSingleton().getCustodyProvider());
+        return PlatformMpesaCustodyProviders.normalize(resolveSingleton().getCustodyProvider());
     }
 
     /** Tenant can activate CUSTODY_MPESA when SA picked a ready rail. */
@@ -119,7 +129,20 @@ public class PlatformMpesaCustodySettingsService {
         return false;
     }
 
-    private PlatformMpesaCustodySettings loadSingleton() {
+    /** Read-only: falls back to a transient default (seeded by migration) without writing. */
+    private PlatformMpesaCustodySettings resolveSingleton() {
+        return repository.findById(PlatformMpesaCustodySettings.SINGLETON_ID)
+                .orElseGet(() -> {
+                    PlatformMpesaCustodySettings row = new PlatformMpesaCustodySettings();
+                    row.setId(PlatformMpesaCustodySettings.SINGLETON_ID);
+                    row.setCustodyProvider(PlatformMpesaCustodyProviders.OFF);
+                    row.setUpdatedAt(Instant.now());
+                    return row;
+                });
+    }
+
+    /** Write path: creates the singleton row if it is missing. */
+    private PlatformMpesaCustodySettings resolveSingletonForUpdate() {
         return repository.findById(PlatformMpesaCustodySettings.SINGLETON_ID)
                 .orElseGet(() -> {
                     PlatformMpesaCustodySettings row = new PlatformMpesaCustodySettings();

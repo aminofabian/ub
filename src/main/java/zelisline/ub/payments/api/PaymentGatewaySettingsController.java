@@ -24,12 +24,14 @@ import zelisline.ub.payments.api.dto.GatewayCheckoutResponse;
 import zelisline.ub.payments.api.dto.GatewayConfigRequest;
 import zelisline.ub.payments.api.dto.GatewayConfigResponse;
 import zelisline.ub.payments.api.dto.GatewayCredentialSettingsResponse;
+import zelisline.ub.payments.api.dto.MpesaCustodyAvailabilityResponse;
 import zelisline.ub.payments.api.dto.SubscribeWebhookTillsRequest;
 import zelisline.ub.payments.api.dto.SubscribeWebhookTillsResponse;
 import zelisline.ub.payments.api.dto.TestConnectionResponse;
 import zelisline.ub.payments.application.KopokopoWebhookSubscriptionService;
 import zelisline.ub.payments.application.GatewayCheckoutService;
 import zelisline.ub.payments.application.PaymentGatewayConfigService;
+import zelisline.ub.payments.application.PlatformMpesaCustodySettingsService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
@@ -48,6 +50,7 @@ public class PaymentGatewaySettingsController {
     private final PaymentGatewayConfigService configService;
     private final KopokopoWebhookSubscriptionService webhookSubscriptionService;
     private final GatewayCheckoutService gatewayCheckoutService;
+    private final PlatformMpesaCustodySettingsService mpesaCustodySettingsService;
 
     // ── Available gateways ──────────────────────────────────────────
 
@@ -56,6 +59,17 @@ public class PaymentGatewaySettingsController {
     public List<AvailableGatewayResponse> listAvailable(HttpServletRequest request) {
         CurrentTenantUser.require(request);
         return configService.listAvailable(TenantRequestIds.resolveBusinessId(request));
+    }
+
+    /**
+     * Whether the tenant may add a till/paybill-only (Kiosk settles) method, and on
+     * which platform rail. Lets the UI gate the option instead of failing on save.
+     */
+    @GetMapping("/mpesa-custody")
+    @PreAuthorize("hasPermission(null, 'payments.gateways.read')")
+    public MpesaCustodyAvailabilityResponse mpesaCustodyAvailability(HttpServletRequest request) {
+        CurrentTenantUser.require(request);
+        return mpesaCustodySettingsService.availabilityForTenant();
     }
 
     // ── CRUD ────────────────────────────────────────────────────────

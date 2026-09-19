@@ -9,6 +9,8 @@ import jakarta.validation.constraints.Positive;
 public record PosStkPushRequest(
         @NotBlank String phoneNumber,
         @NotNull @Positive BigDecimal amount,
-        String description
+        String description,
+        /** Optional ACTIVE STK / custody config id — cashier rail choice. */
+        String configId
 ) {
 }

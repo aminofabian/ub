@@ -19,6 +19,7 @@ import zelisline.ub.payments.application.GatewayCheckoutService;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.KioskPayWalletService;
 import zelisline.ub.payments.application.PaymentGatewayStkService;
+import zelisline.ub.payments.application.PlatformCustodySettlementService;
 import zelisline.ub.payments.application.PlatformPaymentGatewayService;
 import zelisline.ub.payments.application.StkPushRetryHelper;
 import zelisline.ub.payments.domain.GatewayCheckout;
@@ -72,6 +73,7 @@ public class PublicStorefrontPaymentService {
     private final FeatureFlagService featureFlagService;
     private final KioskPayWalletService kioskPayWalletService;
     private final StorefrontSettingsService storefrontSettingsService;
+    private final PlatformCustodySettlementService platformCustodySettlementService;
 
     @Transactional(readOnly = true)
     public PublicCheckoutPaymentOptions checkoutOptions(String slug) {
@@ -110,6 +112,18 @@ public class PublicStorefrontPaymentService {
                         label,
                         displayName,
                         kind
+                ));
+            } else if (type == GatewayType.CUSTODY_MPESA
+                    && platformCustodySettlementService.platformRailsReady()) {
+                String label = cfg.getLabel() != null && !cfg.getLabel().isBlank()
+                        ? cfg.getLabel()
+                        : "Till / paybill via Kiosk";
+                online.add(new PublicOnlinePaymentMethod(
+                        cfg.getId(),
+                        type.name(),
+                        label,
+                        "Kiosk settles",
+                        "stk"
                 ));
             }
         }

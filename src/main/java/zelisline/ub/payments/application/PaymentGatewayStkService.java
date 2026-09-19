@@ -80,6 +80,16 @@ public class PaymentGatewayStkService {
             if (preferred != null) {
                 return preferred;
             }
+            // The caller explicitly picked a till/paybill-only (custody) method. If it cannot
+            // run, do NOT fall through to the platform Daraja fallback — that has no auto-settle
+            // and the shop would never receive the money.
+            PaymentGatewayConfig chosen = configRepository.findById(preferredConfigId).orElse(null);
+            if (chosen != null && chosen.getGatewayType() == GatewayType.CUSTODY_MPESA) {
+                log.warn("Custody config {} not runnable (status={}) — refusing STK for business={}",
+                        chosen.getId(), chosen.getStatus(), businessId);
+                return StkPushOutcome.rejected(
+                        GatewayType.CUSTODY_MPESA.name(), "CUSTODY_UNAVAILABLE", custodyUnavailableMessage());
+            }
         }
 
         StkPushOutcome lastOutcome = null;
@@ -115,6 +125,19 @@ public class PaymentGatewayStkService {
                 businessId, phoneNumber, amount, reference, description);
         if (custody != null) {
             return custody;
+        }
+
+        // A shop with an ACTIVE till/paybill-only method expects Kiosk settlement. Never
+        // silently route it to the no-settle platform Daraja fallback.
+        PlatformCustodySettlementService custodyService = custodySettlementService.getIfAvailable();
+        PaymentGatewayConfig activeCustody = custodyService != null
+                ? custodyService.findActiveCustodyConfig(businessId)
+                : null;
+        if (activeCustody != null) {
+            log.warn("Custody config {} active but platform rail not ready — refusing STK for business={}",
+                    activeCustody.getId(), businessId);
+            return StkPushOutcome.rejected(
+                    GatewayType.CUSTODY_MPESA.name(), "CUSTODY_UNAVAILABLE", custodyUnavailableMessage());
         }
 
         StkPushOutcome platformDaraja = tryPlatformDaraja(
@@ -296,6 +319,13 @@ public class PaymentGatewayStkService {
         return platformPaymentGatewayService.listEnabled().stream()
                 .map(PlatformPaymentGateway::getGatewayType)
                 .anyMatch(t -> t == type);
+    }
+
+    private String custodyUnavailableMessage() {
+        PlatformCustodySettlementService custody = custodySettlementService.getIfAvailable();
+        return custody != null
+                ? custody.railsNotReadyMessage()
+                : "Kiosk-powered till/paybill is not available right now.";
     }
 
     private StkPushOutcome tryConfig(

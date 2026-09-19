@@ -136,6 +136,36 @@ class PaymentGatewayStkServiceTest {
         assertThat(outcome.gatewayType()).isEqualTo(GatewayType.KOPOKOPO.name());
     }
 
+    @Test
+    void initiate_explicitCustodyConfigNotReady_failsInsteadOfDarajaFallback() {
+        when(configRepository.findById("cfg-custody")).thenReturn(Optional.of(custodyConfig()));
+        when(custodyService.platformRailsReady()).thenReturn(false);
+        when(custodyService.railsNotReadyMessage()).thenReturn("Platform custody is Off.");
+
+        PaymentGatewayStkService.StkPushOutcome outcome = service.initiate(
+                BUSINESS, "cfg-custody", "254712345678", new BigDecimal("500.00"), "REF-1", "Test");
+
+        assertThat(outcome.accepted()).isFalse();
+        assertThat(outcome.responseCode()).isEqualTo("CUSTODY_UNAVAILABLE");
+        assertThat(outcome.message()).isEqualTo("Platform custody is Off.");
+        verify(kopokopoGateway, never()).initiateStkPush(any());
+    }
+
+    @Test
+    void initiate_activeCustodyButRailNotReady_doesNotUseDarajaFallback() {
+        when(platformPaymentGatewayService.listEnabled()).thenReturn(List.of());
+        when(custodyService.platformRailsReady()).thenReturn(false);
+        when(custodyService.findActiveCustodyConfig(BUSINESS)).thenReturn(custodyConfig());
+        when(custodyService.railsNotReadyMessage()).thenReturn("Platform KopoKopo credentials are missing.");
+
+        PaymentGatewayStkService.StkPushOutcome outcome = service.initiate(
+                BUSINESS, null, "254712345678", new BigDecimal("500.00"), "REF-1", "Test");
+
+        assertThat(outcome.accepted()).isFalse();
+        assertThat(outcome.responseCode()).isEqualTo("CUSTODY_UNAVAILABLE");
+        verify(darajaProvider, never()).getIfAvailable();
+    }
+
     private static PlatformPaymentGateway platformGateway(GatewayType type) {
         PlatformPaymentGateway pg = new PlatformPaymentGateway();
         pg.setGatewayType(type);

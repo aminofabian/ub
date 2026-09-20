@@ -96,7 +96,12 @@ public class PlatformRequestLogInterceptor implements HandlerInterceptor {
                 status = 500;
             }
             row.setStatus(status);
-            row.setSuccess(status >= 200 && status < 400);
+            // A provider callback we acknowledged with 200 can still carry a failure
+            // (Safaricom ResultCode 1032, Daraja errorCode …). Keep the real HTTP status
+            // but mark the row failed so the outcome filter shows it.
+            boolean upstreamFailed = Boolean.TRUE.equals(
+                    request.getAttribute(PlatformRequestLogErrorCapture.ATTR_UPSTREAM_FAILURE));
+            row.setSuccess(status >= 200 && status < 400 && !upstreamFailed);
             row.setDurationMs((System.nanoTime() - started) / 1_000_000);
             row.setIp(clientIp(request));
             row.setLoadTestRunId(loadTestRunId(request));

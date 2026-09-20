@@ -25,8 +25,10 @@ public class RequestLogClassifier {
         if (p.contains("/kplc")) {
             return RequestLogCategory.KPLC;
         }
+        // /daraja covers the C2B and B2B callback paths, which carry neither
+        // "mpesa" nor "stk" and would otherwise fall through to OTHER.
         if (p.contains("/mpesa") || p.contains("/stk") || p.contains("/kopokopo")
-                || p.contains("/payments") || p.contains("/kiosk-pay")) {
+                || p.contains("/daraja") || p.contains("/payments") || p.contains("/kiosk-pay")) {
             return RequestLogCategory.MPESA;
         }
         if (p.contains("/sales") || p.contains("/pos-drafts") || p.contains("/pos/")

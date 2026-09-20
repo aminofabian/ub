@@ -495,6 +495,23 @@ public class DarajaPaymentGateway implements PaymentGateway {
         }
     }
 
+    /**
+     * {@code Body.stkCallback.ResultCode} from a raw STK callback, or {@code null} when the
+     * payload is not an STK callback. {@link WebhookResult} carries the ResultDesc as its
+     * failure message but not the code, and the code is what distinguishes a cancellation
+     * (1032) from a timeout (1037) or insufficient funds (1).
+     */
+    public String stkCallbackResultCode(String rawBody) {
+        if (rawBody == null || rawBody.isBlank()) {
+            return null;
+        }
+        try {
+            return text(objectMapper.readTree(rawBody).path("Body").path("stkCallback"), "ResultCode");
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private WebhookResult parseC2bConfirmation(JsonNode root, String rawBody) {
         String receipt = text(root, "TransID");
         String phone = normalizeMsisdn(text(root, "MSISDN"));

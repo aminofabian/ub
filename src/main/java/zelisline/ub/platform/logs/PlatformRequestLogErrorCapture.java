@@ -32,6 +32,8 @@ public final class PlatformRequestLogErrorCapture {
     public static final String ATTR_STACK = PlatformRequestLogErrorCapture.class.getName() + ".stack";
     public static final String ATTR_PROBLEM_JSON =
             PlatformRequestLogErrorCapture.class.getName() + ".problemJson";
+    public static final String ATTR_UPSTREAM_FAILURE =
+            PlatformRequestLogErrorCapture.class.getName() + ".upstreamFailure";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final int MAX_DETAIL = 12_000;
@@ -39,6 +41,35 @@ public final class PlatformRequestLogErrorCapture {
     private static final int MAX_CHAIN = 4_000;
 
     private PlatformRequestLogErrorCapture() {}
+
+    /**
+     * Record a failure that an otherwise-2xx request carried in its payload, and mark the
+     * row failed so it surfaces in Super Admin → Platform → Logs.
+     *
+     * <p>Provider callbacks must be acknowledged with 200 or the provider retries, so a
+     * Safaricom {@code ResultCode 1032} and a Daraja {@code errorCode 400.002.02} both
+     * arrive on requests that look perfectly healthy at the HTTP layer. Without this the
+     * only trace is the application log.
+     *
+     * @param type stable machine-readable discriminator, e.g. {@code mpesa/stk-callback}
+     */
+    public static void captureUpstreamFailure(String type, String title, String detail) {
+        RequestAttributes attrs = RequestContextHolder.getRequestAttributes();
+        if (!(attrs instanceof ServletRequestAttributes servletAttrs)) {
+            return;
+        }
+        HttpServletRequest request = servletAttrs.getRequest();
+        request.setAttribute(ATTR_UPSTREAM_FAILURE, Boolean.TRUE);
+        if (type != null) {
+            request.setAttribute(ATTR_TYPE, clip(type, 255));
+        }
+        if (title != null) {
+            request.setAttribute(ATTR_TITLE, clip(title, 255));
+        }
+        if (detail != null) {
+            request.setAttribute(ATTR_DETAIL, clip(detail, MAX_DETAIL));
+        }
+    }
 
     public static void capture(ProblemDetail problem, Throwable ex) {
         RequestAttributes attrs = RequestContextHolder.getRequestAttributes();

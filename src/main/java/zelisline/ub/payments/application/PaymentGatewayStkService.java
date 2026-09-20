@@ -26,6 +26,7 @@ import zelisline.ub.payments.domain.spi.StkPushRequest;
 import zelisline.ub.payments.domain.spi.StkPushResponse;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
 import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
+import zelisline.ub.platform.logs.PlatformRequestLogErrorCapture;
 
 /**
  * Initiates STK Push via the first available ACTIVE online gateway for a business.
@@ -529,6 +530,15 @@ public class PaymentGatewayStkService {
                     "Check your phone to complete M-Pesa payment.");
         }
         log.warn("STK Push via {} rejected: {} {}", gatewayType, response.responseCode(), response.responseDescription());
+        // The POS/storefront call still answers 2xx with a declined outcome, so record the
+        // gateway's own error on the request log row or it is invisible to Super Admin.
+        PlatformRequestLogErrorCapture.captureUpstreamFailure(
+                "payments/stk-rejected",
+                gatewayType + " declined STK: " + response.responseCode(),
+                "Gateway: " + gatewayType
+                        + "\nConfig: " + configId
+                        + "\nCode: " + response.responseCode()
+                        + "\nMessage: " + response.responseDescription());
         return StkPushOutcome.rejected(gatewayType, response.responseCode(),
                 response.responseDescription() != null ? response.responseDescription() : "Payment request declined");
     }

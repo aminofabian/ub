@@ -17,6 +17,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.PlatformCustodySettlementService;
 import zelisline.ub.payments.domain.spi.WebhookResult;
+import zelisline.ub.platform.logs.PlatformRequestLogErrorCapture;
 import zelisline.ub.payments.infrastructure.DarajaPaymentGateway;
 
 /**
@@ -52,6 +53,8 @@ public class DarajaWebhookController {
         }
         log.info("Daraja STK callback received: bytes={}", rawBody.length());
         WebhookResult result = darajaGateway.processWebhook(Map.of(), rawBody);
+        recordCallbackFailure("mpesa/stk-callback", result,
+                darajaGateway.stkCallbackResultCode(rawBody));
         gatewayStkPushService.processDarajaWebhook(result);
         return ResponseEntity.ok("Received");
     }
@@ -85,6 +88,7 @@ public class DarajaWebhookController {
         }
         log.info("Daraja C2B confirmation: bytes={}", rawBody.length());
         WebhookResult result = darajaGateway.processWebhook(Map.of(), rawBody);
+        recordCallbackFailure("mpesa/c2b-confirmation", result, null);
         gatewayStkPushService.processDarajaWebhook(result);
         return ResponseEntity.ok(DarajaPaymentGateway.c2bAck(0, "Accepted"));
     }
@@ -117,6 +121,44 @@ public class DarajaWebhookController {
             handleB2b(rawBody);
         }
         return ResponseEntity.ok(DarajaPaymentGateway.c2bAck(0, "Accepted"));
+    }
+
+    /**
+     * Surface a declined Safaricom callback on Super Admin → Platform → Logs.
+     *
+     * <p>Safaricom retries a callback it does not get a 200 for, so every one of these is
+     * acknowledged as OK regardless of the ResultCode inside. That makes a declined payment
+     * indistinguishable from a successful one in the request log unless the failure is
+     * recorded explicitly.
+     */
+    private static void recordCallbackFailure(String type, WebhookResult result, String resultCode) {
+        if (result == null || !result.terminalFailure()) {
+            return;
+        }
+        String desc = result.failureMessage() == null || result.failureMessage().isBlank()
+                ? "Declined by Safaricom"
+                : result.failureMessage();
+        String title = resultCode == null || resultCode.isBlank()
+                ? "M-Pesa declined: " + desc
+                : "M-Pesa ResultCode " + resultCode + ": " + desc;
+
+        StringBuilder detail = new StringBuilder(desc);
+        if (resultCode != null && !resultCode.isBlank()) {
+            detail.append("\nResultCode: ").append(resultCode);
+        }
+        if (result.gatewayCheckoutId() != null) {
+            detail.append("\nCheckoutRequestID: ").append(result.gatewayCheckoutId());
+        }
+        if (result.reference() != null) {
+            detail.append("\nMerchantRequestID: ").append(result.reference());
+        }
+        if (result.rawPayload() != null) {
+            detail.append("\n\nCallback payload:\n").append(result.rawPayload());
+        }
+
+        log.warn("Safaricom callback declined type={} resultCode={} checkoutId={} desc={}",
+                type, resultCode, result.gatewayCheckoutId(), desc);
+        PlatformRequestLogErrorCapture.captureUpstreamFailure(type, title, detail.toString());
     }
 
     private void handleB2b(String rawBody) {

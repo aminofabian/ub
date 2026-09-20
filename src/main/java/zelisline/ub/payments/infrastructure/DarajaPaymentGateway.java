@@ -614,16 +614,104 @@ public class DarajaPaymentGateway implements PaymentGateway {
         }
         try {
             String token = obtainAccessToken(creds);
-            if (token != null && !token.isBlank()) {
-                return ValidationResult.success();
+            if (token == null || token.isBlank()) {
+                return ValidationResult.failure("AUTH_FAILED", "Could not obtain Daraja access token", null);
             }
-            return ValidationResult.failure("AUTH_FAILED", "Could not obtain Daraja access token", null);
         } catch (Exception e) {
             return ValidationResult.failure(
                     "AUTH_FAILED",
                     e.getMessage() != null ? e.getMessage() : "Daraja auth failed",
                     null);
         }
+
+        String shortcode = digitsOnly(firstNonBlank(
+                creds.get("shortcode"), creds.get("tillNumber"), creds.get("businessShortCode")));
+        String passkey = creds.get("passkey");
+        if (shortcode == null || !isValidShortcode(shortcode)) {
+            return ValidationResult.failure("MISSING_SHORTCODE",
+                    "shortcode is required (the Go Live Lipa Na M-Pesa shortcode)", null);
+        }
+        if (passkey == null || passkey.isBlank()) {
+            return ValidationResult.failure("MISSING_PASSKEY",
+                    "Lipa Na M-Pesa passkey is required (emailed after Go Live)", null);
+        }
+        if (isSandboxPasskey(passkey) && isProduction(creds)) {
+            return ValidationResult.failure("SANDBOX_PASSKEY",
+                    "This is Safaricom's sandbox passkey on a production shortcode. "
+                            + "Paste the passkey from the Go Live email for shortcode " + shortcode,
+                    null);
+        }
+
+        // OAuth only proves consumer key/secret. STK Password is Base64(shortcode+passkey+timestamp)
+        // and is validated separately — probe it with a no-op STK query so Wrong credentials
+        // fails here instead of on a live cashier callback.
+        ValidationResult stkPassword = probeStkPassword(creds, shortcode, passkey);
+        if (!stkPassword.valid()) {
+            return stkPassword;
+        }
+        return ValidationResult.success();
+    }
+
+    /**
+     * Hits STK Query with a synthetic CheckoutRequestID. A wrong passkey returns
+     * MerchantValidate / Wrong credentials; a right passkey returns a "not found /
+     * still processing" style error — which proves the Password encodes correctly.
+     */
+    private ValidationResult probeStkPassword(Map<String, String> creds, String shortcode, String passkey) {
+        String timestamp = mpesaTimestamp();
+        String password = stkPassword(shortcode, passkey, timestamp);
+        Map<String, Object> body = Map.of(
+                "BusinessShortCode", shortcode,
+                "Password", password,
+                "Timestamp", timestamp,
+                "CheckoutRequestID", "ws_CO_kiosk_probe_" + timestamp);
+        try {
+            String accessToken = obtainAccessToken(creds);
+            String json = objectMapper.writeValueAsString(body);
+            HttpResponse<String> response = Unirest.post(baseUrl(creds) + STK_QUERY_PATH)
+                    .connectTimeout(HTTP_CONNECT_TIMEOUT_MS)
+                    .socketTimeout(HTTP_SOCKET_TIMEOUT_MS)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .body(json)
+                    .asString();
+
+            String raw = response.getBody() != null ? response.getBody() : "";
+            JsonNode root = objectMapper.readTree(raw.isBlank() ? "{}" : raw);
+            String errorCode = text(root, "errorCode");
+            String errorMessage = firstNonBlank(text(root, "errorMessage"), text(root, "ResultDesc"), raw);
+            String combined = ((errorCode != null ? errorCode : "") + " "
+                    + (errorMessage != null ? errorMessage : "")).toLowerCase();
+
+            if (looksLikeWrongCredentials(errorMessage)
+                    || combined.contains("wrong credentials")
+                    || combined.contains("merchantvalidate")) {
+                return ValidationResult.failure("WRONG_PASSKEY",
+                        "Lipa Na M-Pesa passkey does not match shortcode " + shortcode
+                                + ". Re-paste the passkey Safaricom emailed after Go Live for this "
+                                + "exact shortcode (Test connection OAuth can still pass).",
+                        null);
+            }
+            // Any other answer (transaction not found, still processing, ResultCode …)
+            // means Daraja accepted the Password — good enough for a connection test.
+            log.info("Daraja STK password probe ok shortcode={} env={} status={} body={}",
+                    shortcode, isProduction(creds) ? "production" : "sandbox",
+                    response.getStatus(), clipForLog(raw, 200));
+            return ValidationResult.success();
+        } catch (Exception e) {
+            log.warn("Daraja STK password probe failed: {}", e.getMessage());
+            // Do not fail the whole connection test on a network blip after OAuth succeeded.
+            return ValidationResult.success();
+        }
+    }
+
+    private static String clipForLog(String value, int max) {
+        if (value == null) {
+            return "";
+        }
+        String trimmed = value.replaceAll("\\s+", " ").trim();
+        return trimmed.length() <= max ? trimmed : trimmed.substring(0, max) + "…";
     }
 
     /**

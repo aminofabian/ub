@@ -11,6 +11,8 @@ import org.junit.jupiter.api.Test;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import zelisline.ub.payments.domain.spi.StkPushRequest;
+import zelisline.ub.payments.domain.spi.StkPushResponse;
 import zelisline.ub.payments.domain.spi.StkStatusResponse;
 
 /**
@@ -95,6 +97,28 @@ class DarajaStkPushTest {
                 "  BFB279F9AA9BDBCF158E97DD71A467CD2E0C893059B10F78E6B72ADA1ED2C919 ")).isTrue();
         assertThat(DarajaPaymentGateway.isSandboxPasskey("our-live-passkey")).isFalse();
         assertThat(DarajaPaymentGateway.isSandboxPasskey(null)).isFalse();
+    }
+
+    @Test
+    void initiate_rejectsSandboxPasskeyOnProductionBeforeAnyHttpCall() {
+        StkPushResponse res = new DarajaPaymentGateway().initiateStkPush(new StkPushRequest(
+                "biz-1",
+                "254722000000",
+                BigDecimal.TEN,
+                "REF1",
+                "Sale",
+                "https://api.example.com",
+                Map.of(
+                        "shortcode", "880100",
+                        "shortcodeType", "paybill",
+                        "environment", "production",
+                        "consumerKey", "ck",
+                        "consumerSecret", "cs",
+                        "passkey", "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919")));
+
+        assertThat(res.accepted()).isFalse();
+        assertThat(res.responseCode()).isEqualTo("SANDBOX_PASSKEY");
+        assertThat(res.responseDescription()).contains("emailed");
     }
 
     @Test

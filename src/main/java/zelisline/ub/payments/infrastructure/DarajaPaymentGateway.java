@@ -48,9 +48,13 @@ import zelisline.ub.payments.domain.spi.WebhookResult;
  *
  * <p>Party A = customer MSISDN. {@code BusinessShortCode} and the STK password always
  * come from the Daraja app (platform or BYO) — the shortcode used on Go Live.
- * Per Safaricom FAQ, a Buy Goods till under that Head Office may be sent as
- * {@code PartyB} with {@code CustomerBuyGoodsOnline}. Arbitrary bank paybills
- * are not supported (and there is no B2B settle on this path).
+ * {@code PartyB} defaults to that same shortcode; per Safaricom FAQ a Buy Goods till
+ * under the same Head Office may be sent instead, with {@code CustomerBuyGoodsOnline}.
+ * Arbitrary bank paybills are not supported (and there is no B2B settle on this path).
+ *
+ * <p>The Daraja app must be subscribed to <em>Lipa Na M-Pesa Online</em>. An app with
+ * only other products (e.g. Daraja Direct Payments) issues a token that reaches this
+ * endpoint but never delivers a prompt.
  */
 @Component
 public class DarajaPaymentGateway implements PaymentGateway {
@@ -65,6 +69,14 @@ public class DarajaPaymentGateway implements PaymentGateway {
     private static final String STK_QUERY_PATH = "/mpesa/stkpushquery/v1/query";
     /** Business-to-business transfer — used for custody settlement to a paybill/till. */
     private static final String B2B_PATH = "/mpesa/b2b/v1/paymentrequest";
+
+    /**
+     * The passkey Safaricom publishes in the sandbox simulator test data. Production
+     * needs the passkey emailed after Go Live; the sandbox one against a live shortcode
+     * is accepted by Daraja and then dropped, so no prompt ever reaches the handset.
+     */
+    private static final String SANDBOX_PASSKEY =
+            "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919";
 
     private static final int HTTP_CONNECT_TIMEOUT_MS = 5_000;
     private static final int HTTP_SOCKET_TIMEOUT_MS = 15_000;
@@ -101,6 +113,12 @@ public class DarajaPaymentGateway implements PaymentGateway {
         }
         if (passkey == null || passkey.isBlank()) {
             return StkPushResponse.rejected("MISSING_PASSKEY", "passkey is required in credentials");
+        }
+        if (isSandboxPasskey(passkey) && isProduction(creds)) {
+            return StkPushResponse.rejected("SANDBOX_PASSKEY",
+                    "This is Safaricom's sandbox passkey on a production shortcode. Daraja accepts "
+                            + "the request but never sends the prompt. Use the passkey emailed "
+                            + "after Go Live.");
         }
 
         shortcode = digitsOnly(shortcode);
@@ -153,6 +171,15 @@ public class DarajaPaymentGateway implements PaymentGateway {
         if (!isProduction(creds)) {
             log.warn("Daraja STK on sandbox shortcode={} — the prompt only reaches Safaricom "
                     + "test MSISDNs; {} will not ring", shortcode, phone);
+        }
+        // Daraja answers ResponseCode 0 for requests it later drops silently (sandbox app,
+        // PartyB outside the Head Office), so the exact outbound body is logged to make a
+        // missing prompt diagnosable. Password is a rotating secret and is redacted.
+        if (log.isInfoEnabled()) {
+            Map<String, Object> redacted = new LinkedHashMap<>(body);
+            redacted.put("Password", "***");
+            log.info("Daraja STK request env={} body={}",
+                    isProduction(creds) ? "production" : "sandbox", redacted);
         }
 
         try {
@@ -252,6 +279,10 @@ public class DarajaPaymentGateway implements PaymentGateway {
     /** Timestamp must be M-Pesa (Nairobi) wall clock, not the host's zone. */
     static String mpesaTimestamp() {
         return ZonedDateTime.now(MPESA_ZONE).format(TIMESTAMP_FMT);
+    }
+
+    static boolean isSandboxPasskey(String passkey) {
+        return passkey != null && SANDBOX_PASSKEY.equalsIgnoreCase(passkey.trim());
     }
 
     static String stkPassword(String shortcode, String passkey, String timestamp) {

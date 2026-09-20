@@ -88,6 +88,16 @@ class DarajaStkPushTest {
     }
 
     @Test
+    void sandboxPasskey_isRecognised() {
+        assertThat(DarajaPaymentGateway.isSandboxPasskey(
+                "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919")).isTrue();
+        assertThat(DarajaPaymentGateway.isSandboxPasskey(
+                "  BFB279F9AA9BDBCF158E97DD71A467CD2E0C893059B10F78E6B72ADA1ED2C919 ")).isTrue();
+        assertThat(DarajaPaymentGateway.isSandboxPasskey("our-live-passkey")).isFalse();
+        assertThat(DarajaPaymentGateway.isSandboxPasskey(null)).isFalse();
+    }
+
+    @Test
     void timestamp_isFourteenDigits() {
         assertThat(DarajaPaymentGateway.mpesaTimestamp()).matches("\\d{14}");
     }

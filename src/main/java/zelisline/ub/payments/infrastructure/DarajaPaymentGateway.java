@@ -150,6 +150,11 @@ public class DarajaPaymentGateway implements PaymentGateway {
                 shortcode, password, timestamp, transactionType, amount, phone, partyB,
                 callback, accountRef, request.description());
 
+        if (!isProduction(creds)) {
+            log.warn("Daraja STK on sandbox shortcode={} — the prompt only reaches Safaricom "
+                    + "test MSISDNs; {} will not ring", shortcode, phone);
+        }
+
         try {
             String accessToken = obtainAccessToken(creds);
             String json = objectMapper.writeValueAsString(body);
@@ -170,8 +175,11 @@ public class DarajaPaymentGateway implements PaymentGateway {
 
             if (response.getStatus() >= 200 && response.getStatus() < 300
                     && ("0".equals(responseCode) || checkoutId != null)) {
-                log.info("Daraja STK accepted: checkoutId={} shortcode={} partyB={} type={}",
-                        checkoutId, shortcode, partyB, transactionType);
+                // env is logged because a sandbox app accepts the request and returns a
+                // ws_CO_ id, but only ever pushes the prompt to Safaricom's test MSISDNs.
+                log.info("Daraja STK accepted: checkoutId={} env={} shortcode={} partyB={} type={} accountRef={}",
+                        checkoutId, isProduction(creds) ? "production" : "sandbox",
+                        shortcode, partyB, transactionType, body.get("AccountReference"));
                 return StkPushResponse.accepted(
                         checkoutId,
                         merchantId,
@@ -288,6 +296,19 @@ public class DarajaPaymentGateway implements PaymentGateway {
         return stkTransactionType(creds);
     }
 
+    /**
+     * Express AccountReference is alpha-numeric, max 12, and is rendered in the USSD
+     * prompt. Spaces, dashes and '#' from a tenant account number are stripped rather
+     * than passed through, since Daraja answers those with 400.002.02.
+     */
+    static String accountReference(String raw) {
+        String cleaned = raw == null ? "" : raw.replaceAll("[^A-Za-z0-9]", "");
+        if (cleaned.isBlank()) {
+            return "Kiosk";
+        }
+        return truncate(cleaned, 12);
+    }
+
     static Map<String, Object> buildStkRequestBody(
             String shortcode,
             String password,
@@ -309,8 +330,7 @@ public class DarajaPaymentGateway implements PaymentGateway {
         body.put("PartyB", partyB);
         body.put("PhoneNumber", phone);
         body.put("CallBackURL", callbackUrl);
-        // Shown to the customer in the prompt — Daraja caps it at 12 characters.
-        body.put("AccountReference", truncate(firstNonBlank(accountReference, "Kiosk"), 12));
+        body.put("AccountReference", accountReference(accountReference));
         body.put("TransactionDesc", truncate(firstNonBlank(description, "Payment"), 13));
         return body;
     }

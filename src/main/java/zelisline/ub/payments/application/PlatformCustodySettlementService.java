@@ -173,10 +173,13 @@ public class PlatformCustodySettlementService {
             log.error("Custody settle blocked for push={} provider=OFF", push.getId());
             return;
         }
-        // Direct C2B to Party B — no B2B settle for Daraja custody.
+        // Daraja custody is Express-only by product decision: the C2B lands on the
+        // platform Go Live shortcode, tagged per shop via AccountReference, and is
+        // reconciled from the STK push record rather than pushed out over B2B.
         if (PlatformMpesaCustodyProviders.DARAJA.equals(provider)) {
-            log.info("Skipping Daraja B2B settle for custody STK push={} (direct Party B, no B2B)",
-                    push.getId());
+            log.info("Daraja custody push={} business={} amount={} dest={} — Express only, "
+                    + "no B2B disburse; reconcile from the STK push record",
+                    push.getId(), push.getBusinessId(), push.getAmount(), dest.type());
             return;
         }
 

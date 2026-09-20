@@ -248,13 +248,11 @@ public class PaymentGatewayStkService {
             return null;
         }
         Map<String, String> creds = new LinkedHashMap<>(rail.credentials());
-        // Same shape as working multi-tenant Express integrations:
-        //   PartyB           = platform collection_account (Go Live shortcode)
-        //   AccountReference = tenant destination (till / paybill account)
-        // Money credits the Merchant (Partner) on Go Live — Express never PartyB-routes
-        // to NCBA/foreign paybills. No B2B in this request.
+        // Express credits the Merchant (Partner) account behind BusinessShortCode, so
+        // PartyB stays the platform Go Live shortcode and the tenant destination rides
+        // in AccountReference for the prompt and recon. No B2B leg in this request.
         if (rail.gatewayType() == GatewayType.DARAJA) {
-            StkPushOutcome destError = applyFriendStyleExpressDestination(creds, cfg);
+            StkPushOutcome destError = applyCustodyAccountReference(creds, cfg);
             if (destError != null) {
                 return destError;
             }
@@ -275,10 +273,10 @@ public class PaymentGatewayStkService {
     }
 
     /**
-     * Friend-style Express: PartyB stays the platform collection shortcode;
-     * tenant till/paybill goes in AccountReference (max 12) for the USSD prompt / recon.
+     * Custody Express: PartyB stays the platform collection shortcode; the tenant
+     * till/paybill goes in AccountReference for the USSD prompt and recon.
      */
-    private StkPushOutcome applyFriendStyleExpressDestination(
+    private StkPushOutcome applyCustodyAccountReference(
             Map<String, String> creds, PaymentGatewayConfig cfg) {
         PlatformCustodySettlementService.Destination dest =
                 PlatformCustodySettlementService.parseDestination(
@@ -314,10 +312,7 @@ public class PaymentGatewayStkService {
                     "NO_DESTINATION",
                     "Add a till or paybill in Payments settings.");
         }
-        // Express caps AccountReference at 12 characters.
-        if (accountRef.length() > 12) {
-            accountRef = accountRef.substring(0, 12);
-        }
+        // DarajaPaymentGateway strips non-alphanumerics and caps the value at 12.
         creds.put("accountReference", accountRef);
         return null;
     }

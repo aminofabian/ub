@@ -32,8 +32,8 @@ class DarajaStkPushTest {
 
     @Test
     void resolveTransactionType_partyBEqualsShortcodeUsesCollectionType() {
-        // Friend-style: PartyB = collection_account (= BusinessShortCode).
-        // Type must match the Go Live shortcode, not the tenant AccountReference.
+        // PartyB = collection account (= BusinessShortCode). Type must match the
+        // Go Live shortcode, not the tenant destination in AccountReference.
         assertThat(DarajaPaymentGateway.resolveStkTransactionType(
                 Map.of("shortcodeType", "paybill"), "174379", "174379"))
                 .isEqualTo("CustomerPayBillOnline");
@@ -70,7 +70,14 @@ class DarajaStkPushTest {
         assertThat(body.get("AccountReference")).isEqualTo("5552830017");
     }
 
-
+    @Test
+    void accountReference_isAlphanumericAndCapped() {
+        assertThat(DarajaPaymentGateway.accountReference("555 283-0017")).isEqualTo("5552830017");
+        assertThat(DarajaPaymentGateway.accountReference("#ACC/2026 000111222")).isEqualTo("ACC202600011");
+        assertThat(DarajaPaymentGateway.accountReference("  ")).isEqualTo("Kiosk");
+        assertThat(DarajaPaymentGateway.accountReference("---")).isEqualTo("Kiosk");
+        assertThat(DarajaPaymentGateway.accountReference(null)).isEqualTo("Kiosk");
+    }
 
     @Test
     void password_isBase64OfShortcodePasskeyTimestamp() {
@@ -98,7 +105,7 @@ class DarajaStkPushTest {
         assertThat(body.get("Amount")).isEqualTo(150);
         assertThat(body.get("PartyA")).isEqualTo("254722000000");
         assertThat(body.get("PhoneNumber")).isEqualTo("254722000000");
-        assertThat(body.get("AccountReference")).isEqualTo("ORDER-123456");
+        assertThat(body.get("AccountReference")).isEqualTo("ORDER1234567");
         assertThat(body.get("TransactionDesc")).isEqualTo("Kiosk sale pa");
     }
 

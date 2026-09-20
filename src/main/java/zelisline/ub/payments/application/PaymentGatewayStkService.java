@@ -249,18 +249,22 @@ public class PaymentGatewayStkService {
             return null;
         }
         Map<String, String> creds = new LinkedHashMap<>(rail.credentials());
-        // Express credits the Merchant (Partner) account behind BusinessShortCode, so
-        // PartyB stays the platform Go Live shortcode and the tenant destination rides
-        // in AccountReference for the prompt and recon. No B2B leg in this request.
+        // Safaricom FAQ (till under HO) — no B2B:
+        //   BusinessShortCode = platform Go Live shortcode (password / OAuth app)
+        //   PartyB            = shop till (or paybill under the same HO)
+        //   TransactionType   = CustomerBuyGoodsOnline for till /
+        //                       CustomerPayBillOnline for paybill
+        // Money credits PartyB directly. AccountReference is the prompt tag only.
         if (rail.gatewayType() == GatewayType.DARAJA) {
-            StkPushOutcome destError = applyCustodyAccountReference(creds, cfg);
+            StkPushOutcome destError = applyCustodyDirectPartyB(creds, cfg);
             if (destError != null) {
                 return destError;
             }
         }
-        log.info("STK via platform Daraja Express (CUSTODY_MPESA) business={} config={} partyB={} accountRef={}",
+        log.info("STK via platform Daraja Express (CUSTODY_MPESA) business={} config={} partyB={} type={} accountRef={}",
                 cfg.getBusinessId(), cfg.getId(),
-                firstNonBlank(creds.get("shortcode"), creds.get("tillNumber")),
+                firstNonBlank(creds.get("partyB"), creds.get("shortcode")),
+                creds.get("transactionType"),
                 creds.get("accountReference"));
         return initiateWithCredentials(
                 rail.gatewayType().name(),
@@ -274,10 +278,12 @@ public class PaymentGatewayStkService {
     }
 
     /**
-     * Custody Express: PartyB stays the platform collection shortcode; the tenant
-     * till/paybill goes in AccountReference for the USSD prompt and recon.
+     * Custody Express with direct PartyB credit (no B2B): PartyB is the shop's till
+     * or paybill under the same Head Office as BusinessShortCode. Matches Safaricom's
+     * till FAQ — BusinessShortCode = Go Live HO/store, PartyB = till,
+     * TransactionType = CustomerBuyGoodsOnline.
      */
-    private StkPushOutcome applyCustodyAccountReference(
+    private StkPushOutcome applyCustodyDirectPartyB(
             Map<String, String> creds, PaymentGatewayConfig cfg) {
         PlatformCustodySettlementService.Destination dest =
                 PlatformCustodySettlementService.parseDestination(
@@ -289,32 +295,39 @@ public class PaymentGatewayStkService {
                     "Add a till or paybill in Payments settings.");
         }
 
-        // Do not set partyB — DarajaPaymentGateway defaults PartyB = BusinessShortCode.
-        creds.remove("partyB");
-        creds.remove("PartyB");
-        creds.remove("receivingShortcode");
-
+        String partyB;
+        String transactionType;
         String accountRef;
         if (dest.till() != null && !dest.till().isBlank()) {
-            accountRef = digitsOnly(dest.till());
+            partyB = digitsOnly(dest.till());
+            transactionType = "CustomerBuyGoodsOnline";
+            // Leave AccountReference to the order reference in initiateWithCredentials.
+            accountRef = null;
         } else if (dest.paybill() != null && !dest.paybill().isBlank()) {
-            // Prefer the shop account number (e.g. NCBA 5552830017); fall back to paybill digits.
+            partyB = digitsOnly(dest.paybill());
+            transactionType = "CustomerPayBillOnline";
             String account = dest.account() != null ? dest.account().trim() : "";
-            accountRef = !account.isBlank() ? account.replaceAll("\\s+", "") : digitsOnly(dest.paybill());
+            accountRef = !account.isBlank() ? account.replaceAll("\\s+", "") : null;
         } else {
             return StkPushOutcome.rejected(
                     GatewayType.CUSTODY_MPESA.name(),
                     "NO_DESTINATION",
                     "Add a till or paybill in Payments settings.");
         }
-        if (accountRef == null || accountRef.isBlank()) {
+        if (partyB == null || partyB.isBlank() || partyB.length() < 5 || partyB.length() > 7) {
             return StkPushOutcome.rejected(
                     GatewayType.CUSTODY_MPESA.name(),
-                    "NO_DESTINATION",
-                    "Add a till or paybill in Payments settings.");
+                    "INVALID_DESTINATION",
+                    "Till/paybill must be 5–7 digits (Buy Goods till or paybill under Kiosk's Head Office).");
         }
-        // DarajaPaymentGateway strips non-alphanumerics and caps the value at 12.
-        creds.put("accountReference", accountRef);
+
+        creds.put("partyB", partyB);
+        creds.put("transactionType", transactionType);
+        if (accountRef != null && !accountRef.isBlank()) {
+            creds.put("accountReference", accountRef);
+        } else {
+            creds.remove("accountReference");
+        }
         return null;
     }
 

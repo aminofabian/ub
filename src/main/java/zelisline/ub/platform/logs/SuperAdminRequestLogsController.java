@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -90,7 +91,7 @@ public class SuperAdminRequestLogsController {
                 : null;
         List<PlatformRequestLog> rows = repository.findAll(
                 PlatformRequestLogRepository.matches(category, success, since, ip, loadTestRunId),
-                PageRequest.of(0, capped)).getContent();
+                PageRequest.of(0, capped, Sort.by(Sort.Direction.DESC, "loggedAt"))).getContent();
         Map<String, String> tenantNames = resolveTenantNames(rows);
         return rows.stream().map(p -> toRow(p, tenantNames.get(p.getBusinessId()))).toList();
     }

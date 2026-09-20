@@ -31,6 +31,48 @@ class DarajaStkPushTest {
     }
 
     @Test
+    void resolveTransactionType_partyBEqualsShortcodeUsesCollectionType() {
+        // Friend-style: PartyB = collection_account (= BusinessShortCode).
+        // Type must match the Go Live shortcode, not the tenant AccountReference.
+        assertThat(DarajaPaymentGateway.resolveStkTransactionType(
+                Map.of("shortcodeType", "paybill"), "174379", "174379"))
+                .isEqualTo("CustomerPayBillOnline");
+        assertThat(DarajaPaymentGateway.resolveStkTransactionType(
+                Map.of("shortcodeType", "till"), "123456", "123456"))
+                .isEqualTo("CustomerBuyGoodsOnline");
+    }
+
+    @Test
+    void resolveTransactionType_tillUnderHoForcesBuyGoods() {
+        assertThat(DarajaPaymentGateway.resolveStkTransactionType(
+                Map.of("shortcodeType", "paybill"), "123456", "556677"))
+                .isEqualTo("CustomerBuyGoodsOnline");
+    }
+
+    @Test
+    void resolveTransactionType_explicitTransferTypeWins() {
+        assertThat(DarajaPaymentGateway.resolveStkTransactionType(
+                Map.of("shortcodeType", "till", "transfer_type", "CustomerPayBillOnline"),
+                "174379", "174379"))
+                .isEqualTo("CustomerPayBillOnline");
+    }
+
+    @Test
+    void buildBody_paybillCollectionMatchesExpressSample() {
+        Map<String, Object> body = DarajaPaymentGateway.buildStkRequestBody(
+                "174379", "PWD", "20210628092408", "CustomerPayBillOnline",
+                BigDecimal.ONE, "254722000000", "174379",
+                "https://api.example.com/webhooks/daraja/stk", "5552830017", "Payment");
+
+        assertThat(body.get("BusinessShortCode")).isEqualTo("174379");
+        assertThat(body.get("PartyB")).isEqualTo("174379");
+        assertThat(body.get("TransactionType")).isEqualTo("CustomerPayBillOnline");
+        assertThat(body.get("AccountReference")).isEqualTo("5552830017");
+    }
+
+
+
+    @Test
     void password_isBase64OfShortcodePasskeyTimestamp() {
         String password = DarajaPaymentGateway.stkPassword("174379", "passkey", "20210628092408");
 

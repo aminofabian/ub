@@ -173,9 +173,10 @@ public class PlatformCustodySettlementService {
             log.error("Custody settle blocked for push={} provider=OFF", push.getId());
             return;
         }
-        // Daraja till/paybill-only is Lipa Na M-Pesa C2B to the shop destination (not B2B).
+        // Direct C2B to Party B — no B2B settle for Daraja custody.
         if (PlatformMpesaCustodyProviders.DARAJA.equals(provider)) {
-            log.info("Skipping Daraja B2B settle for custody STK push={} (direct Party B)", push.getId());
+            log.info("Skipping Daraja B2B settle for custody STK push={} (direct Party B, no B2B)",
+                    push.getId());
             return;
         }
 

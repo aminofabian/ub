@@ -47,9 +47,10 @@ import zelisline.ub.payments.domain.spi.WebhookResult;
  * {@code shortcodeType} ({@code paybill}|{@code till}), {@code environment}.
  *
  * <p>Party A = customer MSISDN. {@code BusinessShortCode} and the STK password always
- * come from the Daraja app (platform or BYO). When {@code partyB} is set (till/paybill-only
- * tenants), that number is sent as Party B with {@code CustomerBuyGoodsOnline} or
- * {@code CustomerPayBillOnline} so the prompt names the shop destination.
+ * come from the Daraja app (platform or BYO) — the shortcode used on Go Live.
+ * Per Safaricom FAQ, a Buy Goods till under that Head Office may be sent as
+ * {@code PartyB} with {@code CustomerBuyGoodsOnline}. Arbitrary bank paybills
+ * are not supported (and there is no B2B settle on this path).
  */
 @Component
 public class DarajaPaymentGateway implements PaymentGateway {
@@ -122,8 +123,8 @@ public class DarajaPaymentGateway implements PaymentGateway {
             return StkPushResponse.rejected("INVALID_AMOUNT", "amount must be at least 1");
         }
 
-        // Party B defaults to the app's own shortcode; till/paybill-only tenants send their
-        // destination (which must sit under the same Head Office as BusinessShortCode).
+        // Express sample: PartyB defaults to BusinessShortCode. Till-under-HO FAQ may
+        // set PartyB to a store till (then type must be CustomerBuyGoodsOnline).
         String partyB = shortcode;
         String destination = digitsOnly(firstNonBlank(
                 creds.get("partyB"), creds.get("PartyB"), creds.get("receivingShortcode")));
@@ -135,9 +136,13 @@ public class DarajaPaymentGateway implements PaymentGateway {
             partyB = destination;
         }
 
+        // TransactionType follows the credit party, not the tenant AccountReference:
+        //   PartyB == BusinessShortCode + paybill → CustomerPayBillOnline
+        //   PartyB == BusinessShortCode + till    → CustomerBuyGoodsOnline
+        //   PartyB is a different till (HO FAQ)   → CustomerBuyGoodsOnline
+        String transactionType = resolveStkTransactionType(creds, shortcode, partyB);
         String timestamp = mpesaTimestamp();
         String password = stkPassword(shortcode, passkey, timestamp);
-        String transactionType = stkTransactionType(creds);
         String accountRef = firstNonBlank(creds.get("accountReference"), request.reference(), "Kiosk");
         String callback = request.callbackBaseUrl().replaceAll("/$", "") + "/webhooks/daraja/stk";
 
@@ -249,6 +254,38 @@ public class DarajaPaymentGateway implements PaymentGateway {
     /** {@code CustomerBuyGoodsOnline} for tills, {@code CustomerPayBillOnline} for paybills. */
     static String stkTransactionType(Map<String, String> creds) {
         return isPaybill(creds) ? "CustomerPayBillOnline" : "CustomerBuyGoodsOnline";
+    }
+
+    /**
+     * Express TransactionType rules (Safaricom docs + friend-style multi-tenant):
+     * <ul>
+     *   <li>Explicit {@code transactionType} / {@code transfer_type} in creds wins.</li>
+     *   <li>If PartyB differs from BusinessShortCode → Buy Goods till under HO →
+     *       {@code CustomerBuyGoodsOnline}.</li>
+     *   <li>Else PartyB == BusinessShortCode → type of the Go Live shortcode
+     *       ({@code shortcodeType} paybill|till).</li>
+     * </ul>
+     * Tenant destination in AccountReference must never flip this.
+     */
+    static String resolveStkTransactionType(Map<String, String> creds, String businessShortCode, String partyB) {
+        String explicit = firstNonBlank(
+                creds.get("transactionType"),
+                creds.get("TransactionType"),
+                creds.get("transfer_type"),
+                creds.get("transferType"));
+        if (explicit != null) {
+            String t = explicit.trim();
+            if ("CustomerBuyGoodsOnline".equalsIgnoreCase(t) || "buygoods".equalsIgnoreCase(t) || "till".equalsIgnoreCase(t)) {
+                return "CustomerBuyGoodsOnline";
+            }
+            if ("CustomerPayBillOnline".equalsIgnoreCase(t) || "paybill".equalsIgnoreCase(t)) {
+                return "CustomerPayBillOnline";
+            }
+        }
+        if (partyB != null && businessShortCode != null && !partyB.equals(businessShortCode)) {
+            return "CustomerBuyGoodsOnline";
+        }
+        return stkTransactionType(creds);
     }
 
     static Map<String, Object> buildStkRequestBody(

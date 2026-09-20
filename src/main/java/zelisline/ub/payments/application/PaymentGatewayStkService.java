@@ -248,16 +248,21 @@ public class PaymentGatewayStkService {
             return null;
         }
         Map<String, String> creds = new LinkedHashMap<>(rail.credentials());
-        if (rail.gatewayType() == GatewayType.DARAJA && !applyDarajaDestination(creds, cfg)) {
-            // Without a destination the prompt would credit the platform shortcode instead of
-            // the shop, and till/paybill-only has no settlement leg to recover from that.
-            return StkPushOutcome.rejected(
-                    GatewayType.CUSTODY_MPESA.name(),
-                    "NO_DESTINATION",
-                    "This M-Pesa lane has no till or paybill saved. Add it in Payments settings.");
+        // Same shape as working multi-tenant Express integrations:
+        //   PartyB           = platform collection_account (Go Live shortcode)
+        //   AccountReference = tenant destination (till / paybill account)
+        // Money credits the Merchant (Partner) on Go Live — Express never PartyB-routes
+        // to NCBA/foreign paybills. No B2B in this request.
+        if (rail.gatewayType() == GatewayType.DARAJA) {
+            StkPushOutcome destError = applyFriendStyleExpressDestination(creds, cfg);
+            if (destError != null) {
+                return destError;
+            }
         }
-        log.info("STK via platform {} (CUSTODY_MPESA) business={} config={} partyB={}",
-                rail.provider(), cfg.getBusinessId(), cfg.getId(), creds.get("partyB"));
+        log.info("STK via platform Daraja Express (CUSTODY_MPESA) business={} config={} partyB={} accountRef={}",
+                cfg.getBusinessId(), cfg.getId(),
+                firstNonBlank(creds.get("shortcode"), creds.get("tillNumber")),
+                creds.get("accountReference"));
         return initiateWithCredentials(
                 rail.gatewayType().name(),
                 cfg.getId(),
@@ -270,31 +275,71 @@ public class PaymentGatewayStkService {
     }
 
     /**
-     * Points the platform Daraja app at the shop's till/paybill: Party B is the shop, the
-     * BusinessShortCode and passkey stay the platform's (Lipa Na M-Pesa Express, direct credit).
-     *
-     * @return false when the config carries no usable destination
+     * Friend-style Express: PartyB stays the platform collection shortcode;
+     * tenant till/paybill goes in AccountReference (max 12) for the USSD prompt / recon.
      */
-    private boolean applyDarajaDestination(Map<String, String> creds, PaymentGatewayConfig cfg) {
+    private StkPushOutcome applyFriendStyleExpressDestination(
+            Map<String, String> creds, PaymentGatewayConfig cfg) {
         PlatformCustodySettlementService.Destination dest =
                 PlatformCustodySettlementService.parseDestination(
                         cfg.getDisplayInstructionsJson(), objectMapper);
         if (dest == null) {
-            return false;
+            return StkPushOutcome.rejected(
+                    GatewayType.CUSTODY_MPESA.name(),
+                    "NO_DESTINATION",
+                    "Add a till or paybill in Payments settings.");
         }
+
+        // Do not set partyB — DarajaPaymentGateway defaults PartyB = BusinessShortCode.
+        creds.remove("partyB");
+        creds.remove("PartyB");
+        creds.remove("receivingShortcode");
+
+        String accountRef;
         if (dest.till() != null && !dest.till().isBlank()) {
-            creds.put("partyB", dest.till());
-            creds.put("shortcodeType", "till");
-            return true;
+            accountRef = digitsOnly(dest.till());
+        } else if (dest.paybill() != null && !dest.paybill().isBlank()) {
+            // Prefer the shop account number (e.g. NCBA 5552830017); fall back to paybill digits.
+            String account = dest.account() != null ? dest.account().trim() : "";
+            accountRef = !account.isBlank() ? account.replaceAll("\\s+", "") : digitsOnly(dest.paybill());
+        } else {
+            return StkPushOutcome.rejected(
+                    GatewayType.CUSTODY_MPESA.name(),
+                    "NO_DESTINATION",
+                    "Add a till or paybill in Payments settings.");
         }
-        if (dest.paybill() != null && !dest.paybill().isBlank()) {
-            creds.put("partyB", dest.paybill());
-            creds.put("shortcodeType", "paybill");
-            creds.put("accountReference",
-                    dest.account() != null && !dest.account().isBlank() ? dest.account() : "Kiosk");
-            return true;
+        if (accountRef == null || accountRef.isBlank()) {
+            return StkPushOutcome.rejected(
+                    GatewayType.CUSTODY_MPESA.name(),
+                    "NO_DESTINATION",
+                    "Add a till or paybill in Payments settings.");
         }
-        return false;
+        // Express caps AccountReference at 12 characters.
+        if (accountRef.length() > 12) {
+            accountRef = accountRef.substring(0, 12);
+        }
+        creds.put("accountReference", accountRef);
+        return null;
+    }
+
+    private static String digitsOnly(String value) {
+        if (value == null) {
+            return null;
+        }
+        String digits = value.replaceAll("\\D", "");
+        return digits.isBlank() ? null : digits;
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String v : values) {
+            if (v != null && !v.isBlank()) {
+                return v;
+            }
+        }
+        return null;
     }
 
     private StkPushOutcome tryPlatformDaraja(

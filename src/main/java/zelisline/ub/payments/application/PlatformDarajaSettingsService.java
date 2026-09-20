@@ -170,7 +170,8 @@ public class PlatformDarajaSettingsService {
             merged.put("consumerSecret", body.consumerSecret().trim());
         }
         if (body.passkey() != null && !body.passkey().isBlank()) {
-            merged.put("passkey", body.passkey().trim());
+            // Go Live emails often wrap the hex passkey; whitespace breaks MerchantValidate.
+            merged.put("passkey", sanitizePasskey(body.passkey()));
         }
         if (body.initiatorName() != null && !body.initiatorName().isBlank()) {
             merged.put("initiatorName", body.initiatorName().trim());
@@ -265,6 +266,15 @@ public class PlatformDarajaSettingsService {
     private static boolean isPresent(Map<String, String> map, String key) {
         String v = map.get(key);
         return v != null && !v.isBlank();
+    }
+
+    /** Lipa Na M-Pesa passkeys are hex; strip spaces/newlines from email pastes. */
+    static String sanitizePasskey(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String cleaned = raw.replaceAll("\\s+", "").trim();
+        return cleaned.isEmpty() ? null : cleaned;
     }
 
     private static String normalizeEnv(String env) {

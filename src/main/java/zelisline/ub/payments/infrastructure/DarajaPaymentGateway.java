@@ -114,6 +114,7 @@ public class DarajaPaymentGateway implements PaymentGateway {
         if (passkey == null || passkey.isBlank()) {
             return StkPushResponse.rejected("MISSING_PASSKEY", "passkey is required in credentials");
         }
+        passkey = passkey.replaceAll("\\s+", "").trim();
         if (isSandboxPasskey(passkey) && isProduction(creds)) {
             return StkPushResponse.rejected("SANDBOX_PASSKEY",
                     "This is Safaricom's sandbox passkey on a production shortcode. Daraja accepts "

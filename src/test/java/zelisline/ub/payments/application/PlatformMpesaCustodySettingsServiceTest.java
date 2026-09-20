@@ -22,8 +22,7 @@ import zelisline.ub.payments.domain.PlatformMpesaCustodySettings;
 import zelisline.ub.payments.repository.PlatformMpesaCustodySettingsRepository;
 
 /**
- * SA custody-provider gating: only ready rails can be selected; Daraja stays blocked
- * until disburse ships.
+ * SA custody-provider gating: till/paybill-only is Daraja Lipa Na M-Pesa for now.
  */
 @SuppressWarnings("unchecked")
 class PlatformMpesaCustodySettingsServiceTest {
@@ -63,8 +62,9 @@ class PlatformMpesaCustodySettingsServiceTest {
     }
 
     @Test
-    void update_kopokopoRejectedWhenCredentialsMissing() {
-        when(kioskPaySettings.kopokopoCredentials()).thenReturn(Optional.empty());
+    void update_kopokopoRejectedWhileDarajaOnly() {
+        when(kioskPaySettings.kopokopoCredentials())
+                .thenReturn(Optional.of(Map.of("clientId", "c", "tillNumber", "123456")));
 
         assertThatThrownBy(() ->
                 service.update(new UpdatePlatformMpesaCustodySettingsRequest("KOPOKOPO")))
@@ -74,26 +74,14 @@ class PlatformMpesaCustodySettingsServiceTest {
     }
 
     @Test
-    void update_kopokopoAllowedWhenReady() {
-        when(kioskPaySettings.kopokopoCredentials())
-                .thenReturn(Optional.of(Map.of("clientId", "c", "tillNumber", "123456")));
-
-        PlatformMpesaCustodySettingsResponse res =
-                service.update(new UpdatePlatformMpesaCustodySettingsRequest("KOPOKOPO"));
-
-        assertThat(res.custodyProvider()).isEqualTo(PlatformMpesaCustodyProviders.KOPOKOPO);
-        assertThat(res.kopokopoReady()).isTrue();
-    }
-
-    @Test
-    void update_darajaBlockedUntilDisburseShips() {
+    void update_darajaAllowedWhenCollectReady() {
         when(darajaSettings.isEnabledAndConfigured()).thenReturn(true);
 
-        assertThatThrownBy(() ->
-                service.update(new UpdatePlatformMpesaCustodySettingsRequest("DARAJA")))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.BAD_REQUEST);
+        PlatformMpesaCustodySettingsResponse res =
+                service.update(new UpdatePlatformMpesaCustodySettingsRequest("DARAJA"));
+
+        assertThat(res.custodyProvider()).isEqualTo(PlatformMpesaCustodyProviders.DARAJA);
+        assertThat(res.darajaReady()).isTrue();
     }
 
     @Test
@@ -108,9 +96,8 @@ class PlatformMpesaCustodySettingsServiceTest {
     @Test
     void availability_reflectsActiveProviderReadiness() {
         when(repository.findById(PlatformMpesaCustodySettings.SINGLETON_ID))
-                .thenReturn(Optional.of(settings(PlatformMpesaCustodyProviders.KOPOKOPO)));
-        when(kioskPaySettings.kopokopoCredentials())
-                .thenReturn(Optional.of(Map.of("clientId", "c")));
+                .thenReturn(Optional.of(settings(PlatformMpesaCustodyProviders.DARAJA)));
+        when(darajaSettings.isEnabledAndConfigured()).thenReturn(true);
 
         assertThat(service.availabilityForTenant().available()).isTrue();
         assertThat(service.custodyAvailableForTenants()).isTrue();

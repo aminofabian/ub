@@ -51,18 +51,14 @@ public class PlatformMpesaCustodySettingsService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
         }
 
-        if (PlatformMpesaCustodyProviders.KOPOKOPO.equals(provider) && !isKopokopoReady()) {
+        if (PlatformMpesaCustodyProviders.KOPOKOPO.equals(provider)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Platform KopoKopo is not ready (need Kiosk Pay KopoKopo credentials for STK and Send Money).");
+                    "Till/paybill-only uses Daraja for now. Set the provider to Daraja or Off.");
         }
         if (PlatformMpesaCustodyProviders.DARAJA.equals(provider)) {
             if (!isDarajaCollectReady()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "Platform Daraja is not enabled/configured.");
-            }
-            if (!isDarajaDisburseAvailable()) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "Platform Daraja disburse is not configured yet (enable Daraja, then add the B2B initiator name/password in Super Admin → Payments). Use KopoKopo for till/paybill-only, or leave Off.");
             }
         }
 
@@ -84,10 +80,10 @@ public class PlatformMpesaCustodySettingsService {
             return false;
         }
         if (PlatformMpesaCustodyProviders.KOPOKOPO.equals(p)) {
-            return isKopokopoReady();
+            return false;
         }
         if (PlatformMpesaCustodyProviders.DARAJA.equals(p)) {
-            return isDarajaCollectReady() && isDarajaDisburseAvailable();
+            return isDarajaCollectReady();
         }
         return false;
     }
@@ -96,17 +92,14 @@ public class PlatformMpesaCustodySettingsService {
     public String notAvailableMessage() {
         String p = activeProvider();
         if (PlatformMpesaCustodyProviders.OFF.equals(p)) {
-            return "Kiosk-powered till/paybill is Off. Ask Super Admin to set Platform custody provider to KopoKopo or Daraja.";
+            return "Kiosk-powered till/paybill is Off. Ask Super Admin to set Platform custody provider to Daraja.";
         }
-        if (PlatformMpesaCustodyProviders.KOPOKOPO.equals(p) && !isKopokopoReady()) {
-            return "Platform KopoKopo is selected for custody but credentials are missing.";
+        if (PlatformMpesaCustodyProviders.KOPOKOPO.equals(p)) {
+            return "Till/paybill-only is Daraja-only right now. Ask Super Admin to set the provider to Daraja.";
         }
         if (PlatformMpesaCustodyProviders.DARAJA.equals(p)) {
             if (!isDarajaCollectReady()) {
-                return "Platform Daraja is selected for custody but is not enabled.";
-            }
-            if (!isDarajaDisburseAvailable()) {
-                return "Platform Daraja is selected for custody but B2B disburse credentials are missing.";
+                return "Platform Daraja is selected but is not enabled.";
             }
         }
         return "Kiosk-powered till/paybill is not available.";

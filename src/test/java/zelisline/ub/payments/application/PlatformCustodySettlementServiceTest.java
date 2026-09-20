@@ -164,20 +164,13 @@ class PlatformCustodySettlementServiceTest {
     }
 
     @Test
-    void onStkConfirmed_darajaRail_settlesViaB2B() {
+    void onStkConfirmed_darajaRail_doesNotB2bSettle() {
         when(configRepository.findById(CONFIG_ID)).thenReturn(Optional.of(custodyConfig()));
-        when(settlementRepository.findByStkPushId("push-1")).thenReturn(Optional.empty());
-        when(darajaGateway.sendB2B(any())).thenReturn(
-                new DarajaPaymentGateway.B2BResult(true, "conv-1", "orig-1", "0", "Accepted"));
 
         service.onStkConfirmed(custodyPush(GatewayType.DARAJA));
 
-        assertThat(store).hasSize(1);
-        PlatformCustodySettlement row = store.values().iterator().next();
-        assertThat(row.getProvider()).isEqualTo(PlatformMpesaCustodyProviders.DARAJA);
-        assertThat(row.getStatus()).isEqualTo(PlatformCustodySettlementStatuses.SETTLING);
-        assertThat(row.getDisbursementId()).isEqualTo("conv-1");
-        verify(darajaGateway).sendB2B(any());
+        verify(settlementRepository, never()).save(any());
+        verify(darajaGateway, never()).sendB2B(any());
     }
 
     @Test

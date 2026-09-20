@@ -45,10 +45,10 @@ import zelisline.ub.payments.domain.spi.WebhookResult;
  * {@code consumerKey}, {@code consumerSecret}, {@code passkey}, {@code shortcode},
  * {@code shortcodeType} ({@code paybill}|{@code till}), {@code environment}.
  *
- * <p>Party A = customer MSISDN; Party B = shortcode (Paybill or Buy Goods till).
- * Party B is always forced equal to {@code BusinessShortCode} from credentials —
- * a separate {@code partyB} credential key is ignored (and logged) so callers cannot
- * attempt “platform keys + tenant till” routing, which Safaricom does not support.
+ * <p>Party A = customer MSISDN. {@code BusinessShortCode} and the STK password always
+ * come from the Daraja app (platform or BYO). When {@code partyB} is set (till/paybill-only
+ * tenants), that number is sent as Party B with {@code CustomerBuyGoodsOnline} or
+ * {@code CustomerPayBillOnline} so the prompt names the shop destination.
  */
 @Component
 public class DarajaPaymentGateway implements PaymentGateway {
@@ -115,18 +115,16 @@ public class DarajaPaymentGateway implements PaymentGateway {
                 (shortcode + passkey + timestamp).getBytes(StandardCharsets.UTF_8));
 
         boolean paybill = isPaybill(creds);
-        String transactionType = paybill ? "CustomerPayBillOnline" : "CustomerBuyGoodsOnline";
-        // Hard rule: PartyB === BusinessShortCode === credential shortcode. Never honor a
-        // divergent partyB / receivingAccount override (would imply impossible cross-merchant STK).
         String partyB = shortcode;
         String overridePartyB = firstNonBlank(creds.get("partyB"), creds.get("PartyB"), creds.get("receivingShortcode"));
-        if (overridePartyB != null && !overridePartyB.equals(shortcode)) {
-            log.warn(
-                    "Ignoring Daraja partyB override={} — STK PartyB must equal BusinessShortCode={}",
-                    overridePartyB, shortcode);
+        if (overridePartyB != null && !overridePartyB.isBlank()) {
+            partyB = overridePartyB.replaceAll("\\D", "");
+            paybill = isPaybill(creds);
         }
+        String transactionType = paybill ? "CustomerPayBillOnline" : "CustomerBuyGoodsOnline";
         // AccountReference must stay short — Daraja caps ~12 chars for some shortcodes.
-        String accountRef = truncate(request.reference() != null ? request.reference() : "Kiosk", 12);
+        String accountRef = truncate(
+                firstNonBlank(creds.get("accountReference"), request.reference(), "Kiosk"), 12);
         String description = truncate(
                 request.description() != null ? request.description() : "Payment", 13);
 

@@ -173,6 +173,11 @@ public class PlatformCustodySettlementService {
             log.error("Custody settle blocked for push={} provider=OFF", push.getId());
             return;
         }
+        // Daraja till/paybill-only is Lipa Na M-Pesa C2B to the shop destination (not B2B).
+        if (PlatformMpesaCustodyProviders.DARAJA.equals(provider)) {
+            log.info("Skipping Daraja B2B settle for custody STK push={} (direct Party B)", push.getId());
+            return;
+        }
 
         PlatformCustodySettlement row = new PlatformCustodySettlement();
         row.setBusinessId(push.getBusinessId());
@@ -380,15 +385,11 @@ public class PlatformCustodySettlementService {
                 return new RailTestResult(false, "DARAJA_NOT_READY",
                         "Platform Daraja is not enabled/configured.");
             }
-            if (!daraja.isB2bConfigured()) {
-                return new RailTestResult(false, "DARAJA_DISBURSE_NOT_READY",
-                        "Daraja B2B initiator name/password are missing in Super Admin → Payments.");
-            }
             try {
                 ValidationResult result = darajaPaymentGateway.validateCredentials(
                         daraja.credentials().orElse(Map.of()));
                 return result.valid()
-                        ? new RailTestResult(true, null, "Kiosk rail reachable — collect and settle on Daraja B2B.")
+                        ? new RailTestResult(true, null, "Daraja Lipa Na M-Pesa is reachable.")
                         : new RailTestResult(false,
                                 result.errorCode() != null ? result.errorCode() : "AUTH_FAILED",
                                 result.errorMessage() != null ? result.errorMessage() : "Platform Daraja could not be reached.");

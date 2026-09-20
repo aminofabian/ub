@@ -2,6 +2,7 @@ package zelisline.ub.payments.application;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -246,17 +247,42 @@ public class PaymentGatewayStkService {
         if (rail == null || rail.credentials() == null || rail.credentials().isEmpty()) {
             return null;
         }
-        log.info("STK via platform {} (CUSTODY_MPESA) business={} config={}",
-                rail.provider(), cfg.getBusinessId(), cfg.getId());
+        Map<String, String> creds = new LinkedHashMap<>(rail.credentials());
+        if (rail.gatewayType() == GatewayType.DARAJA) {
+            applyDarajaDestination(creds, cfg);
+        }
+        log.info("STK via platform {} (CUSTODY_MPESA) business={} config={} partyB={}",
+                rail.provider(), cfg.getBusinessId(), cfg.getId(), creds.get("partyB"));
         return initiateWithCredentials(
                 rail.gatewayType().name(),
                 cfg.getId(),
                 cfg.getBusinessId(),
-                rail.credentials(),
+                creds,
                 phoneNumber,
                 amount,
                 reference,
                 description);
+    }
+
+    private void applyDarajaDestination(Map<String, String> creds, PaymentGatewayConfig cfg) {
+        PlatformCustodySettlementService.Destination dest =
+                PlatformCustodySettlementService.parseDestination(
+                        cfg.getDisplayInstructionsJson(), objectMapper);
+        if (dest == null) {
+            return;
+        }
+        if (dest.till() != null && !dest.till().isBlank()) {
+            creds.put("partyB", dest.till());
+            creds.put("shortcodeType", "till");
+            return;
+        }
+        if (dest.paybill() != null && !dest.paybill().isBlank()) {
+            creds.put("partyB", dest.paybill());
+            creds.put("shortcodeType", "paybill");
+            if (dest.account() != null && !dest.account().isBlank()) {
+                creds.put("accountReference", dest.account());
+            }
+        }
     }
 
     private StkPushOutcome tryPlatformDaraja(

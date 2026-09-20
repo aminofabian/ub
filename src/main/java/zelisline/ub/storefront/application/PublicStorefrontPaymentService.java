@@ -117,12 +117,12 @@ public class PublicStorefrontPaymentService {
                     && platformCustodySettlementService.platformRailsReady()) {
                 String label = cfg.getLabel() != null && !cfg.getLabel().isBlank()
                         ? cfg.getLabel()
-                        : "Till / paybill via Kiosk";
+                        : "M-Pesa till / paybill";
                 online.add(new PublicOnlinePaymentMethod(
                         cfg.getId(),
                         type.name(),
                         label,
-                        "Kiosk settles",
+                        "Enter your PIN on the prompt",
                         "stk"
                 ));
             }

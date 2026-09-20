@@ -9,7 +9,8 @@ import java.security.PublicKey;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.security.spec.X509EncodedKeySpec;
-import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -68,6 +69,7 @@ public class DarajaPaymentGateway implements PaymentGateway {
     private static final int HTTP_SOCKET_TIMEOUT_MS = 15_000;
 
     private static final DateTimeFormatter TIMESTAMP_FMT = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+    private static final ZoneId MPESA_ZONE = ZoneId.of("Africa/Nairobi");
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Map<String, CachedToken> tokenCache = new ConcurrentHashMap<>();
@@ -100,9 +102,19 @@ public class DarajaPaymentGateway implements PaymentGateway {
             return StkPushResponse.rejected("MISSING_PASSKEY", "passkey is required in credentials");
         }
 
+        shortcode = digitsOnly(shortcode);
+        if (!isValidShortcode(shortcode)) {
+            return StkPushResponse.rejected("INVALID_SHORTCODE",
+                    "BusinessShortCode must be the 5-7 digit shortcode used on Go Live");
+        }
+
         String phone = normalizeMsisdn(request.phoneNumber());
         if (phone == null) {
             return StkPushResponse.rejected("MISSING_PHONE", "phoneNumber is required");
+        }
+        if (!isValidMsisdn(phone)) {
+            return StkPushResponse.rejected("INVALID_PHONE",
+                    "phoneNumber must be a Safaricom M-Pesa number in the 2547XXXXXXXX format");
         }
 
         BigDecimal amount = request.amount().setScale(0, RoundingMode.HALF_UP);
@@ -110,38 +122,28 @@ public class DarajaPaymentGateway implements PaymentGateway {
             return StkPushResponse.rejected("INVALID_AMOUNT", "amount must be at least 1");
         }
 
-        String timestamp = LocalDateTime.now().format(TIMESTAMP_FMT);
-        String password = Base64.getEncoder().encodeToString(
-                (shortcode + passkey + timestamp).getBytes(StandardCharsets.UTF_8));
-
-        boolean paybill = isPaybill(creds);
+        // Party B defaults to the app's own shortcode; till/paybill-only tenants send their
+        // destination (which must sit under the same Head Office as BusinessShortCode).
         String partyB = shortcode;
-        String overridePartyB = firstNonBlank(creds.get("partyB"), creds.get("PartyB"), creds.get("receivingShortcode"));
-        if (overridePartyB != null && !overridePartyB.isBlank()) {
-            partyB = overridePartyB.replaceAll("\\D", "");
-            paybill = isPaybill(creds);
+        String destination = digitsOnly(firstNonBlank(
+                creds.get("partyB"), creds.get("PartyB"), creds.get("receivingShortcode")));
+        if (destination != null) {
+            if (!isValidShortcode(destination)) {
+                return StkPushResponse.rejected("INVALID_PARTY_B",
+                        "Destination till/paybill must be 5-7 digits");
+            }
+            partyB = destination;
         }
-        String transactionType = paybill ? "CustomerPayBillOnline" : "CustomerBuyGoodsOnline";
-        // AccountReference must stay short — Daraja caps ~12 chars for some shortcodes.
-        String accountRef = truncate(
-                firstNonBlank(creds.get("accountReference"), request.reference(), "Kiosk"), 12);
-        String description = truncate(
-                request.description() != null ? request.description() : "Payment", 13);
 
+        String timestamp = mpesaTimestamp();
+        String password = stkPassword(shortcode, passkey, timestamp);
+        String transactionType = stkTransactionType(creds);
+        String accountRef = firstNonBlank(creds.get("accountReference"), request.reference(), "Kiosk");
         String callback = request.callbackBaseUrl().replaceAll("/$", "") + "/webhooks/daraja/stk";
 
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("BusinessShortCode", shortcode);
-        body.put("Password", password);
-        body.put("Timestamp", timestamp);
-        body.put("TransactionType", transactionType);
-        body.put("Amount", amount.intValueExact());
-        body.put("PartyA", phone);
-        body.put("PartyB", partyB);
-        body.put("PhoneNumber", phone);
-        body.put("CallBackURL", callback);
-        body.put("AccountReference", accountRef);
-        body.put("TransactionDesc", description);
+        Map<String, Object> body = buildStkRequestBody(
+                shortcode, password, timestamp, transactionType, amount, phone, partyB,
+                callback, accountRef, request.description());
 
         try {
             String accessToken = obtainAccessToken(creds);
@@ -163,7 +165,8 @@ public class DarajaPaymentGateway implements PaymentGateway {
 
             if (response.getStatus() >= 200 && response.getStatus() < 300
                     && ("0".equals(responseCode) || checkoutId != null)) {
-                log.info("Daraja STK accepted: checkoutId={} partyB={} type={}", checkoutId, partyB, transactionType);
+                log.info("Daraja STK accepted: checkoutId={} shortcode={} partyB={} type={}",
+                        checkoutId, shortcode, partyB, transactionType);
                 return StkPushResponse.accepted(
                         checkoutId,
                         merchantId,
@@ -171,11 +174,13 @@ public class DarajaPaymentGateway implements PaymentGateway {
                         responseDesc != null ? responseDesc : "Success");
             }
 
+            String errorCode = text(root, "errorCode");
             String error = firstNonBlank(text(root, "errorMessage"), responseDesc, response.getBody());
-            log.warn("Daraja STK rejected: status={} body={}", response.getStatus(), response.getBody());
+            log.warn("Daraja STK rejected: status={} shortcode={} partyB={} body={}",
+                    response.getStatus(), shortcode, partyB, response.getBody());
             return StkPushResponse.rejected(
-                    responseCode != null ? responseCode : String.valueOf(response.getStatus()),
-                    error != null ? error : "STK request declined");
+                    firstNonBlank(errorCode, responseCode, String.valueOf(response.getStatus())),
+                    stkErrorMessage(errorCode, error));
         } catch (Exception e) {
             log.error("Daraja STK failed", e);
             return StkPushResponse.rejected("NETWORK_ERROR", e.getMessage() != null ? e.getMessage() : "Daraja STK failed");
@@ -202,9 +207,9 @@ public class DarajaPaymentGateway implements PaymentGateway {
             return new StkStatusResponse("ERROR", "shortcode/passkey required", false, false, null, null);
         }
 
-        String timestamp = LocalDateTime.now().format(TIMESTAMP_FMT);
-        String password = Base64.getEncoder().encodeToString(
-                (shortcode + passkey + timestamp).getBytes(StandardCharsets.UTF_8));
+        shortcode = digitsOnly(shortcode);
+        String timestamp = mpesaTimestamp();
+        String password = stkPassword(shortcode, passkey, timestamp);
 
         Map<String, Object> body = Map.of(
                 "BusinessShortCode", shortcode,
@@ -224,37 +229,115 @@ public class DarajaPaymentGateway implements PaymentGateway {
                     .body(json)
                     .asString();
 
-            String raw = response.getBody();
-            JsonNode root = objectMapper.readTree(raw != null ? raw : "{}");
-            String resultCode = firstNonBlank(text(root, "ResultCode"), text(root, "ResponseCode"));
-            String resultDesc = firstNonBlank(text(root, "ResultDesc"), text(root, "ResponseDescription"));
-
-            if ("0".equals(resultCode)) {
-                // Query success does not always include receipt — treat completed without receipt
-                // only when ResultDesc indicates success; receipt may arrive via callback.
-                return new StkStatusResponse(resultCode, resultDesc, true, false, null, raw);
-            }
-            // 1032 = cancelled by user; 1037 = timeout; 4999 = request still processing sometimes
-            if (resultCode != null && !"4999".equals(resultCode) && !"1".equals(resultCode)) {
-                // Daraja uses ResultCode 0 success; non-zero terminal failures for query
-                // while request is still open often return ResponseCode "0" with ResultCode pending.
-                if ("1032".equals(resultCode) || "1037".equals(resultCode) || "1001".equals(resultCode)) {
-                    return new StkStatusResponse(resultCode, resultDesc, false, true, null, raw);
-                }
-            }
-            // Still processing / unknown — leave pending
-            if (resultCode == null || "1".equals(resultCode) || "4999".equals(resultCode)) {
-                return new StkStatusResponse(
-                        resultCode != null ? resultCode : "PENDING",
-                        resultDesc != null ? resultDesc : "Pending",
-                        false, false, null, raw);
-            }
-            // Other non-zero → failed
-            return new StkStatusResponse(resultCode, resultDesc, false, true, null, raw);
+            return parseStkQueryResponse(response.getBody(), objectMapper);
         } catch (Exception e) {
             log.warn("Daraja STK query failed checkoutId={}: {}", checkoutRequestId, e.getMessage());
             return new StkStatusResponse("ERROR", e.getMessage(), false, false, null, null);
         }
+    }
+
+    /** Timestamp must be M-Pesa (Nairobi) wall clock, not the host's zone. */
+    static String mpesaTimestamp() {
+        return ZonedDateTime.now(MPESA_ZONE).format(TIMESTAMP_FMT);
+    }
+
+    static String stkPassword(String shortcode, String passkey, String timestamp) {
+        return Base64.getEncoder().encodeToString(
+                (shortcode + passkey + timestamp).getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** {@code CustomerBuyGoodsOnline} for tills, {@code CustomerPayBillOnline} for paybills. */
+    static String stkTransactionType(Map<String, String> creds) {
+        return isPaybill(creds) ? "CustomerPayBillOnline" : "CustomerBuyGoodsOnline";
+    }
+
+    static Map<String, Object> buildStkRequestBody(
+            String shortcode,
+            String password,
+            String timestamp,
+            String transactionType,
+            BigDecimal amount,
+            String phone,
+            String partyB,
+            String callbackUrl,
+            String accountReference,
+            String description) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("BusinessShortCode", shortcode);
+        body.put("Password", password);
+        body.put("Timestamp", timestamp);
+        body.put("TransactionType", transactionType);
+        body.put("Amount", amount.setScale(0, RoundingMode.HALF_UP).intValueExact());
+        body.put("PartyA", phone);
+        body.put("PartyB", partyB);
+        body.put("PhoneNumber", phone);
+        body.put("CallBackURL", callbackUrl);
+        // Shown to the customer in the prompt — Daraja caps it at 12 characters.
+        body.put("AccountReference", truncate(firstNonBlank(accountReference, "Kiosk"), 12));
+        body.put("TransactionDesc", truncate(firstNonBlank(description, "Payment"), 13));
+        return body;
+    }
+
+    /**
+     * Query replies with ResultCode 0 (paid) or a terminal code (1032 cancelled, 1037 timeout).
+     * While the prompt is still on the handset Daraja answers with an {@code errorCode} instead,
+     * so anything carrying one stays pending rather than failing the push.
+     */
+    static StkStatusResponse parseStkQueryResponse(String raw, ObjectMapper mapper) {
+        JsonNode root;
+        try {
+            root = mapper.readTree(raw != null && !raw.isBlank() ? raw : "{}");
+        } catch (Exception e) {
+            return new StkStatusResponse("PENDING", "Unreadable query response", false, false, null, raw);
+        }
+
+        String errorCode = text(root, "errorCode");
+        if (errorCode != null) {
+            return new StkStatusResponse(errorCode,
+                    firstNonBlank(text(root, "errorMessage"), "Still processing"),
+                    false, false, null, raw);
+        }
+
+        String resultCode = firstNonBlank(text(root, "ResultCode"), text(root, "ResponseCode"));
+        String resultDesc = firstNonBlank(text(root, "ResultDesc"), text(root, "ResponseDescription"));
+
+        if ("0".equals(resultCode)) {
+            // The receipt only arrives on the callback, so leave it null here.
+            return new StkStatusResponse(resultCode, resultDesc, true, false, null, raw);
+        }
+        if (resultCode == null || "1".equals(resultCode) || "4999".equals(resultCode)) {
+            return new StkStatusResponse(
+                    resultCode != null ? resultCode : "PENDING",
+                    resultDesc != null ? resultDesc : "Pending",
+                    false, false, null, raw);
+        }
+        return new StkStatusResponse(resultCode, resultDesc, false, true, null, raw);
+    }
+
+    /** Daraja error codes are terse — add the fix so cashiers see something actionable. */
+    static String stkErrorMessage(String errorCode, String errorMessage) {
+        String fallback = firstNonBlank(errorMessage, "STK request declined");
+        if (errorCode == null) {
+            return fallback;
+        }
+        String hint = switch (errorCode) {
+            case "404.001.03" -> "Daraja access token was rejected — check the consumer key and secret.";
+            case "400.002.02" -> "Daraja rejected a request field — check the shortcode and destination.";
+            case "500.001.1001" -> "Daraja rejected the shortcode or passkey, or a prompt is already "
+                    + "open on that phone. Wait a minute and retry.";
+            case "500.003.02", "500.003.03" -> "Daraja is rate limiting or busy — retry shortly.";
+            default -> null;
+        };
+        return hint == null ? fallback : fallback + " — " + hint;
+    }
+
+    /** Paybill / till / store numbers are 5-7 digits. */
+    private static boolean isValidShortcode(String shortcode) {
+        return shortcode != null && shortcode.matches("\\d{5,7}");
+    }
+
+    private static boolean isValidMsisdn(String phone) {
+        return phone != null && phone.matches("254[17]\\d{8}");
     }
 
     @Override

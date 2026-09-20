@@ -188,12 +188,12 @@ public class PaymentGatewayStkService {
                     businessId, GatewayType.CUSTODY_MPESA, GatewayStatus.ACTIVE)) {
                 String label = cfg.getLabel() != null && !cfg.getLabel().isBlank()
                         ? cfg.getLabel()
-                        : "Till / paybill via Kiosk";
+                        : "Till / paybill";
                 rails.add(new PosStkRailResponse(
                         cfg.getId(),
                         GatewayType.CUSTODY_MPESA.name(),
                         label,
-                        "Kiosk settles",
+                        "Lipa Na M-Pesa",
                         cfg.getId().equals(defaultId) || cfg.isDefault()));
             }
         }
@@ -248,8 +248,13 @@ public class PaymentGatewayStkService {
             return null;
         }
         Map<String, String> creds = new LinkedHashMap<>(rail.credentials());
-        if (rail.gatewayType() == GatewayType.DARAJA) {
-            applyDarajaDestination(creds, cfg);
+        if (rail.gatewayType() == GatewayType.DARAJA && !applyDarajaDestination(creds, cfg)) {
+            // Without a destination the prompt would credit the platform shortcode instead of
+            // the shop, and till/paybill-only has no settlement leg to recover from that.
+            return StkPushOutcome.rejected(
+                    GatewayType.CUSTODY_MPESA.name(),
+                    "NO_DESTINATION",
+                    "This M-Pesa lane has no till or paybill saved. Add it in Payments settings.");
         }
         log.info("STK via platform {} (CUSTODY_MPESA) business={} config={} partyB={}",
                 rail.provider(), cfg.getBusinessId(), cfg.getId(), creds.get("partyB"));
@@ -264,25 +269,32 @@ public class PaymentGatewayStkService {
                 description);
     }
 
-    private void applyDarajaDestination(Map<String, String> creds, PaymentGatewayConfig cfg) {
+    /**
+     * Points the platform Daraja app at the shop's till/paybill: Party B is the shop, the
+     * BusinessShortCode and passkey stay the platform's (Lipa Na M-Pesa Express, direct credit).
+     *
+     * @return false when the config carries no usable destination
+     */
+    private boolean applyDarajaDestination(Map<String, String> creds, PaymentGatewayConfig cfg) {
         PlatformCustodySettlementService.Destination dest =
                 PlatformCustodySettlementService.parseDestination(
                         cfg.getDisplayInstructionsJson(), objectMapper);
         if (dest == null) {
-            return;
+            return false;
         }
         if (dest.till() != null && !dest.till().isBlank()) {
             creds.put("partyB", dest.till());
             creds.put("shortcodeType", "till");
-            return;
+            return true;
         }
         if (dest.paybill() != null && !dest.paybill().isBlank()) {
             creds.put("partyB", dest.paybill());
             creds.put("shortcodeType", "paybill");
-            if (dest.account() != null && !dest.account().isBlank()) {
-                creds.put("accountReference", dest.account());
-            }
+            creds.put("accountReference",
+                    dest.account() != null && !dest.account().isBlank() ? dest.account() : "Kiosk");
+            return true;
         }
+        return false;
     }
 
     private StkPushOutcome tryPlatformDaraja(

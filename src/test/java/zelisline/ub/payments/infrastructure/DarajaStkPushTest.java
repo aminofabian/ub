@@ -1,0 +1,123 @@
+package zelisline.ub.payments.infrastructure;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import java.util.Map;
+
+import org.junit.jupiter.api.Test;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import zelisline.ub.payments.domain.spi.StkStatusResponse;
+
+/**
+ * Lipa Na M-Pesa Express (STK push): request body shape, till/paybill routing, query parsing.
+ */
+class DarajaStkPushTest {
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    @Test
+    void transactionType_followsShortcodeType() {
+        assertThat(DarajaPaymentGateway.stkTransactionType(Map.of("shortcodeType", "till")))
+                .isEqualTo("CustomerBuyGoodsOnline");
+        assertThat(DarajaPaymentGateway.stkTransactionType(Map.of("shortcodeType", "paybill")))
+                .isEqualTo("CustomerPayBillOnline");
+        assertThat(DarajaPaymentGateway.stkTransactionType(Map.of()))
+                .isEqualTo("CustomerPayBillOnline");
+    }
+
+    @Test
+    void password_isBase64OfShortcodePasskeyTimestamp() {
+        String password = DarajaPaymentGateway.stkPassword("174379", "passkey", "20210628092408");
+
+        assertThat(new String(Base64.getDecoder().decode(password), StandardCharsets.UTF_8))
+                .isEqualTo("174379passkey20210628092408");
+    }
+
+    @Test
+    void timestamp_isFourteenDigits() {
+        assertThat(DarajaPaymentGateway.mpesaTimestamp()).matches("\\d{14}");
+    }
+
+    @Test
+    void buildBody_tillDestinationKeepsAppShortcodeAsBusinessShortCode() {
+        Map<String, Object> body = DarajaPaymentGateway.buildStkRequestBody(
+                "174379", "PWD", "20210628092408", "CustomerBuyGoodsOnline",
+                new BigDecimal("150.49"), "254722000000", "556677",
+                "https://api.example.com/webhooks/daraja/stk", "ORDER-123456789", "Kiosk sale payment");
+
+        assertThat(body.get("BusinessShortCode")).isEqualTo("174379");
+        assertThat(body.get("PartyB")).isEqualTo("556677");
+        assertThat(body.get("TransactionType")).isEqualTo("CustomerBuyGoodsOnline");
+        assertThat(body.get("Amount")).isEqualTo(150);
+        assertThat(body.get("PartyA")).isEqualTo("254722000000");
+        assertThat(body.get("PhoneNumber")).isEqualTo("254722000000");
+        assertThat(body.get("AccountReference")).isEqualTo("ORDER-123456");
+        assertThat(body.get("TransactionDesc")).isEqualTo("Kiosk sale pa");
+    }
+
+    @Test
+    void buildBody_fallsBackForBlankReferenceAndDescription() {
+        Map<String, Object> body = DarajaPaymentGateway.buildStkRequestBody(
+                "174379", "PWD", "20210628092408", "CustomerPayBillOnline",
+                BigDecimal.ONE, "254722000000", "174379",
+                "https://api.example.com/webhooks/daraja/stk", null, null);
+
+        assertThat(body.get("AccountReference")).isEqualTo("Kiosk");
+        assertThat(body.get("TransactionDesc")).isEqualTo("Payment");
+        assertThat(body.keySet()).containsExactly(
+                "BusinessShortCode", "Password", "Timestamp", "TransactionType", "Amount",
+                "PartyA", "PartyB", "PhoneNumber", "CallBackURL", "AccountReference", "TransactionDesc");
+    }
+
+    @Test
+    void query_resultCodeZeroIsPaid() {
+        StkStatusResponse status = DarajaPaymentGateway.parseStkQueryResponse("""
+                {
+                  "ResponseCode": "0",
+                  "ResultCode": "0",
+                  "ResultDesc": "The service request is processed successfully."
+                }
+                """, MAPPER);
+
+        assertThat(status.completed()).isTrue();
+        assertThat(status.failed()).isFalse();
+    }
+
+    @Test
+    void query_cancelledByUserIsTerminalFailure() {
+        StkStatusResponse status = DarajaPaymentGateway.parseStkQueryResponse("""
+                { "ResultCode": "1032", "ResultDesc": "Request cancelled by user" }
+                """, MAPPER);
+
+        assertThat(status.failed()).isTrue();
+        assertThat(status.completed()).isFalse();
+    }
+
+    @Test
+    void query_errorCodeStaysPending() {
+        StkStatusResponse status = DarajaPaymentGateway.parseStkQueryResponse("""
+                {
+                  "requestId": "1c5b-4ba8",
+                  "errorCode": "500.001.1001",
+                  "errorMessage": "The transaction is being processed"
+                }
+                """, MAPPER);
+
+        assertThat(status.completed()).isFalse();
+        assertThat(status.failed()).isFalse();
+        assertThat(status.resultCode()).isEqualTo("500.001.1001");
+    }
+
+    @Test
+    void errorMessage_addsMitigationForKnownCodes() {
+        assertThat(DarajaPaymentGateway.stkErrorMessage("404.001.03", "Invalid Access Token"))
+                .contains("Invalid Access Token")
+                .contains("consumer key");
+        assertThat(DarajaPaymentGateway.stkErrorMessage(null, "Boom")).isEqualTo("Boom");
+    }
+}

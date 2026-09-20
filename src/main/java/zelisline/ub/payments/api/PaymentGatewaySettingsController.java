@@ -62,7 +62,7 @@ public class PaymentGatewaySettingsController {
     }
 
     /**
-     * Whether the tenant may add a till/paybill-only (Kiosk settles) method, and on
+     * Whether the tenant may add a till/paybill-only (Lipa Na M-Pesa, no keys) method, and on
      * which platform rail. Lets the UI gate the option instead of failing on save.
      */
     @GetMapping("/mpesa-custody")

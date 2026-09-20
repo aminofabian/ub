@@ -182,6 +182,47 @@ class DarajaStkPushTest {
     }
 
     @Test
+    void query_resultCode4999StaysPending() {
+        StkStatusResponse status = DarajaPaymentGateway.parseStkQueryResponse("""
+                {
+                  "ResponseCode": "0",
+                  "ResultCode": "4999",
+                  "ResultDesc": "Wrong credentials"
+                }
+                """, MAPPER);
+
+        assertThat(status.completed()).isFalse();
+        assertThat(status.failed()).isFalse();
+        assertThat(status.resultCode()).isEqualTo("4999");
+    }
+
+    @Test
+    void query_insufficientBalanceIsTerminal() {
+        StkStatusResponse status = DarajaPaymentGateway.parseStkQueryResponse("""
+                { "ResultCode": "1", "ResultDesc": "The balance is insufficient" }
+                """, MAPPER);
+
+        assertThat(status.failed()).isTrue();
+        assertThat(status.completed()).isFalse();
+    }
+
+    @Test
+    void classifyStkResultCode_threeBuckets() {
+        assertThat(DarajaPaymentGateway.classifyStkResultCode("0"))
+                .isEqualTo(DarajaPaymentGateway.StkResultBucket.SUCCESS);
+        assertThat(DarajaPaymentGateway.classifyStkResultCode("1032"))
+                .isEqualTo(DarajaPaymentGateway.StkResultBucket.TERMINAL_FAILURE);
+        assertThat(DarajaPaymentGateway.classifyStkResultCode("1"))
+                .isEqualTo(DarajaPaymentGateway.StkResultBucket.TERMINAL_FAILURE);
+        assertThat(DarajaPaymentGateway.classifyStkResultCode("4999"))
+                .isEqualTo(DarajaPaymentGateway.StkResultBucket.PENDING);
+        assertThat(DarajaPaymentGateway.classifyStkResultCode("9999"))
+                .isEqualTo(DarajaPaymentGateway.StkResultBucket.PENDING);
+        assertThat(DarajaPaymentGateway.classifyStkResultCode(null))
+                .isEqualTo(DarajaPaymentGateway.StkResultBucket.PENDING);
+    }
+
+    @Test
     void query_errorCodeStaysPending() {
         StkStatusResponse status = DarajaPaymentGateway.parseStkQueryResponse("""
                 {

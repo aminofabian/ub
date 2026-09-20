@@ -130,9 +130,17 @@ public class DarajaWebhookController {
      * acknowledged as OK regardless of the ResultCode inside. That makes a declined payment
      * indistinguishable from a successful one in the request log unless the failure is
      * recorded explicitly.
+     *
+     * <p>Also surfaces ResultDesc "Wrong credentials" even when the ResultCode (e.g. 4999)
+     * is classified as still-pending — the payment stays open, but ops can see the passkey
+     * problem.
      */
     private static void recordCallbackFailure(String type, WebhookResult result, String resultCode) {
-        if (result == null || !result.terminalFailure()) {
+        if (result == null) {
+            return;
+        }
+        boolean credentialHint = DarajaPaymentGateway.looksLikeWrongCredentials(result.failureMessage());
+        if (!result.terminalFailure() && !credentialHint) {
             return;
         }
         String desc = result.failureMessage() == null || result.failureMessage().isBlank()
@@ -145,6 +153,11 @@ public class DarajaWebhookController {
         StringBuilder detail = new StringBuilder(desc);
         if (resultCode != null && !resultCode.isBlank()) {
             detail.append("\nResultCode: ").append(resultCode);
+        }
+        if (credentialHint && !result.terminalFailure()) {
+            detail.append("\n\nThis ResultCode is treated as still-pending for the payment, ")
+                    .append("but ResultDesc says Wrong credentials — check the Lipa Na M-Pesa ")
+                    .append("passkey matches the Go Live shortcode in Super Admin → Platform → Daraja.");
         }
         if (result.gatewayCheckoutId() != null) {
             detail.append("\nCheckoutRequestID: ").append(result.gatewayCheckoutId());

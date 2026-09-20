@@ -389,17 +389,55 @@ public class DarajaPaymentGateway implements PaymentGateway {
         String resultCode = firstNonBlank(text(root, "ResultCode"), text(root, "ResponseCode"));
         String resultDesc = firstNonBlank(text(root, "ResultDesc"), text(root, "ResponseDescription"));
 
-        if ("0".equals(resultCode)) {
-            // The receipt only arrives on the callback, so leave it null here.
-            return new StkStatusResponse(resultCode, resultDesc, true, false, null, raw);
-        }
-        if (resultCode == null || "1".equals(resultCode) || "4999".equals(resultCode)) {
-            return new StkStatusResponse(
+        return switch (classifyStkResultCode(resultCode)) {
+            case SUCCESS -> new StkStatusResponse(resultCode, resultDesc, true, false, null, raw);
+            case TERMINAL_FAILURE -> new StkStatusResponse(resultCode, resultDesc, false, true, null, raw);
+            case PENDING -> new StkStatusResponse(
                     resultCode != null ? resultCode : "PENDING",
                     resultDesc != null ? resultDesc : "Pending",
                     false, false, null, raw);
+        };
+    }
+
+    /**
+     * Three-bucket STK ResultCode classification. Anything not explicitly listed stays
+     * {@link StkResultBucket#PENDING} — Safaricom's undocumented codes (notably 4999)
+     * must never fail a payment; see https://www.codewithkarani.com/blog/mpesa-resultcode-4999-not-a-failure
+     */
+    enum StkResultBucket {
+        SUCCESS,
+        TERMINAL_FAILURE,
+        PENDING
+    }
+
+    static StkResultBucket classifyStkResultCode(String resultCode) {
+        if (resultCode == null || resultCode.isBlank()) {
+            return StkResultBucket.PENDING;
         }
-        return new StkStatusResponse(resultCode, resultDesc, false, true, null, raw);
+        String code = resultCode.trim();
+        if ("0".equals(code)) {
+            return StkResultBucket.SUCCESS;
+        }
+        // Known terminal outcomes — match on the numeric code, ignore ResultDesc wording.
+        if ("1".equals(code)           // insufficient balance
+                || "1019".equals(code) // expired
+                || "1032".equals(code) // cancelled by user
+                || "1037".equals(code) // timeout / unreachable
+                || "2001".equals(code) // wrong PIN / initiator
+        ) {
+            return StkResultBucket.TERMINAL_FAILURE;
+        }
+        // 1001 (subscriber locked), 4999 (still processing), and any undocumented code
+        // stay pending — never fail a payment on a code we do not recognise.
+        return StkResultBucket.PENDING;
+    }
+
+    public static boolean looksLikeWrongCredentials(String resultDesc) {
+        if (resultDesc == null || resultDesc.isBlank()) {
+            return false;
+        }
+        String d = resultDesc.toLowerCase();
+        return d.contains("wrong credentials") || d.contains("merchantvalidate");
     }
 
     /** Daraja error codes are terse — add the fix so cashiers see something actionable. */
@@ -448,8 +486,13 @@ public class DarajaPaymentGateway implements PaymentGateway {
             String merchantId = text(stk, "MerchantRequestID");
             String resultCode = text(stk, "ResultCode");
             String resultDesc = text(stk, "ResultDesc");
-            boolean success = "0".equals(resultCode);
-            boolean failed = !success && resultCode != null && !resultCode.isBlank();
+            StkResultBucket bucket = classifyStkResultCode(resultCode);
+            boolean success = bucket == StkResultBucket.SUCCESS;
+            boolean failed = bucket == StkResultBucket.TERMINAL_FAILURE;
+            if (bucket == StkResultBucket.PENDING && resultCode != null) {
+                log.info("Daraja STK callback still pending resultCode={} desc={} checkoutId={}",
+                        resultCode, resultDesc, checkoutId);
+            }
 
             BigDecimal amount = null;
             String receipt = null;
@@ -476,6 +519,11 @@ public class DarajaPaymentGateway implements PaymentGateway {
             }
 
             String eventId = firstNonBlank(receipt, checkoutId, merchantId);
+            // Surface credential-looking pending codes on the request log without failing
+            // the payment — ResultDesc "Wrong credentials" on 4999 is a Safaricom quirk.
+            String failureMessage = failed
+                    ? resultDesc
+                    : (looksLikeWrongCredentials(resultDesc) ? resultDesc : null);
             return new WebhookResult(
                     null,
                     receipt,
@@ -488,7 +536,7 @@ public class DarajaPaymentGateway implements PaymentGateway {
                     eventId,
                     "stk_callback",
                     rawBody,
-                    failed ? resultDesc : null);
+                    failureMessage);
         } catch (Exception e) {
             log.warn("Daraja webhook parse failed: {}", e.getMessage());
             return WebhookResult.empty(rawBody);

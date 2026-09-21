@@ -23,7 +23,7 @@ public record SupplierResponse(
         String payoutTillNumber,
         String payoutPaybillNumber,
         String payoutPaybillAccount,
-        /** Non-null when the M-Pesa payout phone was OTP-verified. */
+        /** Non-null when the M-Pesa payout phone was OTP-verified (optional). */
         Instant payoutPhoneVerifiedAt,
         String kopokopoExternalRecipientUrl,
         String marketplaceSupplierId,

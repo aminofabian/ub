@@ -105,12 +105,9 @@ public class MarketplaceEscrowService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
 
         if (!SupplierDisbursementService.hasAutomatedPayoutDestination(supplier)) {
-            String hint = SupplierPayoutTypes.MOBILE_WALLET.equals(supplier.getPayoutType())
-                    && supplier.getPayoutPhone() != null
-                    && supplier.getPayoutPhoneVerifiedAt() == null
-                    ? "Verify the supplier M-Pesa payout phone before funding escrow"
-                    : "Supplier needs an automated payout destination (M-Pesa phone, till, or paybill)";
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, hint);
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Supplier needs an automated payout destination (M-Pesa phone, till, or paybill)");
         }
 
         String poId = blankToNull(body.purchaseOrderId());
@@ -385,7 +382,7 @@ public class MarketplaceEscrowService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Supplier missing for escrow"));
 
         if (!SupplierDisbursementService.hasAutomatedPayoutDestination(supplier)) {
-            hold.setFailureReason("Supplier payout destination is missing or unverified");
+            hold.setFailureReason("Supplier payout destination is missing");
             finalizeSendMoneyFailed(hold, hold.getFailureReason());
             return;
         }

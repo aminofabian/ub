@@ -154,13 +154,9 @@ public class SupplierDisbursementService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
 
         if (!hasAutomatedPayoutDestination(supplier)) {
-            String hint = SupplierPayoutTypes.MOBILE_WALLET.equals(supplier.getPayoutType())
-                    && supplier.getPayoutPhone() != null
-                    && !supplier.getPayoutPhone().isBlank()
-                    && supplier.getPayoutPhoneVerifiedAt() == null
-                    ? "Verify the supplier M-Pesa payout phone with an SMS code first (Suppliers → payout)."
-                    : "Supplier needs a KopoKopo payout destination (M-Pesa phone, till, or paybill)";
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, hint);
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Supplier needs a KopoKopo payout destination (M-Pesa phone, till, or paybill)");
         }
 
         PaymentGatewayConfig cfg = supplierPayoutSettingsService.resolveActivePayoutConfig(businessId)
@@ -477,8 +473,8 @@ public class SupplierDisbursementService {
         }
         String type = supplier.getPayoutType();
         if (SupplierPayoutTypes.MOBILE_WALLET.equals(type)) {
-            return supplier.getPayoutPhone() != null && !supplier.getPayoutPhone().isBlank()
-                    && supplier.getPayoutPhoneVerifiedAt() != null;
+            // Phone on file is enough — OTP verification is optional, not a Send Money gate.
+            return supplier.getPayoutPhone() != null && !supplier.getPayoutPhone().isBlank();
         }
         if (SupplierPayoutTypes.TILL.equals(type)) {
             return supplier.getPayoutTillNumber() != null && !supplier.getPayoutTillNumber().isBlank();

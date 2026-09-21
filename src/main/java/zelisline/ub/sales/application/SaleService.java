@@ -231,6 +231,7 @@ public class SaleService {
                 businessId, saleId, customerId, walletTenderTotal, resolved.overpay());
         String journalId = postSaleJournal(
                 businessId,
+                req.branchId(),
                 saleId,
                 grandTotal,
                 cogsTotal,
@@ -700,6 +701,7 @@ public class SaleService {
 
     private String postSaleJournal(
             String businessId,
+            String branchId,
             String saleId,
             BigDecimal grandTotal,
             BigDecimal cogs,
@@ -715,6 +717,7 @@ public class SaleService {
 
         JournalEntry entry = new JournalEntry();
         entry.setBusinessId(businessId);
+        entry.setBranchId(blankToNull(branchId));
         entry.setEntryDate(LocalDate.now(ZoneOffset.UTC));
         entry.setSourceType(SalesConstants.JOURNAL_SOURCE_SALE);
         entry.setSourceId(saleId);

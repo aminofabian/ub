@@ -288,10 +288,10 @@ public class SupplierDisbursementService {
 
         SupplierDisbursement disbursement = resolveDisbursement(businessId, parsed);
         if (disbursement == null) {
-            log.warn("KopoKopo send_money: no matching disbursement business={} ref={} id={}",
+            log.warn("KopoKopo send_money: no matching supplier disbursement business={} ref={} id={}",
                     businessId, parsed.reference(), parsed.gatewayCheckoutId());
-            // Do not burn the event id — a later retry may arrive after the disbursement row exists.
-            return true;
+            // Do not burn the event id — expense disbursement (or a later retry) may claim it.
+            return false;
         }
 
         if (!isOpenForConfirm(disbursement)) {

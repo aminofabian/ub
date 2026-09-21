@@ -19,6 +19,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.finance.FinanceConstants;
 import zelisline.ub.finance.api.dto.ExpenseCalendarMonthResponse;
 import zelisline.ub.finance.api.dto.ExpenseCalendarResponse;
@@ -38,6 +44,8 @@ public class ExpenseScheduleOccurrenceService {
     private final ExpenseScheduleRepository expenseScheduleRepository;
     private final ExpenseScheduleOccurrenceRepository occurrenceRepository;
     private final RecurringExpenseService recurringExpenseService;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
 
     @Transactional(readOnly = true)
     public List<ExpenseScheduleOccurrenceResponse> listForMonth(
@@ -184,6 +192,7 @@ public class ExpenseScheduleOccurrenceService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Occurrence not found"));
         ExpenseSchedule schedule = requireSchedule(businessId, occ.getScheduleId());
         ExpenseScheduleOccurrence saved = recurringExpenseService.postExistingOccurrence(schedule, occ, userId);
+        publishOccurrencePosted(businessId, schedule, saved, userId);
         return toResponse(schedule, saved);
     }
 
@@ -199,11 +208,12 @@ public class ExpenseScheduleOccurrenceService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Date is not a due date for this schedule");
         }
         ExpenseScheduleOccurrence saved = recurringExpenseService.postOccurrenceForDate(schedule, occurrenceDate, userId);
+        publishOccurrencePosted(businessId, schedule, saved, userId);
         return toResponse(schedule, saved);
     }
 
     @Transactional
-    public ExpenseScheduleOccurrenceResponse skipById(String businessId, String occurrenceId) {
+    public ExpenseScheduleOccurrenceResponse skipById(String businessId, String occurrenceId, String userId) {
         ExpenseScheduleOccurrence occ = occurrenceRepository.findByIdAndBusinessId(occurrenceId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Occurrence not found"));
         if (FinanceConstants.OCCURRENCE_STATUS_POSTED.equals(occ.getStatus())) {
@@ -215,6 +225,7 @@ public class ExpenseScheduleOccurrenceService {
         occ.setExpenseId(null);
         occ.setPostedAt(null);
         ExpenseScheduleOccurrence saved = occurrenceRepository.save(occ);
+        publishOccurrenceSkipped(businessId, schedule, saved, userId);
         return toResponse(schedule, saved);
     }
 
@@ -222,7 +233,8 @@ public class ExpenseScheduleOccurrenceService {
     public ExpenseScheduleOccurrenceResponse skipByScheduleDate(
             String businessId,
             String scheduleId,
-            LocalDate occurrenceDate
+            LocalDate occurrenceDate,
+            String userId
     ) {
         ExpenseSchedule schedule = requireSchedule(businessId, scheduleId);
         if (!RecurringExpenseService.isDueOn(schedule, occurrenceDate)) {
@@ -246,7 +258,55 @@ public class ExpenseScheduleOccurrenceService {
         occ.setExpenseId(null);
         occ.setPostedAt(null);
         ExpenseScheduleOccurrence saved = occurrenceRepository.save(occ);
+        publishOccurrenceSkipped(businessId, schedule, saved, userId);
         return toResponse(schedule, saved);
+    }
+
+    private void publishOccurrencePosted(
+            String businessId,
+            ExpenseSchedule schedule,
+            ExpenseScheduleOccurrence occ,
+            String userId
+    ) {
+        if (!FinanceConstants.OCCURRENCE_STATUS_POSTED.equals(occ.getStatus())) {
+            return;
+        }
+        auditEventPublisher.publish(auditEventBuilder
+                .builder(AuditEventCategory.FINANCE, AuditEventTypes.EXPENSE_OCCURRENCE_POSTED, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .branchId(schedule.getBranchId())
+                .actor(userId, AuditEventActorType.USER)
+                .target("expense_occurrence", occ.getId())
+                .targetLabel(schedule.getName())
+                .source("web_admin")
+                .metadata(java.util.Map.of(
+                        "scheduleId", schedule.getId(),
+                        "occurrenceDate", occ.getOccurrenceDate().toString(),
+                        "expenseId", occ.getExpenseId() == null ? "" : occ.getExpenseId(),
+                        "amount", schedule.getAmount()
+                ))
+                .build());
+    }
+
+    private void publishOccurrenceSkipped(
+            String businessId,
+            ExpenseSchedule schedule,
+            ExpenseScheduleOccurrence occ,
+            String userId
+    ) {
+        auditEventPublisher.publish(auditEventBuilder
+                .builder(AuditEventCategory.FINANCE, AuditEventTypes.EXPENSE_OCCURRENCE_SKIPPED, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .branchId(schedule.getBranchId())
+                .actor(userId, AuditEventActorType.USER)
+                .target("expense_occurrence", occ.getId())
+                .targetLabel(schedule.getName())
+                .source("web_admin")
+                .metadata(java.util.Map.of(
+                        "scheduleId", schedule.getId(),
+                        "occurrenceDate", occ.getOccurrenceDate().toString()
+                ))
+                .build());
     }
 
     private ExpenseSchedule requireSchedule(String businessId, String scheduleId) {

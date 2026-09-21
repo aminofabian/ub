@@ -26,6 +26,12 @@ public class LedgerBootstrapService {
         ensure(businessId, LedgerAccountCodes.SALES_REVENUE, "Sales revenue", "revenue");
         ensure(businessId, LedgerAccountCodes.COST_OF_GOODS_SOLD, "Cost of goods sold", "expense");
         ensure(businessId, LedgerAccountCodes.OPERATING_EXPENSES, "Operating expenses", "expense");
+        ensure(businessId, LedgerAccountCodes.EXPENSE_RENT, "Rent", "expense");
+        ensure(businessId, LedgerAccountCodes.EXPENSE_UTILITIES, "Utilities", "expense");
+        ensure(businessId, LedgerAccountCodes.EXPENSE_SALARIES, "Salaries", "expense");
+        ensure(businessId, LedgerAccountCodes.EXPENSE_TRANSPORT, "Transport", "expense");
+        ensure(businessId, LedgerAccountCodes.EXPENSE_MAINTENANCE, "Maintenance", "expense");
+        ensure(businessId, LedgerAccountCodes.EXPENSE_PACKAGING_MISC, "Packaging & misc", "expense");
         ensure(businessId, LedgerAccountCodes.SUPPLIER_ADVANCES, "Supplier advances (prepayments)", "asset");
         ensure(businessId, LedgerAccountCodes.LOYALTY_REDEMPTION_LIABILITY, "Loyalty redemption clearing", "liability");
         ensure(businessId, LedgerAccountCodes.LOYALTY_MARKETING_EXPENSE, "Loyalty marketing expense (earn accrual)", "expense");

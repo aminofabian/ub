@@ -14,6 +14,8 @@ public interface ExpenseScheduleOccurrenceRepository extends JpaRepository<Expen
 
     Optional<ExpenseScheduleOccurrence> findByIdAndBusinessId(String id, String businessId);
 
+    Optional<ExpenseScheduleOccurrence> findByExpenseIdAndBusinessId(String expenseId, String businessId);
+
     List<ExpenseScheduleOccurrence> findByBusinessIdAndOccurrenceDateBetween(
             String businessId,
             LocalDate start,

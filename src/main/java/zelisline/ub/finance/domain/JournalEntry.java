@@ -31,6 +31,10 @@ public class JournalEntry {
     @Column(name = "business_id", nullable = false, length = 36)
     private String businessId;
 
+    /** Optional branch attribution for branch-scoped P&amp;L / balance sheet. */
+    @Column(name = "branch_id", length = 36)
+    private String branchId;
+
     @Column(name = "entry_date", nullable = false)
     private LocalDate entryDate;
 

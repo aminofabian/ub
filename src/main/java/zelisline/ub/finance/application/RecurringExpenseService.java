@@ -13,6 +13,13 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
+import zelisline.ub.finance.BusinessTimeZones;
 import zelisline.ub.finance.FinanceConstants;
 import zelisline.ub.finance.api.dto.PostExpenseRequest;
 import zelisline.ub.finance.domain.Expense;
@@ -31,6 +38,8 @@ public class RecurringExpenseService {
     private final ExpenseScheduleRepository expenseScheduleRepository;
     private final ExpenseScheduleOccurrenceRepository occurrenceRepository;
     private final ExpenseService expenseService;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
 
     @Transactional
     public int processAllBusinessesDueToday() {
@@ -38,9 +47,24 @@ public class RecurringExpenseService {
         List<Business> businesses = businessRepository.findByDeletedAtIsNull(org.springframework.data.domain.Pageable.unpaged())
                 .getContent();
         for (Business business : businesses) {
-            ZoneId zone = ZoneId.of(business.getTimezone());
+            ZoneId zone = BusinessTimeZones.of(business);
             LocalDate businessDate = LocalDate.now(zone);
-            total += processBusinessForDate(business.getId(), businessDate);
+            int posted = processBusinessForDate(business.getId(), businessDate);
+            if (posted > 0) {
+                auditEventPublisher.publish(auditEventBuilder
+                        .builder(AuditEventCategory.FINANCE, AuditEventTypes.EXPENSE_SCHEDULES_PROCESSED, AuditEventSeverity.INFO)
+                        .businessId(business.getId())
+                        .actor("scheduler", AuditEventActorType.SCHEDULER)
+                        .target("expense_schedules", business.getId())
+                        .targetLabel("Nightly process " + businessDate)
+                        .source("scheduler")
+                        .metadata(java.util.Map.of(
+                                "date", businessDate.toString(),
+                                "postedCount", posted
+                        ))
+                        .build());
+            }
+            total += posted;
         }
         return total;
     }
@@ -133,7 +157,12 @@ public class RecurringExpenseService {
                             schedule.getBranchId(),
                             schedule.getReceiptS3Key(),
                             schedule.getExpenseLedgerAccountId(),
-                            Instant.now()
+                            FinanceConstants.EXPENSE_PAY_METHOD_MPESA_MANUAL.equals(schedule.getPaymentMethod())
+                                    ? null
+                                    : Instant.now(),
+                            schedule.getCategoryCode(),
+                            FinanceConstants.EXPENSE_SOURCE_RECURRING,
+                            schedule.getVendorMpesaNumber()
                     ),
                     userId
             );
@@ -199,7 +228,12 @@ public class RecurringExpenseService {
                             schedule.getBranchId(),
                             schedule.getReceiptS3Key(),
                             schedule.getExpenseLedgerAccountId(),
-                            Instant.now()
+                            FinanceConstants.EXPENSE_PAY_METHOD_MPESA_MANUAL.equals(schedule.getPaymentMethod())
+                                    ? null
+                                    : Instant.now(),
+                            schedule.getCategoryCode(),
+                            FinanceConstants.EXPENSE_SOURCE_RECURRING,
+                            schedule.getVendorMpesaNumber()
                     ),
                     userId
             );
@@ -257,6 +291,21 @@ public class RecurringExpenseService {
             return nextMonth.withDayOfMonth(day);
         }
         return null;
+    }
+
+    public void publishProcessedAudit(String businessId, LocalDate date, int postedCount, String userId) {
+        auditEventPublisher.publish(auditEventBuilder
+                .builder(AuditEventCategory.FINANCE, AuditEventTypes.EXPENSE_SCHEDULES_PROCESSED, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .actor(userId, AuditEventActorType.USER)
+                .target("expense_schedules", businessId)
+                .targetLabel("Process due " + date)
+                .source("web_admin")
+                .metadata(java.util.Map.of(
+                        "date", date.toString(),
+                        "postedCount", postedCount
+                ))
+                .build());
     }
 
     private static String limit(String input, int max) {

@@ -2,8 +2,9 @@ package zelisline.ub.finance.application;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Instant;
 import java.time.LocalDate;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -15,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.finance.BusinessTimeZones;
 import zelisline.ub.finance.LedgerAccountCodes;
 import zelisline.ub.finance.api.dto.BalanceSheetResponse;
 import zelisline.ub.finance.api.dto.FinancePulseResponse;
@@ -22,13 +24,19 @@ import zelisline.ub.finance.api.dto.ProfitAndLossResponse;
 import zelisline.ub.finance.repository.JournalReportRepository;
 import zelisline.ub.finance.repository.JournalReportRepository.AccountBalance;
 import zelisline.ub.finance.repository.JournalReportRepository.SaleAggregate;
+import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BranchRepository;
+import zelisline.ub.tenancy.repository.BusinessRepository;
 
 /**
  * Owner pulse, simple P&amp;L, and simple balance sheet — the Phase 6 close-out gate
  * Phase 7 Slice 0 promises before MV optimisation begins. All three are journal-backed
  * (with sales/expenses cross-checks for pulse "today") so Phase 7 Slices 2+ can layer MVs
  * over the same numbers without behavioural drift.
+ *
+ * <p><b>Day window rule (ENP-3):</b> business timezone is canonical (same as recurring
+ * expense scheduler). Pulse sales use {@code [local midnight, next local midnight)} as
+ * Instants; expense day lists and default "today" use {@code LocalDate.now(zone)}.
  */
 @Service
 @RequiredArgsConstructor
@@ -39,6 +47,7 @@ public class FinanceReportsService {
 
     private final JournalReportRepository journalReportRepository;
     private final BranchRepository branchRepository;
+    private final BusinessRepository businessRepository;
 
     @Transactional(readOnly = true)
     public FinancePulseResponse pulse(String businessId, LocalDate date, String branchId) {
@@ -47,14 +56,18 @@ public class FinanceReportsService {
 
     @Transactional(readOnly = true)
     public FinancePulseResponse pulse(String businessId, LocalDate date, String branchId, String itemTypeId) {
-        LocalDate day = date != null ? date : LocalDate.now(ZoneOffset.UTC);
+        ZoneId zone = resolveZone(businessId);
+        LocalDate day = date != null ? date : LocalDate.now(zone);
         String resolvedBranch = resolveBranch(businessId, branchId);
         String resolvedType = blankToNull(itemTypeId);
 
+        Instant windowStart = day.atStartOfDay(zone).toInstant();
+        Instant windowEnd = day.plusDays(1).atStartOfDay(zone).toInstant();
+
         SaleAggregate sales = journalReportRepository.sumSalesForWindow(
                 businessId,
-                day.atStartOfDay(ZoneOffset.UTC).toInstant(),
-                day.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant(),
+                windowStart,
+                windowEnd,
                 resolvedBranch,
                 resolvedType
         );
@@ -133,7 +146,8 @@ public class FinanceReportsService {
             );
         }
 
-        List<AccountBalance> rows = journalReportRepository.sumByAccountForPeriod(businessId, from, to);
+        List<AccountBalance> rows = journalReportRepository.sumByAccountForPeriod(
+                businessId, from, to, resolvedBranch);
         BigDecimal revenue = BigDecimal.ZERO;
         BigDecimal cogs = BigDecimal.ZERO;
         BigDecimal operatingExpenses = BigDecimal.ZERO;
@@ -192,10 +206,11 @@ public class FinanceReportsService {
 
     @Transactional(readOnly = true)
     public BalanceSheetResponse balanceSheet(String businessId, LocalDate asOf, String branchId) {
-        LocalDate target = asOf != null ? asOf : LocalDate.now(ZoneOffset.UTC);
+        ZoneId zone = resolveZone(businessId);
+        LocalDate target = asOf != null ? asOf : LocalDate.now(zone);
         String resolvedBranch = resolveBranch(businessId, branchId);
 
-        List<AccountBalance> rows = journalReportRepository.sumByAccountAsOf(businessId, target);
+        List<AccountBalance> rows = journalReportRepository.sumByAccountAsOf(businessId, target, resolvedBranch);
         List<BalanceSheetResponse.LineItem> assets = new ArrayList<>();
         List<BalanceSheetResponse.LineItem> liabilities = new ArrayList<>();
         List<BalanceSheetResponse.LineItem> equity = new ArrayList<>();
@@ -271,6 +286,11 @@ public class FinanceReportsService {
         branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(trimmed, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Branch not found"));
         return trimmed;
+    }
+
+    private ZoneId resolveZone(String businessId) {
+        Business business = businessRepository.findById(businessId).orElse(null);
+        return BusinessTimeZones.of(business);
     }
 
     private static String blankToNull(String value) {

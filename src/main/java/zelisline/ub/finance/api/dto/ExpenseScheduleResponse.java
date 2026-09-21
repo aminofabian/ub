@@ -8,6 +8,7 @@ public record ExpenseScheduleResponse(
         String branchId,
         String name,
         String categoryType,
+        String categoryCode,
         BigDecimal amount,
         String paymentMethod,
         String frequency,

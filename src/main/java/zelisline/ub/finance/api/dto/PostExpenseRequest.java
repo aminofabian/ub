@@ -17,7 +17,9 @@ public record PostExpenseRequest(
         String branchId,
         String receiptS3Key,
         String expenseLedgerAccountId,
-        Instant paidAt
+        Instant paidAt,
+        String categoryCode,
+        String source,
+        String vendorMpesaNumber
 ) {
 }
-

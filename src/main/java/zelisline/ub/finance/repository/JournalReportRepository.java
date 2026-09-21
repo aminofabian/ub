@@ -32,8 +32,9 @@ public interface JournalReportRepository extends JpaRepository<JournalLine, Stri
 
     /**
      * Per-account debit/credit totals for entries with {@code entry_date} between
-     * {@code from} and {@code to} inclusive. Single round-trip; the service applies
-     * the sign convention per account type.
+     * {@code from} and {@code to} inclusive. Pass {@code null} {@code branchId} for
+     * all branches (includes unallocated journals); a non-null branch returns only
+     * entries tagged with that branch.
      */
     @Query(value = """
             select la.id              as ledgerAccountId,
@@ -48,17 +49,20 @@ public interface JournalReportRepository extends JpaRepository<JournalLine, Stri
              where je.business_id = :businessId
                and je.entry_date >= :from
                and je.entry_date <= :to
+               and (:branchId is null or je.branch_id = :branchId)
              group by la.id, la.code, la.name, la.account_type
             """, nativeQuery = true)
     List<AccountBalance> sumByAccountForPeriod(
             @Param("businessId") String businessId,
             @Param("from") LocalDate from,
-            @Param("to") LocalDate to
+            @Param("to") LocalDate to,
+            @Param("branchId") String branchId
     );
 
     /**
      * Per-account totals for every entry on or before {@code asOf} — drives the
-     * balance sheet (`assets = liabilities + equity` identity).
+     * balance sheet (`assets = liabilities + equity` identity). Same branch rule as
+     * {@link #sumByAccountForPeriod}.
      */
     @Query(value = """
             select la.id              as ledgerAccountId,
@@ -72,18 +76,21 @@ public interface JournalReportRepository extends JpaRepository<JournalLine, Stri
               join ledger_accounts la on la.id = jl.ledger_account_id
              where je.business_id = :businessId
                and je.entry_date <= :asOf
+               and (:branchId is null or je.branch_id = :branchId)
              group by la.id, la.code, la.name, la.account_type
             """, nativeQuery = true)
     List<AccountBalance> sumByAccountAsOf(
             @Param("businessId") String businessId,
-            @Param("asOf") LocalDate asOf
+            @Param("asOf") LocalDate asOf,
+            @Param("branchId") String branchId
     );
 
     /**
      * Revenue, COGS, profit, and sale count for completed sales whose {@code sold_at} falls
-     * within the supplied UTC window — pulse uses the OLTP side (PHASE_7_PLAN.md In Scope:
-     * "today" hybrid). Pass {@code null} for {@code branchId} / {@code itemTypeId} to aggregate
-     * across the tenant (or all departments).
+     * within the supplied Instant window. Pulse passes business-TZ midnight bounds
+     * ({@code BusinessTimeZones} / ENP-3), not UTC midnight of the calendar date.
+     * Pass {@code null} for {@code branchId} / {@code itemTypeId} to aggregate across the
+     * tenant (or all departments).
      */
     @Query(value = """
             select coalesce(sum(si.line_total), 0) as revenue,

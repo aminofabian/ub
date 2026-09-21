@@ -329,7 +329,7 @@ public class ShiftService {
         s.setStatus(SalesConstants.SHIFT_STATUS_CLOSED);
 
         if (variance.abs().compareTo(MONEY_TOLERANCE) > 0) {
-            s.setCloseJournalEntryId(postVarianceJournal(businessId, s.getId(), variance));
+            s.setCloseJournalEntryId(postVarianceJournal(businessId, s.getBranchId(), s.getId(), variance));
         }
         shiftRepository.save(s);
 
@@ -694,10 +694,11 @@ public class ShiftService {
     // LEDGER POSTING
     // ========================================================================
 
-    private String postVarianceJournal(String businessId, String shiftId, BigDecimal variance) {
+    private String postVarianceJournal(String businessId, String branchId, String shiftId, BigDecimal variance) {
         BigDecimal amt = variance.abs().setScale(2, RoundingMode.HALF_UP);
         JournalEntry entry = new JournalEntry();
         entry.setBusinessId(businessId);
+        entry.setBranchId(branchId);
         entry.setEntryDate(LocalDate.now(ZoneOffset.UTC));
         entry.setSourceType(SalesConstants.JOURNAL_SOURCE_SHIFT_CLOSE);
         entry.setSourceId(shiftId);

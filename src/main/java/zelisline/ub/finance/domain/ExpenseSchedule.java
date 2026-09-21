@@ -37,6 +37,9 @@ public class ExpenseSchedule {
     @Column(name = "category_type", nullable = false, length = 16)
     private String categoryType;
 
+    @Column(name = "category_code", length = 32)
+    private String categoryCode;
+
     @Column(name = "amount", nullable = false, precision = 14, scale = 2)
     private BigDecimal amount;
 

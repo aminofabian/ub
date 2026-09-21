@@ -7,6 +7,12 @@ public final class LedgerAccountCodes {
     public static final String COST_OF_GOODS_SOLD = "5000";
     /** Operating expenses root (Phase 6). */
     public static final String OPERATING_EXPENSES = "6000";
+    public static final String EXPENSE_RENT = "6010";
+    public static final String EXPENSE_UTILITIES = "6020";
+    public static final String EXPENSE_SALARIES = "6030";
+    public static final String EXPENSE_TRANSPORT = "6040";
+    public static final String EXPENSE_MAINTENANCE = "6050";
+    public static final String EXPENSE_PACKAGING_MISC = "6060";
     public static final String OPERATING_CASH = "1010";
     /** Generic bank account (Phase 6). */
     public static final String BANK_ACCOUNT = "1030";

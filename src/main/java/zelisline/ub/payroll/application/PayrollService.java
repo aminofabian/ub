@@ -44,6 +44,7 @@ import zelisline.ub.payroll.api.dto.SalaryResponse;
 import zelisline.ub.payroll.api.dto.StaffPaySelfAdvanceRow;
 import zelisline.ub.payroll.api.dto.StaffPaySelfPayslipRow;
 import zelisline.ub.payroll.api.dto.StaffPaySelfResponse;
+import zelisline.ub.finance.ExpenseCategoryCodes;
 import zelisline.ub.finance.FinanceConstants;
 import zelisline.ub.finance.api.dto.PostExpenseRequest;
 import zelisline.ub.finance.application.ExpenseService;
@@ -591,7 +592,10 @@ public class PayrollService {
                             expenseBranch,
                             null,
                             null,
-                            payslip.getPaidAt()
+                            payslip.getPaidAt(),
+                            ExpenseCategoryCodes.SALARIES,
+                            FinanceConstants.EXPENSE_SOURCE_PAYROLL,
+                            null
                     ),
                     actorId,
                     "payroll-" + payslip.getId()
@@ -1074,7 +1078,10 @@ public class PayrollService {
                             expenseBranch,
                             null,
                             null,
-                            payslip.getPaidAt()
+                            payslip.getPaidAt(),
+                            ExpenseCategoryCodes.SALARIES,
+                            FinanceConstants.EXPENSE_SOURCE_PAYROLL,
+                            null
                     ),
                     actorId,
                     "payroll-" + payslip.getId()

@@ -22,6 +22,7 @@ public record PostExpenseScheduleRequest(
         String vendorContactName,
         String vendorPhone,
         String vendorMpesaNumber,
-        String vendorLeaseNote
+        String vendorLeaseNote,
+        String categoryCode
 ) {
 }

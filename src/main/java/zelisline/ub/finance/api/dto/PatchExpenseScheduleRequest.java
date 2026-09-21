@@ -18,6 +18,7 @@ public record PatchExpenseScheduleRequest(
         String vendorContactName,
         String vendorPhone,
         String vendorMpesaNumber,
-        String vendorLeaseNote
+        String vendorLeaseNote,
+        String categoryCode
 ) {
 }

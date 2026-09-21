@@ -22,6 +22,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import zelisline.ub.finance.LedgerAccountCodes;
 import zelisline.ub.finance.api.dto.BalanceSheetResponse;
+import zelisline.ub.finance.api.dto.ExpenseResponse;
 import zelisline.ub.finance.api.dto.FinancePulseResponse;
 import zelisline.ub.finance.api.dto.ProfitAndLossResponse;
 import zelisline.ub.finance.domain.Expense;
@@ -92,6 +93,8 @@ class FinanceReportsServiceIT {
     private LedgerBootstrapService ledgerBootstrapService;
     @Autowired
     private FinanceReportsService financeReportsService;
+    @Autowired
+    private ExpenseService expenseService;
 
     @MockitoBean
     @SuppressWarnings("unused")
@@ -155,22 +158,86 @@ class FinanceReportsServiceIT {
     }
 
     @Test
+    void pulseSalesWindow_usesBusinessTimezoneNotUtcMidnight() {
+        // PDT (UTC-7): 2026-06-15 02:00Z == 2026-06-14 19:00 local — belongs to June 14 locally.
+        Business business = businessRepository.findById(TENANT).orElseThrow();
+        business.setTimezone("America/Los_Angeles");
+        businessRepository.save(business);
+
+        Instant soldAt = Instant.parse("2026-06-15T02:00:00Z");
+        LocalDate utcDate = LocalDate.of(2026, 6, 15);
+        LocalDate localDate = LocalDate.of(2026, 6, 14);
+
+        postJournal(localDate, "sale", branchId, List.of(
+                debit(LedgerAccountCodes.OPERATING_CASH, "50.00"),
+                credit(LedgerAccountCodes.SALES_REVENUE, "50.00")
+        ));
+        Sale sale = new Sale();
+        sale.setBusinessId(TENANT);
+        sale.setBranchId(branchId);
+        sale.setShiftId("shift-tz");
+        sale.setStatus(SalesConstants.SALE_STATUS_COMPLETED);
+        sale.setIdempotencyKey("sale-tz-boundary");
+        sale.setGrandTotal(new BigDecimal("50.00"));
+        sale.setSoldBy(userId);
+        sale.setSoldAt(soldAt);
+        saleRepository.save(sale);
+        SaleItem line = new SaleItem();
+        line.setSaleId(sale.getId());
+        line.setLineIndex(0);
+        line.setItemId(UUID.randomUUID().toString());
+        line.setBatchId(UUID.randomUUID().toString());
+        line.setQuantity(new BigDecimal("1.0000"));
+        line.setUnitPrice(new BigDecimal("50.0000"));
+        line.setLineTotal(new BigDecimal("50.00"));
+        line.setUnitCost(BigDecimal.ZERO.setScale(4));
+        line.setCostTotal(BigDecimal.ZERO.setScale(2));
+        line.setProfit(new BigDecimal("50.00"));
+        saleItemRepository.save(line);
+
+        Expense expense = new Expense();
+        expense.setBusinessId(TENANT);
+        expense.setBranchId(branchId);
+        expense.setExpenseDate(localDate);
+        expense.setName("TZ day expense");
+        expense.setCategoryType("variable");
+        expense.setAmount(new BigDecimal("10.00"));
+        expense.setPaymentMethod("cash");
+        expense.setIncludeInCashDrawer(false);
+        expense.setExpenseLedgerAccountId(accountId(LedgerAccountCodes.OPERATING_EXPENSES));
+        expense.setJournalEntryId(UUID.randomUUID().toString());
+        expense.setCreatedBy(userId);
+        expenseRepository.save(expense);
+
+        FinancePulseResponse onLocalDay = financeReportsService.pulse(TENANT, localDate, null);
+        FinancePulseResponse onUtcCalendarDay = financeReportsService.pulse(TENANT, utcDate, null);
+
+        assertThat(onLocalDay.revenue()).isEqualByComparingTo("50.00");
+        assertThat(onUtcCalendarDay.revenue()).isEqualByComparingTo("0.00");
+
+        assertThat(expenseService.listExpensesForDate(TENANT, localDate))
+                .extracting(ExpenseResponse::name)
+                .contains("TZ day expense");
+        assertThat(expenseService.listExpensesForDate(TENANT, utcDate)).isEmpty();
+    }
+
+    @Test
     void pulseAndPlAndBalanceSheet_balanceOnFixturedDay() {
         LocalDate today = LocalDate.now(ZoneOffset.UTC);
         Instant noon = today.atTime(12, 0).toInstant(ZoneOffset.UTC);
 
         // Opening inventory: Dr Inventory 100 / Cr Opening balance equity 100
-        postJournal(today, "opening", List.of(
+        postJournal(today, "opening", branchId, List.of(
                 debit(LedgerAccountCodes.INVENTORY, "100.00"),
                 credit(LedgerAccountCodes.OPENING_BALANCE_EQUITY, "100.00")
         ));
 
         // Cash sale: revenue 100, COGS 60, profit 40.
-        postJournal(today, "sale", List.of(
+        postJournal(today, "sale", branchId, List.of(
                 debit(LedgerAccountCodes.OPERATING_CASH, "100.00"),
                 credit(LedgerAccountCodes.SALES_REVENUE, "100.00")
         ));
-        postJournal(today, "sale_cogs", List.of(
+        postJournal(today, "sale_cogs", branchId, List.of(
                 debit(LedgerAccountCodes.COST_OF_GOODS_SOLD, "60.00"),
                 credit(LedgerAccountCodes.INVENTORY, "60.00")
         ));
@@ -198,7 +265,7 @@ class FinanceReportsServiceIT {
         saleItemRepository.save(line);
 
         // Operating expense paid in cash: 30.
-        String expenseJournalId = postJournal(today, "expense", List.of(
+        String expenseJournalId = postJournal(today, "expense", branchId, List.of(
                 debit(LedgerAccountCodes.OPERATING_EXPENSES, "30.00"),
                 credit(LedgerAccountCodes.OPERATING_CASH, "30.00")
         ));
@@ -283,9 +350,82 @@ class FinanceReportsServiceIT {
                 .isInstanceOf(ResponseStatusException.class);
     }
 
+    @Test
+    void profitAndLossAndBalanceSheet_branchFilterExcludesOtherBranch() {
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+
+        Branch other = new Branch();
+        other.setBusinessId(TENANT);
+        other.setName("Other");
+        branchRepository.save(other);
+        String branchB = other.getId();
+
+        // Branch A: revenue 100, COGS 40, OpEx 10 → net 50
+        postJournal(today, "sale", branchId, List.of(
+                debit(LedgerAccountCodes.OPERATING_CASH, "100.00"),
+                credit(LedgerAccountCodes.SALES_REVENUE, "100.00")
+        ));
+        postJournal(today, "sale_cogs", branchId, List.of(
+                debit(LedgerAccountCodes.COST_OF_GOODS_SOLD, "40.00"),
+                credit(LedgerAccountCodes.INVENTORY, "40.00")
+        ));
+        postJournal(today, "expense", branchId, List.of(
+                debit(LedgerAccountCodes.OPERATING_EXPENSES, "10.00"),
+                credit(LedgerAccountCodes.OPERATING_CASH, "10.00")
+        ));
+
+        // Branch B: revenue 50, COGS 20, OpEx 5 → net 25
+        postJournal(today, "sale", branchB, List.of(
+                debit(LedgerAccountCodes.OPERATING_CASH, "50.00"),
+                credit(LedgerAccountCodes.SALES_REVENUE, "50.00")
+        ));
+        postJournal(today, "sale_cogs", branchB, List.of(
+                debit(LedgerAccountCodes.COST_OF_GOODS_SOLD, "20.00"),
+                credit(LedgerAccountCodes.INVENTORY, "20.00")
+        ));
+        postJournal(today, "expense", branchB, List.of(
+                debit(LedgerAccountCodes.OPERATING_EXPENSES, "5.00"),
+                credit(LedgerAccountCodes.OPERATING_CASH, "5.00")
+        ));
+
+        ProfitAndLossResponse plA = financeReportsService.profitAndLoss(TENANT, today, today, branchId);
+        assertThat(plA.branchId()).isEqualTo(branchId);
+        assertThat(plA.revenue()).isEqualByComparingTo("100.00");
+        assertThat(plA.cogs()).isEqualByComparingTo("40.00");
+        assertThat(plA.operatingExpenses()).isEqualByComparingTo("10.00");
+        assertThat(plA.netOperating()).isEqualByComparingTo("50.00");
+
+        ProfitAndLossResponse plB = financeReportsService.profitAndLoss(TENANT, today, today, branchB);
+        assertThat(plB.branchId()).isEqualTo(branchB);
+        assertThat(plB.revenue()).isEqualByComparingTo("50.00");
+        assertThat(plB.cogs()).isEqualByComparingTo("20.00");
+        assertThat(plB.operatingExpenses()).isEqualByComparingTo("5.00");
+        assertThat(plB.netOperating()).isEqualByComparingTo("25.00");
+
+        ProfitAndLossResponse plAll = financeReportsService.profitAndLoss(TENANT, today, today, null);
+        assertThat(plAll.branchId()).isNull();
+        assertThat(plAll.revenue()).isEqualByComparingTo("150.00");
+        assertThat(plAll.operatingExpenses()).isEqualByComparingTo("15.00");
+
+        BalanceSheetResponse bsA = financeReportsService.balanceSheet(TENANT, today, branchId);
+        assertThat(bsA.branchId()).isEqualTo(branchId);
+        // Cash: +100 -10 = 90; Inventory: -40; earnings in equity
+        assertThat(bsA.totalAssets()).isEqualByComparingTo("50.00");
+
+        BalanceSheetResponse bsB = financeReportsService.balanceSheet(TENANT, today, branchB);
+        assertThat(bsB.branchId()).isEqualTo(branchB);
+        // Cash: +50 -5 = 45; Inventory: -20
+        assertThat(bsB.totalAssets()).isEqualByComparingTo("25.00");
+    }
+
     private String postJournal(LocalDate day, String sourceType, List<JournalLine> lines) {
+        return postJournal(day, sourceType, null, lines);
+    }
+
+    private String postJournal(LocalDate day, String sourceType, String journalBranchId, List<JournalLine> lines) {
         JournalEntry je = new JournalEntry();
         je.setBusinessId(TENANT);
+        je.setBranchId(journalBranchId);
         je.setEntryDate(day);
         je.setSourceType(sourceType);
         je.setSourceId(UUID.randomUUID().toString());

@@ -11,8 +11,14 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
+import zelisline.ub.finance.ExpenseCategoryCodes;
 import zelisline.ub.finance.FinanceConstants;
-import zelisline.ub.finance.LedgerAccountCodes;
 import zelisline.ub.finance.api.dto.ExpenseScheduleResponse;
 import zelisline.ub.finance.api.dto.PatchExpenseScheduleRequest;
 import zelisline.ub.finance.api.dto.PostExpenseScheduleRequest;
@@ -30,6 +36,8 @@ public class ExpenseScheduleService {
     private final LedgerBootstrapService ledgerBootstrapService;
     private final LedgerAccountRepository ledgerAccountRepository;
     private final BranchRepository branchRepository;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
 
     @Transactional
     public ExpenseScheduleResponse create(String businessId, PostExpenseScheduleRequest req, String userId) {
@@ -39,6 +47,8 @@ public class ExpenseScheduleService {
         s.setBranchId(validateBranch(businessId, req.branchId()));
         s.setName(requireName(req.name()));
         s.setCategoryType(requireCategory(req.categoryType()));
+        String categoryCode = resolveCategoryCode(req.categoryCode());
+        s.setCategoryCode(categoryCode);
         s.setAmount(requireAmount(req.amount()));
         s.setPaymentMethod(requirePaymentMethod(req.paymentMethod()));
         s.setFrequency(requireFrequency(req.frequency()));
@@ -50,18 +60,38 @@ public class ExpenseScheduleService {
         s.setActive(true);
         s.setIncludeInCashDrawer(req.includeInCashDrawer() != null && req.includeInCashDrawer());
         s.setReceiptS3Key(blankToNull(req.receiptS3Key()));
-        s.setExpenseLedgerAccountId(resolveExpenseLedger(businessId, req.expenseLedgerAccountId()).getId());
+        s.setExpenseLedgerAccountId(resolveExpenseLedger(businessId, req.expenseLedgerAccountId(), categoryCode).getId());
         s.setAutomationMode(requireAutomationMode(req.automationMode()));
         s.setVendorContactName(blankToNull(req.vendorContactName()));
         s.setVendorPhone(blankToNull(req.vendorPhone()));
         s.setVendorMpesaNumber(blankToNull(req.vendorMpesaNumber()));
         s.setVendorLeaseNote(blankToNull(req.vendorLeaseNote()));
         s.setCreatedBy(userId);
-        return toDto(expenseScheduleRepository.save(s));
+        ExpenseSchedule saved = expenseScheduleRepository.save(s);
+        auditEventPublisher.publish(auditEventBuilder
+                .builder(AuditEventCategory.FINANCE, AuditEventTypes.EXPENSE_SCHEDULE_CREATED, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .branchId(saved.getBranchId())
+                .actor(userId, AuditEventActorType.USER)
+                .target("expense_schedule", saved.getId())
+                .targetLabel(saved.getName())
+                .source("web_admin")
+                .metadata(java.util.Map.of(
+                        "amount", saved.getAmount(),
+                        "frequency", saved.getFrequency(),
+                        "automationMode", saved.getAutomationMode() == null ? "" : saved.getAutomationMode()
+                ))
+                .build());
+        return toDto(saved);
     }
 
     @Transactional
-    public ExpenseScheduleResponse update(String businessId, String scheduleId, PatchExpenseScheduleRequest req) {
+    public ExpenseScheduleResponse update(
+            String businessId,
+            String scheduleId,
+            PatchExpenseScheduleRequest req,
+            String userId
+    ) {
         ExpenseSchedule s = expenseScheduleRepository.findByIdAndBusinessId(scheduleId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Expense schedule not found"));
         if (req.name() != null) {
@@ -95,7 +125,15 @@ public class ExpenseScheduleService {
             s.setReceiptS3Key(blankToNull(req.receiptS3Key()));
         }
         if (req.expenseLedgerAccountId() != null) {
-            s.setExpenseLedgerAccountId(resolveExpenseLedger(businessId, req.expenseLedgerAccountId()).getId());
+            s.setExpenseLedgerAccountId(resolveExpenseLedger(
+                    businessId, req.expenseLedgerAccountId(), s.getCategoryCode()).getId());
+        }
+        if (req.categoryCode() != null) {
+            String categoryCode = resolveCategoryCode(req.categoryCode());
+            s.setCategoryCode(categoryCode);
+            if (req.expenseLedgerAccountId() == null) {
+                s.setExpenseLedgerAccountId(resolveExpenseLedger(businessId, null, categoryCode).getId());
+            }
         }
         if (req.automationMode() != null) {
             s.setAutomationMode(requireAutomationMode(req.automationMode()));
@@ -112,7 +150,17 @@ public class ExpenseScheduleService {
         if (req.vendorLeaseNote() != null) {
             s.setVendorLeaseNote(blankToNull(req.vendorLeaseNote()));
         }
-        return toDto(expenseScheduleRepository.save(s));
+        ExpenseSchedule saved = expenseScheduleRepository.save(s);
+        auditEventPublisher.publish(auditEventBuilder
+                .builder(AuditEventCategory.FINANCE, AuditEventTypes.EXPENSE_SCHEDULE_UPDATED, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .branchId(saved.getBranchId())
+                .actor(userId, AuditEventActorType.USER)
+                .target("expense_schedule", saved.getId())
+                .targetLabel(saved.getName())
+                .source("web_admin")
+                .build());
+        return toDto(saved);
     }
 
     @Transactional(readOnly = true)
@@ -124,16 +172,26 @@ public class ExpenseScheduleService {
     }
 
     @Transactional
-    public ExpenseScheduleResponse deactivate(String businessId, String scheduleId) {
+    public ExpenseScheduleResponse deactivate(String businessId, String scheduleId, String userId) {
         ExpenseSchedule s = expenseScheduleRepository.findByIdAndBusinessId(scheduleId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Expense schedule not found"));
         s.setActive(false);
-        return toDto(expenseScheduleRepository.save(s));
+        ExpenseSchedule saved = expenseScheduleRepository.save(s);
+        auditEventPublisher.publish(auditEventBuilder
+                .builder(AuditEventCategory.FINANCE, AuditEventTypes.EXPENSE_SCHEDULE_DEACTIVATED, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .branchId(saved.getBranchId())
+                .actor(userId, AuditEventActorType.USER)
+                .target("expense_schedule", saved.getId())
+                .targetLabel(saved.getName())
+                .source("web_admin")
+                .build());
+        return toDto(saved);
     }
 
-    private LedgerAccount resolveExpenseLedger(String businessId, String preferredId) {
+    private LedgerAccount resolveExpenseLedger(String businessId, String preferredId, String categoryCode) {
         if (preferredId == null || preferredId.isBlank()) {
-            return ledgerByCode(businessId, LedgerAccountCodes.OPERATING_EXPENSES);
+            return ledgerByCode(businessId, ExpenseCategoryCodes.ledgerCodeFor(categoryCode));
         }
         LedgerAccount account = ledgerAccountRepository.findById(preferredId.trim())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Expense ledger account not found"));
@@ -144,6 +202,14 @@ public class ExpenseScheduleService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Expense ledger account must be expense type");
         }
         return account;
+    }
+
+    private static String resolveCategoryCode(String raw) {
+        try {
+            return ExpenseCategoryCodes.normalize(raw);
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+        }
     }
 
     private LedgerAccount ledgerByCode(String businessId, String code) {
@@ -219,6 +285,7 @@ public class ExpenseScheduleService {
                 s.getBranchId(),
                 s.getName(),
                 s.getCategoryType(),
+                s.getCategoryCode(),
                 s.getAmount(),
                 s.getPaymentMethod(),
                 s.getFrequency(),

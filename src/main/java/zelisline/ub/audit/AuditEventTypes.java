@@ -209,4 +209,19 @@ public final class AuditEventTypes {
     public static final String SUBSCRIPTION_OVERRIDDEN = "subscription.overridden";
     public static final String SUBSCRIPTION_CAMPAIGN_SENT = "subscription.campaign_sent";
     public static final String SUBSCRIPTION_PRE_EXPIRY_SENT = "subscription.pre_expiry_sent";
+
+    // Finance / expenses
+    public static final String EXPENSE_CREATED = "expense.created";
+    public static final String EXPENSE_APPROVED = "expense.approved";
+    public static final String EXPENSE_REJECTED = "expense.rejected";
+    public static final String EXPENSE_SCHEDULE_CREATED = "expense_schedule.created";
+    public static final String EXPENSE_SCHEDULE_UPDATED = "expense_schedule.updated";
+    public static final String EXPENSE_SCHEDULE_DEACTIVATED = "expense_schedule.deactivated";
+    public static final String EXPENSE_OCCURRENCE_POSTED = "expense_occurrence.posted";
+    public static final String EXPENSE_OCCURRENCE_SKIPPED = "expense_occurrence.skipped";
+    public static final String EXPENSE_SCHEDULES_PROCESSED = "expense_schedules.processed";
+    public static final String EXPENSE_DISBURSEMENT_INITIATED = "expense_disbursement.initiated";
+    public static final String EXPENSE_DISBURSEMENT_CONFIRMED = "expense_disbursement.confirmed";
+    public static final String EXPENSE_DISBURSEMENT_FAILED = "expense_disbursement.failed";
+    public static final String EXPENSE_DISBURSEMENT_CANCELLED = "expense_disbursement.cancelled";
 }

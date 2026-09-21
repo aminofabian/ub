@@ -44,7 +44,7 @@ public class FinanceExpenseSchedulesController {
     private final RecurringExpenseService recurringExpenseService;
 
     @PostMapping
-    @PreAuthorize("hasPermission(null, 'finance.expenses.write')")
+    @PreAuthorize("hasPermission(null, 'finance.expenses.manage')")
     @ResponseStatus(HttpStatus.CREATED)
     public ExpenseScheduleResponse create(
             @Valid @RequestBody PostExpenseScheduleRequest body,
@@ -59,21 +59,30 @@ public class FinanceExpenseSchedulesController {
     }
 
     @PatchMapping("/{scheduleId}")
-    @PreAuthorize("hasPermission(null, 'finance.expenses.write')")
+    @PreAuthorize("hasPermission(null, 'finance.expenses.manage')")
     public ExpenseScheduleResponse update(
             @PathVariable String scheduleId,
             @RequestBody PatchExpenseScheduleRequest body,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.requireHuman(request);
-        return expenseScheduleService.update(TenantRequestIds.resolveBusinessId(request), scheduleId, body);
+        var user = CurrentTenantUser.requireHuman(request);
+        return expenseScheduleService.update(
+                TenantRequestIds.resolveBusinessId(request),
+                scheduleId,
+                body,
+                user.userId()
+        );
     }
 
     @DeleteMapping("/{scheduleId}")
-    @PreAuthorize("hasPermission(null, 'finance.expenses.write')")
+    @PreAuthorize("hasPermission(null, 'finance.expenses.manage')")
     public ExpenseScheduleResponse deactivate(@PathVariable String scheduleId, HttpServletRequest request) {
-        CurrentTenantUser.requireHuman(request);
-        return expenseScheduleService.deactivate(TenantRequestIds.resolveBusinessId(request), scheduleId);
+        var user = CurrentTenantUser.requireHuman(request);
+        return expenseScheduleService.deactivate(
+                TenantRequestIds.resolveBusinessId(request),
+                scheduleId,
+                user.userId()
+        );
     }
 
     @GetMapping
@@ -150,10 +159,11 @@ public class FinanceExpenseSchedulesController {
             @PathVariable String occurrenceId,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.requireHuman(request);
+        var user = CurrentTenantUser.requireHuman(request);
         return occurrenceService.skipById(
                 TenantRequestIds.resolveBusinessId(request),
-                occurrenceId
+                occurrenceId,
+                user.userId()
         );
     }
 
@@ -163,11 +173,12 @@ public class FinanceExpenseSchedulesController {
             @Valid @RequestBody PostExpenseOccurrenceRequest body,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.requireHuman(request);
+        var user = CurrentTenantUser.requireHuman(request);
         return occurrenceService.skipByScheduleDate(
                 TenantRequestIds.resolveBusinessId(request),
                 body.scheduleId(),
-                body.occurrenceDate()
+                body.occurrenceDate(),
+                user.userId()
         );
     }
 
@@ -177,11 +188,10 @@ public class FinanceExpenseSchedulesController {
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) java.time.LocalDate date,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.requireHuman(request);
-        int posted = recurringExpenseService.processBusinessForDate(
-                TenantRequestIds.resolveBusinessId(request),
-                date
-        );
+        var user = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        int posted = recurringExpenseService.processBusinessForDate(businessId, date);
+        recurringExpenseService.publishProcessedAudit(businessId, date, posted, user.userId());
         return new ProcessExpenseSchedulesResponse(date, posted);
     }
 }

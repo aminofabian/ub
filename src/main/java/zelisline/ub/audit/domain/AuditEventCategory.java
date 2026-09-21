@@ -13,5 +13,6 @@ public enum AuditEventCategory {
     CUSTOMERS,
     PRODUCTS,
     SUPPLIERS,
-    SYSTEM
+    SYSTEM,
+    FINANCE
 }

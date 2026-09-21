@@ -15,6 +15,15 @@ public final class FinanceConstants {
     public static final String EXPENSE_FREQUENCY_WEEKLY = "weekly";
     public static final String EXPENSE_FREQUENCY_MONTHLY = "monthly";
 
+    public static final String EXPENSE_SOURCE_MANUAL = "manual";
+    public static final String EXPENSE_SOURCE_RECURRING = "recurring";
+    public static final String EXPENSE_SOURCE_PAYROLL = "payroll";
+    public static final String EXPENSE_SOURCE_DRAWER = "drawer";
+
+    public static final String EXPENSE_APPROVAL_POSTED = "posted";
+    public static final String EXPENSE_APPROVAL_PENDING = "pending_approval";
+    public static final String EXPENSE_APPROVAL_REJECTED = "rejected";
+
     public static final String OCCURRENCE_STATUS_POSTED = "posted";
     public static final String OCCURRENCE_STATUS_FAILED = "failed";
     public static final String OCCURRENCE_STATUS_SKIPPED = "skipped";

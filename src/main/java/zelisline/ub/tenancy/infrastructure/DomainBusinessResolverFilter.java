@@ -173,7 +173,9 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
             TenantStatus status = businessRepository.findTenantStatusById(businessId)
                     .orElse(TenantStatus.ACTIVE);
             if (status != TenantStatus.ACTIVE) {
-                if (isBillingRecoveryPath(request)) {
+                // Billing SUSPENDED may still hit auth / subscription / me to pay.
+                // SA INACTIVE is a hard lock — no recovery path.
+                if (status == TenantStatus.SUSPENDED && isBillingRecoveryPath(request)) {
                     request.setAttribute(TenantRequestAttributes.BUSINESS_ID, businessId);
                     filterChain.doFilter(request, response);
                     return;

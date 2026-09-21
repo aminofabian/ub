@@ -115,6 +115,36 @@ public class Business {
         countryCode = normalizeCode(countryCode, "KE");
     }
 
+    /**
+     * Recomputes {@link #tenantStatus} (and {@link #suspensionReason}) from the
+     * SA {@code active} flag and subscription billing status.
+     *
+     * <ul>
+     *   <li>{@code active=false} → {@link TenantStatus#INACTIVE} (blocks login;
+     *       reason {@link SuspensionReason#MANUAL_SUPPORT})</li>
+     *   <li>{@code active=true} + billing suspended → {@link TenantStatus#SUSPENDED}
+     *       (auth recovery paths still work)</li>
+     *   <li>otherwise → {@link TenantStatus#ACTIVE}</li>
+     * </ul>
+     *
+     * <p>Call after mutating {@code active} or {@code subscriptionBillingStatus}.
+     * Does not clear {@link #billingSuspendedAt} — billing flows own that column.
+     */
+    public void syncAccessGate() {
+        if (!active) {
+            tenantStatus = TenantStatus.INACTIVE;
+            suspensionReason = SuspensionReason.MANUAL_SUPPORT;
+            return;
+        }
+        if (subscriptionBillingStatus == SubscriptionBillingStatus.SUSPENDED) {
+            tenantStatus = TenantStatus.SUSPENDED;
+            suspensionReason = SuspensionReason.BILLING_UNPAID;
+            return;
+        }
+        tenantStatus = TenantStatus.ACTIVE;
+        suspensionReason = null;
+    }
+
     private String normalize(String value) {
         return value == null ? null : value.trim().toLowerCase();
     }

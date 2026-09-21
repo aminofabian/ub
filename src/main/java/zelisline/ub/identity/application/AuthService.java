@@ -121,6 +121,7 @@ public class AuthService {
     private final TillAccessRequestService tillAccessRequestService;
     private final ObjectProvider<zelisline.ub.billing.application.SubscriptionRenewalService> subscriptionRenewalService;
     private final PlatformAuthSettingsService platformAuthSettingsService;
+    private final zelisline.ub.tenancy.repository.BusinessRepository businessRepository;
     /**
      * Desktop-only: cloud↔till mapping. Absent on cloud profiles
      * ({@code ObjectProvider} stays empty). Used so synced PIN hashes — keyed
@@ -155,6 +156,7 @@ public class AuthService {
             throw invalidCredentials();
         }
         assertCanAuthenticate(user);
+        assertTenantAllowsLogin(user.getBusinessId());
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
             recordLoginFailure(user, http, AuditEventTypes.LOGIN_FAILED, "Incorrect password");
             throw invalidCredentials();
@@ -177,6 +179,7 @@ public class AuthService {
     @Transactional
     public LoginResponse issueSessionForUser(User user, HttpServletRequest http, String loginMethod) {
         assertCanAuthenticate(user);
+        assertTenantAllowsLogin(user.getBusinessId());
         recordLoginSuccess(user);
         LoginResponse response = attachBillingGate(
                 issueNewSessionWithSession(user, http).tokens(),
@@ -198,6 +201,7 @@ public class AuthService {
         }
         String branchId = resolvePinBranchId(user, request.branchId());
         assertCanAuthenticate(user);
+        assertTenantAllowsLogin(user.getBusinessId());
         if (!pinMatches(user.getPinHash(), businessId, request.pin())) {
             recordLoginFailure(user, http, AuditEventTypes.LOGIN_FAILED, "Incorrect PIN");
             throw invalidCredentials();
@@ -255,6 +259,7 @@ public class AuthService {
         }
         String branchId = resolvePinBranchId(user, request.branchId());
         assertCanAuthenticate(user);
+        assertTenantAllowsLogin(user.getBusinessId());
 
         if (!pinMatches(user.getPinHash(), businessId, request.pin())) {
             recordLoginFailure(user, http, AuditEventTypes.LOGIN_FAILED, "Incorrect PIN");
@@ -309,6 +314,7 @@ public class AuthService {
         User user = userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(old.getUserId(), old.getBusinessId())
                 .orElseThrow(this::invalidCredentials);
         assertCanAuthenticate(user);
+        assertTenantAllowsLogin(user.getBusinessId());
 
         LoginResponse tokens = reissueAccessOnSession(old, user, http);
         return attachBillingGate(
@@ -847,6 +853,21 @@ public class AuthService {
         }
         if (user.getLockedUntil() != null && user.getLockedUntil().isAfter(Instant.now())) {
             throw invalidCredentials();
+        }
+    }
+
+    /**
+     * SA {@code active=false} syncs to {@code tenant_status=INACTIVE}. That is a
+     * hard lock — unlike billing {@code SUSPENDED}, login/refresh must fail even
+     * on the platform apex (no host mapping).
+     */
+    private void assertTenantAllowsLogin(String businessId) {
+        if (businessId == null || businessId.isBlank()) {
+            return;
+        }
+        var status = businessRepository.findTenantStatusById(businessId).orElse(null);
+        if (status == zelisline.ub.tenancy.domain.TenantStatus.INACTIVE) {
+            throw new ResponseStatusException(HttpStatus.LOCKED, "Tenant is inactive");
         }
     }
 

@@ -437,8 +437,17 @@ public class TenancyService {
                 request.subscriptionTier().trim().toLowerCase(Locale.ROOT)
             );
         }
-        if (request.active() != null) {
-            business.setActive(request.active());
+        if (request.active() != null && !tenantSelfServe) {
+            boolean nextActive = request.active();
+            boolean deactivated = business.isActive() && !nextActive;
+            business.setActive(nextActive);
+            business.syncAccessGate();
+            if (deactivated) {
+                userSessionRepository.revokeAllActiveForBusiness(
+                        business.getId(),
+                        Instant.now()
+                );
+            }
         }
         if (request.storefront() != null) {
             String merged = storefrontSettingsService.mergeAndValidate(

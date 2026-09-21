@@ -66,6 +66,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
     private final UserSessionActivity userSessionActivity;
+    private final zelisline.ub.tenancy.repository.BusinessRepository businessRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
@@ -249,6 +250,23 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     HttpStatus.UNAUTHORIZED,
                     "Account is temporarily locked",
                     "unauthorized");
+            return;
+        }
+
+        var tenantStatus = businessRepository.findTenantStatusById(resolvedTenant).orElse(null);
+        if (tenantStatus == zelisline.ub.tenancy.domain.TenantStatus.INACTIVE) {
+            publishSecurityEvent(
+                    request,
+                    resolvedTenant,
+                    AuditEventTypes.SESSION_ACCESS_DENIED,
+                    AuditEventSeverity.WARN,
+                    "Tenant is inactive");
+            writeProblem(
+                    request,
+                    response,
+                    HttpStatus.LOCKED,
+                    "Tenant is inactive",
+                    "tenant-not-active");
             return;
         }
 

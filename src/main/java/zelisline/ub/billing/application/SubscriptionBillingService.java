@@ -119,8 +119,7 @@ public class SubscriptionBillingService {
 
         business.setSubscriptionBillingStatus(SubscriptionBillingStatus.SUSPENDED);
         business.setBillingSuspendedAt(now);
-        business.setSuspensionReason(SuspensionReason.BILLING_UNPAID);
-        business.setTenantStatus(TenantStatus.SUSPENDED);
+        business.syncAccessGate();
         businessRepository.save(business);
         userSessionRepository.revokeAllActiveForBusiness(business.getId(), now);
         publishAudit(business.getId(), AuditEventTypes.SUBSCRIPTION_SUSPENDED, null);
@@ -148,11 +147,8 @@ public class SubscriptionBillingService {
         business.setCurrentPeriodEnd(base.plus(months * 30L, ChronoUnit.DAYS));
         clearGraceFields(business);
         business.setSubscriptionBillingStatus(SubscriptionBillingStatus.ACTIVE);
-        if (business.getSuspensionReason() == SuspensionReason.BILLING_UNPAID) {
-            business.setSuspensionReason(null);
-            business.setBillingSuspendedAt(null);
-            business.setTenantStatus(TenantStatus.ACTIVE);
-        }
+        business.setBillingSuspendedAt(null);
+        business.syncAccessGate();
         businessRepository.save(business);
         cancelExpiryCampaigns(businessId);
         publishAudit(business.getId(), AuditEventTypes.SUBSCRIPTION_EXTENDED, actorUserId);
@@ -193,13 +189,11 @@ public class SubscriptionBillingService {
         }
         business.setGraceEndsAt(base.plus(days, ChronoUnit.DAYS));
         business.setSubscriptionBillingStatus(SubscriptionBillingStatus.GRACE);
-        if (business.getSuspensionReason() == SuspensionReason.BILLING_UNPAID) {
-            business.setSuspensionReason(null);
+        if (business.getSuspensionReason() == SuspensionReason.BILLING_UNPAID
+                || business.getTenantStatus() == TenantStatus.SUSPENDED) {
             business.setBillingSuspendedAt(null);
-            business.setTenantStatus(TenantStatus.ACTIVE);
-        } else if (business.getTenantStatus() == TenantStatus.SUSPENDED) {
-            business.setTenantStatus(TenantStatus.ACTIVE);
         }
+        business.syncAccessGate();
         businessRepository.save(business);
         publishAudit(business.getId(), AuditEventTypes.SUBSCRIPTION_GRACE_EXTENDED, actorUserId);
         return adminSnapshot(businessId);
@@ -276,9 +270,8 @@ public class SubscriptionBillingService {
             case ACTIVE -> {
                 clearGraceFields(business);
                 business.setSubscriptionBillingStatus(SubscriptionBillingStatus.ACTIVE);
-                business.setSuspensionReason(null);
                 business.setBillingSuspendedAt(null);
-                business.setTenantStatus(TenantStatus.ACTIVE);
+                business.syncAccessGate();
                 if (business.getCurrentPeriodEnd() == null || !business.getCurrentPeriodEnd().isAfter(now)) {
                     business.setCurrentPeriodEnd(now.plus(30, ChronoUnit.DAYS));
                 }
@@ -293,17 +286,16 @@ public class SubscriptionBillingService {
                     int graceDays = settingsService.resolveGraceDays(plan);
                     business.setGraceEndsAt(now.plus(graceDays, ChronoUnit.DAYS));
                 }
-                if (business.getSuspensionReason() == SuspensionReason.BILLING_UNPAID) {
-                    business.setSuspensionReason(null);
+                if (business.getSuspensionReason() == SuspensionReason.BILLING_UNPAID
+                        || business.getTenantStatus() == TenantStatus.SUSPENDED) {
                     business.setBillingSuspendedAt(null);
                 }
-                business.setTenantStatus(TenantStatus.ACTIVE);
+                business.syncAccessGate();
             }
             case SUSPENDED -> {
                 business.setSubscriptionBillingStatus(SubscriptionBillingStatus.SUSPENDED);
                 business.setBillingSuspendedAt(now);
-                business.setSuspensionReason(SuspensionReason.BILLING_UNPAID);
-                business.setTenantStatus(TenantStatus.SUSPENDED);
+                business.syncAccessGate();
             }
         }
     }
@@ -311,17 +303,15 @@ public class SubscriptionBillingService {
     @Transactional
     public SubscriptionBillingDtos.AdminSubscriptionSnapshot reactivate(String businessId, String actorUserId) {
         Business business = requireBusiness(businessId);
-        if (business.getSubscriptionBillingStatus() != SubscriptionBillingStatus.SUSPENDED
-                || business.getSuspensionReason() != SuspensionReason.BILLING_UNPAID) {
+        if (business.getSubscriptionBillingStatus() != SubscriptionBillingStatus.SUSPENDED) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Business is not suspended for billing");
         }
         clearGraceFields(business);
         business.setSubscriptionBillingStatus(SubscriptionBillingStatus.ACTIVE);
-        business.setSuspensionReason(null);
         business.setBillingSuspendedAt(null);
-        business.setTenantStatus(TenantStatus.ACTIVE);
+        business.syncAccessGate();
         if (business.getCurrentPeriodEnd() == null || !business.getCurrentPeriodEnd().isAfter(Instant.now())) {
             business.setCurrentPeriodEnd(Instant.now().plus(30, ChronoUnit.DAYS));
         }
@@ -348,9 +338,8 @@ public class SubscriptionBillingService {
         business.setCurrentPeriodEnd(base.plus(months * 30L, ChronoUnit.DAYS));
         clearGraceFields(business);
         business.setSubscriptionBillingStatus(SubscriptionBillingStatus.ACTIVE);
-        business.setSuspensionReason(null);
         business.setBillingSuspendedAt(null);
-        business.setTenantStatus(TenantStatus.ACTIVE);
+        business.syncAccessGate();
         businessRepository.save(business);
         cancelExpiryCampaigns(business.getId());
         publishAudit(business.getId(), AuditEventTypes.SUBSCRIPTION_RENEWED, null);

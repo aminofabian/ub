@@ -170,4 +170,51 @@ class DomainBusinessResolverFilterIT {
                 .andExpect(jsonPath("$.type").value("urn:problem:tenant-not-active"))
                 .andExpect(jsonPath("$.tenantStatus").value("SUSPENDED"));
     }
+
+    @Test
+    void suspendedTenantMayStillHitAuthRecoveryPath() throws Exception {
+        DomainMapping mapping = Mockito.mock(DomainMapping.class);
+        org.mockito.BDDMockito.given(mapping.getBusinessId()).willReturn("biz-suspended");
+        org.mockito.BDDMockito.given(domainMappingRepository.findByDomainAndActiveTrue("acme.palmart.co.ke"))
+                .willReturn(Optional.of(mapping));
+        org.mockito.BDDMockito.given(businessRepository.findTenantStatusById("biz-suspended"))
+                .willReturn(Optional.of(TenantStatus.SUSPENDED));
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .with(request -> {
+                            request.setServerName("acme.palmart.co.ke");
+                            return request;
+                        })
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"x\",\"password\":\"y\"}"))
+                .andExpect(result -> {
+                    int status = result.getResponse().getStatus();
+                    if (status == HttpStatus.LOCKED.value()) {
+                        throw new AssertionError(
+                                "billing-suspended tenants must reach auth for recovery");
+                    }
+                });
+    }
+
+    @Test
+    void inactiveTenantBlocksAuthOnMappedHost() throws Exception {
+        DomainMapping mapping = Mockito.mock(DomainMapping.class);
+        org.mockito.BDDMockito.given(mapping.getBusinessId()).willReturn("biz-inactive");
+        org.mockito.BDDMockito.given(domainMappingRepository.findByDomainAndActiveTrue("novelties.palmart.co.ke"))
+                .willReturn(Optional.of(mapping));
+        org.mockito.BDDMockito.given(businessRepository.findTenantStatusById("biz-inactive"))
+                .willReturn(Optional.of(TenantStatus.INACTIVE));
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .with(request -> {
+                            request.setServerName("novelties.palmart.co.ke");
+                            return request;
+                        })
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"x\",\"password\":\"y\"}"))
+                .andExpect(status().isLocked())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.type").value("urn:problem:tenant-not-active"))
+                .andExpect(jsonPath("$.tenantStatus").value("INACTIVE"));
+    }
 }

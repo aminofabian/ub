@@ -283,12 +283,13 @@ public class SecurityConfig {
             zelisline.ub.marketplace.application.SupplierPortalSessionService supplierPortalSessionService,
             zelisline.ub.audit.application.AuditEventPublisher auditEventPublisher,
             zelisline.ub.audit.application.AuditEventBuilder auditEventBuilder,
-            zelisline.ub.identity.application.UserSessionActivity userSessionActivity
+            zelisline.ub.identity.application.UserSessionActivity userSessionActivity,
+            zelisline.ub.tenancy.repository.BusinessRepository businessRepository
     ) {
         return new JwtAuthenticationFilter(
                 jwtTokenService, userRepository, superAdminRepository,
                 supplierUserRepository, supplierUserSessionRepository, supplierPortalSessionService,
-                auditEventPublisher, auditEventBuilder, userSessionActivity);
+                auditEventPublisher, auditEventBuilder, userSessionActivity, businessRepository);
     }
 
     @Bean

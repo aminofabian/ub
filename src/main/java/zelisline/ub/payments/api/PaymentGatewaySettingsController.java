@@ -20,6 +20,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.api.dto.AvailableGatewayResponse;
+import zelisline.ub.payments.api.dto.CustodyReceiveTestRequest;
+import zelisline.ub.payments.api.dto.CustodyReceiveTestResponse;
 import zelisline.ub.payments.api.dto.GatewayCheckoutResponse;
 import zelisline.ub.payments.api.dto.GatewayConfigRequest;
 import zelisline.ub.payments.api.dto.GatewayConfigResponse;
@@ -28,6 +30,7 @@ import zelisline.ub.payments.api.dto.MpesaCustodyAvailabilityResponse;
 import zelisline.ub.payments.api.dto.SubscribeWebhookTillsRequest;
 import zelisline.ub.payments.api.dto.SubscribeWebhookTillsResponse;
 import zelisline.ub.payments.api.dto.TestConnectionResponse;
+import zelisline.ub.payments.application.CustodyReceiveTestService;
 import zelisline.ub.payments.application.KopokopoWebhookSubscriptionService;
 import zelisline.ub.payments.application.GatewayCheckoutService;
 import zelisline.ub.payments.application.PaymentGatewayConfigService;
@@ -51,6 +54,7 @@ public class PaymentGatewaySettingsController {
     private final KopokopoWebhookSubscriptionService webhookSubscriptionService;
     private final GatewayCheckoutService gatewayCheckoutService;
     private final PlatformMpesaCustodySettingsService mpesaCustodySettingsService;
+    private final CustodyReceiveTestService custodyReceiveTestService;
 
     // ── Available gateways ──────────────────────────────────────────
 
@@ -70,6 +74,21 @@ public class PaymentGatewaySettingsController {
     public MpesaCustodyAvailabilityResponse mpesaCustodyAvailability(HttpServletRequest request) {
         CurrentTenantUser.require(request);
         return mpesaCustodySettingsService.availabilityForTenant();
+    }
+
+    /**
+     * Save till/paybill/bank destination and send a KES 1 STK so the merchant can
+     * confirm cash landed. Used by onboarding and payments settings.
+     */
+    @PostMapping("/custody/receive-test")
+    @PreAuthorize("hasPermission(null, 'payments.gateways.write')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public CustodyReceiveTestResponse custodyReceiveTest(
+            @Valid @RequestBody CustodyReceiveTestRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return custodyReceiveTestService.run(TenantRequestIds.resolveBusinessId(request), body);
     }
 
     // ── CRUD ────────────────────────────────────────────────────────

@@ -19,5 +19,7 @@ public enum StkPushContextType {
     /** Tenant buying SMS credit top-ups via platform M-Pesa STK. */
     SMS_CREDIT_PURCHASE,
     /** Subscription renewal via platform M-Pesa STK. */
-    SUBSCRIPTION_RENEWAL
+    SUBSCRIPTION_RENEWAL,
+    /** Onboarding “prove my till/paybill works” KES 1 STK ping. */
+    ONBOARDING_RECEIVE_TEST
 }

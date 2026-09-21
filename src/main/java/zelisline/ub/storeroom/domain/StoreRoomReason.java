@@ -18,6 +18,9 @@ import zelisline.ub.inventory.WastageReason;
  *       the shop, so the ledger is untouched and the movement is pure narrative.</li>
  *   <li><b>Class B — gone</b> ({@link StoreRoomStockEffect#DECREASE}): spoilage,
  *       expiry, breakage, theft, staff use. These decrement stock.</li>
+ *   <li><b>Put-in</b> ({@link StoreRoomStockEffect#INCREASE}): goods returned to
+ *       the back room raise on-hand. Purchase-order inherit uses a separate
+ *       {@link #FROM_PURCHASE_ORDER} memo so GRN is not double-counted.</li>
  * </ul>
  *
  * <p>Class B reasons that describe physical loss of goods also map onto the
@@ -43,8 +46,14 @@ public enum StoreRoomReason {
     COUNT_CORRECTION("count_correction", StoreRoomDirection.OUT, StoreRoomStockEffect.DECREASE, WastageReason.COUNTING_ERROR, false),
     OTHER("other", StoreRoomDirection.OUT, StoreRoomStockEffect.DECREASE, WastageReason.OTHER, false),
 
-    // ---- Put-in: a memo under the one-pool model (see scope §5) ---------
-    RECEIVED_INTO_ROOM("received_into_room", StoreRoomDirection.IN, StoreRoomStockEffect.NONE, null, false);
+    // ---- Put-in: brought back / found, so on-hand goes up -----------------
+    RECEIVED_INTO_ROOM("received_into_room", StoreRoomDirection.IN, StoreRoomStockEffect.INCREASE, null, false),
+
+    /**
+     * Inherit-from-PO memo only. Confirm order / GRN already raised inventory;
+     * this reason must not increase stock again.
+     */
+    FROM_PURCHASE_ORDER("from_purchase_order", StoreRoomDirection.IN, StoreRoomStockEffect.NONE, null, false);
 
     private final String wireValue;
     private final StoreRoomDirection direction;

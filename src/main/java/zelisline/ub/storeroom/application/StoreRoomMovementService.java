@@ -26,6 +26,7 @@ import zelisline.ub.inventory.api.dto.BatchAllocationLine;
 import zelisline.ub.inventory.api.dto.InventoryMutationResponse;
 import zelisline.ub.inventory.api.dto.PostBatchDecreaseRequest;
 import zelisline.ub.inventory.api.dto.PostStandaloneWastageRequest;
+import zelisline.ub.inventory.api.dto.PostStockIncreaseRequest;
 import zelisline.ub.inventory.application.InventoryBatchPickerService;
 import zelisline.ub.inventory.application.InventoryLedgerService;
 import zelisline.ub.platform.security.CurrentUserPermissions;
@@ -49,10 +50,12 @@ import zelisline.ub.tenancy.application.BranchResolutionService;
  * Records take-outs and put-ins from the store room, and decides on the ones that
  * need approval.
  *
- * <p>The rule that matters: <b>only Class B reasons move stock</b>. Class A
- * ("restock to shelf", prep, counter transfer) leave the shop's stock alone — the
- * goods never left the business, so decrementing would drain inventory every time
- * a shelf was filled. See docs/scopes/STORE_ROOM_MANAGEMENT_SCOPE.md §5.
+ * <p>The rule that matters: <b>Class B reasons decrease stock</b>, and a manual
+ * put-in ({@code received_into_room}) increases it. Class A ("restock to shelf",
+ * prep, counter transfer) leave the shop's stock alone — the goods never left
+ * the business, so decrementing would drain inventory every time a shelf was
+ * filled. Purchase-order inherit uses {@code from_purchase_order} as a memo so
+ * GRN is not double-counted. See docs/scopes/STORE_ROOM_MANAGEMENT_SCOPE.md §5.
  *
  * <p>For a linked product the inventory ledger stays the stock of record; this
  * service writes the ledger entry <em>and</em> the narrative row, in one
@@ -120,7 +123,10 @@ public class StoreRoomMovementService {
         }
         boolean linked = storeRoomSettingsService.currentMode(businessId) == StoreRoomMode.CONNECTED
                 && item.getItemId() != null;
-        boolean movesStock = reason.stockEffect() == StoreRoomStockEffect.DECREASE;
+        StoreRoomStockEffect effect = reason.stockEffect();
+        boolean decreasesStock = effect == StoreRoomStockEffect.DECREASE;
+        boolean increasesStock = effect == StoreRoomStockEffect.INCREASE;
+        boolean movesStock = decreasesStock || increasesStock;
 
         // The permission depends on the payload, not the route: moving real stock is
         // an inventory action, while adjusting the local register is a catalogue one.
@@ -138,17 +144,19 @@ public class StoreRoomMovementService {
         row.setItemId(item.getItemId());
         row.setDirection(direction);
         row.setReason(reason);
-        row.setStockEffect(reason.stockEffect());
+        row.setStockEffect(effect);
         row.setQuantity(quantity);
         row.setNote(note);
         row.setCreatedBy(actorId);
         row.setStatus(StoreRoomMovementStatus.APPLIED);
 
-        if (movesStock && linked && exceedsApprovalThreshold(businessId, quantity)) {
+        if (decreasesStock && linked && exceedsApprovalThreshold(businessId, quantity)) {
             // Nothing moves until somebody says yes. The reason class still records the
             // intent, so an approver can see what they are approving.
             row.setStatus(StoreRoomMovementStatus.PENDING);
-        } else if (movesStock) {
+            row.setBranchId(resolveBranch(
+                    businessId, sessionBranchId, actorRoleId, request.branchId()));
+        } else if (decreasesStock) {
             if (linked) {
                 applyInventoryDecrease(
                         businessId,
@@ -165,6 +173,23 @@ public class StoreRoomMovementService {
                         row);
             } else {
                 applyLocalDecrease(item, quantity);
+            }
+        } else if (increasesStock) {
+            if (linked) {
+                applyInventoryIncrease(
+                        businessId,
+                        item.getItemId(),
+                        item.getBuyingPrice(),
+                        quantity,
+                        reason,
+                        request.branchId(),
+                        note,
+                        actorId,
+                        actorRoleId,
+                        sessionBranchId,
+                        row);
+            } else {
+                applyLocalIncrease(item, quantity);
             }
         }
 
@@ -363,6 +388,53 @@ public class StoreRoomMovementService {
         }
         item.setQuantity(item.getQuantity() - qty);
         storeItemRepository.save(item);
+    }
+
+    private void applyLocalIncrease(StoreItem item, BigDecimal quantity) {
+        BigDecimal whole = quantity.stripTrailingZeros();
+        if (whole.scale() > 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Back-room-only items are counted in whole numbers.");
+        }
+        int qty = whole.intValueExact();
+        item.setQuantity(item.getQuantity() + qty);
+        storeItemRepository.save(item);
+    }
+
+    /**
+     * Linked put-in raises real on-hand through the inventory ledger (same path as
+     * a stock gain), so the store room count follows the product again.
+     */
+    private void applyInventoryIncrease(
+            String businessId,
+            String catalogItemId,
+            BigDecimal preferredUnitCost,
+            BigDecimal quantity,
+            StoreRoomReason reason,
+            String requestedBranchId,
+            String note,
+            String actorId,
+            String actorRoleId,
+            String sessionBranchId,
+            StoreRoomMovement row
+    ) {
+        String branchId = resolveBranch(businessId, sessionBranchId, actorRoleId, requestedBranchId);
+        BigDecimal unitCost = preferredUnitCost != null && preferredUnitCost.signum() > 0
+                ? preferredUnitCost
+                : NOMINAL_UNIT_COST;
+        InventoryMutationResponse result = inventoryLedgerService.recordStockIncrease(
+                businessId,
+                new PostStockIncreaseRequest(
+                        branchId,
+                        catalogItemId,
+                        quantity,
+                        unitCost,
+                        ledgerNote(reason, note)),
+                actorId);
+        row.setBranchId(branchId);
+        row.setMovementId(result.stockMovementId());
+        row.setMovementCount(countLedgerRows(businessId, result.stockMovementId()));
     }
 
     /**

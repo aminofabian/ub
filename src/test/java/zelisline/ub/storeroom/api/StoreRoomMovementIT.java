@@ -301,15 +301,30 @@ class StoreRoomMovementIT {
     }
 
     @Test
-    void putIn_logsWithoutChangingStock() throws Exception {
+    void putIn_raisesLocalCountForStandalone() throws Exception {
         record(owner, ROLE_OWNER, standaloneRowId, "in", "received_into_room", "5", "returned")
                 .andExpect(status().isCreated());
 
+        // Started at 5; put-in adds 5.
         assertThat(storeItemRepository.findById(standaloneRowId).orElseThrow().getQuantity())
-                .isEqualTo(5);
+                .isEqualTo(10);
         assertThat(currentStock()).isEqualByComparingTo("20");
-        assertThat(storeRoomMovementRepository.findAll().getFirst().getDirection())
-                .isEqualTo(StoreRoomDirection.IN);
+        StoreRoomMovement entry = storeRoomMovementRepository.findAll().getFirst();
+        assertThat(entry.getDirection()).isEqualTo(StoreRoomDirection.IN);
+        assertThat(entry.getStockEffect()).isEqualTo(StoreRoomStockEffect.INCREASE);
+    }
+
+    @Test
+    void putIn_raisesLinkedInventory() throws Exception {
+        record(owner, ROLE_OWNER, linkedRowId, "in", "received_into_room", "2", "found in back")
+                .andExpect(status().isCreated());
+
+        // Put-in opens a new gain batch; on-hand on the product is what matters.
+        assertThat(currentStock()).isEqualByComparingTo("22");
+        StoreRoomMovement entry = storeRoomMovementRepository.findAll().getFirst();
+        assertThat(entry.getStockEffect()).isEqualTo(StoreRoomStockEffect.INCREASE);
+        assertThat(entry.getMovementId()).isNotBlank();
+        assertThat(entry.getBranchId()).isEqualTo(branchId);
     }
 
     @Test

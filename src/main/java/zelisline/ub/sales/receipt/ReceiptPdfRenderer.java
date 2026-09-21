@@ -57,8 +57,8 @@ public final class ReceiptPdfRenderer {
             Font saleId = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 8.5f);
             Font body = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 9.5f);
             Font bodyRegular = FontFactory.getFont(FontFactory.HELVETICA, 9);
-            Font colHead = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 7.5f);
-            Font lineItem = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 9.5f);
+            Font colHead = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 7f);
+            Font lineItem = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 8.5f);
             Font totalLabel = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 11);
             Font money = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 9.5f);
             Font contact = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 9);
@@ -141,20 +141,22 @@ public final class ReceiptPdfRenderer {
 
     private static void addLineItems(Document doc, ReceiptSnapshot s, Font head, Font body)
             throws DocumentException {
-        PdfPTable table = new PdfPTable(3);
+        PdfPTable table = new PdfPTable(4);
         table.setWidthPercentage(100);
-        table.setWidths(new float[]{3.2f, 1.1f, 1.7f});
+        table.setWidths(new float[]{2.4f, 0.85f, 1.25f, 1.5f});
         table.setSpacingBefore(0);
         table.setSpacingAfter(0);
 
         table.addCell(headerCell("Item", head, Element.ALIGN_LEFT));
         table.addCell(headerCell("Qty", head, Element.ALIGN_RIGHT));
         table.addCell(headerCell("Price", head, Element.ALIGN_RIGHT));
+        table.addCell(headerCell("Total", head, Element.ALIGN_RIGHT));
 
         for (ReceiptLineRow line : s.lines()) {
             table.addCell(bodyCell(strip(line.description()), body, Element.ALIGN_LEFT));
             table.addCell(bodyCell(strip(line.quantity()), body, Element.ALIGN_RIGHT));
             table.addCell(bodyCell(strip(line.unitPrice()), body, Element.ALIGN_RIGHT));
+            table.addCell(bodyCell(strip(line.lineTotal()), body, Element.ALIGN_RIGHT));
         }
         doc.add(table);
     }

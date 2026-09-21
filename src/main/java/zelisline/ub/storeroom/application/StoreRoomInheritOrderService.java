@@ -32,8 +32,9 @@ import zelisline.ub.storeroom.repository.StoreItemRepository;
 import zelisline.ub.storeroom.repository.StoreRoomMovementRepository;
 
 /**
- * Puts a purchase order into the store room as {@code received_into_room} memos.
- * Inventory is not raised here — Confirm order / GRN already owns that.
+ * Puts a purchase order into the store room as {@code from_purchase_order} memos.
+ * Inventory is not raised here for connected mode — Confirm order / GRN already owns that.
+ * Standalone mode still bumps the local register count.
  */
 @Service
 @RequiredArgsConstructor
@@ -120,7 +121,7 @@ public class StoreRoomInheritOrderService {
                     new CreateStoreRoomMovementRequest(
                             matched.row().getId(),
                             "in",
-                            "received_into_room",
+                            "from_purchase_order",
                             incoming.quantity(),
                             note,
                             po.getBranchId())));

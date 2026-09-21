@@ -1,9 +1,14 @@
 -- Phase 3: expense → KopoKopo Send Money (tenant BYO). Posted (books) ≠ Paid (money moved).
+-- Idempotent ADD — safe if a prior partial deploy already added the column.
 
-ALTER TABLE expenses
-  ADD COLUMN vendor_mpesa_number VARCHAR(32) NULL AFTER payment_method;
+SET @s = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS
+   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'expenses' AND COLUMN_NAME = 'vendor_mpesa_number') = 0,
+  'ALTER TABLE expenses ADD COLUMN vendor_mpesa_number VARCHAR(32) NULL AFTER payment_method',
+  'SELECT 1');
+PREPARE stmt FROM @s; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
-CREATE TABLE expense_disbursements (
+CREATE TABLE IF NOT EXISTS expense_disbursements (
   id                          VARCHAR(36) NOT NULL PRIMARY KEY,
   business_id                 VARCHAR(36) NOT NULL,
   expense_id                  VARCHAR(36) NOT NULL,

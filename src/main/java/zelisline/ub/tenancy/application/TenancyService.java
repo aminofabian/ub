@@ -159,11 +159,11 @@ public class TenancyService {
     @Transactional(readOnly = true)
     public Page<BusinessResponse> listBusinesses(Pageable pageable) {
         Page<Business> page = businessRepository.findByDeletedAtIsNull(pageable);
-        Map<String, String> ownerPhones = ownerPhonesByBusinessId(
+        Map<String, OwnerContact> owners = ownersByBusinessId(
                 page.getContent().stream().map(Business::getId).toList()
         );
         return page.map(business ->
-                toResponse(business, true, ownerPhones.get(business.getId())));
+                toResponse(business, owners.get(business.getId())));
     }
 
     @Transactional
@@ -950,14 +950,10 @@ public class TenancyService {
     }
 
     private BusinessResponse toResponse(Business business) {
-        return toResponse(business, false, null);
+        return toResponse(business, null);
     }
 
-    private BusinessResponse toResponse(
-            Business business,
-            boolean ownerPhoneLookedUp,
-            String ownerPhoneHint
-    ) {
+    private BusinessResponse toResponse(Business business, OwnerContact ownerHint) {
         StorefrontSettingsResponse storefront =
             storefrontSettingsService.readFromSettingsJson(
                 business.getSettings()
@@ -993,6 +989,9 @@ public class TenancyService {
             .map(DomainMapping::getDomain)
             .findFirst()
             .orElse(null);
+        OwnerContact owner = ownerHint != null
+            ? ownerHint
+            : ownersByBusinessId(List.of(business.getId())).get(business.getId());
         return new BusinessResponse(
             business.getId(),
             business.getName(),
@@ -1017,7 +1016,9 @@ public class TenancyService {
             globalCatalogResolver.readOverrideCode(business.getSettings()),
             saleRepository.findLatestReceiptNo(business.getId()).orElse(null),
             posReceiptSequenceSettingsService.readNextReceiptNo(business.getSettings()),
-            resolveOwnerPhone(business.getId(), ownerPhoneLookedUp, ownerPhoneHint, onboarding)
+            resolveOwnerPhone(owner, onboarding),
+            owner == null ? null : blankToNull(owner.name()),
+            owner == null ? null : blankToNull(owner.email())
         );
     }
 
@@ -1026,24 +1027,14 @@ public class TenancyService {
      * when the user row has not been updated yet.
      */
     private String resolveOwnerPhone(
-            String businessId,
-            boolean ownerPhoneLookedUp,
-            String ownerPhoneHint,
+            OwnerContact owner,
             OnboardingSettingsResponse onboarding
     ) {
-        String fromUser = blankToNull(ownerPhoneHint);
-        if (!ownerPhoneLookedUp && fromUser == null) {
-            fromUser = userRepository
-                    .findOwnersWithPhoneByBusinessIdIn(List.of(businessId))
-                    .stream()
-                    .map(User::getPhone)
-                    .map(TenancyService::blankToNull)
-                    .filter(phone -> phone != null)
-                    .findFirst()
-                    .orElse(null);
-        }
-        if (fromUser != null) {
-            return fromUser;
+        if (owner != null) {
+            String fromUser = blankToNull(owner.phone());
+            if (fromUser != null) {
+                return fromUser;
+            }
         }
         if (onboarding != null && onboarding.answers() != null) {
             return blankToNull(onboarding.answers().ownerPhone());
@@ -1051,21 +1042,22 @@ public class TenancyService {
         return null;
     }
 
-    /** First non-blank owner phone per business (oldest owner wins). */
-    private Map<String, String> ownerPhonesByBusinessId(List<String> businessIds) {
-        Map<String, String> out = new HashMap<>();
+    /** Oldest owner per business (name / email / phone). */
+    private Map<String, OwnerContact> ownersByBusinessId(List<String> businessIds) {
+        Map<String, OwnerContact> out = new HashMap<>();
         if (businessIds == null || businessIds.isEmpty()) {
             return out;
         }
-        for (User owner : userRepository.findOwnersWithPhoneByBusinessIdIn(businessIds)) {
-            String phone = blankToNull(owner.getPhone());
-            if (phone == null) {
-                continue;
-            }
-            out.putIfAbsent(owner.getBusinessId(), phone);
+        for (User owner : userRepository.findOwnersByBusinessIdIn(businessIds)) {
+            out.putIfAbsent(
+                    owner.getBusinessId(),
+                    new OwnerContact(owner.getName(), owner.getEmail(), owner.getPhone())
+            );
         }
         return out;
     }
+
+    private record OwnerContact(String name, String email, String phone) {}
 
     private DomainResponse toResponse(DomainMapping domain) {
         return new DomainResponse(

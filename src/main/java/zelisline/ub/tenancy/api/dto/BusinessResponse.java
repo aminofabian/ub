@@ -40,6 +40,10 @@ public record BusinessResponse(
          * Owner shop phone when linked ({@code users.phone} for an owner, else
          * onboarding {@code answers.ownerPhone}). Null when neither is set.
          */
-        String ownerPhone
+        String ownerPhone,
+        /** Display name of the oldest owner user, if any. */
+        String ownerName,
+        /** Email of the oldest owner user, if any. */
+        String ownerEmail
 ) {
 }

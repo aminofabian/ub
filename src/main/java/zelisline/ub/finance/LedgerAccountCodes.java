@@ -39,6 +39,8 @@ public final class LedgerAccountCodes {
     public static final String PURCHASE_PRICE_VARIANCE = "5220";
     /** Credit offset for opening balances and count gains (no POS sale yet). */
     public static final String OPENING_BALANCE_EQUITY = "3980";
+    /** Owner drawings / Profit Pocket (contra equity — debited when cash leaves the shop). */
+    public static final String OWNER_DRAWINGS = "3990";
     /** Drawer count vs expected; net over/short at shift close (Phase 4). */
     public static final String CASH_OVER_SHORT = "3900";
 

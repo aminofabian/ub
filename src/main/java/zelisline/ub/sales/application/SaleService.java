@@ -52,7 +52,9 @@ import zelisline.ub.messaging.application.CreditSaleReminderEvent;
 import zelisline.ub.messaging.application.CreditSaleReminderLineItem;
 import zelisline.ub.messaging.application.WalletCreditNotificationEvent;
 import zelisline.ub.payments.application.InboundTillPaymentService;
+import zelisline.ub.payments.application.ProfitPocketSettingsService;
 import zelisline.ub.payments.domain.GatewayStkPushStatuses;
+import zelisline.ub.payments.domain.ProfitPocketSettings;
 import zelisline.ub.payments.repository.GatewayStkPushRepository;
 import zelisline.ub.sales.SalePaymentLedger;
 import zelisline.ub.sales.SalesConstants;
@@ -118,6 +120,7 @@ public class SaleService {
     private final CashDrawerLedgerService cashDrawerLedgerService;
     private final BusinessRepository businessRepository;
     private final PosReceiptSequenceSettingsService posReceiptSequenceSettingsService;
+    private final ProfitPocketSettingsService profitPocketSettingsService;
 
     @Transactional
     public SaleCreationOutcome createSale(String businessId, String rawIdempotencyKey, PostSaleRequest req, String userId) {
@@ -860,9 +863,42 @@ public class SaleService {
             zelisline.ub.discounts.api.dto.ResolvedPriceResponse resolved =
                     resolvedPrices.getOrDefault(line.itemId(), discountResolutionService.resolveForItem(
                             businessId, line.itemId(), branchId));
-            out.put(i, resolveLinePricing(i, line, resolved, roleId, businessId));
+            EffectiveLinePricing pricing = resolveLinePricing(i, line, resolved, roleId, businessId);
+            enforceMarginGuard(businessId, roleId, i, pricing.chargedUnitPrice(), item);
+            out.put(i, pricing);
         }
         return out;
+    }
+
+    private void enforceMarginGuard(
+            String businessId,
+            String roleId,
+            int lineIndex,
+            BigDecimal chargedUnitPrice,
+            Item item
+    ) {
+        BigDecimal cost = item.getBuyingPrice();
+        if (cost == null || cost.compareTo(BigDecimal.ZERO) <= 0 || chargedUnitPrice == null) {
+            return;
+        }
+        if (chargedUnitPrice.compareTo(cost) >= 0) {
+            return;
+        }
+        String mode = profitPocketSettingsService.marginGuardMode(businessId);
+        if (ProfitPocketSettings.GUARD_WARN.equals(mode)) {
+            return;
+        }
+        if (ProfitPocketSettings.GUARD_HARD.equals(mode)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Line " + (lineIndex + 1) + ": selling below cost is blocked");
+        }
+        // approve — require explicit sell-price permission (not the cashier price-edit flag)
+        boolean canApprove = roleId != null
+                && requestPermissionService.hasPermission(roleId, PRICE_OVERRIDE_PERMISSION);
+        if (!canApprove) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Line " + (lineIndex + 1) + ": below-cost sale needs manager approval");
+        }
     }
 
     private EffectiveLinePricing resolveLinePricing(

@@ -24,6 +24,7 @@ import zelisline.ub.sales.api.dto.CustomerTrendResponse;
 import zelisline.ub.sales.api.dto.ItemActivityResponse;
 import zelisline.ub.sales.api.dto.ItemRevenueRow;
 import zelisline.ub.sales.api.dto.ItemVelocityRow;
+import zelisline.ub.sales.api.dto.MarginLeakRow;
 import zelisline.ub.sales.api.dto.PaymentLedgerRow;
 import zelisline.ub.sales.api.dto.PaymentMethodBreakdownRow;
 import zelisline.ub.sales.api.dto.RecentSaleRow;
@@ -162,6 +163,21 @@ public class SalesIntelligenceController {
         CurrentTenantUser.require(request);
         return salesIntelligenceService.itemsByProfit(
                 TenantRequestIds.resolveBusinessId(request), from, to, categoryId, branchId, itemTypeId, limit);
+    }
+
+    @GetMapping("/margin-leaks")
+    @PreAuthorize("hasPermission(null, 'sales.intelligence.read')")
+    public List<MarginLeakRow> marginLeaks(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) String itemTypeId,
+            @RequestParam(required = false) Integer limit,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return salesIntelligenceService.marginLeaks(
+                TenantRequestIds.resolveBusinessId(request), from, to, branchId, itemTypeId, limit);
     }
 
     @GetMapping("/cogs-by-branch")

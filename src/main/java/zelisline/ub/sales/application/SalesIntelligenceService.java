@@ -53,6 +53,7 @@ import zelisline.ub.sales.api.dto.ItemActivitySummary;
 import zelisline.ub.sales.api.dto.ItemDailySalesRow;
 import zelisline.ub.sales.api.dto.ItemPeriodBuckets;
 import zelisline.ub.sales.api.dto.ItemRevenueRow;
+import zelisline.ub.sales.api.dto.MarginLeakRow;
 import zelisline.ub.sales.api.dto.ItemStockInRow;
 import zelisline.ub.sales.api.dto.ItemVelocityRow;
 import zelisline.ub.sales.api.dto.MonthlyCustomerRow;
@@ -71,6 +72,7 @@ public class SalesIntelligenceService {
 
     private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
     private static final BigDecimal QTY_ZERO = BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
+    private static final BigDecimal HUNDRED = new BigDecimal("100");
     private static final int DEFAULT_VELOCITY_LIMIT = 100;
     private static final int MAX_VELOCITY_LIMIT = 500;
     private static final int DEFAULT_PROFIT_ITEM_LIMIT = 10;
@@ -1696,6 +1698,64 @@ public class SalesIntelligenceService {
         out.sort(Comparator.comparing(ItemRevenueRow::netProfit).reversed());
         if (out.size() > cap) {
             return new ArrayList<>(out.subList(0, cap));
+        }
+        return out;
+    }
+
+    /**
+     * Items that lost money in the window, worst first — for Hub “Why negative?”.
+     */
+    @Transactional(readOnly = true)
+    public List<MarginLeakRow> marginLeaks(
+            String businessId,
+            LocalDate fromInclusive,
+            LocalDate toInclusive,
+            String branchId,
+            String itemTypeId,
+            Integer limit
+    ) {
+        int cap = limit == null
+                ? DEFAULT_PROFIT_ITEM_LIMIT
+                : Math.max(1, Math.min(limit, MAX_PROFIT_ITEM_LIMIT));
+        // Pull a wide set so loss-makers at the tail of the profit ranking are included.
+        List<ItemRevenueRow> all = itemsByProfit(
+                businessId, fromInclusive, toInclusive, null, branchId, itemTypeId, MAX_PROFIT_ITEM_LIMIT);
+        List<ItemRevenueRow> losses = all.stream()
+                .filter(r -> r.netProfit() != null && r.netProfit().signum() < 0)
+                .sorted(Comparator.comparing(ItemRevenueRow::netProfit))
+                .toList();
+        BigDecimal totalLoss = losses.stream()
+                .map(ItemRevenueRow::netProfit)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .abs();
+        List<MarginLeakRow> out = new ArrayList<>();
+        for (ItemRevenueRow row : losses) {
+            if (out.size() >= cap) {
+                break;
+            }
+            BigDecimal lossAbs = row.netProfit().abs();
+            BigDecimal share = totalLoss.signum() == 0
+                    ? BigDecimal.ZERO
+                    : lossAbs.multiply(HUNDRED).divide(totalLoss, 1, RoundingMode.HALF_UP);
+            List<String> reasons = new ArrayList<>();
+            if (row.netRevenue() != null && row.netRevenue().signum() > 0) {
+                reasons.add("below_cost");
+            }
+            if (row.refundAmount() != null && row.refundAmount().signum() > 0) {
+                reasons.add("refund");
+            }
+            if (reasons.isEmpty()) {
+                reasons.add("margin_loss");
+            }
+            out.add(new MarginLeakRow(
+                    row.itemId(),
+                    row.itemName(),
+                    row.sku(),
+                    row.quantitySold(),
+                    row.netRevenue(),
+                    row.netProfit(),
+                    share,
+                    List.copyOf(reasons)));
         }
         return out;
     }

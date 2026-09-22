@@ -3,6 +3,8 @@ package zelisline.ub.finance;
 public final class FinanceConstants {
 
     public static final String JOURNAL_SOURCE_EXPENSE = "expense";
+    /** Owner Profit Pocket — cash transfer out; never OpEx or COGS. */
+    public static final String JOURNAL_SOURCE_PROFIT_POCKET = "profit_pocket";
 
     public static final String EXPENSE_CATEGORY_FIXED = "fixed";
     public static final String EXPENSE_CATEGORY_VARIABLE = "variable";

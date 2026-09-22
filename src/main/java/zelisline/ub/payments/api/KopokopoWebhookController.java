@@ -16,6 +16,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.finance.application.ExpenseDisbursementService;
+import zelisline.ub.finance.application.ProfitPocketService;
 import zelisline.ub.marketplace.application.MarketplaceEscrowService;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.KioskPayWithdrawService;
@@ -51,6 +52,7 @@ public class KopokopoWebhookController {
     private final GatewayStkPushService gatewayStkPushService;
     private final SupplierDisbursementService supplierDisbursementService;
     private final ExpenseDisbursementService expenseDisbursementService;
+    private final ProfitPocketService profitPocketService;
     private final ObjectProvider<PlatformDomainSettingsService> platformDomainSettingsService;
     private final ObjectProvider<PlatformKioskPaySettingsService> kioskPaySettingsService;
     private final ObjectProvider<KioskPayWithdrawService> kioskPayWithdrawService;
@@ -150,7 +152,13 @@ public class KopokopoWebhookController {
                     matchedConfig.getId(),
                     result);
             if (!handled) {
-                expenseDisbursementService.processKopokopoSendMoneyWebhook(
+                handled = expenseDisbursementService.processKopokopoSendMoneyWebhook(
+                        matchedConfig.getBusinessId(),
+                        matchedConfig.getId(),
+                        result);
+            }
+            if (!handled) {
+                profitPocketService.processKopokopoSendMoneyWebhook(
                         matchedConfig.getBusinessId(),
                         matchedConfig.getId(),
                         result);

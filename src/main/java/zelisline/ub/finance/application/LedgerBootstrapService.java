@@ -47,6 +47,12 @@ public class LedgerBootstrapService {
         );
         ensure(
                 businessId,
+                LedgerAccountCodes.OWNER_DRAWINGS,
+                "Owner drawings (profit pocket)",
+                "equity"
+        );
+        ensure(
+                businessId,
                 LedgerAccountCodes.CASH_OVER_SHORT,
                 "Cash over and short (drawer)",
                 "expense"

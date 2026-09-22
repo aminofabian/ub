@@ -23,6 +23,7 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.JpaSort;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -42,6 +43,7 @@ import zelisline.ub.audit.domain.AuditEventActorType;
 import zelisline.ub.audit.domain.AuditEventCategory;
 import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.catalog.api.dto.CatalogListScope;
+import zelisline.ub.catalog.api.dto.CatalogListSort;
 import zelisline.ub.catalog.api.dto.CatalogRowType;
 import zelisline.ub.catalog.api.dto.CatalogRowTypeSum;
 import zelisline.ub.catalog.api.dto.CatalogRowTypeCountsResponse;
@@ -91,6 +93,8 @@ public class ItemCatalogService {
     private static final Logger log = LoggerFactory.getLogger(ItemCatalogService.class);
     /** Legacy flat attention level — only used for items with no reorder / min level set. */
     private static final BigDecimal CATALOG_LOW_STOCK_THRESHOLD = new BigDecimal("10");
+    /** Default max margin % for {@code poorMargin} (sell ≥ buy but thin). */
+    private static final BigDecimal DEFAULT_POOR_MARGIN_MAX_PCT = new BigDecimal("15");
 
     private final ItemRepository itemRepository;
     private final ItemImageRepository itemImageRepository;
@@ -152,9 +156,15 @@ public class ItemCatalogService {
                 false,
                 false,
                 false,
+                false,
+                false,
+                false,
+                false,
+                null,
                 null,
                 null,
                 false,
+                null,
                 pageable);
     }
 
@@ -200,9 +210,15 @@ public class ItemCatalogService {
                 false,
                 false,
                 false,
+                false,
+                false,
+                false,
+                false,
+                null,
                 null,
                 null,
                 false,
+                null,
                 pageable);
     }
 
@@ -230,6 +246,66 @@ public class ItemCatalogService {
             boolean aisleUnset,
             Pageable pageable
     ) {
+        return listItems(
+                businessId,
+                search,
+                barcodeExact,
+                categoryId,
+                includeCategoryDescendants,
+                noBarcode,
+                includeInactive,
+                catalogListScope,
+                catalogRowTypes,
+                excludeLinkedSupplierId,
+                branchIdForStock,
+                itemTypeId,
+                allowedItemTypeIds,
+                filterNoPrice,
+                filterZeroStock,
+                filterLowStock,
+                false,
+                inactiveOnly,
+                false,
+                false,
+                false,
+                null,
+                isWeighed,
+                aisleId,
+                aisleUnset,
+                null,
+                pageable);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<ItemSummaryResponse> listItems(
+            String businessId,
+            String search,
+            String barcodeExact,
+            String categoryId,
+            boolean includeCategoryDescendants,
+            boolean noBarcode,
+            boolean includeInactive,
+            CatalogListScope catalogListScope,
+            List<CatalogRowType> catalogRowTypes,
+            String excludeLinkedSupplierId,
+            String branchIdForStock,
+            String itemTypeId,
+            Collection<String> allowedItemTypeIds,
+            boolean filterNoPrice,
+            boolean filterZeroStock,
+            boolean filterLowStock,
+            boolean filterInStock,
+            boolean inactiveOnly,
+            boolean filterNoBuyingPrice,
+            boolean filterPriceLoss,
+            boolean filterPoorMargin,
+            BigDecimal poorMarginMaxPct,
+            Boolean isWeighed,
+            String aisleId,
+            boolean aisleUnset,
+            CatalogListSort listSort,
+            Pageable pageable
+    ) {
         CatalogListQueryContext ctx = resolveCatalogListQuery(
                 businessId,
                 search,
@@ -246,13 +322,14 @@ public class ItemCatalogService {
                 isWeighed,
                 aisleId,
                 aisleUnset,
+                listSort,
                 pageable);
         if (ctx.emptyResult()) {
             return Page.empty(ctx.pageable());
         }
         Collection<String> restrictItemIds = List.of("");
         boolean restrictItemIdsUnset = true;
-        if (filterZeroStock || filterLowStock) {
+        if (filterZeroStock || filterLowStock || filterInStock) {
             StockAttentionSnapshot stockAttention = computeStockAttention(
                     businessId,
                     branchIdForStock,
@@ -267,6 +344,9 @@ public class ItemCatalogService {
             if (filterLowStock) {
                 stockFilterIds.addAll(stockAttention.lowStockIds());
             }
+            if (filterInStock) {
+                stockFilterIds.addAll(stockAttention.inStockIds());
+            }
             if (stockFilterIds.isEmpty()) {
                 return Page.empty(ctx.pageable());
             }
@@ -275,6 +355,7 @@ public class ItemCatalogService {
         }
         final Collection<String> restrictIds = restrictItemIds;
         final boolean restrictIdsUnset = restrictItemIdsUnset;
+        final BigDecimal marginCap = resolvePoorMarginMaxPct(poorMarginMaxPct);
         boolean intelligentSearch = ctx.q() != null && !CatalogSearchSupport.isBlankQuery(ctx.q());
         String searchCandidate = intelligentSearch ? dbSearchToken(ctx.q()) : ctx.q();
         Pageable fetchPageable = intelligentSearch
@@ -307,6 +388,10 @@ public class ItemCatalogService {
                 ctx.filterAisleUnset(),
                 ctx.aisleId(),
                 filterNoPrice,
+                filterNoBuyingPrice,
+                filterPriceLoss,
+                filterPoorMargin,
+                marginCap,
                 restrictIdsUnset,
                 restrictIds,
                 ctx.isWeighedUnset(),
@@ -340,6 +425,10 @@ public class ItemCatalogService {
                     ctx.filterAisleUnset(),
                     ctx.aisleId(),
                     filterNoPrice,
+                    filterNoBuyingPrice,
+                    filterPriceLoss,
+                    filterPoorMargin,
+                    marginCap,
                     restrictIdsUnset,
                     restrictIds,
                     ctx.isWeighedUnset(),
@@ -2149,6 +2238,45 @@ public class ItemCatalogService {
             boolean aisleUnset,
             Pageable pageable
     ) {
+        return resolveCatalogListQuery(
+                businessId,
+                search,
+                barcodeExact,
+                categoryId,
+                includeCategoryDescendants,
+                noBarcode,
+                includeInactive,
+                catalogListScope,
+                catalogRowTypes,
+                excludeLinkedSupplierId,
+                itemTypeId,
+                allowedItemTypeIds,
+                isWeighed,
+                aisleId,
+                aisleUnset,
+                null,
+                pageable);
+    }
+
+    private CatalogListQueryContext resolveCatalogListQuery(
+            String businessId,
+            String search,
+            String barcodeExact,
+            String categoryId,
+            boolean includeCategoryDescendants,
+            boolean noBarcode,
+            boolean includeInactive,
+            CatalogListScope catalogListScope,
+            List<CatalogRowType> catalogRowTypes,
+            String excludeLinkedSupplierId,
+            String itemTypeId,
+            Collection<String> allowedItemTypeIds,
+            Boolean isWeighed,
+            String aisleId,
+            boolean aisleUnset,
+            CatalogListSort listSort,
+            Pageable pageable
+    ) {
         String q = blankToNull(search);
         String bc = blankToNull(barcodeExact);
         String cat = blankToNull(categoryId);
@@ -2173,10 +2301,13 @@ public class ItemCatalogService {
         Sort defaultSort = Sort.by(
                 Sort.Order.asc("name").ignoreCase(),
                 Sort.Order.asc("sku").ignoreCase());
+        Sort resolvedSort = listSort != null
+                ? sortForCatalogList(listSort)
+                : (pageable.getSort().isSorted() ? pageable.getSort() : defaultSort);
         Pageable pg = PageRequest.of(
                 pageable.getPageNumber(),
                 pageable.getPageSize(),
-                pageable.getSort().isSorted() ? pageable.getSort() : defaultSort);
+                resolvedSort);
         boolean catUnset = cat == null;
         Collection<String> categoryIds = List.of("");
         if (!catUnset) {
@@ -2234,6 +2365,52 @@ public class ItemCatalogService {
             return null;
         }
         return s.trim();
+    }
+
+    private static BigDecimal resolvePoorMarginMaxPct(BigDecimal requested) {
+        if (requested == null || requested.signum() <= 0) {
+            return DEFAULT_POOR_MARGIN_MAX_PCT;
+        }
+        BigDecimal max = new BigDecimal("100");
+        return requested.compareTo(max) > 0 ? max : requested;
+    }
+
+    /**
+     * Maps {@link CatalogListSort} to a Spring Data {@link Sort}. Profit / margin
+     * use unsafe JPQL expressions so ordering is done in SQL across the full page.
+     */
+    static Sort sortForCatalogList(CatalogListSort listSort) {
+        Sort byName = Sort.by(Sort.Order.asc("name").ignoreCase());
+        return switch (listSort) {
+            case NAME_ASC -> Sort.by(
+                    Sort.Order.asc("name").ignoreCase(),
+                    Sort.Order.asc("sku").ignoreCase());
+            case NAME_DESC -> Sort.by(
+                    Sort.Order.desc("name").ignoreCase(),
+                    Sort.Order.asc("sku").ignoreCase());
+            case SELL_ASC -> Sort.by(Sort.Order.asc("bundlePrice").nullsLast()).and(byName);
+            case SELL_DESC -> Sort.by(Sort.Order.desc("bundlePrice").nullsLast()).and(byName);
+            case BUY_ASC -> Sort.by(Sort.Order.asc("buyingPrice").nullsLast()).and(byName);
+            case BUY_DESC -> Sort.by(Sort.Order.desc("buyingPrice").nullsLast()).and(byName);
+            case PROFIT_DESC -> JpaSort.unsafe(
+                            Sort.Direction.DESC,
+                            "(coalesce(bundlePrice, 0) - coalesce(buyingPrice, 0))")
+                    .and(byName);
+            case PROFIT_ASC -> JpaSort.unsafe(
+                            Sort.Direction.ASC,
+                            "(coalesce(bundlePrice, 0) - coalesce(buyingPrice, 0))")
+                    .and(byName);
+            case MARGIN_DESC -> JpaSort.unsafe(
+                            Sort.Direction.DESC,
+                            "((coalesce(bundlePrice, 0) - coalesce(buyingPrice, 0))"
+                                    + " / nullif(buyingPrice, 0))")
+                    .and(byName);
+            case MARGIN_ASC -> JpaSort.unsafe(
+                            Sort.Direction.ASC,
+                            "((coalesce(bundlePrice, 0) - coalesce(buyingPrice, 0))"
+                                    + " / nullif(buyingPrice, 0))")
+                    .and(byName);
+        };
     }
 
     /** Fits {@code items.buying_price} / {@code bundle_price} {@code DECIMAL(14,2)}. */
@@ -2377,10 +2554,11 @@ public class ItemCatalogService {
             long zeroStockCount,
             long lowStockCount,
             Set<String> zeroStockIds,
-            Set<String> lowStockIds
+            Set<String> lowStockIds,
+            Set<String> inStockIds
     ) {
         private static StockAttentionSnapshot empty() {
-            return new StockAttentionSnapshot(0, 0, Set.of(), Set.of());
+            return new StockAttentionSnapshot(0, 0, Set.of(), Set.of(), Set.of());
         }
     }
 
@@ -2444,6 +2622,7 @@ public class ItemCatalogService {
         }
         Set<String> zeroStockIds = new HashSet<>();
         Set<String> lowStockIds = new HashSet<>();
+        Set<String> inStockIds = new HashSet<>();
         for (Item item : candidates) {
             BigDecimal holderStock = packageVariantStockResolver.sumPoolStock(item, stockMap);
             BigDecimal displayStock = packageVariantStockResolver.displayStockQty(item, holderStock);
@@ -2451,13 +2630,16 @@ public class ItemCatalogService {
                 zeroStockIds.add(item.getId());
             } else if (isCatalogLowStock(displayStock, item)) {
                 lowStockIds.add(item.getId());
+            } else {
+                inStockIds.add(item.getId());
             }
         }
         return new StockAttentionSnapshot(
                 zeroStockIds.size(),
                 lowStockIds.size(),
                 zeroStockIds,
-                lowStockIds);
+                lowStockIds,
+                inStockIds);
     }
 
     /**

@@ -1,5 +1,6 @@
 package zelisline.ub.catalog.repository;
 
+import java.math.BigDecimal;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -256,6 +257,21 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                          and sp.effectiveTo is null
                          and sp.price > 0
                     )))
+               and (:filterNoBuyingPrice = false
+                    or i.buyingPrice is null
+                    or i.buyingPrice <= 0)
+               and (:filterPriceLoss = false or (
+                    i.buyingPrice is not null and i.buyingPrice > 0
+                    and i.bundlePrice is not null and i.bundlePrice > 0
+                    and i.bundlePrice < i.buyingPrice
+               ))
+               and (:filterPoorMargin = false or (
+                    i.buyingPrice is not null and i.buyingPrice > 0
+                    and i.bundlePrice is not null and i.bundlePrice > 0
+                    and i.bundlePrice >= i.buyingPrice
+                    and ((i.bundlePrice - i.buyingPrice) * 100 / i.buyingPrice)
+                        < :poorMarginMaxPct
+               ))
                and (:restrictItemIdsUnset = true or i.id in :restrictItemIds)
             """)
     Page<Item> search(
@@ -285,6 +301,10 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("filterAisleUnset") boolean filterAisleUnset,
             @Param("aisleId") String aisleId,
             @Param("filterNoPrice") boolean filterNoPrice,
+            @Param("filterNoBuyingPrice") boolean filterNoBuyingPrice,
+            @Param("filterPriceLoss") boolean filterPriceLoss,
+            @Param("filterPoorMargin") boolean filterPoorMargin,
+            @Param("poorMarginMaxPct") BigDecimal poorMarginMaxPct,
             @Param("restrictItemIdsUnset") boolean restrictItemIdsUnset,
             @Param("restrictItemIds") Collection<String> restrictItemIds,
             @Param("isWeighedUnset") boolean isWeighedUnset,

@@ -30,6 +30,7 @@ import zelisline.ub.catalog.api.dto.AttachVariantsRequest;
 import zelisline.ub.catalog.api.dto.BulkItemImageImportResponse;
 import zelisline.ub.catalog.api.dto.EffectivePricingContextResponse;
 import zelisline.ub.catalog.api.dto.CatalogListScope;
+import zelisline.ub.catalog.api.dto.CatalogListSort;
 import zelisline.ub.catalog.api.dto.CatalogRowType;
 import zelisline.ub.catalog.api.dto.CatalogRowTypeCountsResponse;
 import zelisline.ub.catalog.api.dto.CreateGroupFromItemsRequest;
@@ -64,6 +65,7 @@ import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.tenancy.application.BranchResolutionService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Set;
 
@@ -95,6 +97,11 @@ public class ItemsController {
             @RequestParam(required = false, defaultValue = "false") boolean noPrice,
             @RequestParam(required = false, defaultValue = "false") boolean zeroStock,
             @RequestParam(required = false, defaultValue = "false") boolean lowStock,
+            @RequestParam(required = false, defaultValue = "false") boolean inStock,
+            @RequestParam(required = false, defaultValue = "false") boolean noBuyingPrice,
+            @RequestParam(required = false, defaultValue = "false") boolean priceLoss,
+            @RequestParam(required = false, defaultValue = "false") boolean poorMargin,
+            @RequestParam(required = false) BigDecimal poorMarginMaxPct,
             @RequestParam(required = false, defaultValue = "false") boolean inactiveOnly,
             @RequestParam(required = false, defaultValue = "ALL") CatalogListScope catalogScope,
             @RequestParam(required = false) List<CatalogRowType> catalogRowTypes,
@@ -104,6 +111,7 @@ public class ItemsController {
             @RequestParam(required = false) String aisleId,
             @RequestParam(required = false, defaultValue = "false") boolean aisleUnset,
             @RequestParam(required = false) Boolean isWeighed,
+            @RequestParam(required = false) CatalogListSort listSort,
             Pageable pageable,
             HttpServletRequest request
     ) {
@@ -126,10 +134,16 @@ public class ItemsController {
                 noPrice,
                 zeroStock,
                 lowStock,
+                inStock,
                 inactiveOnly,
+                noBuyingPrice,
+                priceLoss,
+                poorMargin,
+                poorMarginMaxPct,
                 isWeighed,
                 aisleId,
                 aisleUnset,
+                listSort,
                 pageable
         );
     }

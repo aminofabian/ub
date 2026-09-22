@@ -2,17 +2,28 @@ package zelisline.ub.payments.application;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.payments.api.dto.ProfitPocketSendRailOption;
 import zelisline.ub.payments.api.dto.ProfitPocketSettingsRequest;
 import zelisline.ub.payments.api.dto.ProfitPocketSettingsResponse;
+import zelisline.ub.payments.domain.GatewayStatus;
+import zelisline.ub.payments.domain.GatewayType;
+import zelisline.ub.payments.domain.PaymentGatewayConfig;
+import zelisline.ub.payments.domain.PlatformPaymentGateway;
 import zelisline.ub.payments.domain.ProfitPocketSettings;
+import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
+import zelisline.ub.payments.repository.PlatformPaymentGatewayRepository;
 import zelisline.ub.payments.repository.ProfitPocketSettingsRepository;
 
 @Service
@@ -21,9 +32,12 @@ public class ProfitPocketSettingsService {
 
     private static final Set<String> TYPES = Set.of(
             ProfitPocketSettings.TYPE_BANK,
-            ProfitPocketSettings.TYPE_MPESA_PHONE,
             ProfitPocketSettings.TYPE_TILL,
             ProfitPocketSettings.TYPE_PAYBILL);
+
+    private static final Set<String> RAILS = Set.of(
+            ProfitPocketSettings.RAIL_DARAJA,
+            ProfitPocketSettings.RAIL_KOPOKOPO);
 
     private static final Set<String> GUARD_MODES = Set.of(
             ProfitPocketSettings.GUARD_WARN,
@@ -32,6 +46,10 @@ public class ProfitPocketSettingsService {
 
     private final ProfitPocketSettingsRepository settingsRepository;
     private final CustomerPayEndpointService customerPayEndpointService;
+    private final PaymentGatewayConfigRepository configRepository;
+    private final PlatformPaymentGatewayRepository platformGatewayRepository;
+    private final ObjectProvider<PlatformDarajaSettingsService> platformDarajaSettingsService;
+    private final SupplierPayoutSettingsService supplierPayoutSettingsService;
 
     @Transactional(readOnly = true)
     public ProfitPocketSettingsResponse getSettings(String businessId) {
@@ -59,7 +77,7 @@ public class ProfitPocketSettingsService {
             String type = blankToNull(request.destinationType());
             if (type != null && !TYPES.contains(type)) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "destinationType must be bank, mpesa_phone, till, or paybill");
+                        "destinationType must be bank, till, or paybill");
             }
             settings.setDestinationType(type);
         }
@@ -113,6 +131,13 @@ public class ProfitPocketSettingsService {
             BigDecimal budget = request.marginBudgetDaily().setScale(2, RoundingMode.HALF_UP);
             settings.setMarginBudgetDaily(budget.signum() == 0 ? null : budget);
         }
+        if (request.sendRail() != null) {
+            String rail = blankToNull(request.sendRail());
+            if (rail != null && !RAILS.contains(rail)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "sendRail must be daraja or kopokopo");
+            }
+            settings.setSendRail(rail);
+        }
 
         if (settings.isEnabled()) {
             normalizeAndRequireDestination(settings);
@@ -120,6 +145,7 @@ public class ProfitPocketSettingsService {
             if (collision != null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, collision);
             }
+            normalizeSendRail(businessId, settings);
         }
 
         settingsRepository.save(settings);
@@ -169,17 +195,6 @@ public class ProfitPocketSettingsService {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Bank account number is required");
                 }
             }
-            case ProfitPocketSettings.TYPE_MPESA_PHONE -> {
-                String phone = blankToNull(settings.getDestinationAccount());
-                if (phone == null) {
-                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "M-Pesa phone is required");
-                }
-                String normalized = StkPhoneNormalizer.normalize(phone);
-                if (normalized == null) {
-                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter a valid Kenyan M-Pesa phone");
-                }
-                settings.setDestinationAccount(normalized);
-            }
             case ProfitPocketSettings.TYPE_TILL -> {
                 if (blankToNull(settings.getDestinationAccount()) == null) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Till number is required");
@@ -201,12 +216,16 @@ public class ProfitPocketSettingsService {
         if (s.getDestinationType() == null || s.getDestinationType().isBlank()) {
             return false;
         }
+        // Legacy mpesa_phone destinations are no longer supported.
+        if (ProfitPocketSettings.TYPE_MPESA_PHONE.equals(s.getDestinationType())) {
+            return false;
+        }
         return switch (s.getDestinationType()) {
             case ProfitPocketSettings.TYPE_BANK ->
                     blankToNull(s.getDestinationAccount()) != null
                             && blankToNull(s.getDestinationBankName()) != null
                             && blankToNull(s.getDestinationPaybill()) != null;
-            case ProfitPocketSettings.TYPE_MPESA_PHONE, ProfitPocketSettings.TYPE_TILL ->
+            case ProfitPocketSettings.TYPE_TILL ->
                     blankToNull(s.getDestinationAccount()) != null;
             case ProfitPocketSettings.TYPE_PAYBILL ->
                     blankToNull(s.getDestinationPaybill()) != null
@@ -220,6 +239,8 @@ public class ProfitPocketSettingsService {
         String collision = configured
                 ? customerPayEndpointService.collisionMessage(businessId, s)
                 : null;
+        List<ProfitPocketSendRailOption> rails = listAvailableSendRails(businessId);
+        String sendRail = effectiveSendRail(s.getSendRail(), rails);
         return new ProfitPocketSettingsResponse(
                 s.isEnabled(),
                 configured,
@@ -238,7 +259,115 @@ public class ProfitPocketSettingsService {
                 collision != null,
                 collision,
                 s.getProfitJarPct(),
-                s.getMarginBudgetDaily());
+                s.getMarginBudgetDaily(),
+                sendRail,
+                rails);
+    }
+
+    /** Resolved rail for outbound send (may be null when none ready). */
+    @Transactional(readOnly = true)
+    public String resolveSendRail(String businessId, ProfitPocketSettings settings) {
+        List<ProfitPocketSendRailOption> rails = listAvailableSendRails(businessId);
+        return effectiveSendRail(settings != null ? settings.getSendRail() : null, rails);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ProfitPocketSendRailOption> listAvailableSendRails(String businessId) {
+        List<ProfitPocketSendRailOption> out = new ArrayList<>();
+
+        PlatformDarajaSettingsService daraja = platformDarajaSettingsService.getIfAvailable();
+        boolean darajaEnabled = daraja != null && daraja.isEnabledAndConfigured();
+        boolean darajaB2b = daraja != null && daraja.isB2bConfigured();
+        if (darajaEnabled || darajaB2b) {
+            out.add(new ProfitPocketSendRailOption(
+                    ProfitPocketSettings.RAIL_DARAJA,
+                    "Daraja (platform)",
+                    darajaB2b,
+                    darajaB2b
+                            ? "Sends via platform Daraja B2B to your bank / till / paybill"
+                            : "Platform Daraja is on, but B2B initiator credentials are missing"));
+        }
+
+        boolean platformKk = platformGatewayRepository.findById(GatewayType.KOPOKOPO)
+                .map(PlatformPaymentGateway::isEnabled)
+                .orElse(false);
+        Optional<PaymentGatewayConfig> kk = resolveKopokopoConfig(businessId);
+        if (platformKk || kk.isPresent()) {
+            String detail;
+            boolean ready = platformKk && kk.isPresent();
+            if (!platformKk) {
+                detail = "KopoKopo is disabled by the platform administrator";
+            } else if (kk.isEmpty()) {
+                detail = "Connect and activate KopoKopo under Accept payments, then select it in Pay suppliers";
+            } else {
+                detail = "Sends via your KopoKopo account ("
+                        + (kk.get().getLabel() != null ? kk.get().getLabel() : "KopoKopo")
+                        + ")";
+            }
+            out.add(new ProfitPocketSendRailOption(
+                    ProfitPocketSettings.RAIL_KOPOKOPO,
+                    "KopoKopo",
+                    ready,
+                    detail));
+        }
+        return out;
+    }
+
+    /** Active tenant KopoKopo config preferred by Pay suppliers, else any ACTIVE KopoKopo. */
+    @Transactional(readOnly = true)
+    public Optional<PaymentGatewayConfig> resolveKopokopoConfig(String businessId) {
+        Optional<PaymentGatewayConfig> preferred = supplierPayoutSettingsService.resolveActivePayoutConfig(businessId);
+        if (preferred.isPresent() && preferred.get().getGatewayType() == GatewayType.KOPOKOPO) {
+            return preferred;
+        }
+        PlatformPaymentGateway platform = platformGatewayRepository.findById(GatewayType.KOPOKOPO).orElse(null);
+        if (platform == null || !platform.isEnabled()) {
+            return Optional.empty();
+        }
+        return configRepository
+                .findByBusinessIdAndGatewayTypeAndStatus(businessId, GatewayType.KOPOKOPO, GatewayStatus.ACTIVE)
+                .stream()
+                .findFirst();
+    }
+
+    private void normalizeSendRail(String businessId, ProfitPocketSettings settings) {
+        List<ProfitPocketSendRailOption> rails = listAvailableSendRails(businessId);
+        String rail = blankToNull(settings.getSendRail());
+        if (rail == null) {
+            settings.setSendRail(firstReadyRail(rails));
+            return;
+        }
+        ProfitPocketSendRailOption match = rails.stream()
+                .filter(r -> rail.equals(r.id()))
+                .findFirst()
+                .orElse(null);
+        if (match == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Send rail “" + rail + "” is not available for this shop");
+        }
+        if (!match.ready()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, match.detail());
+        }
+    }
+
+    private static String effectiveSendRail(String preferred, List<ProfitPocketSendRailOption> rails) {
+        if (preferred != null && !preferred.isBlank()) {
+            for (ProfitPocketSendRailOption r : rails) {
+                if (preferred.equals(r.id()) && r.ready()) {
+                    return preferred;
+                }
+            }
+        }
+        return firstReadyRail(rails);
+    }
+
+    private static String firstReadyRail(List<ProfitPocketSendRailOption> rails) {
+        for (ProfitPocketSendRailOption r : rails) {
+            if (r.ready()) {
+                return r.id();
+            }
+        }
+        return null;
     }
 
     /** Effective jar share 1–100 (defaults to 100). */
@@ -271,8 +400,6 @@ public class ProfitPocketSettingsService {
                         + (paybill != null ? "Paybill " + paybill + " · " : "")
                         + acct;
             }
-            case ProfitPocketSettings.TYPE_MPESA_PHONE ->
-                    (label != null ? label + " · " : "") + "M-Pesa " + maskTail(s.getDestinationAccount());
             case ProfitPocketSettings.TYPE_TILL ->
                     (label != null ? label + " · " : "") + "Till " + s.getDestinationAccount();
             case ProfitPocketSettings.TYPE_PAYBILL ->

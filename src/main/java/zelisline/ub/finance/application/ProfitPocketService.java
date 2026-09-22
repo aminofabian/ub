@@ -28,13 +28,14 @@ import zelisline.ub.finance.api.dto.CashSurplusResponse;
 import zelisline.ub.finance.api.dto.PostProfitPocketRequest;
 import zelisline.ub.finance.api.dto.ProfitAndLossResponse;
 import zelisline.ub.finance.api.dto.ProfitPocketResponse;
+import zelisline.ub.finance.api.dto.ProfitPocketTestResponse;
 import zelisline.ub.finance.domain.JournalEntry;
 import zelisline.ub.finance.domain.ProfitPocket;
 import zelisline.ub.finance.repository.JournalReportRepository;
 import zelisline.ub.finance.repository.ProfitPocketRepository;
 import zelisline.ub.payments.api.dto.ProfitPocketSettingsResponse;
+import zelisline.ub.payments.application.PlatformDarajaSettingsService;
 import zelisline.ub.payments.application.ProfitPocketSettingsService;
-import zelisline.ub.payments.application.SupplierPayoutSettingsService;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
 import zelisline.ub.payments.domain.ProfitPocketSettings;
@@ -42,10 +43,13 @@ import zelisline.ub.payments.domain.spi.SendMoneyRequest;
 import zelisline.ub.payments.domain.spi.SendMoneyResult;
 import zelisline.ub.payments.domain.spi.WebhookResult;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
+import zelisline.ub.payments.infrastructure.DarajaPaymentGateway;
 import zelisline.ub.payments.infrastructure.KopokopoPaymentGateway;
 import zelisline.ub.sales.api.dto.PaymentMethodBreakdownRow;
 import zelisline.ub.sales.application.SalesIntelligenceService;
 import zelisline.ub.tenancy.repository.BranchRepository;
+
+import org.springframework.beans.factory.ObjectProvider;
 
 @Service
 @RequiredArgsConstructor
@@ -61,7 +65,6 @@ public class ProfitPocketService {
 
     private final ProfitPocketRepository profitPocketRepository;
     private final ProfitPocketSettingsService profitPocketSettingsService;
-    private final SupplierPayoutSettingsService supplierPayoutSettingsService;
     private final SalesIntelligenceService salesIntelligenceService;
     private final FinanceReportsService financeReportsService;
     private final JournalReportRepository journalReportRepository;
@@ -71,6 +74,8 @@ public class ProfitPocketService {
     private final ObjectMapper objectMapper;
     private final CredentialEncryptionService encryptionService;
     private final KopokopoPaymentGateway kopokopoGateway;
+    private final DarajaPaymentGateway darajaPaymentGateway;
+    private final ObjectProvider<PlatformDarajaSettingsService> platformDarajaSettingsService;
 
     @Value("${app.public.api-base-url:http://localhost:5050}")
     private String publicApiBaseUrl;
@@ -117,12 +122,16 @@ public class ProfitPocketService {
         if (rawSurplus.signum() < 0) {
             rawSurplus = ZERO;
         }
+        ProfitAndLossResponse pl = financeReportsService.profitAndLoss(businessId, from, to, resolvedBranch);
+        BigDecimal grossProfit = money(pl.grossProfit());
+        BigDecimal profitBase = grossProfit.signum() > 0 ? grossProfit : ZERO;
+        // Suggest from profit, never more than liquid cash surplus.
+        BigDecimal pocketBase = profitBase.min(rawSurplus);
         BigDecimal jarPct = ProfitPocketSettingsService.effectiveJarPct(settings.profitJarPct());
-        BigDecimal suggested = rawSurplus
+        BigDecimal suggested = pocketBase
                 .multiply(jarPct)
                 .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
 
-        ProfitAndLossResponse pl = financeReportsService.profitAndLoss(businessId, from, to, resolvedBranch);
         long openShifts = journalReportRepository.countOpenShifts(businessId, resolvedBranch);
 
         return new CashSurplusResponse(
@@ -134,7 +143,7 @@ public class ProfitPocketService {
                 credit,
                 leaveFloat,
                 suggested,
-                money(pl.grossProfit()),
+                grossProfit,
                 openShifts,
                 settings.enabled() && settings.configured() && !settings.collidesWithCustomerPay(),
                 settings.destinationSummary(),
@@ -282,12 +291,7 @@ public class ProfitPocketService {
             ProfitPocket row
     ) {
         String type = settings.getDestinationType();
-        if (ProfitPocketSettings.TYPE_BANK.equals(type)) {
-            row.setSendMoneyStatus(SEND_SKIPPED);
-            row.setSendMoneyMessage("Bank destination — recorded on books only; transfer manually");
-            return;
-        }
-        if (!ProfitPocketSettings.TYPE_MPESA_PHONE.equals(type)
+        if (!ProfitPocketSettings.TYPE_BANK.equals(type)
                 && !ProfitPocketSettings.TYPE_TILL.equals(type)
                 && !ProfitPocketSettings.TYPE_PAYBILL.equals(type)) {
             row.setSendMoneyStatus(SEND_SKIPPED);
@@ -295,19 +299,212 @@ public class ProfitPocketService {
             return;
         }
 
-        Optional<PaymentGatewayConfig> gateway =
-                supplierPayoutSettingsService.resolveActivePayoutConfig(businessId);
-        if (gateway.isEmpty()) {
+        String rail = profitPocketSettingsService.resolveSendRail(businessId, settings);
+        if (rail == null) {
             row.setSendMoneyStatus(SEND_SKIPPED);
             row.setSendMoneyMessage(
-                    "No active supplier-payout gateway — pocket recorded on books. "
-                            + "Enable Payments → Pay suppliers to auto-send.");
+                    "No send rail ready — choose Daraja or KopoKopo in Profit Pocket settings");
+            return;
+        }
+
+        if (ProfitPocketSettings.RAIL_DARAJA.equals(rail)) {
+            initiateDarajaB2B(businessId, settings, row.getAmount(), "Profit pocket", result -> {
+                if (!result.accepted()) {
+                    row.setSendMoneyStatus(SEND_FAILED);
+                    row.setSendMoneyMessage(truncate(
+                            result.message() != null ? result.message() : "Daraja B2B declined", 500));
+                    return;
+                }
+                String id = firstNonBlank(result.conversationId(), result.originatorConversationId());
+                row.setSendMoneyStatus(SEND_PENDING);
+                row.setKopokopoSendMoneyId(id);
+                row.setSendMoneyMessage("Daraja B2B submitted — waiting for Safaricom");
+                log.info("Profit pocket Daraja B2B pending pocket={} conversationId={}", row.getId(), id);
+            }, err -> {
+                row.setSendMoneyStatus(SEND_FAILED);
+                row.setSendMoneyMessage(truncate(err, 500));
+            });
+            return;
+        }
+
+        initiateKopokopoSendMoney(businessId, settings, row.getAmount(), "Profit pocket",
+                row.getId(), (status, sendId, message, cfgId) -> {
+                    row.setSendMoneyStatus(status);
+                    row.setKopokopoSendMoneyId(sendId);
+                    row.setSendMoneyMessage(message);
+                    row.setPaymentGatewayConfigId(cfgId);
+                });
+    }
+
+    /**
+     * Sends KES 1 to the configured pocket destination so the owner can confirm the rail.
+     * Does not create a pocket journal entry.
+     */
+    @Transactional
+    public ProfitPocketTestResponse testDestination(String businessId) {
+        ProfitPocketSettings settings = profitPocketSettingsService.requireConfigured(businessId);
+        String rail = profitPocketSettingsService.resolveSendRail(businessId, settings);
+        if (rail == null) {
+            return new ProfitPocketTestResponse(
+                    "skipped",
+                    null,
+                    "Choose a ready send rail (Daraja or KopoKopo) in Profit Pocket settings.");
+        }
+
+        if (ProfitPocketSettings.RAIL_DARAJA.equals(rail)) {
+            final ProfitPocketTestResponse[] box = new ProfitPocketTestResponse[1];
+            initiateDarajaB2B(businessId, settings, new BigDecimal("1.00"), "Profit Pocket destination test",
+                    result -> {
+                        if (!result.accepted()) {
+                            box[0] = new ProfitPocketTestResponse(
+                                    "failed",
+                                    null,
+                                    result.message() != null ? result.message() : "Daraja B2B declined");
+                            return;
+                        }
+                        String id = firstNonBlank(result.conversationId(), result.originatorConversationId());
+                        box[0] = new ProfitPocketTestResponse(
+                                "pending",
+                                id,
+                                "KES 1 via Daraja B2B — check the destination. Waiting for Safaricom.");
+                    },
+                    err -> box[0] = new ProfitPocketTestResponse("failed", null, err));
+            return box[0] != null
+                    ? box[0]
+                    : new ProfitPocketTestResponse("failed", null, "Daraja test did not complete");
+        }
+
+        final ProfitPocketTestResponse[] box = new ProfitPocketTestResponse[1];
+        initiateKopokopoSendMoney(businessId, settings, new BigDecimal("1.00"),
+                "Profit Pocket destination test", null,
+                (status, sendId, message, cfgId) ->
+                        box[0] = new ProfitPocketTestResponse(status, sendId, message));
+        return box[0] != null
+                ? box[0]
+                : new ProfitPocketTestResponse("failed", null, "KopoKopo test did not complete");
+    }
+
+    @Transactional
+    public boolean processDarajaB2BResult(DarajaPaymentGateway.B2BResult result) {
+        if (result == null) {
+            return false;
+        }
+        Optional<ProfitPocket> opt = Optional.empty();
+        if (result.conversationId() != null && !result.conversationId().isBlank()) {
+            opt = profitPocketRepository.findFirstByKopokopoSendMoneyId(result.conversationId().trim());
+        }
+        if (opt.isEmpty()
+                && result.originatorConversationId() != null
+                && !result.originatorConversationId().isBlank()) {
+            opt = profitPocketRepository.findFirstByKopokopoSendMoneyId(
+                    result.originatorConversationId().trim());
+        }
+        if (opt.isEmpty()) {
+            return false;
+        }
+        ProfitPocket row = opt.get();
+        if (SEND_SUCCESS.equals(row.getSendMoneyStatus()) || SEND_FAILED.equals(row.getSendMoneyStatus())) {
+            return true;
+        }
+        if (result.accepted()) {
+            row.setSendMoneyStatus(SEND_SUCCESS);
+            row.setSendMoneyMessage("Daraja confirmed the transfer");
+        } else {
+            row.setSendMoneyStatus(SEND_FAILED);
+            String msg = result.message() != null ? result.message() : "Daraja B2B failed";
+            row.setSendMoneyMessage(truncate(msg, 500));
+        }
+        profitPocketRepository.save(row);
+        log.info("Profit pocket Daraja B2B {} pocket={}", row.getSendMoneyStatus(), row.getId());
+        return true;
+    }
+
+    private void initiateDarajaB2B(
+            String businessId,
+            ProfitPocketSettings settings,
+            BigDecimal amount,
+            String remarks,
+            java.util.function.Consumer<DarajaPaymentGateway.B2BResult> onResult,
+            java.util.function.Consumer<String> onError
+    ) {
+        PlatformDarajaSettingsService daraja = platformDarajaSettingsService.getIfAvailable();
+        if (daraja == null || !daraja.isB2bConfigured()) {
+            onError.accept("Platform Daraja B2B is not configured by the administrator");
+            return;
+        }
+        Map<String, String> creds = daraja.credentials().orElse(Map.of());
+        if (creds.isEmpty()) {
+            onError.accept("Platform Daraja credentials missing");
+            return;
+        }
+
+        String destType;
+        String partyB;
+        String accountRef;
+        String type = settings.getDestinationType();
+        if (ProfitPocketSettings.TYPE_TILL.equals(type)) {
+            destType = SendMoneyRequest.DEST_TILL;
+            partyB = settings.getDestinationAccount();
+            accountRef = null;
+        } else if (ProfitPocketSettings.TYPE_PAYBILL.equals(type)) {
+            destType = SendMoneyRequest.DEST_PAYBILL;
+            partyB = settings.getDestinationPaybill();
+            accountRef = settings.getDestinationPaybillAccount();
+        } else if (ProfitPocketSettings.TYPE_BANK.equals(type)) {
+            destType = SendMoneyRequest.DEST_PAYBILL;
+            partyB = settings.getDestinationPaybill();
+            accountRef = settings.getDestinationAccount();
+        } else {
+            onError.accept("Unsupported destination for Daraja B2B");
+            return;
+        }
+
+        try {
+            DarajaPaymentGateway.B2BRequest request = new DarajaPaymentGateway.B2BRequest(
+                    creds,
+                    publicApiBaseUrl.replaceAll("/+$", ""),
+                    destType,
+                    partyB,
+                    accountRef,
+                    amount,
+                    "KES",
+                    remarks);
+            onResult.accept(darajaPaymentGateway.sendB2B(request));
+        } catch (Exception e) {
+            log.warn("Profit pocket Daraja B2B failed: {}", e.toString());
+            onError.accept(e.getMessage() != null ? e.getMessage() : "Daraja B2B failed");
+        }
+    }
+
+    private interface KopokopoSendCallback {
+        void accept(String status, String sendMoneyId, String message, String configId);
+    }
+
+    private void initiateKopokopoSendMoney(
+            String businessId,
+            ProfitPocketSettings settings,
+            BigDecimal amount,
+            String description,
+            String profitPocketId,
+            KopokopoSendCallback callback
+    ) {
+        Optional<PaymentGatewayConfig> gateway =
+                profitPocketSettingsService.resolveKopokopoConfig(businessId);
+        if (gateway.isEmpty()) {
+            callback.accept(
+                    SEND_SKIPPED,
+                    null,
+                    "No active KopoKopo gateway — connect KopoKopo and enable Pay suppliers.",
+                    null);
             return;
         }
         PaymentGatewayConfig cfg = gateway.get();
         if (cfg.getGatewayType() != GatewayType.KOPOKOPO) {
-            row.setSendMoneyStatus(SEND_SKIPPED);
-            row.setSendMoneyMessage("Send Money via " + cfg.getGatewayType().name() + " is not implemented yet");
+            callback.accept(
+                    SEND_SKIPPED,
+                    null,
+                    "Send Money via " + cfg.getGatewayType().name() + " is not implemented yet",
+                    cfg.getId());
             return;
         }
 
@@ -315,43 +512,62 @@ public class ProfitPocketService {
             Map<String, String> creds = decryptCredentials(cfg);
             String till = creds.getOrDefault("tillNumber", creds.get("shortcode"));
             Map<String, String> metadata = new LinkedHashMap<>();
-            metadata.put("profitPocketId", row.getId());
+            if (profitPocketId != null) {
+                metadata.put("profitPocketId", profitPocketId);
+            } else {
+                metadata.put("profitPocketTest", "true");
+            }
             metadata.put("businessId", businessId);
-            metadata.put("destinationType", type);
+            metadata.put("destinationType", settings.getDestinationType());
 
             SendMoneyRequest request = buildSendMoneyRequest(
                     settings,
                     creds,
                     publicApiBaseUrl.replaceAll("/+$", ""),
-                    row.getAmount(),
-                    "Profit pocket",
+                    amount,
+                    description,
                     till,
                     metadata);
             SendMoneyResult result = kopokopoGateway.sendMoney(request);
             if (!result.accepted() || result.sendMoneyId() == null) {
-                row.setSendMoneyStatus(SEND_FAILED);
-                row.setSendMoneyMessage(truncate(
-                        result.message() != null ? result.message() : "KopoKopo Send Money declined",
-                        500));
-                row.setPaymentGatewayConfigId(cfg.getId());
+                callback.accept(
+                        SEND_FAILED,
+                        null,
+                        truncate(
+                                result.message() != null ? result.message() : "KopoKopo Send Money declined",
+                                500),
+                        cfg.getId());
                 return;
             }
-            row.setSendMoneyStatus(SEND_PENDING);
-            row.setKopokopoSendMoneyId(result.sendMoneyId());
-            row.setPaymentGatewayConfigId(cfg.getId());
-            row.setSendMoneyMessage("Send Money submitted — waiting for KopoKopo");
-            log.info("Profit pocket Send Money pending pocket={} kopokopoId={}",
-                    row.getId(), result.sendMoneyId());
+            callback.accept(
+                    SEND_PENDING,
+                    result.sendMoneyId(),
+                    "Send Money submitted — waiting for KopoKopo",
+                    cfg.getId());
+            log.info("Profit pocket KopoKopo Send Money pending pocket={} kopokopoId={}",
+                    profitPocketId, result.sendMoneyId());
         } catch (Exception e) {
-            log.warn("Profit pocket Send Money failed soft: {}", e.toString());
-            row.setSendMoneyStatus(SEND_FAILED);
-            row.setSendMoneyMessage(truncate(
-                    e instanceof ResponseStatusException rse && rse.getReason() != null
-                            ? rse.getReason()
-                            : "Could not send money: " + e.getMessage(),
-                    500));
-            row.setPaymentGatewayConfigId(cfg.getId());
+            log.warn("Profit pocket KopoKopo Send Money failed soft: {}", e.toString());
+            callback.accept(
+                    SEND_FAILED,
+                    null,
+                    truncate(
+                            e instanceof ResponseStatusException rse && rse.getReason() != null
+                                    ? rse.getReason()
+                                    : "Could not send money: " + e.getMessage(),
+                            500),
+                    cfg.getId());
         }
+    }
+
+    private static String firstNonBlank(String a, String b) {
+        if (a != null && !a.isBlank()) {
+            return a.trim();
+        }
+        if (b != null && !b.isBlank()) {
+            return b.trim();
+        }
+        return null;
     }
 
     private static SendMoneyRequest buildSendMoneyRequest(
@@ -364,21 +580,6 @@ public class ProfitPocketService {
             Map<String, String> metadata
     ) {
         String type = settings.getDestinationType();
-        if (ProfitPocketSettings.TYPE_MPESA_PHONE.equals(type)) {
-            return new SendMoneyRequest(
-                    creds,
-                    callbackBase,
-                    SendMoneyRequest.DEST_MOBILE_WALLET,
-                    settings.getDestinationAccount(),
-                    null,
-                    null,
-                    null,
-                    amount,
-                    "KES",
-                    description,
-                    sourceIdentifier,
-                    metadata);
-        }
         if (ProfitPocketSettings.TYPE_TILL.equals(type)) {
             return new SendMoneyRequest(
                     creds,
@@ -403,6 +604,22 @@ public class ProfitPocketService {
                     null,
                     settings.getDestinationPaybill(),
                     settings.getDestinationPaybillAccount(),
+                    amount,
+                    "KES",
+                    description,
+                    sourceIdentifier,
+                    metadata);
+        }
+        if (ProfitPocketSettings.TYPE_BANK.equals(type)) {
+            // Bank Lipa Na M-Pesa = paybill business number + account number.
+            return new SendMoneyRequest(
+                    creds,
+                    callbackBase,
+                    SendMoneyRequest.DEST_PAYBILL,
+                    null,
+                    null,
+                    settings.getDestinationPaybill(),
+                    settings.getDestinationAccount(),
                     amount,
                     "KES",
                     description,

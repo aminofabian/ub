@@ -20,7 +20,7 @@ public record CashSurplusResponse(
         String customerPayCollisionMessage,
         /** Applied jar % (1–100). */
         BigDecimal profitJarPct,
-        /** Cash + M-Pesa − float before jar %. */
+        /** Cash + M-Pesa − float (liquidity cap). Suggested pocket uses min(profit, this) × jar %. */
         BigDecimal rawSurplus
 ) {
 }

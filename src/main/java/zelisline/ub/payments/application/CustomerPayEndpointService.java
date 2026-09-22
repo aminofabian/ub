@@ -68,9 +68,12 @@ public class CustomerPayEndpointService {
                 return "Till " + till
                         + " is already a customer-pay till. Choose a different expense / owner destination.";
             }
-        } else if (ProfitPocketSettings.TYPE_PAYBILL.equals(type)) {
+        } else if (ProfitPocketSettings.TYPE_PAYBILL.equals(type)
+                || ProfitPocketSettings.TYPE_BANK.equals(type)) {
             String paybill = digitsOnly(settings.getDestinationPaybill());
-            String account = normalizeAccount(settings.getDestinationPaybillAccount());
+            String account = ProfitPocketSettings.TYPE_BANK.equals(type)
+                    ? normalizeAccount(settings.getDestinationAccount())
+                    : normalizeAccount(settings.getDestinationPaybillAccount());
             if (paybill != null && account != null) {
                 String key = paybillKey(paybill, account);
                 if (endpoints.paybills().contains(key)) {

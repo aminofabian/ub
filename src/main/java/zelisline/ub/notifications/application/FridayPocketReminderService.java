@@ -133,7 +133,7 @@ public class FridayPocketReminderService {
                     hasText(s.getDestinationAccount())
                             && hasText(s.getDestinationBankName())
                             && hasText(s.getDestinationPaybill());
-            case ProfitPocketSettings.TYPE_MPESA_PHONE, ProfitPocketSettings.TYPE_TILL ->
+            case ProfitPocketSettings.TYPE_TILL ->
                     hasText(s.getDestinationAccount());
             case ProfitPocketSettings.TYPE_PAYBILL ->
                     hasText(s.getDestinationPaybill()) && hasText(s.getDestinationPaybillAccount());

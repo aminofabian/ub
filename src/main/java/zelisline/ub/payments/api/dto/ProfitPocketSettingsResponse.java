@@ -1,6 +1,7 @@
 package zelisline.ub.payments.api.dto;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 public record ProfitPocketSettingsResponse(
         boolean enabled,
@@ -21,6 +22,9 @@ public record ProfitPocketSettingsResponse(
         /** 1–100 share of surplus; null means 100%. */
         BigDecimal profitJarPct,
         /** Daily below-cost loss budget (KES); null/0 = off. */
-        BigDecimal marginBudgetDaily
+        BigDecimal marginBudgetDaily,
+        /** daraja | kopokopo | null */
+        String sendRail,
+        List<ProfitPocketSendRailOption> availableSendRails
 ) {
 }

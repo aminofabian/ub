@@ -18,6 +18,8 @@ public record ProfitPocketSettingsRequest(
         @Size(max = 16) String marginGuardMode,
         Boolean fridayReminderEnabled,
         @DecimalMin("1.00") @DecimalMax("100.00") BigDecimal profitJarPct,
-        @DecimalMin("0.00") BigDecimal marginBudgetDaily
+        @DecimalMin("0.00") BigDecimal marginBudgetDaily,
+        /** daraja | kopokopo */
+        @Size(max = 16) String sendRail
 ) {
 }

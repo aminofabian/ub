@@ -23,6 +23,9 @@ public class ProfitPocketSettings {
     public static final String TYPE_TILL = "till";
     public static final String TYPE_PAYBILL = "paybill";
 
+    public static final String RAIL_DARAJA = "daraja";
+    public static final String RAIL_KOPOKOPO = "kopokopo";
+
     public static final String GUARD_WARN = "warn";
     public static final String GUARD_APPROVE = "approve";
     public static final String GUARD_HARD = "hard";
@@ -73,6 +76,13 @@ public class ProfitPocketSettings {
      */
     @Column(name = "margin_budget_daily", precision = 14, scale = 2)
     private BigDecimal marginBudgetDaily;
+
+    /**
+     * Outbound rail for pocket / test send: {@code daraja} (platform B2B) or
+     * {@code kopokopo} (tenant KopoKopo Send Money).
+     */
+    @Column(name = "send_rail", length = 16)
+    private String sendRail;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

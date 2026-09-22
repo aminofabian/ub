@@ -14,5 +14,7 @@ public interface ProfitPocketRepository extends JpaRepository<ProfitPocket, Stri
 
     Optional<ProfitPocket> findByBusinessIdAndKopokopoSendMoneyId(String businessId, String kopokopoSendMoneyId);
 
+    Optional<ProfitPocket> findFirstByKopokopoSendMoneyId(String kopokopoSendMoneyId);
+
     List<ProfitPocket> findByBusinessIdOrderByCreatedAtDesc(String businessId, Pageable pageable);
 }

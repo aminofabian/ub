@@ -2378,6 +2378,7 @@ public class ItemCatalogService {
     /**
      * Maps {@link CatalogListSort} to a Spring Data {@link Sort}. Profit / margin
      * use unsafe JPQL expressions so ordering is done in SQL across the full page.
+     * Expressions must use the {@code i} alias from {@code ItemRepository.search}.
      */
     static Sort sortForCatalogList(CatalogListSort listSort) {
         Sort byName = Sort.by(Sort.Order.asc("name").ignoreCase());
@@ -2388,27 +2389,29 @@ public class ItemCatalogService {
             case NAME_DESC -> Sort.by(
                     Sort.Order.desc("name").ignoreCase(),
                     Sort.Order.asc("sku").ignoreCase());
-            case SELL_ASC -> Sort.by(Sort.Order.asc("bundlePrice").nullsLast()).and(byName);
-            case SELL_DESC -> Sort.by(Sort.Order.desc("bundlePrice").nullsLast()).and(byName);
-            case BUY_ASC -> Sort.by(Sort.Order.asc("buyingPrice").nullsLast()).and(byName);
-            case BUY_DESC -> Sort.by(Sort.Order.desc("buyingPrice").nullsLast()).and(byName);
+            case SELL_ASC -> Sort.by(Sort.Order.asc("bundlePrice")).and(byName);
+            case SELL_DESC -> Sort.by(Sort.Order.desc("bundlePrice")).and(byName);
+            case BUY_ASC -> Sort.by(Sort.Order.asc("buyingPrice")).and(byName);
+            case BUY_DESC -> Sort.by(Sort.Order.desc("buyingPrice")).and(byName);
             case PROFIT_DESC -> JpaSort.unsafe(
                             Sort.Direction.DESC,
-                            "(coalesce(bundlePrice, 0) - coalesce(buyingPrice, 0))")
+                            "(coalesce(i.bundlePrice, 0) - coalesce(i.buyingPrice, 0))")
                     .and(byName);
             case PROFIT_ASC -> JpaSort.unsafe(
                             Sort.Direction.ASC,
-                            "(coalesce(bundlePrice, 0) - coalesce(buyingPrice, 0))")
+                            "(coalesce(i.bundlePrice, 0) - coalesce(i.buyingPrice, 0))")
                     .and(byName);
             case MARGIN_DESC -> JpaSort.unsafe(
                             Sort.Direction.DESC,
-                            "((coalesce(bundlePrice, 0) - coalesce(buyingPrice, 0))"
-                                    + " / nullif(buyingPrice, 0))")
+                            "(case when coalesce(i.buyingPrice, 0) <= 0 then null"
+                                    + " else (coalesce(i.bundlePrice, 0) - i.buyingPrice)"
+                                    + " / i.buyingPrice end)")
                     .and(byName);
             case MARGIN_ASC -> JpaSort.unsafe(
                             Sort.Direction.ASC,
-                            "((coalesce(bundlePrice, 0) - coalesce(buyingPrice, 0))"
-                                    + " / nullif(buyingPrice, 0))")
+                            "(case when coalesce(i.buyingPrice, 0) <= 0 then null"
+                                    + " else (coalesce(i.bundlePrice, 0) - i.buyingPrice)"
+                                    + " / i.buyingPrice end)")
                     .and(byName);
         };
     }

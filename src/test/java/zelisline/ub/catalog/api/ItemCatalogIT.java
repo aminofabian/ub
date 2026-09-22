@@ -473,6 +473,95 @@ class ItemCatalogIT {
     }
 
     @Test
+    void listItemsSupportsPricingFiltersAndCatalogListSort() throws Exception {
+        String gid = goodsTypeId(TENANT_A);
+        String cheap = createItemViaService(TENANT_A, gid, "SKU-PRICE-C", "Cheap Widget");
+        String loss = createItemViaService(TENANT_A, gid, "SKU-PRICE-L", "Loss Widget");
+        String noBuy = createItemViaService(TENANT_A, gid, "SKU-PRICE-NB", "No Buy Widget");
+
+        mockMvc.perform(patch("/api/v1/items/" + cheap)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"buyingPrice\":10,\"bundlePrice\":25}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(patch("/api/v1/items/" + loss)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"buyingPrice\":20,\"bundlePrice\":10}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(patch("/api/v1/items/" + noBuy)
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"buyingPrice\":null,\"bundlePrice\":15}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/items")
+                        .param("catalogScope", "SKUS_ONLY")
+                        .param("listSort", "SELL_ASC")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].sku").value("SKU-PRICE-L"));
+
+        // No search: listSort must apply in SQL (intelligent search otherwise re-ranks).
+        mockMvc.perform(get("/api/v1/items")
+                        .param("catalogScope", "SKUS_ONLY")
+                        .param("listSort", "PROFIT_DESC")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].sku").value("SKU-PRICE-C"));
+
+        mockMvc.perform(get("/api/v1/items")
+                        .param("catalogScope", "SKUS_ONLY")
+                        .param("listSort", "MARGIN_DESC")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/items")
+                        .param("catalogScope", "SKUS_ONLY")
+                        .param("priceLoss", "true")
+                        .param("search", "Widget")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].sku").value("SKU-PRICE-L"));
+
+        mockMvc.perform(get("/api/v1/items")
+                        .param("catalogScope", "SKUS_ONLY")
+                        .param("noBuyingPrice", "true")
+                        .param("search", "Widget")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].sku").value("SKU-PRICE-NB"));
+
+        mockMvc.perform(get("/api/v1/items")
+                        .param("catalogScope", "SKUS_ONLY")
+                        .param("poorMargin", "true")
+                        .param("poorMarginMaxPct", "20")
+                        .param("listSort", "NAME_ASC")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+    }
+
+    @Test
     void listItemsCatalogScopeFiltersParentsAndVariants() throws Exception {
         String gid = goodsTypeId(TENANT_A);
         String parent = createItemViaService(TENANT_A, gid, "SKU-SCOPE-P", "Scope parent unique");

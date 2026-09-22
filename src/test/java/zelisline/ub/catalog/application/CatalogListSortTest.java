@@ -25,15 +25,16 @@ class CatalogListSortTest {
     }
 
     @Test
-    void profitDescUsesUnsafeExpression() {
+    void profitDescUsesAliasedUnsafeExpression() {
         Sort sort = ItemCatalogService.sortForCatalogList(CatalogListSort.PROFIT_DESC);
-        assertThat(sort.toString()).contains("coalesce(bundlePrice");
-        assertThat(sort.toString()).containsIgnoringCase("desc");
+        assertThat(sort.toString()).contains("i.bundlePrice");
+        assertThat(sort.toString()).contains("i.buyingPrice");
     }
 
     @Test
-    void marginAscUsesNullifBuyPrice() {
+    void marginAscAvoidsNullif() {
         Sort sort = ItemCatalogService.sortForCatalogList(CatalogListSort.MARGIN_ASC);
-        assertThat(sort.toString()).contains("nullif(buyingPrice");
+        assertThat(sort.toString()).contains("case when");
+        assertThat(sort.toString()).doesNotContain("nullif");
     }
 }

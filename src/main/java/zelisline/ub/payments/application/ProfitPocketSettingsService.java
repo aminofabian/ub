@@ -138,6 +138,18 @@ public class ProfitPocketSettingsService {
             }
             settings.setSendRail(rail);
         }
+        if (request.stkPhone() != null) {
+            String phone = blankToNull(request.stkPhone());
+            if (phone != null) {
+                String normalized = StkPhoneNormalizer.normalize(phone);
+                if (normalized == null) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter a valid Kenyan M-Pesa phone");
+                }
+                settings.setStkPhone(normalized);
+            } else {
+                settings.setStkPhone(null);
+            }
+        }
 
         if (settings.isEnabled()) {
             normalizeAndRequireDestination(settings);
@@ -146,6 +158,11 @@ public class ProfitPocketSettingsService {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, collision);
             }
             normalizeSendRail(businessId, settings);
+            if (ProfitPocketSettings.RAIL_DARAJA.equals(settings.getSendRail())
+                    && blankToNull(settings.getStkPhone()) == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "M-Pesa phone is required for Daraja Express (same as receive test)");
+            }
         }
 
         settingsRepository.save(settings);
@@ -261,7 +278,8 @@ public class ProfitPocketSettingsService {
                 s.getProfitJarPct(),
                 s.getMarginBudgetDaily(),
                 sendRail,
-                rails);
+                rails,
+                s.getStkPhone());
     }
 
     /** Resolved rail for outbound send (may be null when none ready). */
@@ -276,16 +294,18 @@ public class ProfitPocketSettingsService {
         List<ProfitPocketSendRailOption> out = new ArrayList<>();
 
         PlatformDarajaSettingsService daraja = platformDarajaSettingsService.getIfAvailable();
-        boolean darajaEnabled = daraja != null && daraja.isEnabledAndConfigured();
-        boolean darajaB2b = daraja != null && daraja.isB2bConfigured();
-        if (darajaEnabled || darajaB2b) {
-            out.add(new ProfitPocketSendRailOption(
-                    ProfitPocketSettings.RAIL_DARAJA,
-                    "Daraja (platform)",
-                    darajaB2b,
-                    darajaB2b
-                            ? "Sends via platform Daraja B2B to your bank / till / paybill"
-                            : "Platform Daraja is on, but B2B initiator credentials are missing"));
+        if (daraja != null) {
+            boolean enabled = daraja.loadSingleton().isEnabled();
+            boolean stkReady = daraja.isEnabledAndConfigured();
+            if (enabled || stkReady) {
+                out.add(new ProfitPocketSendRailOption(
+                        ProfitPocketSettings.RAIL_DARAJA,
+                        "Daraja (platform Express)",
+                        stkReady,
+                        stkReady
+                                ? "Same as customer receive: STK to your phone, money lands on bank / till / paybill (PartyB)"
+                                : "Platform Daraja is on, but STK credentials (passkey / shortcode) are missing"));
+            }
         }
 
         boolean platformKk = platformGatewayRepository.findById(GatewayType.KOPOKOPO)

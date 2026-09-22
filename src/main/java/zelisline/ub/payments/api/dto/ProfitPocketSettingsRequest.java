@@ -20,6 +20,8 @@ public record ProfitPocketSettingsRequest(
         @DecimalMin("1.00") @DecimalMax("100.00") BigDecimal profitJarPct,
         @DecimalMin("0.00") BigDecimal marginBudgetDaily,
         /** daraja | kopokopo */
-        @Size(max = 16) String sendRail
+        @Size(max = 16) String sendRail,
+        /** M-Pesa phone for Daraja Express STK */
+        @Size(max = 32) String stkPhone
 ) {
 }

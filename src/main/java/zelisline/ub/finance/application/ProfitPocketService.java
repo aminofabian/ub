@@ -34,16 +34,20 @@ import zelisline.ub.finance.domain.ProfitPocket;
 import zelisline.ub.finance.repository.JournalReportRepository;
 import zelisline.ub.finance.repository.ProfitPocketRepository;
 import zelisline.ub.payments.api.dto.ProfitPocketSettingsResponse;
+import zelisline.ub.payments.application.GatewayStkPushService;
+import zelisline.ub.payments.application.PaymentGatewayStkService;
 import zelisline.ub.payments.application.PlatformDarajaSettingsService;
 import zelisline.ub.payments.application.ProfitPocketSettingsService;
+import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
+import zelisline.ub.payments.domain.PlatformDarajaSettings;
 import zelisline.ub.payments.domain.ProfitPocketSettings;
+import zelisline.ub.payments.domain.StkPushContextType;
 import zelisline.ub.payments.domain.spi.SendMoneyRequest;
 import zelisline.ub.payments.domain.spi.SendMoneyResult;
 import zelisline.ub.payments.domain.spi.WebhookResult;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
-import zelisline.ub.payments.infrastructure.DarajaPaymentGateway;
 import zelisline.ub.payments.infrastructure.KopokopoPaymentGateway;
 import zelisline.ub.sales.api.dto.PaymentMethodBreakdownRow;
 import zelisline.ub.sales.application.SalesIntelligenceService;
@@ -74,7 +78,8 @@ public class ProfitPocketService {
     private final ObjectMapper objectMapper;
     private final CredentialEncryptionService encryptionService;
     private final KopokopoPaymentGateway kopokopoGateway;
-    private final DarajaPaymentGateway darajaPaymentGateway;
+    private final PaymentGatewayStkService paymentGatewayStkService;
+    private final GatewayStkPushService gatewayStkPushService;
     private final ObjectProvider<PlatformDarajaSettingsService> platformDarajaSettingsService;
 
     @Value("${app.public.api-base-url:http://localhost:5050}")
@@ -308,22 +313,18 @@ public class ProfitPocketService {
         }
 
         if (ProfitPocketSettings.RAIL_DARAJA.equals(rail)) {
-            initiateDarajaB2B(businessId, settings, row.getAmount(), "Profit pocket", result -> {
-                if (!result.accepted()) {
-                    row.setSendMoneyStatus(SEND_FAILED);
-                    row.setSendMoneyMessage(truncate(
-                            result.message() != null ? result.message() : "Daraja B2B declined", 500));
-                    return;
-                }
-                String id = firstNonBlank(result.conversationId(), result.originatorConversationId());
-                row.setSendMoneyStatus(SEND_PENDING);
-                row.setKopokopoSendMoneyId(id);
-                row.setSendMoneyMessage("Daraja B2B submitted — waiting for Safaricom");
-                log.info("Profit pocket Daraja B2B pending pocket={} conversationId={}", row.getId(), id);
-            }, err -> {
-                row.setSendMoneyStatus(SEND_FAILED);
-                row.setSendMoneyMessage(truncate(err, 500));
-            });
+            DarajaStkOutcome stk = initiateDarajaExpressStk(
+                    businessId,
+                    settings,
+                    settings.getStkPhone(),
+                    row.getAmount(),
+                    "pocket-" + row.getId().replace("-", "").substring(0, 12),
+                    "Profit pocket",
+                    StkPushContextType.PROFIT_POCKET,
+                    row.getId());
+            row.setSendMoneyStatus(stk.status());
+            row.setKopokopoSendMoneyId(stk.checkoutRequestId());
+            row.setSendMoneyMessage(stk.message());
             return;
         }
 
@@ -337,11 +338,11 @@ public class ProfitPocketService {
     }
 
     /**
-     * Sends KES 1 to the configured pocket destination so the owner can confirm the rail.
-     * Does not create a pocket journal entry.
+     * Prove the pocket destination: KopoKopo Send Money KES 1, or Daraja Express STK
+     * (same PartyB model as customer receive — no initiator / B2B).
      */
     @Transactional
-    public ProfitPocketTestResponse testDestination(String businessId) {
+    public ProfitPocketTestResponse testDestination(String businessId, String phoneOverride) {
         ProfitPocketSettings settings = profitPocketSettingsService.requireConfigured(businessId);
         String rail = profitPocketSettingsService.resolveSendRail(businessId, settings);
         if (rail == null) {
@@ -352,26 +353,20 @@ public class ProfitPocketService {
         }
 
         if (ProfitPocketSettings.RAIL_DARAJA.equals(rail)) {
-            final ProfitPocketTestResponse[] box = new ProfitPocketTestResponse[1];
-            initiateDarajaB2B(businessId, settings, new BigDecimal("1.00"), "Profit Pocket destination test",
-                    result -> {
-                        if (!result.accepted()) {
-                            box[0] = new ProfitPocketTestResponse(
-                                    "failed",
-                                    null,
-                                    result.message() != null ? result.message() : "Daraja B2B declined");
-                            return;
-                        }
-                        String id = firstNonBlank(result.conversationId(), result.originatorConversationId());
-                        box[0] = new ProfitPocketTestResponse(
-                                "pending",
-                                id,
-                                "KES 1 via Daraja B2B — check the destination. Waiting for Safaricom.");
-                    },
-                    err -> box[0] = new ProfitPocketTestResponse("failed", null, err));
-            return box[0] != null
-                    ? box[0]
-                    : new ProfitPocketTestResponse("failed", null, "Daraja test did not complete");
+            String phone = blankToNull(phoneOverride);
+            if (phone == null) {
+                phone = settings.getStkPhone();
+            }
+            DarajaStkOutcome stk = initiateDarajaExpressStk(
+                    businessId,
+                    settings,
+                    phone,
+                    new BigDecimal("1.00"),
+                    "pkt-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12),
+                    "Profit Pocket destination test",
+                    StkPushContextType.PROFIT_POCKET_TEST,
+                    null);
+            return new ProfitPocketTestResponse(stk.status(), stk.checkoutRequestId(), stk.message());
         }
 
         final ProfitPocketTestResponse[] box = new ProfitPocketTestResponse[1];
@@ -384,96 +379,157 @@ public class ProfitPocketService {
                 : new ProfitPocketTestResponse("failed", null, "KopoKopo test did not complete");
     }
 
+    /** STK webhook success/fail for {@link StkPushContextType#PROFIT_POCKET}. */
     @Transactional
-    public boolean processDarajaB2BResult(DarajaPaymentGateway.B2BResult result) {
-        if (result == null) {
-            return false;
+    public void processDarajaStkResult(String profitPocketId, boolean success, String detail) {
+        if (profitPocketId == null || profitPocketId.isBlank()) {
+            return;
         }
-        Optional<ProfitPocket> opt = Optional.empty();
-        if (result.conversationId() != null && !result.conversationId().isBlank()) {
-            opt = profitPocketRepository.findFirstByKopokopoSendMoneyId(result.conversationId().trim());
-        }
-        if (opt.isEmpty()
-                && result.originatorConversationId() != null
-                && !result.originatorConversationId().isBlank()) {
-            opt = profitPocketRepository.findFirstByKopokopoSendMoneyId(
-                    result.originatorConversationId().trim());
-        }
-        if (opt.isEmpty()) {
-            return false;
-        }
-        ProfitPocket row = opt.get();
-        if (SEND_SUCCESS.equals(row.getSendMoneyStatus()) || SEND_FAILED.equals(row.getSendMoneyStatus())) {
-            return true;
-        }
-        if (result.accepted()) {
-            row.setSendMoneyStatus(SEND_SUCCESS);
-            row.setSendMoneyMessage("Daraja confirmed the transfer");
-        } else {
-            row.setSendMoneyStatus(SEND_FAILED);
-            String msg = result.message() != null ? result.message() : "Daraja B2B failed";
-            row.setSendMoneyMessage(truncate(msg, 500));
-        }
-        profitPocketRepository.save(row);
-        log.info("Profit pocket Daraja B2B {} pocket={}", row.getSendMoneyStatus(), row.getId());
-        return true;
+        profitPocketRepository.findById(profitPocketId.trim()).ifPresent(row -> {
+            if (SEND_SUCCESS.equals(row.getSendMoneyStatus()) || SEND_FAILED.equals(row.getSendMoneyStatus())) {
+                return;
+            }
+            if (success) {
+                row.setSendMoneyStatus(SEND_SUCCESS);
+                row.setSendMoneyMessage("Daraja Express confirmed — cash landed on destination");
+            } else {
+                row.setSendMoneyStatus(SEND_FAILED);
+                row.setSendMoneyMessage(truncate(
+                        detail != null ? detail : "Daraja Express STK failed", 500));
+            }
+            profitPocketRepository.save(row);
+            log.info("Profit pocket Daraja STK {} pocket={}", row.getSendMoneyStatus(), row.getId());
+        });
     }
 
-    private void initiateDarajaB2B(
+    private record DarajaStkOutcome(String status, String checkoutRequestId, String message) {
+    }
+
+    /**
+     * Platform Daraja Lipa Na M-Pesa Online (Express) — same as customer receive:
+     * BusinessShortCode + passkey from platform; PartyB = pocket till/paybill/bank.
+     * No initiator / B2B.
+     */
+    private DarajaStkOutcome initiateDarajaExpressStk(
             String businessId,
             ProfitPocketSettings settings,
+            String rawPhone,
             BigDecimal amount,
-            String remarks,
-            java.util.function.Consumer<DarajaPaymentGateway.B2BResult> onResult,
-            java.util.function.Consumer<String> onError
+            String reference,
+            String description,
+            StkPushContextType contextType,
+            String contextId
     ) {
         PlatformDarajaSettingsService daraja = platformDarajaSettingsService.getIfAvailable();
-        if (daraja == null || !daraja.isB2bConfigured()) {
-            onError.accept("Platform Daraja B2B is not configured by the administrator");
-            return;
+        if (daraja == null || !daraja.isEnabledAndConfigured()) {
+            return new DarajaStkOutcome(
+                    SEND_SKIPPED,
+                    null,
+                    "Platform Daraja Express is not configured (need passkey / shortcode)");
         }
-        Map<String, String> creds = daraja.credentials().orElse(Map.of());
+        String phone = StkPhoneNormalizer.normalize(rawPhone);
+        if (phone == null) {
+            return new DarajaStkOutcome(
+                    SEND_FAILED,
+                    null,
+                    "M-Pesa phone is required for Daraja Express (enter it under Profit Pocket settings)");
+        }
+        Map<String, String> creds = new LinkedHashMap<>(daraja.credentials().orElse(Map.of()));
         if (creds.isEmpty()) {
-            onError.accept("Platform Daraja credentials missing");
-            return;
+            return new DarajaStkOutcome(SEND_FAILED, null, "Platform Daraja credentials missing");
         }
-
-        String destType;
-        String partyB;
-        String accountRef;
-        String type = settings.getDestinationType();
-        if (ProfitPocketSettings.TYPE_TILL.equals(type)) {
-            destType = SendMoneyRequest.DEST_TILL;
-            partyB = settings.getDestinationAccount();
-            accountRef = null;
-        } else if (ProfitPocketSettings.TYPE_PAYBILL.equals(type)) {
-            destType = SendMoneyRequest.DEST_PAYBILL;
-            partyB = settings.getDestinationPaybill();
-            accountRef = settings.getDestinationPaybillAccount();
-        } else if (ProfitPocketSettings.TYPE_BANK.equals(type)) {
-            destType = SendMoneyRequest.DEST_PAYBILL;
-            partyB = settings.getDestinationPaybill();
-            accountRef = settings.getDestinationAccount();
-        } else {
-            onError.accept("Unsupported destination for Daraja B2B");
-            return;
+        String partyErr = applyExpressPartyB(creds, settings);
+        if (partyErr != null) {
+            return new DarajaStkOutcome(SEND_FAILED, null, partyErr);
         }
 
         try {
-            DarajaPaymentGateway.B2BRequest request = new DarajaPaymentGateway.B2BRequest(
+            PaymentGatewayStkService.StkPushOutcome outcome = paymentGatewayStkService.initiateWithCredentials(
+                    GatewayType.DARAJA.name(),
+                    PlatformDarajaSettings.PLATFORM_DARAJA_CONFIG_ID,
+                    businessId,
                     creds,
-                    publicApiBaseUrl.replaceAll("/+$", ""),
-                    destType,
-                    partyB,
-                    accountRef,
-                    amount,
-                    "KES",
-                    remarks);
-            onResult.accept(darajaPaymentGateway.sendB2B(request));
+                    phone,
+                    amount.setScale(0, RoundingMode.HALF_UP),
+                    reference,
+                    description);
+            if (!outcome.accepted() || outcome.checkoutRequestId() == null) {
+                return new DarajaStkOutcome(
+                        SEND_FAILED,
+                        null,
+                        outcome.message() != null ? outcome.message() : "Daraja STK declined");
+            }
+            gatewayStkPushService.registerPush(
+                    businessId,
+                    GatewayType.DARAJA,
+                    PlatformDarajaSettings.PLATFORM_DARAJA_CONFIG_ID,
+                    outcome.checkoutRequestId(),
+                    reference,
+                    contextType,
+                    contextId,
+                    amount.setScale(0, RoundingMode.HALF_UP),
+                    phone);
+            log.info("Profit pocket Daraja Express STK pending business={} checkoutId={} partyB={} context={}",
+                    businessId, outcome.checkoutRequestId(), creds.get("partyB"), contextType);
+            return new DarajaStkOutcome(
+                    SEND_PENDING,
+                    outcome.checkoutRequestId(),
+                    "Check your phone — enter M-Pesa PIN. Money goes to the pocket destination (PartyB).");
         } catch (Exception e) {
-            log.warn("Profit pocket Daraja B2B failed: {}", e.toString());
-            onError.accept(e.getMessage() != null ? e.getMessage() : "Daraja B2B failed");
+            log.warn("Profit pocket Daraja Express failed: {}", e.toString());
+            return new DarajaStkOutcome(
+                    SEND_FAILED,
+                    null,
+                    e.getMessage() != null ? e.getMessage() : "Daraja Express STK failed");
         }
+    }
+
+    /** Mirror {@code PaymentGatewayStkService.applyCustodyDirectPartyB} for pocket settings. */
+    private static String applyExpressPartyB(Map<String, String> creds, ProfitPocketSettings settings) {
+        String type = settings.getDestinationType();
+        String partyB;
+        String transactionType;
+        String accountRef;
+        if (ProfitPocketSettings.TYPE_TILL.equals(type)) {
+            partyB = digitsOnly(settings.getDestinationAccount());
+            transactionType = "CustomerBuyGoodsOnline";
+            accountRef = null;
+        } else if (ProfitPocketSettings.TYPE_PAYBILL.equals(type)) {
+            partyB = digitsOnly(settings.getDestinationPaybill());
+            transactionType = "CustomerPayBillOnline";
+            String account = settings.getDestinationPaybillAccount();
+            accountRef = account != null && !account.isBlank() ? account.replaceAll("\\s+", "") : null;
+        } else if (ProfitPocketSettings.TYPE_BANK.equals(type)) {
+            partyB = digitsOnly(settings.getDestinationPaybill());
+            transactionType = "CustomerPayBillOnline";
+            String account = settings.getDestinationAccount();
+            accountRef = account != null && !account.isBlank() ? account.replaceAll("\\s+", "") : null;
+        } else {
+            return "Unsupported destination for Daraja Express";
+        }
+        if (partyB == null || partyB.length() < 5 || partyB.length() > 7) {
+            return "Till/paybill / bank business number must be 5–7 digits";
+        }
+        if ("CustomerPayBillOnline".equals(transactionType)
+                && (accountRef == null || accountRef.isBlank())) {
+            return "Account number is required for paybill / bank destinations";
+        }
+        creds.put("partyB", partyB);
+        creds.put("transactionType", transactionType);
+        if (accountRef != null && !accountRef.isBlank()) {
+            creds.put("accountReference", accountRef);
+        } else {
+            creds.remove("accountReference");
+        }
+        return null;
+    }
+
+    private static String digitsOnly(String value) {
+        if (value == null) {
+            return null;
+        }
+        String digits = value.replaceAll("\\D", "");
+        return digits.isBlank() ? null : digits;
     }
 
     private interface KopokopoSendCallback {

@@ -1,6 +1,6 @@
 package zelisline.ub.payments.api.dto;
 
-/** One outbound rail the merchant can pick for Profit Pocket Send Money / B2B. */
+/** One outbound rail the merchant can pick for Profit Pocket (Daraja Express or KopoKopo). */
 public record ProfitPocketSendRailOption(
         /** daraja | kopokopo */
         String id,

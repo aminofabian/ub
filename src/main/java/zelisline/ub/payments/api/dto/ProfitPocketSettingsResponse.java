@@ -25,6 +25,8 @@ public record ProfitPocketSettingsResponse(
         BigDecimal marginBudgetDaily,
         /** daraja | kopokopo | null */
         String sendRail,
-        List<ProfitPocketSendRailOption> availableSendRails
+        List<ProfitPocketSendRailOption> availableSendRails,
+        /** M-Pesa phone for Daraja Express STK (PartyA). */
+        String stkPhone
 ) {
 }

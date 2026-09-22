@@ -125,6 +125,7 @@ public class GatewayStkPushService {
     private final InboundTillPaymentService inboundTillPaymentService;
     private final ObjectProvider<zelisline.ub.messaging.application.SmsCreditPurchaseService> smsCreditPurchaseService;
     private final ObjectProvider<zelisline.ub.billing.application.SubscriptionRenewalService> subscriptionRenewalService;
+    private final ObjectProvider<zelisline.ub.finance.application.ProfitPocketService> profitPocketService;
     /** Own proxy, so gateway polling can open a transaction only to write the result. */
     private final ObjectProvider<GatewayStkPushService> self;
     private final AuditEventPublisher auditEventPublisher;
@@ -1364,6 +1365,10 @@ public class GatewayStkPushService {
             case KIOSK_PAY_TOPUP -> confirmKioskPayTopUp(push);
             case SMS_CREDIT_PURCHASE -> confirmSmsCreditPurchase(push);
             case SUBSCRIPTION_RENEWAL -> confirmSubscriptionRenewal(push);
+            case PROFIT_POCKET -> confirmProfitPocket(push);
+            case PROFIT_POCKET_TEST, ONBOARDING_RECEIVE_TEST -> log.info(
+                    "Destination test STK confirmed push={} txn={}",
+                    push.getId(), gatewayTxnId);
             default -> log.warn("Unknown STK context type: {}", push.getContextType());
         }
 
@@ -1419,6 +1424,18 @@ public class GatewayStkPushService {
                 push.getContextId(),
                 push.getGatewayCheckoutId(),
                 push.getGatewayTransactionId());
+    }
+
+    private void confirmProfitPocket(GatewayStkPush push) {
+        if (push.getContextId() == null) {
+            return;
+        }
+        var pocket = profitPocketService.getIfAvailable();
+        if (pocket == null) {
+            log.warn("Profit pocket {} STK paid but finance module is unavailable", push.getContextId());
+            return;
+        }
+        pocket.processDarajaStkResult(push.getContextId(), true, null);
     }
 
     /**
@@ -1534,6 +1551,16 @@ public class GatewayStkPushService {
                 }
             } catch (Exception e) {
                 log.warn("Failed to mark subscription renewal failed {}", push.getContextId(), e);
+            }
+        }
+        if (push.getContextType() == StkPushContextType.PROFIT_POCKET && push.getContextId() != null) {
+            try {
+                var pocket = profitPocketService.getIfAvailable();
+                if (pocket != null) {
+                    pocket.processDarajaStkResult(push.getContextId(), false, reason);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to mark profit pocket STK failed {}", push.getContextId(), e);
             }
         }
         publishStkRealtime(push, false, reason);

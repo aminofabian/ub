@@ -78,11 +78,18 @@ public class ProfitPocketSettings {
     private BigDecimal marginBudgetDaily;
 
     /**
-     * Outbound rail for pocket / test send: {@code daraja} (platform B2B) or
-     * {@code kopokopo} (tenant KopoKopo Send Money).
+     * Outbound rail for pocket / test send: {@code daraja} (platform Express STK,
+     * PartyB = destination — same as customer receive) or {@code kopokopo}.
      */
     @Column(name = "send_rail", length = 16)
     private String sendRail;
+
+    /**
+     * M-Pesa phone for Daraja Express STK (test / pocket) — PartyA on the prompt.
+     * Same model as customer receive: platform shortcode + passkey, PartyB = destination.
+     */
+    @Column(name = "stk_phone", length = 32)
+    private String stkPhone;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

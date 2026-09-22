@@ -14,7 +14,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
-import zelisline.ub.finance.application.ProfitPocketService;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.PlatformCustodySettlementService;
 import zelisline.ub.payments.domain.spi.WebhookResult;
@@ -39,7 +38,6 @@ public class DarajaWebhookController {
     private final DarajaPaymentGateway darajaGateway;
     private final GatewayStkPushService gatewayStkPushService;
     private final ObjectProvider<PlatformCustodySettlementService> platformCustodySettlementService;
-    private final ObjectProvider<ProfitPocketService> profitPocketService;
 
     @Value("${app.payments.daraja.webhook-allowed-ips:}")
     private String webhookAllowedIps;
@@ -179,12 +177,8 @@ public class DarajaWebhookController {
     private void handleB2b(String rawBody) {
         DarajaPaymentGateway.B2BResult parsed = darajaGateway.parseB2BResult(rawBody);
         PlatformCustodySettlementService custody = platformCustodySettlementService.getIfAvailable();
-        if (custody != null && custody.handleDarajaDisburseResult(parsed)) {
-            return;
-        }
-        ProfitPocketService pocket = profitPocketService.getIfAvailable();
-        if (pocket != null) {
-            pocket.processDarajaB2BResult(parsed);
+        if (custody != null) {
+            custody.handleDarajaDisburseResult(parsed);
         }
     }
 

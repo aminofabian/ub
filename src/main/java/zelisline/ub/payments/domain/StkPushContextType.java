@@ -21,5 +21,9 @@ public enum StkPushContextType {
     /** Subscription renewal via platform M-Pesa STK. */
     SUBSCRIPTION_RENEWAL,
     /** Onboarding “prove my till/paybill works” KES 1 STK ping. */
-    ONBOARDING_RECEIVE_TEST
+    ONBOARDING_RECEIVE_TEST,
+    /** Profit Pocket destination test (KES 1 Express to PartyB). */
+    PROFIT_POCKET_TEST,
+    /** Profit Pocket confirm — Express STK to owner destination PartyB. */
+    PROFIT_POCKET
 }

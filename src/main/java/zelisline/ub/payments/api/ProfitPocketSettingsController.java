@@ -48,11 +48,16 @@ public class ProfitPocketSettingsController {
                 body);
     }
 
-    /** Send KES 1 to the saved destination via KopoKopo Send Money (no pocket JE). */
+    /** Send KES 1 via Daraja Express (PartyB) or KopoKopo Send Money — no pocket JE. */
     @PostMapping("/test")
     @PreAuthorize("hasPermission(null, 'payments.gateways.write')")
-    public ProfitPocketTestResponse test(HttpServletRequest request) {
+    public ProfitPocketTestResponse test(
+            @RequestBody(required = false) zelisline.ub.finance.api.dto.ProfitPocketTestRequest body,
+            HttpServletRequest request
+    ) {
         CurrentTenantUser.require(request);
-        return profitPocketService.testDestination(TenantRequestIds.resolveBusinessId(request));
+        String phone = body != null ? body.phoneNumber() : null;
+        return profitPocketService.testDestination(
+                TenantRequestIds.resolveBusinessId(request), phone);
     }
 }

@@ -24,6 +24,11 @@ public record PostSupplierPaymentRequest(
          * When {@code false}, records the payment without SMS / portal payment notification.
          * Null or true keeps the default notify-on-pay behaviour.
          */
-        Boolean notifySupplier
+        Boolean notifySupplier,
+        /**
+         * Optional override for the confirmation SMS destination.
+         * When blank/null, the supplier payout phone or primary contact is used.
+         */
+        String notifyPhone
 ) {
 }

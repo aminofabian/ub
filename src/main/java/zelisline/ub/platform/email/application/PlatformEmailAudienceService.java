@@ -5,16 +5,19 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.identity.application.FrontendAuthLinkBuilder;
 import zelisline.ub.identity.application.IdentityService;
 import zelisline.ub.identity.domain.Role;
@@ -22,6 +25,9 @@ import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.domain.UserStatus;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.payments.domain.GatewayType;
+import zelisline.ub.payments.domain.PaymentGatewayConfig;
+import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
 import zelisline.ub.platform.email.api.dto.PlatformEmailCampaignDtos.SaEmailRecipientResponse;
 import zelisline.ub.platform.email.domain.PlatformEmailCampaign;
 import zelisline.ub.platform.email.domain.PlatformEmailCampaignRecipient;
@@ -42,13 +48,18 @@ public class PlatformEmailAudienceService {
             PlatformEmailCampaign.SEGMENT_STUCK_SIGNUP,
             PlatformEmailCampaign.SEGMENT_UNVERIFIED_OWNERS,
             PlatformEmailCampaign.SEGMENT_SELECTED_TENANTS,
-            PlatformEmailCampaign.SEGMENT_SELECTED_USERS);
+            PlatformEmailCampaign.SEGMENT_SELECTED_USERS,
+            PlatformEmailCampaign.SEGMENT_NO_PAYMENT_METHOD,
+            PlatformEmailCampaign.SEGMENT_HAS_OPEN_TABS,
+            PlatformEmailCampaign.SEGMENT_WEIGHTED_GUIDE);
 
     private final BusinessRepository businessRepository;
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final BusinessOnboardingSettingsService onboardingSettingsService;
     private final FrontendAuthLinkBuilder frontendAuthLinkBuilder;
+    private final PaymentGatewayConfigRepository paymentGatewayConfigRepository;
+    private final CreditAccountRepository creditAccountRepository;
 
     public String normalizeSegment(String raw) {
         String key = raw == null || raw.isBlank()
@@ -72,9 +83,15 @@ public class PlatformEmailAudienceService {
 
         List<SaEmailRecipientResponse> rows = switch (segment) {
             case PlatformEmailCampaign.SEGMENT_SELECTED_USERS -> resolveExplicitUsers(userFilter);
-            case PlatformEmailCampaign.SEGMENT_SELECTED_TENANTS -> resolvePreferredContacts(loadBusinesses(bizFilter), false, false);
+            case PlatformEmailCampaign.SEGMENT_SELECTED_TENANTS,
+                 PlatformEmailCampaign.SEGMENT_WEIGHTED_GUIDE -> resolvePreferredContacts(
+                    loadBusinesses(bizFilter), false, false);
             case PlatformEmailCampaign.SEGMENT_UNVERIFIED_OWNERS -> resolvePreferredContacts(
                     loadBusinesses(bizFilter), true, false);
+            case PlatformEmailCampaign.SEGMENT_NO_PAYMENT_METHOD -> resolvePreferredContacts(
+                    loadBusinessesWithoutPaymentMethod(bizFilter), false, false);
+            case PlatformEmailCampaign.SEGMENT_HAS_OPEN_TABS -> resolvePreferredContacts(
+                    loadBusinessesWithOpenTabs(bizFilter), false, false);
             default -> resolvePreferredContacts(loadBusinesses(bizFilter), false, true);
         };
 
@@ -90,18 +107,66 @@ public class PlatformEmailAudienceService {
     }
 
     public String continueUrlForPreview(SaEmailRecipientResponse recipient) {
+        return continueUrlForPreview(recipient, null);
+    }
+
+    public String continueUrlForPreview(SaEmailRecipientResponse recipient, String segmentKey) {
         String origin = shopOrigin(recipient.businessId());
         if (PlatformEmailCampaignRecipient.KIND_VERIFY.equals(recipient.continueKind())) {
             return origin + "/verify-email?token=preview";
         }
-        return origin + "/business";
+        return origin + hubPathForSegment(segmentKey);
     }
 
     public String continueUrlForSend(User user, String continueKind, String mintedVerifyLink) {
+        return continueUrlForSend(user, continueKind, mintedVerifyLink, null);
+    }
+
+    public String continueUrlForSend(
+            User user,
+            String continueKind,
+            String mintedVerifyLink,
+            String segmentKey
+    ) {
         if (PlatformEmailCampaignRecipient.KIND_VERIFY.equals(continueKind)) {
             return mintedVerifyLink;
         }
-        return shopOrigin(user.getBusinessId()) + "/business";
+        return shopOrigin(user.getBusinessId()) + hubPathForSegment(segmentKey);
+    }
+
+    static String hubPathForSegment(String segmentKey) {
+        if (PlatformEmailCampaign.SEGMENT_HAS_OPEN_TABS.equals(segmentKey)) {
+            return "/credits";
+        }
+        if (PlatformEmailCampaign.SEGMENT_WEIGHTED_GUIDE.equals(segmentKey)) {
+            return "/sales/quick";
+        }
+        return "/business";
+    }
+
+    /**
+     * Prefer shops that have never saved a CUSTODY_MPESA till / paybill / bank.
+     * Optional {@code businessIds} still narrows the pool when SA picks tenants.
+     */
+    private List<Business> loadBusinessesWithoutPaymentMethod(List<String> ids) {
+        Set<String> configured = paymentGatewayConfigRepository
+                .findByGatewayType(GatewayType.CUSTODY_MPESA)
+                .stream()
+                .map(PaymentGatewayConfig::getBusinessId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(HashSet::new));
+        return loadBusinesses(ids).stream()
+                .filter(b -> b.getId() != null && !configured.contains(b.getId()))
+                .toList();
+    }
+
+    /** Shops that currently have at least one customer with a positive tab balance. */
+    private List<Business> loadBusinessesWithOpenTabs(List<String> ids) {
+        Set<String> withTabs = new HashSet<>(
+                creditAccountRepository.findDistinctBusinessIdsWithOutstanding());
+        return loadBusinesses(ids).stream()
+                .filter(b -> b.getId() != null && withTabs.contains(b.getId()))
+                .toList();
     }
 
     static boolean isStuck(String userStatus, Instant lastLoginAt, String onboardingStatus) {

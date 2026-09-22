@@ -79,14 +79,34 @@ public class SupplierPortalNotifyService {
             String reference,
             List<String> invoiceNumbers
     ) {
+        notifySupplyPaidAfterCommit(
+                businessId, supplierId, amountPaid, paymentMethod, reference, invoiceNumbers, null);
+    }
+
+    /**
+     * Schedule a payment confirmation SMS after the current transaction commits (never blocks payment).
+     *
+     * @param notifyPhone optional override; when blank, uses supplier payout phone or primary contact
+     */
+    public void notifySupplyPaidAfterCommit(
+            String businessId,
+            String supplierId,
+            BigDecimal amountPaid,
+            String paymentMethod,
+            String reference,
+            List<String> invoiceNumbers,
+            String notifyPhone
+    ) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            notifySupplyPaid(businessId, supplierId, amountPaid, paymentMethod, reference, invoiceNumbers);
+            notifySupplyPaid(
+                    businessId, supplierId, amountPaid, paymentMethod, reference, invoiceNumbers, notifyPhone);
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                notifySupplyPaid(businessId, supplierId, amountPaid, paymentMethod, reference, invoiceNumbers);
+                notifySupplyPaid(
+                        businessId, supplierId, amountPaid, paymentMethod, reference, invoiceNumbers, notifyPhone);
             }
         });
     }
@@ -124,6 +144,18 @@ public class SupplierPortalNotifyService {
             String reference,
             List<String> invoiceNumbers
     ) {
+        notifySupplyPaid(businessId, supplierId, amountPaid, paymentMethod, reference, invoiceNumbers, null);
+    }
+
+    public void notifySupplyPaid(
+            String businessId,
+            String supplierId,
+            BigDecimal amountPaid,
+            String paymentMethod,
+            String reference,
+            List<String> invoiceNumbers,
+            String notifyPhone
+    ) {
         try {
             Supplier supplier = supplierRepository.findByIdAndBusinessId(supplierId, businessId).orElse(null);
             boolean claimed = supplier != null
@@ -141,7 +173,7 @@ public class SupplierPortalNotifyService {
                 }
             }
 
-            SupplierNotifyContext ctx = resolveNotifyContext(businessId, supplierId);
+            SupplierNotifyContext ctx = resolveNotifyContext(businessId, supplierId, notifyPhone);
             if (ctx == null) {
                 return;
             }
@@ -216,12 +248,29 @@ public class SupplierPortalNotifyService {
     }
 
     private SupplierNotifyContext resolveNotifyContext(String businessId, String supplierId) {
+        return resolveNotifyContext(businessId, supplierId, null);
+    }
+
+    private SupplierNotifyContext resolveNotifyContext(
+            String businessId,
+            String supplierId,
+            String phoneOverride
+    ) {
         // Soft-deleted suppliers may still be paid; allow SMS on payout phone / contacts.
         Supplier supplier = supplierRepository.findByIdAndBusinessId(supplierId, businessId).orElse(null);
         if (supplier == null) {
             return null;
         }
-        String phoneDigits = resolvePhoneDigits(supplier);
+        String phoneDigits = null;
+        if (phoneOverride != null && !phoneOverride.isBlank()) {
+            phoneDigits = StkPhoneNormalizer.normalize(phoneOverride);
+            if (phoneDigits == null) {
+                log.debug("Supplier SMS skipped — invalid notifyPhone override for supplier {}", supplierId);
+                return null;
+            }
+        } else {
+            phoneDigits = resolvePhoneDigits(supplier);
+        }
         if (phoneDigits == null) {
             log.debug("Supplier SMS skipped — no phone for supplier {}", supplierId);
             return null;

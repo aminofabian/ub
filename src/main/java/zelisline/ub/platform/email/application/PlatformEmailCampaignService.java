@@ -144,7 +144,7 @@ public class PlatformEmailCampaignService {
                 request.bodyMarkdown(),
                 blankToDefault(request.ctaLabel(), "Continue setup"),
                 sample,
-                audienceService.continueUrlForPreview(sample));
+                audienceService.continueUrlForPreview(sample, request.segmentKey()));
     }
 
     @Transactional(readOnly = true)
@@ -170,7 +170,8 @@ public class PlatformEmailCampaignService {
                 row.getError());
         String continueUrl = PlatformEmailCampaignRecipient.KIND_VERIFY.equals(row.getContinueKind())
                 ? audienceService.shopOrigin(row.getBusinessId()) + "/verify-email?token=preview"
-                : audienceService.shopOrigin(row.getBusinessId()) + "/business";
+                : audienceService.shopOrigin(row.getBusinessId())
+                        + PlatformEmailAudienceService.hubPathForSegment(campaign.getSegmentKey());
         return renderPreview(campaign.getSubject(), campaign.getBodyMarkdown(), campaign.getCtaLabel(), sample, continueUrl);
     }
 
@@ -201,7 +202,7 @@ public class PlatformEmailCampaignService {
             try {
                 User user = userRepository.findById(row.getUserId()).orElseThrow(
                         () -> new IllegalStateException("User missing"));
-                String continueUrl = resolveContinueUrl(user, row);
+                String continueUrl = resolveContinueUrl(user, row, campaign.getSegmentKey());
                 SaEmailRecipientResponse person = new SaEmailRecipientResponse(
                         user.getId(),
                         row.getEmail(),
@@ -266,9 +267,13 @@ public class PlatformEmailCampaignService {
         return toDetail(campaign, rows);
     }
 
-    private String resolveContinueUrl(User user, PlatformEmailCampaignRecipient row) {
+    private String resolveContinueUrl(
+            User user,
+            PlatformEmailCampaignRecipient row,
+            String segmentKey
+    ) {
         if (!PlatformEmailCampaignRecipient.KIND_VERIFY.equals(row.getContinueKind())) {
-            return audienceService.continueUrlForSend(user, row.getContinueKind(), null);
+            return audienceService.continueUrlForSend(user, row.getContinueKind(), null, segmentKey);
         }
         return authRegistrationService.issueVerificationLinkOnly(user);
     }

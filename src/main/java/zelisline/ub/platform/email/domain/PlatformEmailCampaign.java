@@ -27,6 +27,12 @@ public class PlatformEmailCampaign {
     public static final String SEGMENT_UNVERIFIED_OWNERS = "unverified_owners";
     public static final String SEGMENT_SELECTED_TENANTS = "selected_tenants";
     public static final String SEGMENT_SELECTED_USERS = "selected_users";
+    /** Owners/admins of shops that have not set a CUSTODY_MPESA till/paybill/bank. */
+    public static final String SEGMENT_NO_PAYMENT_METHOD = "no_payment_method";
+    /** Owners/admins of shops with at least one outstanding credit tab. */
+    public static final String SEGMENT_HAS_OPEN_TABS = "has_open_tabs";
+    /** All shops — CTA opens cashier for weighted / litre selling guide. */
+    public static final String SEGMENT_WEIGHTED_GUIDE = "weighted_guide";
 
     public static final int MAX_RECIPIENTS = 500;
 

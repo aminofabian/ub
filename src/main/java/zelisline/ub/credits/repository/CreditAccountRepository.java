@@ -81,6 +81,13 @@ public interface CreditAccountRepository extends JpaRepository<CreditAccount, St
     List<CreditAccount> findOutstandingByBusinessId(@Param("businessId") String businessId);
 
     @Query("""
+            select distinct c.businessId
+            from CreditAccount c
+            where c.balanceOwed > 0
+            """)
+    List<String> findDistinctBusinessIdsWithOutstanding();
+
+    @Query("""
             select coalesce(sum(c.balanceOwed), 0)
             from CreditAccount c
             where c.businessId = :businessId

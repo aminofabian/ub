@@ -26,6 +26,9 @@ import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.ItemImage;
 import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.notifications.NotificationTypes;
+import zelisline.ub.notifications.domain.Notification;
+import zelisline.ub.notifications.repository.NotificationRepository;
 import zelisline.ub.reporting.repository.MvSalesDailyRepository;
 import zelisline.ub.storefront.repository.WebCartRepository;
 import zelisline.ub.storefront.repository.WebOrderRepository;
@@ -48,6 +51,7 @@ public class InsightsDigestService {
     private final ItemImageRepository itemImageRepository;
     private final ShopperRecipientResolver shopperRecipientResolver;
     private final NotificationOutboxService notificationOutboxService;
+    private final NotificationRepository notificationRepository;
     private final ObjectMapper objectMapper;
 
     @Value("${app.notifications.insights.zone:Africa/Nairobi}")
@@ -56,16 +60,32 @@ public class InsightsDigestService {
     @Value("${app.notifications.abandoned-cart.stale-hours:24}")
     private int abandonedCartStaleHours;
 
+    /** Minimum days between abandoned-cart owner emails. */
+    @Value("${app.notifications.abandoned-cart.interval-days:2}")
+    private int abandonedCartIntervalDays;
+
+    /** Stop after this many emails in the current streak window. */
+    @Value("${app.notifications.abandoned-cart.max-attempts:3}")
+    private int abandonedCartMaxAttempts;
+
     @Value("${app.notifications.win-back.inactive-days:30}")
     private int winBackInactiveDays;
 
     public void enqueueAbandonedCartDigests() {
         LocalDate reportDay = LocalDate.now(ZoneId.of(zoneId));
         Instant staleBefore = Instant.now().minus(abandonedCartStaleHours, ChronoUnit.HOURS);
+        int intervalDays = Math.max(1, abandonedCartIntervalDays);
+        int maxAttempts = Math.max(1, abandonedCartMaxAttempts);
+        Instant streakSince =
+                Instant.now().minus((long) maxAttempts * intervalDays + 1L, ChronoUnit.DAYS);
         for (Business business : activeBusinesses()) {
             try {
                 long count = webCartRepository.countStaleCartsWithItems(business.getId(), staleBefore);
                 if (count <= 0) {
+                    continue;
+                }
+                if (!shouldSendAbandonedCartDigest(
+                        business.getId(), streakSince, intervalDays, maxAttempts)) {
                     continue;
                 }
                 String itemsJson = buildAbandonedItemsJson(business.getId(), staleBefore);
@@ -78,6 +98,44 @@ public class InsightsDigestService {
                 log.warn("abandoned cart digest enqueue failed businessId={}", business.getId(), ex);
             }
         }
+    }
+
+    /**
+     * Enforce 2-day spacing and a hard stop after {@code maxAttempts} emails in the
+     * current streak window so owners are not emailed daily forever.
+     */
+    boolean shouldSendAbandonedCartDigest(
+            String businessId,
+            Instant streakSince,
+            int intervalDays,
+            int maxAttempts
+    ) {
+        long prior = notificationRepository.countByBusinessIdAndTypeAndCreatedAtGreaterThanEqual(
+                businessId,
+                NotificationTypes.ABANDONED_CART,
+                streakSince);
+        if (prior >= maxAttempts) {
+            log.debug(
+                    "abandoned cart digest capped businessId={} prior={} max={}",
+                    businessId,
+                    prior,
+                    maxAttempts);
+            return false;
+        }
+        Notification last = notificationRepository.findFirstByBusinessIdAndTypeOrderByCreatedAtDesc(
+                businessId,
+                NotificationTypes.ABANDONED_CART);
+        if (last != null && last.getCreatedAt() != null) {
+            Instant earliestNext = last.getCreatedAt().plus(intervalDays, ChronoUnit.DAYS);
+            if (Instant.now().isBefore(earliestNext)) {
+                log.debug(
+                        "abandoned cart digest waiting interval businessId={} nextEligible={}",
+                        businessId,
+                        earliestNext);
+                return false;
+            }
+        }
+        return true;
     }
 
     public void enqueuePeakHoursDigests() {

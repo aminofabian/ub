@@ -22,6 +22,11 @@ public interface NotificationRepository extends JpaRepository<Notification, Stri
 
     boolean existsByBusinessIdAndDedupeKey(String businessId, String dedupeKey);
 
+    long countByBusinessIdAndTypeAndCreatedAtGreaterThanEqual(
+            String businessId, String type, Instant since);
+
+    Notification findFirstByBusinessIdAndTypeOrderByCreatedAtDesc(String businessId, String type);
+
     /** Staff inbox: business-wide alerts plus rows targeted at this user. */
     @Query("""
         select n from Notification n

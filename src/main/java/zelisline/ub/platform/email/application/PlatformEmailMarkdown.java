@@ -6,13 +6,15 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Paragraphs, {@code **bold**}, and {@code [label](url)} — not a full markdown parser.
+ * Paragraphs, {@code **bold**}, {@code [label](url)}, and {@code ![alt](url)} —
+ * not a full markdown parser.
  */
 public final class PlatformEmailMarkdown {
 
     private static final Pattern BOLD = Pattern.compile("\\*\\*(.+?)\\*\\*");
     private static final Pattern LINK = Pattern.compile("\\[([^\\]]+)\\]\\((https?://[^\\s)]+)\\)");
-    private static final Pattern BARE_URL = Pattern.compile("(?<!href=\")(?<!\\()(https?://[^\\s<]+)");
+    private static final Pattern IMAGE = Pattern.compile("!\\[([^\\]]*)]\\((https?://[^\\s)]+)\\)");
+    private static final Pattern BARE_URL = Pattern.compile("(?<!href=\")(?<!src=\")(?<!\\()(https?://[^\\s<]+)");
 
     private PlatformEmailMarkdown() {
     }
@@ -25,6 +27,10 @@ public final class PlatformEmailMarkdown {
         List<String> blocks = splitParagraphs(normalized);
         StringBuilder html = new StringBuilder();
         for (String block : blocks) {
+            if (isImageOnlyBlock(block)) {
+                html.append(imageBlock(block.trim()));
+                continue;
+            }
             html.append("<p style=\"margin:0 0 14px;font-family:")
                     .append(PlatformCampaignEmailRenderer.FONT_SANS)
                     .append(";font-size:15px;font-weight:400;color:")
@@ -41,14 +47,54 @@ public final class PlatformEmailMarkdown {
             return "";
         }
         String text = markdown.replace("\r\n", "\n");
+        text = IMAGE.matcher(text).replaceAll("");
         text = LINK.matcher(text).replaceAll("$1 ($2)");
         text = BOLD.matcher(text).replaceAll("$1");
         return text.strip();
     }
 
+    static boolean isImageOnlyBlock(String block) {
+        String trimmed = block == null ? "" : block.strip();
+        if (trimmed.isEmpty()) {
+            return false;
+        }
+        Matcher m = IMAGE.matcher(trimmed);
+        return m.matches();
+    }
+
+    static String imageBlock(String raw) {
+        Matcher m = IMAGE.matcher(raw);
+        if (!m.matches()) {
+            return "";
+        }
+        String alt = escape(m.group(1));
+        String src = escapeAttr(unescapeAmp(m.group(2)));
+        return "<div style=\"margin:8px 0 18px;\">"
+                + "<img src=\"" + src + "\" alt=\"" + alt + "\" width=\"480\" "
+                + "style=\"display:block;width:100%;max-width:480px;height:auto;"
+                + "border:1px solid " + PlatformCampaignEmailRenderer.BORDER
+                + ";border-radius:4px;background-color:#FFFFFF;\"/>"
+                + "</div>";
+    }
+
     static String inline(String raw) {
-        String escaped = escape(raw);
-        Matcher links = LINK.matcher(escaped);
+        // Images first so ![alt](url) is not treated as a bare link.
+        Matcher images = IMAGE.matcher(escape(raw));
+        StringBuffer withImages = new StringBuffer();
+        while (images.find()) {
+            String alt = images.group(1);
+            String src = unescapeAmp(images.group(2));
+            images.appendReplacement(
+                    withImages,
+                    Matcher.quoteReplacement(
+                            "<img src=\"" + escapeAttr(src) + "\" alt=\"" + alt
+                                    + "\" width=\"480\" style=\"display:block;max-width:100%;"
+                                    + "height:auto;margin:10px 0;border:1px solid "
+                                    + PlatformCampaignEmailRenderer.BORDER + ";\"/>"));
+        }
+        images.appendTail(withImages);
+
+        Matcher links = LINK.matcher(withImages);
         StringBuffer withLinks = new StringBuffer();
         while (links.find()) {
             String label = links.group(1);

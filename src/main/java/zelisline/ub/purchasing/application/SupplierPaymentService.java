@@ -165,7 +165,8 @@ public class SupplierPaymentService {
                 reference,
                 "Paid via KopoKopo Send Money",
                 List.of(new PostSupplierPaymentAllocationLine(supplierInvoiceId, amount.setScale(2, RoundingMode.HALF_UP))),
-                true);
+                true,
+                null);
         return executePayment(businessId, req);
     }
 
@@ -288,7 +289,8 @@ public class SupplierPaymentService {
                         "ADVANCE",
                         "Auto-applied supplier advance",
                         List.of(new PostSupplierPaymentAllocationLine(inv.getId(), apply)),
-                        false));
+                        false,
+                        null));
     }
 
     private PostSupplierPaymentResponse executePayment(String businessId, PostSupplierPaymentRequest req) {
@@ -425,7 +427,8 @@ public class SupplierPaymentService {
                         allocSum,
                         payment.getPaymentMethod(),
                         payment.getReference(),
-                        List.copyOf(invoiceNumbers));
+                        List.copyOf(invoiceNumbers),
+                        blankToNull(req.notifyPhone()));
             }
 
             return new PostSupplierPaymentResponse(payment.getId(), jeId, allocSum, prepayAfter);

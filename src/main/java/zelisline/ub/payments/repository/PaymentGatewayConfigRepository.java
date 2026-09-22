@@ -23,4 +23,6 @@ public interface PaymentGatewayConfigRepository extends JpaRepository<PaymentGat
     boolean existsByBusinessIdAndGatewayType(String businessId, GatewayType gatewayType);
 
     List<PaymentGatewayConfig> findByGatewayTypeAndStatus(GatewayType gatewayType, GatewayStatus status);
+
+    List<PaymentGatewayConfig> findByGatewayType(GatewayType gatewayType);
 }

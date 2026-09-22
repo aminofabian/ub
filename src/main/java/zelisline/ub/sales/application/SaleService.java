@@ -885,6 +885,9 @@ public class SaleService {
         if (chargedUnitPrice.compareTo(cost) >= 0) {
             return;
         }
+        if (item.isClearance()) {
+            return;
+        }
         String mode = resolveEffectiveMarginGuardMode(businessId);
         if (ProfitPocketSettings.GUARD_WARN.equals(mode)) {
             return;

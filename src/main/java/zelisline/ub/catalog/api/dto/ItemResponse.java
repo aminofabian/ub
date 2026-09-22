@@ -17,6 +17,7 @@ public record ItemResponse(
         String itemTypeId,
         String unitType,
         boolean isWeighed,
+        boolean isClearance,
         boolean isSellable,
         boolean isStocked,
         boolean packageVariant,

@@ -218,6 +218,7 @@ public class BulkItemImageImportService {
                 null, // itemTypeId
                 null, // unitType
                 null, // isWeighed
+                null, // isClearance
                 null, // isSellable
                 null, // isStocked
                 null, // packageVariant

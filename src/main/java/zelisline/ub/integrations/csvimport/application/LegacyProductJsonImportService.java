@@ -402,6 +402,7 @@ public class LegacyProductJsonImportService {
                         null, // itemTypeId
                         null, // unitType
                         null, // isWeighed
+                        null, // isClearance
                         null, // isSellable
                         null, // isStocked
                         null, // packageVariant
@@ -444,13 +445,14 @@ public class LegacyProductJsonImportService {
                             // 1-10: expectedUpdatedAt, sku, barcode, name, description,
                             //       categoryId, aisleId, itemTypeId, unitType, isWeighed
                             null, null, null, null, null, null, null, null, null, null,
-                            // 11-20: isSellable, isStocked, packageVariant, packagingUnitName,
-                            //        packagingUnitQty, bundleQty, bundlePrice, buyingPrice,
-                            //        bundleName, minStockLevel
+                            // 11-20: isClearance, isSellable, isStocked, packageVariant,
+                            //        packagingUnitName, packagingUnitQty, bundleQty, bundlePrice,
+                            //        buyingPrice, bundleName
                             null, null, null, null, null, null, null, null, null, null,
-                            // 21-30: reorderLevel, reorderQty, expiresAfterDays, hasExpiry,
-                            //        imageKey, active, webPublished, brand, size, variantName
-                            null, null, null, null, null, false, null, null, null, null, null));
+                            // 21-32: minStockLevel, reorderLevel, reorderQty, expiresAfterDays,
+                            //        hasExpiry, imageKey, active, webPublished, brand, size,
+                            //        variantName, pluCode
+                            null, null, null, null, null, null, false, null, null, null, null, null));
         }
         BigDecimal sell = sanitizeMoney14_2(r.sellPrice());
         if (sell != null && sell.compareTo(new BigDecimal("0.01")) >= 0) {
@@ -513,6 +515,7 @@ public class LegacyProductJsonImportService {
                 itemId,
                 new PatchItemRequest(
                         null, null, null, null, null, null, null, null, null, null,
+                        null, // isClearance
                         null, null, null, null, null, null, null,
                         buy,
                         null, null, null, null, null, null, null, null, null, null, null, null, null));

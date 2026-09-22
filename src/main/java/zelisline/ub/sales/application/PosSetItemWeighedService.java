@@ -68,6 +68,7 @@ public class PosSetItemWeighedService {
                         null, // itemTypeId
                         nextUnit,
                         weighed,
+                        null, // isClearance
                         null, // isSellable
                         null, // isStocked
                         null, // packageVariant

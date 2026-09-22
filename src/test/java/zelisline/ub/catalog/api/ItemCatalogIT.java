@@ -1176,6 +1176,7 @@ class ItemCatalogIT {
                 null, null, null, null, null, null, null, null,
                 "box",
                 true,
+                null, // isClearance
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
 
         mockMvc.perform(patch("/api/v1/items/" + id)
@@ -1279,6 +1280,7 @@ class ItemCatalogIT {
                 null,    // itemTypeId
                 null,    // unitType
                 null,    // isWeighed
+                null,    // isClearance
                 null,    // isSellable
                 null,    // isStocked
                 null,    // packageVariant

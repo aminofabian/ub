@@ -30,6 +30,7 @@ public class StaffEmailFanoutService {
 
     private static final Logger log = LoggerFactory.getLogger(StaffEmailFanoutService.class);
     private static final String PERMISSION_STOREFRONT_ORDERS = "storefront.orders.read";
+    private static final String PERMISSION_FINANCE_WRITE = "finance.expenses.write";
 
     private final UserRepository userRepository;
     private final BusinessRepository businessRepository;
@@ -42,9 +43,12 @@ public class StaffEmailFanoutService {
     private String frontendBaseUrl;
 
     public void fanoutForStaffDigest(Notification notification) {
+        String permission = FridayPocketReminderService.TYPE_FRIDAY_POCKET.equals(notification.getType())
+                ? PERMISSION_FINANCE_WRITE
+                : PERMISSION_STOREFRONT_ORDERS;
         List<String> userIds = userRepository.findIdsWithPermission(
                 notification.getBusinessId(),
-                PERMISSION_STOREFRONT_ORDERS);
+                permission);
         if (userIds.isEmpty()) {
             return;
         }
@@ -77,7 +81,8 @@ public class StaffEmailFanoutService {
         return NotificationTypes.ABANDONED_CART.equals(type)
                 || NotificationTypes.PEAK_HOURS.equals(type)
                 || NotificationTypes.TOP_PRODUCTS.equals(type)
-                || "sales.daily_digest".equals(type);
+                || "sales.daily_digest".equals(type)
+                || FridayPocketReminderService.TYPE_FRIDAY_POCKET.equals(type);
     }
 
     private DigestEmail buildDigestEmail(Notification notification, ParsedPayload payload) {

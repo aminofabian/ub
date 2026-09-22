@@ -64,6 +64,10 @@ public class Item {
     @Column(name = "is_weighed", nullable = false)
     private boolean weighed;
 
+    /** When true, Margin Guard approve/hard does not block below-cost sales. */
+    @Column(name = "is_clearance", nullable = false)
+    private boolean clearance;
+
     @Column(name = "is_sellable", nullable = false)
     private boolean sellable = true;
 

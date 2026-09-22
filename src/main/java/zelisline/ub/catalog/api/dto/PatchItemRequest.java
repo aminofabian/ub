@@ -19,6 +19,7 @@ public record PatchItemRequest(
         @Size(max = 36) String itemTypeId,
         @Size(max = 16) String unitType,
         Boolean isWeighed,
+        Boolean isClearance,
         Boolean isSellable,
         Boolean isStocked,
         Boolean packageVariant,

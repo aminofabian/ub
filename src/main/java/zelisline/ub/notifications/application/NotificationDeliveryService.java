@@ -106,6 +106,13 @@ public class NotificationDeliveryService {
     }
 
     private List<String> resolveChannels(String businessId, String type) {
+        if (FridayPocketReminderService.TYPE_FRIDAY_POCKET.equals(type)) {
+            return List.of(
+                    NotificationDelivery.CHANNEL_IN_APP,
+                    NotificationDelivery.CHANNEL_WHATSAPP,
+                    NotificationDelivery.CHANNEL_SMS,
+                    NotificationDelivery.CHANNEL_EMAIL);
+        }
         NotificationTemplate template = templateRepository
                 .findFirstByBusinessIdAndTypeAndLocaleAndActiveTrueOrderByVersionDesc(businessId, type, "en")
                 .or(() -> templateRepository.findFirstByBusinessIdIsNullAndTypeAndLocaleAndActiveTrueOrderByVersionDesc(

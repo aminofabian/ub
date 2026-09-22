@@ -151,11 +151,22 @@ public class ProfitPocketSettingsService {
         }
         switch (type) {
             case ProfitPocketSettings.TYPE_BANK -> {
-                if (blankToNull(settings.getDestinationAccount()) == null) {
-                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Bank account number is required");
-                }
                 if (blankToNull(settings.getDestinationBankName()) == null) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Bank name is required");
+                }
+                String bankPaybill = blankToNull(settings.getDestinationPaybill());
+                if (bankPaybill == null) {
+                    throw new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST, "Bank M-Pesa business number (paybill) is required");
+                }
+                String digits = bankPaybill.replaceAll("\\D", "");
+                if (digits.length() < 5 || digits.length() > 7) {
+                    throw new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST, "Bank business number must be 5–7 digits");
+                }
+                settings.setDestinationPaybill(digits);
+                if (blankToNull(settings.getDestinationAccount()) == null) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Bank account number is required");
                 }
             }
             case ProfitPocketSettings.TYPE_MPESA_PHONE -> {
@@ -193,7 +204,8 @@ public class ProfitPocketSettingsService {
         return switch (s.getDestinationType()) {
             case ProfitPocketSettings.TYPE_BANK ->
                     blankToNull(s.getDestinationAccount()) != null
-                            && blankToNull(s.getDestinationBankName()) != null;
+                            && blankToNull(s.getDestinationBankName()) != null
+                            && blankToNull(s.getDestinationPaybill()) != null;
             case ProfitPocketSettings.TYPE_MPESA_PHONE, ProfitPocketSettings.TYPE_TILL ->
                     blankToNull(s.getDestinationAccount()) != null;
             case ProfitPocketSettings.TYPE_PAYBILL ->
@@ -252,9 +264,11 @@ public class ProfitPocketSettingsService {
         return switch (s.getDestinationType()) {
             case ProfitPocketSettings.TYPE_BANK -> {
                 String bank = blankToNull(s.getDestinationBankName());
+                String paybill = blankToNull(s.getDestinationPaybill());
                 String acct = maskTail(s.getDestinationAccount());
                 yield (label != null ? label + " · " : "")
                         + (bank != null ? bank + " · " : "")
+                        + (paybill != null ? "Paybill " + paybill + " · " : "")
                         + acct;
             }
             case ProfitPocketSettings.TYPE_MPESA_PHONE ->

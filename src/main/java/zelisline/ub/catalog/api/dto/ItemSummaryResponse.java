@@ -55,6 +55,8 @@ public record ItemSummaryResponse(
         String aisleName,
         /** True when the item is sold by weight (kg, g, lb). */
         boolean isWeighed,
+        /** True when below-cost sales are allowed (clearance / loss-leader). */
+        boolean isClearance,
         /** Unit of measure: each, kg, g, lb, etc. */
         String unitType,
         /**

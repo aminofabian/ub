@@ -972,6 +972,9 @@ public class ItemCatalogService {
         if (patch.isWeighed() != null) {
             item.setWeighed(patch.isWeighed());
         }
+        if (patch.isClearance() != null) {
+            item.setClearance(patch.isClearance());
+        }
         if (patch.isSellable() != null) {
             item.setSellable(patch.isSellable());
         }
@@ -2023,6 +2026,7 @@ public class ItemCatalogService {
                 aisle != null ? aisle.getCode() : null,
                 aisle != null ? aisle.getName() : null,
                 i.isWeighed(),
+                i.isClearance(),
                 i.getUnitType(),
                 blankToNull(parentName)
         );
@@ -2103,6 +2107,7 @@ public class ItemCatalogService {
                 i.getItemTypeId(),
                 i.getUnitType(),
                 i.isWeighed(),
+                i.isClearance(),
                 i.isSellable(),
                 i.isStocked(),
                 i.isPackageVariant(),

@@ -17,6 +17,10 @@ public record CashSurplusResponse(
         boolean destinationConfigured,
         String destinationSummary,
         boolean collidesWithCustomerPay,
-        String customerPayCollisionMessage
+        String customerPayCollisionMessage,
+        /** Applied jar % (1–100). */
+        BigDecimal profitJarPct,
+        /** Cash + M-Pesa − float before jar %. */
+        BigDecimal rawSurplus
 ) {
 }

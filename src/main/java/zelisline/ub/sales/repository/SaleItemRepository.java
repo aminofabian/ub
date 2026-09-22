@@ -226,4 +226,24 @@ public interface SaleItemRepository extends JpaRepository<SaleItem, String> {
             @Param("from") Instant from,
             @Param("to") Instant to
     );
+
+    /**
+     * Sum of (cost − sell) on lines sold below cost for completed non-voided sales in a window.
+     */
+    @Query("""
+            select coalesce(sum(si.costTotal - si.lineTotal), 0)
+              from SaleItem si
+              join Sale s on s.id = si.saleId
+             where s.businessId = :businessId
+               and s.status = 'completed'
+               and s.voidedAt is null
+               and s.soldAt >= :from
+               and s.soldAt < :to
+               and si.costTotal > si.lineTotal
+            """)
+    java.math.BigDecimal sumBelowCostLossBetween(
+            @Param("businessId") String businessId,
+            @Param("from") Instant from,
+            @Param("to") Instant to
+    );
 }

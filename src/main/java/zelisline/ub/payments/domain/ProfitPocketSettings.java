@@ -62,6 +62,18 @@ public class ProfitPocketSettings {
     @Column(name = "friday_reminder_enabled", nullable = false)
     private boolean fridayReminderEnabled = true;
 
+    /**
+     * Share of cash surplus to suggest for pocketing (1–100). Null / 100 = full surplus.
+     */
+    @Column(name = "profit_jar_pct", precision = 5, scale = 2)
+    private BigDecimal profitJarPct;
+
+    /**
+     * Max below-cost loss (KES) allowed today before warn mode flips to approve. Null / 0 = off.
+     */
+    @Column(name = "margin_budget_daily", precision = 14, scale = 2)
+    private BigDecimal marginBudgetDaily;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

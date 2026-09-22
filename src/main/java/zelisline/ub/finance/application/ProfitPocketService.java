@@ -113,10 +113,14 @@ public class ProfitPocketService {
 
         ProfitPocketSettingsResponse settings = profitPocketSettingsService.getSettings(businessId);
         BigDecimal leaveFloat = money(settings.defaultFloat());
-        BigDecimal suggested = cash.add(mpesa).subtract(leaveFloat).setScale(2, RoundingMode.HALF_UP);
-        if (suggested.signum() < 0) {
-            suggested = ZERO;
+        BigDecimal rawSurplus = cash.add(mpesa).subtract(leaveFloat).setScale(2, RoundingMode.HALF_UP);
+        if (rawSurplus.signum() < 0) {
+            rawSurplus = ZERO;
         }
+        BigDecimal jarPct = ProfitPocketSettingsService.effectiveJarPct(settings.profitJarPct());
+        BigDecimal suggested = rawSurplus
+                .multiply(jarPct)
+                .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
 
         ProfitAndLossResponse pl = financeReportsService.profitAndLoss(businessId, from, to, resolvedBranch);
         long openShifts = journalReportRepository.countOpenShifts(businessId, resolvedBranch);
@@ -135,7 +139,9 @@ public class ProfitPocketService {
                 settings.enabled() && settings.configured() && !settings.collidesWithCustomerPay(),
                 settings.destinationSummary(),
                 settings.collidesWithCustomerPay(),
-                settings.customerPayCollisionMessage());
+                settings.customerPayCollisionMessage(),
+                jarPct,
+                rawSurplus);
     }
 
     @Transactional

@@ -5,6 +5,7 @@ import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -884,7 +885,7 @@ public class SaleService {
         if (chargedUnitPrice.compareTo(cost) >= 0) {
             return;
         }
-        String mode = profitPocketSettingsService.marginGuardMode(businessId);
+        String mode = resolveEffectiveMarginGuardMode(businessId);
         if (ProfitPocketSettings.GUARD_WARN.equals(mode)) {
             return;
         }
@@ -899,6 +900,30 @@ public class SaleService {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN,
                     "Line " + (lineIndex + 1) + ": below-cost sale needs manager approval");
         }
+    }
+
+    /**
+     * Warn mode + daily margin budget: once today's below-cost loss reaches the budget,
+     * flip to approve for the rest of the day.
+     */
+    private String resolveEffectiveMarginGuardMode(String businessId) {
+        String mode = profitPocketSettingsService.marginGuardMode(businessId);
+        if (!ProfitPocketSettings.GUARD_WARN.equals(mode)) {
+            return mode;
+        }
+        BigDecimal budget = profitPocketSettingsService.marginBudgetDaily(businessId);
+        if (budget == null || budget.signum() <= 0) {
+            return mode;
+        }
+        ZoneId zone = ZoneId.of("Africa/Nairobi");
+        LocalDate today = LocalDate.now(zone);
+        Instant from = today.atStartOfDay(zone).toInstant();
+        Instant to = today.plusDays(1).atStartOfDay(zone).toInstant();
+        BigDecimal spent = saleItemRepository.sumBelowCostLossBetween(businessId, from, to);
+        if (spent != null && spent.compareTo(budget) >= 0) {
+            return ProfitPocketSettings.GUARD_APPROVE;
+        }
+        return mode;
     }
 
     private EffectiveLinePricing resolveLinePricing(

@@ -98,6 +98,21 @@ public class ProfitPocketSettingsService {
         if (request.fridayReminderEnabled() != null) {
             settings.setFridayReminderEnabled(request.fridayReminderEnabled());
         }
+        if (request.profitJarPct() != null) {
+            BigDecimal pct = request.profitJarPct().setScale(2, RoundingMode.HALF_UP);
+            if (pct.compareTo(BigDecimal.ONE) < 0 || pct.compareTo(new BigDecimal("100.00")) > 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "profitJarPct must be between 1 and 100");
+            }
+            // 100% = full surplus (store null)
+            settings.setProfitJarPct(pct.compareTo(new BigDecimal("100.00")) >= 0 ? null : pct);
+        }
+        if (request.marginBudgetDaily() != null) {
+            if (request.marginBudgetDaily().signum() < 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "marginBudgetDaily must be >= 0");
+            }
+            BigDecimal budget = request.marginBudgetDaily().setScale(2, RoundingMode.HALF_UP);
+            settings.setMarginBudgetDaily(budget.signum() == 0 ? null : budget);
+        }
 
         if (settings.isEnabled()) {
             normalizeAndRequireDestination(settings);
@@ -209,7 +224,27 @@ public class ProfitPocketSettingsService {
                 normalizeGuardMode(s.getMarginGuardMode()),
                 s.isFridayReminderEnabled(),
                 collision != null,
-                collision);
+                collision,
+                s.getProfitJarPct(),
+                s.getMarginBudgetDaily());
+    }
+
+    /** Effective jar share 1–100 (defaults to 100). */
+    public static BigDecimal effectiveJarPct(BigDecimal raw) {
+        if (raw == null || raw.signum() <= 0) {
+            return new BigDecimal("100.00");
+        }
+        if (raw.compareTo(new BigDecimal("100.00")) > 0) {
+            return new BigDecimal("100.00");
+        }
+        return raw.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    @Transactional(readOnly = true)
+    public BigDecimal marginBudgetDaily(String businessId) {
+        return settingsRepository.findById(businessId)
+                .map(ProfitPocketSettings::getMarginBudgetDaily)
+                .orElse(null);
     }
 
     public static String summarize(ProfitPocketSettings s) {

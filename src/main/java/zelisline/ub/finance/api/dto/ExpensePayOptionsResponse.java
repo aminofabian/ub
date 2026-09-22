@@ -8,6 +8,8 @@ public record ExpensePayOptionsResponse(
         boolean payoutEnabled,
         boolean payoutGatewayReady,
         String payoutGatewayLabel,
+        /** Super-admin has enabled a Send Money gateway for the platform. */
+        boolean platformPayoutGatewayEnabled,
         boolean destinationConfigured,
         String destinationPhone,
         boolean kopokopoPayEligible,

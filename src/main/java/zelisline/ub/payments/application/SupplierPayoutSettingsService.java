@@ -133,6 +133,16 @@ public class SupplierPayoutSettingsService {
                 .orElse(false);
     }
 
+    /**
+     * True when the platform administrator has enabled at least one gateway
+     * that supports supplier / expense Send Money (today: KopoKopo).
+     */
+    @Transactional(readOnly = true)
+    public boolean isPlatformSupplierPayoutGatewayEnabled() {
+        return platformGatewayRepository.findAll().stream()
+                .anyMatch(p -> p.isEnabled() && p.isSupplierPayoutSupported());
+    }
+
     @Transactional(readOnly = true)
     public List<SupplierPayoutSettings> listAutoPayEnabledSettings() {
         return settingsRepository.findByEnabledTrueAndAutoPayEnabledTrue();
@@ -245,6 +255,7 @@ public class SupplierPayoutSettingsService {
                 resolved.isPresent(),
                 settings.isAutoPayEnabled(),
                 SupplierAutoPayTimes.parseOrDefault(settings.getAutoPayTimesJson(), objectMapper),
-                selectable);
+                selectable,
+                isPlatformSupplierPayoutGatewayEnabled());
     }
 }

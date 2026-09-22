@@ -10,6 +10,11 @@ public record SupplyPayOptionsResponse(
         boolean supplierPayoutGatewayReady,
         String supplierPayoutGatewayLabel,
         /**
+         * Super-admin has enabled KopoKopo (or another Send Money gateway) for the platform.
+         * When false, tenants must not see KopoKopo Send Money UI.
+         */
+        boolean platformPayoutGatewayEnabled,
+        /**
          * Supplier has an automated KopoKopo destination configured
          * (mobile_wallet, till, or paybill).
          */

@@ -10,6 +10,8 @@ public record SupplierPayoutSettingsResponse(
         boolean gatewayReady,
         boolean autoPayEnabled,
         List<String> autoPayTimes,
-        List<SupplierPayoutGatewayOption> selectableGateways
+        List<SupplierPayoutGatewayOption> selectableGateways,
+        /** Super-admin has enabled a Send Money gateway for the platform. */
+        boolean platformPayoutGatewayEnabled
 ) {
 }

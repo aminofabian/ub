@@ -311,25 +311,20 @@ public class ProfitPocketSettingsService {
         boolean platformKk = platformGatewayRepository.findById(GatewayType.KOPOKOPO)
                 .map(PlatformPaymentGateway::isEnabled)
                 .orElse(false);
+        if (!platformKk) {
+            return out;
+        }
         Optional<PaymentGatewayConfig> kk = resolveKopokopoConfig(businessId);
-        if (platformKk || kk.isPresent()) {
-            String detail;
-            boolean ready = platformKk && kk.isPresent();
-            if (!platformKk) {
-                detail = "KopoKopo is disabled by the platform administrator";
-            } else if (kk.isEmpty()) {
-                detail = "Connect and activate KopoKopo under Accept payments, then select it in Pay suppliers";
-            } else {
-                detail = "Sends via your KopoKopo account ("
+        String detail = kk.isEmpty()
+                ? "Connect and activate KopoKopo under Accept payments, then select it in Pay suppliers"
+                : "Sends via your KopoKopo account ("
                         + (kk.get().getLabel() != null ? kk.get().getLabel() : "KopoKopo")
                         + ")";
-            }
-            out.add(new ProfitPocketSendRailOption(
-                    ProfitPocketSettings.RAIL_KOPOKOPO,
-                    "KopoKopo",
-                    ready,
-                    detail));
-        }
+        out.add(new ProfitPocketSendRailOption(
+                ProfitPocketSettings.RAIL_KOPOKOPO,
+                "KopoKopo",
+                kk.isPresent(),
+                detail));
         return out;
     }
 

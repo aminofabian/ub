@@ -84,11 +84,13 @@ public class ExpenseDisbursementService {
 
         Optional<PaymentGatewayConfig> payoutGateway = supplierPayoutSettingsService.resolveActivePayoutConfig(businessId);
         boolean payoutEnabled = supplierPayoutSettingsService.isSupplierPayoutToggleEnabled(businessId);
+        boolean platformPayoutGatewayEnabled = supplierPayoutSettingsService.isPlatformSupplierPayoutGatewayEnabled();
         boolean gatewayReady = payoutGateway.isPresent();
         boolean destinationConfigured = dest.phone() != null;
         boolean alreadyPaid = expense.getPaidAt() != null
                 || hasSuccessfulDisbursement(businessId, expenseId);
-        boolean kopokopoEligible = gatewayReady
+        boolean kopokopoEligible = platformPayoutGatewayEnabled
+                && gatewayReady
                 && destinationConfigured
                 && !alreadyPaid
                 && expense.getAmount().compareTo(MONEY) > 0
@@ -99,34 +101,39 @@ public class ExpenseDisbursementService {
                 .findByBusinessIdAndExpenseIdOrderByCreatedAtDesc(businessId, expenseId)
                 .stream()
                 .findFirst();
-        if (latest.isPresent() && isOpenForConfirm(latest.get())) {
+        if (platformPayoutGatewayEnabled && latest.isPresent() && isOpenForConfirm(latest.get())) {
             pollSendMoneyStatus(latest.get());
             expense = expenseRepository.findByIdAndBusinessId(expenseId, businessId).orElse(expense);
             alreadyPaid = expense.getPaidAt() != null
                     || ExpenseDisbursementStatuses.SUCCESS.equals(latest.get().getStatus());
-            kopokopoEligible = gatewayReady
+            kopokopoEligible = platformPayoutGatewayEnabled
+                    && gatewayReady
                     && destinationConfigured
                     && !alreadyPaid
                     && expense.getAmount().compareTo(MONEY) > 0
                     && FinanceConstants.EXPENSE_PAY_METHOD_MPESA_MANUAL.equals(expense.getPaymentMethod());
         }
 
+        boolean exposeDisbursement = platformPayoutGatewayEnabled;
         return new ExpensePayOptionsResponse(
                 expense.getAmount(),
                 payoutEnabled,
                 gatewayReady,
                 payoutGateway.map(PaymentGatewayConfig::getLabel).orElse(null),
+                platformPayoutGatewayEnabled,
                 destinationConfigured,
                 dest.phone(),
                 kopokopoEligible,
-                pending.filter(d -> ExpenseDisbursementStatuses.PENDING.equals(d.getStatus())).isPresent()
-                        || latest.filter(d -> ExpenseDisbursementStatuses.PENDING.equals(d.getStatus())).isPresent(),
-                pending.map(ExpenseDisbursement::getId)
-                        .or(() -> latest.filter(d -> ExpenseDisbursementStatuses.PENDING.equals(d.getStatus()))
-                                .map(ExpenseDisbursement::getId))
-                        .orElse(null),
-                latest.map(ExpenseDisbursement::getStatus).orElse(null),
-                latest.map(this::publicDisbursementMessage).orElse(null),
+                exposeDisbursement && (pending.filter(d -> ExpenseDisbursementStatuses.PENDING.equals(d.getStatus())).isPresent()
+                        || latest.filter(d -> ExpenseDisbursementStatuses.PENDING.equals(d.getStatus())).isPresent()),
+                exposeDisbursement
+                        ? pending.map(ExpenseDisbursement::getId)
+                                .or(() -> latest.filter(d -> ExpenseDisbursementStatuses.PENDING.equals(d.getStatus()))
+                                        .map(ExpenseDisbursement::getId))
+                                .orElse(null)
+                        : null,
+                exposeDisbursement ? latest.map(ExpenseDisbursement::getStatus).orElse(null) : null,
+                exposeDisbursement ? latest.map(this::publicDisbursementMessage).orElse(null) : null,
                 alreadyPaid);
     }
 

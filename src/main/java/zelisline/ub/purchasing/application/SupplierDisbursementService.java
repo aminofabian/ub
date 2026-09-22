@@ -77,26 +77,32 @@ public class SupplierDisbursementService {
         BigDecimal open = openBalance(inv);
         Optional<PaymentGatewayConfig> payoutGateway = supplierPayoutSettingsService.resolveActivePayoutConfig(businessId);
         boolean supplierPayoutEnabled = supplierPayoutSettingsService.isSupplierPayoutToggleEnabled(businessId);
+        boolean platformPayoutGatewayEnabled = supplierPayoutSettingsService.isPlatformSupplierPayoutGatewayEnabled();
         boolean gatewayReady = payoutGateway.isPresent();
         boolean destinationConfigured = supplier != null
                 && supplier.getDeletedAt() == null
                 && hasAutomatedPayoutDestination(supplier);
-        boolean kopokopoEligible = gatewayReady && destinationConfigured && open.compareTo(MONEY) > 0;
+        boolean kopokopoEligible = platformPayoutGatewayEnabled
+                && gatewayReady
+                && destinationConfigured
+                && open.compareTo(MONEY) > 0;
 
         Optional<SupplierDisbursement> pending = findPendingDisbursement(businessId, invoiceId);
         Optional<SupplierDisbursement> latest = disbursementRepository
                 .findByBusinessIdAndSupplierInvoiceIdOrderByCreatedAtDesc(businessId, invoiceId)
                 .stream()
                 .findFirst();
-        if (latest.isPresent() && isOpenForConfirm(latest.get())) {
+        if (platformPayoutGatewayEnabled && latest.isPresent() && isOpenForConfirm(latest.get())) {
             pollSendMoneyStatus(latest.get());
         }
 
+        boolean exposeDisbursement = platformPayoutGatewayEnabled;
         return new SupplyPayOptionsResponse(
                 open,
                 supplierPayoutEnabled,
                 gatewayReady,
                 payoutGateway.map(PaymentGatewayConfig::getLabel).orElse(null),
+                platformPayoutGatewayEnabled,
                 destinationConfigured,
                 destinationConfigured && supplier != null ? supplier.getPayoutType() : null,
                 destinationConfigured && supplier != null ? supplier.getPayoutPhone() : null,
@@ -104,14 +110,16 @@ public class SupplierDisbursementService {
                 destinationConfigured && supplier != null ? supplier.getPayoutPaybillNumber() : null,
                 destinationConfigured && supplier != null ? supplier.getPayoutPaybillAccount() : null,
                 kopokopoEligible,
-                pending.filter(d -> SupplierDisbursementStatuses.PENDING.equals(d.getStatus())).isPresent()
-                        || latest.filter(d -> SupplierDisbursementStatuses.PENDING.equals(d.getStatus())).isPresent(),
-                pending.map(SupplierDisbursement::getId)
-                        .or(() -> latest.filter(d -> SupplierDisbursementStatuses.PENDING.equals(d.getStatus()))
-                                .map(SupplierDisbursement::getId))
-                        .orElse(null),
-                latest.map(SupplierDisbursement::getStatus).orElse(null),
-                latest.map(this::publicDisbursementMessage).orElse(null));
+                exposeDisbursement && (pending.filter(d -> SupplierDisbursementStatuses.PENDING.equals(d.getStatus())).isPresent()
+                        || latest.filter(d -> SupplierDisbursementStatuses.PENDING.equals(d.getStatus())).isPresent()),
+                exposeDisbursement
+                        ? pending.map(SupplierDisbursement::getId)
+                                .or(() -> latest.filter(d -> SupplierDisbursementStatuses.PENDING.equals(d.getStatus()))
+                                        .map(SupplierDisbursement::getId))
+                                .orElse(null)
+                        : null,
+                exposeDisbursement ? latest.map(SupplierDisbursement::getStatus).orElse(null) : null,
+                exposeDisbursement ? latest.map(this::publicDisbursementMessage).orElse(null) : null);
     }
 
     @Transactional

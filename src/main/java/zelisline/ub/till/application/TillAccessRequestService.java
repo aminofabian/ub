@@ -33,6 +33,8 @@ import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.till.api.dto.PublicTillAccessReviewResponse;
 import zelisline.ub.till.api.dto.RegisterTillDeviceRequest;
+import zelisline.ub.till.api.dto.TillAccessRequestListResponse;
+import zelisline.ub.till.api.dto.TillAccessRequestResponse;
 import zelisline.ub.till.api.dto.TillDeviceResponse;
 import zelisline.ub.till.domain.TillAccessRequest;
 import zelisline.ub.till.repository.TillAccessRequestRepository;
@@ -132,20 +134,83 @@ public class TillAccessRequestService {
 
     @Transactional(readOnly = true)
     public PublicTillAccessReviewResponse reviewByToken(String token) {
-        return toReview(requireByToken(token));
+        return toPublicReview(requireByToken(token));
+    }
+
+    @Transactional(readOnly = true)
+    public TillAccessRequestListResponse listForBusiness(
+            String businessId,
+            String branchId,
+            String status
+    ) {
+        String resolvedStatus = status == null || status.isBlank()
+                ? TillAccessRequest.STATUS_PENDING
+                : status.trim().toLowerCase(Locale.ROOT);
+        List<TillAccessRequest> rows;
+        String branch = branchId != null ? branchId.trim() : "";
+        if (!branch.isEmpty()) {
+            rows = tillAccessRequestRepository
+                    .findByBusinessIdAndBranchIdAndStatusOrderByLastSeenAtDesc(
+                            businessId, branch, resolvedStatus);
+        } else {
+            rows = tillAccessRequestRepository
+                    .findByBusinessIdAndStatusOrderByLastSeenAtDesc(businessId, resolvedStatus);
+        }
+        return new TillAccessRequestListResponse(rows.stream().map(this::toAdminResponse).toList());
     }
 
     @Transactional
     public PublicTillAccessReviewResponse approveByToken(String token, String label) {
         TillAccessRequest row = requireByToken(token);
+        String actorId = resolveLinkActorUserId(row.getBusinessId());
+        if (actorId == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT, "No shop owner is available to register this till.");
+        }
+        return toPublicReview(approveRow(row, actorId, label));
+    }
+
+    @Transactional
+    public TillAccessRequestResponse approveById(
+            String businessId,
+            String requestId,
+            String actorUserId,
+            String label
+    ) {
+        TillAccessRequest row = tillAccessRequestRepository
+                .findByIdAndBusinessId(requestId.trim(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "This till request is no longer available."));
+        return toAdminResponse(approveRow(row, actorUserId, label));
+    }
+
+    @Transactional
+    public PublicTillAccessReviewResponse dismissByToken(String token) {
+        TillAccessRequest row = requireByToken(token);
+        String actorId = resolveLinkActorUserId(row.getBusinessId());
+        return toPublicReview(dismissRow(row, actorId));
+    }
+
+    @Transactional
+    public TillAccessRequestResponse dismissById(
+            String businessId,
+            String requestId,
+            String actorUserId
+    ) {
+        TillAccessRequest row = tillAccessRequestRepository
+                .findByIdAndBusinessId(requestId.trim(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "This till request is no longer available."));
+        return toAdminResponse(dismissRow(row, actorUserId));
+    }
+
+    private TillAccessRequest approveRow(TillAccessRequest row, String actorId, String label) {
         if (TillAccessRequest.STATUS_APPROVED.equals(row.getStatus())
                 && tillDeviceRepository.existsByBusinessIdAndBranchIdAndDeviceKeyAndRevokedAtIsNull(
                         row.getBusinessId(), row.getBranchId(), row.getDeviceKey())) {
-            return toReview(row);
+            return row;
         }
-
-        String actorId = resolveLinkActorUserId(row.getBusinessId());
-        if (actorId == null) {
+        if (actorId == null || actorId.isBlank()) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT, "No shop owner is available to register this till.");
         }
@@ -164,26 +229,21 @@ public class TillAccessRequestService {
         row.setStatus(TillAccessRequest.STATUS_APPROVED);
         row.setResolvedBy(actorId);
         row.setResolvedAt(Instant.now());
-        tillAccessRequestRepository.save(row);
-        return toReview(row);
+        return tillAccessRequestRepository.save(row);
     }
 
-    @Transactional
-    public PublicTillAccessReviewResponse dismissByToken(String token) {
-        TillAccessRequest row = requireByToken(token);
+    private TillAccessRequest dismissRow(TillAccessRequest row, String actorId) {
         if (TillAccessRequest.STATUS_APPROVED.equals(row.getStatus())) {
             throw new ResponseStatusException(
-                    HttpStatus.CONFLICT, "This till is already trusted. Revoke it from Trusted tills if needed.");
+                    HttpStatus.CONFLICT, "This till is already trusted. Deactivate it from Trusted tills if needed.");
         }
         if (TillAccessRequest.STATUS_DISMISSED.equals(row.getStatus())) {
-            return toReview(row);
+            return row;
         }
-        String actorId = resolveLinkActorUserId(row.getBusinessId());
         row.setStatus(TillAccessRequest.STATUS_DISMISSED);
         row.setResolvedBy(actorId);
         row.setResolvedAt(Instant.now());
-        tillAccessRequestRepository.save(row);
-        return toReview(row);
+        return tillAccessRequestRepository.save(row);
     }
 
     String publicReviewUrl(TillAccessRequest row) {
@@ -299,17 +359,13 @@ public class TillAccessRequestService {
                         HttpStatus.NOT_FOUND, "This till request is no longer available."));
     }
 
-    private PublicTillAccessReviewResponse toReview(TillAccessRequest row) {
+    private PublicTillAccessReviewResponse toPublicReview(TillAccessRequest row) {
         boolean pending = TillAccessRequest.STATUS_PENDING.equals(row.getStatus());
         String shopName = businessRepository.findById(row.getBusinessId())
                 .map(Business::getName)
                 .filter(n -> n != null && !n.isBlank())
                 .orElse("Kiosk");
-        String branchName = branchRepository
-                .findByIdAndBusinessIdAndDeletedAtIsNull(row.getBranchId(), row.getBusinessId())
-                .map(Branch::getName)
-                .filter(n -> n != null && !n.isBlank())
-                .orElse("Branch");
+        String branchName = branchName(row);
         return new PublicTillAccessReviewResponse(
                 row.getId(),
                 row.getStatus(),
@@ -323,6 +379,32 @@ public class TillAccessRequestService {
                 row.getLastSeenAt(),
                 row.getCreatedAt(),
                 pending);
+    }
+
+    private TillAccessRequestResponse toAdminResponse(TillAccessRequest row) {
+        boolean pending = TillAccessRequest.STATUS_PENDING.equals(row.getStatus());
+        return new TillAccessRequestResponse(
+                row.getId(),
+                row.getBranchId(),
+                branchName(row),
+                row.getDeviceKey(),
+                deviceShortId(row.getDeviceKey()),
+                row.getRequestedByName(),
+                row.getRequestedByEmail(),
+                row.getSuggestedLabel(),
+                row.getUserAgent(),
+                row.getStatus(),
+                row.getLastSeenAt(),
+                row.getCreatedAt(),
+                pending);
+    }
+
+    private String branchName(TillAccessRequest row) {
+        return branchRepository
+                .findByIdAndBusinessIdAndDeletedAtIsNull(row.getBranchId(), row.getBusinessId())
+                .map(Branch::getName)
+                .filter(n -> n != null && !n.isBlank())
+                .orElse("Branch");
     }
 
     private String resolveLinkActorUserId(String businessId) {
@@ -348,9 +430,12 @@ public class TillAccessRequestService {
         Map<String, Object> payload = new LinkedHashMap<>(variables);
         payload.put("title", rendered.title());
         payload.put("body", rendered.body());
-        payload.put("actionUrl", rendered.actionUrl() != null && !rendered.actionUrl().isBlank()
-                ? rendered.actionUrl()
-                : variables.getOrDefault("publicUrl", "/tills"));
+        // In-app opens the business hub manage-tills drawer; email still carries publicUrl.
+        payload.put("actionUrl", "/business?manageTills=1");
+        payload.put("publicUrl", variables.getOrDefault("publicUrl", "/tills/review"));
+        if (rendered.actionUrl() != null && !rendered.actionUrl().isBlank()) {
+            payload.put("emailActionUrl", rendered.actionUrl());
+        }
         try {
             return objectMapper.writeValueAsString(payload);
         } catch (JsonProcessingException e) {

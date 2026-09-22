@@ -125,4 +125,12 @@ public class TillDevicesController {
         String businessId = TenantRequestIds.requireMatchingTenant(request, principal.businessId());
         tillDeviceService.revoke(businessId, id);
     }
+
+    @PostMapping("/{id}/reactivate")
+    @PreAuthorize("hasPermission(null, 'business.manage_settings')")
+    public TillDeviceResponse reactivate(@PathVariable("id") String id, HttpServletRequest request) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.requireMatchingTenant(request, principal.businessId());
+        return tillDeviceService.reactivate(businessId, id, principal.userId());
+    }
 }

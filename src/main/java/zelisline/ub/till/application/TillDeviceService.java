@@ -155,6 +155,24 @@ public class TillDeviceService {
         }
     }
 
+    /** Clear revoke so PIN login works on this computer again. */
+    @Transactional
+    public TillDeviceResponse reactivate(String businessId, String id, String actorUserId) {
+        TillDevice row = tillDeviceRepository
+                .findByIdAndBusinessId(id.trim(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Till device not found"));
+        if (row.getRevokedAt() == null) {
+            return toResponse(row);
+        }
+        row.setRevokedAt(null);
+        row.setRegisteredAt(Instant.now());
+        if (actorUserId != null && !actorUserId.isBlank()) {
+            row.setRegisteredBy(actorUserId.trim());
+        }
+        row.setUpdatedAt(Instant.now());
+        return toResponse(tillDeviceRepository.save(row));
+    }
+
     /**
      * Hybrid trusted-till policy for PIN login:
      * <ul>

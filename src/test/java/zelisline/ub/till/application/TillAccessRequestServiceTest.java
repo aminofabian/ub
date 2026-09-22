@@ -161,6 +161,41 @@ class TillAccessRequestServiceTest {
         assertThat(body.getValue().label()).isEqualTo("Front counter");
     }
 
+    @Test
+    void approveById_registersDeviceAsActor() {
+        TillAccessRequest existing = pendingRow();
+        when(tillAccessRequestRepository.findByIdAndBusinessId("req-1", "biz"))
+                .thenReturn(Optional.of(existing));
+        when(tillAccessRequestRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(tillDeviceService.register(eq("biz"), eq("owner-1"), eq("br"), any(), eq(DEVICE_KEY)))
+                .thenReturn(new TillDeviceResponse(
+                        "till-1", "br", DEVICE_KEY, "Counter 2", "shelf",
+                        "owner-1", Instant.now(), null));
+        stubShopNames();
+
+        var review = service.approveById("biz", "req-1", "owner-1", "Counter 2");
+
+        assertThat(review.status()).isEqualTo(TillAccessRequest.STATUS_APPROVED);
+        assertThat(review.canApprove()).isFalse();
+        assertThat(review.suggestedLabel()).isEqualTo("Counter 2");
+        assertThat(existing.getResolvedBy()).isEqualTo("owner-1");
+    }
+
+    @Test
+    void listForBusiness_returnsPendingRows() {
+        TillAccessRequest existing = pendingRow();
+        when(tillAccessRequestRepository.findByBusinessIdAndBranchIdAndStatusOrderByLastSeenAtDesc(
+                        "biz", "br", TillAccessRequest.STATUS_PENDING))
+                .thenReturn(List.of(existing));
+        stubShopNames();
+
+        var list = service.listForBusiness("biz", "br", "pending");
+
+        assertThat(list.requests()).hasSize(1);
+        assertThat(list.requests().get(0).requestedByName()).isEqualTo("MURIKI Wanjiru");
+        assertThat(list.requests().get(0).canApprove()).isTrue();
+    }
+
     private void stubNotifyLookups() {
         stubShopNames();
         when(userRepository.findIdsWithPermission("biz", TillAccessRequestService.APPROVE_PERMISSION))

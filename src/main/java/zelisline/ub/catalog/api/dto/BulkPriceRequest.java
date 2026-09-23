@@ -10,28 +10,40 @@ import jakarta.validation.Valid;
  */
 public record BulkPriceRequest(
         List<String> itemIds,
-        boolean selectAllMatching,
+        Boolean selectAllMatching,
         List<String> excludedItemIds,
         String search,
         String barcode,
         String categoryId,
-        boolean includeCategoryDescendants,
-        boolean noBarcode,
-        boolean includeInactive,
-        boolean inactiveOnly,
-        boolean noPrice,
-        boolean zeroStock,
-        boolean lowStock,
+        Boolean includeCategoryDescendants,
+        Boolean noBarcode,
+        Boolean includeInactive,
+        Boolean inactiveOnly,
+        Boolean noPrice,
+        Boolean zeroStock,
+        Boolean lowStock,
         CatalogListScope catalogScope,
         List<CatalogRowType> catalogRowTypes,
         String branchId,
         String itemTypeId,
         String aisleId,
-        boolean aisleUnset,
+        Boolean aisleUnset,
         PriceStatusFilter priceStatus,
         @Valid BulkPriceSideRequest buying,
         @Valid BulkPriceSideRequest selling,
         PriceRounding rounding,
-        boolean acknowledgeLosses
+        Boolean acknowledgeLosses
 ) {
+    public BulkPriceRequest {
+        selectAllMatching = Boolean.TRUE.equals(selectAllMatching);
+        includeCategoryDescendants = Boolean.TRUE.equals(includeCategoryDescendants);
+        noBarcode = Boolean.TRUE.equals(noBarcode);
+        includeInactive = Boolean.TRUE.equals(includeInactive);
+        inactiveOnly = Boolean.TRUE.equals(inactiveOnly);
+        noPrice = Boolean.TRUE.equals(noPrice);
+        zeroStock = Boolean.TRUE.equals(zeroStock);
+        lowStock = Boolean.TRUE.equals(lowStock);
+        aisleUnset = Boolean.TRUE.equals(aisleUnset);
+        acknowledgeLosses = Boolean.TRUE.equals(acknowledgeLosses);
+    }
 }

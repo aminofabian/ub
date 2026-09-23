@@ -7,6 +7,9 @@ import jakarta.validation.constraints.NotNull;
 public record BulkPriceSideRequest(
         @NotNull BulkPriceMode mode,
         BigDecimal value,
-        boolean overwriteExisting
+        Boolean overwriteExisting
 ) {
+    public BulkPriceSideRequest {
+        overwriteExisting = Boolean.TRUE.equals(overwriteExisting);
+    }
 }

@@ -47,6 +47,12 @@ import zelisline.ub.catalog.api.dto.PatchItemRequest;
 import zelisline.ub.catalog.api.dto.RecordItemScanRequest;
 import zelisline.ub.catalog.api.dto.RegisterItemImageRequest;
 import zelisline.ub.catalog.api.dto.SuggestedSkuResponse;
+import zelisline.ub.catalog.api.dto.BulkPriceApplyResponse;
+import zelisline.ub.catalog.api.dto.BulkPricePreviewResponse;
+import zelisline.ub.catalog.api.dto.BulkPriceRequest;
+import zelisline.ub.catalog.api.dto.PriceStatusCountsResponse;
+import zelisline.ub.catalog.api.dto.PriceStatusFilter;
+import zelisline.ub.catalog.application.BulkPriceService;
 import zelisline.ub.catalog.application.CategoryPricingResolutionService;
 import zelisline.ub.catalog.application.BulkItemImageImportService;
 import zelisline.ub.catalog.application.ItemCatalogService;
@@ -84,6 +90,7 @@ public class ItemsController {
     private final BranchResolutionService branchResolutionService;
     private final UserItemTypeRepository userItemTypeRepository;
     private final BulkItemImageImportService bulkItemImageImportService;
+    private final BulkPriceService bulkPriceService;
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'catalog.items.read')")
@@ -112,6 +119,7 @@ public class ItemsController {
             @RequestParam(required = false, defaultValue = "false") boolean aisleUnset,
             @RequestParam(required = false) Boolean isWeighed,
             @RequestParam(required = false) CatalogListSort listSort,
+            @RequestParam(required = false, defaultValue = "ALL") PriceStatusFilter priceStatus,
             Pageable pageable,
             HttpServletRequest request
     ) {
@@ -143,9 +151,82 @@ public class ItemsController {
                 isWeighed,
                 aisleId,
                 aisleUnset,
+                priceStatus.name(),
                 listSort,
                 pageable
         );
+    }
+
+    @GetMapping("/price-status-counts")
+    @PreAuthorize("hasPermission(null, 'catalog.items.read')")
+    public PriceStatusCountsResponse priceStatusCounts(
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) String barcode,
+            @RequestParam(required = false) String categoryId,
+            @RequestParam(required = false, defaultValue = "false") boolean includeCategoryDescendants,
+            @RequestParam(required = false, defaultValue = "false") boolean noBarcode,
+            @RequestParam(required = false, defaultValue = "false") boolean includeInactive,
+            @RequestParam(required = false, defaultValue = "false") boolean inactiveOnly,
+            @RequestParam(required = false, defaultValue = "false") boolean noPrice,
+            @RequestParam(required = false, defaultValue = "false") boolean zeroStock,
+            @RequestParam(required = false, defaultValue = "false") boolean lowStock,
+            @RequestParam(required = false, defaultValue = "ALL") CatalogListScope catalogScope,
+            @RequestParam(required = false) List<CatalogRowType> catalogRowTypes,
+            @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) String itemTypeId,
+            @RequestParam(required = false) String aisleId,
+            @RequestParam(required = false, defaultValue = "false") boolean aisleUnset,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        List<String> allowedItemTypes = resolveCallerAllowedItemTypes(request, itemTypeId);
+        return itemCatalogService.countPriceStatuses(
+                TenantRequestIds.resolveBusinessId(request),
+                search,
+                barcode,
+                categoryId,
+                includeCategoryDescendants,
+                noBarcode,
+                includeInactive,
+                inactiveOnly,
+                noPrice,
+                zeroStock,
+                lowStock,
+                catalogScope,
+                catalogRowTypes,
+                branchId,
+                itemTypeId,
+                allowedItemTypes,
+                aisleId,
+                aisleUnset
+        );
+    }
+
+    @PostMapping("/bulk-prices/preview")
+    @PreAuthorize("hasPermission(null, 'catalog.items.read')")
+    public BulkPricePreviewResponse previewBulkPrices(
+            @Valid @RequestBody BulkPriceRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return bulkPriceService.preview(
+                TenantRequestIds.resolveBusinessId(request),
+                resolveCallerAllowedItemTypes(request, body.itemTypeId()),
+                body);
+    }
+
+    @PostMapping("/bulk-prices")
+    @PreAuthorize("hasPermission(null, 'catalog.items.write')")
+    public BulkPriceApplyResponse applyBulkPrices(
+            @Valid @RequestBody BulkPriceRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return bulkPriceService.apply(
+                TenantRequestIds.resolveBusinessId(request),
+                CurrentTenantUser.auditActorId(request),
+                resolveCallerAllowedItemTypes(request, body.itemTypeId()),
+                body);
     }
 
     @GetMapping("/row-type-counts")

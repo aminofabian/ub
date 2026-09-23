@@ -272,6 +272,9 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                     and ((i.bundlePrice - i.buyingPrice) * 100 / i.buyingPrice)
                         < :poorMarginMaxPct
                ))
+            """
+            + PriceStatusJpql.FILTER
+            + """
                and (:restrictItemIdsUnset = true or i.id in :restrictItemIds)
             """)
     Page<Item> search(
@@ -309,6 +312,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("restrictItemIds") Collection<String> restrictItemIds,
             @Param("isWeighedUnset") boolean isWeighedUnset,
             @Param("isWeighed") boolean isWeighed,
+            @Param("priceStatus") String priceStatus,
             Pageable pageable
     );
 

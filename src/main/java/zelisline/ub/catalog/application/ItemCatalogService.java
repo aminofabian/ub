@@ -47,6 +47,7 @@ import zelisline.ub.catalog.api.dto.CatalogListSort;
 import zelisline.ub.catalog.api.dto.CatalogRowType;
 import zelisline.ub.catalog.api.dto.CatalogRowTypeSum;
 import zelisline.ub.catalog.api.dto.CatalogRowTypeCountsResponse;
+import zelisline.ub.catalog.api.dto.PriceStatusCountsResponse;
 import zelisline.ub.sales.application.VariableWeightBarcodeService;
 import zelisline.ub.catalog.api.dto.AttachVariantLineRequest;
 import zelisline.ub.catalog.api.dto.AttachVariantsRequest;
@@ -165,6 +166,7 @@ public class ItemCatalogService {
                 null,
                 false,
                 null,
+                null,
                 pageable);
     }
 
@@ -218,6 +220,7 @@ public class ItemCatalogService {
                 null,
                 null,
                 false,
+                null,
                 null,
                 pageable);
     }
@@ -273,6 +276,7 @@ public class ItemCatalogService {
                 aisleId,
                 aisleUnset,
                 null,
+                null,
                 pageable);
     }
 
@@ -303,9 +307,11 @@ public class ItemCatalogService {
             Boolean isWeighed,
             String aisleId,
             boolean aisleUnset,
+            String priceStatus,
             CatalogListSort listSort,
             Pageable pageable
     ) {
+        final String priceStatusFilter = normalizePriceStatus(priceStatus);
         CatalogListQueryContext ctx = resolveCatalogListQuery(
                 businessId,
                 search,
@@ -396,6 +402,7 @@ public class ItemCatalogService {
                 restrictIds,
                 ctx.isWeighedUnset(),
                 ctx.isWeighed(),
+                priceStatusFilter,
                 fetchPageable);
         if (intelligentSearch) {
             page = rankCatalogSearchPage(businessId, page, ctx.q(), ctx.pageable(), fuzzyToken -> itemRepository.search(
@@ -433,6 +440,7 @@ public class ItemCatalogService {
                     restrictIds,
                     ctx.isWeighedUnset(),
                     ctx.isWeighed(),
+                    priceStatusFilter,
                     PageRequest.of(0, CatalogSearchSupport.CANDIDATE_FETCH_SIZE)));
         }
         List<String> ids = page.getContent().stream().map(Item::getId).toList();
@@ -511,6 +519,146 @@ public class ItemCatalogService {
                     parentName,
                     aisle);
         });
+    }
+
+    @Transactional(readOnly = true)
+    public PriceStatusCountsResponse countPriceStatuses(
+            String businessId,
+            String search,
+            String barcodeExact,
+            String categoryId,
+            boolean includeCategoryDescendants,
+            boolean noBarcode,
+            boolean includeInactive,
+            boolean inactiveOnly,
+            boolean filterNoPrice,
+            boolean filterZeroStock,
+            boolean filterLowStock,
+            CatalogListScope catalogListScope,
+            List<CatalogRowType> catalogRowTypes,
+            String branchIdForStock,
+            String itemTypeId,
+            Collection<String> allowedItemTypeIds,
+            String aisleId,
+            boolean aisleUnset
+    ) {
+        CatalogListQueryContext ctx = resolveCatalogListQuery(
+                businessId,
+                search,
+                barcodeExact,
+                categoryId,
+                includeCategoryDescendants,
+                noBarcode,
+                includeInactive,
+                catalogListScope,
+                catalogRowTypes,
+                null,
+                itemTypeId,
+                allowedItemTypeIds,
+                null,
+                aisleId,
+                aisleUnset,
+                PageRequest.of(0, 1));
+        if (ctx.emptyResult()) {
+            return PriceStatusCountsResponse.zeros();
+        }
+        Collection<String> restrictItemIds = List.of("");
+        boolean restrictItemIdsUnset = true;
+        if (filterZeroStock || filterLowStock) {
+            StockAttentionSnapshot stockAttention = computeStockAttention(
+                    businessId,
+                    branchIdForStock,
+                    ctx,
+                    noBarcode,
+                    filterNoPrice,
+                    inactiveOnly);
+            Set<String> stockFilterIds = new HashSet<>();
+            if (filterZeroStock) {
+                stockFilterIds.addAll(stockAttention.zeroStockIds());
+            }
+            if (filterLowStock) {
+                stockFilterIds.addAll(stockAttention.lowStockIds());
+            }
+            if (stockFilterIds.isEmpty()) {
+                return PriceStatusCountsResponse.zeros();
+            }
+            restrictItemIds = stockFilterIds;
+            restrictItemIdsUnset = false;
+        }
+        BigDecimal marginCap = new BigDecimal("15");
+        String token = dbSearchToken(ctx.q());
+        return new PriceStatusCountsResponse(
+                countPriceStatus(businessId, ctx, token, noBarcode, includeInactive, inactiveOnly, filterNoPrice,
+                        restrictItemIdsUnset, restrictItemIds, marginCap, "MISSING_BUYING"),
+                countPriceStatus(businessId, ctx, token, noBarcode, includeInactive, inactiveOnly, filterNoPrice,
+                        restrictItemIdsUnset, restrictItemIds, marginCap, "MISSING_SELLING"),
+                countPriceStatus(businessId, ctx, token, noBarcode, includeInactive, inactiveOnly, filterNoPrice,
+                        restrictItemIdsUnset, restrictItemIds, marginCap, "BOTH_MISSING"),
+                countPriceStatus(businessId, ctx, token, noBarcode, includeInactive, inactiveOnly, filterNoPrice,
+                        restrictItemIdsUnset, restrictItemIds, marginCap, "BOTH_SET"));
+    }
+
+    private long countPriceStatus(
+            String businessId,
+            CatalogListQueryContext ctx,
+            String token,
+            boolean noBarcode,
+            boolean includeInactive,
+            boolean inactiveOnly,
+            boolean filterNoPrice,
+            boolean restrictItemIdsUnset,
+            Collection<String> restrictItemIds,
+            BigDecimal marginCap,
+            String priceStatus
+    ) {
+        return itemRepository.search(
+                businessId,
+                token,
+                ctx.barcodeExact(),
+                ctx.catUnset(),
+                ctx.categoryIds(),
+                noBarcode,
+                includeInactive,
+                inactiveOnly,
+                ctx.includeAllScopes(),
+                ctx.parentsOnly(),
+                ctx.variantsOnly(),
+                ctx.skusOnly(),
+                ctx.filterByCatalogRowTypes(),
+                ctx.includeParentRows(),
+                ctx.includeVariantRows(),
+                ctx.includeStandaloneRows(),
+                ctx.excludeLinkedSupplierId(),
+                ctx.squashParentGroupsForSearch(),
+                ctx.itemTypeUnset(),
+                ctx.itemTypeId(),
+                ctx.restrictByAllowedItemTypes(),
+                ctx.allowedItemTypeIds(),
+                ctx.aisleFilterUnset(),
+                ctx.filterAisleUnset(),
+                ctx.aisleId(),
+                filterNoPrice,
+                false,
+                false,
+                false,
+                marginCap,
+                restrictItemIdsUnset,
+                restrictItemIds,
+                ctx.isWeighedUnset(),
+                ctx.isWeighed(),
+                priceStatus,
+                PageRequest.of(0, 1)).getTotalElements();
+    }
+
+    private static String normalizePriceStatus(String priceStatus) {
+        if (priceStatus == null || priceStatus.isBlank()) {
+            return "ALL";
+        }
+        String status = priceStatus.trim().toUpperCase(Locale.ROOT);
+        return switch (status) {
+            case "ALL", "MISSING_BUYING", "MISSING_SELLING", "BOTH_MISSING", "BOTH_SET" -> status;
+            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown price status");
+        };
     }
 
     @Transactional(readOnly = true)

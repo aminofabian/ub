@@ -167,6 +167,7 @@ public class ItemCatalogService {
                 false,
                 null,
                 null,
+                null,
                 pageable);
     }
 
@@ -220,6 +221,7 @@ public class ItemCatalogService {
                 null,
                 null,
                 false,
+                null,
                 null,
                 null,
                 pageable);
@@ -277,6 +279,7 @@ public class ItemCatalogService {
                 aisleUnset,
                 null,
                 null,
+                null,
                 pageable);
     }
 
@@ -309,6 +312,7 @@ public class ItemCatalogService {
             boolean aisleUnset,
             String priceStatus,
             CatalogListSort listSort,
+            String linkedSupplierId,
             Pageable pageable
     ) {
         final String priceStatusFilter = normalizePriceStatus(priceStatus);
@@ -323,6 +327,7 @@ public class ItemCatalogService {
                 catalogListScope,
                 catalogRowTypes,
                 excludeLinkedSupplierId,
+                linkedSupplierId,
                 itemTypeId,
                 allowedItemTypeIds,
                 isWeighed,
@@ -385,6 +390,7 @@ public class ItemCatalogService {
                 ctx.includeVariantRows(),
                 ctx.includeStandaloneRows(),
                 ctx.excludeLinkedSupplierId(),
+                ctx.linkedSupplierId(),
                 ctx.squashParentGroupsForSearch(),
                 ctx.itemTypeUnset(),
                 ctx.itemTypeId(),
@@ -423,6 +429,7 @@ public class ItemCatalogService {
                     ctx.includeVariantRows(),
                     ctx.includeStandaloneRows(),
                     ctx.excludeLinkedSupplierId(),
+                    ctx.linkedSupplierId(),
                     ctx.squashParentGroupsForSearch(),
                     ctx.itemTypeUnset(),
                     ctx.itemTypeId(),
@@ -534,6 +541,12 @@ public class ItemCatalogService {
             boolean filterNoPrice,
             boolean filterZeroStock,
             boolean filterLowStock,
+            boolean filterInStock,
+            boolean filterNoBuyingPrice,
+            boolean filterPriceLoss,
+            boolean filterPoorMargin,
+            BigDecimal poorMarginMaxPct,
+            String linkedSupplierId,
             CatalogListScope catalogListScope,
             List<CatalogRowType> catalogRowTypes,
             String branchIdForStock,
@@ -553,6 +566,7 @@ public class ItemCatalogService {
                 catalogListScope,
                 catalogRowTypes,
                 null,
+                linkedSupplierId,
                 itemTypeId,
                 allowedItemTypeIds,
                 null,
@@ -564,7 +578,7 @@ public class ItemCatalogService {
         }
         Collection<String> restrictItemIds = List.of("");
         boolean restrictItemIdsUnset = true;
-        if (filterZeroStock || filterLowStock) {
+        if (filterZeroStock || filterLowStock || filterInStock) {
             StockAttentionSnapshot stockAttention = computeStockAttention(
                     businessId,
                     branchIdForStock,
@@ -579,22 +593,29 @@ public class ItemCatalogService {
             if (filterLowStock) {
                 stockFilterIds.addAll(stockAttention.lowStockIds());
             }
+            if (filterInStock) {
+                stockFilterIds.addAll(stockAttention.inStockIds());
+            }
             if (stockFilterIds.isEmpty()) {
                 return PriceStatusCountsResponse.zeros();
             }
             restrictItemIds = stockFilterIds;
             restrictItemIdsUnset = false;
         }
-        BigDecimal marginCap = new BigDecimal("15");
+        BigDecimal marginCap = resolvePoorMarginMaxPct(poorMarginMaxPct);
         String token = dbSearchToken(ctx.q());
         return new PriceStatusCountsResponse(
                 countPriceStatus(businessId, ctx, token, noBarcode, includeInactive, inactiveOnly, filterNoPrice,
+                        filterNoBuyingPrice, filterPriceLoss, filterPoorMargin,
                         restrictItemIdsUnset, restrictItemIds, marginCap, "MISSING_BUYING"),
                 countPriceStatus(businessId, ctx, token, noBarcode, includeInactive, inactiveOnly, filterNoPrice,
+                        filterNoBuyingPrice, filterPriceLoss, filterPoorMargin,
                         restrictItemIdsUnset, restrictItemIds, marginCap, "MISSING_SELLING"),
                 countPriceStatus(businessId, ctx, token, noBarcode, includeInactive, inactiveOnly, filterNoPrice,
+                        filterNoBuyingPrice, filterPriceLoss, filterPoorMargin,
                         restrictItemIdsUnset, restrictItemIds, marginCap, "BOTH_MISSING"),
                 countPriceStatus(businessId, ctx, token, noBarcode, includeInactive, inactiveOnly, filterNoPrice,
+                        filterNoBuyingPrice, filterPriceLoss, filterPoorMargin,
                         restrictItemIdsUnset, restrictItemIds, marginCap, "BOTH_SET"));
     }
 
@@ -606,6 +627,9 @@ public class ItemCatalogService {
             boolean includeInactive,
             boolean inactiveOnly,
             boolean filterNoPrice,
+            boolean filterNoBuyingPrice,
+            boolean filterPriceLoss,
+            boolean filterPoorMargin,
             boolean restrictItemIdsUnset,
             Collection<String> restrictItemIds,
             BigDecimal marginCap,
@@ -629,6 +653,7 @@ public class ItemCatalogService {
                 ctx.includeVariantRows(),
                 ctx.includeStandaloneRows(),
                 ctx.excludeLinkedSupplierId(),
+                ctx.linkedSupplierId(),
                 ctx.squashParentGroupsForSearch(),
                 ctx.itemTypeUnset(),
                 ctx.itemTypeId(),
@@ -638,9 +663,9 @@ public class ItemCatalogService {
                 ctx.filterAisleUnset(),
                 ctx.aisleId(),
                 filterNoPrice,
-                false,
-                false,
-                false,
+                filterNoBuyingPrice,
+                filterPriceLoss,
+                filterPoorMargin,
                 marginCap,
                 restrictItemIdsUnset,
                 restrictItemIds,
@@ -689,6 +714,7 @@ public class ItemCatalogService {
                 catalogListScope,
                 null,
                 excludeLinkedSupplierId,
+                null,
                 itemTypeId,
                 allowedItemTypeIds,
                 null,
@@ -2358,6 +2384,7 @@ public class ItemCatalogService {
             boolean includeVariantRows,
             boolean includeStandaloneRows,
             String excludeLinkedSupplierId,
+            String linkedSupplierId,
             boolean squashParentGroupsForSearch,
             boolean itemTypeUnset,
             String itemTypeId,
@@ -2384,6 +2411,7 @@ public class ItemCatalogService {
             CatalogListScope catalogListScope,
             List<CatalogRowType> catalogRowTypes,
             String excludeLinkedSupplierId,
+            String linkedSupplierId,
             String itemTypeId,
             Collection<String> allowedItemTypeIds,
             Boolean isWeighed,
@@ -2402,6 +2430,7 @@ public class ItemCatalogService {
                 catalogListScope,
                 catalogRowTypes,
                 excludeLinkedSupplierId,
+                linkedSupplierId,
                 itemTypeId,
                 allowedItemTypeIds,
                 isWeighed,
@@ -2422,6 +2451,7 @@ public class ItemCatalogService {
             CatalogListScope catalogListScope,
             List<CatalogRowType> catalogRowTypes,
             String excludeLinkedSupplierId,
+            String linkedSupplierId,
             String itemTypeId,
             Collection<String> allowedItemTypeIds,
             Boolean isWeighed,
@@ -2471,6 +2501,7 @@ public class ItemCatalogService {
                         includeAllScopes, parentsOnly, variantsOnly, skusOnly,
                         filterByCatalogRowTypes, includeParentRows, includeVariantRows, includeStandaloneRows,
                         blankToNull(excludeLinkedSupplierId),
+                        null,
                         includeAllScopes && q != null,
                         true, "", false, List.of(""),
                         isWeighed == null, isWeighed != null && isWeighed,
@@ -2491,6 +2522,7 @@ public class ItemCatalogService {
                     includeAllScopes, parentsOnly, variantsOnly, skusOnly,
                     filterByCatalogRowTypes, includeParentRows, includeVariantRows, includeStandaloneRows,
                     blankToNull(excludeLinkedSupplierId),
+                    blankToNull(linkedSupplierId),
                     squashParentGroupsForSearch,
                     itemTypeUnset, itemType != null ? itemType : "",
                     restrictByAllowedItemTypes,
@@ -2506,6 +2538,7 @@ public class ItemCatalogService {
                 includeAllScopes, parentsOnly, variantsOnly, skusOnly,
                 filterByCatalogRowTypes, includeParentRows, includeVariantRows, includeStandaloneRows,
                 blankToNull(excludeLinkedSupplierId),
+                blankToNull(linkedSupplierId),
                 squashParentGroupsForSearch,
                 itemTypeUnset, itemType != null ? itemType : "",
                 restrictByAllowedItemTypes, safeAllowedItemTypes,
@@ -2750,6 +2783,7 @@ public class ItemCatalogService {
                 ctx.includeVariantRows(),
                 ctx.includeStandaloneRows(),
                 ctx.excludeLinkedSupplierId(),
+                ctx.linkedSupplierId(),
                 ctx.squashParentGroupsForSearch(),
                 ctx.itemTypeUnset(),
                 ctx.itemTypeId(),

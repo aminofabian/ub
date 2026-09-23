@@ -283,17 +283,18 @@ public class BulkPriceService {
                 request.noPrice(),
                 request.zeroStock(),
                 request.lowStock(),
-                false,
+                Boolean.TRUE.equals(request.inStock()),
                 request.inactiveOnly(),
-                false,
-                false,
-                false,
-                null,
+                Boolean.TRUE.equals(request.noBuyingPrice()),
+                Boolean.TRUE.equals(request.priceLoss()),
+                Boolean.TRUE.equals(request.poorMargin()),
+                request.poorMarginMaxPct(),
                 null,
                 request.aisleId(),
                 request.aisleUnset(),
                 priceStatus,
                 null,
+                request.linkedSupplierId(),
                 PageRequest.of(page, PAGE_SIZE));
     }
 

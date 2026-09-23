@@ -231,6 +231,16 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                          and s.businessId = i.businessId
                          and sp.deletedAt is null
                     ))
+               and (:linkedSupplierId is null
+                    or exists (
+                      select 1 from SupplierProduct spIn
+                       inner join Supplier sIn on sIn.id = spIn.supplierId
+                       where sIn.businessId = i.businessId
+                         and spIn.supplierId = :linkedSupplierId
+                         and spIn.deletedAt is null
+                         and spIn.active = true
+                         and (spIn.itemId = i.id or spIn.itemId = i.variantOfItemId)
+                    ))
                and ((:squashParentGroupsForSearch = false)
                     or (i.variantOfItemId is not null
                         or i.sellable = true
@@ -295,6 +305,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("includeVariantRows") boolean includeVariantRows,
             @Param("includeStandaloneRows") boolean includeStandaloneRows,
             @Param("excludeLinkedSupplierId") String excludeLinkedSupplierId,
+            @Param("linkedSupplierId") String linkedSupplierId,
             @Param("squashParentGroupsForSearch") boolean squashParentGroupsForSearch,
             @Param("itemTypeUnset") boolean itemTypeUnset,
             @Param("itemTypeId") String itemTypeId,
@@ -705,6 +716,16 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                          and s.businessId = i.businessId
                          and sp.deletedAt is null
                     ))
+               and (:linkedSupplierId is null
+                    or exists (
+                      select 1 from SupplierProduct spIn
+                       inner join Supplier sIn on sIn.id = spIn.supplierId
+                       where sIn.businessId = i.businessId
+                         and spIn.supplierId = :linkedSupplierId
+                         and spIn.deletedAt is null
+                         and spIn.active = true
+                         and (spIn.itemId = i.id or spIn.itemId = i.variantOfItemId)
+                    ))
                and ((:squashParentGroupsForSearch = false)
                     or (i.variantOfItemId is not null
                         or i.sellable = true
@@ -739,6 +760,7 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("includeVariantRows") boolean includeVariantRows,
             @Param("includeStandaloneRows") boolean includeStandaloneRows,
             @Param("excludeLinkedSupplierId") String excludeLinkedSupplierId,
+            @Param("linkedSupplierId") String linkedSupplierId,
             @Param("squashParentGroupsForSearch") boolean squashParentGroupsForSearch,
             @Param("itemTypeUnset") boolean itemTypeUnset,
             @Param("itemTypeId") String itemTypeId,

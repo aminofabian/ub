@@ -1,5 +1,6 @@
 package zelisline.ub.catalog.api.dto;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 import jakarta.validation.Valid;
@@ -22,10 +23,16 @@ public record BulkPriceRequest(
         Boolean noPrice,
         Boolean zeroStock,
         Boolean lowStock,
+        Boolean inStock,
+        Boolean noBuyingPrice,
+        Boolean priceLoss,
+        Boolean poorMargin,
+        BigDecimal poorMarginMaxPct,
         CatalogListScope catalogScope,
         List<CatalogRowType> catalogRowTypes,
         String branchId,
         String itemTypeId,
+        String linkedSupplierId,
         String aisleId,
         Boolean aisleUnset,
         PriceStatusFilter priceStatus,
@@ -43,6 +50,10 @@ public record BulkPriceRequest(
         noPrice = Boolean.TRUE.equals(noPrice);
         zeroStock = Boolean.TRUE.equals(zeroStock);
         lowStock = Boolean.TRUE.equals(lowStock);
+        inStock = Boolean.TRUE.equals(inStock);
+        noBuyingPrice = Boolean.TRUE.equals(noBuyingPrice);
+        priceLoss = Boolean.TRUE.equals(priceLoss);
+        poorMargin = Boolean.TRUE.equals(poorMargin);
         aisleUnset = Boolean.TRUE.equals(aisleUnset);
         acknowledgeLosses = Boolean.TRUE.equals(acknowledgeLosses);
     }

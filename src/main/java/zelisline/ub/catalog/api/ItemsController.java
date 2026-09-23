@@ -120,6 +120,7 @@ public class ItemsController {
             @RequestParam(required = false) Boolean isWeighed,
             @RequestParam(required = false) CatalogListSort listSort,
             @RequestParam(required = false, defaultValue = "ALL") PriceStatusFilter priceStatus,
+            @RequestParam(required = false) String linkedSupplierId,
             Pageable pageable,
             HttpServletRequest request
     ) {
@@ -153,6 +154,7 @@ public class ItemsController {
                 aisleUnset,
                 priceStatus.name(),
                 listSort,
+                linkedSupplierId,
                 pageable
         );
     }
@@ -170,6 +172,12 @@ public class ItemsController {
             @RequestParam(required = false, defaultValue = "false") boolean noPrice,
             @RequestParam(required = false, defaultValue = "false") boolean zeroStock,
             @RequestParam(required = false, defaultValue = "false") boolean lowStock,
+            @RequestParam(required = false, defaultValue = "false") boolean inStock,
+            @RequestParam(required = false, defaultValue = "false") boolean noBuyingPrice,
+            @RequestParam(required = false, defaultValue = "false") boolean priceLoss,
+            @RequestParam(required = false, defaultValue = "false") boolean poorMargin,
+            @RequestParam(required = false) java.math.BigDecimal poorMarginMaxPct,
+            @RequestParam(required = false) String linkedSupplierId,
             @RequestParam(required = false, defaultValue = "ALL") CatalogListScope catalogScope,
             @RequestParam(required = false) List<CatalogRowType> catalogRowTypes,
             @RequestParam(required = false) String branchId,
@@ -192,6 +200,12 @@ public class ItemsController {
                 noPrice,
                 zeroStock,
                 lowStock,
+                inStock,
+                noBuyingPrice,
+                priceLoss,
+                poorMargin,
+                poorMarginMaxPct,
+                linkedSupplierId,
                 catalogScope,
                 catalogRowTypes,
                 branchId,

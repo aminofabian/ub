@@ -301,6 +301,11 @@ public class PublicMarketplaceSearchService {
         if ((description == null || description.isBlank()) && businessName != null) {
             description = "Supplier listed by " + businessName;
         }
+        String contactPhone = primary != null ? blankToNull(primary.getPhone()) : null;
+        if (contactPhone == null) {
+            contactPhone = blankToNull(supplier.getPayoutPhone());
+        }
+        String contactEmail = primary != null ? blankToNull(primary.getEmail()) : null;
 
         return new MarketplaceSupplierDetailResponse(
                 supplier.getId(),
@@ -312,8 +317,8 @@ public class PublicMarketplaceSearchService {
                 loc.primary(),
                 loc.locations(),
                 supplier.getStatus(),
-                primary != null ? blankToNull(primary.getEmail()) : null,
-                primary != null ? blankToNull(primary.getPhone()) : null,
+                contactEmail,
+                contactPhone,
                 contacts,
                 blankToNull(supplier.getPaymentMethodPreferred()),
                 blankToNull(supplier.getPaymentDetails()),
@@ -338,6 +343,11 @@ public class PublicMarketplaceSearchService {
                 Integer.MAX_VALUE,
                 supplierProductRepository.countActivePublicForSupplier(supplier.getId()));
         String slug = marketplaceSlugService.supplierSlug(supplier);
+        String contactPhone = primary != null ? blankToNull(primary.getPhone()) : null;
+        if (contactPhone == null) {
+            contactPhone = blankToNull(supplier.getPayoutPhone());
+        }
+        String contactEmail = primary != null ? blankToNull(primary.getEmail()) : null;
 
         return new PublicMarketplaceSupplierSearchRow(
                 supplier.getId(),
@@ -350,8 +360,8 @@ public class PublicMarketplaceSearchService {
                 loc.locations(),
                 productCount,
                 primary != null ? blankToNull(primary.getName()) : null,
-                primary != null ? blankToNull(primary.getPhone()) : null,
-                primary != null ? blankToNull(primary.getEmail()) : null,
+                contactPhone,
+                contactEmail,
                 blankToNull(supplier.getPaymentMethodPreferred()),
                 blankToNull(supplier.getPayoutType()),
                 loc.locations(),

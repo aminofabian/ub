@@ -136,6 +136,7 @@ public class PricingService {
                 }
                 existing.setSetBy(userId);
                 sellingPriceRepository.save(existing);
+                syncCatalogShelfFromSellingPrice(businessId, req.itemId(), existing.getPrice());
                 eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.PriceChangedEvent(
                         businessId, branchId, req.itemId(), itemName(businessId, req.itemId()),
                         oldPrice, req.price()));
@@ -164,6 +165,7 @@ public class PricingService {
         row.setSetBy(userId);
         row.setNotes(req.notes());
         sellingPriceRepository.save(row);
+        syncCatalogShelfFromSellingPrice(businessId, req.itemId(), row.getPrice());
         BigDecimal prior = priorForEvent != null ? priorForEvent : BigDecimal.ZERO;
         eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.PriceChangedEvent(
                 businessId, branchId, req.itemId(), itemName(businessId, req.itemId()),
@@ -592,6 +594,29 @@ public class PricingService {
     private void requireItem(String businessId, String itemId) {
         itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
+    }
+
+    /**
+     * Keep catalog {@code bundlePrice} (default shelf / sell) aligned with the latest posted
+     * selling price so supplier links, product list, and POS fallbacks all show the new price.
+     */
+    private void syncCatalogShelfFromSellingPrice(
+            String businessId,
+            String itemId,
+            BigDecimal price
+    ) {
+        if (price == null || price.signum() <= 0) {
+            return;
+        }
+        BigDecimal shelf = price.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId).ifPresent(item -> {
+            BigDecimal current = item.getBundlePrice();
+            if (current != null && current.compareTo(shelf) == 0) {
+                return;
+            }
+            item.setBundlePrice(shelf);
+            itemRepository.save(item);
+        });
     }
 
     private void requireBranch(String businessId, String branchId) {

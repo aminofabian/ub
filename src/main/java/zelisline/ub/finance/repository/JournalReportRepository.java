@@ -149,6 +149,36 @@ public interface JournalReportRepository extends JpaRepository<JournalLine, Stri
         long getSaleCount();
     }
 
+    /**
+     * Gross profit by sale date for the pocketing calendar. Uses the same
+     * {@code cast(sold_at as date)} window as {@link #sumSalesForPeriod}.
+     */
+    @Query(value = """
+            select cast(s.sold_at as date)          as day,
+                   coalesce(sum(si.profit), 0)       as profit,
+                   count(distinct s.id)              as saleCount
+              from sales s
+              join sale_items si on si.sale_id = s.id
+             where s.business_id = :businessId
+               and s.status = 'completed'
+               and cast(s.sold_at as date) >= :from
+               and cast(s.sold_at as date) <= :to
+               and (:branchId is null or s.branch_id = :branchId)
+             group by cast(s.sold_at as date)
+            """, nativeQuery = true)
+    List<DailyProfitRow> sumProfitByDay(
+            @Param("businessId") String businessId,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to,
+            @Param("branchId") String branchId
+    );
+
+    interface DailyProfitRow {
+        Object getDay();
+        BigDecimal getProfit();
+        Number getSaleCount();
+    }
+
     @Query(value = """
             select count(*)
               from shifts s

@@ -71,6 +71,9 @@ public class ProfitPocket {
     @Column(name = "send_money_message", length = 500)
     private String sendMoneyMessage;
 
+    @Column(name = "note", length = 500)
+    private String note;
+
     @Column(name = "created_by", nullable = false, length = 36)
     private String createdBy;
 

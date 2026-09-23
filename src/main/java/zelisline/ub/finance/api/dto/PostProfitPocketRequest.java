@@ -6,6 +6,7 @@ import java.util.List;
 
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 
 public record PostProfitPocketRequest(
         @NotNull LocalDate periodFrom,
@@ -16,6 +17,7 @@ public record PostProfitPocketRequest(
         /** cash | mpesa_manual | bank — which asset account to credit. */
         String fundingMethod,
         /** Soft warnings the client showed (e.g. negative_gp, above_surplus). */
-        List<String> acknowledgedWarnings
+        List<String> acknowledgedWarnings,
+        @Size(max = 500) String note
 ) {
 }

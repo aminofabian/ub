@@ -15,6 +15,7 @@ public record ProfitPocketResponse(
         /** pending | success | failed | skipped | null */
         String sendMoneyStatus,
         String kopokopoSendMoneyId,
-        String sendMoneyMessage
+        String sendMoneyMessage,
+        String note
 ) {
 }

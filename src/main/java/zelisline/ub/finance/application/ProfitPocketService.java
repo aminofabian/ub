@@ -81,6 +81,7 @@ public class ProfitPocketService {
     private final PaymentGatewayStkService paymentGatewayStkService;
     private final GatewayStkPushService gatewayStkPushService;
     private final ObjectProvider<PlatformDarajaSettingsService> platformDarajaSettingsService;
+    private final ProfitPocketCalendarService profitPocketCalendarService;
 
     @Value("${app.public.api-base-url:http://localhost:5050}")
     private String publicApiBaseUrl;
@@ -222,9 +223,11 @@ public class ProfitPocketService {
         row.setJournalEntryId(jeId);
         row.setCreatedBy(userId);
         row.setCreatedAt(Instant.now());
+        row.setNote(blankToNull(req.note()));
 
         maybeInitiateSendMoney(businessId, settings, row);
         profitPocketRepository.save(row);
+        profitPocketCalendarService.syncCashPocket(businessId, userId, row);
 
         return toResponse(row, ProfitPocketSettingsService.summarize(settings));
     }
@@ -706,7 +709,8 @@ public class ProfitPocketService {
                 row.getCreatedAt(),
                 row.getSendMoneyStatus(),
                 row.getKopokopoSendMoneyId(),
-                row.getSendMoneyMessage());
+                row.getSendMoneyMessage(),
+                row.getNote());
     }
 
     private String summaryFromSnapshot(String json) {

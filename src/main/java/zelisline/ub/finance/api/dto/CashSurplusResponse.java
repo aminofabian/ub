@@ -21,6 +21,10 @@ public record CashSurplusResponse(
         /** Applied jar % (1–100). */
         BigDecimal profitJarPct,
         /** Cash + M-Pesa − float (liquidity cap). Suggested pocket uses min(profit, this) × jar %. */
-        BigDecimal rawSurplus
+        BigDecimal rawSurplus,
+        /** Owner drawings already posted for this window. */
+        BigDecimal alreadyPocketed,
+        /** Gross profit still not pocketed. Zero when profit is gone or already taken. */
+        BigDecimal profitBalance
 ) {
 }

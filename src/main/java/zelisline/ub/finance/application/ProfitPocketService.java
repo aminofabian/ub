@@ -139,6 +139,11 @@ public class ProfitPocketService {
                 .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
 
         long openShifts = journalReportRepository.countOpenShifts(businessId, resolvedBranch);
+        BigDecimal alreadyPocketed = alreadyPocketed(businessId, from, to, resolvedBranch);
+        BigDecimal profitBalance = profitBase.subtract(alreadyPocketed).setScale(2, RoundingMode.HALF_UP);
+        if (profitBalance.signum() < 0) {
+            profitBalance = ZERO;
+        }
 
         return new CashSurplusResponse(
                 from,
@@ -156,7 +161,9 @@ public class ProfitPocketService {
                 settings.collidesWithCustomerPay(),
                 settings.customerPayCollisionMessage(),
                 jarPct,
-                rawSurplus);
+                rawSurplus,
+                alreadyPocketed,
+                profitBalance);
     }
 
     @Transactional
@@ -771,6 +778,23 @@ public class ProfitPocketService {
             case FinanceConstants.EXPENSE_PAY_METHOD_BANK -> LedgerAccountCodes.BANK_ACCOUNT;
             default -> LedgerAccountCodes.OPERATING_CASH;
         };
+    }
+
+    private BigDecimal alreadyPocketed(String businessId, LocalDate from, LocalDate to, String branchId) {
+        BigDecimal total = ZERO;
+        for (zelisline.ub.finance.domain.ProfitPocket pocket :
+                profitPocketRepository.findOverlappingPeriod(businessId, from, to)) {
+            if (branchId != null && !branchId.equals(pocket.getBranchId())) {
+                continue;
+            }
+            LocalDate start = pocket.getPeriodFrom().isBefore(from) ? from : pocket.getPeriodFrom();
+            LocalDate end = pocket.getPeriodTo().isAfter(to) ? to : pocket.getPeriodTo();
+            for (LocalDate day = start; !day.isAfter(end); day = day.plusDays(1)) {
+                total = total.add(ProfitPocketCalendarMath.allocate(
+                        pocket.getAmount(), pocket.getPeriodFrom(), pocket.getPeriodTo(), day));
+            }
+        }
+        return money(total);
     }
 
     private static BigDecimal money(BigDecimal v) {

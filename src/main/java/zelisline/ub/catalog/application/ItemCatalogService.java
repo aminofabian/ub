@@ -452,6 +452,7 @@ public class ItemCatalogService {
         }
         List<String> ids = page.getContent().stream().map(Item::getId).toList();
         Map<String, String> thumbs = firstGalleryImageUrlByItemId(ids);
+        String stockBranch = blankToNull(branchIdForStock);
         Map<String, BigDecimal> sellingByItemId = pricingService.getCurrentOpenSellingPricesForItems(
                 businessId, stockBranch, ids);
         Set<String> catIds = page.getContent().stream()
@@ -474,7 +475,6 @@ public class ItemCatalogService {
         Set<String> parentsWithChildren = parentIdsOnPage.isEmpty()
                 ? Set.of()
                 : new HashSet<>(itemRepository.findParentIdsHavingVariants(businessId, parentIdsOnPage));
-        String stockBranch = blankToNull(branchIdForStock);
         Map<String, BigDecimal> stockByItemId = Map.of();
         if (stockBranch != null) {
             branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(stockBranch, businessId)

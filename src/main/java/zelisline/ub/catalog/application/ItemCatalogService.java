@@ -452,6 +452,8 @@ public class ItemCatalogService {
         }
         List<String> ids = page.getContent().stream().map(Item::getId).toList();
         Map<String, String> thumbs = firstGalleryImageUrlByItemId(ids);
+        Map<String, BigDecimal> sellingByItemId = pricingService.getCurrentOpenSellingPricesForItems(
+                businessId, stockBranch, ids);
         Set<String> catIds = page.getContent().stream()
                 .map(Item::getCategoryId)
                 .filter(id -> id != null && !id.isBlank())
@@ -524,7 +526,8 @@ public class ItemCatalogService {
                     displayStock,
                     baseStock,
                     parentName,
-                    aisle);
+                    aisle,
+                    sellingByItemId.get(item.getId()));
         });
     }
 
@@ -856,6 +859,8 @@ public class ItemCatalogService {
             }
             Map<String, BigDecimal> variantStock = branchStockMap(businessId, stockBranch, variantStockIds);
             Map<String, String> vthumbs = firstGalleryImageUrlByItemId(variantIds);
+            Map<String, BigDecimal> variantSelling = pricingService.getCurrentOpenSellingPricesForItems(
+                    businessId, stockBranch, variantIds);
             List<Item> forCat = new ArrayList<>();
             forCat.add(item);
             forCat.addAll(variantRows);
@@ -879,7 +884,8 @@ public class ItemCatalogService {
                                 display,
                                 base,
                                 item.getName(),
-                                null);
+                                null,
+                                variantSelling.get(v.getId()));
                     })
                     .toList();
         }
@@ -2052,6 +2058,8 @@ public class ItemCatalogService {
                     businessId, item.getId());
             List<String> variantIds = variantRows.stream().map(Item::getId).toList();
             Map<String, String> vthumbs = firstGalleryImageUrlByItemId(variantIds);
+            Map<String, BigDecimal> variantSelling = pricingService.getCurrentOpenSellingPricesForItems(
+                    businessId, null, variantIds);
             List<Item> forCat = new ArrayList<>();
             forCat.add(item);
             forCat.addAll(variantRows);
@@ -2065,7 +2073,8 @@ public class ItemCatalogService {
                             null,
                             null,
                             item.getName(),
-                            null))
+                            null,
+                            variantSelling.get(v.getId())))
                     .toList();
         }
         return toResponse(item, variants, null, null);
@@ -2170,8 +2179,13 @@ public class ItemCatalogService {
             BigDecimal stockQty,
             BigDecimal baseStockQty,
             String parentName,
-            Aisle aisle
+            Aisle aisle,
+            BigDecimal sellingPrice
     ) {
+        BigDecimal bundle = i.getBundlePrice();
+        BigDecimal effectiveSell = sellingPrice != null && sellingPrice.signum() > 0
+                ? sellingPrice
+                : (bundle != null && bundle.signum() > 0 ? bundle : null);
         return new ItemSummaryResponse(
                 i.getId(),
                 i.getSku(),
@@ -2193,8 +2207,9 @@ public class ItemCatalogService {
                 baseStockQty,
                 i.getBrand(),
                 i.getSize(),
-                i.getBundlePrice(),
+                bundle,
                 i.getBuyingPrice(),
+                effectiveSell,
                 i.getItemTypeId(),
                 aisle != null ? aisle.getId() : null,
                 aisle != null ? aisle.getCode() : null,

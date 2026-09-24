@@ -45,6 +45,11 @@ public record ItemSummaryResponse(
         BigDecimal bundlePrice,
         /** Reference buying / cost price on the item record. */
         BigDecimal buyingPrice,
+        /**
+         * Effective shelf sell price for list UIs: open {@code SellingPrice} row when present,
+         * otherwise {@link #bundlePrice}. Matches price-cleanup “selling set” semantics.
+         */
+        BigDecimal sellingPrice,
         /** Department / item type ID. */
         String itemTypeId,
         /** Optional shelf zone (aisle) ID. */

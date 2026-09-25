@@ -11,6 +11,10 @@ public record MarginLeakRow(
         BigDecimal netRevenue,
         BigDecimal netProfit,
         BigDecimal shareOfLossPct,
-        List<String> reasons
+        List<String> reasons,
+        /** Base units removed per pack sold. Null when this SKU is not a pack. */
+        BigDecimal unitsPerPack,
+        /** Product whose stock the pack draws from. Null when this SKU is not a pack. */
+        String stockSourceName
 ) {
 }

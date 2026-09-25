@@ -3,7 +3,9 @@ package zelisline.ub.storefront.application;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -73,20 +75,67 @@ public class WhatsAppOrderExpiryService {
      */
     @Transactional
     public void releaseStock(WebOrder order) {
+        releaseOutstandingStock(
+                order,
+                InventoryConstants.MOVEMENT_WEB_ORDER_EXPIRY,
+                "WhatsApp order expired — stock released");
+    }
+
+    /**
+     * Put back only the quantity still held for this order. A later void after
+     * expiry (or a second release) must not add the same units twice.
+     */
+    @Transactional
+    public void releaseStockForVoid(WebOrder order) {
+        releaseOutstandingStock(
+                order,
+                InventoryConstants.MOVEMENT_WEB_ORDER_VOID,
+                "Web order voided — stock released");
+    }
+
+    private void releaseOutstandingStock(WebOrder order, String movementType, String notes) {
         List<StockMovement> movements = stockMovementRepository
                 .findByBusinessIdAndReferenceTypeAndReferenceId(
                         order.getBusinessId(),
                         SalesConstants.STOCK_REFERENCE_TYPE_WEB_ORDER,
-                        order.getId())
-                .stream()
-                .filter(m -> InventoryConstants.MOVEMENT_SALE.equals(m.getMovementType()))
-                .toList();
+                        order.getId());
+        Map<String, BigDecimal> stillHeld = new HashMap<>();
+        Map<String, BigDecimal> unitCost = new HashMap<>();
+        Map<String, String> itemIds = new HashMap<>();
+        Map<String, String> batchIds = new HashMap<>();
         for (StockMovement movement : movements) {
-            BigDecimal qtyBack = movement.getQuantityDelta().abs();
-            Item item = itemRepository
-                    .findByIdAndBusinessIdAndDeletedAtIsNull(movement.getItemId(), order.getBusinessId())
-                    .orElse(null);
-            InventoryBatch batch = inventoryBatchRepository.findById(movement.getBatchId()).orElse(null);
+            if (movement.getQuantityDelta() == null) {
+                continue;
+            }
+            String key = movement.getItemId() + "|" + movement.getBatchId();
+            BigDecimal qty = movement.getQuantityDelta().abs();
+            String type = movement.getMovementType();
+            if (InventoryConstants.MOVEMENT_SALE.equals(type)) {
+                stillHeld.merge(key, qty, BigDecimal::add);
+                itemIds.putIfAbsent(key, movement.getItemId());
+                batchIds.putIfAbsent(key, movement.getBatchId());
+                if (movement.getUnitCost() != null) {
+                    unitCost.putIfAbsent(key, movement.getUnitCost());
+                }
+            } else if (isStockRelease(type)) {
+                stillHeld.merge(key, qty.negate(), BigDecimal::add);
+            }
+        }
+        for (Map.Entry<String, BigDecimal> entry : stillHeld.entrySet()) {
+            BigDecimal qtyBack = entry.getValue();
+            if (qtyBack.signum() <= 0) {
+                continue;
+            }
+            String itemId = itemIds.get(entry.getKey());
+            String batchId = batchIds.get(entry.getKey());
+            Item item = itemId == null
+                    ? null
+                    : itemRepository
+                            .findByIdAndBusinessIdAndDeletedAtIsNull(itemId, order.getBusinessId())
+                            .orElse(null);
+            InventoryBatch batch = batchId == null
+                    ? null
+                    : inventoryBatchRepository.findById(batchId).orElse(null);
             if (item != null) {
                 item.setCurrentStock(round(item.getCurrentStock().add(qtyBack)));
                 itemRepository.save(item);
@@ -98,16 +147,22 @@ public class WhatsAppOrderExpiryService {
             StockMovement release = new StockMovement();
             release.setBusinessId(order.getBusinessId());
             release.setBranchId(order.getCatalogBranchId());
-            release.setItemId(movement.getItemId());
-            release.setBatchId(movement.getBatchId());
-            release.setMovementType(InventoryConstants.MOVEMENT_WEB_ORDER_EXPIRY);
+            release.setItemId(itemId);
+            release.setBatchId(batchId);
+            release.setMovementType(movementType);
             release.setReferenceType(SalesConstants.STOCK_REFERENCE_TYPE_WEB_ORDER);
             release.setReferenceId(order.getId());
             release.setQuantityDelta(qtyBack);
-            release.setUnitCost(movement.getUnitCost());
-            release.setNotes("WhatsApp order expired — stock released");
+            release.setUnitCost(unitCost.get(entry.getKey()));
+            release.setNotes(notes);
             stockMovementRepository.save(release);
         }
+    }
+
+    private static boolean isStockRelease(String movementType) {
+        return InventoryConstants.MOVEMENT_WEB_ORDER_EXPIRY.equals(movementType)
+                || InventoryConstants.MOVEMENT_WEB_ORDER_VOID.equals(movementType)
+                || InventoryConstants.MOVEMENT_SALE_VOID.equals(movementType);
     }
 
     /**

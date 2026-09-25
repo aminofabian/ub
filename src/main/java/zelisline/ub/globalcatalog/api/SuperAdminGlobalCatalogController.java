@@ -49,6 +49,7 @@ import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductSup
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PromoteRequest;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PromoteResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PublishProductsRequest;
+import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PublishAllDraftsResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PublishProductsResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PurgeCatalogRequest;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PurgeCatalogResponse;
@@ -153,6 +154,14 @@ public class SuperAdminGlobalCatalogController {
     @PostMapping("/products/publish")
     public PublishProductsResponse publishProducts(@Valid @RequestBody PublishProductsRequest body) {
         return superAdminGlobalCatalogService.publishProducts(body);
+    }
+
+    /** Publishes every draft in the catalog so shops can import the full assortment. */
+    @PostMapping("/products/publish-all-drafts")
+    public PublishAllDraftsResponse publishAllDrafts(
+            @RequestParam(required = false) String catalogId
+    ) {
+        return superAdminGlobalCatalogService.publishAllDrafts(catalogId);
     }
 
     @PostMapping("/products/apply-margin")

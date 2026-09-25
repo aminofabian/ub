@@ -1728,11 +1728,11 @@ public class SalesIntelligenceService {
                 .map(ItemRevenueRow::netProfit)
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
                 .abs();
+        List<ItemRevenueRow> shown = losses.size() > cap ? losses.subList(0, cap) : losses;
+        Map<String, Item> soldItems = packContextById(businessId, shown);
+        Map<String, String> parentNames = parentNamesForPacks(businessId, soldItems.values());
         List<MarginLeakRow> out = new ArrayList<>();
-        for (ItemRevenueRow row : losses) {
-            if (out.size() >= cap) {
-                break;
-            }
+        for (ItemRevenueRow row : shown) {
             BigDecimal lossAbs = row.netProfit().abs();
             BigDecimal share = totalLoss.signum() == 0
                     ? BigDecimal.ZERO
@@ -1747,6 +1747,14 @@ public class SalesIntelligenceService {
             if (reasons.isEmpty()) {
                 reasons.add("margin_loss");
             }
+            Item sold = soldItems.get(row.itemId());
+            BigDecimal unitsPerPack = null;
+            String stockSourceName = null;
+            if (sold != null && packageVariantStockResolver.sharesParentStock(sold)) {
+                unitsPerPack = packageVariantStockResolver.unitsPerSale(sold);
+                String parentId = sold.getVariantOfItemId();
+                stockSourceName = parentId == null ? null : parentNames.get(parentId);
+            }
             out.add(new MarginLeakRow(
                     row.itemId(),
                     row.itemName(),
@@ -1755,9 +1763,40 @@ public class SalesIntelligenceService {
                     row.netRevenue(),
                     row.netProfit(),
                     share,
-                    List.copyOf(reasons)));
+                    List.copyOf(reasons),
+                    unitsPerPack,
+                    stockSourceName));
         }
         return out;
+    }
+
+    private Map<String, Item> packContextById(String businessId, List<ItemRevenueRow> rows) {
+        List<String> ids = rows.stream().map(ItemRevenueRow::itemId).filter(id -> id != null && !id.isBlank()).toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        return itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(ids, businessId).stream()
+                .collect(Collectors.toMap(Item::getId, item -> item, (a, b) -> a));
+    }
+
+    private Map<String, String> parentNamesForPacks(String businessId, Collection<Item> soldItems) {
+        List<String> parentIds = soldItems.stream()
+                .filter(packageVariantStockResolver::sharesParentStock)
+                .map(Item::getVariantOfItemId)
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .toList();
+        if (parentIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> names = new HashMap<>();
+        for (Item parent : itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(parentIds, businessId)) {
+            String name = parent.getName();
+            if (name != null && !name.isBlank()) {
+                names.put(parent.getId(), name.trim());
+            }
+        }
+        return names;
     }
 
     @Transactional(readOnly = true)

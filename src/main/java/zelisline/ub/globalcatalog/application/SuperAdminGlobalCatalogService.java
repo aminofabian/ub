@@ -45,6 +45,7 @@ import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PatchSuppl
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductImageResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductSupplierLinkResponse;
+import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PublishAllDraftsResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PublishProductsRequest;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PublishProductsResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PurgeCatalogRequest;
@@ -137,6 +138,38 @@ public class SuperAdminGlobalCatalogService {
         globalCategoryRepository.saveAll(toDeactivate);
 
         return new ArchiveCatalogProductsResponse(toArchive.size(), toDeactivate.size());
+    }
+
+    /**
+     * Publishes every draft in the catalog so tenant shops can import them.
+     * Rows that fail barcode uniqueness stay drafts and are counted as skipped.
+     */
+    @Transactional
+    public PublishAllDraftsResponse publishAllDrafts(String catalogId) {
+        GlobalCatalog catalog = requireCatalog(catalogId);
+        List<GlobalProduct> drafts = globalProductRepository
+                .findByCatalogIdAndStatusOrderBySortOrderAscNameAsc(catalog.getId(), GlobalProductStatus.DRAFT);
+        int published = 0;
+        int skipped = 0;
+        for (GlobalProduct product : drafts) {
+            try {
+                assertBarcodeAvailable(
+                        product.getCatalogId(),
+                        product.getBarcode(),
+                        GlobalProductStatus.PUBLISHED,
+                        product.getId());
+                product.setStatus(GlobalProductStatus.PUBLISHED);
+                published++;
+            } catch (ResponseStatusException ex) {
+                skipped++;
+            }
+        }
+        if (published > 0) {
+            globalProductRepository.saveAll(drafts.stream()
+                    .filter(p -> GlobalProductStatus.PUBLISHED.equals(p.getStatus()))
+                    .toList());
+        }
+        return new PublishAllDraftsResponse(published, skipped);
     }
 
     /**

@@ -73,6 +73,31 @@ public class WebOrderFulfillmentService {
         return webOrderAdminService.getOrder(businessId, orderId);
     }
 
+    /**
+     * Merchant voids an order that should not be fulfilled. Stock reserved at
+     * checkout is put back; completed pickups stay as they are.
+     */
+    @Transactional
+    public WebOrderDetailResponse voidOrder(String businessId, String orderId) {
+        WebOrder order = webOrderRepository
+                .findByIdAndBusinessId(orderId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found"));
+        if (WebOrderStatuses.CANCELLED.equals(order.getStatus())) {
+            return webOrderAdminService.getOrder(businessId, orderId);
+        }
+        String fulfillment = effectiveFulfillment(order);
+        if (WebOrderFulfillmentStatuses.COMPLETED.equals(fulfillment)) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "A completed pickup cannot be voided");
+        }
+        expiryService.releaseStockForVoid(order);
+        order.setStatus(WebOrderStatuses.CANCELLED);
+        order.setFulfillmentStatus(WebOrderStatuses.CANCELLED);
+        webOrderRepository.save(order);
+        return webOrderAdminService.getOrder(businessId, orderId);
+    }
+
     private void enqueueNotification(WebOrder order, String fulfillmentStatus) {
         switch (fulfillmentStatus) {
             case WebOrderFulfillmentStatuses.CONFIRMED ->

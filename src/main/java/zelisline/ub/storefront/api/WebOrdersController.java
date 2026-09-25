@@ -110,4 +110,16 @@ public class WebOrdersController {
                 orderId.trim(),
                 body.fulfillmentStatus());
     }
+
+    @PostMapping("/{orderId}/void")
+    @PreAuthorize("hasPermission(null, 'storefront.orders.read')")
+    public WebOrderDetailResponse voidOrder(
+            @PathVariable String orderId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return webOrderFulfillmentService.voidOrder(
+                TenantRequestIds.resolveBusinessId(request),
+                orderId.trim());
+    }
 }

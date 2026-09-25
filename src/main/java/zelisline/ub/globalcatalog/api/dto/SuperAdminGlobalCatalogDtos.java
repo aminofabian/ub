@@ -267,6 +267,12 @@ public final class SuperAdminGlobalCatalogDtos {
     ) {
     }
 
+    public record PublishAllDraftsResponse(
+            int publishedCount,
+            int skippedCount
+    ) {
+    }
+
     public record PurgeCatalogRequest(
             @NotBlank @Size(max = 64) String confirmCode
     ) {

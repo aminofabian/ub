@@ -127,6 +127,22 @@ public final class StoreSectionStarterKitCatalog {
                             "Tobacco",
                             "Glassware & accessories"
                     )
+            ),
+            new StoreSectionStarterKitResponse(
+                    "pharmacy",
+                    "Pharmacy / chemist",
+                    List.of(
+                            "Medicines (OTC)",
+                            "Prescription",
+                            "Vitamins & supplements",
+                            "Syrups & suspensions",
+                            "Creams & ointments",
+                            "First aid & wound care",
+                            "Medical devices",
+                            "Baby care",
+                            "Personal care",
+                            "Antiseptics & hygiene"
+                    )
             )
     );
 

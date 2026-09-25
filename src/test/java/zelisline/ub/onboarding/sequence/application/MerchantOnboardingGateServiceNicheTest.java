@@ -13,6 +13,7 @@ class MerchantOnboardingGateServiceNicheTest {
         assertThat(MerchantOnboardingGateService.isNicheSpecialty(List.of("butchery"))).isTrue();
         assertThat(MerchantOnboardingGateService.isNicheSpecialty(List.of("cosmetics"))).isTrue();
         assertThat(MerchantOnboardingGateService.isNicheSpecialty(List.of("wines-spirits"))).isTrue();
+        assertThat(MerchantOnboardingGateService.isNicheSpecialty(List.of("pharmacy"))).isTrue();
         assertThat(MerchantOnboardingGateService.isNicheSpecialty(List.of("mini-mart"))).isFalse();
         assertThat(MerchantOnboardingGateService.isNicheSpecialty(List.of())).isFalse();
         assertThat(MerchantOnboardingGateService.isNicheSpecialty(null)).isFalse();

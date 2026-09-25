@@ -142,7 +142,10 @@ public class MerchantOnboardingGateService {
                 continue;
             }
             String t = raw.trim().toLowerCase(Locale.ROOT);
-            if ("butchery".equals(t) || "cosmetics".equals(t) || "wines-spirits".equals(t)) {
+            if ("butchery".equals(t)
+                    || "cosmetics".equals(t)
+                    || "wines-spirits".equals(t)
+                    || "pharmacy".equals(t)) {
                 return true;
             }
         }

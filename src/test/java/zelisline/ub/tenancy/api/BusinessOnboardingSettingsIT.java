@@ -133,7 +133,8 @@ class BusinessOnboardingSettingsIT {
                 .andExpect(jsonPath("$[0].id").value("butchery"))
                 .andExpect(jsonPath("$[0].sections[0]").value("Beef"))
                 .andExpect(jsonPath("$[?(@.id=='cosmetics')].label").value(org.hamcrest.Matchers.hasItem("Cosmetics")))
-                .andExpect(jsonPath("$[?(@.id=='wines-spirits')].label").value(org.hamcrest.Matchers.hasItem("Wines & spirits")));
+                .andExpect(jsonPath("$[?(@.id=='wines-spirits')].label").value(org.hamcrest.Matchers.hasItem("Wines & spirits")))
+                .andExpect(jsonPath("$[?(@.id=='pharmacy')].label").value(org.hamcrest.Matchers.hasItem("Pharmacy / chemist")));
     }
 
     @Test

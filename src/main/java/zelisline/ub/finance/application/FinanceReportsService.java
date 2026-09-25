@@ -24,6 +24,7 @@ import zelisline.ub.finance.api.dto.ProfitAndLossResponse;
 import zelisline.ub.finance.repository.JournalReportRepository;
 import zelisline.ub.finance.repository.JournalReportRepository.AccountBalance;
 import zelisline.ub.finance.repository.JournalReportRepository.SaleAggregate;
+import zelisline.ub.finance.repository.JournalReportRepository.RefundAggregate;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.tenancy.repository.BusinessRepository;
@@ -71,10 +72,22 @@ public class FinanceReportsService {
                 resolvedBranch,
                 resolvedType
         );
-        BigDecimal revenue = money(sales != null ? sales.getRevenue() : null);
-        BigDecimal cogs = money(sales != null ? sales.getCogs() : null);
-        BigDecimal profit = money(sales != null ? sales.getProfit() : null);
         long saleCount = sales != null ? sales.getSaleCount() : 0L;
+        BigDecimal grossRevenue = money(sales != null ? sales.getRevenue() : null);
+        BigDecimal grossCogs = money(sales != null ? sales.getCogs() : null);
+
+        // Net refunds processed in the same business-day window so "today" uses the same refund
+        // treatment as the ledger P&L (and the Hub's week card). Skipped for a department scope,
+        // which has no journal refund dimension — the department P&L ignores refunds too.
+        RefundAggregate refunds = resolvedType != null
+                ? null
+                : journalReportRepository.sumRefundsForWindow(
+                        businessId, windowStart, windowEnd, resolvedBranch);
+        BigDecimal refundRevenue = money(refunds != null ? refunds.getRefundRevenue() : null);
+        BigDecimal refundCogs = money(refunds != null ? refunds.getRefundCogs() : null);
+        BigDecimal revenue = grossRevenue.subtract(refundRevenue).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal cogs = grossCogs.subtract(refundCogs).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal profit = revenue.subtract(cogs).setScale(2, RoundingMode.HALF_UP);
 
         // Expenses are not department-attributed; omit them when a department filter is active
         // so net operating stays meaningful for the scoped revenue.

@@ -150,6 +150,42 @@ public interface JournalReportRepository extends JpaRepository<JournalLine, Stri
     }
 
     /**
+     * Refund revenue / COGS / profit reversed within an {@code Instant} window. Used to net
+     * refunds into the pulse so the "today" card treats refunds the way the ledger P&amp;L does.
+     * Refunds whose sale is already fully refunded ({@code s.status = 'refunded'}) are excluded —
+     * that sale is outside the gross aggregate too, so netting it again would double-count.
+     */
+    @Query(value = """
+            select coalesce(sum(rl.amount), 0) as refundRevenue,
+                   coalesce(sum(si.cost_total * (rl.quantity / nullif(si.quantity, 0))), 0) as refundCogs,
+                   coalesce(sum(si.profit * (rl.quantity / nullif(si.quantity, 0))), 0) as refundProfit,
+                   count(distinct r.id) as refundCount
+              from refund_lines rl
+              join refunds r on r.id = rl.refund_id
+              join sale_items si on si.id = rl.sale_item_id
+              join sales s on s.id = si.sale_id
+             where r.business_id = :businessId
+               and r.status = 'completed'
+               and s.status = 'completed'
+               and r.refunded_at >= :startInclusive
+               and r.refunded_at <  :endExclusive
+               and (:branchId is null or s.branch_id = :branchId)
+            """, nativeQuery = true)
+    RefundAggregate sumRefundsForWindow(
+            @Param("businessId") String businessId,
+            @Param("startInclusive") Instant startInclusive,
+            @Param("endExclusive") Instant endExclusive,
+            @Param("branchId") String branchId
+    );
+
+    interface RefundAggregate {
+        BigDecimal getRefundRevenue();
+        BigDecimal getRefundCogs();
+        BigDecimal getRefundProfit();
+        long getRefundCount();
+    }
+
+    /**
      * Gross profit by sale date for the pocketing calendar. Uses the same
      * {@code cast(sold_at as date)} window as {@link #sumSalesForPeriod}.
      */

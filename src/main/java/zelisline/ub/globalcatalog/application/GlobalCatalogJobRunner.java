@@ -23,9 +23,11 @@ import zelisline.ub.globalcatalog.domain.GlobalCatalogJob;
 import zelisline.ub.globalcatalog.repository.GlobalCatalogJobRepository;
 
 /**
- * Drains {@code global_catalog_jobs}. Claiming a pending row is brief and synchronized;
- * the heavy adopt/promote work runs on a small worker pool so one long Cloudinary-heavy
- * job cannot leave every other tenant import stuck in {@code pending} (UI: "Lining up…").
+ * Drains {@code global_catalog_jobs}. Claiming a pending row is an atomic
+ * {@code pending -> processing} update, so only one instance ever runs a given job even when the
+ * scheduler is enabled on every node; the heavy adopt/promote work then runs on a small worker pool
+ * so one long Cloudinary-heavy job cannot leave every other tenant import stuck in {@code pending}
+ * (UI: "Lining up…").
  */
 @Component
 @RequiredArgsConstructor
@@ -108,12 +110,16 @@ public class GlobalCatalogJobRunner {
         try {
             total = estimateRowsTotal(job);
         } catch (Exception ex) {
+            // Terminal-safe: only finalises if the row is still pending/processing.
             progressWriter.finalizeFailed(
                     job.getId(),
                     "Invalid job payload: " + (ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName()));
             return null;
         }
-        progressWriter.markProcessing(job.getId(), total);
+        // Atomic claim: the instance that flips pending -> processing wins; everyone else backs off.
+        if (!progressWriter.claimPending(job.getId(), total)) {
+            return null;
+        }
         return new ClaimedJob(job.getId(), job.getKind(), job.getBusinessId(), job.getActorUserId(), job.getPayloadJson(), total);
     }
 

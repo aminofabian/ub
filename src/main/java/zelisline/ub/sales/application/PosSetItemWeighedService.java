@@ -9,6 +9,9 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.api.dto.ItemResponse;
 import zelisline.ub.catalog.api.dto.PatchItemRequest;
 import zelisline.ub.catalog.application.ItemCatalogService;
+import zelisline.ub.catalog.application.PackageVariantStockResolver;
+import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.identity.application.RequestPermissionService;
 import zelisline.ub.sales.api.dto.PosSetItemWeighedRequest;
 import zelisline.ub.tenancy.application.FeatureFlagService;
@@ -22,6 +25,8 @@ public class PosSetItemWeighedService {
     private final FeatureFlagService featureFlagService;
     private final RequestPermissionService requestPermissionService;
     private final ItemCatalogService itemCatalogService;
+    private final PackageVariantStockResolver packageVariantStockResolver;
+    private final ItemRepository itemRepository;
 
     @Transactional
     public ItemResponse setWeighed(
@@ -51,6 +56,18 @@ public class PosSetItemWeighedService {
         }
 
         boolean weighed = Boolean.TRUE.equals(req.weighed());
+        if (weighed) {
+            // A pack/shared-stock SKU must not be sold by weight: the sale path would
+            // multiply the kg by unitsPerSale, booking a spurious loss.
+            Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(id, businessId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Item not found"));
+            if (item.isPackageVariant() || packageVariantStockResolver.sharesParentStock(item)) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "This product sells as a pack. Mark the base product as weighed instead, or create a separate weighed SKU."
+                );
+            }
+        }
         // Sale API currently accepts weighed qty in kg only.
         String nextUnit = weighed ? "kg" : null;
 

@@ -13,6 +13,7 @@ import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
@@ -37,6 +38,9 @@ import zelisline.ub.tenancy.repository.BranchRepository;
 /**
  * Shop-opt-in apply of template recommended sell/buy/image onto already-adopted items.
  * Defaults: no field updates unless flags are true; selling skips customized prices.
+ *
+ * <p>Price writes run in one short transaction; image re-hosting (CDN I/O) runs afterwards, outside
+ * any transaction, so a slow media store cannot hold a pooled database connection.
  */
 @Service
 @RequiredArgsConstructor
@@ -54,18 +58,22 @@ public class GlobalCatalogRefreshService {
     private final PricingService pricingService;
     private final SupplierProductRepository supplierProductRepository;
     private final GlobalCatalogAdoptImageAttacher imageAttacher;
+    private final TransactionTemplate transactionTemplate;
 
     @Transactional(readOnly = true)
     public RefreshCatalogResponse preview(String businessId, RefreshCatalogRequest request) {
-        return run(businessId, request, true, null);
+        return assemble(plan(businessId, request, true, null));
     }
 
-    @Transactional
     public RefreshCatalogResponse refresh(String businessId, RefreshCatalogRequest request, String actorUserId) {
-        return run(businessId, request, false, actorUserId);
+        // Phase 1 — sell/buy writes inside one short transaction.
+        List<LineState> lines = transactionTemplate.execute(status -> plan(businessId, request, false, actorUserId));
+        // Phase 2 — image re-host outside the transaction (CDN latency must not pin a connection).
+        applyImages(businessId, lines);
+        return assemble(lines);
     }
 
-    private RefreshCatalogResponse run(
+    private List<LineState> plan(
             String businessId,
             RefreshCatalogRequest request,
             boolean dryRun,
@@ -85,11 +93,11 @@ public class GlobalCatalogRefreshService {
         boolean skipCustomized = Boolean.TRUE.equals(request.skipCustomizedSellingPrice());
 
         if (!refreshSell && !refreshBuy && !refreshImage) {
-            List<RefreshCatalogLineResponse> noop = ids.stream()
-                    .map(id -> line(id, null, "skipped", "No refresh flags enabled", null, null, null, null,
-                            false, false, false))
-                    .toList();
-            return new RefreshCatalogResponse(0, noop.size(), noop);
+            List<LineState> noop = new ArrayList<>(ids.size());
+            for (String id : ids) {
+                noop.add(LineState.skipped(id, dryRun, "No refresh flags enabled"));
+            }
+            return noop;
         }
 
         GlobalCatalog catalog = globalCatalogResolver.resolveForBusiness(businessId);
@@ -101,39 +109,30 @@ public class GlobalCatalogRefreshService {
             itemByGlobalId.putIfAbsent(item.getGlobalProductSourceId(), item);
         }
 
-        List<RefreshCatalogLineResponse> lines = new ArrayList<>();
-        int updated = 0;
-        int skipped = 0;
-
+        List<LineState> out = new ArrayList<>(ids.size());
         for (String globalId : ids) {
             GlobalProduct gp = products.get(globalId);
             if (gp == null) {
-                lines.add(line(globalId, null, "skipped", "Global product not found or not published",
-                        null, null, null, null, false, false, false));
-                skipped++;
+                out.add(LineState.skipped(globalId, dryRun, "Global product not found or not published"));
                 continue;
             }
             Item item = itemByGlobalId.get(globalId);
             if (item == null) {
-                lines.add(line(globalId, null, "skipped", "Not adopted in this shop",
-                        null, gp.getRecommendedSellingPrice(), null, gp.getRecommendedBuyingPrice(),
-                        false, false, false));
-                skipped++;
+                LineState st = LineState.skipped(globalId, dryRun, "Not adopted in this shop");
+                st.recommendedSell = gp.getRecommendedSellingPrice();
+                st.recommendedBuy = gp.getRecommendedBuyingPrice();
+                out.add(st);
                 continue;
             }
 
-            BigDecimal currentSell = currentSellingPrice(businessId, item.getId(), request.branchId());
-            BigDecimal recommendedSell = gp.getRecommendedSellingPrice();
-            BigDecimal currentBuy = item.getBuyingPrice();
-            BigDecimal recommendedBuy = gp.getRecommendedBuyingPrice();
-
-            boolean sellUpdated = false;
-            boolean buyUpdated = false;
-            boolean imageUpdated = false;
-            List<String> messages = new ArrayList<>();
+            LineState st = new LineState(globalId, item.getId(), dryRun);
+            st.currentSell = currentSellingPrice(businessId, item.getId(), request.branchId());
+            st.recommendedSell = gp.getRecommendedSellingPrice();
+            st.currentBuy = item.getBuyingPrice();
+            st.recommendedBuy = gp.getRecommendedBuyingPrice();
 
             if (refreshSell) {
-                SellDecision decision = decideSell(currentSell, recommendedSell, skipCustomized);
+                SellDecision decision = decideSell(st.currentSell, st.recommendedSell, skipCustomized);
                 if (decision.shouldApply()) {
                     if (!dryRun) {
                         pricingService.setSellingPrice(
@@ -141,84 +140,104 @@ public class GlobalCatalogRefreshService {
                                 new PostSellingPriceRequest(
                                         item.getId(),
                                         request.branchId(),
-                                        recommendedSell,
+                                        st.recommendedSell,
                                         LocalDate.now(),
                                         "Global catalog refresh"),
                                 actorUserId
                         );
                     }
-                    sellUpdated = true;
-                    messages.add(dryRun ? "Would update selling price" : "Selling price updated");
+                    st.sellUpdated = true;
+                    st.messages.add(dryRun ? "Would update selling price" : "Selling price updated");
                 } else {
-                    messages.add(decision.reason());
+                    st.messages.add(decision.reason());
                 }
             }
 
             if (refreshBuy) {
-                BuyDecision decision = decideBuy(currentBuy, recommendedBuy);
+                BuyDecision decision = decideBuy(st.currentBuy, st.recommendedBuy);
                 if (decision.shouldApply()) {
                     if (!dryRun) {
-                        applyBuying(businessId, item, recommendedBuy, actorUserId);
+                        applyBuying(businessId, item, st.recommendedBuy, actorUserId);
                     }
-                    buyUpdated = true;
-                    messages.add(dryRun ? "Would update buying price" : "Buying price updated");
+                    st.buyUpdated = true;
+                    st.messages.add(dryRun ? "Would update buying price" : "Buying price updated");
                 } else {
-                    messages.add(decision.reason());
+                    st.messages.add(decision.reason());
                 }
             }
 
             if (refreshImage) {
                 String imageUrl = blankToNull(gp.getImageUrl());
                 if (imageUrl == null) {
-                    messages.add("No template image");
-                } else if (!dryRun) {
-                    GlobalCatalogAdoptImageAttacher.AttachResult result = imageAttacher.attachFromGlobalUrl(
-                            businessId,
-                            item.getId(),
-                            imageUrl,
-                            !forceImage
-                    );
-                    if (result.attached()) {
-                        imageUpdated = true;
-                        messages.add("Image updated");
-                    } else if (blankToNull(result.warning()) != null) {
-                        messages.add(result.warning());
-                    } else {
-                        messages.add(forceImage ? "Image unchanged" : "Cover already present");
-                    }
-                } else {
+                    st.messages.add("No template image");
+                } else if (dryRun) {
                     boolean missingCover = blankToNull(item.getImageKey()) == null;
                     if (forceImage || missingCover) {
-                        imageUpdated = true;
-                        messages.add(forceImage ? "Would refresh image" : "Would set missing cover");
+                        st.imageUpdated = true;
+                        st.messages.add(forceImage ? "Would refresh image" : "Would set missing cover");
                     } else {
-                        messages.add("Cover already present");
+                        st.messages.add("Cover already present");
                     }
+                } else {
+                    // Deferred to phase 2 — no CDN call inside the transaction.
+                    st.pendingImageUrl = imageUrl;
+                    st.pendingImageOnlyIfMissing = !forceImage;
                 }
             }
 
-            boolean anyUpdate = sellUpdated || buyUpdated || imageUpdated;
+            out.add(st);
+        }
+        return out;
+    }
+
+    private void applyImages(String businessId, List<LineState> lines) {
+        for (LineState st : lines) {
+            if (st.pendingImageUrl == null) {
+                continue;
+            }
+            GlobalCatalogAdoptImageAttacher.AttachResult result = imageAttacher.attachFromGlobalUrl(
+                    businessId,
+                    st.itemId,
+                    st.pendingImageUrl,
+                    st.pendingImageOnlyIfMissing
+            );
+            if (result.attached()) {
+                st.imageUpdated = true;
+                st.messages.add("Image updated");
+            } else if (blankToNull(result.warning()) != null) {
+                st.messages.add(result.warning());
+            } else {
+                st.messages.add(st.pendingImageOnlyIfMissing ? "Cover already present" : "Image unchanged");
+            }
+        }
+    }
+
+    private static RefreshCatalogResponse assemble(List<LineState> lines) {
+        List<RefreshCatalogLineResponse> responses = new ArrayList<>(lines.size());
+        int updated = 0;
+        int skipped = 0;
+        for (LineState st : lines) {
+            boolean anyUpdate = st.sellUpdated || st.buyUpdated || st.imageUpdated;
             if (anyUpdate) {
                 updated++;
             } else {
                 skipped++;
             }
-            lines.add(line(
-                    globalId,
-                    item.getId(),
-                    anyUpdate ? (dryRun ? "would_update" : "updated") : "skipped",
-                    String.join("; ", messages),
-                    currentSell,
-                    recommendedSell,
-                    currentBuy,
-                    recommendedBuy,
-                    sellUpdated,
-                    buyUpdated,
-                    imageUpdated
+            responses.add(new RefreshCatalogLineResponse(
+                    st.globalProductId,
+                    st.itemId,
+                    anyUpdate ? (st.dryRun ? "would_update" : "updated") : "skipped",
+                    String.join("; ", st.messages),
+                    st.currentSell,
+                    st.recommendedSell,
+                    st.currentBuy,
+                    st.recommendedBuy,
+                    st.sellUpdated,
+                    st.buyUpdated,
+                    st.imageUpdated
             ));
         }
-
-        return new RefreshCatalogResponse(updated, skipped, lines);
+        return new RefreshCatalogResponse(updated, skipped, responses);
     }
 
     private void applyBuying(String businessId, Item item, BigDecimal recommendedBuy, String actorUserId) {
@@ -325,39 +344,43 @@ public class GlobalCatalogRefreshService {
                 .compareTo(b.setScale(MONEY_SCALE, RoundingMode.HALF_UP)) == 0;
     }
 
-    private static RefreshCatalogLineResponse line(
-            String globalProductId,
-            String itemId,
-            String status,
-            String message,
-            BigDecimal currentSell,
-            BigDecimal recommendedSell,
-            BigDecimal currentBuy,
-            BigDecimal recommendedBuy,
-            boolean sellUpdated,
-            boolean buyUpdated,
-            boolean imageUpdated
-    ) {
-        return new RefreshCatalogLineResponse(
-                globalProductId,
-                itemId,
-                status,
-                message,
-                currentSell,
-                recommendedSell,
-                currentBuy,
-                recommendedBuy,
-                sellUpdated,
-                buyUpdated,
-                imageUpdated
-        );
-    }
-
     private static String blankToNull(String value) {
         if (value == null || value.isBlank()) {
             return null;
         }
         return value.trim();
+    }
+
+    /**
+     * Mutable per-line accumulator. Price/image flags are filled in the transactional phase; the
+     * image flag and message are completed in the post-transaction phase.
+     */
+    private static final class LineState {
+        private final String globalProductId;
+        private final String itemId;
+        private final boolean dryRun;
+        private final List<String> messages = new ArrayList<>();
+        private BigDecimal currentSell;
+        private BigDecimal recommendedSell;
+        private BigDecimal currentBuy;
+        private BigDecimal recommendedBuy;
+        private boolean sellUpdated;
+        private boolean buyUpdated;
+        private boolean imageUpdated;
+        private String pendingImageUrl;
+        private boolean pendingImageOnlyIfMissing;
+
+        private LineState(String globalProductId, String itemId, boolean dryRun) {
+            this.globalProductId = globalProductId;
+            this.itemId = itemId;
+            this.dryRun = dryRun;
+        }
+
+        private static LineState skipped(String globalProductId, boolean dryRun, String message) {
+            LineState state = new LineState(globalProductId, null, dryRun);
+            state.messages.add(message);
+            return state;
+        }
     }
 
     private record SellDecision(boolean shouldApply, String reason) {

@@ -5,6 +5,7 @@ import static org.hamcrest.Matchers.containsString;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -47,6 +48,7 @@ import zelisline.ub.credits.repository.MpesaStkIntentRepository;
 import zelisline.ub.credits.repository.PublicPaymentClaimRepository;
 import zelisline.ub.credits.repository.WalletTransactionRepository;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
+import zelisline.ub.catalog.api.dto.CreateVariantRequest;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.repository.ItemRepository;
@@ -1597,6 +1599,115 @@ class SaleSlice2IT {
         item.setCurrentStock(new BigDecimal(stockKg));
         itemRepository.save(item);
         return weighedItemId;
+    }
+
+    @Test
+    void postSale_packageVariant_booksBaseUnitCostAgainstPackRevenue() throws Exception {
+        openShift(new BigDecimal("100.00"));
+        String parentId = createPackParent("60");
+        String variantId = createPackVariant(parentId, false);
+
+        // 2 trays @ 90 = 180 revenue; each tray pulls 30 base units @ 2.00 = 120 COGS.
+        String body = """
+                {"branchId":"%s","lines":[{"itemId":"%s","quantity":2,"unitPrice":90}],"payments":[{"method":"cash","amount":180}]}
+                """.formatted(branchId, variantId);
+
+        MvcResult res = mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("Idempotency-Key", "pack-sale-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        String saleId = objectMapper.readTree(res.getResponse().getContentAsString()).get("id").asText();
+        List<SaleItem> items = saleItemRepository.findBySaleIdOrderByLineIndexAsc(saleId);
+        assertThat(items).hasSize(1);
+        SaleItem line = items.getFirst();
+        assertThat(line.getLineTotal()).isEqualByComparingTo(new BigDecimal("180.00"));
+        assertThat(line.getCostTotal()).isEqualByComparingTo(new BigDecimal("120.00"));
+        assertThat(line.getProfit()).isEqualByComparingTo(new BigDecimal("60.00"));
+
+        // 2 packs × 30 base units leave the parent's shelf.
+        assertThat(itemRepository.findById(parentId).orElseThrow().getCurrentStock())
+                .isEqualByComparingTo(new BigDecimal("0"));
+    }
+
+    @Test
+    void postSale_weighedQuantityOnPackageVariant_isRejected() throws Exception {
+        openShift(new BigDecimal("100.00"));
+        String parentId = createPackParent("60");
+        // Pathological data: a pack SKU also flagged weighed (e.g. created before the guard).
+        String variantId = createPackVariant(parentId, true);
+
+        String body = """
+                {"branchId":"%s","lines":[{"itemId":"%s","quantity":0.5,"unitPrice":100}],"payments":[{"method":"cash","amount":50}]}
+                """.formatted(branchId, variantId);
+
+        mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("Idempotency-Key", "weighed-pack-sale-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(containsString("sells as a pack")));
+    }
+
+    @Test
+    void posSetWeighed_onPackageVariant_isRejected() throws Exception {
+        String parentId = createPackParent("60");
+        String variantId = createPackVariant(parentId, false);
+
+        mockMvc.perform(put("/api/v1/pos/items/{itemId}/weighed", variantId)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"weighed\":true}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(containsString("sells as a pack")));
+    }
+
+    /**
+     * A stocked base product with on-hand batches. Package variants sell from this parent's pool.
+     */
+    private String createPackParent(String stockUnits) {
+        String parentId = itemCatalogService.createItem(
+                TENANT,
+                new CreateItemRequest(
+                        "SKU-EGGS", null, "Eggs Base", null, goodsTypeId, null, null, "each",
+                        false, true, true,
+                        null, null, null, null, null, null, null, null, null, null, true, null, null, null, null),
+                null
+        ).body().id();
+
+        var parent = itemRepository.findById(parentId).orElseThrow();
+        parent.setCurrentStock(BigDecimal.ZERO);
+        itemRepository.save(parent);
+
+        Instant base = Instant.parse("2026-02-10T12:00:00Z");
+        inventoryBatchRepository.save(batch("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee1", parentId, base,
+                LocalDate.of(2030, 4, 1), stockUnits));
+        parent.setCurrentStock(new BigDecimal(stockUnits));
+        itemRepository.save(parent);
+        return parentId;
+    }
+
+    private String createPackVariant(String parentId, boolean weighed) {
+        return itemCatalogService.createVariant(
+                TENANT,
+                parentId,
+                new CreateVariantRequest(
+                        "SKU-EGGS-TRAY", "Tray of 30", null, null, null, null, null, weighed ? "kg" : "each",
+                        weighed, true, false,
+                        true, "Tray", new BigDecimal("30"), 1, new BigDecimal("90.00"), null, null,
+                        null, null, null, null, null, null),
+                null
+        ).id();
     }
 
     private static void assertJournalBalanced(List<JournalLine> lines) {

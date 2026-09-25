@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.globalcatalog.domain.GlobalProduct;
@@ -35,6 +36,7 @@ public class GlobalProductImageGalleryService {
     private final GlobalProductImageRepository imageRepository;
     private final GlobalProductRepository productRepository;
     private final MediaStore mediaStore;
+    private final TransactionTemplate transactionTemplate;
 
     public record GalleryFrame(
             String imageUrl,
@@ -64,54 +66,90 @@ public class GlobalProductImageGalleryService {
     }
 
     /**
-     * Replaces the gallery from portable HTTPS source URLs (promote path).
-     * Re-hosts when media store is configured; otherwise stores the source URLs.
-     * Cover on {@code product} is updated to the first frame.
+     * Replaces the gallery from portable HTTPS source URLs (promote path). Re-hosts when media store
+     * is configured; otherwise stores the source URLs. Cover on {@code product} is updated to the
+     * first frame.
+     *
+     * <p>Re-hosting (CDN upload) and orphan cleanup (CDN delete) run <em>outside</em> any
+     * transaction; only the row writes are transactional. Callers must invoke this with no ambient
+     * transaction, or the media I/O would sit inside it again.
      *
      * @return number of frames that were re-hosted (or stored) successfully
      */
-    @Transactional
     public int replaceFromSourceUrls(GlobalProduct product, List<String> sourceHttpsUrls) {
+        String productId = product.getId();
         List<String> urls = dedupeHttps(sourceHttpsUrls);
-        List<GlobalProductImage> previous = imageRepository
-                .findByGlobalProductIdOrderBySortOrderAscIdAsc(product.getId());
-        imageRepository.deleteByGlobalProductId(product.getId());
 
         if (urls.isEmpty()) {
-            product.setImageUrl(null);
-            product.setImagePublicId(null);
-            productRepository.save(product);
-            destroyOrphans(previous, null);
+            List<GlobalProductImage> previous = transactionTemplate.execute(status -> clearRows(productId));
+            destroyOrphans(previous, List.of());
             return 0;
         }
 
         List<GalleryFrame> frames = new ArrayList<>();
         int stored = 0;
-        for (int i = 0; i < urls.size(); i++) {
-            String sourceUrl = urls.get(i);
-            GalleryFrame frame = rehostOrKeep(product.getId(), sourceUrl);
+        for (String sourceUrl : urls) {
+            GalleryFrame frame = rehostOrKeep(productId, sourceUrl);
             if (frame == null) {
                 continue;
             }
             frames.add(frame);
             stored++;
         }
+
         if (frames.isEmpty()) {
-            // Keep previous cover if re-host failed entirely.
-            if (!previous.isEmpty()) {
-                for (GlobalProductImage row : previous) {
-                    imageRepository.save(copyRow(product.getId(), row));
-                }
-                product.setImageUrl(previous.get(0).getImageUrl());
-                product.setImagePublicId(previous.get(0).getImagePublicId());
-                productRepository.save(product);
-            }
+            // Re-host failed entirely: keep the previous gallery untouched.
+            transactionTemplate.executeWithoutResult(status -> restorePrevious(productId));
             return 0;
         }
 
-        persistFrames(product, frames);
+        List<GlobalProductImage> previous = transactionTemplate.execute(status -> persistHosted(productId, frames));
         destroyOrphans(previous, frames.stream().map(GalleryFrame::imagePublicId).filter(Objects::nonNull).toList());
         return stored;
+    }
+
+    /** Clears gallery rows + cover; returns the rows that were removed (for post-commit cleanup). */
+    private List<GlobalProductImage> clearRows(String productId) {
+        GlobalProduct product = requireProductRow(productId);
+        List<GlobalProductImage> previous = imageRepository
+                .findByGlobalProductIdOrderBySortOrderAscIdAsc(productId);
+        imageRepository.deleteByGlobalProductId(productId);
+        product.setImageUrl(null);
+        product.setImagePublicId(null);
+        productRepository.save(product);
+        return previous;
+    }
+
+    /** Re-instates the previous gallery when a re-host produced no frames. */
+    private void restorePrevious(String productId) {
+        GlobalProduct product = requireProductRow(productId);
+        List<GlobalProductImage> previous = imageRepository
+                .findByGlobalProductIdOrderBySortOrderAscIdAsc(productId);
+        imageRepository.deleteByGlobalProductId(productId);
+        if (previous.isEmpty()) {
+            return;
+        }
+        for (GlobalProductImage row : previous) {
+            imageRepository.save(copyRow(productId, row));
+        }
+        product.setImageUrl(previous.get(0).getImageUrl());
+        product.setImagePublicId(previous.get(0).getImagePublicId());
+        productRepository.save(product);
+    }
+
+    /** Persists the freshly hosted frames; returns the previous rows (for post-commit cleanup). */
+    private List<GlobalProductImage> persistHosted(String productId, List<GalleryFrame> frames) {
+        GlobalProduct product = requireProductRow(productId);
+        List<GlobalProductImage> previous = imageRepository
+                .findByGlobalProductIdOrderBySortOrderAscIdAsc(productId);
+        imageRepository.deleteByGlobalProductId(productId);
+        persistFrames(product, frames);
+        return previous;
+    }
+
+    private GlobalProduct requireProductRow(String productId) {
+        return productRepository.findById(productId)
+                .orElseThrow(() -> new IllegalStateException("global product missing: " + productId));
     }
 
     /**
@@ -142,12 +180,19 @@ public class GlobalProductImageGalleryService {
         imageRepository.save(primary);
     }
 
+    /**
+     * Deletes the gallery rows for a product. Returns the public ids whose CDN assets the caller
+     * should destroy <em>after</em> its transaction commits (never destroys them here).
+     */
     @Transactional
-    public void clearGallery(GlobalProduct product) {
+    public List<String> clearGallery(GlobalProduct product) {
         List<GlobalProductImage> previous = imageRepository
                 .findByGlobalProductIdOrderBySortOrderAscIdAsc(product.getId());
         imageRepository.deleteByGlobalProductId(product.getId());
-        destroyOrphans(previous, List.of());
+        return previous.stream()
+                .map(GlobalProductImage::getImagePublicId)
+                .filter(Objects::nonNull)
+                .toList();
     }
 
     private GalleryFrame rehostOrKeep(String productId, String sourceUrl) {

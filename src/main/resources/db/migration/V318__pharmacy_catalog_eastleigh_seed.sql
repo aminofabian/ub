@@ -50,12 +50,6 @@ INSERT IGNORE INTO global_products (
   brand, size, barcode, unit_type,
   recommended_buying_price, recommended_selling_price, default_min_stock_level,
   has_expiry, item_type_key_hint, status, sort_order
--- 5402 pharmacy products
-INSERT IGNORE INTO global_products (
-  id, catalog_id, global_category_id, sku_template, name,
-  brand, size, barcode, unit_type,
-  recommended_buying_price, recommended_selling_price, default_min_stock_level,
-  has_expiry, item_type_key_hint, status, sort_order
 ) VALUES
 ('efb96b46-25ef-561b-acc0-c92585afd204', @catalog_id, @cat_pharma, 'EL-PH-0001', '1-DEW DS AQUAGEL EYE DROPS 10ML', NULL, NULL, NULL, 'each', 525.00, 682.50, 2.0000, TRUE, 'goods', 'published', 0),
 ('362b4ca4-6b1c-5cdc-94ab-4c5880631e0c', @catalog_id, @cat_pharma, 'EL-PH-0002', '3CC WITH NEEDLES 100S', NULL, NULL, NULL, 'each', 290.00, 377.00, 2.0000, TRUE, 'goods', 'published', 1),

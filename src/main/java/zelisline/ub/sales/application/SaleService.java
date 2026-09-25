@@ -38,6 +38,7 @@ import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.inventory.api.dto.BatchAllocationLine;
 import zelisline.ub.inventory.application.InventoryBatchPickerService;
 import zelisline.ub.catalog.application.ItemSellability;
+import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
@@ -100,6 +101,7 @@ public class SaleService {
     private final OpenShiftResolver openShiftResolver;
     private final BranchRepository branchRepository;
     private final InventoryBatchPickerService inventoryBatchPickerService;
+    private final PackageVariantStockResolver packageVariantStockResolver;
     private final LedgerPostingPort ledgerPostingPort;
     private final GatewayStkPushRepository gatewayStkPushRepository;
     private final InboundTillPaymentService inboundTillPaymentService;
@@ -839,6 +841,14 @@ public class SaleService {
             }
 
             if (item.isWeighed()) {
+                // Packs and weighed items are mutually exclusive: a weighed sale of a
+                // shared-stock/pack SKU would resolve pick quantity as (kg × unitsPerSale)
+                // base units while revenue stays per-kg — a spurious, large loss.
+                if (item.isPackageVariant() || packageVariantStockResolver.sharesParentStock(item)) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "Line " + (i + 1) + ": " + item.getName()
+                                    + " sells as a pack, not by weight. Sell the packed unit, or use a separate weighed SKU.");
+                }
                 String unit = item.getUnitType() == null ? "each" : item.getUnitType().trim().toLowerCase(Locale.ROOT);
                 if (!WEIGHT_UNITS.contains(unit)) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST,

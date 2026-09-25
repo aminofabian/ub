@@ -55,7 +55,10 @@ public class SuperAdminGlobalCatalogPromoteLineExecutor {
         globalProductRepository.saveAndFlush(product);
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    /**
+     * Re-hosts a product's source images. Deliberately <em>not</em> transactional: the CDN I/O must
+     * run with no DB transaction held, so the gallery service persists in its own short transaction.
+     */
     public boolean rehostImages(String productId, List<String> sourceHttpsUrls) {
         if (productId == null || sourceHttpsUrls == null || sourceHttpsUrls.isEmpty()) {
             return false;

@@ -26,6 +26,7 @@ import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.finance.application.LedgerBootstrapService;
 import zelisline.ub.finance.repository.LedgerAccountRepository;
+import zelisline.ub.globalcatalog.application.GlobalCatalogJobProgressWriter;
 import zelisline.ub.globalcatalog.application.GlobalCatalogJobRunner;
 import zelisline.ub.globalcatalog.domain.GlobalCatalog;
 import zelisline.ub.globalcatalog.domain.GlobalProduct;
@@ -109,6 +110,9 @@ class GlobalCatalogJobIT {
 
     @Autowired
     private GlobalCatalogJobRunner globalCatalogJobRunner;
+
+    @Autowired
+    private GlobalCatalogJobProgressWriter globalCatalogJobProgressWriter;
 
     private User ownerA;
     private String branchId;
@@ -236,6 +240,39 @@ class GlobalCatalogJobIT {
 
         org.assertj.core.api.Assertions.assertThat(itemRepository.findByBusinessIdAndDeletedAtIsNull(TENANT_A))
                 .hasSize(2);
+    }
+
+    @Test
+    void claimIsAtomicAndFinalizeIsTerminalSafe() throws Exception {
+        List<String> ids = seedPublishedProducts(1);
+        String lines = ids.stream()
+                .map(id -> "{\"globalProductId\":\"" + id + "\",\"sellingPrice\":90,\"buyingPrice\":70}")
+                .collect(Collectors.joining(","));
+        String body = "{\"openingBranchId\":\"" + branchId + "\",\"lines\":[" + lines + "]}";
+
+        String createJson = mockMvc.perform(post("/api/v1/global-catalog/adopt/jobs")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isAccepted())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String jobId = JsonPath.read(createJson, "$.jobId");
+
+        // Only the first caller may escalate pending -> processing (multi-instance guard).
+        org.assertj.core.api.Assertions.assertThat(globalCatalogJobProgressWriter.claimPending(jobId, 1)).isTrue();
+        org.assertj.core.api.Assertions.assertThat(globalCatalogJobProgressWriter.claimPending(jobId, 1)).isFalse();
+
+        // Once terminal, a late finish/failure must not clobber the state.
+        org.assertj.core.api.Assertions.assertThat(
+                globalCatalogJobProgressWriter.finalizeOk(jobId, 1, 1, "{}", "done")).isTrue();
+        org.assertj.core.api.Assertions.assertThat(
+                globalCatalogJobProgressWriter.finalizeOk(jobId, 1, 1, "{}", "late finish")).isFalse();
+        org.assertj.core.api.Assertions.assertThat(
+                globalCatalogJobProgressWriter.finalizeFailed(jobId, "late failure")).isFalse();
     }
 
     private List<String> seedPublishedProducts(int count) {

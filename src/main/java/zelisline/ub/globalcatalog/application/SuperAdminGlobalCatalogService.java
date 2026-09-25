@@ -21,6 +21,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -95,6 +96,7 @@ public class SuperAdminGlobalCatalogService {
     private final GlobalProductImageGalleryService galleryService;
     private final MediaStore mediaStore;
     private final JdbcTemplate jdbcTemplate;
+    private final TransactionTemplate transactionTemplate;
 
     @Transactional(readOnly = true)
     public List<CatalogSummaryResponse> listCatalogs() {
@@ -485,9 +487,13 @@ public class SuperAdminGlobalCatalogService {
         return new ApplyMarginResponse(updated.size(), skipped.size(), updated, skipped);
     }
 
-    @Transactional
+    /**
+     * Uploads a cover image. The CDN upload (and the old-asset destroy) run <em>outside</em> any
+     * database transaction so a slow media store cannot hold a pooled connection; only the short
+     * persist + gallery sync is transactional.
+     */
     public ProductResponse uploadProductImage(String id, String catalogId, MultipartFile file) {
-        GlobalProduct product = requireProduct(id, catalogId);
+        requireProduct(id, catalogId);
         if (file == null || file.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Empty image file");
         }
@@ -503,50 +509,80 @@ public class SuperAdminGlobalCatalogService {
         } catch (Exception ex) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Could not read image file");
         }
-        String folder = CloudinaryImageService.folderGlobalCatalog(product.getId());
+        String folder = CloudinaryImageService.folderGlobalCatalog(id);
         CloudinaryUploadResult uploaded = mediaStore.uploadImageToFolder(
                 bytes, file.getOriginalFilename(), folder, true);
         if (blankToNull(uploaded.secureUrl()) == null || blankToNull(uploaded.publicId()) == null) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Image upload returned empty result");
         }
-        String previousPublicId = blankToNull(product.getImagePublicId());
-        product.setImageUrl(uploaded.secureUrl());
-        product.setImagePublicId(uploaded.publicId());
-        GlobalProduct saved = globalProductRepository.save(product);
-        galleryService.syncCoverAsPrimary(saved);
-        if (previousPublicId != null && !previousPublicId.equals(uploaded.publicId())) {
+
+        UploadedImage persisted = transactionTemplate.execute(status -> {
+            GlobalProduct product = requireProduct(id, catalogId);
+            String previousPublicId = blankToNull(product.getImagePublicId());
+            product.setImageUrl(uploaded.secureUrl());
+            product.setImagePublicId(uploaded.publicId());
+            GlobalProduct saved = globalProductRepository.save(product);
+            galleryService.syncCoverAsPrimary(saved);
+            return new UploadedImage(
+                    previousPublicId, toProduct(saved, galleryService.listForProduct(saved.getId())));
+        });
+
+        if (persisted.previousPublicId() != null && !persisted.previousPublicId().equals(uploaded.publicId())) {
             try {
-                mediaStore.destroyImage(previousPublicId);
+                mediaStore.destroyImage(persisted.previousPublicId());
             } catch (Exception ignored) {
                 // orphan acceptable for v1
             }
         }
-        return toProduct(saved, galleryService.listForProduct(saved.getId()));
+        return persisted.response();
     }
 
-    @Transactional
+    private record UploadedImage(String previousPublicId, ProductResponse response) {
+    }
+
+    /**
+     * Clears the cover image. The row update + gallery clear are transactional; the best-effort CDN
+     * destroy runs afterwards, outside the transaction.
+     */
     public ProductResponse clearProductImage(String id, String catalogId) {
-        GlobalProduct product = requireProduct(id, catalogId);
-        String publicId = blankToNull(product.getImagePublicId());
-        product.setImageUrl(null);
-        product.setImagePublicId(null);
-        GlobalProduct saved = globalProductRepository.save(product);
-        galleryService.clearGallery(saved);
-        if (publicId != null && mediaStore.isConfigured()) {
+        ClearedImage cleared = transactionTemplate.execute(status -> {
+            GlobalProduct product = requireProduct(id, catalogId);
+            String publicId = blankToNull(product.getImagePublicId());
+            product.setImageUrl(null);
+            product.setImagePublicId(null);
+            GlobalProduct saved = globalProductRepository.save(product);
+            List<String> galleryOrphans = galleryService.clearGallery(saved);
+            return new ClearedImage(publicId, galleryOrphans, toProduct(saved, List.of()));
+        });
+        if (mediaStore.isConfigured()) {
+            destroyBestEffort(cleared.orphanPublicIds());
+            if (cleared.publicId() != null) {
+                destroyBestEffort(List.of(cleared.publicId()));
+            }
+        }
+        return cleared.response();
+    }
+
+    private void destroyBestEffort(List<String> publicIds) {
+        for (String publicId : publicIds) {
             try {
                 mediaStore.destroyImage(publicId);
             } catch (Exception ignored) {
-                // keep row cleared even if CDN destroy fails
+                // orphan acceptable for v1
             }
         }
-        return toProduct(saved, List.of());
+    }
+
+    private record ClearedImage(String publicId, List<String> orphanPublicIds, ProductResponse response) {
     }
 
     /**
      * Push a global product's HTTPS image into tenant items that already adopted it
      * but still lack a cover (shops that adopted before imaging).
+     *
+     * <p>Not transactional: the method only reads, and the CDN re-host it drives runs in the
+     * attacher's own short transactions, so no pooled connection is held across media-store latency.
      */
-    @Transactional
     public BackfillImagesResponse backfillAdoptedImages(
             String productId,
             String catalogId,

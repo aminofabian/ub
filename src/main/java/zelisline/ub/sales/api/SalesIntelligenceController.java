@@ -24,7 +24,7 @@ import zelisline.ub.sales.api.dto.CustomerTrendResponse;
 import zelisline.ub.sales.api.dto.ItemActivityResponse;
 import zelisline.ub.sales.api.dto.ItemRevenueRow;
 import zelisline.ub.sales.api.dto.ItemVelocityRow;
-import zelisline.ub.sales.api.dto.MarginLeakRow;
+import zelisline.ub.sales.api.dto.MarginLeaksResponse;
 import zelisline.ub.sales.api.dto.PaymentLedgerRow;
 import zelisline.ub.sales.api.dto.PaymentMethodBreakdownRow;
 import zelisline.ub.sales.api.dto.RecentSaleRow;
@@ -167,7 +167,7 @@ public class SalesIntelligenceController {
 
     @GetMapping("/margin-leaks")
     @PreAuthorize("hasPermission(null, 'sales.intelligence.read')")
-    public List<MarginLeakRow> marginLeaks(
+    public MarginLeaksResponse marginLeaks(
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam(required = false) String branchId,

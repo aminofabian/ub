@@ -188,7 +188,7 @@ class CsvImportIT {
                 .andExpect(result -> {
                     String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
                     assertThat(body).contains(
-                            "sku,name,item_type_key,barcode,unit_type,is_stocked,is_sellable,category_name,brand,size,buying_price,selling_price,on_hand,min_stock_level,reorder_level,supplier_name,supplier_code,image_url");
+                            "sku,name,item_type_key,barcode,unit_type,is_stocked,is_sellable,category_name,aisle_code,brand,size,buying_price,selling_price,on_hand,min_stock_level,reorder_level,supplier_name,supplier_code,image_url");
                     assertThat(body).contains("SKU-EXP-1");
                     assertThat(body).contains("Export One");
                     assertThat(body).contains("40.00");

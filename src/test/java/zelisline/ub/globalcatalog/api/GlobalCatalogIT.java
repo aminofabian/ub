@@ -1363,6 +1363,68 @@ class GlobalCatalogIT {
     }
 
     @Test
+    void replaceCatalogWithEmptyPackDoesNotDeleteExistingItems() throws Exception {
+        var catalog = globalCatalogRepository.findByCode("default").orElseThrow();
+        GlobalProductPack pack = new GlobalProductPack();
+        pack.setCatalogId(catalog.getId());
+        pack.setCode("empty-replace-pack");
+        pack.setName("Empty Replace Pack");
+        pack.setStatus("published");
+        pack.setSortOrder(0);
+        pack = globalProductPackRepository.save(pack);
+
+        String goodsTypeId = itemTypeRepository.findByBusinessIdAndTypeKey(TENANT_A, "goods")
+                .orElseThrow()
+                .getId();
+        itemCatalogService.createItem(
+                TENANT_A,
+                new CreateItemRequest(
+                        "KEEP-ME-SKU",
+                        null,
+                        "Keep Me",
+                        null,
+                        goodsTypeId,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null
+                ),
+                ownerA.getId());
+
+        mockMvc.perform(post("/api/v1/global-catalog/replace")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"openingBranchId":"%s","packId":"%s"}
+                                """.formatted(branchId, pack.getId())))
+                .andExpect(status().isBadRequest());
+
+        // The pack is validated before any soft-delete, so existing items must survive untouched.
+        var active = itemRepository.findByBusinessIdAndDeletedAtIsNull(TENANT_A);
+        assertEquals(1, active.size());
+        assertEquals("KEEP-ME-SKU", active.get(0).getSku());
+    }
+
+    @Test
     void replaceCatalogBlockedWhenSalesExist() throws Exception {
         var catalog = globalCatalogRepository.findByCode("default").orElseThrow();
         GlobalProductPack pack = new GlobalProductPack();

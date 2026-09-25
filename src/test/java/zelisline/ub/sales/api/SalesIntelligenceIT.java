@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
@@ -32,6 +33,7 @@ import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.domain.Category;
+import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
@@ -61,6 +63,7 @@ import zelisline.ub.purchasing.repository.StockMovementRepository;
 import zelisline.ub.sales.api.dto.CaptureHealthResponse;
 import zelisline.ub.sales.api.dto.CustomerSpendResponse;
 import zelisline.ub.sales.api.dto.CustomerSpendRow;
+import zelisline.ub.sales.api.dto.CategoryDailyRevenueRow;
 import zelisline.ub.sales.api.dto.RevenueByCategoryRow;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.SaleItem;
@@ -86,6 +89,7 @@ import zelisline.ub.tenancy.repository.DomainMappingRepository;
 class SalesIntelligenceIT {
 
     private static final String TENANT = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+    private static final ZoneId NAIROBI = ZoneId.of("Africa/Nairobi");
     private static final String P_CAT_READ = "11111111-0000-0000-0000-000000000040";
     private static final String P_SO = "11111111-0000-0000-0000-000000000064";
     private static final String P_SC = "11111111-0000-0000-0000-000000000065";
@@ -608,6 +612,30 @@ class SalesIntelligenceIT {
         saleItemRepository.save(line);
     }
 
+    private void seedSaleItemMargin(
+            String saleId, String itemId, int lineIndex, BigDecimal revenue, BigDecimal cost) {
+        SaleItem line = new SaleItem();
+        line.setSaleId(saleId);
+        line.setItemId(itemId);
+        line.setLineIndex(lineIndex);
+        line.setQuantity(BigDecimal.ONE);
+        line.setUnitPrice(revenue);
+        line.setLineTotal(revenue);
+        line.setUnitCost(cost);
+        line.setCostTotal(cost);
+        line.setProfit(revenue.subtract(cost));
+        saleItemRepository.save(line);
+    }
+
+    private String seedProbeItem(String sku) {
+        Item item = new Item();
+        item.setBusinessId(TENANT);
+        item.setSku(sku);
+        item.setName("Probe " + sku);
+        item.setItemTypeId(goodsTypeId);
+        return itemRepository.save(item).getId();
+    }
+
     private String seedSale(long receiptNo, BigDecimal grandTotal) {
         Sale sale = new Sale();
         sale.setBusinessId(TENANT);
@@ -649,6 +677,159 @@ class SalesIntelligenceIT {
         row.setAmount(amount);
         row.setStatus(InboundTillPaymentStatuses.PENDING);
         return row;
+    }
+
+    @Test
+    void marginLeaks_returnsLossMakersEvenWhenTheyRankBelowTheProfitCap() throws Exception {
+        String saleId = seedSale(9001, new BigDecimal("100.00"));
+        // 55 healthy SKUs with the highest profit, and one loss-maker that ranks last.
+        // The old capped fetch (top 50 by profit) dropped the loss-maker entirely.
+        for (int i = 0; i < 55; i++) {
+            String itemId = seedProbeItem("SKU-HEALTHY-" + i);
+            seedSaleItemMargin(saleId, itemId, i, new BigDecimal("100.00"), new BigDecimal("10.00"));
+        }
+        String lossItemId = seedProbeItem("SKU-LOSS");
+        seedSaleItemMargin(saleId, lossItemId, 55, new BigDecimal("10.00"), new BigDecimal("60.00"));
+
+        String from = LocalDate.now(NAIROBI).minusDays(1).toString();
+        String to = LocalDate.now(NAIROBI).plusDays(1).toString();
+        MvcResult res = mockMvc.perform(get("/api/v1/sales/intelligence/margin-leaks")
+                        .param("from", from)
+                        .param("to", to)
+                        .param("limit", "25")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, user.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ID))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode body = objectMapper.readTree(res.getResponse().getContentAsString());
+        JsonNode rows = body.get("rows");
+        assertThat(rows.isArray()).isTrue();
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).get("itemId").asText()).isEqualTo(lossItemId);
+        assertThat(rows.get(0).get("netProfit").decimalValue())
+                .isEqualByComparingTo(new BigDecimal("-50.00"));
+        assertThat(rows.get(0).get("shareOfLossPct").decimalValue())
+                .isEqualByComparingTo(new BigDecimal("100.0"));
+    }
+
+    @Test
+    void marginLeaks_reconcilesCardWithItemListAndExcludedLines() throws Exception {
+        String saleId = seedSale(9100, new BigDecimal("100.00"));
+        // 55 healthy live SKUs (highest profit) + 1 loss-maker that ranks last.
+        for (int i = 0; i < 55; i++) {
+            String itemId = seedProbeItem("SKU-HEALTHY-" + i);
+            seedSaleItemMargin(saleId, itemId, i, new BigDecimal("100.00"), new BigDecimal("10.00"));
+        }
+        String lossItemId = seedProbeItem("SKU-LOSS");
+        seedSaleItemMargin(saleId, lossItemId, 55, new BigDecimal("10.00"), new BigDecimal("60.00"));
+        // Airtime line (no catalog item) — excluded from the item list, bridged separately.
+        seedSaleItemMargin(saleId, null, 56, new BigDecimal("30.00"), BigDecimal.ZERO);
+        // Line for a product that no longer exists — also excluded from the item list.
+        seedSaleItemMargin(saleId, UUID.randomUUID().toString(), 57, new BigDecimal("5.00"), new BigDecimal("30.00"));
+
+        String from = LocalDate.now(NAIROBI).minusDays(1).toString();
+        String to = LocalDate.now(NAIROBI).plusDays(1).toString();
+        MvcResult res = mockMvc.perform(get("/api/v1/sales/intelligence/margin-leaks")
+                        .param("from", from)
+                        .param("to", to)
+                        .param("limit", "25")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, user.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ID))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode body = objectMapper.readTree(res.getResponse().getContentAsString());
+        JsonNode rows = body.get("rows");
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).get("itemId").asText()).isEqualTo(lossItemId);
+
+        BigDecimal gross = body.get("grossProfit").decimalValue();
+        BigDecimal listed = body.get("listedProfit").decimalValue();
+        BigDecimal refunds = body.get("refundsInWindow").decimalValue();
+        BigDecimal removed = body.get("removedItemsProfit").decimalValue();
+        BigDecimal airtime = body.get("airtimeProfit").decimalValue();
+
+        assertThat(airtime).isEqualByComparingTo(new BigDecimal("30.00"));
+        assertThat(removed).isEqualByComparingTo(new BigDecimal("-25.00"));
+        assertThat(refunds).isEqualByComparingTo(new BigDecimal("0.00"));
+        // The bridge must always add up to the card figure.
+        assertThat(listed.add(refunds).add(removed).add(airtime))
+                .isEqualByComparingTo(gross);
+    }
+
+    @Test
+    void marginLeaks_usesBusinessZoneDayBoundary() throws Exception {
+        LocalDate today = LocalDate.now(NAIROBI);
+        Instant localMidnight = today.atStartOfDay(NAIROBI).toInstant();
+
+        // 23:59 local yesterday — belongs to the previous day, must be excluded.
+        String beforeItemId = seedProbeItem("SKU-BEFORE-MIDNIGHT");
+        String beforeSaleId = seedSale(9200, new BigDecimal("10.00"));
+        pinSoldAt(beforeSaleId, localMidnight.minusSeconds(60));
+        seedSaleItemMargin(beforeSaleId, beforeItemId, 0, new BigDecimal("5.00"), new BigDecimal("30.00"));
+
+        // 00:01 local today — belongs to today, must be included.
+        String afterItemId = seedProbeItem("SKU-AFTER-MIDNIGHT");
+        String afterSaleId = seedSale(9201, new BigDecimal("10.00"));
+        pinSoldAt(afterSaleId, localMidnight.plusSeconds(60));
+        seedSaleItemMargin(afterSaleId, afterItemId, 0, new BigDecimal("5.00"), new BigDecimal("30.00"));
+
+        MvcResult res = mockMvc.perform(get("/api/v1/sales/intelligence/margin-leaks")
+                        .param("from", today.toString())
+                        .param("to", today.toString())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, user.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ID))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode rows = objectMapper.readTree(res.getResponse().getContentAsString()).get("rows");
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).get("itemId").asText()).isEqualTo(afterItemId);
+    }
+
+    private void pinSoldAt(String saleId, Instant soldAt) {
+        Sale sale = saleRepository.findById(saleId).orElseThrow();
+        sale.setSoldAt(soldAt);
+        saleRepository.save(sale);
+    }
+
+    @Test
+    void dailyRevenueByCategory_bucketsByBusinessDayNotUtcDay() throws Exception {
+        LocalDate today = LocalDate.now(NAIROBI);
+        LocalDate yesterday = today.minusDays(1);
+        Instant localMidnight = today.atStartOfDay(NAIROBI).toInstant();
+
+        // 23:59 local yesterday → yesterday's bucket.
+        String beforeSaleId = seedSale(9300, new BigDecimal("10.00"));
+        pinSoldAt(beforeSaleId, localMidnight.minusSeconds(60));
+        seedSaleItemMargin(beforeSaleId, itemDrinksId, 0, new BigDecimal("20.00"), new BigDecimal("10.00"));
+
+        // 00:01 local today → today's bucket (UTC would file it under yesterday).
+        String afterSaleId = seedSale(9301, new BigDecimal("10.00"));
+        pinSoldAt(afterSaleId, localMidnight.plusSeconds(60));
+        seedSaleItemMargin(afterSaleId, itemDrinksId, 0, new BigDecimal("30.00"), new BigDecimal("10.00"));
+
+        MvcResult res = mockMvc.perform(
+                        get("/api/v1/sales/intelligence/revenue-by-category/{categoryId}/daily", categoryDrinksId)
+                                .param("from", yesterday.toString())
+                                .param("to", today.toString())
+                                .header("X-Tenant-Id", TENANT)
+                                .header(TestAuthenticationFilter.HEADER_USER_ID, user.getId())
+                                .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ID))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        List<CategoryDailyRevenueRow> rows = objectMapper.readValue(
+                res.getResponse().getContentAsString(), new TypeReference<>() {});
+        assertThat(rows).hasSize(2);
+        assertThat(rows.get(0).date()).isEqualTo(yesterday);
+        assertThat(rows.get(0).grossRevenue()).isEqualByComparingTo(new BigDecimal("20.00"));
+        assertThat(rows.get(1).date()).isEqualTo(today);
+        assertThat(rows.get(1).grossRevenue()).isEqualByComparingTo(new BigDecimal("30.00"));
     }
 
     private void openShift(BigDecimal openingCash) throws Exception {

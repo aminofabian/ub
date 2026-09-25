@@ -7,6 +7,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.validation.annotation.Validated;
@@ -67,12 +68,16 @@ import zelisline.ub.globalcatalog.application.SuperAdminGlobalCatalogService;
 /**
  * Super-admin curation for the platform global product catalog.
  *
- * <p>Secured by {@code ROLE_SUPER_ADMIN} via {@code /api/v1/super-admin/**}
- * and bypasses tenant resolution in {@code DomainBusinessResolverFilter}.
+ * <p>Authorized by {@code PERM_sa.console.full} (the {@code sa.console.full} desk permission, held by
+ * the {@code owner}/{@code lead} operator roles) via the {@code /api/v1/super-admin/**} path rule in
+ * {@code SecurityConfig}. The class-level {@code @PreAuthorize} mirrors that rule so the requirement
+ * survives any future relaxation of the path matcher, and bypasses tenant resolution in
+ * {@code DomainBusinessResolverFilter}.
  */
 @Validated
 @RestController
 @RequestMapping("/api/v1/super-admin/global-catalog")
+@PreAuthorize("hasAuthority('PERM_sa.console.full')")
 @RequiredArgsConstructor
 public class SuperAdminGlobalCatalogController {
 

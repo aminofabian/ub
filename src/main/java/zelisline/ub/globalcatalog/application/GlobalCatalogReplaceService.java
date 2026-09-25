@@ -81,11 +81,14 @@ public class GlobalCatalogReplaceService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, blockReason);
         }
 
-        int softDeleted = itemCatalogService.softDeleteAllActiveItems(businessId, actorUserId);
+        // Validate the pack BEFORE soft-deleting: softDeleteAllActiveItems commits in its own
+        // REQUIRES_NEW transaction, so throwing after it would leave the shop with zero items.
         List<AdoptLineRequest> lines = buildPackLines(pack.getId());
         if (lines.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Starter pack has no products");
         }
+
+        int softDeleted = itemCatalogService.softDeleteAllActiveItems(businessId, actorUserId);
 
         AdoptResponse adopt = globalCatalogService.adopt(
                 businessId,

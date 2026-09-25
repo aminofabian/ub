@@ -54,7 +54,7 @@ class OpenApiExportIT {
         options.setPrettyFlow(true);
         Yaml yaml = new Yaml(options);
 
-        Path out = Path.of(System.getProperty("user.dir"), "docs/openapi/phase-1.yaml");
+        Path out = resolveCanonicalOutput();
         Files.createDirectories(out.getParent());
 
         String header = """
@@ -63,5 +63,21 @@ class OpenApiExportIT {
                 #
                 """;
         Files.writeString(out, header + yaml.dump(tree), StandardCharsets.UTF_8);
+    }
+
+    /**
+     * The canonical snapshot is {@code <repo-root>/docs/openapi/phase-1.yaml}. The test worker runs
+     * with {@code user.dir = backend/}, so walking up to the repo root (the directory holding both
+     * {@code frontend/} and {@code backend/}) keeps regeneration from silently writing to
+     * {@code backend/docs/openapi/} and leaving the committed contract stale.
+     */
+    private static Path resolveCanonicalOutput() {
+        Path dir = Path.of(System.getProperty("user.dir")).toAbsolutePath();
+        for (Path cursor = dir; cursor != null; cursor = cursor.getParent()) {
+            if (Files.isDirectory(cursor.resolve("frontend")) && Files.isDirectory(cursor.resolve("backend"))) {
+                return cursor.resolve("docs/openapi/phase-1.yaml");
+            }
+        }
+        return dir.resolve("docs/openapi/phase-1.yaml");
     }
 }

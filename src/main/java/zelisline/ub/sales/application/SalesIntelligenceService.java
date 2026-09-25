@@ -2,9 +2,11 @@ package zelisline.ub.sales.application;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.sql.Date;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.YearMonth;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -13,6 +15,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -30,6 +33,8 @@ import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.finance.BusinessTimeZones;
+import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.domain.StockMovement;
@@ -54,6 +59,7 @@ import zelisline.ub.sales.api.dto.ItemDailySalesRow;
 import zelisline.ub.sales.api.dto.ItemPeriodBuckets;
 import zelisline.ub.sales.api.dto.ItemRevenueRow;
 import zelisline.ub.sales.api.dto.MarginLeakRow;
+import zelisline.ub.sales.api.dto.MarginLeaksResponse;
 import zelisline.ub.sales.api.dto.ItemStockInRow;
 import zelisline.ub.sales.api.dto.ItemVelocityRow;
 import zelisline.ub.sales.api.dto.MonthlyCustomerRow;
@@ -93,6 +99,7 @@ public class SalesIntelligenceService {
     private final StockMovementRepository stockMovementRepository;
     private final InventoryBatchRepository inventoryBatchRepository;
     private final PackageVariantStockResolver packageVariantStockResolver;
+    private final BusinessRepository businessRepository;
 
     private static final String Q_GROSS = """
             SELECT COALESCE(i.category_id, '_none') AS category_id,
@@ -105,7 +112,7 @@ public class SalesIntelligenceService {
          LEFT JOIN categories c ON c.id = i.category_id AND c.business_id = s.business_id
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
-               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND s.sold_at >= ? AND s.sold_at < ?
                AND (? IS NULL OR i.category_id = ?)
                AND (? IS NULL OR s.branch_id = ?)
                AND (? IS NULL OR i.item_type_id = ?)
@@ -125,7 +132,7 @@ public class SalesIntelligenceService {
          LEFT JOIN categories c ON c.id = i.category_id AND c.business_id = r.business_id
              WHERE r.business_id = ?
                AND r.status = ?
-               AND CAST(r.refunded_at AS DATE) BETWEEN ? AND ?
+               AND r.refunded_at >= ? AND r.refunded_at < ?
                AND (? IS NULL OR i.category_id = ?)
                AND (? IS NULL OR s.branch_id = ?)
                AND (? IS NULL OR i.item_type_id = ?)
@@ -133,23 +140,22 @@ public class SalesIntelligenceService {
             """;
 
     private static final String Q_DAILY = """
-            SELECT CAST(s.sold_at AS DATE) AS sale_date,
-                   COALESCE(SUM(sil.line_total), 0) AS gross,
-                   COALESCE(SUM(sil.profit), 0) AS profit_gross
+            SELECT s.sold_at AS sold_at,
+                   sil.line_total AS line_total,
+                   sil.profit AS profit
               FROM sale_items sil
               JOIN sales s ON s.id = sil.sale_id
               JOIN items i ON i.id = sil.item_id AND i.business_id = s.business_id AND i.deleted_at IS NULL
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
-               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND s.sold_at >= ? AND s.sold_at < ?
                AND i.category_id = ?
-          GROUP BY CAST(s.sold_at AS DATE)
             """;
 
     private static final String Q_DAILY_REFUNDS = """
-            SELECT CAST(r.refunded_at AS DATE) AS refund_date,
-                   COALESCE(SUM(rl.amount), 0) AS refund_amt,
-                   COALESCE(SUM(sil.profit * (rl.quantity / NULLIF(sil.quantity, 0))), 0) AS profit_refund
+            SELECT r.refunded_at AS refunded_at,
+                   rl.amount AS amount,
+                   sil.profit * (rl.quantity / NULLIF(sil.quantity, 0)) AS profit_refund
               FROM refund_lines rl
               JOIN refunds r ON r.id = rl.refund_id
               JOIN sale_items sil ON sil.id = rl.sale_item_id
@@ -157,9 +163,8 @@ public class SalesIntelligenceService {
               JOIN items i ON i.id = sil.item_id AND i.business_id = r.business_id AND i.deleted_at IS NULL
              WHERE r.business_id = ?
                AND r.status = ?
-               AND CAST(r.refunded_at AS DATE) BETWEEN ? AND ?
+               AND r.refunded_at >= ? AND r.refunded_at < ?
                AND i.category_id = ?
-          GROUP BY CAST(r.refunded_at AS DATE)
             """;
 
     private static final String Q_ITEMS = """
@@ -179,7 +184,7 @@ public class SalesIntelligenceService {
                                AND parent.deleted_at IS NULL
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
-               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND s.sold_at >= ? AND s.sold_at < ?
                AND i.category_id = ?
           GROUP BY sil.item_id, i.name, i.sku, i.variant_name, parent.name
             """;
@@ -196,7 +201,7 @@ public class SalesIntelligenceService {
               JOIN items i ON i.id = sil.item_id AND i.business_id = r.business_id AND i.deleted_at IS NULL
              WHERE r.business_id = ?
                AND r.status = ?
-               AND CAST(r.refunded_at AS DATE) BETWEEN ? AND ?
+               AND r.refunded_at >= ? AND r.refunded_at < ?
                AND i.category_id = ?
           GROUP BY sil.item_id
             """;
@@ -209,7 +214,7 @@ public class SalesIntelligenceService {
               JOIN items i ON i.id = sil.item_id AND i.business_id = s.business_id AND i.deleted_at IS NULL
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
-               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND s.sold_at >= ? AND s.sold_at < ?
           GROUP BY sil.item_id
             """;
 
@@ -223,7 +228,7 @@ public class SalesIntelligenceService {
               JOIN items i ON i.id = sil.item_id AND i.business_id = r.business_id AND i.deleted_at IS NULL
              WHERE r.business_id = ?
                AND r.status = ?
-               AND CAST(r.refunded_at AS DATE) BETWEEN ? AND ?
+               AND r.refunded_at >= ? AND r.refunded_at < ?
           GROUP BY sil.item_id
             """;
 
@@ -236,9 +241,9 @@ public class SalesIntelligenceService {
             String branchId,
             String itemTypeId
     ) {
-        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
-        Date from = Date.valueOf(w[0]);
-        Date to = Date.valueOf(w[1]);
+        ProfitWindow w = profitWindow(businessId, fromInclusive, toInclusive);
+        Timestamp from = utcBound(w.startInclusive());
+        Timestamp to = utcBound(w.endExclusive());
         String catFilter = (categoryId != null && !categoryId.isBlank()) ? categoryId : null;
         String branchFilter = (branchId != null && !branchId.isBlank()) ? branchId : null;
         String typeFilter = blankToNull(itemTypeId);
@@ -310,18 +315,19 @@ public class SalesIntelligenceService {
         if (categoryId == null || categoryId.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "categoryId is required");
         }
-        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
-        Date from = Date.valueOf(w[0]);
-        Date to = Date.valueOf(w[1]);
+        ProfitWindow w = profitWindow(businessId, fromInclusive, toInclusive);
+        Timestamp from = utcBound(w.startInclusive());
+        Timestamp to = utcBound(w.endExclusive());
+        ZoneId zone = businessZone(businessId);
 
         Map<LocalDate, DailyAgg> byDay = new HashMap<>();
 
         jdbc.query(
                 Q_DAILY,
                 rs -> {
-                    LocalDate d = rs.getDate("sale_date").toLocalDate();
-                    BigDecimal gross = rs.getBigDecimal("gross").setScale(2, RoundingMode.HALF_UP);
-                    BigDecimal profit = rs.getBigDecimal("profit_gross").setScale(2, RoundingMode.HALF_UP);
+                    LocalDate d = businessDate(rs.getTimestamp("sold_at"), zone);
+                    BigDecimal gross = rs.getBigDecimal("line_total").setScale(2, RoundingMode.HALF_UP);
+                    BigDecimal profit = rs.getBigDecimal("profit").setScale(2, RoundingMode.HALF_UP);
                     byDay.merge(d, new DailyAgg(gross, ZERO, profit, ZERO), SalesIntelligenceService::combineDaily);
                 },
                 businessId,
@@ -334,8 +340,8 @@ public class SalesIntelligenceService {
         jdbc.query(
                 Q_DAILY_REFUNDS,
                 rs -> {
-                    LocalDate d = rs.getDate("refund_date").toLocalDate();
-                    BigDecimal refund = rs.getBigDecimal("refund_amt").setScale(2, RoundingMode.HALF_UP);
+                    LocalDate d = businessDate(rs.getTimestamp("refunded_at"), zone);
+                    BigDecimal refund = rs.getBigDecimal("amount").setScale(2, RoundingMode.HALF_UP);
                     BigDecimal profit = rs.getBigDecimal("profit_refund").setScale(2, RoundingMode.HALF_UP);
                     byDay.merge(d, new DailyAgg(ZERO, refund, ZERO, profit), SalesIntelligenceService::combineDaily);
                 },
@@ -366,9 +372,9 @@ public class SalesIntelligenceService {
         if (categoryId == null || categoryId.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "categoryId is required");
         }
-        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
-        Date from = Date.valueOf(w[0]);
-        Date to = Date.valueOf(w[1]);
+        ProfitWindow w = profitWindow(businessId, fromInclusive, toInclusive);
+        Timestamp from = utcBound(w.startInclusive());
+        Timestamp to = utcBound(w.endExclusive());
 
         Map<String, ItemAgg> byItem = new HashMap<>();
 
@@ -429,9 +435,9 @@ public class SalesIntelligenceService {
             LocalDate fromInclusive,
             LocalDate toInclusive
     ) {
-        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
-        Date from = Date.valueOf(w[0]);
-        Date to = Date.valueOf(w[1]);
+        ProfitWindow w = profitWindow(businessId, fromInclusive, toInclusive);
+        Timestamp from = utcBound(w.startInclusive());
+        Timestamp to = utcBound(w.endExclusive());
 
         Map<String, BigDecimal> byItem = new HashMap<>();
 
@@ -574,7 +580,7 @@ public class SalesIntelligenceService {
                                AND cu.business_id = s.business_id
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
-               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND s.sold_at >= ? AND s.sold_at < ?
                AND (? IS NULL OR s.branch_id = ?)
                AND (? IS NULL OR i.item_type_id = ?)
                AND (? IS NULL OR sil.item_id = ?)
@@ -605,7 +611,7 @@ public class SalesIntelligenceService {
                           AND i.business_id = wo.business_id
                           AND i.deleted_at IS NULL
              WHERE wo.business_id = ?
-               AND CAST(wo.created_at AS DATE) BETWEEN ? AND ?
+               AND wo.created_at >= ? AND wo.created_at < ?
                AND (? IS NULL OR wo.catalog_branch_id = ?)
           ORDER BY wo.created_at DESC
              LIMIT 500
@@ -636,7 +642,7 @@ public class SalesIntelligenceService {
               JOIN sales s ON s.id = sp.sale_id
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
-               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND s.sold_at >= ? AND s.sold_at < ?
                AND (? IS NULL OR s.branch_id = ?)
                AND (? IS NULL OR EXISTS (
                      SELECT 1
@@ -676,7 +682,7 @@ public class SalesIntelligenceService {
          LEFT JOIN customers cu ON cu.id = s.customer_id AND cu.business_id = s.business_id
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
-               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND s.sold_at >= ? AND s.sold_at < ?
                AND (? IS NULL OR s.branch_id = ?)
           ORDER BY s.sold_at ASC, sp.sort_order ASC
              LIMIT 3000
@@ -695,7 +701,7 @@ public class SalesIntelligenceService {
          LEFT JOIN users u ON u.id = s.sold_by AND u.business_id = s.business_id AND u.deleted_at IS NULL
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
-               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND s.sold_at >= ? AND s.sold_at < ?
                AND (? IS NULL OR s.branch_id = ?)
                AND (? IS NULL OR i.item_type_id = ?)
           GROUP BY s.sold_by, COALESCE(NULLIF(TRIM(u.name), ''), u.email, s.sold_by)
@@ -719,7 +725,7 @@ public class SalesIntelligenceService {
                                AND parent.deleted_at IS NULL
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
-               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND s.sold_at >= ? AND s.sold_at < ?
                AND (? IS NULL OR i.category_id = ?)
                AND (? IS NULL OR s.branch_id = ?)
                AND (? IS NULL OR i.item_type_id = ?)
@@ -738,11 +744,41 @@ public class SalesIntelligenceService {
               JOIN items i ON i.id = sil.item_id AND i.business_id = r.business_id AND i.deleted_at IS NULL
              WHERE r.business_id = ?
                AND r.status = ?
-               AND CAST(r.refunded_at AS DATE) BETWEEN ? AND ?
+               AND r.refunded_at >= ? AND r.refunded_at < ?
                AND (? IS NULL OR i.category_id = ?)
                AND (? IS NULL OR s.branch_id = ?)
                AND (? IS NULL OR i.item_type_id = ?)
           GROUP BY sil.item_id
+            """;
+
+    /** Bridge totals for the “Why negative?” drawer — see {@link MarginLeaksResponse}. */
+    private static final String Q_MARGIN_BRIDGE = """
+            SELECT COALESCE(SUM(si.profit), 0) AS total_profit,
+                   COALESCE(SUM(CASE WHEN si.item_id IS NULL THEN si.profit ELSE 0 END), 0) AS airtime_profit,
+                   COALESCE(SUM(CASE WHEN si.item_id IS NOT NULL AND i.id IS NULL THEN si.profit ELSE 0 END), 0) AS removed_profit
+              FROM sale_items si
+              JOIN sales s ON s.id = si.sale_id
+         LEFT JOIN items i ON i.id = si.item_id AND i.business_id = s.business_id AND i.deleted_at IS NULL
+             WHERE s.business_id = ?
+               AND s.status IN (?, ?)
+               AND s.sold_at >= ? AND s.sold_at < ?
+               AND (? IS NULL OR s.branch_id = ?)
+               AND (? IS NULL OR i.item_type_id = ?)
+            """;
+
+    /** Profit reversed by refunds in the window (live items only, matching the item ranking). */
+    private static final String Q_MARGIN_BRIDGE_REFUNDS = """
+            SELECT COALESCE(SUM(sil.profit * (rl.quantity / NULLIF(sil.quantity, 0))), 0) AS profit_refund
+              FROM refund_lines rl
+              JOIN refunds r ON r.id = rl.refund_id
+              JOIN sale_items sil ON sil.id = rl.sale_item_id
+              JOIN sales s ON s.id = sil.sale_id
+              JOIN items i ON i.id = sil.item_id AND i.business_id = r.business_id AND i.deleted_at IS NULL
+             WHERE r.business_id = ?
+               AND r.status = ?
+               AND r.refunded_at >= ? AND r.refunded_at < ?
+               AND (? IS NULL OR s.branch_id = ?)
+               AND (? IS NULL OR i.item_type_id = ?)
             """;
 
     private static final String Q_COGS_BY_BRANCH = """
@@ -755,7 +791,7 @@ public class SalesIntelligenceService {
          LEFT JOIN branches b ON b.id = s.branch_id AND b.business_id = s.business_id
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
-               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND s.sold_at >= ? AND s.sold_at < ?
                AND (? IS NULL OR i.category_id = ?)
                AND (? IS NULL OR s.branch_id = ?)
                AND (? IS NULL OR i.item_type_id = ?)
@@ -773,25 +809,11 @@ public class SalesIntelligenceService {
               JOIN items i ON i.id = sil.item_id AND i.business_id = r.business_id AND i.deleted_at IS NULL
              WHERE r.business_id = ?
                AND r.status = ?
-               AND CAST(r.refunded_at AS DATE) BETWEEN ? AND ?
+               AND r.refunded_at >= ? AND r.refunded_at < ?
                AND (? IS NULL OR i.category_id = ?)
                AND (? IS NULL OR s.branch_id = ?)
                AND (? IS NULL OR i.item_type_id = ?)
           GROUP BY s.branch_id
-            """;
-
-    private static final String Q_CUSTOMERS_BY_MONTH = """
-            SELECT EXTRACT(YEAR FROM CAST(s.sold_at AS DATE)) AS yr,
-                   EXTRACT(MONTH FROM CAST(s.sold_at AS DATE)) AS mo,
-                   COUNT(*) AS customer_count
-              FROM sales s
-             WHERE s.business_id = ?
-               AND s.status IN (?, ?)
-               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
-               AND (? IS NULL OR s.branch_id = ?)
-          GROUP BY EXTRACT(YEAR FROM CAST(s.sold_at AS DATE)),
-                   EXTRACT(MONTH FROM CAST(s.sold_at AS DATE))
-          ORDER BY yr, mo
             """;
 
     private static final String Q_CUSTOMERS_DISTINCT = """
@@ -799,7 +821,7 @@ public class SalesIntelligenceService {
               FROM sales s
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
-               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND s.sold_at >= ? AND s.sold_at < ?
                AND (? IS NULL OR s.branch_id = ?)
             """;
 
@@ -815,8 +837,8 @@ public class SalesIntelligenceService {
                    COALESCE(NULLIF(TRIM(c.origin), ''), 'mpesa_inferred') AS origin,
                    COUNT(DISTINCT s.id) AS sale_count,
                    COALESCE(SUM(s.grand_total), 0) AS spend,
-                   MIN(CAST(s.sold_at AS DATE)) AS first_visit,
-                   MAX(CAST(s.sold_at AS DATE)) AS last_visit,
+                   MIN(s.sold_at) AS first_visit_at,
+                   MAX(s.sold_at) AS last_visit_at,
                    COALESCE(
                        (SELECT p.masked_msisdn
                           FROM customer_phones p
@@ -838,7 +860,7 @@ public class SalesIntelligenceService {
                                AND c.deleted_at IS NULL
                 WHERE s.business_id = ?
                   AND s.status IN (?, ?)
-                  AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+                  AND s.sold_at >= ? AND s.sold_at < ?
                   AND (? IS NULL OR s.branch_id = ?)
                   AND """ + PAYER_IDENTIFIED
             + " GROUP BY " + PAYER_GROUP_KEY + """
@@ -848,18 +870,15 @@ public class SalesIntelligenceService {
 
     private static final String Q_CUSTOMER_VISIT_DAYS = "SELECT " + PAYER_GROUP_KEY + """
              AS customer_id,
-                   CAST(s.sold_at AS DATE) AS visit_date
+                   s.sold_at AS sold_at
               FROM sales s
             """ + JOIN_SALE_MPESA_PAYER + """
                 WHERE s.business_id = ?
                   AND s.status IN (?, ?)
-                  AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+                  AND s.sold_at >= ? AND s.sold_at < ?
                   AND (? IS NULL OR s.branch_id = ?)
                   AND """ + PAYER_IDENTIFIED
-            + " GROUP BY " + PAYER_GROUP_KEY + """
-            ,
-                     CAST(s.sold_at AS DATE)
-            """;
+            + " GROUP BY " + PAYER_GROUP_KEY + ", s.sold_at";
 
     private static final String Q_WALK_IN_SPEND = """
             SELECT COUNT(*) AS sale_count,
@@ -868,7 +887,7 @@ public class SalesIntelligenceService {
             """ + JOIN_SALE_MPESA_PAYER + """
                 WHERE s.business_id = ?
                   AND s.status IN (?, ?)
-                  AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+                  AND s.sold_at >= ? AND s.sold_at < ?
                   AND (? IS NULL OR s.branch_id = ?)
                   AND NOT """ + PAYER_IDENTIFIED;
 
@@ -879,7 +898,7 @@ public class SalesIntelligenceService {
               FROM sales s
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
-               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND s.sold_at >= ? AND s.sold_at < ?
                AND (? IS NULL OR s.branch_id = ?)
             """;
 
@@ -892,7 +911,7 @@ public class SalesIntelligenceService {
               JOIN sales s ON s.id = sp.sale_id
              WHERE s.business_id = ?
                AND s.status IN (?, ?)
-               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND s.sold_at >= ? AND s.sold_at < ?
                AND (? IS NULL OR s.branch_id = ?)
              GROUP BY sp.method
             """;
@@ -918,9 +937,9 @@ public class SalesIntelligenceService {
             String itemId,
             int limit
     ) {
-        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
-        Date from = Date.valueOf(w[0]);
-        Date to = Date.valueOf(w[1]);
+        ProfitWindow w = profitWindow(businessId, fromInclusive, toInclusive);
+        Timestamp from = utcBound(w.startInclusive());
+        Timestamp to = utcBound(w.endExclusive());
         String branchFilter = (branchId != null && !branchId.isBlank()) ? branchId : null;
         String typeFilter = blankToNull(itemTypeId);
         String itemFilter = blankToNull(itemId);
@@ -1457,9 +1476,9 @@ public class SalesIntelligenceService {
             LocalDate toInclusive,
             String branchId
     ) {
-        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
-        Date from = Date.valueOf(w[0]);
-        Date to = Date.valueOf(w[1]);
+        ProfitWindow w = profitWindow(businessId, fromInclusive, toInclusive);
+        Timestamp from = utcBound(w.startInclusive());
+        Timestamp to = utcBound(w.endExclusive());
         String branchFilter = (branchId != null && !branchId.isBlank()) ? branchId : null;
 
         List<RecentSaleRow> out = new ArrayList<>();
@@ -1507,9 +1526,9 @@ public class SalesIntelligenceService {
             String branchId,
             String itemTypeId
     ) {
-        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
-        Date from = Date.valueOf(w[0]);
-        Date to = Date.valueOf(w[1]);
+        ProfitWindow w = profitWindow(businessId, fromInclusive, toInclusive);
+        Timestamp from = utcBound(w.startInclusive());
+        Timestamp to = utcBound(w.endExclusive());
         String branchFilter = (branchId != null && !branchId.isBlank()) ? branchId : null;
         String typeFilter = blankToNull(itemTypeId);
 
@@ -1544,9 +1563,9 @@ public class SalesIntelligenceService {
             LocalDate toInclusive,
             String branchId
     ) {
-        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
-        Date from = Date.valueOf(w[0]);
-        Date to = Date.valueOf(w[1]);
+        ProfitWindow w = profitWindow(businessId, fromInclusive, toInclusive);
+        Timestamp from = utcBound(w.startInclusive());
+        Timestamp to = utcBound(w.endExclusive());
         String branchFilter = (branchId != null && !branchId.isBlank()) ? branchId : null;
 
         List<PaymentLedgerRow> out = new ArrayList<>();
@@ -1590,9 +1609,9 @@ public class SalesIntelligenceService {
             String branchId,
             String itemTypeId
     ) {
-        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
-        Date from = Date.valueOf(w[0]);
-        Date to = Date.valueOf(w[1]);
+        ProfitWindow w = profitWindow(businessId, fromInclusive, toInclusive);
+        Timestamp from = utcBound(w.startInclusive());
+        Timestamp to = utcBound(w.endExclusive());
         String branchFilter = (branchId != null && !branchId.isBlank()) ? branchId : null;
         String typeFilter = blankToNull(itemTypeId);
 
@@ -1631,15 +1650,34 @@ public class SalesIntelligenceService {
             String itemTypeId,
             Integer limit
     ) {
-        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
-        Date from = Date.valueOf(w[0]);
-        Date to = Date.valueOf(w[1]);
-        String catFilter = blankToNull(categoryId);
-        String branchFilter = blankToNull(branchId);
-        String typeFilter = blankToNull(itemTypeId);
         int cap = limit == null
                 ? DEFAULT_PROFIT_ITEM_LIMIT
                 : Math.max(1, Math.min(limit, MAX_PROFIT_ITEM_LIMIT));
+        List<ItemRevenueRow> all = sortedItemsByProfit(
+                businessId, profitWindow(businessId, fromInclusive, toInclusive), categoryId, branchId, itemTypeId);
+        if (all.size() > cap) {
+            return new ArrayList<>(all.subList(0, cap));
+        }
+        return all;
+    }
+
+    /**
+     * Full per-item profit ranking for the window, highest profit first, with no cap.
+     * Loss-makers sort to the tail, so callers that need them must use this rather than
+     * {@link #itemsByProfit}, whose cap would truncate negatives away.
+     */
+    private List<ItemRevenueRow> sortedItemsByProfit(
+            String businessId,
+            ProfitWindow w,
+            String categoryId,
+            String branchId,
+            String itemTypeId
+    ) {
+        Timestamp from = utcBound(w.startInclusive());
+        Timestamp to = utcBound(w.endExclusive());
+        String catFilter = blankToNull(categoryId);
+        String branchFilter = blankToNull(branchId);
+        String typeFilter = blankToNull(itemTypeId);
 
         Map<String, ItemAgg> byItem = new HashMap<>();
         jdbc.query(
@@ -1696,17 +1734,15 @@ public class SalesIntelligenceService {
             out.add(new ItemRevenueRow(e.getKey(), a.name, a.sku, a.qty, a.gross, a.refunds, net, netProfit));
         }
         out.sort(Comparator.comparing(ItemRevenueRow::netProfit).reversed());
-        if (out.size() > cap) {
-            return new ArrayList<>(out.subList(0, cap));
-        }
         return out;
     }
 
     /**
-     * Items that lost money in the window, worst first — for Hub “Why negative?”.
+     * Items that lost money in the window, worst first, plus the reconciliation bridge —
+     * for Hub “Why negative?”. See {@link MarginLeaksResponse}.
      */
     @Transactional(readOnly = true)
-    public List<MarginLeakRow> marginLeaks(
+    public MarginLeaksResponse marginLeaks(
             String businessId,
             LocalDate fromInclusive,
             LocalDate toInclusive,
@@ -1714,12 +1750,15 @@ public class SalesIntelligenceService {
             String itemTypeId,
             Integer limit
     ) {
+        ProfitWindow w = profitWindow(businessId, fromInclusive, toInclusive);
+        String branchFilter = blankToNull(branchId);
+        String typeFilter = blankToNull(itemTypeId);
         int cap = limit == null
                 ? DEFAULT_PROFIT_ITEM_LIMIT
                 : Math.max(1, Math.min(limit, MAX_PROFIT_ITEM_LIMIT));
-        // Pull a wide set so loss-makers at the tail of the profit ranking are included.
-        List<ItemRevenueRow> all = itemsByProfit(
-                businessId, fromInclusive, toInclusive, null, branchId, itemTypeId, MAX_PROFIT_ITEM_LIMIT);
+        // Full ranking (uncapped): loss-makers sort to the tail, so a capped fetch would drop them.
+        List<ItemRevenueRow> all = sortedItemsByProfit(
+                businessId, w, null, branchId, itemTypeId);
         List<ItemRevenueRow> losses = all.stream()
                 .filter(r -> r.netProfit() != null && r.netProfit().signum() < 0)
                 .sorted(Comparator.comparing(ItemRevenueRow::netProfit))
@@ -1767,7 +1806,75 @@ public class SalesIntelligenceService {
                     unitsPerPack,
                     stockSourceName));
         }
-        return out;
+        BigDecimal listedProfit = all.stream()
+                .map(ItemRevenueRow::netProfit)
+                .filter(p -> p != null)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(2, RoundingMode.HALF_UP);
+        MarginBridge bridge = marginBridge(businessId, w, branchFilter, typeFilter);
+        return new MarginLeaksResponse(
+                w.from(),
+                w.to(),
+                branchFilter,
+                bridge.grossProfit(),
+                listedProfit,
+                bridge.refundsInWindow(),
+                bridge.removedItemsProfit(),
+                bridge.airtimeProfit(),
+                List.copyOf(out));
+    }
+
+    private record MarginBridge(
+            BigDecimal grossProfit,
+            BigDecimal refundsInWindow,
+            BigDecimal removedItemsProfit,
+            BigDecimal airtimeProfit) {
+    }
+
+    /**
+     * Components the card counts but the item list cannot attribute to a live catalog item,
+     * so the drawer can reconcile: {@code grossProfit = listed + refunds + removed + airtime}.
+     */
+    private MarginBridge marginBridge(
+            String businessId,
+            ProfitWindow w,
+            String branchFilter,
+            String typeFilter
+    ) {
+        Timestamp fromDate = utcBound(w.startInclusive());
+        Timestamp toDate = utcBound(w.endExclusive());
+        BigDecimal[] totals = {ZERO, ZERO, ZERO};
+        jdbc.query(
+                Q_MARGIN_BRIDGE,
+                rs -> {
+                    totals[0] = rs.getBigDecimal("total_profit").setScale(2, RoundingMode.HALF_UP);
+                    totals[1] = rs.getBigDecimal("airtime_profit").setScale(2, RoundingMode.HALF_UP);
+                    totals[2] = rs.getBigDecimal("removed_profit").setScale(2, RoundingMode.HALF_UP);
+                },
+                businessId,
+                SalesConstants.SALE_STATUS_COMPLETED,
+                SalesConstants.SALE_STATUS_REFUNDED,
+                fromDate,
+                toDate,
+                branchFilter,
+                branchFilter,
+                typeFilter,
+                typeFilter);
+        BigDecimal[] refunds = {ZERO};
+        jdbc.query(
+                Q_MARGIN_BRIDGE_REFUNDS,
+                rs -> {
+                    refunds[0] = rs.getBigDecimal("profit_refund").setScale(2, RoundingMode.HALF_UP);
+                },
+                businessId,
+                SalesConstants.REFUND_STATUS_COMPLETED,
+                fromDate,
+                toDate,
+                branchFilter,
+                branchFilter,
+                typeFilter,
+                typeFilter);
+        return new MarginBridge(totals[0], refunds[0], totals[2], totals[1]);
     }
 
     private Map<String, Item> packContextById(String businessId, List<ItemRevenueRow> rows) {
@@ -1808,9 +1915,9 @@ public class SalesIntelligenceService {
             String branchId,
             String itemTypeId
     ) {
-        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
-        Date from = Date.valueOf(w[0]);
-        Date to = Date.valueOf(w[1]);
+        ProfitWindow w = profitWindow(businessId, fromInclusive, toInclusive);
+        Timestamp from = utcBound(w.startInclusive());
+        Timestamp to = utcBound(w.endExclusive());
         String catFilter = blankToNull(categoryId);
         String branchFilter = blankToNull(branchId);
         String typeFilter = blankToNull(itemTypeId);
@@ -1874,39 +1981,30 @@ public class SalesIntelligenceService {
             LocalDate toInclusive,
             String branchId
     ) {
-        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
-        Date from = Date.valueOf(w[0]);
-        Date to = Date.valueOf(w[1]);
+        ProfitWindow w = profitWindow(businessId, fromInclusive, toInclusive);
+        Timestamp from = utcBound(w.startInclusive());
+        Timestamp to = utcBound(w.endExclusive());
         String branchFilter = blankToNull(branchId);
 
         List<MonthlyCustomerRow> months = new ArrayList<>();
-        jdbc.query(
-                Q_CUSTOMERS_BY_MONTH,
-                rs -> {
-                    months.add(new MonthlyCustomerRow(
-                            (int) rs.getDouble("yr"),
-                            (int) rs.getDouble("mo"),
-                            rs.getLong("customer_count")));
-                },
-                businessId,
-                SalesConstants.SALE_STATUS_COMPLETED,
-                SalesConstants.SALE_STATUS_REFUNDED,
-                from,
-                to,
-                branchFilter,
-                branchFilter);
+        YearMonth firstMonth = YearMonth.from(w.from());
+        YearMonth lastMonth = YearMonth.from(w.to());
+        for (YearMonth ym = firstMonth; !ym.isAfter(lastMonth); ym = ym.plusMonths(1)) {
+            Instant monthStart = ym.atDay(1).atStartOfDay(businessZone(businessId)).toInstant();
+            Instant monthEnd = ym.plusMonths(1).atDay(1).atStartOfDay(businessZone(businessId)).toInstant();
+            Timestamp mFrom = utcBound(monthStart.isBefore(w.startInclusive()) ? w.startInclusive() : monthStart);
+            Timestamp mTo = utcBound(monthEnd.isAfter(w.endExclusive()) ? w.endExclusive() : monthEnd);
+            Long count = jdbc.queryForObject(
+                    Q_CUSTOMERS_DISTINCT, Long.class,
+                    businessId, SalesConstants.SALE_STATUS_COMPLETED, SalesConstants.SALE_STATUS_REFUNDED,
+                    mFrom, mTo, branchFilter, branchFilter);
+            months.add(new MonthlyCustomerRow(ym.getYear(), ym.getMonthValue(), count == null ? 0L : count));
+        }
 
         Long total = jdbc.queryForObject(
-                Q_CUSTOMERS_DISTINCT,
-                Long.class,
-                businessId,
-                SalesConstants.SALE_STATUS_COMPLETED,
-                SalesConstants.SALE_STATUS_REFUNDED,
-                from,
-                to,
-                branchFilter,
-                branchFilter);
-
+                Q_CUSTOMERS_DISTINCT, Long.class,
+                businessId, SalesConstants.SALE_STATUS_COMPLETED, SalesConstants.SALE_STATUS_REFUNDED,
+                from, to, branchFilter, branchFilter);
         return new CustomerTrendResponse(total == null ? 0L : total, months);
     }
 
@@ -1918,10 +2016,11 @@ public class SalesIntelligenceService {
             String branchId,
             Integer limit
     ) {
-        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
-        Date from = Date.valueOf(w[0]);
-        Date to = Date.valueOf(w[1]);
-        LocalDate asOf = w[1];
+        ProfitWindow w = profitWindow(businessId, fromInclusive, toInclusive);
+        Timestamp from = utcBound(w.startInclusive());
+        Timestamp to = utcBound(w.endExclusive());
+        ZoneId zone = businessZone(businessId);
+        LocalDate asOf = w.to();
         String branchFilter = blankToNull(branchId);
         int rowLimit = limit == null
                 ? DEFAULT_CUSTOMER_SPEND_LIMIT
@@ -1950,8 +2049,8 @@ public class SalesIntelligenceService {
                 rs -> {
                     long customerNo = rs.getLong("customer_no");
                     Long customerNoOrNull = rs.wasNull() ? null : customerNo;
-                    Date first = rs.getDate("first_visit");
-                    Date last = rs.getDate("last_visit");
+                    LocalDate firstVisit = businessDate(rs.getTimestamp("first_visit_at"), zone);
+                    LocalDate lastVisit = businessDate(rs.getTimestamp("last_visit_at"), zone);
                     Boolean phoneVerified = rs.getObject("phone_verified") == null
                             ? null
                             : rs.getBoolean("phone_verified");
@@ -1965,8 +2064,8 @@ public class SalesIntelligenceService {
                             rs.getString("origin"),
                             rs.getLong("sale_count"),
                             spend == null ? ZERO : spend.setScale(2, RoundingMode.HALF_UP),
-                            first == null ? null : first.toLocalDate(),
-                            last == null ? null : last.toLocalDate(),
+                            firstVisit,
+                            lastVisit,
                             rs.getString("masked_msisdn"),
                             phoneVerified,
                             rs.getBoolean("wholesale_pinned")));
@@ -1979,17 +2078,14 @@ public class SalesIntelligenceService {
                 branchFilter,
                 branchFilter);
 
-        Map<String, List<LocalDate>> visitsByCustomer = new HashMap<>();
+        Map<String, Set<LocalDate>> visitsByCustomer = new HashMap<>();
         jdbc.query(
                 Q_CUSTOMER_VISIT_DAYS,
                 rs -> {
-                    Date visit = rs.getDate("visit_date");
-                    if (visit == null) {
-                        return;
-                    }
+                    LocalDate d = businessDate(rs.getTimestamp("sold_at"), zone);
                     visitsByCustomer
-                            .computeIfAbsent(rs.getString("customer_id"), k -> new ArrayList<>())
-                            .add(visit.toLocalDate());
+                            .computeIfAbsent(rs.getString("customer_id"), k -> new LinkedHashSet<>())
+                            .add(d);
                 },
                 businessId,
                 SalesConstants.SALE_STATUS_COMPLETED,
@@ -2035,7 +2131,7 @@ public class SalesIntelligenceService {
         List<CustomerSpendRow> built = new ArrayList<>();
         for (Agg agg : aggs) {
             CustomerSpendMath.Rhythm rhythm = CustomerSpendMath.rhythm(
-                    visitsByCustomer.getOrDefault(agg.customerId(), List.of()), asOf);
+                    new ArrayList<>(visitsByCustomer.getOrDefault(agg.customerId(), Set.of())), asOf);
             Integer daysSince = agg.lastVisit() == null
                     ? null
                     : (int) ChronoUnit.DAYS.between(agg.lastVisit(), asOf);
@@ -2125,9 +2221,9 @@ public class SalesIntelligenceService {
             LocalDate toInclusive,
             String branchId
     ) {
-        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
-        Date from = Date.valueOf(w[0]);
-        Date to = Date.valueOf(w[1]);
+        ProfitWindow w = profitWindow(businessId, fromInclusive, toInclusive);
+        Timestamp from = utcBound(w.startInclusive());
+        Timestamp to = utcBound(w.endExclusive());
         String branchFilter = blankToNull(branchId);
 
         long[] totals = {0L, 0L};
@@ -2178,8 +2274,8 @@ public class SalesIntelligenceService {
         }
 
         return new CaptureHealthResponse(
-                w[0],
-                w[1],
+                w.from(),
+                w.to(),
                 totals[0],
                 totals[1],
                 linkedPct(totals[1], totals[0]),
@@ -2230,7 +2326,7 @@ public class SalesIntelligenceService {
              WHERE s.business_id = ?
                AND sil.item_id = ?
                AND s.status IN (?, ?)
-               AND CAST(s.sold_at AS DATE) BETWEEN ? AND ?
+               AND s.sold_at >= ? AND s.sold_at < ?
                AND s.customer_id IS NOT NULL
                AND c.deleted_at IS NULL
                AND c.anonymised_at IS NULL
@@ -2255,9 +2351,9 @@ public class SalesIntelligenceService {
         if (!itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId.trim(), businessId).isPresent()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found");
         }
-        LocalDate[] w = resolveWindow(fromInclusive, toInclusive);
-        Date from = Date.valueOf(w[0]);
-        Date to = Date.valueOf(w[1]);
+        ProfitWindow w = profitWindow(businessId, fromInclusive, toInclusive);
+        Timestamp from = utcBound(w.startInclusive());
+        Timestamp to = utcBound(w.endExclusive());
         String branchFilter = blankToNull(branchId);
         int rowLimit = limit == null ? 200 : Math.max(1, Math.min(limit, 500));
 
@@ -2351,6 +2447,42 @@ public class SalesIntelligenceService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid date range");
         }
         return new LocalDate[] {fromEx, toEx};
+    }
+
+    /**
+     * Business-zone day window as half-open instants. Profit queries must use this so they slice
+     * sales the same way the Hub pulse / P&amp;L do — {@code CAST(sold_at AS DATE)} reads UTC and
+     * drifts the +/-3 h around local midnight.
+     */
+    private record ProfitWindow(LocalDate from, LocalDate to, Instant startInclusive, Instant endExclusive) {
+    }
+
+    private ProfitWindow profitWindow(String businessId, LocalDate fromInclusive, LocalDate toInclusive) {
+        ZoneId zone = businessZone(businessId);
+        LocalDate to = toInclusive != null ? toInclusive : LocalDate.now(zone);
+        LocalDate from = fromInclusive != null ? fromInclusive : to.minusDays(90);
+        if (from.isAfter(to)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid date range");
+        }
+        return new ProfitWindow(
+                from,
+                to,
+                from.atStartOfDay(zone).toInstant(),
+                to.plusDays(1).atStartOfDay(zone).toInstant());
+    }
+
+    private ZoneId businessZone(String businessId) {
+        return BusinessTimeZones.of(businessRepository.findById(businessId).orElse(null));
+    }
+
+    /** Business-local date for a stored timestamp, whatever zone the JDBC session reads in. */
+    private static LocalDate businessDate(Timestamp ts, ZoneId zone) {
+        return ts == null ? null : ts.toInstant().atZone(zone).toLocalDate();
+    }
+
+    /** UTC-anchored binding for a TIMESTAMP column (same pattern as {@code qtySoldSince}). */
+    private static Timestamp utcBound(Instant instant) {
+        return Timestamp.from(instant);
     }
 
     private static Agg combineAgg(Agg a, Agg b) {

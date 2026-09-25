@@ -323,8 +323,6 @@ public class GlobalCatalogService {
     private static final Set<String> SPECIALIZED_STORE_KITS =
             Set.of("pharmacy", "cosmetics", "wines-spirits");
 
-    private static final String NO_STORE_KIT_FILTER = "__no_store_kit_filter__";
-
     /** Visible product verticals for a shop; {@code empty} means "do not scope". */
     private record StoreKitScope(List<String> kits, boolean empty) {
     }
@@ -337,7 +335,9 @@ public class GlobalCatalogService {
     private StoreKitScope resolveStoreKitScope(String businessId) {
         List<String> shopTypes = readStoreTypes(businessId);
         if (shopTypes.isEmpty()) {
-            return new StoreKitScope(List.of(NO_STORE_KIT_FILTER), true);
+            // Unknown shop format: do not mix verticals — show the general grocery bucket only, never
+            // specialized content (pharmacy / cosmetics / wines) that belongs to another shop type.
+            return new StoreKitScope(List.of("grocery"), false);
         }
         LinkedHashSet<String> kits = new LinkedHashSet<>(shopTypes);
         boolean specialized = shopTypes.stream().anyMatch(SPECIALIZED_STORE_KITS::contains);

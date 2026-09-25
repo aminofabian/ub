@@ -49,6 +49,7 @@ import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductSup
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PromoteRequest;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PromoteResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PublishProductsRequest;
+import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.RestoreAllArchivedResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PublishAllDraftsResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PublishProductsResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PurgeCatalogRequest;
@@ -162,6 +163,14 @@ public class SuperAdminGlobalCatalogController {
             @RequestParam(required = false) String catalogId
     ) {
         return superAdminGlobalCatalogService.publishAllDrafts(catalogId);
+    }
+
+    /** Republishes every archived product (after a partial clear/replace). */
+    @PostMapping("/products/restore-all-archived")
+    public RestoreAllArchivedResponse restoreAllArchived(
+            @RequestParam(required = false) String catalogId
+    ) {
+        return superAdminGlobalCatalogService.restoreAllArchived(catalogId);
     }
 
     @PostMapping("/products/apply-margin")

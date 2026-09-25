@@ -273,6 +273,12 @@ public final class SuperAdminGlobalCatalogDtos {
     ) {
     }
 
+    public record RestoreAllArchivedResponse(
+            int restoredCount,
+            int skippedCount
+    ) {
+    }
+
     public record PurgeCatalogRequest(
             @NotBlank @Size(max = 64) String confirmCode
     ) {

@@ -45,6 +45,7 @@ import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PatchSuppl
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductImageResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductSupplierLinkResponse;
+import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.RestoreAllArchivedResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PublishAllDraftsResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PublishProductsRequest;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PublishProductsResponse;
@@ -170,6 +171,39 @@ public class SuperAdminGlobalCatalogService {
                     .toList());
         }
         return new PublishAllDraftsResponse(published, skipped);
+    }
+
+    /**
+     * Republishes every archived product so shops can import them again.
+     * Used after a clear/replace left rows archived while a partial promote
+     * created a newer live subset.
+     */
+    @Transactional
+    public RestoreAllArchivedResponse restoreAllArchived(String catalogId) {
+        GlobalCatalog catalog = requireCatalog(catalogId);
+        List<GlobalProduct> archived = globalProductRepository
+                .findByCatalogIdAndStatusOrderBySortOrderAscNameAsc(catalog.getId(), GlobalProductStatus.ARCHIVED);
+        int restored = 0;
+        int skipped = 0;
+        List<GlobalProduct> toSave = new ArrayList<>();
+        for (GlobalProduct product : archived) {
+            try {
+                assertBarcodeAvailable(
+                        product.getCatalogId(),
+                        product.getBarcode(),
+                        GlobalProductStatus.PUBLISHED,
+                        product.getId());
+                product.setStatus(GlobalProductStatus.PUBLISHED);
+                toSave.add(product);
+                restored++;
+            } catch (ResponseStatusException ex) {
+                skipped++;
+            }
+        }
+        if (!toSave.isEmpty()) {
+            globalProductRepository.saveAll(toSave);
+        }
+        return new RestoreAllArchivedResponse(restored, skipped);
     }
 
     /**

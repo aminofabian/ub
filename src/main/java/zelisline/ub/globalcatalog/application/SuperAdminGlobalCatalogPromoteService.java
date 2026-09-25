@@ -253,10 +253,8 @@ public class SuperAdminGlobalCatalogPromoteService {
                 continue;
             }
 
-            GlobalProduct existing = matchIndex.findMatch(item);
-            if (existing == null) {
-                existing = archivedMatchIndex.findMatch(item);
-            }
+            GlobalProduct existing = resolveExistingForPromote(
+                    item, catalog.getId(), matchIndex, archivedMatchIndex);
             if (existing != null && "skip".equals(onConflict)) {
                 skipped++;
                 lines.add(new PromoteLineResult(
@@ -517,6 +515,32 @@ public class SuperAdminGlobalCatalogPromoteService {
     }
 
     /**
+     * Prefer updating an archived row (same source id / barcode / sku / name) over creating
+     * a second live product and leaving the archive stranded.
+     */
+    private GlobalProduct resolveExistingForPromote(
+            Item item,
+            String catalogId,
+            GlobalMatchIndex matchIndex,
+            GlobalMatchIndex archivedMatchIndex
+    ) {
+        GlobalProduct existing = matchIndex.findMatch(item);
+        if (existing != null) {
+            return existing;
+        }
+        existing = archivedMatchIndex.findMatch(item);
+        if (existing != null) {
+            return existing;
+        }
+        if (item.getId() != null) {
+            return globalProductRepository.findById(item.getId())
+                    .filter(p -> catalogId.equals(p.getCatalogId()))
+                    .orElse(null);
+        }
+        return null;
+    }
+
+    /**
      * Draft promote must not silently demote already-published rows (that emptied Curate
      * "published" after the first batch). Revive archived rows to the requested status;
      * elevate to published when requested; otherwise keep live status.
@@ -571,6 +595,8 @@ public class SuperAdminGlobalCatalogPromoteService {
         product.setStatus(status);
         if (category != null) {
             product.setGlobalCategoryId(ensureGlobalCategory(catalogId, category).getId());
+        } else if (itemType != null && blankToNull(itemType.getLabel()) != null) {
+            product.setGlobalCategoryId(ensureDepartmentCategory(catalogId, itemType).getId());
         }
     }
 
@@ -657,6 +683,36 @@ public class SuperAdminGlobalCatalogPromoteService {
         created.setTenantCategorySlugHint(slug);
         created.setParentId(parentGlobalId);
         created.setPosition(tenantCategory.getPosition());
+        created.setActive(true);
+        return globalCategoryRepository.save(created);
+    }
+
+    /**
+     * Shops often file products under a department (item type) with no category.
+     * Promote that department as a global category so the assortment keeps its shelf.
+     */
+    private GlobalCategory ensureDepartmentCategory(String catalogId, ItemType department) {
+        String slug = slugify(department.getTypeKey() != null ? department.getTypeKey() : department.getLabel());
+        Optional<GlobalCategory> existing = globalCategoryRepository.findByCatalogIdAndSlug(catalogId, slug);
+        if (existing.isPresent()) {
+            GlobalCategory found = existing.get();
+            boolean dirty = false;
+            if (!found.isActive()) {
+                found.setActive(true);
+                dirty = true;
+            }
+            if (!Objects.equals(found.getName(), department.getLabel())) {
+                found.setName(department.getLabel());
+                dirty = true;
+            }
+            return dirty ? globalCategoryRepository.save(found) : found;
+        }
+        GlobalCategory created = new GlobalCategory();
+        created.setCatalogId(catalogId);
+        created.setName(department.getLabel());
+        created.setSlug(slug);
+        created.setTenantCategorySlugHint(slug);
+        created.setPosition(department.getSortOrder());
         created.setActive(true);
         return globalCategoryRepository.save(created);
     }

@@ -130,6 +130,14 @@ public class GlobalProduct {
     @Column(name = "item_type_key_hint", length = 64)
     private String itemTypeKeyHint = "goods";
 
+    /**
+     * Vertical this template belongs to (a store-kit id, e.g. {@code pharmacy}, or the general
+     * {@code grocery} bucket). {@code null} means unrestricted — visible to every shop. Browse/lookup
+     * are scoped to the shop's own verticals so a pharmacy never sees grocery SKUs and vice versa.
+     */
+    @Column(name = "store_kit_id", length = 64)
+    private String storeKitId;
+
     @Column(name = "status", nullable = false, length = 16)
     private String status = GlobalProductStatus.PUBLISHED;
 

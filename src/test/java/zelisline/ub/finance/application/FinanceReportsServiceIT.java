@@ -42,9 +42,13 @@ import zelisline.ub.identity.repository.RolePermissionRepository;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.sales.SalesConstants;
+import zelisline.ub.sales.domain.Refund;
+import zelisline.ub.sales.domain.RefundLine;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.SaleItem;
 import zelisline.ub.sales.domain.Shift;
+import zelisline.ub.sales.repository.RefundLineRepository;
+import zelisline.ub.sales.repository.RefundRepository;
 import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
@@ -82,6 +86,10 @@ class FinanceReportsServiceIT {
     @Autowired
     private SaleItemRepository saleItemRepository;
     @Autowired
+    private RefundRepository refundRepository;
+    @Autowired
+    private RefundLineRepository refundLineRepository;
+    @Autowired
     private JournalEntryRepository journalEntryRepository;
     @Autowired
     private JournalLineRepository journalLineRepository;
@@ -106,6 +114,8 @@ class FinanceReportsServiceIT {
     @BeforeEach
     void seed() {
         expenseRepository.deleteAll();
+        refundLineRepository.deleteAll();
+        refundRepository.deleteAll();
         saleItemRepository.deleteAll();
         saleRepository.deleteAll();
         journalLineRepository.deleteAll();
@@ -219,6 +229,61 @@ class FinanceReportsServiceIT {
                 .extracting(ExpenseResponse::name)
                 .contains("TZ day expense");
         assertThat(expenseService.listExpensesForDate(TENANT, utcDate)).isEmpty();
+    }
+
+    @Test
+    void pulse_netsRefundsProcessedInTheWindow() {
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        Instant noon = today.atTime(12, 0).toInstant(ZoneOffset.UTC);
+
+        // Sale today: revenue 100, COGS 60, profit 40.
+        Sale sale = new Sale();
+        sale.setBusinessId(TENANT);
+        sale.setBranchId(branchId);
+        sale.setShiftId("shift-refund-fixture");
+        sale.setStatus(SalesConstants.SALE_STATUS_COMPLETED);
+        sale.setIdempotencyKey("sale-refund-fixture");
+        sale.setGrandTotal(new BigDecimal("100.00"));
+        sale.setSoldBy(userId);
+        sale.setSoldAt(noon);
+        saleRepository.save(sale);
+        SaleItem line = new SaleItem();
+        line.setSaleId(sale.getId());
+        line.setLineIndex(0);
+        line.setItemId(UUID.randomUUID().toString());
+        line.setBatchId(UUID.randomUUID().toString());
+        line.setQuantity(new BigDecimal("10.0000"));
+        line.setUnitPrice(new BigDecimal("10.0000"));
+        line.setLineTotal(new BigDecimal("100.00"));
+        line.setUnitCost(new BigDecimal("6.0000"));
+        line.setCostTotal(new BigDecimal("60.00"));
+        line.setProfit(new BigDecimal("40.00"));
+        saleItemRepository.save(line);
+
+        // Partially refund 4 of 10 units: revenue -40, COGS -24.
+        Refund refund = new Refund();
+        refund.setBusinessId(TENANT);
+        refund.setSaleId(sale.getId());
+        refund.setIdempotencyKey("refund-fixture");
+        refund.setRefundedBy(userId);
+        refund.setTotalRefunded(new BigDecimal("40.00"));
+        refund.setStatus(SalesConstants.REFUND_STATUS_COMPLETED);
+        refund.setRefundedAt(noon.plusSeconds(60));
+        refundRepository.save(refund);
+        RefundLine refundLine = new RefundLine();
+        refundLine.setRefundId(refund.getId());
+        refundLine.setSaleItemId(line.getId());
+        refundLine.setQuantity(new BigDecimal("4.0000"));
+        refundLine.setAmount(new BigDecimal("40.00"));
+        refundLineRepository.save(refundLine);
+
+        // Pulse must be net of the refund, matching the ledger P&L's refund treatment.
+        FinancePulseResponse pulse = financeReportsService.pulse(TENANT, today, null);
+        assertThat(pulse.revenue()).isEqualByComparingTo("60.00");
+        assertThat(pulse.cogs()).isEqualByComparingTo("36.00");
+        assertThat(pulse.grossProfit()).isEqualByComparingTo("24.00");
+        // Refunded sale still counts as one completed sale.
+        assertThat(pulse.salesCount()).isEqualTo(1L);
     }
 
     @Test

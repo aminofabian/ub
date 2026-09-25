@@ -284,6 +284,47 @@ class GlobalCatalogIT {
     }
 
     @Test
+    void browseScopedToShopVertical() throws Exception {
+        // The seeded product becomes general grocery retail; add a pharmacy-only product.
+        GlobalProduct grocery = globalProductRepository.findById(globalProductId).orElseThrow();
+        grocery.setStoreKitId("grocery");
+        globalProductRepository.save(grocery);
+
+        GlobalProduct pharmacy = new GlobalProduct();
+        pharmacy.setCatalogId(grocery.getCatalogId());
+        pharmacy.setName("Paracetamol 500mg");
+        pharmacy.setUnitType("each");
+        pharmacy.setStatus("published");
+        pharmacy.setStoreKitId("pharmacy");
+        pharmacy.setSortOrder(1);
+        globalProductRepository.save(pharmacy);
+
+        Business business = businessRepository.findById(TENANT_A).orElseThrow();
+
+        // A pharmacy sees its own vertical only — never the grocery SKUs.
+        business.setSettings("{\"profile\":{\"storeTypes\":[\"pharmacy\"]}}");
+        businessRepository.saveAndFlush(business);
+        mockMvc.perform(get("/api/v1/global-catalog/products")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].name").value("Paracetamol 500mg"));
+
+        // A mini-mart sees grocery only — never the pharmacy SKUs.
+        business.setSettings("{\"profile\":{\"storeTypes\":[\"mini-mart\"]}}");
+        businessRepository.saveAndFlush(business);
+        mockMvc.perform(get("/api/v1/global-catalog/products")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].name").value("Test Cola 500ml"));
+    }
+
+    @Test
     void getMetaReturnsCatalogCategoriesAndPacks() throws Exception {
         mockMvc.perform(get("/api/v1/global-catalog/meta")
                         .header("X-Tenant-Id", TENANT_A)

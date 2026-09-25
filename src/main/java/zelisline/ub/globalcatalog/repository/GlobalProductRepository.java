@@ -28,6 +28,9 @@ public interface GlobalProductRepository extends JpaRepository<GlobalProduct, St
                     or lower(coalesce(gp.brand, '')) like lower(concat('%', :q, '%'))
                     or lower(coalesce(gp.barcode, '')) like lower(concat('%', :q, '%')))
                and (:barcode is null or :barcode = '' or gp.barcode = :barcode)
+               and (:storeKitsEmpty = true
+                    or gp.storeKitId is null
+                    or gp.storeKitId in :storeKits)
             """)
     Page<GlobalProduct> search(
             @Param("catalogId") String catalogId,
@@ -36,6 +39,8 @@ public interface GlobalProductRepository extends JpaRepository<GlobalProduct, St
             @Param("categoryIdsEmpty") boolean categoryIdsEmpty,
             @Param("q") String q,
             @Param("barcode") String barcode,
+            @Param("storeKits") Collection<String> storeKits,
+            @Param("storeKitsEmpty") boolean storeKitsEmpty,
             Pageable pageable);
 
     @Query("""

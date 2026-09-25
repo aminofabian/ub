@@ -128,6 +128,7 @@ public class GlobalCatalogService {
     ) {
         GlobalCatalog catalog = resolveCatalog(businessId);
         TenantCatalogMatchIndex matchIndex = tenantCatalogMatchIndex(businessId);
+        StoreKitScope scope = resolveStoreKitScope(businessId);
         Collection<String> categoryIds = expandCategoryFilter(catalog.getId(), blankToNull(categoryId));
         boolean categoryIdsEmpty = categoryIds.isEmpty();
         // Hibernate rejects empty IN lists — use a sentinel when no category filter.
@@ -142,6 +143,8 @@ public class GlobalCatalogService {
                     categoryIdsEmpty,
                     blankToNull(q),
                     blankToNull(barcode),
+                    scope.kits(),
+                    scope.empty(),
                     Pageable.unpaged());
 
             List<GlobalProduct> availableProducts = all.getContent().stream()
@@ -169,6 +172,8 @@ public class GlobalCatalogService {
                 categoryIdsEmpty,
                 blankToNull(q),
                 blankToNull(barcode),
+                scope.kits(),
+                scope.empty(),
                 p);
 
         Map<String, List<GlobalProductImage>> imagesByProduct = imagesByProductId(page.getContent());
@@ -224,6 +229,7 @@ public class GlobalCatalogService {
     @Transactional(readOnly = true)
     public List<GlobalProductResponse> lookup(String businessId, String barcode, String q) {
         GlobalCatalog catalog = resolveCatalog(businessId);
+        StoreKitScope scope = resolveStoreKitScope(businessId);
         String barcodeNorm = blankToNull(barcode);
         String query = blankToNull(q);
         if (barcodeNorm == null && query == null) {
@@ -233,17 +239,17 @@ public class GlobalCatalogService {
         LinkedHashMap<String, GlobalProduct> ordered = new LinkedHashMap<>();
         if (barcodeNorm != null) {
             for (GlobalProduct gp : fetchPublishedCandidates(
-                    catalog.getId(), null, barcodeNorm, PageRequest.of(0, LOOKUP_LIMIT))) {
+                    catalog.getId(), null, barcodeNorm, scope, PageRequest.of(0, LOOKUP_LIMIT))) {
                 ordered.put(gp.getId(), gp);
             }
         }
         if (query != null && !CatalogSearchSupport.isBlankQuery(query)) {
-            for (GlobalProduct gp : fetchRankedByQuery(catalog.getId(), query)) {
+            for (GlobalProduct gp : fetchRankedByQuery(catalog.getId(), query, scope)) {
                 ordered.putIfAbsent(gp.getId(), gp);
             }
         } else if (query != null) {
             for (GlobalProduct gp : fetchPublishedCandidates(
-                    catalog.getId(), query, null, PageRequest.of(0, LOOKUP_LIMIT))) {
+                    catalog.getId(), query, null, scope, PageRequest.of(0, LOOKUP_LIMIT))) {
                 ordered.putIfAbsent(gp.getId(), gp);
             }
         }
@@ -257,13 +263,14 @@ public class GlobalCatalogService {
                 .toList();
     }
 
-    private List<GlobalProduct> fetchRankedByQuery(String catalogId, String query) {
+    private List<GlobalProduct> fetchRankedByQuery(String catalogId, String query, StoreKitScope scope) {
         String first = CatalogSearchSupport.candidateToken(query);
         List<GlobalProduct> ranked = rankGlobalHits(
                 fetchPublishedCandidates(
                         catalogId,
                         first,
                         null,
+                        scope,
                         PageRequest.of(0, CatalogSearchSupport.CANDIDATE_FETCH_SIZE)),
                 query);
         if (!ranked.isEmpty()) {
@@ -282,6 +289,7 @@ public class GlobalCatalogService {
                             catalogId,
                             token,
                             null,
+                            scope,
                             PageRequest.of(0, CatalogSearchSupport.CANDIDATE_FETCH_SIZE)),
                     query);
             if (!ranked.isEmpty()) {
@@ -295,6 +303,7 @@ public class GlobalCatalogService {
             String catalogId,
             String q,
             String barcode,
+            StoreKitScope scope,
             Pageable pageable
     ) {
         return globalProductRepository.search(
@@ -304,8 +313,57 @@ public class GlobalCatalogService {
                 true,
                 q,
                 barcode,
+                scope.kits(),
+                scope.empty(),
                 pageable
         ).getContent();
+    }
+
+    /** Verticals whose content is exclusive — no cross-vertical fallback. */
+    private static final Set<String> SPECIALIZED_STORE_KITS =
+            Set.of("pharmacy", "cosmetics", "wines-spirits");
+
+    private static final String NO_STORE_KIT_FILTER = "__no_store_kit_filter__";
+
+    /** Visible product verticals for a shop; {@code empty} means "do not scope". */
+    private record StoreKitScope(List<String> kits, boolean empty) {
+    }
+
+    /**
+     * Product verticals visible to this shop. When the shop's formats are unknown, no scoping is
+     * applied (safer than hiding everything). A specialized shop (pharmacy / cosmetics / wines)
+     * sees only its own vertical; general formats also see the shared {@code grocery} bucket.
+     */
+    private StoreKitScope resolveStoreKitScope(String businessId) {
+        List<String> shopTypes = readStoreTypes(businessId);
+        if (shopTypes.isEmpty()) {
+            return new StoreKitScope(List.of(NO_STORE_KIT_FILTER), true);
+        }
+        LinkedHashSet<String> kits = new LinkedHashSet<>(shopTypes);
+        boolean specialized = shopTypes.stream().anyMatch(SPECIALIZED_STORE_KITS::contains);
+        if (!specialized) {
+            kits.add("grocery");
+        }
+        return new StoreKitScope(new ArrayList<>(kits), false);
+    }
+
+    private List<String> readStoreTypes(String businessId) {
+        try {
+            Business business = businessRepository.findById(businessId).orElse(null);
+            if (business == null) {
+                return List.of();
+            }
+            var profile = businessProfileSettingsService.readFromSettingsJson(business.getSettings());
+            if (profile.storeTypes() != null && !profile.storeTypes().isEmpty()) {
+                return profile.storeTypes();
+            }
+            if (profile.storeType() != null) {
+                return List.of(profile.storeType());
+            }
+        } catch (Exception ignored) {
+            // Settings unreadable → do not scope.
+        }
+        return List.of();
     }
 
     private static List<GlobalProduct> rankGlobalHits(List<GlobalProduct> candidates, String query) {

@@ -5,9 +5,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-import org.springframework.security.core.GrantedAuthority;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
-
 /**
  * Desk roles for platform operators on the Customer Serving portal.
  *
@@ -103,12 +100,18 @@ public final class SuperAdminDeskRoles {
         return OWNER_PERMISSIONS;
     }
 
-    public static List<GrantedAuthority> authoritiesFor(String roleKey) {
-        List<GrantedAuthority> authorities = new ArrayList<>();
-        authorities.add(new SimpleGrantedAuthority("ROLE_SUPER_ADMIN"));
+    /**
+     * Spring Security authority names for this desk role ({@code ROLE_SUPER_ADMIN}
+     * plus the {@code PERM_*} grants). Framework-agnostic on purpose — the
+     * security layer wraps these in {@link org.springframework.security.core.GrantedAuthority}
+     * so the identity domain stays free of Spring (see {@code IdentityDomainArchTest}).
+     */
+    public static List<String> authorityNames(String roleKey) {
+        List<String> names = new ArrayList<>();
+        names.add("ROLE_SUPER_ADMIN");
         for (String perm : permissionsFor(roleKey)) {
-            authorities.add(new SimpleGrantedAuthority("PERM_" + perm));
+            names.add("PERM_" + perm);
         }
-        return authorities;
+        return names;
     }
 }

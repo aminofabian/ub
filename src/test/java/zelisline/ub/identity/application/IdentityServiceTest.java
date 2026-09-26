@@ -35,6 +35,7 @@ import zelisline.ub.identity.repository.PermissionRepository;
 import zelisline.ub.identity.repository.RolePermissionRepository;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserItemTypeRepository;
+import zelisline.ub.identity.repository.UserOAuthIdentityRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.identity.repository.UserSessionRepository;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
@@ -65,6 +66,7 @@ class IdentityServiceTest {
     @Mock private UserItemTypeRepository userItemTypeRepository;
     @Mock private ItemTypeRepository itemTypeRepository;
     @Mock private UserSessionRepository userSessionRepository;
+    @Mock private UserOAuthIdentityRepository userOAuthIdentityRepository;
     @Mock private StaffProfileRepository staffProfileRepository;
     @Mock private PasswordEncoder passwordEncoder;
     @Mock private CredentialEncryptionService credentialEncryptionService;
@@ -275,6 +277,27 @@ class IdentityServiceTest {
         assertThat(profile.getEmploymentStatus()).isEqualTo(EmploymentStatus.TERMINATED);
         verify(userSessionRepository).revokeAllActiveForUser(eq(user.getId()), any(Instant.class));
         verify(staffProfileRepository).save(profile);
+    }
+
+    @Test
+    void unlinkGoogleRejectsPasswordMismatch() {
+        User user = new User();
+        user.setId("user-link");
+        user.setBusinessId(TENANT_A);
+        user.setRoleId(ROLE_CASHIER);
+        user.setPasswordHash("encoded");
+        given(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull("user-link", TENANT_A))
+                .willReturn(Optional.of(user));
+        given(passwordEncoder.matches("nope", "encoded")).willReturn(false);
+
+        ResponseStatusException ex = catchThrowableOfType(
+                () -> identityService.unlinkGoogle(TENANT_A, "user-link", "nope"),
+                ResponseStatusException.class);
+
+        assertThat(ex).isNotNull();
+        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        verify(userOAuthIdentityRepository, never())
+                .deleteByUserIdAndProvider(anyString(), anyString());
     }
 
     @Test

@@ -15,6 +15,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.identity.api.dto.AdminSetPinRequest;
+import zelisline.ub.identity.api.dto.MeOAuthLinksResponse;
+import zelisline.ub.identity.api.dto.UnlinkOAuthRequest;
 import zelisline.ub.identity.api.dto.UpdateMeRequest;
 import zelisline.ub.identity.api.dto.UserResponse;
 import zelisline.ub.identity.application.IdentityService;
@@ -59,6 +61,31 @@ public class IdentityMeController {
             TenantRequestIds.resolveBusinessId(request),
             principal.userId(),
             body.pin()
+        );
+    }
+
+    /** Which social identities are connected to this account (for the profile card). */
+    @GetMapping("/oauth")
+    @PreAuthorize("isAuthenticated()")
+    public MeOAuthLinksResponse oauthLinks(HttpServletRequest request) {
+        var principal = CurrentTenantUser.requireHuman(request);
+        return new MeOAuthLinksResponse(identityService.googleLinked(
+                TenantRequestIds.resolveBusinessId(request), principal.userId()));
+    }
+
+    /** Self-service disconnect of the caller's own Google identity. */
+    @PostMapping("/oauth/google/unlink")
+    @PreAuthorize("isAuthenticated()")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void unlinkGoogle(
+            @Valid @RequestBody UnlinkOAuthRequest body,
+            HttpServletRequest request
+    ) {
+        var principal = CurrentTenantUser.requireHuman(request);
+        identityService.unlinkGoogle(
+            TenantRequestIds.resolveBusinessId(request),
+            principal.userId(),
+            body.password()
         );
     }
 }

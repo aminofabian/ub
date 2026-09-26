@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.security.core.GrantedAuthority;
 
 class SuperAdminDeskRolesTest {
 
@@ -37,11 +36,9 @@ class SuperAdminDeskRolesTest {
     void leadHasConsoleAndStaff() {
         assertTrue(SuperAdminDeskRoles.canSeeFullConsole(SuperAdminDeskRoles.LEAD));
         assertTrue(SuperAdminDeskRoles.canManageStaff(SuperAdminDeskRoles.LEAD));
-        assertTrue(SuperAdminDeskRoles.authoritiesFor(SuperAdminDeskRoles.LEAD).stream()
-                .map(GrantedAuthority::getAuthority)
-                .anyMatch("PERM_sa.staff.manage"::equals));
-        assertTrue(SuperAdminDeskRoles.authoritiesFor(SuperAdminDeskRoles.LEAD).stream()
-                .map(GrantedAuthority::getAuthority)
-                .anyMatch("PERM_sa.inbox.access"::equals));
+        assertTrue(SuperAdminDeskRoles.authorityNames(SuperAdminDeskRoles.LEAD)
+                .contains("PERM_sa.staff.manage"));
+        assertTrue(SuperAdminDeskRoles.authorityNames(SuperAdminDeskRoles.LEAD)
+                .contains("PERM_sa.inbox.access"));
     }
 }

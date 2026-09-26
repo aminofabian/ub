@@ -35,6 +35,7 @@ import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.domain.RolePermission;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.domain.UserItemType;
+import zelisline.ub.identity.domain.UserOAuthIdentity;
 import zelisline.ub.identity.domain.UserStatus;
 import zelisline.ub.identity.repository.PermissionRepository;
 import zelisline.ub.identity.repository.RolePermissionRepository;
@@ -428,6 +429,36 @@ public class IdentityService {
         User saved = userRepository.save(user);
         Role role = roleRepository.findById(saved.getRoleId()).orElse(null);
         return toResponse(saved, role);
+    }
+
+    /** True when this account has a linked Google identity (self-service link status). */
+    @Transactional(readOnly = true)
+    public boolean googleLinked(String businessId, String userId) {
+        requireTenantUser(businessId, userId);
+        return userOAuthIdentityRepository
+                .findByUserIdAndProvider(userId, UserOAuthIdentity.PROVIDER_GOOGLE)
+                .isPresent();
+    }
+
+    /**
+     * Disconnect a user's own Google identity. Requires the account password so a
+     * Google-only owner (whose stored password is an unusable system hash) cannot
+     * lock themselves out — the caller must set a password first.
+     */
+    @Transactional
+    public void unlinkGoogle(String businessId, String userId, String password) {
+        User user = requireTenantUser(businessId, userId);
+        if (password == null
+                || password.isBlank()
+                || user.getPasswordHash() == null
+                || !passwordEncoder.matches(password, user.getPasswordHash())) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Enter your account password to disconnect Google. "
+                            + "If you never set one, set a password first, then try again.");
+        }
+        userOAuthIdentityRepository.deleteByUserIdAndProvider(
+                userId, UserOAuthIdentity.PROVIDER_GOOGLE);
     }
 
     /**

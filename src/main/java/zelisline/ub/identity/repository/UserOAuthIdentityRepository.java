@@ -24,4 +24,10 @@ public interface UserOAuthIdentityRepository extends JpaRepository<UserOAuthIden
     @Transactional
     @Query("delete from UserOAuthIdentity u where u.userId = :userId")
     void deleteByUserId(@Param("userId") String userId);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("delete from UserOAuthIdentity u where u.userId = :userId and u.provider = :provider")
+    void deleteByUserIdAndProvider(
+            @Param("userId") String userId, @Param("provider") String provider);
 }

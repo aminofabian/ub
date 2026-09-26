@@ -345,10 +345,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     "unauthorized");
             return false;
         }
+        var authorities = SuperAdminDeskRoles.authorityNames(admin.getDeskRole()).stream()
+                .map(SimpleGrantedAuthority::new)
+                .toList();
         var authentication = new UsernamePasswordAuthenticationToken(
                 admin.getId(),
                 "",
-                SuperAdminDeskRoles.authoritiesFor(admin.getDeskRole())
+                authorities
         );
         SecurityContextHolder.getContext().setAuthentication(authentication);
         return true;

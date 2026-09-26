@@ -34,9 +34,11 @@ import zelisline.ub.identity.api.dto.VerifyEmailRequest;
 import zelisline.ub.identity.domain.EmailVerificationToken;
 import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.domain.User;
+import zelisline.ub.identity.domain.UserOAuthIdentity;
 import zelisline.ub.identity.domain.UserStatus;
 import zelisline.ub.identity.repository.EmailVerificationTokenRepository;
 import zelisline.ub.identity.repository.RoleRepository;
+import zelisline.ub.identity.repository.UserOAuthIdentityRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.notifications.NotificationCategories;
 import zelisline.ub.notifications.NotificationTypes;
@@ -63,6 +65,7 @@ public class AuthRegistrationService {
 
     private final BusinessRepository businessRepository;
     private final UserRepository userRepository;
+    private final UserOAuthIdentityRepository userOAuthIdentityRepository;
     private final RoleRepository roleRepository;
     private final PasswordEncoder passwordEncoder;
     private final EmailVerificationTokenRepository emailVerificationTokenRepository;
@@ -379,8 +382,13 @@ public class AuthRegistrationService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found");
         }
         String email = normaliseEmail(request.email());
-        boolean registered = userRepository.existsByBusinessIdAndEmailAndDeletedAtIsNull(businessId, email);
-        return new EmailLookupResponse(registered);
+        var existing = userRepository.findByBusinessIdAndEmailAndDeletedAtIsNull(businessId, email);
+        boolean usesGoogle = existing
+                .map(user -> userOAuthIdentityRepository
+                        .findByUserIdAndProvider(user.getId(), UserOAuthIdentity.PROVIDER_GOOGLE)
+                        .isPresent())
+                .orElse(false);
+        return new EmailLookupResponse(existing.isPresent(), usesGoogle);
     }
 
     private void assertSignupEnabled() {

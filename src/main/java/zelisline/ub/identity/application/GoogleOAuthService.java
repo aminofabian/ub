@@ -61,6 +61,8 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
 public class GoogleOAuthService {
 
     public static final String BIND_COOKIE = "ub.oauth_bind";
+    /** Short-lived hint so BFF error redirects can return to office login. */
+    public static final String NEXT_COOKIE = "ub.oauth_next";
     private static final String GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth";
     private static final String GOOGLE_TOKEN = "https://oauth2.googleapis.com/token";
     private static final Duration STATE_TTL = Duration.ofMinutes(10);
@@ -148,9 +150,17 @@ public class GoogleOAuthService {
                 .maxAge(STATE_TTL)
                 .sameSite("Lax")
                 .build();
+        ResponseCookie nextHint = ResponseCookie.from(NEXT_COOKIE, row.getNextPath())
+                .httpOnly(true)
+                .secure(isSecureRequest(http))
+                .path("/")
+                .maxAge(STATE_TTL)
+                .sameSite("Lax")
+                .build();
 
         return ResponseEntity.ok()
                 .header(HttpHeaders.SET_COOKIE, bind.toString())
+                .header(HttpHeaders.SET_COOKIE, nextHint.toString())
                 .body(new GoogleOAuthStartResponse(authorizeUrl));
     }
 
@@ -174,6 +184,7 @@ public class GoogleOAuthService {
             HttpHeaders headers = new HttpHeaders();
             appendSessionCookies(headers, done.session());
             headers.add(HttpHeaders.SET_COOKIE, clearBindCookie(http));
+            headers.add(HttpHeaders.SET_COOKIE, clearNextCookie(http));
             headers.setLocation(URI.create(handoff));
             return new ResponseEntity<>(headers, HttpStatus.FOUND);
         } catch (Exception ex) {
@@ -204,6 +215,7 @@ public class GoogleOAuthService {
         HttpHeaders headers = new HttpHeaders();
         appendSessionCookies(headers, done.session());
         headers.add(HttpHeaders.SET_COOKIE, clearBindCookie(http));
+        headers.add(HttpHeaders.SET_COOKIE, clearNextCookie(http));
         return ResponseEntity.ok()
                 .headers(headers)
                 .body(new GoogleOAuthExchangeResponse(
@@ -292,6 +304,17 @@ public class GoogleOAuthService {
 
     private String clearBindCookie(HttpServletRequest http) {
         return ResponseCookie.from(BIND_COOKIE, "")
+                .path("/")
+                .maxAge(0)
+                .httpOnly(true)
+                .secure(isSecureRequest(http))
+                .sameSite("Lax")
+                .build()
+                .toString();
+    }
+
+    private String clearNextCookie(HttpServletRequest http) {
+        return ResponseCookie.from(NEXT_COOKIE, "")
                 .path("/")
                 .maxAge(0)
                 .httpOnly(true)
@@ -450,8 +473,64 @@ public class GoogleOAuthService {
     }
 
     private ResponseEntity<Void> errorRedirect(String frontendOrigin, String code) {
-        String target = frontendOrigin + "/login?googleError=" + enc(code);
+        return errorRedirect(frontendOrigin, code, null, null);
+    }
+
+    private ResponseEntity<Void> errorRedirect(
+            String frontendOrigin, String code, OAuthLoginState row) {
+        return errorRedirect(
+                frontendOrigin,
+                code,
+                row == null ? null : row.getNextPath(),
+                row == null ? null : row.getBusinessId());
+    }
+
+    /**
+     * Office / hub destinations return to staff office login so Google-only
+     * owners see errors on the same page they started from.
+     */
+    private ResponseEntity<Void> errorRedirect(
+            String frontendOrigin, String code, String nextPath, String businessId) {
+        String target;
+        if (preferOfficeLoginError(nextPath, businessId)) {
+            StringBuilder sb = new StringBuilder(frontendOrigin)
+                    .append("/login/staff?mode=office&googleError=")
+                    .append(enc(code));
+            if (nextPath != null && !nextPath.isBlank()) {
+                sb.append("&next=").append(enc(nextPath.trim()));
+            }
+            target = sb.toString();
+        } else {
+            target = frontendOrigin + "/login?googleError=" + enc(code);
+        }
         return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(target)).build();
+    }
+
+    private static boolean preferOfficeLoginError(String nextPath, String businessId) {
+        if (businessId != null && !businessId.isBlank()) {
+            return true;
+        }
+        if (nextPath == null || nextPath.isBlank()) {
+            return false;
+        }
+        String p = nextPath.trim();
+        if (!p.startsWith("/") || p.startsWith("//")) {
+            return false;
+        }
+        if ("/".equals(p) || p.startsWith("/shop")) {
+            return false;
+        }
+        return p.startsWith("/business")
+                || p.startsWith("/overview")
+                || p.startsWith("/settings")
+                || p.startsWith("/inventory")
+                || p.startsWith("/suppliers")
+                || p.startsWith("/users")
+                || p.startsWith("/branches")
+                || p.startsWith("/reports")
+                || p.startsWith("/cashier")
+                || p.startsWith("/grocery")
+                || p.startsWith("/butcher");
     }
 
     /**

@@ -11,6 +11,9 @@ import lombok.RequiredArgsConstructor;
 /**
  * Blocks new products and staff seats once the current plan is full.
  * Fail-open when the catalogue is missing so catalog ITs keep working.
+ * Skipped for the first
+ * {@link SubscriptionBillingService#PLAN_LIMIT_EXPERIENCE_DAYS} so new shops
+ * can try any scale before upgrade pressure.
  */
 @Service
 @RequiredArgsConstructor
@@ -21,6 +24,9 @@ public class SubscriptionPlanLimitGuard {
     private final SubscriptionPlanFitService fitService;
 
     public void assertCanAddProduct(String businessId) {
+        if (fitService.isWithinPlanLimitExperience(businessId)) {
+            return;
+        }
         SubscriptionPlanFit.Result result = evaluateQuietly(businessId);
         if (result == null || result.current() == null) {
             return;
@@ -35,6 +41,9 @@ public class SubscriptionPlanLimitGuard {
     }
 
     public void assertCanAddUser(String businessId) {
+        if (fitService.isWithinPlanLimitExperience(businessId)) {
+            return;
+        }
         SubscriptionPlanFit.Result result = evaluateQuietly(businessId);
         if (result == null || result.current() == null) {
             return;

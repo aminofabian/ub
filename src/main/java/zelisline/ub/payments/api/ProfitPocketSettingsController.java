@@ -14,6 +14,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.finance.api.dto.ProfitPocketTestResponse;
 import zelisline.ub.finance.application.ProfitPocketService;
+import zelisline.ub.payments.api.dto.MarginGuardSettingsResponse;
 import zelisline.ub.payments.api.dto.ProfitPocketSettingsRequest;
 import zelisline.ub.payments.api.dto.ProfitPocketSettingsResponse;
 import zelisline.ub.payments.application.ProfitPocketSettingsService;
@@ -34,6 +35,21 @@ public class ProfitPocketSettingsController {
     public ProfitPocketSettingsResponse get(HttpServletRequest request) {
         CurrentTenantUser.require(request);
         return profitPocketSettingsService.getSettings(TenantRequestIds.resolveBusinessId(request));
+    }
+
+    /**
+     * Margin-guard mode for POS checkout (warn / approve / hard). Safe for
+     * {@code sales.sell} — does not expose pocket destination details.
+     */
+    @GetMapping("/margin-guard")
+    @PreAuthorize(
+            "hasPermission(null, 'sales.sell') or hasPermission(null, 'payments.gateways.read')"
+    )
+    public MarginGuardSettingsResponse marginGuard(HttpServletRequest request) {
+        CurrentTenantUser.requireHuman(request);
+        var settings = profitPocketSettingsService.getSettings(
+                TenantRequestIds.resolveBusinessId(request));
+        return new MarginGuardSettingsResponse(settings.marginGuardMode());
     }
 
     @PutMapping

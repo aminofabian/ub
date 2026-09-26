@@ -2,6 +2,7 @@ package zelisline.ub.pricing.api;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -19,6 +20,8 @@ import org.springframework.web.bind.annotation.RestController;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.discounts.api.dto.ResolvedPriceResponse;
+import zelisline.ub.discounts.application.DiscountResolutionService;
 import zelisline.ub.pricing.api.dto.BuyingPriceResponse;
 import zelisline.ub.pricing.api.dto.CurrentSellingPriceResponse;
 import zelisline.ub.pricing.api.dto.PostBuyingPriceRequest;
@@ -27,10 +30,10 @@ import zelisline.ub.pricing.api.dto.PostSellingPriceRequest;
 import zelisline.ub.pricing.api.dto.PostTaxRateRequest;
 import zelisline.ub.pricing.api.dto.PriceRuleResponse;
 import zelisline.ub.pricing.api.dto.PutPriceRuleRequest;
+import zelisline.ub.pricing.api.dto.ResolvePricesRequest;
 import zelisline.ub.pricing.api.dto.SellPriceSuggestionResponse;
 import zelisline.ub.pricing.api.dto.SellingPriceResponse;
 import zelisline.ub.pricing.api.dto.TaxRateResponse;
-import zelisline.ub.discounts.application.DiscountResolutionService;
 import zelisline.ub.pricing.application.PricingService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.TenantRequestIds;
@@ -174,7 +177,7 @@ public class PricingController {
                     + "or hasPermission(null, 'purchasing.path_b.read') "
                     + "or hasPermission(null, 'purchasing.path_b.write')"
     )
-    public zelisline.ub.discounts.api.dto.ResolvedPriceResponse getResolvedPrice(
+    public ResolvedPriceResponse getResolvedPrice(
             @RequestParam String itemId,
             @RequestParam(required = false) String branchId,
             HttpServletRequest request
@@ -184,5 +187,26 @@ public class PricingController {
                 TenantRequestIds.resolveBusinessId(request),
                 itemId,
                 branchId);
+    }
+
+    /**
+     * Batch shelf prices for POS tiles — one round-trip instead of N×
+     * {@code /resolved-price}. Caps at 200 ids (see {@link ResolvePricesRequest}).
+     */
+    @PostMapping("/resolved-prices")
+    @PreAuthorize(
+            "hasPermission(null, 'pricing.read') or hasPermission(null, 'sales.sell') "
+                    + "or hasPermission(null, 'purchasing.path_b.read') "
+                    + "or hasPermission(null, 'purchasing.path_b.write')"
+    )
+    public Map<String, ResolvedPriceResponse> getResolvedPrices(
+            @Valid @RequestBody ResolvePricesRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return discountResolutionService.resolveForItems(
+                TenantRequestIds.resolveBusinessId(request),
+                body.branchId(),
+                body.itemIds());
     }
 }

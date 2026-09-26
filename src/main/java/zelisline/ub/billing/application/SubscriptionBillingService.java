@@ -349,11 +349,30 @@ public class SubscriptionBillingService {
         expiryCampaignService.ifAvailable(c -> c.cancelActiveCampaigns(businessId));
     }
 
+    /**
+     * First-month experience window: every shop may run at any catalog/staff
+     * scale for {@link #PLAN_LIMIT_EXPERIENCE_DAYS} after creation before plan
+     * fit banners or hard product/seat caps apply.
+     */
+    public static final int PLAN_LIMIT_EXPERIENCE_DAYS = 30;
+
     public static Instant initialPeriodEndForTier(String tier, Instant createdAt) {
         if (isFreeTierStatic(tier)) {
             return null;
         }
-        return createdAt.plus(30, ChronoUnit.DAYS);
+        return createdAt.plus(PLAN_LIMIT_EXPERIENCE_DAYS, ChronoUnit.DAYS);
+    }
+
+    /**
+     * {@code true} while the shop is still inside the post-signup experience
+     * window — no upgrade notices, no product/seat hard blocks.
+     * Missing timestamps fail open so a clock/data glitch never nags day-one.
+     */
+    public static boolean isWithinPlanLimitExperience(Instant createdAt, Instant now) {
+        if (createdAt == null || now == null) {
+            return true;
+        }
+        return now.isBefore(createdAt.plus(PLAN_LIMIT_EXPERIENCE_DAYS, ChronoUnit.DAYS));
     }
 
     private SubscriptionBillingDtos.BillingStatusResponse buildStatusView(
@@ -386,7 +405,8 @@ public class SubscriptionBillingService {
         SubscriptionPlanFitService fit = planFitService.getIfAvailable();
         if (fit != null) {
             try {
-                planFit = fit.toView(fit.evaluate(business));
+                boolean enforceLimits = !isWithinPlanLimitExperience(business.getCreatedAt(), now);
+                planFit = fit.toView(fit.evaluate(business), enforceLimits);
             } catch (RuntimeException ignored) {
                 planFit = null;
             }

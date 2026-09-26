@@ -1,5 +1,6 @@
 package zelisline.ub.billing.application;
 
+import java.time.Instant;
 import java.util.List;
 
 import org.springframework.stereotype.Service;
@@ -25,6 +26,24 @@ public class SubscriptionPlanFitService {
     private final PlatformSubscriptionPlanRepository planRepository;
     private final ItemRepository itemRepository;
     private final UserRepository userRepository;
+
+    /**
+     * {@code true} while plan product/seat caps and upgrade notices are
+     * deferred (first {@link SubscriptionBillingService#PLAN_LIMIT_EXPERIENCE_DAYS}
+     * after the shop was created).
+     */
+    @Transactional(readOnly = true)
+    public boolean isWithinPlanLimitExperience(String businessId) {
+        if (businessId == null || businessId.isBlank()) {
+            return true;
+        }
+        Business business = businessRepository.findByIdAndDeletedAtIsNull(businessId).orElse(null);
+        if (business == null) {
+            return true;
+        }
+        return SubscriptionBillingService.isWithinPlanLimitExperience(
+                business.getCreatedAt(), Instant.now());
+    }
 
     @Transactional(readOnly = true)
     public SubscriptionPlanFit.Result evaluate(String businessId) {
@@ -69,22 +88,39 @@ public class SubscriptionPlanFitService {
     }
 
     public SubscriptionBillingDtos.PlanFitView toView(SubscriptionPlanFit.Result result) {
+        return toView(result, true);
+    }
+
+    /**
+     * @param enforceLimits when {@code false} (experience window), usage and
+     *                      published caps stay visible but upgrade / over-limit
+     *                      flags stay quiet so the dashboard never nags.
+     */
+    public SubscriptionBillingDtos.PlanFitView toView(
+            SubscriptionPlanFit.Result result,
+            boolean enforceLimits
+    ) {
         SubscriptionPlanFit.PlanSnapshot current = result.current();
         SubscriptionPlanFit.PlanSnapshot recommended = result.recommended();
+        boolean overProduct = enforceLimits && result.overProductLimit();
+        boolean overUser = enforceLimits && result.overUserLimit();
+        boolean needsUpgrade = enforceLimits && result.needsUpgrade();
+        boolean negotiable = enforceLimits && result.negotiable();
+        boolean talkToUs = enforceLimits && result.talkToUs();
         return new SubscriptionBillingDtos.PlanFitView(
                 result.usage().productCount(),
                 result.usage().userCount(),
                 current != null ? current.productLimit() : null,
                 current != null ? current.cashierLimit() : null,
-                result.overProductLimit(),
-                result.overUserLimit(),
-                result.needsUpgrade(),
-                result.negotiable(),
-                result.talkToUs(),
-                recommended != null ? recommended.tierCode() : null,
-                recommended != null ? recommended.displayName() : null,
-                recommended != null ? recommended.monthlyPriceKes() : null,
-                result.reasons());
+                overProduct,
+                overUser,
+                needsUpgrade,
+                negotiable,
+                talkToUs,
+                enforceLimits && recommended != null ? recommended.tierCode() : null,
+                enforceLimits && recommended != null ? recommended.displayName() : null,
+                enforceLimits && recommended != null ? recommended.monthlyPriceKes() : null,
+                enforceLimits ? result.reasons() : List.of());
     }
 
     private List<SubscriptionPlanFit.PlanSnapshot> activePlans() {

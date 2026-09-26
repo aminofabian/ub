@@ -28,5 +28,8 @@ public record UpdatePlatformIntegrationsRequest(
         String whatsappMetaPhoneNumberId,
         String whatsappMetaGraphVersion,
         String whatsappMetaWebhookVerifyToken,
-        String whatsappMetaAppSecret
+        String whatsappMetaAppSecret,
+        Boolean googleOauthEnabled,
+        String googleOauthClientId,
+        String googleOauthClientSecret
 ) {}

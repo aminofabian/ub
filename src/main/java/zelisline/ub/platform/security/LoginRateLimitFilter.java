@@ -41,7 +41,8 @@ public class LoginRateLimitFilter extends OncePerRequestFilter {
         String path = request.getRequestURI();
         if (!path.endsWith("/api/v1/auth/login")
                 && !path.endsWith("/api/v1/auth/login-pin")
-                && !path.endsWith("/api/v1/auth/unlock-pin")) {
+                && !path.endsWith("/api/v1/auth/unlock-pin")
+                && !path.endsWith("/api/v1/auth/oauth/google/start")) {
             filterChain.doFilter(request, response);
             return;
         }

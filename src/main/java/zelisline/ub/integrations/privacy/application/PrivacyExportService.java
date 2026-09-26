@@ -32,6 +32,8 @@ import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.identity.domain.User;
+import zelisline.ub.identity.domain.UserOAuthIdentity;
+import zelisline.ub.identity.repository.UserOAuthIdentityRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.integrations.privacy.api.dto.PrivacyExportCreateRequest;
 import zelisline.ub.integrations.privacy.api.dto.PrivacyExportDownload;
@@ -65,6 +67,7 @@ public class PrivacyExportService {
     private final CreditAccountRepository creditAccountRepository;
     private final SaleRepository saleRepository;
     private final UserRepository userRepository;
+    private final UserOAuthIdentityRepository userOAuthIdentityRepository;
     private final NotificationRepository notificationRepository;
     private final ObjectMapper objectMapper;
 
@@ -235,6 +238,18 @@ public class PrivacyExportService {
         profile.put("deletedAt", u.getDeletedAt() != null ? u.getDeletedAt().toString() : null);
         profile.put("anonymisedAt", u.getAnonymisedAt() != null ? u.getAnonymisedAt().toString() : null);
         zipEntry(zos, "profile/user.json", objectMapper.writeValueAsBytes(profile));
+
+        List<Map<String, Object>> oauthRows = new ArrayList<>();
+        for (UserOAuthIdentity link : userOAuthIdentityRepository.findByUserId(userId)) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", link.getId());
+            row.put("provider", link.getProvider());
+            row.put("providerSubject", link.getProviderSubject());
+            row.put("emailAtLink", link.getEmailAtLink());
+            row.put("createdAt", link.getCreatedAt() != null ? link.getCreatedAt().toString() : null);
+            oauthRows.add(row);
+        }
+        zipEntry(zos, "profile/oauth_identities.json", objectMapper.writeValueAsBytes(oauthRows));
 
         List<Sale> sales = saleRepository.findByBusinessIdAndSoldByOrderBySoldAtDesc(businessId, userId);
         List<Map<String, Object>> saleRows = new ArrayList<>();

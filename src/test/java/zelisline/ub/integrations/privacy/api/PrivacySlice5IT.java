@@ -36,10 +36,12 @@ import zelisline.ub.identity.domain.Permission;
 import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.domain.RolePermission;
 import zelisline.ub.identity.domain.User;
+import zelisline.ub.identity.domain.UserOAuthIdentity;
 import zelisline.ub.identity.domain.UserStatus;
 import zelisline.ub.identity.repository.PermissionRepository;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.RolePermissionRepository;
+import zelisline.ub.identity.repository.UserOAuthIdentityRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.integrations.privacy.application.CustomerAnonymisationService;
 import zelisline.ub.integrations.privacy.application.UserAnonymisationService;
@@ -72,6 +74,8 @@ class PrivacySlice5IT {
     @Autowired
     private UserRepository userRepository;
     @Autowired
+    private UserOAuthIdentityRepository userOAuthIdentityRepository;
+    @Autowired
     private PermissionRepository permissionRepository;
     @Autowired
     private RoleRepository roleRepository;
@@ -99,6 +103,7 @@ class PrivacySlice5IT {
         customerPhoneRepository.deleteAll();
         creditAccountRepository.deleteAll();
         customerRepository.deleteAll();
+        userOAuthIdentityRepository.deleteAll();
         userRepository.deleteAll();
         rolePermissionRepository.deleteAll();
         roleRepository.deleteAll();
@@ -256,6 +261,17 @@ class PrivacySlice5IT {
         userRepository.save(target);
         String tid = target.getId();
 
+        UserOAuthIdentity link = new UserOAuthIdentity();
+        link.setId(java.util.UUID.randomUUID().toString());
+        link.setBusinessId(TENANT);
+        link.setUserId(tid);
+        link.setProvider(UserOAuthIdentity.PROVIDER_GOOGLE);
+        link.setProviderSubject("google-sub-erasure");
+        link.setEmailAtLink("staff-erasure@test");
+        link.setCreatedAt(java.time.Instant.now());
+        link.setUpdatedAt(java.time.Instant.now());
+        userOAuthIdentityRepository.save(link);
+
         mockMvc.perform(post("/api/v1/integrations/privacy/users/" + tid + "/anonymise")
                         .header("X-Tenant-Id", TENANT)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, user.getId())
@@ -270,6 +286,7 @@ class PrivacySlice5IT {
         assertThat(re.getPhone()).isNull();
         assertThat(re.getAnonymisedAt()).isNotNull();
         assertThat(re.getStatus()).isEqualTo(UserStatus.SUSPENDED.wire());
+        assertThat(userOAuthIdentityRepository.findByUserId(tid)).isEmpty();
     }
 
     private static Permission perm(String id, String key, String desc) {

@@ -40,6 +40,7 @@ import zelisline.ub.identity.repository.PermissionRepository;
 import zelisline.ub.identity.repository.RolePermissionRepository;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserItemTypeRepository;
+import zelisline.ub.identity.repository.UserOAuthIdentityRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.identity.repository.UserSessionRepository;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
@@ -75,6 +76,7 @@ public class IdentityService {
     private final UserItemTypeRepository userItemTypeRepository;
     private final ItemTypeRepository itemTypeRepository;
     private final UserSessionRepository userSessionRepository;
+    private final UserOAuthIdentityRepository userOAuthIdentityRepository;
     private final StaffProfileRepository staffProfileRepository;
     private final PasswordEncoder passwordEncoder;
     private final CredentialEncryptionService credentialEncryptionService;
@@ -352,6 +354,7 @@ public class IdentityService {
         user.setPinEnc(null);
         userRepository.save(user);
         userSessionRepository.revokeAllActiveForUser(user.getId(), now);
+        userOAuthIdentityRepository.deleteByUserId(user.getId());
 
         staffProfileRepository.findByBusinessIdAndUserId(businessId, user.getId())
                 .ifPresent(profile -> {

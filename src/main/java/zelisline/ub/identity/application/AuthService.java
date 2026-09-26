@@ -498,6 +498,11 @@ public class AuthService {
                 .build());
     }
 
+    /** Public wrapper for apex / OAuth flows that need the same tenant resolution as password login. */
+    public String resolveLoginBusinessId(HttpServletRequest http, String email) {
+        return resolveCredentialBusinessId(http, email);
+    }
+
     /**
      * Tenant for an unauthenticated credential call. Hosts without a domain
      * mapping — the platform apex, bare localhost, native shells, the desktop

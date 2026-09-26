@@ -93,6 +93,15 @@ public class PlatformIntegrationSettings {
     @Column(name = "whatsapp_meta_app_secret_enc", columnDefinition = "TEXT")
     private String whatsappMetaAppSecretEnc;
 
+    @Column(name = "google_oauth_enabled", nullable = false)
+    private boolean googleOauthEnabled = false;
+
+    @Column(name = "google_oauth_client_id", length = 255)
+    private String googleOauthClientId;
+
+    @Column(name = "google_oauth_client_secret_enc", columnDefinition = "TEXT")
+    private String googleOauthClientSecretEnc;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt = Instant.now();
 }

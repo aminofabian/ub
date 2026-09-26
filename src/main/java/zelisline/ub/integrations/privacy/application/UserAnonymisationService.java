@@ -13,6 +13,7 @@ import zelisline.ub.identity.application.UserSessionRevocation;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.domain.UserStatus;
 import zelisline.ub.identity.repository.RoleRepository;
+import zelisline.ub.identity.repository.UserOAuthIdentityRepository;
 import zelisline.ub.identity.repository.UserRepository;
 
 /**
@@ -25,6 +26,7 @@ public class UserAnonymisationService {
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final UserSessionRevocation userSessionRevocation;
+    private final UserOAuthIdentityRepository userOAuthIdentityRepository;
 
     @Transactional
     public void anonymiseUser(String businessId, String userId) {
@@ -43,6 +45,7 @@ public class UserAnonymisationService {
         }
 
         userSessionRevocation.revokeAllActiveForUserNow(userId);
+        userOAuthIdentityRepository.deleteByUserId(userId);
 
         u.setName(CustomerAnonymisationService.REDACTED_NAME);
         u.setPhone(null);

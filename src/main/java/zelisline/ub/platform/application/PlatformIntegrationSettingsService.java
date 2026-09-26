@@ -130,6 +130,15 @@ public class PlatformIntegrationSettingsService {
         if (body.whatsappMetaAppSecret() != null) {
             row.setWhatsappMetaAppSecretEnc(encryptOrClear(body.whatsappMetaAppSecret()));
         }
+        if (body.googleOauthEnabled() != null) {
+            row.setGoogleOauthEnabled(body.googleOauthEnabled());
+        }
+        if (body.googleOauthClientId() != null) {
+            row.setGoogleOauthClientId(blankToNull(body.googleOauthClientId()));
+        }
+        if (body.googleOauthClientSecret() != null) {
+            row.setGoogleOauthClientSecretEnc(encryptOrClear(body.googleOauthClientSecret()));
+        }
         SecretRead secrets = readSecrets(row);
         validateSmsProvider(row, secrets);
         row.setUpdatedAt(Instant.now());
@@ -205,6 +214,28 @@ public class PlatformIntegrationSettingsService {
         return resolveMetaWhatsAppFromRow(row, secrets);
     }
 
+    @Transactional(readOnly = true)
+    public ResolvedGoogleOauthConfig resolveGoogleOauth() {
+        PlatformIntegrationSettings row = loadSingleton();
+        SecretRead secrets = readSecrets(row);
+        String clientId = trimToNull(row.getGoogleOauthClientId());
+        String clientSecret =
+                secrets.readable ? blankToNull(secrets.googleOauthClientSecret) : null;
+        boolean ready = row.isGoogleOauthEnabled()
+                && clientId != null
+                && clientSecret != null
+                && secrets.hasGoogleOauthClientSecret;
+        return new ResolvedGoogleOauthConfig(
+                ready, row.isGoogleOauthEnabled(), clientId, clientSecret);
+    }
+
+    public record ResolvedGoogleOauthConfig(
+            boolean ready,
+            boolean enabled,
+            String clientId,
+            String clientSecret
+    ) {}
+
     private PlatformIntegrationsResponse toResponse(
             PlatformIntegrationSettings row,
             SecretRead secrets
@@ -215,6 +246,7 @@ public class PlatformIntegrationSettingsService {
         ResolvedSozuriSmsConfig sozuri = resolveSozuriFromRow(row, secrets);
         ResolvedTextSmsConfig textsms = resolveTextSmsFromRow(row, secrets);
         ResolvedMetaWhatsAppConfig meta = resolveMetaWhatsAppFromRow(row, secrets);
+        String googleClientId = trimToNull(row.getGoogleOauthClientId());
         return new PlatformIntegrationsResponse(
                 secrets.hasDeepseekApiKey,
                 firstNonBlank(trimToNull(row.getDeepseekHost()), catalogEnv.host()),
@@ -240,6 +272,10 @@ public class PlatformIntegrationSettingsService {
                 meta.graphVersion(),
                 secrets.hasWhatsappMetaWebhookVerifyToken,
                 secrets.hasWhatsappMetaAppSecret,
+                row.isGoogleOauthEnabled(),
+                googleClientId == null ? "" : googleClientId,
+                secrets.hasGoogleOauthClientSecret,
+                "https://kiosk.ke/api/v1/auth/oauth/google/callback",
                 envHasDeepseekKey(catalogEnv),
                 envHasRapidApiWhatsappKey(msgEnv),
                 envHasSozuriKey(messagingProperties.sms()),
@@ -392,6 +428,7 @@ public class PlatformIntegrationSettingsService {
                     hasEncrypted(row.getWhatsappMetaAccessTokenEnc()),
                     hasEncrypted(row.getWhatsappMetaWebhookVerifyTokenEnc()),
                     hasEncrypted(row.getWhatsappMetaAppSecretEnc()),
+                    hasEncrypted(row.getGoogleOauthClientSecretEnc()),
                     decryptOrNull(row.getDeepseekApiKeyEnc()),
                     decryptOrNull(row.getRapidapiWhatsappKeyEnc()),
                     decryptOrNull(row.getSozuriApiKeyEnc()),
@@ -399,6 +436,7 @@ public class PlatformIntegrationSettingsService {
                     decryptOrNull(row.getWhatsappMetaAccessTokenEnc()),
                     decryptOrNull(row.getWhatsappMetaWebhookVerifyTokenEnc()),
                     decryptOrNull(row.getWhatsappMetaAppSecretEnc()),
+                    decryptOrNull(row.getGoogleOauthClientSecretEnc()),
                     persistenceHint);
         } catch (RuntimeException ex) {
             return new SecretRead(
@@ -410,6 +448,8 @@ public class PlatformIntegrationSettingsService {
                     hasEncrypted(row.getWhatsappMetaAccessTokenEnc()),
                     hasEncrypted(row.getWhatsappMetaWebhookVerifyTokenEnc()),
                     hasEncrypted(row.getWhatsappMetaAppSecretEnc()),
+                    hasEncrypted(row.getGoogleOauthClientSecretEnc()),
+                    null,
                     null,
                     null,
                     null,
@@ -499,6 +539,7 @@ public class PlatformIntegrationSettingsService {
             boolean hasWhatsappMetaAccessToken,
             boolean hasWhatsappMetaWebhookVerifyToken,
             boolean hasWhatsappMetaAppSecret,
+            boolean hasGoogleOauthClientSecret,
             String deepseekApiKey,
             String rapidapiWhatsappKey,
             String sozuriApiKey,
@@ -506,6 +547,7 @@ public class PlatformIntegrationSettingsService {
             String whatsappMetaAccessToken,
             String whatsappMetaWebhookVerifyToken,
             String whatsappMetaAppSecret,
+            String googleOauthClientSecret,
             String errorMessage
     ) {}
 }

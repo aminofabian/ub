@@ -8,5 +8,6 @@ package zelisline.ub.identity.api.dto;
 public record GoogleOAuthExchangeResponse(
         String accessToken,
         String nextPath,
-        String slug
+        String slug,
+        String returnHost
 ) {}

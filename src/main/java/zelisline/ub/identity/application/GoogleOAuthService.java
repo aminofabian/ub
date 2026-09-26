@@ -63,6 +63,7 @@ public class GoogleOAuthService {
     public static final String BIND_COOKIE = "ub.oauth_bind";
     /** Short-lived hint so BFF error redirects can return to office login. */
     public static final String NEXT_COOKIE = "ub.oauth_next";
+    public static final String RETURN_HOST_COOKIE = "ub.oauth_return_host";
     private static final String GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth";
     private static final String GOOGLE_TOKEN = "https://oauth2.googleapis.com/token";
     private static final Duration STATE_TTL = Duration.ofMinutes(10);
@@ -126,6 +127,7 @@ public class GoogleOAuthService {
         // starts still pin the shop after the apex-only Google callback.
         row.setBusinessId(
                 firstNonBlank(body.businessId(), TenantRequestIds.resolveBusinessIdOrNull(http)));
+        row.setOnboardDraftJson(encodeReturnHost(sanitizeReturnHost(body.returnHost())));
         row.setBrowserBinding(browserBinding);
         row.setNonce(nonce);
         row.setRedirectUri(redirectUri);
@@ -157,11 +159,23 @@ public class GoogleOAuthService {
                 .maxAge(STATE_TTL)
                 .sameSite("Lax")
                 .build();
-
-        return ResponseEntity.ok()
+        var response = ResponseEntity.ok()
                 .header(HttpHeaders.SET_COOKIE, bind.toString())
-                .header(HttpHeaders.SET_COOKIE, nextHint.toString())
-                .body(new GoogleOAuthStartResponse(authorizeUrl));
+                .header(HttpHeaders.SET_COOKIE, nextHint.toString());
+        String returnHost = sanitizeReturnHost(body.returnHost());
+        if (returnHost != null) {
+            response = response.header(
+                    HttpHeaders.SET_COOKIE,
+                    ResponseCookie.from(RETURN_HOST_COOKIE, returnHost)
+                            .httpOnly(true)
+                            .secure(isSecureRequest(http))
+                            .path("/")
+                            .maxAge(STATE_TTL)
+                            .sameSite("Lax")
+                            .build()
+                            .toString());
+        }
+        return response.body(new GoogleOAuthStartResponse(authorizeUrl));
     }
 
     /**
@@ -180,11 +194,15 @@ public class GoogleOAuthService {
             if (done.slug() != null && !done.slug().isBlank()) {
                 handoff += "&slug=" + enc(done.slug().trim());
             }
+            if (done.returnHost() != null && !done.returnHost().isBlank()) {
+                handoff += "&returnHost=" + enc(done.returnHost().trim());
+            }
 
             HttpHeaders headers = new HttpHeaders();
             appendSessionCookies(headers, done.session());
             headers.add(HttpHeaders.SET_COOKIE, clearBindCookie(http));
             headers.add(HttpHeaders.SET_COOKIE, clearNextCookie(http));
+            headers.add(HttpHeaders.SET_COOKIE, clearReturnHostCookie(http));
             headers.setLocation(URI.create(handoff));
             return new ResponseEntity<>(headers, HttpStatus.FOUND);
         } catch (Exception ex) {
@@ -216,13 +234,18 @@ public class GoogleOAuthService {
         appendSessionCookies(headers, done.session());
         headers.add(HttpHeaders.SET_COOKIE, clearBindCookie(http));
         headers.add(HttpHeaders.SET_COOKIE, clearNextCookie(http));
+        headers.add(HttpHeaders.SET_COOKIE, clearReturnHostCookie(http));
         return ResponseEntity.ok()
                 .headers(headers)
                 .body(new GoogleOAuthExchangeResponse(
-                        done.session().accessToken(), done.nextPath(), done.slug()));
+                        done.session().accessToken(),
+                        done.nextPath(),
+                        done.slug(),
+                        done.returnHost()));
     }
 
-    private record Completed(LoginResponse session, String nextPath, String slug) {}
+    private record Completed(
+            LoginResponse session, String nextPath, String slug, String returnHost) {}
 
     /** Shared code path for {@link #callback} and {@link #exchange}. */
     private Completed complete(HttpServletRequest http, String code, String state) {
@@ -293,7 +316,7 @@ public class GoogleOAuthService {
         String slug = businessRepository.findByIdAndDeletedAtIsNull(businessId)
                 .map(Business::getSlug)
                 .orElse(null);
-        return new Completed(session, next, slug);
+        return new Completed(session, next, slug, decodeReturnHost(row.getOnboardDraftJson()));
     }
 
     private void appendSessionCookies(HttpHeaders headers, LoginResponse session) {
@@ -315,6 +338,17 @@ public class GoogleOAuthService {
 
     private String clearNextCookie(HttpServletRequest http) {
         return ResponseCookie.from(NEXT_COOKIE, "")
+                .path("/")
+                .maxAge(0)
+                .httpOnly(true)
+                .secure(isSecureRequest(http))
+                .sameSite("Lax")
+                .build()
+                .toString();
+    }
+
+    private String clearReturnHostCookie(HttpServletRequest http) {
+        return ResponseCookie.from(RETURN_HOST_COOKIE, "")
                 .path("/")
                 .maxAge(0)
                 .httpOnly(true)
@@ -556,6 +590,59 @@ public class GoogleOAuthService {
             return "/";
         }
         return t.length() > 500 ? t.substring(0, 500) : t;
+    }
+
+    /** Hostname only — no scheme/path. Used to return shoppers to custom domains. */
+    private static String sanitizeReturnHost(String host) {
+        if (host == null || host.isBlank()) {
+            return null;
+        }
+        String t = host.trim().toLowerCase(Locale.ROOT);
+        if (t.startsWith("http://") || t.startsWith("https://")) {
+            try {
+                t = URI.create(t).getHost();
+            } catch (Exception ex) {
+                return null;
+            }
+        }
+        if (t == null || t.isBlank()) {
+            return null;
+        }
+        int slash = t.indexOf('/');
+        if (slash >= 0) {
+            t = t.substring(0, slash);
+        }
+        int colon = t.indexOf(':');
+        if (colon > 0) {
+            t = t.substring(0, colon);
+        }
+        if (t.isBlank() || t.contains(" ") || t.contains("..")) {
+            return null;
+        }
+        return t.length() > 253 ? null : t;
+    }
+
+    private String encodeReturnHost(String host) {
+        if (host == null || host.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(java.util.Map.of("returnHost", host));
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private String decodeReturnHost(String draftJson) {
+        if (draftJson == null || draftJson.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(draftJson);
+            return sanitizeReturnHost(text(node, "returnHost"));
+        } catch (Exception ex) {
+            return null;
+        }
     }
 
     private static String readCookie(HttpServletRequest http, String name) {

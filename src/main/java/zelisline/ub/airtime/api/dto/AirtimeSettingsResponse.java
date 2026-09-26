@@ -24,6 +24,10 @@ public record AirtimeSettingsResponse(
         /** Kiosk Pay must be active — the wallet is what funds airtime. */
         boolean walletActive,
         BigDecimal walletBalance,
-        String blockedReason
+        String blockedReason,
+        /** True after the one-time Airtime Float starter was credited. */
+        boolean starterSeedGranted,
+        /** Face value of the starter seed (KES 10). */
+        BigDecimal starterSeedAmount
 ) {
 }

@@ -375,6 +375,51 @@ public class KioskPayWalletService {
     }
 
     /**
+     * One-time Airtime Float starter credit (KES 10). Idempotent by reference —
+     * typically {@code airtime-starter-{businessId}}. Float gift, not sales revenue,
+     * so it never touches {@code lifetimeIn}.
+     *
+     * @return true when a new ledger credit was written
+     */
+    @Transactional
+    public boolean creditAirtimeStarterSeed(String businessId, BigDecimal amount, String reference) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            return false;
+        }
+        if (reference == null || reference.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Airtime starter seed requires a stable reference");
+        }
+        if (ledgerRepository.findByReference(reference).isPresent()) {
+            return false;
+        }
+        PlatformKioskPaySettings settings = platformSettings.loadSingleton();
+        KioskPayAccount account = getOrCreate(businessId);
+        String cur = settings.getCurrency() != null && !settings.getCurrency().isBlank()
+                ? settings.getCurrency()
+                : "KES";
+
+        applyDelta(account, amount, BigDecimal.ZERO);
+        accountRepository.save(account);
+        writeEntry(
+                account,
+                KioskPayLedgerEntryTypes.AIRTIME_STARTER,
+                KioskPayLedgerEntryTypes.CREDIT,
+                amount,
+                cur,
+                amount,
+                BigDecimal.ZERO,
+                reference,
+                "AIRTIME",
+                null,
+                null,
+                null,
+                "Airtime Float starter seed");
+        publishBalance(account, cur, "AIRTIME_STARTER");
+        return true;
+    }
+
+    /**
      * Reserve airtime face value before handing the request to the provider, so a
      * merchant can never sell more airtime than their wallet can cover. Mirrors
      * {@link #holdForWithdraw} — held funds sit in pending until the provider's

@@ -31,6 +31,9 @@ import zelisline.ub.payments.application.KioskPayWalletService;
 @RequiredArgsConstructor
 public class BusinessAirtimeSettingsService {
 
+    /** One-time wallet gift when a merchant first turns on Airtime Float. */
+    public static final BigDecimal STARTER_SEED_AMOUNT = new BigDecimal("10.00");
+
     /** Denominations Kenyan shoppers actually ask for. */
     private static final List<BigDecimal> QUICK_AMOUNTS = List.of(
             new BigDecimal("20"),
@@ -77,7 +80,9 @@ public class BusinessAirtimeSettingsService {
                 platform.getCurrency(),
                 "ACTIVE".equals(wallet.status()),
                 wallet.availableBalance(),
-                blocked);
+                blocked,
+                row != null && row.getStarterSeedAt() != null,
+                STARTER_SEED_AMOUNT);
     }
 
     @Transactional
@@ -118,6 +123,14 @@ public class BusinessAirtimeSettingsService {
                         "Activate Kiosk Pay before selling airtime — your wallet is what pays for it");
             }
             row.setEnabled(true);
+            if (row.getStarterSeedAt() == null) {
+                walletService.creditAirtimeStarterSeed(
+                        businessId,
+                        STARTER_SEED_AMOUNT,
+                        "airtime-starter-" + businessId);
+                // Mark granted even if the ledger already had the reference (retry-safe).
+                row.setStarterSeedAt(Instant.now());
+            }
         } else if (Boolean.FALSE.equals(body.enabled())) {
             row.setEnabled(false);
         }

@@ -40,6 +40,10 @@ public class BusinessAirtimeSettings {
     @Column(name = "max_single_amount", precision = 14, scale = 2)
     private BigDecimal maxSingleAmount;
 
+    /** When the one-time KES 10 Airtime Float starter was credited (null = never). */
+    @Column(name = "starter_seed_at")
+    private Instant starterSeedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

@@ -30,6 +30,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import kong.unirest.HttpResponse;
 import kong.unirest.Unirest;
+import zelisline.ub.identity.api.dto.GoogleOAuthExchangeResponse;
 import zelisline.ub.identity.api.dto.GoogleOAuthPublicConfigResponse;
 import zelisline.ub.identity.api.dto.GoogleOAuthStartRequest;
 import zelisline.ub.identity.api.dto.GoogleOAuthStartResponse;
@@ -153,104 +154,164 @@ public class GoogleOAuthService {
                 .body(new GoogleOAuthStartResponse(authorizeUrl));
     }
 
+    /**
+     * Legacy browser-facing callback: exchanges the code, sets cookies, and 302s to the
+     * frontend handoff. Kept as a fallback for deployments where {@code /api/v1/*} is
+     * fronted by a plain rewrite, or when the same-host BFF exchange route is unavailable.
+     */
     @Transactional
     public ResponseEntity<Void> callback(HttpServletRequest http, String code, String state) {
         // Callback is always registered on the platform apex — never the tenant host.
         String frontendOrigin = apexOrigin();
         try {
-            if (code == null || code.isBlank() || state == null || state.isBlank()) {
-                return errorRedirect(frontendOrigin, "missing_code");
-            }
-            var google = platformIntegrationSettingsService.resolveGoogleOauth();
-            if (!google.ready()) {
-                return errorRedirect(frontendOrigin, "disabled");
-            }
-
-            OAuthLoginState row = oauthLoginStateRepository
-                    .findById(TokenHasher.sha256Hex(state))
-                    .orElse(null);
-            if (row == null) {
-                return errorRedirect(frontendOrigin, "invalid_state");
-            }
-            if (row.getConsumedAt() != null || Instant.now().isAfter(row.getExpiresAt())) {
-                return errorRedirect(frontendOrigin, "expired_state");
-            }
-            String binding = readCookie(http, BIND_COOKIE);
-            if (binding == null || !binding.equals(row.getBrowserBinding())) {
-                return errorRedirect(frontendOrigin, "binding_mismatch");
-            }
-            row.setConsumedAt(Instant.now());
-            oauthLoginStateRepository.save(row);
-
-            String redirectUri = row.getRedirectUri();
-            if (redirectUri == null || redirectUri.isBlank()) {
-                redirectUri = resolveRedirectUri();
-            }
-            JsonNode tokenJson = exchangeCode(google, code, row.getCodeVerifier(), redirectUri);
-            String idToken = text(tokenJson, "id_token");
-            if (idToken == null) {
-                return errorRedirect(frontendOrigin, "token_exchange");
-            }
-            JsonNode claims = parseIdTokenPayload(idToken);
-            if (!validateClaims(claims, google.clientId(), row.getNonce())) {
-                return errorRedirect(frontendOrigin, "invalid_token");
-            }
-            if (!claims.path("email_verified").asBoolean(false)) {
-                return errorRedirect(frontendOrigin, "email_unverified");
-            }
-            String email = normaliseEmail(text(claims, "email"));
-            String subject = text(claims, "sub");
-            String name = firstNonBlank(text(claims, "name"), email);
-            if (email == null || subject == null) {
-                return errorRedirect(frontendOrigin, "missing_email");
-            }
-
-            String businessId;
-            try {
-                businessId = resolveBusinessId(http, row, email);
-            } catch (ResponseStatusException ex) {
-                if (HttpStatus.BAD_REQUEST.equals(ex.getStatusCode())
-                        && AuthService.MULTI_SHOP_LOGIN_DETAIL.equals(ex.getReason())) {
-                    return errorRedirect(frontendOrigin, "multi_shop");
-                }
-                if (OAuthLoginState.INTENT_SIGN_IN.equals(row.getIntent())) {
-                    return errorRedirect(frontendOrigin, "no_account");
-                }
-                return errorRedirect(frontendOrigin, "no_business");
-            }
-
-            User user = findOrCreateUser(row, businessId, email, subject, name);
-            LoginResponse session = authService.issueSessionForUser(user, http, "google");
-
-            String next = row.getNextPath() != null ? row.getNextPath() : "/";
-            String slug = businessRepository.findByIdAndDeletedAtIsNull(businessId)
-                    .map(Business::getSlug)
-                    .orElse(null);
+            Completed done = complete(http, code, state);
+            String next = done.nextPath() != null ? done.nextPath() : "/";
             String handoff = frontendOrigin + "/auth/handoff?next=" + enc(next);
-            if (slug != null && !slug.isBlank()) {
-                handoff += "&slug=" + enc(slug.trim());
+            if (done.slug() != null && !done.slug().isBlank()) {
+                handoff += "&slug=" + enc(done.slug().trim());
             }
 
             HttpHeaders headers = new HttpHeaders();
-            if (refreshTokenCookieSupport.isEnabled() && session.refreshToken() != null) {
-                headers.addAll(refreshTokenCookieSupport.cookieHeaders(session.refreshToken()));
-            }
-            headers.add(
-                    HttpHeaders.SET_COOKIE,
-                    ResponseCookie.from(BIND_COOKIE, "")
-                            .path("/")
-                            .maxAge(0)
-                            .httpOnly(true)
-                            .secure(isSecureRequest(http))
-                            .sameSite("Lax")
-                            .build()
-                            .toString());
+            appendSessionCookies(headers, done.session());
+            headers.add(HttpHeaders.SET_COOKIE, clearBindCookie(http));
             headers.setLocation(URI.create(handoff));
             return new ResponseEntity<>(headers, HttpStatus.FOUND);
         } catch (Exception ex) {
             log.warn("Google OAuth callback failed: {}", ex.toString());
-            return errorRedirect(frontendOrigin, "failed");
+            return errorRedirect(frontendOrigin, oauthErrorCode(ex));
         }
+    }
+
+    /**
+     * Same-host handoff for the Next.js BFF: exchange the code server-side and return the
+     * session as a normal 200 JSON plus the refresh cookie. The BFF mints
+     * {@code ub.access}/{@code ub.refresh} on the browser-facing host, so the flow does not
+     * depend on a proxied 302 preserving {@code Set-Cookie}.
+     */
+    @Transactional
+    public ResponseEntity<GoogleOAuthExchangeResponse> exchange(
+            HttpServletRequest http, String code, String state) {
+        Completed done;
+        try {
+            done = complete(http, code, state);
+        } catch (ResponseStatusException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            log.warn("Google OAuth exchange failed: {}", ex.toString());
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "failed");
+        }
+
+        HttpHeaders headers = new HttpHeaders();
+        appendSessionCookies(headers, done.session());
+        headers.add(HttpHeaders.SET_COOKIE, clearBindCookie(http));
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(new GoogleOAuthExchangeResponse(
+                        done.session().accessToken(), done.nextPath(), done.slug()));
+    }
+
+    private record Completed(LoginResponse session, String nextPath, String slug) {}
+
+    /** Shared code path for {@link #callback} and {@link #exchange}. */
+    private Completed complete(HttpServletRequest http, String code, String state) {
+        if (code == null || code.isBlank() || state == null || state.isBlank()) {
+            throw oauthError("missing_code", HttpStatus.BAD_REQUEST);
+        }
+        var google = platformIntegrationSettingsService.resolveGoogleOauth();
+        if (!google.ready()) {
+            throw oauthError("disabled", HttpStatus.SERVICE_UNAVAILABLE);
+        }
+
+        OAuthLoginState row = oauthLoginStateRepository
+                .findById(TokenHasher.sha256Hex(state))
+                .orElse(null);
+        if (row == null) {
+            throw oauthError("invalid_state", HttpStatus.BAD_REQUEST);
+        }
+        if (row.getConsumedAt() != null || Instant.now().isAfter(row.getExpiresAt())) {
+            throw oauthError("expired_state", HttpStatus.BAD_REQUEST);
+        }
+        String binding = readCookie(http, BIND_COOKIE);
+        if (binding == null || !binding.equals(row.getBrowserBinding())) {
+            throw oauthError("binding_mismatch", HttpStatus.BAD_REQUEST);
+        }
+        row.setConsumedAt(Instant.now());
+        oauthLoginStateRepository.save(row);
+
+        String redirectUri = row.getRedirectUri();
+        if (redirectUri == null || redirectUri.isBlank()) {
+            redirectUri = resolveRedirectUri();
+        }
+        JsonNode tokenJson = exchangeCode(google, code, row.getCodeVerifier(), redirectUri);
+        String idToken = text(tokenJson, "id_token");
+        if (idToken == null) {
+            throw oauthError("token_exchange", HttpStatus.BAD_GATEWAY);
+        }
+        JsonNode claims = parseIdTokenPayload(idToken);
+        if (!validateClaims(claims, google.clientId(), row.getNonce())) {
+            throw oauthError("invalid_token", HttpStatus.BAD_REQUEST);
+        }
+        if (!claims.path("email_verified").asBoolean(false)) {
+            throw oauthError("email_unverified", HttpStatus.BAD_REQUEST);
+        }
+        String email = normaliseEmail(text(claims, "email"));
+        String subject = text(claims, "sub");
+        String name = firstNonBlank(text(claims, "name"), email);
+        if (email == null || subject == null) {
+            throw oauthError("missing_email", HttpStatus.BAD_REQUEST);
+        }
+
+        String businessId;
+        try {
+            businessId = resolveBusinessId(http, row, email);
+        } catch (ResponseStatusException ex) {
+            if (HttpStatus.BAD_REQUEST.equals(ex.getStatusCode())
+                    && AuthService.MULTI_SHOP_LOGIN_DETAIL.equals(ex.getReason())) {
+                throw oauthError("multi_shop", HttpStatus.BAD_REQUEST);
+            }
+            if (OAuthLoginState.INTENT_SIGN_IN.equals(row.getIntent())) {
+                throw oauthError("no_account", HttpStatus.UNAUTHORIZED);
+            }
+            throw oauthError("no_business", HttpStatus.BAD_REQUEST);
+        }
+
+        User user = findOrCreateUser(row, businessId, email, subject, name);
+        LoginResponse session = authService.issueSessionForUser(user, http, "google");
+        String next = row.getNextPath() != null ? row.getNextPath() : "/";
+        String slug = businessRepository.findByIdAndDeletedAtIsNull(businessId)
+                .map(Business::getSlug)
+                .orElse(null);
+        return new Completed(session, next, slug);
+    }
+
+    private void appendSessionCookies(HttpHeaders headers, LoginResponse session) {
+        if (refreshTokenCookieSupport.isEnabled() && session.refreshToken() != null) {
+            headers.addAll(refreshTokenCookieSupport.cookieHeaders(session.refreshToken()));
+        }
+    }
+
+    private String clearBindCookie(HttpServletRequest http) {
+        return ResponseCookie.from(BIND_COOKIE, "")
+                .path("/")
+                .maxAge(0)
+                .httpOnly(true)
+                .secure(isSecureRequest(http))
+                .sameSite("Lax")
+                .build()
+                .toString();
+    }
+
+    private static ResponseStatusException oauthError(String code, HttpStatus status) {
+        return new ResponseStatusException(status, code);
+    }
+
+    private static String oauthErrorCode(Exception ex) {
+        if (ex instanceof ResponseStatusException rse
+                && rse.getReason() != null
+                && !rse.getReason().isBlank()) {
+            return rse.getReason();
+        }
+        return "failed";
     }
 
     private String resolveBusinessId(HttpServletRequest http, OAuthLoginState row, String email) {

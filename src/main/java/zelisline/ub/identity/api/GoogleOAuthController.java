@@ -11,6 +11,8 @@ import org.springframework.web.bind.annotation.RestController;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.identity.api.dto.GoogleOAuthExchangeRequest;
+import zelisline.ub.identity.api.dto.GoogleOAuthExchangeResponse;
 import zelisline.ub.identity.api.dto.GoogleOAuthPublicConfigResponse;
 import zelisline.ub.identity.api.dto.GoogleOAuthStartRequest;
 import zelisline.ub.identity.api.dto.GoogleOAuthStartResponse;
@@ -40,5 +42,17 @@ public class GoogleOAuthController {
             @RequestParam(value = "code", required = false) String code,
             @RequestParam(value = "state", required = false) String state) {
         return googleOAuthService.callback(http, code, state);
+    }
+
+    /**
+     * Same-host BFF relay: the Next.js callback handler posts the browser's code/state
+     * (plus its cookies, for browser binding) and receives the session as 200 JSON, so
+     * cookies are minted on the frontend host without relying on a proxied 302's
+     * {@code Set-Cookie} surviving the hop.
+     */
+    @PostMapping("/api/v1/auth/oauth/google/exchange")
+    public ResponseEntity<GoogleOAuthExchangeResponse> exchange(
+            HttpServletRequest http, @Valid @RequestBody GoogleOAuthExchangeRequest body) {
+        return googleOAuthService.exchange(http, body.code(), body.state());
     }
 }

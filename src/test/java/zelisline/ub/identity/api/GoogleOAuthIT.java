@@ -149,6 +149,27 @@ class GoogleOAuthIT {
     }
 
     @Test
+    void exchange_invalidState_returnsBadRequestCode() throws Exception {
+        enableGoogle();
+        mockMvc.perform(post("/api/v1/auth/oauth/google/exchange")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"code\":\"fake-code\",\"state\":\"unknown-state\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("invalid_state"));
+    }
+
+    @Test
+    void exchange_disabled_isReachableWithoutAccessToken() throws Exception {
+        // No Authorization header: proves the route is public (JWT filter bypassed),
+        // and that a disabled platform fails closed with an ops-safe code.
+        mockMvc.perform(post("/api/v1/auth/oauth/google/exchange")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"code\":\"fake-code\",\"state\":\"fake-state\"}"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.detail").value("disabled"));
+    }
+
+    @Test
     void googleSecret_encryptRoundTrip() {
         enableGoogle();
         var resolved = platformIntegrationSettingsService.resolveGoogleOauth();

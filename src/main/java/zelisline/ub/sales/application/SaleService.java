@@ -609,7 +609,9 @@ public class SaleService {
                     userId
             );
             EffectiveLinePricing pricing = linePricing.get(lineIndex);
-            all.addAll(buildItemsForCartLine(saleId, lineIndex, line, allocations, pricing));
+            Item sold = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(line.itemId(), businessId)
+                    .orElse(null);
+            all.addAll(buildItemsForCartLine(saleId, lineIndex, line, allocations, pricing, sold));
             lineIndex++;
         }
         return all;
@@ -640,25 +642,58 @@ public class SaleService {
         return row;
     }
 
-    private static List<SaleItem> buildItemsForCartLine(
+    /**
+     * Builds sale_items for one cart line. Pack/shared-stock SKUs sell in packs but pick
+     * base units from the parent shelf — revenue and (when set) pack cost are split across
+     * those base units so {@code quantity × unit_price} is not required to equal
+     * {@code line_total}, but multi-batch rows still net to pack price − pack cost.
+     */
+    private List<SaleItem> buildItemsForCartLine(
             String saleId,
             int lineIndex,
             PostSaleLineRequest line,
             List<BatchAllocationLine> allocations,
-            EffectiveLinePricing pricing
+            EffectiveLinePricing pricing,
+            Item sold
     ) {
         BigDecimal chargedUnitPrice = pricing != null
                 ? pricing.chargedUnitPrice()
                 : line.unitPrice().setScale(QTY_SCALE, RoundingMode.HALF_UP);
-        BigDecimal lineQty = line.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
-        BigDecimal lineTotal = lineQty.multiply(chargedUnitPrice).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal packsSold = line.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal lineTotal = packsSold.multiply(chargedUnitPrice).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal totalAllocQty = BigDecimal.ZERO;
+        for (BatchAllocationLine a : allocations) {
+            totalAllocQty = totalAllocQty.add(a.quantity());
+        }
+        // Pack SKU "Cost of 1 pack" drives COGS when set — otherwise batch WAC on the shelf.
+        BigDecimal packCostTotal = null;
+        if (sold != null
+                && packageVariantStockResolver.sharesParentStock(sold)
+                && sold.getBuyingPrice() != null
+                && sold.getBuyingPrice().signum() > 0) {
+            packCostTotal = packsSold.multiply(sold.getBuyingPrice()).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        }
         BigDecimal revenueAllocated = BigDecimal.ZERO;
+        BigDecimal costAllocated = BigDecimal.ZERO;
         List<SaleItem> rows = new ArrayList<>();
         for (int i = 0; i < allocations.size(); i++) {
             BatchAllocationLine a = allocations.get(i);
-            BigDecimal portion = revenuePortion(lineTotal, lineQty, revenueAllocated, i, allocations.size(), a.quantity());
+            BigDecimal portion = moneyPortion(
+                    lineTotal, totalAllocQty, revenueAllocated, i, allocations.size(), a.quantity());
             revenueAllocated = revenueAllocated.add(portion);
-            BigDecimal costTotal = a.quantity().multiply(a.unitCost()).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+            BigDecimal costTotal;
+            BigDecimal unitCost;
+            if (packCostTotal != null) {
+                costTotal = moneyPortion(
+                        packCostTotal, totalAllocQty, costAllocated, i, allocations.size(), a.quantity());
+                costAllocated = costAllocated.add(costTotal);
+                unitCost = a.quantity().signum() == 0
+                        ? BigDecimal.ZERO
+                        : costTotal.divide(a.quantity(), QTY_SCALE, RoundingMode.HALF_UP);
+            } else {
+                unitCost = a.unitCost().setScale(QTY_SCALE, RoundingMode.HALF_UP);
+                costTotal = a.quantity().multiply(unitCost).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+            }
             BigDecimal profit = portion.subtract(costTotal);
             SaleItem row = new SaleItem();
             row.setSaleId(saleId);
@@ -669,7 +704,7 @@ public class SaleService {
             row.setQuantity(a.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP));
             row.setUnitPrice(chargedUnitPrice);
             row.setLineTotal(portion);
-            row.setUnitCost(a.unitCost().setScale(QTY_SCALE, RoundingMode.HALF_UP));
+            row.setUnitCost(unitCost);
             row.setCostTotal(costTotal);
             row.setProfit(profit);
             if (pricing != null) {
@@ -683,18 +718,25 @@ public class SaleService {
         return rows;
     }
 
-    private static BigDecimal revenuePortion(
-            BigDecimal lineTotal,
-            BigDecimal lineQty,
+    /**
+     * Splits a money total across allocation rows by physical quantity (base units for packs).
+     * Last row takes the remainder so cents never drift.
+     */
+    private static BigDecimal moneyPortion(
+            BigDecimal total,
+            BigDecimal totalQty,
             BigDecimal allocatedSoFar,
             int index,
             int n,
             BigDecimal allocQty
     ) {
         if (index == n - 1) {
-            return lineTotal.subtract(allocatedSoFar);
+            return total.subtract(allocatedSoFar);
         }
-        return lineTotal.multiply(allocQty).divide(lineQty, MONEY_SCALE, RoundingMode.HALF_UP);
+        if (totalQty == null || totalQty.signum() == 0) {
+            return BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        }
+        return total.multiply(allocQty).divide(totalQty, MONEY_SCALE, RoundingMode.HALF_UP);
     }
 
     private static BigDecimal sumCost(List<SaleItem> saleItems) {

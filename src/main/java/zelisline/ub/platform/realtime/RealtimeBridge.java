@@ -315,6 +315,29 @@ public class RealtimeBridge {
     }
 
     /**
+     * Push a purchase-order or goods-receipt slip to one cashier's open till.
+     * Other tills never see the frame.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onTillPrintRequested(TillPrintRequestedEvent event) {
+        String eventId = event.jobId();
+        var dataMap = new LinkedHashMap<String, String>();
+        dataMap.put("jobId", event.jobId());
+        dataMap.put("kind", event.kind());
+        dataMap.put("reference", event.reference() != null ? event.reference() : "");
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) {
+            return;
+        }
+        Set<String> sessionIds = sessionRegistry.findSessionsByUser(event.businessId(), event.userId());
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "till.print", eventId, "HIGH", Instant.now(), payloadJson);
+        }
+        log.debug("Till print requested: job={} kind={} user={} sessions={}",
+                event.jobId(), event.kind(), event.userId(), sessionIds.size());
+    }
+
+    /**
      * Fan-out sale.completed to branch POS listeners and business-wide hub sessions
      * (owners/managers with null branch claim). Invalidates Morning board pulse.
      */
@@ -874,6 +897,10 @@ public class RealtimeBridge {
     public record PaymentConfirmedEvent(
             String businessId, String branchId, String saleId, BigDecimal amount,
             String paymentMethod, String cashierUserId) {}
+
+    /** Slip for one cashier till. {@code kind} is {@code order} or {@code receipt}. */
+    public record TillPrintRequestedEvent(
+            String businessId, String userId, String jobId, String kind, String reference) {}
 
     /** Once-per-sale invalidate signal for dashboards (not cashier payment UX). */
     public record SaleCompletedEvent(

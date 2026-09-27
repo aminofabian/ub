@@ -13,6 +13,9 @@ public record PayrollArrearPeriodResponse(
         BigDecimal shifSuggested,
         BigDecimal housingLevySuggested,
         /** Base minus statutory for this arrear month (no advance deductions). */
-        BigDecimal netBeforeAdvances
+        BigDecimal netBeforeAdvances,
+        /** Calendar days paid for a mid-month join; full month when not prorated. */
+        int payableDays,
+        int daysInMonth
 ) {
 }

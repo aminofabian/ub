@@ -960,6 +960,10 @@ public class PayrollService {
             if (!PayrollPeriod.isReleased(year, month, today)) {
                 break;
             }
+            // A month still in progress is not arrears — pay it on that month's run.
+            if (!PayrollPeriod.bounds(year, month).end().isBefore(today)) {
+                break;
+            }
 
             if (payslipRepository.findByBusinessIdAndStaffProfileIdAndPeriodYearAndPeriodMonth(
                     businessId, staffProfileId, year, month
@@ -998,7 +1002,9 @@ public class PayrollService {
                     statutoryBreakdown != null ? statutoryBreakdown.nssf() : ZERO_MONEY,
                     statutoryBreakdown != null ? statutoryBreakdown.shif() : ZERO_MONEY,
                     statutoryBreakdown != null ? statutoryBreakdown.housingLevy() : ZERO_MONEY,
-                    netBeforeAdvances
+                    netBeforeAdvances,
+                    proration.payableDays(),
+                    proration.daysInMonth()
             ));
         }
 

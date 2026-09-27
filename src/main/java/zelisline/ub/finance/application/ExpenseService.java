@@ -273,6 +273,89 @@ public class ExpenseService {
         return toDto(e);
     }
 
+    /**
+     * Post an approved till drawout as operating expense. Idempotent per drawout
+     * via {@code source_reference}. The drawer was already reduced by the drawout
+     * itself, so this never touches the physical drawer ({@code includeInCashDrawer}
+     * stays false) — it only puts the spend on the P&amp;L.
+     *
+     * @return true when a new expense was posted, false when one already existed
+     */
+    @Transactional
+    public boolean postDrawoutExpense(
+            String businessId,
+            String drawoutId,
+            String branchId,
+            BigDecimal amount,
+            String categoryCode,
+            String name,
+            LocalDate expenseDate,
+            String userId
+    ) {
+        if (expenseRepository.findByBusinessIdAndSourceAndSourceReference(
+                businessId, FinanceConstants.EXPENSE_SOURCE_DRAWER, drawoutId).isPresent()) {
+            return false;
+        }
+        String code = ExpenseCategoryCodes.normalize(categoryCode);
+        BigDecimal amt = amount.setScale(2, RoundingMode.HALF_UP);
+        LedgerAccount expenseAcc = resolveExpenseAccount(businessId, null, code);
+        LedgerAccount creditAcc = resolvePaymentLedger(businessId, FinanceConstants.EXPENSE_PAY_METHOD_CASH);
+
+        String expenseId = UUID.randomUUID().toString();
+        JournalEntry entry = new JournalEntry();
+        entry.setBusinessId(businessId);
+        entry.setBranchId(branchId);
+        entry.setEntryDate(expenseDate);
+        entry.setSourceType(FinanceConstants.JOURNAL_SOURCE_EXPENSE);
+        entry.setSourceId(expenseId);
+        entry.setMemo("Till drawout " + drawoutId);
+        entry.debit(expenseAcc.getId(), amt);
+        entry.credit(creditAcc.getId(), amt);
+        String jeId = ledgerPostingPort.post(entry);
+
+        Instant now = Instant.now();
+        Expense e = new Expense();
+        e.setId(expenseId);
+        e.setBusinessId(businessId);
+        e.setBranchId(branchId);
+        e.setExpenseDate(expenseDate);
+        e.setName(name);
+        e.setCategoryType(ExpenseCategoryCodes.defaultFixedVariable(code));
+        e.setSource(FinanceConstants.EXPENSE_SOURCE_DRAWER);
+        e.setSourceReference(drawoutId);
+        e.setCategoryCode(code);
+        e.setAmount(amt);
+        e.setPaymentMethod(FinanceConstants.EXPENSE_PAY_METHOD_CASH);
+        e.setIncludeInCashDrawer(false);
+        e.setPaidAt(now);
+        e.setExpenseLedgerAccountId(expenseAcc.getId());
+        e.setJournalEntryId(jeId);
+        e.setCreatedBy(userId);
+        e.setApprovalStatus(FinanceConstants.EXPENSE_APPROVAL_POSTED);
+        e.setApprovedBy(userId);
+        e.setApprovedAt(now);
+        expenseRepository.save(e);
+        publishExpenseCreated(e, userId);
+        return true;
+    }
+
+    /**
+     * Reverse the operating expense a drawout posted (void / reject / expiry),
+     * deleting its journal entry too. No-op when the drawout never posted one.
+     */
+    @Transactional
+    public void reverseDrawoutExpense(String businessId, String drawoutId) {
+        expenseRepository.findByBusinessIdAndSourceAndSourceReference(
+                businessId, FinanceConstants.EXPENSE_SOURCE_DRAWER, drawoutId)
+                .ifPresent(e -> {
+                    if (e.getJournalEntryId() != null) {
+                        ledgerPostingPort.deleteBySource(
+                                businessId, FinanceConstants.JOURNAL_SOURCE_EXPENSE, e.getId());
+                    }
+                    expenseRepository.delete(e);
+                });
+    }
+
     private ExpenseResponse recordExpenseIdempotent(
             String businessId,
             PostExpenseRequest req,
@@ -620,6 +703,7 @@ public class ExpenseService {
                 e.getName(),
                 e.getCategoryType(),
                 e.getSource(),
+                e.getSourceReference(),
                 e.getCategoryCode(),
                 e.getAmount(),
                 e.getPaymentMethod(),

@@ -49,6 +49,10 @@ public class Shift {
     @Column(name = "counted_closing_cash", precision = 14, scale = 2)
     private BigDecimal countedClosingCash;
 
+    /** Cash removed from the till at close (owner drop / safe). Not OpEx. */
+    @Column(name = "cash_taken_out", precision = 14, scale = 2)
+    private BigDecimal cashTakenOut;
+
     @Column(name = "closing_variance", precision = 14, scale = 2)
     private BigDecimal closingVariance;
 

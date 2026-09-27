@@ -53,6 +53,7 @@ public record ShiftSyncRequest(
         boolean blindClosing,
         @NotNull Instant openedAt,
         Instant closedAt,
+        BigDecimal cashTakenOut,
         @Valid List<SaleData> sales
     ) {}
 

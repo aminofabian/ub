@@ -43,6 +43,14 @@ public class Expense {
     @Column(name = "source", nullable = false, length = 32)
     private String source = "manual";
 
+    /**
+     * The row this expense was posted from (e.g. a cash drawout id). Null for
+     * user-entered expenses. Unique with {@code business_id + source} so a
+     * source can be posted at most once.
+     */
+    @Column(name = "source_reference", length = 36)
+    private String sourceReference;
+
     /** Soft taxonomy: rent, utilities, salaries, … */
     @Column(name = "category_code", length = 32)
     private String categoryCode;

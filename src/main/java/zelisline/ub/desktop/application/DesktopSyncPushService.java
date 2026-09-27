@@ -371,6 +371,7 @@ public class DesktopSyncPushService {
                 shift.isBlindClosing(),
                 shift.getOpenedAt(),
                 shift.getClosedAt(),
+                shift.getCashTakenOut(),
                 sales
             ));
         }

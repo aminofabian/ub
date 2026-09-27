@@ -32,7 +32,8 @@ public record ShiftDetailResponse(
         List<DenominationResponse> closingDenominations,
         List<ShiftListItemResponse.SalesSummary> salesSummary,
         List<ShiftExpenseResponse> expenses,
-        List<ShiftAuditEntryResponse> auditLog
+        List<ShiftAuditEntryResponse> auditLog,
+        BigDecimal cashTakenOut
 ) {
 
     /**
@@ -48,7 +49,8 @@ public record ShiftDetailResponse(
                         ? salesSummary.getFirst().transactionCount()
                         : 0,
                 BigDecimal.ZERO, // total sales will be computed from salesSummary
-                null, null
+                null, null,
+                cashTakenOut
         );
     }
 }

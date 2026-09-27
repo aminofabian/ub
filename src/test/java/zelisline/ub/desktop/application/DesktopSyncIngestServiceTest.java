@@ -89,6 +89,7 @@ class DesktopSyncIngestServiceTest {
             false,
             Instant.parse("2026-08-20T08:00:00Z"),
             null,
+            null,
             List.of(new ShiftSyncRequest.SaleData(
                 saleId,
                 "branch-1",
@@ -141,7 +142,7 @@ class DesktopSyncIngestServiceTest {
                 "shift-1", "branch-1", "till-1", SalesConstants.SHIFT_STATUS_OPEN,
                 "owner-id", new BigDecimal("5000.00"), new BigDecimal("5000.00"),
                 null, null, null, null, null, false,
-                Instant.parse("2026-08-20T08:00:00Z"), null, List.of())),
+                Instant.parse("2026-08-20T08:00:00Z"), null, null, List.of())),
             List.of(new ShiftSyncRequest.CustomerData(
                 "customer-1",
                 "Jane Doe",
@@ -200,7 +201,7 @@ class DesktopSyncIngestServiceTest {
                 "shift-1", "branch-1", "   ", SalesConstants.SHIFT_STATUS_OPEN,
                 "owner-id", new BigDecimal("5000.00"), new BigDecimal("5000.00"),
                 null, null, null, null, null, false,
-                Instant.parse("2026-08-20T08:00:00Z"), null, List.of())),
+                Instant.parse("2026-08-20T08:00:00Z"), null, null, List.of())),
             null,
             null);
         when(shiftRepository.findByIdAndBusinessId("shift-1", "cloud-biz"))

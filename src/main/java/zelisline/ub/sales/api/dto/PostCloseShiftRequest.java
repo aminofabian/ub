@@ -10,6 +10,8 @@ public record PostCloseShiftRequest(
         @NotNull @DecimalMin(value = "0", inclusive = true) BigDecimal countedClosingCash,
         String notes,
         String varianceReason,
-        List<DenominationEntry> denominations
+        List<DenominationEntry> denominations,
+        /** Cash removed from the till at close. Null keeps older clients working. */
+        @DecimalMin(value = "0", inclusive = true) BigDecimal cashTakenOut
 ) {
 }

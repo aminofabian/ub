@@ -22,7 +22,8 @@ public record ShiftListItemResponse(
         int transactionCount,
         BigDecimal totalSales,
         String registerName,
-        String shiftNumber
+        String shiftNumber,
+        BigDecimal cashTakenOut
 ) {
 
     /**

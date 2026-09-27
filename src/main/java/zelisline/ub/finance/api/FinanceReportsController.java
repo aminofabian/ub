@@ -8,9 +8,12 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.finance.api.dto.BalanceSheetResponse;
+import zelisline.ub.finance.api.dto.DailyProfitPoint;
 import zelisline.ub.finance.api.dto.FinancePulseResponse;
 import zelisline.ub.finance.api.dto.ProfitAndLossResponse;
 import zelisline.ub.finance.application.FinanceReportsService;
@@ -57,6 +60,19 @@ public class FinanceReportsController {
         CurrentTenantUser.require(request);
         return financeReportsService.profitAndLoss(
                 TenantRequestIds.resolveBusinessId(request), from, to, branchId, itemTypeId);
+    }
+
+    @GetMapping("/pl/daily")
+    @PreAuthorize("hasPermission(null, 'finance.reports.read')")
+    public List<DailyProfitPoint> dailyProfitAndLoss(
+            @RequestParam("from") LocalDate from,
+            @RequestParam("to") LocalDate to,
+            @RequestParam(value = "branchId", required = false) String branchId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return financeReportsService.dailyProfitAndLoss(
+                TenantRequestIds.resolveBusinessId(request), from, to, branchId);
     }
 
     @GetMapping("/balance-sheet")

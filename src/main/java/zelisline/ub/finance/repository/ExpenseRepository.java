@@ -17,6 +17,9 @@ public interface ExpenseRepository extends JpaRepository<Expense, String> {
 
     Optional<Expense> findByIdAndBusinessId(String id, String businessId);
 
+    Optional<Expense> findByBusinessIdAndSourceAndSourceReference(
+            String businessId, String source, String sourceReference);
+
     List<Expense> findByBusinessIdAndExpenseDateOrderByCreatedAtDesc(String businessId, LocalDate expenseDate);
 
     @Query("""

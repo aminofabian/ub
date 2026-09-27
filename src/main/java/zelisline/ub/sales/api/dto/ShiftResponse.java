@@ -26,6 +26,7 @@ public record ShiftResponse(
         String tillDeviceKey,
         String tillLabel,
         List<DenominationResponse> openingDenominations,
-        List<DenominationResponse> closingDenominations
+        List<DenominationResponse> closingDenominations,
+        BigDecimal cashTakenOut
 ) {
 }

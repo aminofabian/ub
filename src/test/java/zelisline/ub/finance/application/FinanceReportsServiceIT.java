@@ -22,6 +22,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import zelisline.ub.finance.LedgerAccountCodes;
 import zelisline.ub.finance.api.dto.BalanceSheetResponse;
+import zelisline.ub.finance.api.dto.DailyProfitPoint;
 import zelisline.ub.finance.api.dto.ExpenseResponse;
 import zelisline.ub.finance.api.dto.FinancePulseResponse;
 import zelisline.ub.finance.api.dto.ProfitAndLossResponse;
@@ -393,6 +394,23 @@ class FinanceReportsServiceIT {
                 .findFirst()
                 .orElseThrow();
         assertThat(retained.amount()).isEqualByComparingTo("10.00");
+
+        // --- Daily P&L strip (3-day window, zero-filled before the fixture day) ---
+        List<DailyProfitPoint> daily =
+                financeReportsService.dailyProfitAndLoss(TENANT, today.minusDays(2), today, null);
+        assertThat(daily).hasSize(3);
+        assertThat(daily.get(0).date()).isEqualTo(today.minusDays(2));
+        assertThat(daily.get(0).revenue()).isEqualByComparingTo("0.00");
+        assertThat(daily.get(0).hasActivity()).isFalse();
+        assertThat(daily.get(0).netOperating()).isEqualByComparingTo("0.00");
+        DailyProfitPoint last = daily.get(2);
+        assertThat(last.date()).isEqualTo(today);
+        assertThat(last.hasActivity()).isTrue();
+        assertThat(last.revenue()).isEqualByComparingTo("100.00");
+        assertThat(last.cogs()).isEqualByComparingTo("60.00");
+        assertThat(last.grossProfit()).isEqualByComparingTo("40.00");
+        assertThat(last.operatingExpenses()).isEqualByComparingTo("30.00");
+        assertThat(last.netOperating()).isEqualByComparingTo("10.00");
     }
 
     @Test

@@ -3,10 +3,13 @@ package zelisline.ub.sales.application;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.springframework.data.domain.Pageable;
 
@@ -22,6 +25,9 @@ import zelisline.ub.audit.application.AuditEventPublisher;
 import zelisline.ub.audit.domain.AuditEventActorType;
 import zelisline.ub.audit.domain.AuditEventCategory;
 import zelisline.ub.audit.domain.AuditEventSeverity;
+import zelisline.ub.finance.BusinessTimeZones;
+import zelisline.ub.finance.ExpenseCategoryCodes;
+import zelisline.ub.finance.application.ExpenseService;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
@@ -55,6 +61,16 @@ public class DrawoutService {
     private static final String CASHIER_ROLE = "cashier";
     private static final String BUTCHER_CASHIER_ROLE = "butcher_cashier";
 
+    /**
+     * Drawout categories that are real operating spend and post to the finance
+     * ledger at approval. SUPPLIER_PAYMENT is deliberately excluded — it settles
+     * stock or a supplier bill, not OpEx — and OTHER needs a human look.
+     */
+    private static final Set<String> OPERATING_DRAWOUT_CATEGORIES = Set.of(
+            SalesConstants.DRAWOUT_CATEGORY_PETTY_CASH,
+            SalesConstants.DRAWOUT_CATEGORY_CASUAL_LABOUR,
+            SalesConstants.DRAWOUT_CATEGORY_RECURRING);
+
     private final CashDrawoutRepository cashDrawoutRepository;
     private final RecurringDrawoutItemRepository recurringDrawoutItemRepository;
     private final ShiftRepository shiftRepository;
@@ -69,6 +85,7 @@ public class DrawoutService {
     private final DrawoutApprovalNotifier drawoutApprovalNotifier;
     private final DrawoutApprovalToken drawoutApprovalToken;
     private final zelisline.ub.tenancy.repository.BusinessRepository businessRepository;
+    private final ExpenseService expenseService;
 
     // ========================================================================
     // INITIATE DRAWOUT
@@ -148,6 +165,11 @@ public class DrawoutService {
         cashDrawoutRepository.save(drawout);
         shiftRepository.save(shift);
 
+        // Tier-1 drawouts self-approve, so their OpEx posts straight away.
+        if (SalesConstants.DRAWOUT_STATUS_APPROVED.equals(drawout.getStatus())) {
+            postOperatingDrawoutExpense(businessId, shift, drawout, userId);
+        }
+
         // Record audit log
         String auditMeta = String.format(
                 "{\"category\":\"%s\",\"amount\":\"%s\",\"recipient\":\"%s\",\"tier\":%d,\"status\":\"%s\"}",
@@ -196,6 +218,7 @@ public class DrawoutService {
                 drawout.getAmount().negate(), CashDrawerLedgerService.CONFIDENCE_INFERRED, userId, null);
 
         recordDrawoutExpense(drawout.getShiftId(), drawout.getAmount(), drawout.getDescription(), userId);
+        postOperatingDrawoutExpense(businessId, shift, drawout, userId);
 
         // Record audit log
         String auditMeta = String.format(
@@ -242,6 +265,8 @@ public class DrawoutService {
                 request.rejectionReason(), drawout.getAmount());
         recordAudit(drawout.getShiftId(), SalesConstants.AUDIT_DRAWOUT_REJECTED, userId, auditMeta, null);
         publishDrawoutEvent(businessId, shift, drawout, userId, AuditEventTypes.DRAWOUT_REJECTED, request.rejectionReason());
+        // Pending drawouts never posted an expense; harmless no-op if none exists.
+        expenseService.reverseDrawoutExpense(businessId, drawout.getId());
 
         return toDrawoutResponse(drawout, businessId);
     }
@@ -282,6 +307,7 @@ public class DrawoutService {
                 request.voidReason(), drawout.getAmount());
         recordAudit(drawout.getShiftId(), SalesConstants.AUDIT_DRAWOUT_VOIDED, userId, auditMeta, null);
         publishDrawoutEvent(businessId, shift, drawout, userId, AuditEventTypes.DRAWOUT_VOIDED, request.voidReason());
+        expenseService.reverseDrawoutExpense(businessId, drawout.getId());
 
         return toDrawoutResponse(drawout, businessId);
     }
@@ -577,6 +603,7 @@ public class DrawoutService {
             shiftRepository.save(shift);
         }
         cashDrawoutRepository.save(drawout);
+        expenseService.reverseDrawoutExpense(businessId, drawout.getId());
         recordAudit(drawout.getShiftId(), SalesConstants.AUDIT_DRAWOUT_EXPIRED, userId,
                 "{\"reason\":\"Auto-expired\",\"originalAmount\":\"" + drawout.getAmount() + "\"}", null);
     }
@@ -589,6 +616,100 @@ public class DrawoutService {
         expense.setDescription(description);
         expense.setAuthorisedBy(userId);
         shiftExpenseRepository.save(expense);
+    }
+
+    /**
+     * Post a drawout to finance as operating expense when its category is real
+     * operating spend. Supplier payments and uncategorised drawouts stay
+     * till-only. Idempotent — re-approval or replayed events do not double-post.
+     */
+    private void postOperatingDrawoutExpense(
+            String businessId, Shift shift, CashDrawout drawout, String userId) {
+        if (!OPERATING_DRAWOUT_CATEGORIES.contains(drawout.getCategory())) {
+            return;
+        }
+        expenseService.postDrawoutExpense(
+                businessId,
+                drawout.getId(),
+                shift.getBranchId(),
+                drawout.getAmount(),
+                drawoutExpenseCategoryCode(drawout.getCategory()),
+                drawoutExpenseName(drawout),
+                businessDateOf(businessId, drawout.getCreatedAt()),
+                userId);
+    }
+
+    /**
+     * Manager action for a drawout the automatic rule leaves till-only (today:
+     * categories flagged "Review"): post it as operating expense under a chosen
+     * category code. Idempotent per drawout through the shared posting path.
+     *
+     * @return true when a new expense was posted, false when one already existed
+     */
+    @Transactional
+    public boolean classifyDrawoutAsExpense(
+            String businessId, String drawoutId, String categoryCode, String userId) {
+        CashDrawout drawout = cashDrawoutRepository.findById(drawoutId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Drawout not found"));
+        Shift shift = shiftRepository.findByIdAndBusinessId(drawout.getShiftId(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shift not found"));
+        if (!SalesConstants.DRAWOUT_STATUS_APPROVED.equals(drawout.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Only an approved drawout can be posted to expenses");
+        }
+        String code;
+        try {
+            code = ExpenseCategoryCodes.normalize(categoryCode);
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+        }
+        if (code == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "categoryCode is required");
+        }
+        return expenseService.postDrawoutExpense(
+                businessId,
+                drawout.getId(),
+                shift.getBranchId(),
+                drawout.getAmount(),
+                code,
+                drawoutExpenseName(drawout),
+                businessDateOf(businessId, drawout.getCreatedAt()),
+                userId);
+    }
+
+    /** The business-day of an instant — expenses land on the day they happened, not the day they were approved. */
+    private LocalDate businessDateOf(String businessId, Instant instant) {
+        ZoneId zone = BusinessTimeZones.of(businessRepository.findById(businessId).orElse(null));
+        return LocalDate.ofInstant(instant == null ? Instant.now() : instant, zone);
+    }
+
+    private static String drawoutExpenseName(CashDrawout drawout) {
+        String description = drawout.getDescription();
+        if (description != null && !description.isBlank()) {
+            return description.trim();
+        }
+        return drawoutCategoryName(drawout.getCategory());
+    }
+
+    /** Maps a drawout category onto the soft expense taxonomy. */
+    private static String drawoutExpenseCategoryCode(String category) {
+        if (SalesConstants.DRAWOUT_CATEGORY_CASUAL_LABOUR.equals(category)) {
+            return ExpenseCategoryCodes.SALARIES;
+        }
+        return ExpenseCategoryCodes.OTHER;
+    }
+
+    private static String drawoutCategoryName(String category) {
+        if (SalesConstants.DRAWOUT_CATEGORY_PETTY_CASH.equals(category)) {
+            return "Petty cash";
+        }
+        if (SalesConstants.DRAWOUT_CATEGORY_CASUAL_LABOUR.equals(category)) {
+            return "Casual labour";
+        }
+        if (SalesConstants.DRAWOUT_CATEGORY_RECURRING.equals(category)) {
+            return "Recurring bill";
+        }
+        return "Till drawout";
     }
 
     private void recordAudit(String shiftId, String eventType, String performedBy,

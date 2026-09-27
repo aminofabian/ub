@@ -215,6 +215,40 @@ public interface JournalReportRepository extends JpaRepository<JournalLine, Stri
         Number getSaleCount();
     }
 
+    /**
+     * Same classification as {@link #sumByAccountForPeriod} but grouped by journal
+     * day — drives the daily net-profit strip (revenue / COGS / OpEx per day).
+     */
+    interface DailyAccountBalance {
+        Object getJournalDay();
+        String getCode();
+        String getAccountType();
+        BigDecimal getDebitTotal();
+        BigDecimal getCreditTotal();
+    }
+
+    @Query(value = """
+            select je.entry_date              as journalDay,
+                   la.code                    as code,
+                   la.account_type            as accountType,
+                   coalesce(sum(jl.debit), 0)  as debitTotal,
+                   coalesce(sum(jl.credit), 0) as creditTotal
+              from journal_lines jl
+              join journal_entries je on je.id = jl.journal_entry_id
+              join ledger_accounts la on la.id = jl.ledger_account_id
+             where je.business_id = :businessId
+               and je.entry_date >= :from
+               and je.entry_date <= :to
+               and (:branchId is null or je.branch_id = :branchId)
+             group by je.entry_date, la.code, la.account_type
+            """, nativeQuery = true)
+    List<DailyAccountBalance> sumByAccountForPeriodByDay(
+            @Param("businessId") String businessId,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to,
+            @Param("branchId") String branchId
+    );
+
     @Query(value = """
             select count(*)
               from shifts s

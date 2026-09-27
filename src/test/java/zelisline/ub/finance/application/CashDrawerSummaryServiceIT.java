@@ -231,7 +231,7 @@ class CashDrawerSummaryServiceIT {
         shift.setExpectedClosingCash(new BigDecimal("135.00"));
         shiftRepository.save(shift);
 
-        shiftService.closeShift(TENANT, shift.getId(), new PostCloseShiftRequest(new BigDecimal("130.00"), "close", null, null), userId);
+        shiftService.closeShift(TENANT, shift.getId(), new PostCloseShiftRequest(new BigDecimal("130.00"), "close", null, null, null), userId);
 
         CashDrawerDailySummary summary = summaryRepository.findByShiftId(shift.getId()).orElseThrow();
         assertThat(summary.getOpeningCash()).isEqualByComparingTo(new BigDecimal("100.00"));

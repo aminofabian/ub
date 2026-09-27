@@ -32,6 +32,7 @@ import zelisline.ub.identity.repository.PermissionRepository;
 import zelisline.ub.identity.repository.RolePermissionRepository;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.finance.repository.ExpenseRepository;
 import zelisline.ub.platform.security.TestAuthenticationFilter;
 import zelisline.ub.sales.application.DrawoutApprovalNotifier;
 import zelisline.ub.sales.repository.CashDrawoutRepository;
@@ -82,6 +83,8 @@ class DrawoutIT {
     private ShiftExpenseRepository shiftExpenseRepository;
     @Autowired
     private CashDrawerMovementRepository cashDrawerMovementRepository;
+    @Autowired
+    private ExpenseRepository expenseRepository;
 
     @MockitoBean
     @SuppressWarnings("unused")
@@ -273,6 +276,77 @@ class DrawoutIT {
                 .andExpect(status().isForbidden());
     }
 
+    @Test
+    void approvedOperatingDrawout_postsOperatingExpense() throws Exception {
+        String shiftId = openShift("1000.00");
+        JsonNode created = postDrawout(shiftId, "200.00", "PETTY_CASH", cashier);
+        String drawoutId = created.get("id").asText();
+        assertThat(created.get("status").asText()).isEqualTo("APPROVED");
+
+        var expense = expenseRepository
+                .findByBusinessIdAndSourceAndSourceReference(TENANT, "drawer", drawoutId)
+                .orElseThrow();
+        assertThat(expense.getAmount()).isEqualByComparingTo("200.00");
+        assertThat(expense.getApprovalStatus()).isEqualTo("posted");
+        assertThat(expense.getJournalEntryId()).isNotNull();
+        // The drawout already moved the drawer; the expense must not move it again.
+        assertThat(expense.isIncludeInCashDrawer()).isFalse();
+    }
+
+    @Test
+    void supplierPaymentDrawout_doesNotPostExpense() throws Exception {
+        String shiftId = openShift("1000.00");
+        JsonNode created = postDrawout(shiftId, "200.00", "SUPPLIER_PAYMENT", cashier);
+        assertThat(created.get("status").asText()).isEqualTo("APPROVED");
+
+        assertThat(expenseRepository.findByBusinessIdAndSourceAndSourceReference(
+                TENANT, "drawer", created.get("id").asText())).isEmpty();
+    }
+
+    @Test
+    void voidApprovedDrawout_reversesOperatingExpense() throws Exception {
+        String shiftId = openShift("1000.00");
+        JsonNode created = postDrawout(shiftId, "200.00", "PETTY_CASH", cashier);
+        String drawoutId = created.get("id").asText();
+        assertThat(expenseRepository.findByBusinessIdAndSourceAndSourceReference(
+                TENANT, "drawer", drawoutId)).isPresent();
+
+        mockMvc.perform(post("/api/v1/drawouts/%s/void".formatted(drawoutId))
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"voidReason\":\"Recorded by mistake\"}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, admin.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ADMIN))
+                .andExpect(status().isOk());
+
+        assertThat(expenseRepository.findByBusinessIdAndSourceAndSourceReference(
+                TENANT, "drawer", drawoutId)).isEmpty();
+    }
+
+    @Test
+    void classifyOtherDrawoutAsExpense_postsOnce() throws Exception {
+        String shiftId = openShift("1000.00");
+        JsonNode created = postDrawout(shiftId, "200.00", "OTHER", cashier);
+        String drawoutId = created.get("id").asText();
+        assertThat(created.get("status").asText()).isEqualTo("APPROVED");
+        assertThat(expenseRepository.findByBusinessIdAndSourceAndSourceReference(
+                TENANT, "drawer", drawoutId)).isEmpty();
+
+        postExpense(drawoutId, "transport").andExpect(status().isOk());
+
+        var expense = expenseRepository
+                .findByBusinessIdAndSourceAndSourceReference(TENANT, "drawer", drawoutId)
+                .orElseThrow();
+        assertThat(expense.getCategoryCode()).isEqualTo("transport");
+        assertThat(expense.getAmount()).isEqualByComparingTo("200.00");
+
+        // Idempotent: classifying again must not double-post.
+        postExpense(drawoutId, "transport").andExpect(status().isOk());
+        assertThat(expenseRepository.findAll().stream()
+                .filter(x -> "drawer".equals(x.getSource()) && drawoutId.equals(x.getSourceReference()))
+                .count()).isEqualTo(1);
+    }
+
     private String openShift(String opening) throws Exception {
         MvcResult result = mockMvc.perform(post("/api/v1/shifts/open")
                         .contentType(APPLICATION_JSON)
@@ -288,18 +362,32 @@ class DrawoutIT {
     }
 
     private JsonNode postDrawout(String shiftId, String amount, User actor) throws Exception {
+        return postDrawout(shiftId, amount, "PETTY_CASH", actor);
+    }
+
+    private JsonNode postDrawout(String shiftId, String amount, String category, User actor) throws Exception {
         MvcResult result = mockMvc.perform(post("/api/v1/shifts/%s/drawouts".formatted(shiftId))
                         .contentType(APPLICATION_JSON)
                         .content("""
-                                {"amount":%s,"category":"PETTY_CASH","description":"Water delivery for shop",
+                                {"amount":%s,"category":"%s","description":"Water delivery for shop",
                                  "recipientName":"John"}
-                                """.formatted(amount))
+                                """.formatted(amount, category))
                         .header("X-Tenant-Id", TENANT)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, actor.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, actor.getRoleId()))
                 .andExpect(status().isCreated())
                 .andReturn();
         return objectMapper.readTree(result.getResponse().getContentAsString());
+    }
+
+    private org.springframework.test.web.servlet.ResultActions postExpense(
+            String drawoutId, String categoryCode) throws Exception {
+        return mockMvc.perform(post("/api/v1/drawouts/%s/expense".formatted(drawoutId))
+                .contentType(APPLICATION_JSON)
+                .content("{\"categoryCode\":\"%s\"}".formatted(categoryCode))
+                .header("X-Tenant-Id", TENANT)
+                .header(TestAuthenticationFilter.HEADER_USER_ID, admin.getId())
+                .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ADMIN));
     }
 
     private BigDecimal expectedCash(String shiftId) throws Exception {

@@ -7,8 +7,10 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -19,6 +21,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.finance.BusinessTimeZones;
 import zelisline.ub.finance.LedgerAccountCodes;
 import zelisline.ub.finance.api.dto.BalanceSheetResponse;
+import zelisline.ub.finance.api.dto.DailyProfitPoint;
 import zelisline.ub.finance.api.dto.FinancePulseResponse;
 import zelisline.ub.finance.api.dto.ProfitAndLossResponse;
 import zelisline.ub.finance.repository.JournalReportRepository;
@@ -215,6 +218,82 @@ public class FinanceReportsService {
                 List.copyOf(cogsLines),
                 List.copyOf(expenseLines)
         );
+    }
+
+    /**
+     * Daily net-profit strip: one {@link DailyProfitPoint} per calendar day in
+     * {@code from..to}, zero-filled when a day has no journal activity. Same
+     * classification as {@link #profitAndLoss} (COGS is account 5000 only).
+     */
+    @Transactional(readOnly = true)
+    public List<DailyProfitPoint> dailyProfitAndLoss(
+            String businessId,
+            LocalDate from,
+            LocalDate to,
+            String branchId
+    ) {
+        if (from == null || to == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "from and to are required");
+        }
+        if (to.isBefore(from)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "to must be on or after from");
+        }
+        String resolvedBranch = resolveBranch(businessId, branchId);
+
+        List<JournalReportRepository.DailyAccountBalance> rows =
+                journalReportRepository.sumByAccountForPeriodByDay(businessId, from, to, resolvedBranch);
+
+        Map<LocalDate, BigDecimal[]> byDay = new HashMap<>();
+        for (JournalReportRepository.DailyAccountBalance row : rows) {
+            LocalDate day = toLocalDate(row.getJournalDay());
+            if (day == null) {
+                continue;
+            }
+            BigDecimal[] acc = byDay.computeIfAbsent(day, k -> new BigDecimal[] {
+                    BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO });
+            String type = normalizedType(row.getAccountType());
+            BigDecimal credit = money(row.getCreditTotal());
+            BigDecimal debit = money(row.getDebitTotal());
+            switch (type) {
+                case "revenue" -> acc[0] = acc[0].add(credit.subtract(debit));
+                case "expense" -> {
+                    BigDecimal amount = debit.subtract(credit);
+                    if (LedgerAccountCodes.COST_OF_GOODS_SOLD.equals(row.getCode())) {
+                        acc[1] = acc[1].add(amount);
+                    } else {
+                        acc[2] = acc[2].add(amount);
+                    }
+                }
+                default -> { /* asset / liability / equity ignored */ }
+            }
+        }
+
+        List<DailyProfitPoint> out = new ArrayList<>();
+        for (LocalDate day = from; !day.isAfter(to); day = day.plusDays(1)) {
+            BigDecimal[] acc = byDay.getOrDefault(day, new BigDecimal[] {
+                    BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO });
+            BigDecimal revenue = acc[0].setScale(2, RoundingMode.HALF_UP);
+            BigDecimal cogs = acc[1].setScale(2, RoundingMode.HALF_UP);
+            BigDecimal opex = acc[2].setScale(2, RoundingMode.HALF_UP);
+            BigDecimal gross = revenue.subtract(cogs).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal net = gross.subtract(opex).setScale(2, RoundingMode.HALF_UP);
+            out.add(new DailyProfitPoint(
+                    day, revenue, cogs, gross, opex, net, byDay.containsKey(day)));
+        }
+        return out;
+    }
+
+    private static LocalDate toLocalDate(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof LocalDate localDate) {
+            return localDate;
+        }
+        if (value instanceof java.sql.Date sqlDate) {
+            return sqlDate.toLocalDate();
+        }
+        return LocalDate.parse(value.toString());
     }
 
     @Transactional(readOnly = true)

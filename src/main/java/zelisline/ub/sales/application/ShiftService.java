@@ -320,7 +320,16 @@ public class ShiftService {
         }
 
         BigDecimal variance = counted.subtract(expected).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal takenOut = null;
+        if (req.cashTakenOut() != null) {
+            takenOut = req.cashTakenOut().setScale(2, RoundingMode.HALF_UP);
+            if (takenOut.compareTo(counted) > 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Amount taken out cannot exceed counted cash.");
+            }
+        }
         s.setCountedClosingCash(counted);
+        s.setCashTakenOut(takenOut);
         s.setClosingVariance(variance);
         s.setClosingNotes(blankToNull(req.notes()));
         s.setVarianceReason(blankToNull(req.varianceReason()));
@@ -347,8 +356,8 @@ public class ShiftService {
 
         // Record legacy audit log
         String meta = String.format(
-                "{\"counted\":\"%s\",\"expected\":\"%s\",\"variance\":\"%s\"}",
-                counted, expected, variance);
+                "{\"counted\":\"%s\",\"expected\":\"%s\",\"variance\":\"%s\",\"cashTakenOut\":\"%s\"}",
+                counted, expected, variance, takenOut == null ? "" : takenOut.toPlainString());
         recordAudit(s.getId(), SalesConstants.AUDIT_SHIFT_CLOSED, userId, meta, null);
 
         // Record unified audit event
@@ -360,7 +369,12 @@ public class ShiftService {
                 .targetLabel("Shift " + s.getId().substring(0, 8))
                 .shiftId(s.getId())
                 .oldState(map("expectedClosingCash", expected.toPlainString(), "status", SalesConstants.SHIFT_STATUS_OPEN))
-                .newState(map("countedClosingCash", counted.toPlainString(), "expectedClosingCash", expected.toPlainString(), "variance", variance.toPlainString(), "status", s.getStatus()))
+                .newState(map(
+                        "countedClosingCash", counted.toPlainString(),
+                        "expectedClosingCash", expected.toPlainString(),
+                        "variance", variance.toPlainString(),
+                        "cashTakenOut", takenOut == null ? "" : takenOut.toPlainString(),
+                        "status", s.getStatus()))
                 .source("pos_terminal")
                 .build());
 
@@ -623,7 +637,8 @@ public class ShiftService {
                 s.isBlindClosing(),
                 openingDenoms, closingDenoms,
                 Collections.emptyList(), // sales summary - would be queried from transactions
-                expenses, auditLog
+                expenses, auditLog,
+                s.getCashTakenOut()
         );
     }
 
@@ -817,7 +832,8 @@ public class ShiftService {
                 s.getCloseJournalEntryId(),
                 s.getTillDeviceKey(),
                 resolveTillLabel(s),
-                openingDenoms, closingDenoms
+                openingDenoms, closingDenoms,
+                s.getCashTakenOut()
         );
     }
 
@@ -835,7 +851,8 @@ public class ShiftService {
                 s.getOpeningCash(), s.getCountedClosingCash(),
                 s.getExpectedClosingCash(), s.getClosingVariance(),
                 0, BigDecimal.ZERO,
-                resolveTillLabel(s), null
+                resolveTillLabel(s), null,
+                s.getCashTakenOut()
         );
     }
 

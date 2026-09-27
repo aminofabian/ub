@@ -539,6 +539,9 @@ public class DesktopSyncIngestService {
         shift.setOpeningCash(data.openingCash());
         shift.setExpectedClosingCash(data.expectedClosingCash());
         shift.setCountedClosingCash(data.countedClosingCash());
+        if (data.cashTakenOut() != null) {
+            shift.setCashTakenOut(data.cashTakenOut());
+        }
         shift.setClosingVariance(data.closingVariance());
         shift.setOpeningNotes(data.openingNotes());
         shift.setClosingNotes(data.closingNotes());

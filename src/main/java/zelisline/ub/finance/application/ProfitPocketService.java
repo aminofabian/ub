@@ -130,8 +130,10 @@ public class ProfitPocketService {
         }
         ProfitAndLossResponse pl = financeReportsService.profitAndLoss(businessId, from, to, resolvedBranch);
         BigDecimal grossProfit = money(pl.grossProfit());
-        BigDecimal profitBase = grossProfit.signum() > 0 ? grossProfit : ZERO;
-        // Suggest from profit, never more than liquid cash surplus.
+        BigDecimal netProfit = money(pl.netOperating());
+        // Bills first: suggest from net operating profit, never gross. Pocketing
+        // gross can drain the cash the shop needs for rent and power.
+        BigDecimal profitBase = netProfit.signum() > 0 ? netProfit : ZERO;
         BigDecimal pocketBase = profitBase.min(rawSurplus);
         BigDecimal jarPct = ProfitPocketSettingsService.effectiveJarPct(settings.profitJarPct());
         BigDecimal suggested = pocketBase
@@ -155,6 +157,7 @@ public class ProfitPocketService {
                 leaveFloat,
                 suggested,
                 grossProfit,
+                netProfit,
                 openShifts,
                 settings.enabled() && settings.configured() && !settings.collidesWithCustomerPay(),
                 settings.destinationSummary(),

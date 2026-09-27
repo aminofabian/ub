@@ -21,6 +21,7 @@ import zelisline.ub.sales.api.dto.ApproveDrawoutRequest;
 import zelisline.ub.sales.api.dto.CreateDrawoutRequest;
 import zelisline.ub.sales.api.dto.CreateRecurringItemRequest;
 import zelisline.ub.sales.api.dto.DrawoutResponse;
+import zelisline.ub.sales.api.dto.PostDrawoutExpenseRequest;
 import zelisline.ub.sales.api.dto.RecurringDrawoutItemResponse;
 import zelisline.ub.sales.api.dto.RejectDrawoutRequest;
 import zelisline.ub.sales.api.dto.VoidDrawoutRequest;
@@ -117,6 +118,29 @@ public class DrawoutController {
                 body,
                 user.userId()
         );
+    }
+
+    // ========================================================================
+    // POST DRAWOUT TO EXPENSES
+    // POST /api/v1/drawouts/{drawoutId}/expense
+    // ========================================================================
+
+    @PostMapping("/api/v1/drawouts/{drawoutId}/expense")
+    @PreAuthorize("hasPermission(null, 'shifts.drawouts.approve')")
+    public DrawoutResponse postDrawoutExpense(
+            @PathVariable String drawoutId,
+            @Valid @RequestBody PostDrawoutExpenseRequest body,
+            HttpServletRequest request
+    ) {
+        var user = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        drawoutService.classifyDrawoutAsExpense(
+                businessId,
+                drawoutId,
+                body.categoryCode(),
+                user.userId()
+        );
+        return drawoutService.getDrawout(businessId, drawoutId);
     }
 
     // ========================================================================

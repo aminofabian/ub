@@ -11,6 +11,7 @@ public record ExpenseResponse(
         String name,
         String categoryType,
         String source,
+        String sourceReference,
         String categoryCode,
         BigDecimal amount,
         String paymentMethod,

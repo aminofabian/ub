@@ -269,6 +269,34 @@ public class CashDrawerLedgerService {
         return qty;
     }
 
+    /**
+     * Puts a cash expense back into an open till when that expense is edited or removed.
+     * Closed shifts are left as counted.
+     */
+    @Transactional
+    public boolean reverseExpensePaidOut(String expenseId, BigDecimal amount) {
+        if (expenseId == null || expenseId.isBlank() || amount == null || amount.signum() <= 0) {
+            return false;
+        }
+        List<CashDrawerMovement> moves = movementRepository.findByReferenceTypeAndReferenceId(
+                REF_EXPENSE, expenseId);
+        if (moves.isEmpty()) {
+            return false;
+        }
+        String shiftId = moves.get(0).getShiftId();
+        Shift shift = shiftRepository.findById(shiftId).orElse(null);
+        if (shift == null || !SalesConstants.SHIFT_STATUS_OPEN.equals(shift.getStatus())) {
+            return false;
+        }
+        BigDecimal expected = shift.getExpectedClosingCash() == null
+                ? BigDecimal.ZERO
+                : shift.getExpectedClosingCash();
+        shift.setExpectedClosingCash(expected.add(amount).setScale(2, RoundingMode.HALF_UP));
+        shiftRepository.save(shift);
+        movementRepository.deleteAll(moves);
+        return true;
+    }
+
     // ========================================================================
     // PROJECTION & RECONCILIATION
     // ========================================================================

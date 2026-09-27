@@ -214,6 +214,8 @@ public final class AuditEventTypes {
     public static final String EXPENSE_CREATED = "expense.created";
     public static final String EXPENSE_APPROVED = "expense.approved";
     public static final String EXPENSE_REJECTED = "expense.rejected";
+    public static final String EXPENSE_UPDATED = "expense.updated";
+    public static final String EXPENSE_DELETED = "expense.deleted";
     public static final String EXPENSE_SCHEDULE_CREATED = "expense_schedule.created";
     public static final String EXPENSE_SCHEDULE_UPDATED = "expense_schedule.updated";
     public static final String EXPENSE_SCHEDULE_DEACTIVATED = "expense_schedule.deactivated";

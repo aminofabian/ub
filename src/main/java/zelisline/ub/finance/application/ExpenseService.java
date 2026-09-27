@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -38,11 +39,17 @@ import zelisline.ub.finance.FinanceConstants;
 import zelisline.ub.finance.LedgerAccountCodes;
 import zelisline.ub.finance.api.dto.ExpenseListResponse;
 import zelisline.ub.finance.api.dto.ExpenseResponse;
+import zelisline.ub.finance.api.dto.PatchExpenseRequest;
 import zelisline.ub.finance.api.dto.PostExpenseRequest;
 import zelisline.ub.finance.domain.Expense;
+import zelisline.ub.finance.domain.ExpenseDisbursement;
+import zelisline.ub.finance.domain.ExpenseDisbursementStatuses;
 import zelisline.ub.finance.domain.JournalEntry;
 import zelisline.ub.finance.domain.LedgerAccount;
+import zelisline.ub.finance.repository.ExpenseDisbursementRepository;
 import zelisline.ub.finance.repository.ExpenseRepository;
+import zelisline.ub.finance.repository.ExpenseScheduleOccurrenceRepository;
+import zelisline.ub.payroll.repository.PayslipRepository;
 import zelisline.ub.identity.application.TokenHasher;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.sales.application.CashDrawerLedgerService;
@@ -66,6 +73,9 @@ public class ExpenseService {
     private final LedgerPostingPort ledgerPostingPort;
     private final LedgerAccountResolver ledgerAccountResolver;
     private final ExpenseRepository expenseRepository;
+    private final ExpenseScheduleOccurrenceRepository occurrenceRepository;
+    private final ExpenseDisbursementRepository disbursementRepository;
+    private final PayslipRepository payslipRepository;
     private final OpenShiftResolver openShiftResolver;
     private final BranchRepository branchRepository;
     private final BusinessRepository businessRepository;
@@ -271,6 +281,148 @@ public class ExpenseService {
         expenseRepository.save(e);
         publishExpenseRejected(e, approverUserId);
         return toDto(e);
+    }
+
+    @Transactional
+    public ExpenseResponse updateExpense(
+            String businessId,
+            String expenseId,
+            PatchExpenseRequest req,
+            String userId
+    ) {
+        Expense e = expenseRepository.findByIdAndBusinessId(expenseId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Expense not found"));
+        if (FinanceConstants.EXPENSE_APPROVAL_REJECTED.equals(e.getApprovalStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Rejected expenses can't be edited. Remove it instead.");
+        }
+        assertNoInFlightDisbursement(businessId, expenseId);
+
+        String name = req.name() == null ? "" : req.name().trim();
+        if (name.isBlank() || name.length() > 255) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "name is required");
+        }
+        LocalDate expenseDate = req.expenseDate();
+        if (expenseDate == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "expenseDate is required");
+        }
+        BigDecimal amount = req.amount() == null ? BigDecimal.ZERO : req.amount().setScale(2, RoundingMode.HALF_UP);
+        if (amount.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "amount must be > 0");
+        }
+        String payMethod = normalized(req.paymentMethod());
+        if (!FinanceConstants.EXPENSE_PAY_METHOD_CASH.equals(payMethod)
+                && !FinanceConstants.EXPENSE_PAY_METHOD_MPESA_MANUAL.equals(payMethod)
+                && !FinanceConstants.EXPENSE_PAY_METHOD_BANK.equals(payMethod)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "paymentMethod must be cash, mpesa_manual, or bank");
+        }
+        String categoryCode;
+        try {
+            categoryCode = ExpenseCategoryCodes.normalize(
+                    req.categoryCode() == null || req.categoryCode().isBlank()
+                            ? e.getCategoryCode()
+                            : req.categoryCode());
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+        }
+        String categoryType = req.categoryType() == null || req.categoryType().isBlank()
+                ? ExpenseCategoryCodes.defaultFixedVariable(categoryCode)
+                : normalized(req.categoryType());
+        if (!FinanceConstants.EXPENSE_CATEGORY_FIXED.equals(categoryType)
+                && !FinanceConstants.EXPENSE_CATEGORY_VARIABLE.equals(categoryType)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "categoryType must be fixed or variable");
+        }
+
+        boolean amountChanged = e.getAmount().compareTo(amount) != 0;
+        boolean methodChanged = !payMethod.equals(e.getPaymentMethod());
+        boolean booksChanged = amountChanged
+                || methodChanged
+                || !expenseDate.equals(e.getExpenseDate())
+                || !Objects.equals(categoryCode, e.getCategoryCode())
+                || !categoryType.equals(e.getCategoryType());
+
+        boolean reapplyDrawer = false;
+        if (e.isIncludeInCashDrawer()
+                && FinanceConstants.EXPENSE_PAY_METHOD_CASH.equals(e.getPaymentMethod())
+                && (amountChanged || methodChanged)) {
+            reapplyDrawer = cashDrawerLedgerService.reverseExpensePaidOut(e.getId(), e.getAmount());
+        }
+
+        e.setName(name);
+        e.setExpenseDate(expenseDate);
+        e.setAmount(amount);
+        e.setPaymentMethod(payMethod);
+        e.setCategoryCode(categoryCode);
+        e.setCategoryType(categoryType);
+
+        if (FinanceConstants.EXPENSE_APPROVAL_POSTED.equals(e.getApprovalStatus()) && booksChanged) {
+            if (e.getJournalEntryId() != null) {
+                ledgerPostingPort.deleteBySource(
+                        businessId, FinanceConstants.JOURNAL_SOURCE_EXPENSE, e.getId());
+            }
+            e.setJournalEntryId(postExpenseJournal(e));
+        }
+        if (reapplyDrawer) {
+            applyDrawerIfNeeded(e, userId, null);
+        }
+
+        expenseRepository.save(e);
+        publishExpenseUpdated(e, userId);
+        return toDto(e);
+    }
+
+    @Transactional
+    public void deleteExpense(String businessId, String expenseId, String userId) {
+        Expense e = expenseRepository.findByIdAndBusinessId(expenseId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Expense not found"));
+        assertNoInFlightDisbursement(businessId, expenseId);
+
+        if (e.isIncludeInCashDrawer()
+                && FinanceConstants.EXPENSE_PAY_METHOD_CASH.equals(e.getPaymentMethod())) {
+            cashDrawerLedgerService.reverseExpensePaidOut(e.getId(), e.getAmount());
+        }
+        if (e.getJournalEntryId() != null) {
+            ledgerPostingPort.deleteBySource(
+                    businessId, FinanceConstants.JOURNAL_SOURCE_EXPENSE, e.getId());
+        }
+        payslipRepository.clearExpenseLink(businessId, e.getId());
+        occurrenceRepository.findByExpenseIdAndBusinessId(e.getId(), businessId).ifPresent(occ -> {
+            occ.setExpenseId(null);
+            if (FinanceConstants.OCCURRENCE_STATUS_POSTED.equals(occ.getStatus())) {
+                occ.setStatus(FinanceConstants.OCCURRENCE_STATUS_DUE);
+            }
+            occurrenceRepository.save(occ);
+        });
+        publishExpenseDeleted(e, userId);
+        expenseRepository.delete(e);
+    }
+
+    private void assertNoInFlightDisbursement(String businessId, String expenseId) {
+        boolean inFlight = disbursementRepository
+                .findByBusinessIdAndExpenseIdOrderByCreatedAtDesc(businessId, expenseId)
+                .stream()
+                .map(ExpenseDisbursement::getStatus)
+                .anyMatch(ExpenseDisbursementStatuses.PENDING::equals);
+        if (inFlight) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Cancel the M-Pesa payment before editing or removing this expense");
+        }
+    }
+
+    private String postExpenseJournal(Expense e) {
+        LedgerAccount expenseAcc = resolveExpenseAccount(e.getBusinessId(), null, e.getCategoryCode());
+        e.setExpenseLedgerAccountId(expenseAcc.getId());
+        LedgerAccount creditAcc = resolvePaymentLedger(e.getBusinessId(), e.getPaymentMethod());
+        JournalEntry entry = new JournalEntry();
+        entry.setBusinessId(e.getBusinessId());
+        entry.setBranchId(e.getBranchId());
+        entry.setEntryDate(e.getExpenseDate());
+        entry.setSourceType(FinanceConstants.JOURNAL_SOURCE_EXPENSE);
+        entry.setSourceId(e.getId());
+        entry.setMemo("Expense " + e.getId());
+        entry.debit(expenseAcc.getId(), e.getAmount());
+        entry.credit(creditAcc.getId(), e.getAmount());
+        return ledgerPostingPort.post(entry);
     }
 
     /**
@@ -610,6 +762,41 @@ public class ExpenseService {
                 .metadata(java.util.Map.of(
                         "amount", e.getAmount(),
                         "journalEntryId", e.getJournalEntryId() == null ? "" : e.getJournalEntryId()
+                ))
+                .build());
+    }
+
+    private void publishExpenseUpdated(Expense e, String userId) {
+        auditEventPublisher.publish(auditEventBuilder
+                .builder(AuditEventCategory.FINANCE, AuditEventTypes.EXPENSE_UPDATED, AuditEventSeverity.INFO)
+                .businessId(e.getBusinessId())
+                .branchId(e.getBranchId())
+                .actor(userId, AuditEventActorType.USER)
+                .target("expense", e.getId())
+                .targetLabel(e.getName())
+                .source("web_admin")
+                .metadata(java.util.Map.of(
+                        "amount", e.getAmount(),
+                        "expenseDate", e.getExpenseDate().toString(),
+                        "paymentMethod", e.getPaymentMethod(),
+                        "categoryCode", e.getCategoryCode() == null ? "" : e.getCategoryCode()
+                ))
+                .build());
+    }
+
+    private void publishExpenseDeleted(Expense e, String userId) {
+        auditEventPublisher.publish(auditEventBuilder
+                .builder(AuditEventCategory.FINANCE, AuditEventTypes.EXPENSE_DELETED, AuditEventSeverity.INFO)
+                .businessId(e.getBusinessId())
+                .branchId(e.getBranchId())
+                .actor(userId, AuditEventActorType.USER)
+                .target("expense", e.getId())
+                .targetLabel(e.getName())
+                .source("web_admin")
+                .metadata(java.util.Map.of(
+                        "amount", e.getAmount(),
+                        "expenseDate", e.getExpenseDate().toString(),
+                        "source", e.getSource() == null ? "" : e.getSource()
                 ))
                 .build());
     }

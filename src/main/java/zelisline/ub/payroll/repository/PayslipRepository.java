@@ -4,6 +4,9 @@ import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import zelisline.ub.payroll.domain.Payslip;
 
@@ -40,4 +43,16 @@ public interface PayslipRepository extends JpaRepository<Payslip, String> {
     );
 
     boolean existsByPayslipNumber(String payslipNumber);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update Payslip p
+               set p.expenseId = null
+             where p.businessId = :businessId
+               and p.expenseId = :expenseId
+            """)
+    int clearExpenseLink(
+            @Param("businessId") String businessId,
+            @Param("expenseId") String expenseId
+    );
 }

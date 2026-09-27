@@ -13,6 +13,11 @@ public interface CashDrawerMovementRepository extends JpaRepository<CashDrawerMo
 
     List<CashDrawerMovement> findByShiftIdOrderByCreatedAtAsc(String shiftId);
 
+    List<CashDrawerMovement> findByReferenceTypeAndReferenceId(
+            String referenceType,
+            String referenceId
+    );
+
     boolean existsByShiftIdAndEventType(String shiftId, String eventType);
 
     /** Idempotency key for replay: one movement per (shift, reference, event, denomination). */

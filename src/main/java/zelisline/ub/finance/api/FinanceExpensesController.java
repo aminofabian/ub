@@ -5,7 +5,9 @@ import java.time.LocalDate;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -20,6 +22,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.finance.api.dto.ExpenseKopokopoPayResponse;
+import zelisline.ub.finance.api.dto.PatchExpenseRequest;
 import zelisline.ub.finance.api.dto.ExpenseListResponse;
 import zelisline.ub.finance.api.dto.ExpensePayOptionsResponse;
 import zelisline.ub.finance.api.dto.ExpenseResponse;
@@ -79,6 +82,34 @@ public class FinanceExpensesController {
     public ExpenseResponse rejectExpense(@PathVariable String expenseId, HttpServletRequest request) {
         var user = CurrentTenantUser.requireHuman(request);
         return expenseService.rejectExpense(
+                TenantRequestIds.resolveBusinessId(request),
+                expenseId,
+                user.userId()
+        );
+    }
+
+    @PatchMapping("/{expenseId}")
+    @PreAuthorize("hasPermission(null, 'finance.expenses.manage')")
+    public ExpenseResponse updateExpense(
+            @PathVariable String expenseId,
+            @Valid @RequestBody PatchExpenseRequest body,
+            HttpServletRequest request
+    ) {
+        var user = CurrentTenantUser.requireHuman(request);
+        return expenseService.updateExpense(
+                TenantRequestIds.resolveBusinessId(request),
+                expenseId,
+                body,
+                user.userId()
+        );
+    }
+
+    @DeleteMapping("/{expenseId}")
+    @PreAuthorize("hasPermission(null, 'finance.expenses.manage')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteExpense(@PathVariable String expenseId, HttpServletRequest request) {
+        var user = CurrentTenantUser.requireHuman(request);
+        expenseService.deleteExpense(
                 TenantRequestIds.resolveBusinessId(request),
                 expenseId,
                 user.userId()

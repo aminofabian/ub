@@ -29,6 +29,7 @@ import zelisline.ub.sales.api.dto.PaymentLedgerRow;
 import zelisline.ub.sales.api.dto.PaymentMethodBreakdownRow;
 import zelisline.ub.sales.api.dto.RecentSaleRow;
 import zelisline.ub.sales.api.dto.RevenueByCategoryRow;
+import zelisline.ub.sales.api.dto.SalesByHourResponse;
 import zelisline.ub.sales.api.dto.StaffPerformanceRow;
 import zelisline.ub.sales.api.dto.CustomerItemRhythmResponse;
 import zelisline.ub.sales.api.dto.ItemSeasonalityResponse;
@@ -93,11 +94,26 @@ public class SalesIntelligenceController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) String itemTypeId,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
         return salesIntelligenceService.recentWebOrderLines(
-                TenantRequestIds.resolveBusinessId(request), from, to, branchId);
+                TenantRequestIds.resolveBusinessId(request), from, to, branchId, itemTypeId);
+    }
+
+    @GetMapping("/sales-by-hour")
+    @PreAuthorize("hasPermission(null, 'sales.intelligence.read')")
+    public SalesByHourResponse salesByHour(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) String itemTypeId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return salesIntelligenceService.salesByHour(
+                TenantRequestIds.resolveBusinessId(request), from, to, branchId, itemTypeId);
     }
 
     @GetMapping("/recent-sales")

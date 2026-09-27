@@ -67,6 +67,8 @@ import zelisline.ub.sales.api.dto.PaymentLedgerRow;
 import zelisline.ub.sales.api.dto.PaymentMethodBreakdownRow;
 import zelisline.ub.sales.api.dto.RecentSaleRow;
 import zelisline.ub.sales.api.dto.RevenueByCategoryRow;
+import zelisline.ub.sales.api.dto.SalesByHourResponse;
+import zelisline.ub.sales.application.HourlySalesBuckets.Stamp;
 import zelisline.ub.sales.api.dto.StaffPerformanceRow;
 import zelisline.ub.sales.application.ItemVelocityMerge.ItemMeta;
 import zelisline.ub.sales.application.ItemVelocityMerge.PastBuckets;
@@ -613,6 +615,7 @@ public class SalesIntelligenceService {
              WHERE wo.business_id = ?
                AND wo.created_at >= ? AND wo.created_at < ?
                AND (? IS NULL OR wo.catalog_branch_id = ?)
+               AND (? IS NULL OR i.item_type_id = ?)
           ORDER BY wo.created_at DESC
              LIMIT 500
             """;
@@ -1474,12 +1477,14 @@ public class SalesIntelligenceService {
             String businessId,
             LocalDate fromInclusive,
             LocalDate toInclusive,
-            String branchId
+            String branchId,
+            String itemTypeId
     ) {
         ProfitWindow w = profitWindow(businessId, fromInclusive, toInclusive);
         Timestamp from = utcBound(w.startInclusive());
         Timestamp to = utcBound(w.endExclusive());
         String branchFilter = (branchId != null && !branchId.isBlank()) ? branchId : null;
+        String typeFilter = blankToNull(itemTypeId);
 
         List<RecentSaleRow> out = new ArrayList<>();
         jdbc.query(
@@ -1514,7 +1519,9 @@ public class SalesIntelligenceService {
                 from,
                 to,
                 branchFilter,
-                branchFilter);
+                branchFilter,
+                typeFilter,
+                typeFilter);
         return out;
     }
 
@@ -2438,6 +2445,124 @@ public class SalesIntelligenceService {
             return fallback.trim();
         }
         return "";
+    }
+
+    /**
+     * Completed checkouts in the business-local day window, one row per sale, bucketed
+     * into clock hours. A department filter counts a sale when it has a line in that
+     * department and uses that department's line total, not the whole basket.
+     */
+    @Transactional(readOnly = true)
+    public SalesByHourResponse salesByHour(
+            String businessId,
+            LocalDate fromInclusive,
+            LocalDate toInclusive,
+            String branchId,
+            String itemTypeId
+    ) {
+        ProfitWindow w = profitWindow(businessId, fromInclusive, toInclusive);
+        Timestamp from = utcBound(w.startInclusive());
+        Timestamp to = utcBound(w.endExclusive());
+        String branchFilter = blankToNull(branchId);
+        String typeFilter = blankToNull(itemTypeId);
+        ZoneId zone = businessZone(businessId);
+
+        List<Stamp> stamps = new ArrayList<>();
+        if (typeFilter == null) {
+            jdbc.query(
+                    """
+                    SELECT s.id AS sale_id,
+                           s.receipt_no,
+                           s.sold_at,
+                           s.grand_total AS amount,
+                           COALESCE(NULLIF(TRIM(u.name), ''), u.email, '') AS cashier_name,
+                           (SELECT CASE
+                                WHEN COUNT(DISTINCT sp.method) > 1 THEN 'split'
+                                ELSE COALESCE(MAX(sp.method), 'unknown')
+                            END
+                              FROM sale_payments sp
+                             WHERE sp.sale_id = s.id) AS payment_method
+                      FROM sales s
+                 LEFT JOIN users u ON u.id = s.sold_by
+                                   AND u.business_id = s.business_id
+                                   AND u.deleted_at IS NULL
+                     WHERE s.business_id = ?
+                       AND s.status = ?
+                       AND s.sold_at >= ? AND s.sold_at < ?
+                       AND (? IS NULL OR s.branch_id = ?)
+                  ORDER BY s.sold_at ASC
+                    """,
+                    rs -> {
+                        long receiptNo = rs.getLong("receipt_no");
+                        Long receiptNoOrNull = rs.wasNull() ? null : receiptNo;
+                        stamps.add(new Stamp(
+                                rs.getString("sale_id"),
+                                receiptNoOrNull,
+                                rs.getTimestamp("sold_at").toInstant(),
+                                rs.getString("cashier_name"),
+                                rs.getString("payment_method"),
+                                rs.getBigDecimal("amount")
+                        ));
+                    },
+                    businessId,
+                    SalesConstants.SALE_STATUS_COMPLETED,
+                    from,
+                    to,
+                    branchFilter,
+                    branchFilter
+            );
+        } else {
+            jdbc.query(
+                    """
+                    SELECT s.id AS sale_id,
+                           s.receipt_no,
+                           s.sold_at,
+                           COALESCE(SUM(sil.line_total), 0) AS amount,
+                           COALESCE(NULLIF(TRIM(u.name), ''), u.email, '') AS cashier_name,
+                           (SELECT CASE
+                                WHEN COUNT(DISTINCT sp.method) > 1 THEN 'split'
+                                ELSE COALESCE(MAX(sp.method), 'unknown')
+                            END
+                              FROM sale_payments sp
+                             WHERE sp.sale_id = s.id) AS payment_method
+                      FROM sales s
+                      JOIN sale_items sil ON sil.sale_id = s.id
+                      JOIN items i ON i.id = sil.item_id
+                                   AND i.business_id = s.business_id
+                                   AND i.deleted_at IS NULL
+                 LEFT JOIN users u ON u.id = s.sold_by
+                                   AND u.business_id = s.business_id
+                                   AND u.deleted_at IS NULL
+                     WHERE s.business_id = ?
+                       AND s.status = ?
+                       AND s.sold_at >= ? AND s.sold_at < ?
+                       AND (? IS NULL OR s.branch_id = ?)
+                       AND i.item_type_id = ?
+                  GROUP BY s.id, s.receipt_no, s.sold_at, u.name, u.email
+                  ORDER BY s.sold_at ASC
+                    """,
+                    rs -> {
+                        long receiptNo = rs.getLong("receipt_no");
+                        Long receiptNoOrNull = rs.wasNull() ? null : receiptNo;
+                        stamps.add(new Stamp(
+                                rs.getString("sale_id"),
+                                receiptNoOrNull,
+                                rs.getTimestamp("sold_at").toInstant(),
+                                rs.getString("cashier_name"),
+                                rs.getString("payment_method"),
+                                rs.getBigDecimal("amount")
+                        ));
+                    },
+                    businessId,
+                    SalesConstants.SALE_STATUS_COMPLETED,
+                    from,
+                    to,
+                    branchFilter,
+                    branchFilter,
+                    typeFilter
+            );
+        }
+        return HourlySalesBuckets.build(stamps, zone);
     }
 
     private static LocalDate[] resolveWindow(LocalDate fromInclusive, LocalDate toInclusive) {

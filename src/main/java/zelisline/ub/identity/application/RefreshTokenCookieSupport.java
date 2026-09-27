@@ -124,7 +124,10 @@ public class RefreshTokenCookieSupport {
         if (domain.isEmpty()) {
             return;
         }
-        headers.add(HttpHeaders.SET_COOKIE, buildHostOnlyClear(COOKIE_PATH).toString());
+        // Live Path=/api must not be cleared here. The storefront rewrites
+        // Set-Cookie onto the shop parent domain (for example .palmart.co.ke),
+        // and a Max-Age=0 on that same path deletes the refresh cookie. The
+        // next renewal then has nothing to send and the owner is signed out.
         headers.add(HttpHeaders.SET_COOKIE, buildHostOnlyClear(LEGACY_COOKIE_PATH).toString());
     }
 

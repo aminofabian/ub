@@ -302,9 +302,6 @@ public class PayrollService {
             String joinPayMode = resolveJoinPayMode(profile);
             SalaryProration.Result proration = SalaryProration.apply(
                     monthly, year, month, joinDate, joinPayMode);
-            if (!salaryReleased) {
-                proration = proration.locked();
-            }
             BigDecimal base = proration.payableAmount();
 
             StatutoryBreakdown statutoryBreakdown = statutory && base.signum() > 0
@@ -414,14 +411,6 @@ public class PayrollService {
                 businessId, profile.getId(), year, month
         ).isPresent()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Payslip already exists for this period");
-        }
-
-        if (!PayrollPeriod.isReleased(year, month, LocalDate.now())) {
-            // Fail fast, before any arrear payslips are touched.
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Salaries for this month unlock on the 25th — pay is not available yet"
-            );
         }
 
         boolean includeArrears = body.includeArrears() == null || Boolean.TRUE.equals(body.includeArrears());
@@ -816,9 +805,7 @@ public class PayrollService {
             if (row.baseSalary().signum() <= 0) {
                 skipped++;
                 String reason;
-                if (!row.salaryReleased()) {
-                    reason = "Salary unlocks on the 25th";
-                } else if (JoinPayMode.DEFERRED.equals(row.joinPayMode())) {
+                if (JoinPayMode.DEFERRED.equals(row.joinPayMode())) {
                     reason = "Join-month pay is 'no salary until next payroll'";
                 } else {
                     reason = "No salary effective for this period";

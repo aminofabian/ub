@@ -89,7 +89,7 @@ public class FinanceExpensesController {
     }
 
     @PatchMapping("/{expenseId}")
-    @PreAuthorize("hasPermission(null, 'finance.expenses.manage')")
+    @PreAuthorize("hasPermission(null, 'finance.expenses.manage') or hasPermission(null, 'finance.expenses.write')")
     public ExpenseResponse updateExpense(
             @PathVariable String expenseId,
             @Valid @RequestBody PatchExpenseRequest body,
@@ -105,7 +105,7 @@ public class FinanceExpensesController {
     }
 
     @DeleteMapping("/{expenseId}")
-    @PreAuthorize("hasPermission(null, 'finance.expenses.manage')")
+    @PreAuthorize("hasPermission(null, 'finance.expenses.manage') or hasPermission(null, 'finance.expenses.write')")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteExpense(@PathVariable String expenseId, HttpServletRequest request) {
         var user = CurrentTenantUser.requireHuman(request);

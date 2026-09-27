@@ -58,6 +58,10 @@ public class DomainPurchaseService {
 
     private static final Logger log = LoggerFactory.getLogger(DomainPurchaseService.class);
 
+    /** Flat retail price charged to the shop. Registrar cost stays internal. */
+    public static final long RETAIL_PRICE_CENTS = 200_000L;
+    public static final String RETAIL_CURRENCY = "KES";
+
     private final HostAfricaClient hostAfricaClient;
     private final HostAfricaResellerClient hostAfricaResellerClient;
     private final VercelDomainZoneClient vercelZoneClient;
@@ -93,8 +97,8 @@ public class DomainPurchaseService {
                         q.domain(),
                         q.available(),
                         q.status(),
-                        q.priceCents(),
-                        q.currency(),
+                        q.available() ? RETAIL_PRICE_CENTS : null,
+                        RETAIL_CURRENCY,
                         q.periodYears(),
                         q.premium(),
                         q.requiresAdditionalInfo()
@@ -104,7 +108,7 @@ public class DomainPurchaseService {
         // No HostAfrica "suggest" / alternate-name chips — only exact TLD options for the searched label.
         return new DomainSearchResponse(
                 query,
-                result.currency(),
+                RETAIL_CURRENCY,
                 quotes,
                 List.of(),
                 null
@@ -144,18 +148,12 @@ public class DomainPurchaseService {
         if (!quote.available()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Domain is not available: " + fqdn);
         }
-        if (quote.priceCents() == null || quote.priceCents() <= 0) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Domain has no register price from HostAfrica — not available for purchase: " + fqdn
-            );
-        }
 
         DomainOrder order = new DomainOrder();
         order.setBusinessId(businessId);
         order.setFqdn(fqdn);
-        order.setPriceCents(quote.priceCents());
-        order.setCurrency(quote.currency());
+        order.setPriceCents(RETAIL_PRICE_CENTS);
+        order.setCurrency(RETAIL_CURRENCY);
         order.setRegisterUrl(quote.registerUrl());
         order.setNsStatus(DomainNsStatus.PENDING_OPS);
 
@@ -173,8 +171,8 @@ public class DomainPurchaseService {
             saved = domainOrderRepository.save(saved);
         }
         if (saved.getStatus() == DomainOrderStatus.REGISTERING) {
-            // Billing stub path: purchase happened immediately at order creation.
-            eventPublisher.publishEvent(new DomainPurchasedEvent(saved.getBusinessId(), saved.getFqdn()));
+            // Billing stub path: no M-Pesa. Still start registration, but texts must not claim payment.
+            eventPublisher.publishEvent(purchasedEvent(saved, false));
         }
         return toResponse(saved);
     }
@@ -338,8 +336,50 @@ public class DomainPurchaseService {
         }
         attemptResellerRegister(order);
         DomainOrder saved = domainOrderRepository.save(order);
-        eventPublisher.publishEvent(new DomainPurchasedEvent(saved.getBusinessId(), saved.getFqdn()));
+        eventPublisher.publishEvent(purchasedEvent(saved, true));
         return toResponse(saved);
+    }
+
+    /**
+     * Runs after payment has committed. Registers the name if needed, then
+     * starts DNS and SSL. Failures stay on the order so the payment is kept.
+     */
+    @Transactional
+    public void continueAfterPayment(String orderId) {
+        DomainOrder order = domainOrderRepository.findById(orderId)
+                .filter(o -> o.getDeletedAt() == null)
+                .orElse(null);
+        if (order == null
+                || order.getStatus() == DomainOrderStatus.LIVE
+                || order.getStatus() == DomainOrderStatus.FAILED
+                || order.getStatus() == DomainOrderStatus.AWAITING_PAYMENT
+                || order.getStatus() == DomainOrderStatus.QUOTED) {
+            return;
+        }
+        try {
+            if (order.getStatus() == DomainOrderStatus.REGISTERING) {
+                attemptResellerRegister(order);
+                pollOwnership(order);
+                domainOrderRepository.saveAndFlush(order);
+            }
+            if (order.getStatus() == DomainOrderStatus.OWNED
+                    || order.getStatus() == DomainOrderStatus.PROVISIONING) {
+                domainProvisioningService.provisionInNewTransaction(order.getId());
+            }
+        } catch (Exception ex) {
+            log.warn("Domain order {} configuration after payment: {}", orderId, ex.getMessage());
+        }
+    }
+
+    private DomainPurchasedEvent purchasedEvent(DomainOrder order, boolean paymentCollected) {
+        return new DomainPurchasedEvent(
+                order.getBusinessId(),
+                order.getId(),
+                order.getFqdn(),
+                order.getPayerPhone(),
+                order.getPriceCents(),
+                paymentCollected
+        );
     }
 
     /** Called when DOMAIN_ORDER STK succeeds. Idempotent. */
@@ -524,12 +564,6 @@ public class DomainPurchaseService {
         var quote = availability.quotes().getFirst();
         if (quote.registerUrl() != null && !quote.registerUrl().isBlank()) {
             order.setRegisterUrl(quote.registerUrl());
-        }
-        if (quote.priceCents() != null) {
-            order.setPriceCents(quote.priceCents());
-        }
-        if (quote.currency() != null && !quote.currency().isBlank()) {
-            order.setCurrency(quote.currency());
         }
     }
 
@@ -815,7 +849,7 @@ public class DomainPurchaseService {
                             order.getLastStkStatus() == null ? "" : order.getLastStkStatus())) {
                         yield "Waiting for M-Pesa confirmation on your phone.";
                     }
-                    yield "Pay with M-Pesa to continue — we'll handle registration and DNS.";
+                    yield "Pay KES 2,000 with M-Pesa. After you pay, we register the name and connect your shop, then text you.";
                 }
                 yield "Payment isn't available yet — ask Super Admin to add Palmart M-Pesa credentials under Platform → Domains (and turn billing stub off).";
             }

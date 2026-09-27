@@ -22,6 +22,7 @@ import zelisline.ub.storefront.api.dto.WebOrderPickupTicketClaimResponse;
 import zelisline.ub.storefront.domain.WebOrder;
 import zelisline.ub.storefront.repository.WebOrderLineRepository;
 import zelisline.ub.storefront.repository.WebOrderRepository;
+import zelisline.ub.storefront.repository.WebOrderShipmentRepository;
 import zelisline.ub.tenancy.application.BranchReceiptSettingsService;
 import zelisline.ub.tenancy.application.StorefrontSettingsService;
 import zelisline.ub.tenancy.repository.BranchRepository;
@@ -37,6 +38,7 @@ class WebOrderReceiptServiceClaimTest {
     @Mock ItemRepository itemRepository;
     @Mock BranchReceiptSettingsService branchReceiptSettingsService;
     @Mock StorefrontSettingsService storefrontSettingsService;
+    @Mock WebOrderShipmentRepository webOrderShipmentRepository;
 
     WebOrderReceiptService service;
 
@@ -49,7 +51,8 @@ class WebOrderReceiptServiceClaimTest {
                 branchRepository,
                 itemRepository,
                 branchReceiptSettingsService,
-                storefrontSettingsService);
+                storefrontSettingsService,
+                webOrderShipmentRepository);
     }
 
     @Test

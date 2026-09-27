@@ -33,6 +33,19 @@ class PublicAuthEndpointsTest {
     }
 
     @Test
+    void magicLinkRoutesBypassJwtFilter() {
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/tills/review"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/tills/approve"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/tills/dismiss"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/drawouts/review"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/drawouts/approve"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/drawouts/reject"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/tills/review?token=abc"));
+        assertFalse(PublicAuthEndpoints.matches("/api/v1/tills/devices"));
+        assertFalse(PublicAuthEndpoints.matches("/api/v1/public/shops/"));
+    }
+
+    @Test
     void googleOauthRoutesBypassJwtFilter() {
         assertTrue(PublicAuthEndpoints.matches("/api/v1/auth/oauth/google/start"));
         assertTrue(PublicAuthEndpoints.matches("/api/v1/auth/oauth/google/callback"));

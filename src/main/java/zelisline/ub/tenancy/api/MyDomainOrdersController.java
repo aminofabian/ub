@@ -16,12 +16,17 @@ import org.springframework.web.bind.annotation.RestController;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.platform.security.CurrentTenantUser;
+import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.tenancy.api.dto.CreateDomainOrderRequest;
 import zelisline.ub.tenancy.api.dto.DomainOrderResponse;
 import zelisline.ub.tenancy.api.dto.DomainSearchRequest;
 import zelisline.ub.tenancy.api.dto.DomainSearchResponse;
 import zelisline.ub.tenancy.api.dto.PayDomainOrderRequest;
 import zelisline.ub.tenancy.api.dto.PayDomainOrderResponse;
+import zelisline.ub.tenancy.api.dto.RequestDomainHelpRequest;
+import zelisline.ub.tenancy.api.dto.RequestDomainHelpResponse;
+import zelisline.ub.tenancy.application.DomainHelpRequestService;
 import zelisline.ub.tenancy.application.DomainPurchaseService;
 
 @Validated
@@ -34,6 +39,7 @@ public class MyDomainOrdersController {
             "hasPermission(null, 'business.manage_settings')";
 
     private final DomainPurchaseService domainPurchaseService;
+    private final DomainHelpRequestService domainHelpRequestService;
 
     @PostMapping("/search")
     @PreAuthorize(REQUIRES_MANAGE_SETTINGS)
@@ -81,6 +87,21 @@ public class MyDomainOrdersController {
         return domainPurchaseService.syncOrder(
                 TenantRequestIds.resolveBusinessId(request),
                 orderId
+        );
+    }
+
+    @PostMapping("/help")
+    @PreAuthorize(REQUIRES_MANAGE_SETTINGS)
+    @ResponseStatus(HttpStatus.CREATED)
+    public RequestDomainHelpResponse help(
+            HttpServletRequest request,
+            @Valid @RequestBody RequestDomainHelpRequest body
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        return domainHelpRequestService.request(
+                TenantRequestIds.resolveBusinessId(request),
+                principal.userId(),
+                body
         );
     }
 

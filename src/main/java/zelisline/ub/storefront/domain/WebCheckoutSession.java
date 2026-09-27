@@ -73,6 +73,10 @@ public class WebCheckoutSession {
     @Column(name = "save_for_next_time", nullable = false)
     private boolean saveForNextTime;
 
+    /** Storefront fulfilment choice JSON (Pickup Mtaani); null = normal delivery. */
+    @Column(name = "pickup_mtaani", length = 1000)
+    private String pickupMtaani;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 

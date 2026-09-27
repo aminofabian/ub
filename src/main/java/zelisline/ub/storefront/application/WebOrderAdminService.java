@@ -13,6 +13,7 @@ import org.springframework.web.server.ResponseStatusException;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.storefront.api.dto.WebOrderDetailResponse;
 import zelisline.ub.storefront.api.dto.WebOrderLineSnapshotResponse;
+import zelisline.ub.storefront.api.dto.WebOrderShipmentSummaryResponse;
 import zelisline.ub.storefront.api.dto.WebOrderSummaryResponse;
 import zelisline.ub.storefront.WebOrderFulfillmentStatuses;
 import zelisline.ub.storefront.WebOrderStatuses;
@@ -20,8 +21,10 @@ import zelisline.ub.storefront.WebOrderChannels;
 import zelisline.ub.storefront.WebOrderCodes;
 import zelisline.ub.storefront.domain.WebOrder;
 import zelisline.ub.storefront.domain.WebOrderLine;
+import zelisline.ub.storefront.domain.WebOrderShipment;
 import zelisline.ub.storefront.repository.WebOrderLineRepository;
 import zelisline.ub.storefront.repository.WebOrderRepository;
+import zelisline.ub.storefront.repository.WebOrderShipmentRepository;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.repository.BranchRepository;
 
@@ -31,6 +34,7 @@ public class WebOrderAdminService {
 
     private final WebOrderRepository webOrderRepository;
     private final WebOrderLineRepository webOrderLineRepository;
+    private final WebOrderShipmentRepository webOrderShipmentRepository;
     private final BranchRepository branchRepository;
 
     @Transactional(readOnly = true)
@@ -105,7 +109,34 @@ public class WebOrderAdminService {
                 o.getCustomerEmail(),
                 o.getNotes(),
                 o.getCreatedAt(),
-                lines);
+                lines,
+                shipmentSummary(businessId, o.getId()));
+    }
+
+    private WebOrderShipmentSummaryResponse shipmentSummary(String businessId, String orderId) {
+        return webOrderShipmentRepository.findByWebOrderIdAndBusinessId(orderId, businessId)
+                .map(WebOrderAdminService::toShipmentSummary)
+                .orElse(null);
+    }
+
+    private static WebOrderShipmentSummaryResponse toShipmentSummary(WebOrderShipment s) {
+        return new WebOrderShipmentSummaryResponse(
+                s.getCarrier(),
+                s.getMode(),
+                s.getDestinationLabel(),
+                s.getLocationDescription(),
+                s.getQuotedFeeKes(),
+                s.getShopperFeeKes(),
+                s.getFeeMode(),
+                s.getBookStatus(),
+                s.getBookError(),
+                s.getTrackId(),
+                s.getReceiptNo(),
+                s.getPaymentStatus(),
+                s.getUpstreamState(),
+                s.getLastTrackDescription(),
+                s.getLastPolledAt(),
+                s.getBookedAt());
     }
 
     private WebOrderSummaryResponse toSummary(String businessId, WebOrder o) {

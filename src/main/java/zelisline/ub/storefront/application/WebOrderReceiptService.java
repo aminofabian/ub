@@ -26,8 +26,10 @@ import zelisline.ub.sales.receipt.ReceiptSnapshot;
 import zelisline.ub.storefront.api.dto.WebOrderPickupTicketClaimResponse;
 import zelisline.ub.storefront.domain.WebOrder;
 import zelisline.ub.storefront.domain.WebOrderLine;
+import zelisline.ub.storefront.domain.WebOrderShipment;
 import zelisline.ub.storefront.repository.WebOrderLineRepository;
 import zelisline.ub.storefront.repository.WebOrderRepository;
+import zelisline.ub.storefront.repository.WebOrderShipmentRepository;
 import zelisline.ub.tenancy.api.dto.BranchReceiptSettingsResponse;
 import zelisline.ub.tenancy.application.BranchReceiptSettingsService;
 import zelisline.ub.tenancy.application.StorefrontSettingsService;
@@ -51,6 +53,7 @@ public class WebOrderReceiptService {
     private final ItemRepository itemRepository;
     private final BranchReceiptSettingsService branchReceiptSettingsService;
     private final StorefrontSettingsService storefrontSettingsService;
+    private final WebOrderShipmentRepository webOrderShipmentRepository;
 
     /**
      * Atomically claim a one-time auto-print. Returns {@code claimed=true} only for the
@@ -125,6 +128,23 @@ public class WebOrderReceiptService {
                     money(ol.getUnitPrice()),
                     money(ol.getLineTotal())
             ));
+        }
+
+        // Delivery appears as its own line so carriage is auditable (scope §10).
+        // Absorb mode (fee 0) adds nothing; the total is unchanged either way.
+        WebOrderShipment shipment = webOrderShipmentRepository
+                .findByWebOrderIdAndBusinessId(order.getId(), businessId)
+                .orElse(null);
+        if (shipment != null
+                && WebOrderShipment.CARRIER_PICKUP_MTAANI.equals(shipment.getCarrier())
+                && shipment.getShopperFeeKes() != null
+                && shipment.getShopperFeeKes().signum() > 0) {
+            lines.add(new ReceiptLineRow(
+                    "Delivery",
+                    "1",
+                    null,
+                    money(shipment.getShopperFeeKes()),
+                    money(shipment.getShopperFeeKes())));
         }
 
         ZoneId zone = ZoneId.of(blankToDefault(business.getTimezone(), "UTC"));

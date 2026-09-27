@@ -11,5 +11,7 @@ public record CheckoutProfileSnapshot(
         String subCounty,
         String ward,
         String streetAddress,
-        String deliveryNotes
+        String deliveryNotes,
+        /** Pickup Mtaani fulfilment choice JSON when chosen; empty otherwise. */
+        String pickupMtaani
 ) {}

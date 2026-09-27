@@ -7,14 +7,17 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.platform.adoption.DomainLiveEvent;
 import zelisline.ub.tenancy.domain.DomainMapping;
 import zelisline.ub.tenancy.domain.DomainNsStatus;
 import zelisline.ub.tenancy.domain.DomainOrder;
@@ -45,9 +48,32 @@ public class DomainProvisioningService {
     private final HostAfricaClient hostAfricaClient;
     private final HostAfricaResellerClient hostAfricaResellerClient;
     private final ObjectMapper objectMapper;
+    private final ApplicationEventPublisher eventPublisher;
+
+    /**
+     * Own transaction so a Vercel or registrar failure cannot roll back the
+     * M-Pesa settlement that already committed.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void provisionInNewTransaction(String orderId) {
+        DomainOrder order = domainOrderRepository.findById(orderId)
+                .filter(row -> row.getDeletedAt() == null)
+                .orElse(null);
+        if (order == null
+                || order.getStatus() == DomainOrderStatus.LIVE
+                || order.getStatus() == DomainOrderStatus.FAILED) {
+            return;
+        }
+        if (order.getStatus() != DomainOrderStatus.OWNED
+                && order.getStatus() != DomainOrderStatus.PROVISIONING) {
+            return;
+        }
+        provision(order);
+    }
 
     @Transactional
     public void provision(DomainOrder order) {
+        boolean wasLive = order.getStatus() == DomainOrderStatus.LIVE;
         if (!zoneClient.configured() || !projectDomainClient.configured()) {
             order.setLastError("vercel_not_configured");
             domainOrderRepository.save(order);
@@ -158,6 +184,13 @@ public class DomainProvisioningService {
             order.setLastError(mapping.getLastError());
         }
         domainOrderRepository.save(order);
+        if (!wasLive && order.getStatus() == DomainOrderStatus.LIVE) {
+            eventPublisher.publishEvent(new DomainLiveEvent(
+                    order.getBusinessId(),
+                    order.getFqdn(),
+                    order.getPayerPhone()
+            ));
+        }
     }
 
     private DomainMapping ensureMapping(

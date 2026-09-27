@@ -4,25 +4,36 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import zelisline.ub.integrations.pickupmtaani.application.PickupMtaaniBookingService;
 import zelisline.ub.notifications.application.NotificationOutboxService;
 import zelisline.ub.storefront.WebOrderChannels;
 import zelisline.ub.storefront.WebOrderFulfillmentStatuses;
 import zelisline.ub.storefront.WebOrderStatuses;
 import zelisline.ub.storefront.api.dto.WebOrderDetailResponse;
 import zelisline.ub.storefront.domain.WebOrder;
+import zelisline.ub.storefront.domain.WebOrderShipment;
 import zelisline.ub.storefront.repository.WebOrderRepository;
+import zelisline.ub.storefront.repository.WebOrderShipmentRepository;
 
 @Service
 @RequiredArgsConstructor
 public class WebOrderFulfillmentService {
 
+    private static final Logger log = LoggerFactory.getLogger(WebOrderFulfillmentService.class);
+
     private final WebOrderRepository webOrderRepository;
     private final WebOrderAdminService webOrderAdminService;
     private final NotificationOutboxService notificationOutboxService;
     private final WhatsAppOrderExpiryService expiryService;
+    private final PickupMtaaniBookingService pickupMtaaniBookingService;
+    private final WebOrderShipmentRepository webOrderShipmentRepository;
 
     @Value("${app.storefront.web-orders.auto-confirm-on-paid:false}")
     private boolean autoConfirmOnPaid;
@@ -70,7 +81,36 @@ public class WebOrderFulfillmentService {
         order.setFulfillmentStatus(normalized);
         webOrderRepository.save(order);
         enqueueNotification(order, normalized);
+        if (WebOrderFulfillmentStatuses.DISPATCHED.equals(normalized)) {
+            schedulePickupBooking(order.getBusinessId(), order.getId());
+        }
         return webOrderAdminService.getOrder(businessId, orderId);
+    }
+
+    /**
+     * Book-on-dispatch (scope §4 #6, §8): enqueue the Pickup Mtaani create after
+     * the fulfilment save commits, so a carrier failure never rolls fulfilment
+     * back. The booking service no-ops when the tenant has auto-book off.
+     */
+    private void schedulePickupBooking(String businessId, String orderId) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    safeBook(businessId, orderId);
+                }
+            });
+            return;
+        }
+        safeBook(businessId, orderId);
+    }
+
+    private void safeBook(String businessId, String orderId) {
+        try {
+            pickupMtaaniBookingService.bookOnDispatchIfEnabled(businessId, orderId);
+        } catch (RuntimeException ex) {
+            log.warn("[pickup-mtaani] book-on-dispatch failed for order {}: {}", orderId, ex.getMessage());
+        }
     }
 
     /**
@@ -95,7 +135,37 @@ public class WebOrderFulfillmentService {
         order.setStatus(WebOrderStatuses.CANCELLED);
         order.setFulfillmentStatus(WebOrderStatuses.CANCELLED);
         webOrderRepository.save(order);
+        standDownPickupShipment(businessId, orderId);
         return webOrderAdminService.getOrder(businessId, orderId);
+    }
+
+    /**
+     * A voided order must not leave a live parcel polling (scope §13). A shipment
+     * still live upstream becomes {@code voided}: polling stops and the merchant
+     * cancels it with the existing Cancel booking action, or inside Pickup Mtaani.
+     * A shipment with nothing upstream just stands down locally.
+     */
+    private void standDownPickupShipment(String businessId, String orderId) {
+        webOrderShipmentRepository.findForUpdate(orderId, businessId).ifPresent(shipment -> {
+            switch (shipment.getBookStatus()) {
+                case WebOrderShipment.BOOK_BOOKED -> {
+                    shipment.setBookStatus(WebOrderShipment.BOOK_VOIDED);
+                    shipment.setBookError(
+                            "The order was voided. Cancel this parcel in Pickup Mtaani if it is still live.");
+                    webOrderShipmentRepository.save(shipment);
+                }
+                case WebOrderShipment.BOOK_PENDING,
+                     WebOrderShipment.BOOK_BOOKING,
+                     WebOrderShipment.BOOK_FAILED -> {
+                    shipment.setBookStatus(WebOrderShipment.BOOK_CANCELLED);
+                    shipment.setBookError(null);
+                    webOrderShipmentRepository.save(shipment);
+                }
+                default -> {
+                    // Already cancelled or voided, or a cancel is in flight.
+                }
+            }
+        });
     }
 
     private void enqueueNotification(WebOrder order, String fulfillmentStatus) {

@@ -1,12 +1,24 @@
 package zelisline.ub.platform.security;
 
+import java.util.List;
 import java.util.Set;
 
 /**
  * Auth routes that must stay reachable without a valid access token or API key,
  * even when the client sends a stale {@code Authorization} header from a prior session.
+ *
+ * <p>Magic-link prefixes (till trust, drawout approval) are included because the
+ * browser proxy attaches whatever {@code ub.access} cookie is already present.
+ * That session often belongs to a different shop than the host the link was
+ * opened on, and the JWT tenant check would reject the link before its own
+ * token is read.
  */
 public final class PublicAuthEndpoints {
+
+    private static final List<String> PREFIXES = List.of(
+            "/api/v1/public/tills/",
+            "/api/v1/public/drawouts/"
+    );
 
     private static final Set<String> PATHS = Set.of(
             "/api/v1/auth/register",
@@ -48,6 +60,19 @@ public final class PublicAuthEndpoints {
         if (requestUri == null || requestUri.isBlank()) {
             return false;
         }
-        return PATHS.contains(requestUri);
+        String path = requestUri;
+        int query = path.indexOf('?');
+        if (query >= 0) {
+            path = path.substring(0, query);
+        }
+        if (PATHS.contains(path)) {
+            return true;
+        }
+        for (String prefix : PREFIXES) {
+            if (path.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

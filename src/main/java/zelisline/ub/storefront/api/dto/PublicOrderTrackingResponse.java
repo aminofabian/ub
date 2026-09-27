@@ -27,6 +27,13 @@ public record PublicOrderTrackingResponse(
          */
         String customerPhone,
         /** Phase 5: true only when the single-use receipt token was verified. */
-        Boolean receiptVerified
+        Boolean receiptVerified,
+        /**
+         * Pickup Mtaani carrier receipt number, when this order uses carrier
+         * delivery. No key, business id, or raw upstream error is ever exposed.
+         */
+        String deliveryReceiptNo,
+        /** Last human carrier track description mirrored from Pickup Mtaani. */
+        String deliveryStatus
 ) {
 }

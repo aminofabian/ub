@@ -15,7 +15,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import jakarta.servlet.http.HttpServletRequest;
+
 import zelisline.ub.catalog.application.PackageVariantStockResolver;
+import zelisline.ub.integrations.pickupmtaani.application.PickupMtaaniCheckoutService;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.identity.application.NotificationService;
@@ -60,6 +63,7 @@ public class PublicWebCheckoutService {
     private final zelisline.ub.notifications.application.NotificationOutboxService notificationOutboxService;
     private final ApplicationEventPublisher eventPublisher;
     private final zelisline.ub.support.application.SupportService supportService;
+    private final PickupMtaaniCheckoutService pickupMtaaniCheckoutService;
 
     public PublicWebCheckoutService(
             PublicWebCartService publicWebCartService,
@@ -76,7 +80,8 @@ public class PublicWebCheckoutService {
             StorefrontSettingsService storefrontSettingsService,
             zelisline.ub.notifications.application.NotificationOutboxService notificationOutboxService,
             ApplicationEventPublisher eventPublisher,
-            zelisline.ub.support.application.SupportService supportService
+            zelisline.ub.support.application.SupportService supportService,
+            PickupMtaaniCheckoutService pickupMtaaniCheckoutService
     ) {
         this.publicWebCartService = publicWebCartService;
         this.inventoryBatchPickerService = inventoryBatchPickerService;
@@ -93,12 +98,15 @@ public class PublicWebCheckoutService {
         this.notificationOutboxService = notificationOutboxService;
         this.eventPublisher = eventPublisher;
         this.supportService = supportService;
+        this.pickupMtaaniCheckoutService = pickupMtaaniCheckoutService;
     }
 
     @Transactional
-    public PublicCheckoutResponse submitCheckout(String slug, String cartId, PublicCheckoutRequest req) {
+    public PublicCheckoutResponse submitCheckout(
+            String slug, String cartId, PublicCheckoutRequest req, HttpServletRequest request) {
         PublicWebCartService.CheckoutEligibility elig =
                 publicWebCartService.requireCheckoutEligible(slug, cartId.trim());
+        String businessId = elig.ctx().business().getId();
         String name = req.customerName().trim();
         String phone = req.customerPhone().trim();
         if (name.isEmpty() || phone.isEmpty()) {
@@ -107,13 +115,25 @@ public class PublicWebCheckoutService {
         String email = normalizeOptionalEmail(req.customerEmail());
         String notes = blankToNull(req.notes());
 
+        // Pickup Mtaani: price the saved delivery choice so the shopper is charged
+        // what they saw. The shipment row is written after the order exists.
+        var pickupSelection = pickupMtaaniCheckoutService.selectionFor(
+                businessId, elig.cart().getId(), request);
+        BigDecimal deliveryFee = BigDecimal.ZERO;
+        PickupMtaaniCheckoutService.PricedSelection pickupPriced = null;
+        if (pickupSelection.isPresent()) {
+            pickupPriced = pickupMtaaniCheckoutService.price(businessId, pickupSelection.get());
+            deliveryFee = pickupPriced.shopperFeeKes();
+        }
+        BigDecimal grandTotal = elig.grandTotal().add(deliveryFee);
+
         WebOrder order = new WebOrder();
         order.setBusinessId(elig.ctx().business().getId());
         order.setCartId(elig.cart().getId());
         order.setCatalogBranchId(elig.cart().getCatalogBranchId());
         order.setStatus(WebOrderStatuses.PENDING_PAYMENT);
         order.setCurrency(elig.ctx().business().getCurrency());
-        order.setGrandTotal(elig.grandTotal());
+        order.setGrandTotal(grandTotal);
         order.setCustomerName(name);
         order.setCustomerPhone(phone);
         order.setCustomerEmail(email);
@@ -125,12 +145,20 @@ public class PublicWebCheckoutService {
         }
         webOrderRepository.save(order);
 
+        if (pickupSelection.isPresent()) {
+            pickupMtaaniCheckoutService.createPendingShipment(
+                    businessId,
+                    order.getId(),
+                    pickupSelection.get(),
+                    pickupPriced,
+                    PickupMtaaniCheckoutService.toWholeKes(elig.grandTotal()));
+        }
+
         // Phase 5: mint the one-tap receipt token so the WhatsApp/SMS link can
         // carry it (single-use, 15-min TTL). The checkout response returns the
         // raw token; only its hash is persisted.
         String receiptToken = receiptTokenService.mint(order);
 
-        String businessId = elig.ctx().business().getId();
         String branchId = elig.ctx().catalogBranch().getId();
         for (PublicWebCartService.CheckoutLine line : elig.lines()) {
             Item itemRow = itemRepository
@@ -180,7 +208,8 @@ public class PublicWebCheckoutService {
                         branding, business.getName(), business.getSlug(), branchName);
                 String brand = OrderConfirmationEmailRenderer.brandWordmark(storeName);
                 String htmlBody = orderConfirmationEmailRenderer.renderHtml(
-                        order, orderLines, branchName, branding, business.getName(), business.getSlug());
+                        order, orderLines, branchName, branding, business.getName(), business.getSlug(),
+                        pickupPriced == null ? null : pickupPriced.shopperFeeKes());
                 String subject = "Order confirmed \u2014 " + brand;
                 notificationService.sendOrderConfirmationHtml(
                         customerEmail, subject, htmlBody, brand);

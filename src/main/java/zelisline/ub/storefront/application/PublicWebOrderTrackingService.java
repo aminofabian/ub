@@ -10,7 +10,9 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.storefront.WebOrderCodes;
 import zelisline.ub.storefront.api.dto.PublicOrderTrackingResponse;
 import zelisline.ub.storefront.domain.WebOrder;
+import zelisline.ub.storefront.domain.WebOrderShipment;
 import zelisline.ub.storefront.repository.WebOrderRepository;
+import zelisline.ub.storefront.repository.WebOrderShipmentRepository;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BranchRepository;
@@ -37,6 +39,7 @@ public class PublicWebOrderTrackingService {
     private final WebOrderRepository webOrderRepository;
     private final BranchRepository branchRepository;
     private final ReceiptTokenService receiptTokenService;
+    private final WebOrderShipmentRepository webOrderShipmentRepository;
 
     @Transactional(readOnly = true)
     public PublicOrderTrackingResponse trackByCode(String slug, String code, String phoneLast4) {
@@ -74,6 +77,17 @@ public class PublicWebOrderTrackingService {
                 .findByIdAndBusinessIdAndDeletedAtIsNull(found.getCatalogBranchId(), found.getBusinessId())
                 .map(Branch::getName)
                 .orElse("(branch)");
+        // Carrier tracking line (scope §8, step 8): receipt number + last human
+        // description only — never the key, business id, or raw upstream body.
+        String deliveryReceiptNo = null;
+        String deliveryStatus = null;
+        WebOrderShipment shipment = webOrderShipmentRepository
+                .findByWebOrderIdAndBusinessId(found.getId(), found.getBusinessId())
+                .orElse(null);
+        if (shipment != null && WebOrderShipment.CARRIER_PICKUP_MTAANI.equals(shipment.getCarrier())) {
+            deliveryReceiptNo = shipment.getReceiptNo();
+            deliveryStatus = shipment.getLastTrackDescription();
+        }
         return new PublicOrderTrackingResponse(
                 found.getId(),
                 WebOrderCodes.code(found.getId()),
@@ -84,7 +98,9 @@ public class PublicWebOrderTrackingService {
                 branchName,
                 found.getCreatedAt(),
                 receiptVerified ? found.getCustomerPhone() : null,
-                receiptVerified ? Boolean.TRUE : null);
+                receiptVerified ? Boolean.TRUE : null,
+                deliveryReceiptNo,
+                deliveryStatus);
     }
 
     private static boolean phoneMatches(String storedPhone, String phoneLast4) {

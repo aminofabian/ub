@@ -73,6 +73,10 @@ public class ShopperCheckoutProfile {
     @Column(name = "is_default", nullable = false)
     private boolean isDefault;
 
+    /** Storefront fulfilment choice JSON (Pickup Mtaani); null = normal delivery. */
+    @Column(name = "pickup_mtaani", length = 1000)
+    private String pickupMtaani;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 

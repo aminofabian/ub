@@ -15,7 +15,9 @@ import org.springframework.web.server.ResponseStatusException;
 
 import zelisline.ub.storefront.api.dto.PublicOrderTrackingResponse;
 import zelisline.ub.storefront.domain.WebOrder;
+import zelisline.ub.storefront.domain.WebOrderShipment;
 import zelisline.ub.storefront.repository.WebOrderRepository;
+import zelisline.ub.storefront.repository.WebOrderShipmentRepository;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BranchRepository;
@@ -30,6 +32,7 @@ class PublicWebOrderTrackingServiceTest {
     private WebOrderRepository webOrderRepository;
     private BranchRepository branchRepository;
     private ReceiptTokenService receiptTokenService;
+    private WebOrderShipmentRepository webOrderShipmentRepository;
     private PublicWebOrderTrackingService service;
 
     @BeforeEach
@@ -38,8 +41,10 @@ class PublicWebOrderTrackingServiceTest {
         webOrderRepository = Mockito.mock(WebOrderRepository.class);
         branchRepository = Mockito.mock(BranchRepository.class);
         receiptTokenService = Mockito.mock(ReceiptTokenService.class);
+        webOrderShipmentRepository = Mockito.mock(WebOrderShipmentRepository.class);
         service = new PublicWebOrderTrackingService(
-                businessRepository, webOrderRepository, branchRepository, receiptTokenService);
+                businessRepository, webOrderRepository, branchRepository,
+                receiptTokenService, webOrderShipmentRepository);
     }
 
     @Test
@@ -82,6 +87,44 @@ class PublicWebOrderTrackingServiceTest {
         assertThat(response.receiptVerified()).isNull();
         assertThat(response.customerPhone()).isNull();
         assertThat(response.orderCode()).isEqualTo(CODE);
+        assertThat(response.deliveryReceiptNo()).isNull();
+        assertThat(response.deliveryStatus()).isNull();
+    }
+
+    @Test
+    void trackByCodeIncludesCarrierLineWhenShipmentPresent() {
+        stubOrderLookup();
+        Mockito.when(branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull("branch-1", "b1"))
+                .thenReturn(Optional.of(branch()));
+        WebOrderShipment shipment = new WebOrderShipment();
+        shipment.setCarrier(WebOrderShipment.CARRIER_PICKUP_MTAANI);
+        shipment.setReceiptNo("PMT-PHL-3053");
+        shipment.setTrackId("PUM-DOR-PHL-pomIv");
+        shipment.setLastTrackDescription("Arrived at the pickup point");
+        Mockito.when(webOrderShipmentRepository.findByWebOrderIdAndBusinessId(ORDER_ID, "b1"))
+                .thenReturn(Optional.of(shipment));
+
+        PublicOrderTrackingResponse response = service.trackByCode("acme", CODE, "2874");
+
+        assertThat(response.deliveryReceiptNo()).isEqualTo("PMT-PHL-3053");
+        assertThat(response.deliveryStatus()).isEqualTo("Arrived at the pickup point");
+    }
+
+    @Test
+    void trackByCodeIgnoresNonCarrierShipments() {
+        stubOrderLookup();
+        Mockito.when(branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull("branch-1", "b1"))
+                .thenReturn(Optional.of(branch()));
+        WebOrderShipment shipment = new WebOrderShipment();
+        shipment.setCarrier("other_carrier");
+        shipment.setReceiptNo("X");
+        Mockito.when(webOrderShipmentRepository.findByWebOrderIdAndBusinessId(ORDER_ID, "b1"))
+                .thenReturn(Optional.of(shipment));
+
+        PublicOrderTrackingResponse response = service.trackByCode("acme", CODE, "2874");
+
+        assertThat(response.deliveryReceiptNo()).isNull();
+        assertThat(response.deliveryStatus()).isNull();
     }
 
     private void stubOrderLookup() {

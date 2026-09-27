@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.storefront.api.dto.PublicCheckoutRequest;
@@ -26,9 +27,10 @@ public class PublicWebCheckoutController {
     public ResponseEntity<PublicCheckoutResponse> checkout(
             @PathVariable String slug,
             @PathVariable String cartId,
-            @Valid @RequestBody PublicCheckoutRequest body
+            @Valid @RequestBody PublicCheckoutRequest body,
+            HttpServletRequest request
     ) {
-        PublicCheckoutResponse out = publicWebCheckoutService.submitCheckout(slug, cartId, body);
+        PublicCheckoutResponse out = publicWebCheckoutService.submitCheckout(slug, cartId, body, request);
         return ResponseEntity.status(HttpStatus.CREATED).cacheControl(CacheControl.noStore()).body(out);
     }
 }

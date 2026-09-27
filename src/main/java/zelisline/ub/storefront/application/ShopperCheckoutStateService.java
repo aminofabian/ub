@@ -15,6 +15,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.integrations.pickupmtaani.application.PickupMtaaniCheckoutService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.storefront.api.dto.CheckoutProfileSnapshot;
@@ -45,6 +46,7 @@ public class ShopperCheckoutStateService {
     private final UserRepository userRepository;
     private final WebOrderAdminService webOrderAdminService;
     private final StorefrontLeadCaptureService storefrontLeadCaptureService;
+    private final PickupMtaaniCheckoutService pickupMtaaniCheckoutService;
 
     @Transactional(readOnly = true)
     public PublicCheckoutStateResponse getState(String slug, String cartId, HttpServletRequest request) {
@@ -109,6 +111,7 @@ public class ShopperCheckoutStateService {
                     body.ward()
             );
             applyDelivery(profile, withCanonicalArea(body, areaName));
+            profile.setPickupMtaani(resolvePickupJson(businessId, body));
             profile.setDeliveryCompletedAt(Instant.now());
             profileRepository.save(profile);
             return buildAuthenticatedState(businessId, principal);
@@ -121,6 +124,7 @@ public class ShopperCheckoutStateService {
                 body.ward()
         );
         applyDelivery(session, withCanonicalArea(body, areaName));
+        session.setPickupMtaani(resolvePickupJson(businessId, body));
         session.setDeliveryCompletedAt(Instant.now());
         session.setSaveForNextTime(body.saveForNextTime());
         if (body.saveForNextTime()) {
@@ -142,8 +146,16 @@ public class ShopperCheckoutStateService {
                 areaName,
                 body.streetAddress(),
                 body.deliveryNotes(),
-                body.saveForNextTime()
+                body.saveForNextTime(),
+                body.fulfillment()
         );
+    }
+
+    private String resolvePickupJson(String businessId, PatchCheckoutDeliveryRequest body) {
+        if (body.fulfillment() == null) {
+            return null;
+        }
+        return pickupMtaaniCheckoutService.validateSelection(businessId, body.fulfillment());
     }
 
     private PublicCheckoutStateResponse buildAuthenticatedState(String businessId, TenantPrincipal principal) {
@@ -223,6 +235,7 @@ public class ShopperCheckoutStateService {
         session.setContactCompletedAt(profile.getContactCompletedAt());
         session.setDeliveryCompletedAt(profile.getDeliveryCompletedAt());
         session.setSaveForNextTime(profile.isDefault());
+        session.setPickupMtaani(profile.getPickupMtaani());
         return session;
     }
 
@@ -259,6 +272,7 @@ public class ShopperCheckoutStateService {
         profile.setContactCompletedAt(session.getContactCompletedAt());
         profile.setDeliveryCompletedAt(session.getDeliveryCompletedAt());
         profile.setGuestKey(session.getGuestKey());
+        profile.setPickupMtaani(session.getPickupMtaani());
     }
 
     private PublicCheckoutStateResponse buildGuestStateFromSession(WebCheckoutSession session) {
@@ -513,7 +527,8 @@ public class ShopperCheckoutStateService {
                 nullToEmpty(profile.getSubcounty()),
                 nullToEmpty(profile.getWard()),
                 nullToEmpty(profile.getStreetAddress()),
-                nullToEmpty(profile.getDeliveryNotes())
+                nullToEmpty(profile.getDeliveryNotes()),
+                nullToEmpty(profile.getPickupMtaani())
         );
     }
 
@@ -529,7 +544,8 @@ public class ShopperCheckoutStateService {
                 nullToEmpty(session.getSubcounty()),
                 nullToEmpty(session.getWard()),
                 nullToEmpty(session.getStreetAddress()),
-                nullToEmpty(session.getDeliveryNotes())
+                nullToEmpty(session.getDeliveryNotes()),
+                nullToEmpty(session.getPickupMtaani())
         );
     }
 
@@ -539,7 +555,7 @@ public class ShopperCheckoutStateService {
                 1,
                 "contact",
                 new CheckoutStepCompletion(false, false),
-                new CheckoutProfileSnapshot("", "", "", "+254", "", "", "Nairobi", "", "", "", ""),
+                new CheckoutProfileSnapshot("", "", "", "+254", "", "", "Nairobi", "", "", "", "", ""),
                 null
         );
     }

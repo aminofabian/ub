@@ -53,6 +53,7 @@ public class OrderConfirmationEmailRenderer {
      * @param branding  tenant branding (display name + colours); may be null
      * @param fallbackBusinessName business name when branding display name is blank
      * @param businessSlug tenant slug used when name is a platform placeholder
+     * @param deliveryFee carrier delivery fee to show as its own line; null/zero omits it
      */
     public String renderHtml(
             WebOrder order,
@@ -60,7 +61,8 @@ public class OrderConfirmationEmailRenderer {
             String branchName,
             TenantBrandingDto branding,
             String fallbackBusinessName,
-            String businessSlug) {
+            String businessSlug,
+            BigDecimal deliveryFee) {
         String storeName = resolveStoreName(branding, fallbackBusinessName, businessSlug, branchName);
         Palette palette = Palette.from(branding);
         String location = cleanLocation(branchName);
@@ -82,7 +84,7 @@ public class OrderConfirmationEmailRenderer {
                 renderFontHead(),
                 PAGE_BG,
                 FONT_SANS,
-                renderBody(order, lines, location, storeName, palette));
+                renderBody(order, lines, location, storeName, palette, deliveryFee));
     }
 
     public String renderHtml(
@@ -91,14 +93,25 @@ public class OrderConfirmationEmailRenderer {
             String branchName,
             TenantBrandingDto branding,
             String fallbackBusinessName) {
-        return renderHtml(order, lines, branchName, branding, fallbackBusinessName, null);
+        return renderHtml(order, lines, branchName, branding, fallbackBusinessName, null, null);
     }
 
-    /** Prefer {@link #renderHtml(WebOrder, List, String, TenantBrandingDto, String, String)}. */
+    /** Without a carrier fee; prefer the {@code BigDecimal} overload when one applies. */
+    public String renderHtml(
+            WebOrder order,
+            List<WebOrderLine> lines,
+            String branchName,
+            TenantBrandingDto branding,
+            String fallbackBusinessName,
+            String businessSlug) {
+        return renderHtml(order, lines, branchName, branding, fallbackBusinessName, businessSlug, null);
+    }
+
+    /** Prefer {@link #renderHtml(WebOrder, List, String, TenantBrandingDto, String, String, BigDecimal)}. */
     @Deprecated
     public String renderHtml(WebOrder order, List<WebOrderLine> lines,
                              String branchName, String businessName) {
-        return renderHtml(order, lines, branchName, null, businessName, null);
+        return renderHtml(order, lines, branchName, null, businessName, null, null);
     }
 
     private static String renderFontHead() {
@@ -116,7 +129,8 @@ public class OrderConfirmationEmailRenderer {
             List<WebOrderLine> lines,
             String location,
             String storeName,
-            Palette palette) {
+            Palette palette,
+            BigDecimal deliveryFee) {
         String brand = brandWordmark(storeName);
         String tagline = brandTagline(storeName, location);
 
@@ -142,7 +156,7 @@ public class OrderConfirmationEmailRenderer {
                 renderHeader(brand, tagline, palette),
                 renderHero(order, palette),
                 renderLinesTable(lines),
-                renderTotals(order),
+                renderTotals(order, deliveryFee),
                 renderPickup(location, palette),
                 renderFooter(brand, location));
     }
@@ -267,13 +281,22 @@ public class OrderConfirmationEmailRenderer {
 
     // ── totals ───────────────────────────────────────────────────────────
 
-    private String renderTotals(WebOrder order) {
+    private String renderTotals(WebOrder order, BigDecimal deliveryFee) {
         BigDecimal grand = order.getGrandTotal() != null ? order.getGrandTotal() : BigDecimal.ZERO;
-
+        String deliveryRow = "";
+        if (deliveryFee != null && deliveryFee.signum() > 0) {
+            deliveryRow = """
+                    <tr>
+                      <td style="padding:4px 0;font-family:%s;font-size:13px;font-weight:500;color:%s;">Delivery</td>
+                      <td style="padding:4px 0;font-family:%s;font-size:13px;font-weight:500;color:%s;text-align:right;">%s</td>
+                    </tr>
+                    """.formatted(FONT_SANS, MUTED, FONT_SANS, TEXT, formatKes(deliveryFee));
+        }
         return """
                 <tr>
                   <td style="background-color:%s;padding:16px 36px 8px;">
                     <table role="presentation" width="100%%" cellpadding="0" cellspacing="0">
+                      %s
                       <tr>
                         <td style="padding:4px 0;font-family:%s;font-size:13px;font-weight:500;color:%s;">Total</td>
                         <td style="padding:4px 0;font-family:%s;font-size:16px;font-weight:600;color:%s;text-align:right;">
@@ -283,7 +306,7 @@ public class OrderConfirmationEmailRenderer {
                     </table>
                   </td>
                 </tr>
-                """.formatted(CARD_BG, FONT_SANS, MUTED, FONT_SANS, TEXT, formatKes(grand));
+                """.formatted(CARD_BG, deliveryRow, FONT_SANS, MUTED, FONT_SANS, TEXT, formatKes(grand));
     }
 
     // ── pickup + status ──────────────────────────────────────────────────

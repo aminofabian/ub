@@ -23,5 +23,7 @@ public record WebOrderDetailResponse(
         String customerEmail,
         String notes,
         Instant createdAt,
-        List<WebOrderLineSnapshotResponse> lines
+        List<WebOrderLineSnapshotResponse> lines,
+        /** Carrier shipment, when the order uses one; null otherwise. */
+        WebOrderShipmentSummaryResponse shipment
 ) {}

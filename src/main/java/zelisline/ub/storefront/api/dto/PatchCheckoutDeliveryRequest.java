@@ -1,5 +1,6 @@
 package zelisline.ub.storefront.api.dto;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
@@ -9,5 +10,7 @@ public record PatchCheckoutDeliveryRequest(
         @NotBlank @Size(max = 120) String ward,
         @NotBlank @Size(max = 500) String streetAddress,
         @Size(max = 1000) String deliveryNotes,
-        boolean saveForNextTime
+        boolean saveForNextTime,
+        /** Pickup Mtaani choice; null keeps the normal delivery-area flow. */
+        @Valid PickupMtaaniFulfillmentRequest fulfillment
 ) {}

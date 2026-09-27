@@ -41,6 +41,7 @@ import zelisline.ub.platform.security.PublicContactMessageRateLimitFilter;
 import zelisline.ub.platform.security.PublicContactMessageRateLimiter;
 import zelisline.ub.platform.security.PublicCreditClaimRateLimitFilter;
 import zelisline.ub.platform.security.PublicCreditClaimRateLimiter;
+import zelisline.ub.platform.security.PublicPickupMtaaniQuoteRateLimitFilter;
 import zelisline.ub.platform.security.PublicStorefrontIpRateLimiter;
 import zelisline.ub.platform.security.PublicStorefrontRateLimitFilter;
 import zelisline.ub.platform.security.PublicSupportRateLimitFilter;
@@ -103,6 +104,7 @@ public class SecurityConfig {
             PublicCreditClaimRateLimitFilter publicCreditClaimRateLimitFilter,
             PublicContactMessageRateLimitFilter publicContactMessageRateLimitFilter,
             PublicSupportRateLimitFilter publicSupportRateLimitFilter,
+            PublicPickupMtaaniQuoteRateLimitFilter publicPickupMtaaniQuoteRateLimitFilter,
             LoginRateLimitFilter loginRateLimitFilter,
             RefreshRateLimitFilter refreshRateLimitFilter,
             JwtAuthenticationFilter jwtAuthenticationFilter,
@@ -223,6 +225,7 @@ public class SecurityConfig {
         http.addFilterAfter(publicCreditClaimRateLimitFilter, PublicStorefrontRateLimitFilter.class);
         http.addFilterAfter(publicContactMessageRateLimitFilter, PublicCreditClaimRateLimitFilter.class);
         http.addFilterAfter(publicSupportRateLimitFilter, PublicContactMessageRateLimitFilter.class);
+        http.addFilterAfter(publicPickupMtaaniQuoteRateLimitFilter, PublicSupportRateLimitFilter.class);
         http.addFilterAfter(loginRateLimitFilter, PublicContactMessageRateLimitFilter.class);
         http.addFilterAfter(refreshRateLimitFilter, LoginRateLimitFilter.class);
         http.addFilterAfter(jwtAuthenticationFilter, RefreshRateLimitFilter.class);
@@ -261,6 +264,13 @@ public class SecurityConfig {
             PublicSupportRateLimiter publicSupportRateLimiter
     ) {
         return new PublicSupportRateLimitFilter(publicSupportRateLimiter);
+    }
+
+    @Bean
+    public PublicPickupMtaaniQuoteRateLimitFilter publicPickupMtaaniQuoteRateLimitFilter(
+            PublicStorefrontIpRateLimiter publicStorefrontIpRateLimiter
+    ) {
+        return new PublicPickupMtaaniQuoteRateLimitFilter(publicStorefrontIpRateLimiter);
     }
 
     @Bean

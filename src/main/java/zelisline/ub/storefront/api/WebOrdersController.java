@@ -28,6 +28,8 @@ import zelisline.ub.storefront.api.dto.WebOrderSummaryResponse;
 import zelisline.ub.storefront.application.WebOrderAdminService;
 import zelisline.ub.storefront.application.WebOrderFulfillmentService;
 import zelisline.ub.storefront.application.WebOrderReceiptService;
+import zelisline.ub.integrations.pickupmtaani.application.PickupMtaaniBookingService;
+import zelisline.ub.integrations.pickupmtaani.application.PickupMtaaniPoller;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
 @Validated
@@ -39,6 +41,8 @@ public class WebOrdersController {
     private final WebOrderAdminService webOrderAdminService;
     private final WebOrderFulfillmentService webOrderFulfillmentService;
     private final WebOrderReceiptService webOrderReceiptService;
+    private final PickupMtaaniBookingService pickupMtaaniBookingService;
+    private final PickupMtaaniPoller pickupMtaaniPoller;
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'storefront.orders.read')")
@@ -121,5 +125,44 @@ public class WebOrdersController {
         return webOrderFulfillmentService.voidOrder(
                 TenantRequestIds.resolveBusinessId(request),
                 orderId.trim());
+    }
+
+    /** Manual booking of a paid order's Pickup Mtaani parcel (scope §8, step 5). */
+    @PostMapping("/{orderId}/shipments/pickup-mtaani")
+    @PreAuthorize("hasPermission(null, 'storefront.orders.read')")
+    public WebOrderDetailResponse bookPickupMtaani(
+            @PathVariable String orderId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        pickupMtaaniBookingService.book(businessId, orderId.trim());
+        return webOrderAdminService.getOrder(businessId, orderId.trim());
+    }
+
+    /** Poll the parcel now and return the refreshed order (scope §8, §12). */
+    @PostMapping("/{orderId}/shipments/pickup-mtaani/refresh")
+    @PreAuthorize("hasPermission(null, 'storefront.orders.read')")
+    public WebOrderDetailResponse refreshPickupMtaani(
+            @PathVariable String orderId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        pickupMtaaniPoller.refresh(businessId, orderId.trim());
+        return webOrderAdminService.getOrder(businessId, orderId.trim());
+    }
+
+    /** Cancel the parcel while it is still a request (scope §8, §13). */
+    @PostMapping("/{orderId}/shipments/pickup-mtaani/cancel")
+    @PreAuthorize("hasPermission(null, 'storefront.orders.read')")
+    public WebOrderDetailResponse cancelPickupMtaani(
+            @PathVariable String orderId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        pickupMtaaniBookingService.cancel(businessId, orderId.trim());
+        return webOrderAdminService.getOrder(businessId, orderId.trim());
     }
 }

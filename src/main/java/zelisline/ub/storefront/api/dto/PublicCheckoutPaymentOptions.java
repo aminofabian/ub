@@ -2,6 +2,7 @@ package zelisline.ub.storefront.api.dto;
 
 import java.util.List;
 
+import zelisline.ub.integrations.pickupmtaani.api.dto.PickupMtaaniPublicConfig;
 import zelisline.ub.payments.domain.spi.DisplayInstructions;
 
 /**
@@ -13,6 +14,8 @@ public record PublicCheckoutPaymentOptions(
         /** When true, cart preview + checkout may register Buy Goods till awaits. */
         boolean tillListenEnabled,
         /** WhatsApp checkout capability (scope §6); null = not offered. */
-        WhatsAppCheckoutOption whatsappCheckout
+        WhatsAppCheckoutOption whatsappCheckout,
+        /** Pickup Mtaani delivery capability; null = not offered. */
+        PickupMtaaniPublicConfig pickupMtaani
 ) {
 }

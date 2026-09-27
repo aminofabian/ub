@@ -120,6 +120,28 @@ class OrderConfirmationEmailRendererTest {
         assertEquals("#2D6A4F", OrderConfirmationEmailRenderer.sanitizeHex("not-a-color", "#2D6A4F"));
     }
 
+    @Test
+    void rendersDeliveryLineWhenCarrierFeePositive() {
+        String html = renderer.renderHtml(
+                sampleOrder(), List.of(sampleLine()), "Mirema", null, "Kiosk", "palmart",
+                new BigDecimal("150.00"));
+
+        assertTrue(html.contains("Delivery"));
+        assertTrue(html.contains("150"));
+    }
+
+    @Test
+    void omitsDeliveryLineWhenFeeNullOrZero() {
+        String noFee = renderer.renderHtml(
+                sampleOrder(), List.of(sampleLine()), "Mirema", null, "Kiosk", "palmart", null);
+        assertFalse(noFee.contains("Delivery"));
+
+        String zeroFee = renderer.renderHtml(
+                sampleOrder(), List.of(sampleLine()), "Mirema", null, "Kiosk", "palmart",
+                BigDecimal.ZERO);
+        assertFalse(zeroFee.contains("Delivery"));
+    }
+
     private static WebOrder sampleOrder() {
         WebOrder order = new WebOrder();
         order.setId("order-1");

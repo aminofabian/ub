@@ -14,6 +14,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.integrations.pickupmtaani.api.dto.PickupMtaaniPublicConfig;
+import zelisline.ub.integrations.pickupmtaani.application.PickupMtaaniSettingsService;
 import zelisline.ub.payments.application.DarajaAccountReferences;
 import zelisline.ub.payments.application.GatewayCheckoutService;
 import zelisline.ub.payments.application.GatewayStkPushService;
@@ -74,6 +76,7 @@ public class PublicStorefrontPaymentService {
     private final KioskPayWalletService kioskPayWalletService;
     private final StorefrontSettingsService storefrontSettingsService;
     private final PlatformCustodySettlementService platformCustodySettlementService;
+    private final PickupMtaaniSettingsService pickupMtaaniSettingsService;
 
     @Transactional(readOnly = true)
     public PublicCheckoutPaymentOptions checkoutOptions(String slug) {
@@ -148,7 +151,9 @@ public class PublicStorefrontPaymentService {
             return a.displayName().compareToIgnoreCase(b.displayName());
         });
         return new PublicCheckoutPaymentOptions(manual, online, tillListenEnabled,
-                resolveWhatsAppCheckout(business, online.isEmpty()));
+                resolveWhatsAppCheckout(business, online.isEmpty()),
+                pickupMtaaniSettingsService.readPublicConfig(
+                        business.getSettings(), business.getCurrency()));
     }
 
     /**

@@ -27,6 +27,8 @@ import zelisline.ub.payments.application.StkPushRetryHelper;
 import zelisline.ub.payments.domain.GatewayCheckout;
 import zelisline.ub.payments.domain.GatewayCheckoutStatuses;
 import zelisline.ub.payments.domain.GatewayStkPush;
+import zelisline.ub.payments.application.StkAudience;
+import zelisline.ub.payments.domain.DarajaStorefrontPolicy;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.StkPushContextType;
 import zelisline.ub.payments.domain.GatewayStatus;
@@ -99,6 +101,8 @@ public class PublicStorefrontPaymentService {
                 if (di != null) {
                     manual.add(di);
                 }
+            } else if (!offeredOnStorefront(cfg)) {
+                // Daraja stays on the till until Super Admin approves the shop.
             } else if (ONLINE_STK_TYPES.contains(type) && enabledTypes.contains(type)) {
                 String displayName = platformEnabled.stream()
                         .filter(pg -> pg.getGatewayType() == type)
@@ -154,6 +158,15 @@ public class PublicStorefrontPaymentService {
                 resolveWhatsAppCheckout(business, online.isEmpty()),
                 pickupMtaaniSettingsService.readPublicConfig(
                         business.getSettings(), business.getCurrency()));
+    }
+
+    /** Daraja is listed on the shop only after Super Admin approval. */
+    private boolean offeredOnStorefront(PaymentGatewayConfig cfg) {
+        String provider = platformCustodySettlementService.activeProvider();
+        if (!DarajaStorefrontPolicy.requiresApproval(cfg.getGatewayType(), provider)) {
+            return true;
+        }
+        return DarajaStorefrontPolicy.isApproved(cfg.getStorefrontApproval());
     }
 
     /**
@@ -293,7 +306,8 @@ public class PublicStorefrontPaymentService {
                 order.getGrandTotal(),
                 // Daraja AccountReference ≤12 chars; use canonical order code so C2B BillRef matches.
                 WebOrderCodes.code(order.getId()),
-                "Web order " + WebOrderCodes.code(order.getId())
+                "Web order " + WebOrderCodes.code(order.getId()),
+                StkAudience.STOREFRONT
         );
 
         if (outcome.accepted()) {

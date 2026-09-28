@@ -21,6 +21,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import zelisline.ub.payments.domain.DarajaStorefrontPolicy;
 import zelisline.ub.payments.domain.GatewayStatus;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
@@ -166,6 +167,67 @@ class PaymentGatewayStkServiceTest {
         verify(darajaProvider, never()).getIfAvailable();
     }
 
+    @Test
+    void initiate_cashier_usesDarajaBeforeShopApproval() {
+        PaymentGateway darajaGateway = mock(PaymentGateway.class);
+        when(platformPaymentGatewayService.listEnabled())
+                .thenReturn(List.of(platformGateway(GatewayType.DARAJA)));
+        when(configRepository.findByBusinessIdAndGatewayTypeAndStatus(
+                BUSINESS, GatewayType.DARAJA, GatewayStatus.ACTIVE))
+                .thenReturn(List.of(darajaConfig(DarajaStorefrontPolicy.OFF)));
+        when(configRepository.findById("cfg-daraja")).thenReturn(Optional.of(darajaConfig(DarajaStorefrontPolicy.OFF)));
+        when(gatewayRegistry.has("DARAJA")).thenReturn(true);
+        when(gatewayRegistry.get("DARAJA")).thenReturn(darajaGateway);
+        when(encryptionService.decrypt("enc")).thenReturn("{\"consumerKey\":\"k\",\"passkey\":\"p\"}");
+        when(darajaGateway.initiateStkPush(any())).thenReturn(
+                StkPushResponse.accepted("checkout-d", "mr-d", "0", "Success"));
+
+        PaymentGatewayStkService.StkPushOutcome outcome = service.initiate(
+                BUSINESS, null, "254712345678", new BigDecimal("200.00"), "REF-D", "Till",
+                StkAudience.CASHIER);
+
+        assertThat(outcome.accepted()).isTrue();
+        assertThat(outcome.gatewayType()).isEqualTo(GatewayType.DARAJA.name());
+        assertThat(outcome.configId()).isEqualTo("cfg-daraja");
+    }
+
+    @Test
+    void initiate_storefront_refusesDarajaUntilApproved() {
+        when(platformPaymentGatewayService.listEnabled())
+                .thenReturn(List.of(platformGateway(GatewayType.DARAJA)));
+        PaymentGatewayConfig pending = darajaConfig(DarajaStorefrontPolicy.PENDING);
+        when(configRepository.findByBusinessIdAndGatewayTypeAndStatus(
+                BUSINESS, GatewayType.DARAJA, GatewayStatus.ACTIVE))
+                .thenReturn(List.of(pending));
+        when(configRepository.findById("cfg-daraja")).thenReturn(Optional.of(pending));
+        when(configRepository.findByBusinessIdAndStatus(BUSINESS, GatewayStatus.ACTIVE))
+                .thenReturn(List.of(pending));
+        when(gatewayRegistry.has("DARAJA")).thenReturn(true);
+
+        PaymentGatewayStkService.StkPushOutcome outcome = service.initiate(
+                BUSINESS, "cfg-daraja", "254712345678", new BigDecimal("200.00"), "REF-D", "Shop",
+                StkAudience.STOREFRONT);
+
+        assertThat(outcome.accepted()).isFalse();
+        assertThat(outcome.responseCode()).isEqualTo("STOREFRONT_APPROVAL");
+        verify(gatewayRegistry, never()).get("DARAJA");
+        verify(darajaProvider, never()).getIfAvailable();
+    }
+
+    @Test
+    void initiate_storefront_doesNotFallThroughToPlatformDaraja() {
+        when(platformPaymentGatewayService.listEnabled()).thenReturn(List.of());
+        when(custodyService.findActiveCustodyConfig(BUSINESS)).thenReturn(null);
+
+        PaymentGatewayStkService.StkPushOutcome outcome = service.initiate(
+                BUSINESS, null, "254712345678", new BigDecimal("200.00"), "REF-D", "Shop",
+                StkAudience.STOREFRONT);
+
+        assertThat(outcome.accepted()).isFalse();
+        assertThat(outcome.responseCode()).isEqualTo("NO_GATEWAY");
+        verify(darajaProvider, never()).getIfAvailable();
+    }
+
     private static PlatformPaymentGateway platformGateway(GatewayType type) {
         PlatformPaymentGateway pg = new PlatformPaymentGateway();
         pg.setGatewayType(type);
@@ -179,6 +241,17 @@ class PaymentGatewayStkServiceTest {
         cfg.setGatewayType(GatewayType.KOPOKOPO);
         cfg.setStatus(GatewayStatus.ACTIVE);
         cfg.setCredentialsJson("enc");
+        return cfg;
+    }
+
+    private static PaymentGatewayConfig darajaConfig(String storefrontApproval) {
+        PaymentGatewayConfig cfg = new PaymentGatewayConfig();
+        cfg.setId("cfg-daraja");
+        cfg.setBusinessId(BUSINESS);
+        cfg.setGatewayType(GatewayType.DARAJA);
+        cfg.setStatus(GatewayStatus.ACTIVE);
+        cfg.setCredentialsJson("enc");
+        cfg.setStorefrontApproval(storefrontApproval);
         return cfg;
     }
 

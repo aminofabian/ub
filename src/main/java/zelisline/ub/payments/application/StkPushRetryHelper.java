@@ -43,11 +43,25 @@ public class StkPushRetryHelper {
             String description
     ) {
         return initiateAfterClearingPhone(
+                businessId, preferredConfigId, phone, amount, reference, description, StkAudience.CASHIER);
+    }
+
+    public PaymentGatewayStkService.StkPushOutcome initiateAfterClearingPhone(
+            String businessId,
+            String preferredConfigId,
+            String phone,
+            BigDecimal amount,
+            String reference,
+            String description,
+            StkAudience audience
+    ) {
+        StkAudience channel = audience != null ? audience : StkAudience.CASHIER;
+        return initiateAfterClearingPhone(
                 businessId,
                 phone,
                 reference,
                 (ref) -> paymentGatewayStkService.initiate(
-                        businessId, preferredConfigId, phone, amount, ref, description));
+                        businessId, preferredConfigId, phone, amount, ref, description, channel));
     }
 
     /**

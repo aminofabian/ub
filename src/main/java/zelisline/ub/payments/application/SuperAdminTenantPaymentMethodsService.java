@@ -91,7 +91,8 @@ public class SuperAdminTenantPaymentMethodsService {
                     dest.accountNumber(),
                     dest.summary(cfg.getLabel()),
                     type == GatewayType.CUSTODY_MPESA ? custodyProvider : null,
-                    cfg.getUpdatedAt()
+                    cfg.getUpdatedAt(),
+                    cfg.getStorefrontApproval()
             ));
         }
 

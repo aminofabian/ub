@@ -52,6 +52,14 @@ public class PaymentGatewayConfig {
     @Column(name = "is_default", nullable = false)
     private boolean isDefault;
 
+    /**
+     * Public-shop gate for Daraja. {@code OFF} until the merchant requests it
+     * ({@code PENDING}) and Super Admin approves ({@code APPROVED}). The till
+     * does not read this — an active Daraja method is available there immediately.
+     */
+    @Column(name = "storefront_approval", nullable = false, length = 16)
+    private String storefrontApproval = DarajaStorefrontPolicy.OFF;
+
     @Column(name = "credentials_json", columnDefinition = "text")
     private String credentialsJson;
 

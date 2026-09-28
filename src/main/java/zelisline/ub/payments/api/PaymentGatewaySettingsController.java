@@ -27,6 +27,7 @@ import zelisline.ub.payments.api.dto.GatewayConfigRequest;
 import zelisline.ub.payments.api.dto.GatewayConfigResponse;
 import zelisline.ub.payments.api.dto.GatewayCredentialSettingsResponse;
 import zelisline.ub.payments.api.dto.MpesaCustodyAvailabilityResponse;
+import zelisline.ub.payments.api.dto.SetDarajaStorefrontRequest;
 import zelisline.ub.payments.api.dto.SubscribeWebhookTillsRequest;
 import zelisline.ub.payments.api.dto.SubscribeWebhookTillsResponse;
 import zelisline.ub.payments.api.dto.TestConnectionResponse;
@@ -192,6 +193,22 @@ public class PaymentGatewaySettingsController {
     ) {
         CurrentTenantUser.require(request);
         return configService.deactivate(TenantRequestIds.resolveBusinessId(request), id);
+    }
+
+    /**
+     * Ask to show Daraja on the public shop, or pull it off. On does not go live
+     * until Super Admin approves. The till already accepts an active Daraja method.
+     */
+    @PostMapping("/{id}/storefront")
+    @PreAuthorize("hasPermission(null, 'payments.gateways.write')")
+    public GatewayConfigResponse setStorefront(
+            @PathVariable String id,
+            @Valid @RequestBody SetDarajaStorefrontRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return configService.setStorefrontRequest(
+                TenantRequestIds.resolveBusinessId(request), id, body.enabled());
     }
 
     /**

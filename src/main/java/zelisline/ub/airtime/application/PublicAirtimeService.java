@@ -28,6 +28,7 @@ import zelisline.ub.credits.domain.KenyanPhoneForms;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.PaymentGatewayStkService;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
+import zelisline.ub.payments.application.StkAudience;
 import zelisline.ub.payments.application.StkPushRetryHelper;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.StkPushContextType;
@@ -123,7 +124,8 @@ public class PublicAirtimeService {
                 order.amount(),
                 order.reference(),
                 "Airtime " + order.currency() + " " + order.amount().toPlainString()
-                        + " for " + order.phoneNumber());
+                        + " for " + order.phoneNumber(),
+                StkAudience.STOREFRONT);
 
         if (!outcome.accepted() || outcome.checkoutRequestId() == null) {
             String message = outcome.message() != null

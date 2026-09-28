@@ -16,6 +16,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.api.dto.PosStkRailResponse;
+import zelisline.ub.payments.domain.DarajaStorefrontPolicy;
 import zelisline.ub.payments.domain.GatewayStatus;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
@@ -61,7 +62,7 @@ public class PaymentGatewayStkService {
             String reference,
             String description
     ) {
-        return initiate(businessId, null, phoneNumber, amount, reference, description);
+        return initiate(businessId, null, phoneNumber, amount, reference, description, StkAudience.CASHIER);
     }
 
     public StkPushOutcome initiate(
@@ -72,11 +73,41 @@ public class PaymentGatewayStkService {
             String reference,
             String description
     ) {
+        return initiate(
+                businessId, preferredConfigId, phoneNumber, amount, reference, description, StkAudience.CASHIER);
+    }
+
+    public StkPushOutcome initiate(
+            String businessId,
+            String preferredConfigId,
+            String phoneNumber,
+            BigDecimal amount,
+            String reference,
+            String description,
+            StkAudience audience
+    ) {
+        StkAudience channel = audience != null ? audience : StkAudience.CASHIER;
         if (preferredConfigId == null || preferredConfigId.isBlank()) {
             preferredConfigId = findDefaultActiveStkConfigId(businessId);
         }
 
+        if (PlatformDarajaSettings.PLATFORM_DARAJA_CONFIG_ID.equals(preferredConfigId)) {
+            if (channel == StkAudience.STOREFRONT) {
+                return storefrontDarajaRejected();
+            }
+            StkPushOutcome platformOnly = tryPlatformDaraja(
+                    businessId, phoneNumber, amount, reference, description);
+            if (platformOnly != null) {
+                return platformOnly;
+            }
+            return StkPushOutcome.rejected(null, "NO_GATEWAY", "Online payment is not available right now.");
+        }
+
         if (preferredConfigId != null && !preferredConfigId.isBlank()) {
+            PaymentGatewayConfig chosen = configRepository.findById(preferredConfigId).orElse(null);
+            if (chosen != null && !allowedOnAudience(chosen, channel)) {
+                return storefrontDarajaRejected();
+            }
             StkPushOutcome preferred = tryConfig(
                     businessId, preferredConfigId, phoneNumber, amount, reference, description);
             if (preferred != null) {
@@ -85,7 +116,6 @@ public class PaymentGatewayStkService {
             // The caller explicitly picked a till/paybill-only (custody) method. If it cannot
             // run, do NOT fall through to the platform Daraja fallback — that has no auto-settle
             // and the shop would never receive the money.
-            PaymentGatewayConfig chosen = configRepository.findById(preferredConfigId).orElse(null);
             if (chosen != null && chosen.getGatewayType() == GatewayType.CUSTODY_MPESA) {
                 log.warn("Custody config {} not runnable (status={}) — refusing STK for business={}",
                         chosen.getId(), chosen.getStatus(), businessId);
@@ -104,6 +134,9 @@ public class PaymentGatewayStkService {
             var configs = configRepository.findByBusinessIdAndGatewayTypeAndStatus(
                     businessId, type, GatewayStatus.ACTIVE);
             for (PaymentGatewayConfig cfg : configs) {
+                if (!allowedOnAudience(cfg, channel)) {
+                    continue;
+                }
                 StkPushOutcome outcome = pushWithConfig(
                         cfg, phoneNumber, amount, reference, description);
                 if (outcome == null) {
@@ -124,9 +157,15 @@ public class PaymentGatewayStkService {
         }
 
         StkPushOutcome custody = tryCustodyMpesa(
-                businessId, phoneNumber, amount, reference, description);
+                businessId, phoneNumber, amount, reference, description, channel);
         if (custody != null) {
             return custody;
+        }
+
+        // Public shops never fall through to platform Daraja. An unapproved Daraja
+        // method stays on the till only — say that before the custody-unavailable gate.
+        if (channel == StkAudience.STOREFRONT && hasActiveUnapprovedDaraja(businessId)) {
+            return storefrontDarajaRejected();
         }
 
         // A shop with an ACTIVE till/paybill-only method expects Kiosk settlement. Never
@@ -142,6 +181,11 @@ public class PaymentGatewayStkService {
                     GatewayType.CUSTODY_MPESA.name(), "CUSTODY_UNAVAILABLE", custodyUnavailableMessage());
         }
 
+        if (channel == StkAudience.STOREFRONT) {
+            log.warn("No storefront STK gateway for business={}", businessId);
+            return StkPushOutcome.rejected(null, "NO_GATEWAY", "Online payment is not available right now.");
+        }
+
         StkPushOutcome platformDaraja = tryPlatformDaraja(
                 businessId, phoneNumber, amount, reference, description);
         if (platformDaraja != null) {
@@ -153,7 +197,8 @@ public class PaymentGatewayStkService {
     }
 
     /**
-     * Rails the cashier / storefront can offer when more than one STK path is ACTIVE.
+     * Rails the cashier can offer. Daraja is included as soon as it is active —
+     * shop approval is not required here. Cash stays the POS default tender.
      */
     public List<PosStkRailResponse> listActiveStkRails(String businessId) {
         List<PosStkRailResponse> rails = new ArrayList<>();
@@ -199,6 +244,20 @@ public class PaymentGatewayStkService {
             }
         }
 
+        // Platform Daraja (no tenant shortcode) is a till fallback only, and only
+        // when the shop has no other lane. It is never offered on the public shop.
+        if (rails.isEmpty()) {
+            PlatformDarajaSettingsService daraja = platformDarajaSettingsService.getIfAvailable();
+            if (daraja != null && daraja.isEnabledAndConfigured()) {
+                rails.add(new PosStkRailResponse(
+                        PlatformDarajaSettings.PLATFORM_DARAJA_CONFIG_ID,
+                        GatewayType.DARAJA.name(),
+                        "M-Pesa",
+                        "Daraja",
+                        true));
+            }
+        }
+
         if (rails.stream().noneMatch(PosStkRailResponse::isDefault) && !rails.isEmpty()) {
             PosStkRailResponse first = rails.getFirst();
             rails.set(0, new PosStkRailResponse(
@@ -216,17 +275,52 @@ public class PaymentGatewayStkService {
             String phoneNumber,
             BigDecimal amount,
             String reference,
-            String description
+            String description,
+            StkAudience audience
     ) {
         PlatformCustodySettlementService custody = custodySettlementService.getIfAvailable();
         if (custody == null || !custody.platformRailsReady()) {
             return null;
         }
         PaymentGatewayConfig cfg = custody.findActiveCustodyConfig(businessId);
-        if (cfg == null) {
+        if (cfg == null || !allowedOnAudience(cfg, audience)) {
             return null;
         }
         return pushCustodyConfig(cfg, phoneNumber, amount, reference, description);
+    }
+
+    private boolean allowedOnAudience(PaymentGatewayConfig cfg, StkAudience audience) {
+        if (audience != StkAudience.STOREFRONT) {
+            return true;
+        }
+        if (!DarajaStorefrontPolicy.requiresApproval(cfg.getGatewayType(), custodyProvider())) {
+            return true;
+        }
+        return DarajaStorefrontPolicy.isApproved(cfg.getStorefrontApproval());
+    }
+
+    private boolean hasActiveUnapprovedDaraja(String businessId) {
+        String provider = custodyProvider();
+        for (PaymentGatewayConfig cfg : configRepository.findByBusinessIdAndStatus(
+                businessId, GatewayStatus.ACTIVE)) {
+            if (DarajaStorefrontPolicy.requiresApproval(cfg.getGatewayType(), provider)
+                    && !DarajaStorefrontPolicy.isApproved(cfg.getStorefrontApproval())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String custodyProvider() {
+        PlatformCustodySettlementService custody = custodySettlementService.getIfAvailable();
+        return custody != null ? custody.activeProvider() : "OFF";
+    }
+
+    private static StkPushOutcome storefrontDarajaRejected() {
+        return StkPushOutcome.rejected(
+                GatewayType.DARAJA.name(),
+                "STOREFRONT_APPROVAL",
+                DarajaStorefrontPolicy.SHOP_BLOCKED_MESSAGE);
     }
 
     private StkPushOutcome pushCustodyConfig(

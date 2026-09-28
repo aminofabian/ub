@@ -22,6 +22,8 @@ public record GatewayConfigResponse(
         Instant updatedAt,
         String displayInstructionsJson,
         String custodyProvider,
-        String testErrorJson
+        String testErrorJson,
+        /** OFF, PENDING, APPROVED, or REJECTED. Matters for Daraja on the public shop. */
+        String storefrontApproval
 ) {
 }

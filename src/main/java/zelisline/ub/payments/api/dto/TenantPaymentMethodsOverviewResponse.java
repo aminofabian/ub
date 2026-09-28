@@ -38,7 +38,9 @@ public record TenantPaymentMethodsOverviewResponse(
             /** Human-readable landing spot, e.g. "Till 556677" or "Equity Bank · Acc …" */
             String destinationSummary,
             String custodyProvider,
-            Instant updatedAt
+            Instant updatedAt,
+            /** OFF, PENDING, APPROVED, or REJECTED — Daraja on the public shop. */
+            String storefrontApproval
     ) {
     }
 }

@@ -24,8 +24,10 @@ import zelisline.ub.payments.api.dto.GatewayConfigRequest;
 import zelisline.ub.payments.api.dto.GatewayConfigResponse;
 import zelisline.ub.payments.api.dto.GatewayCredentialSettingsResponse;
 import zelisline.ub.payments.api.dto.TestConnectionResponse;
+import zelisline.ub.payments.domain.DarajaStorefrontPolicy;
 import zelisline.ub.payments.domain.GatewayStatus;
 import zelisline.ub.payments.domain.GatewayType;
+import zelisline.ub.payments.domain.PlatformMpesaCustodyProviders;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
 import zelisline.ub.payments.domain.PlatformPaymentGateway;
 import zelisline.ub.payments.domain.spi.PaymentGateway;
@@ -397,8 +399,63 @@ public class PaymentGatewayConfigService {
                     "Gateway must be ACTIVE to deactivate. Current: " + cfg.getStatus());
         }
         cfg.setStatus(GatewayStatus.TESTED);
+        cfg.setStorefrontApproval(DarajaStorefrontPolicy.OFF);
         configRepository.save(cfg);
         return toResponse(cfg);
+    }
+
+    /**
+     * Merchant toggle for Daraja on the public shop. On records a request
+     * ({@code PENDING}) unless it is already approved. Off pulls it from the shop.
+     * The till is unaffected — cash stays the default tender there.
+     */
+    @Transactional
+    public GatewayConfigResponse setStorefrontRequest(String businessId, String configId, boolean enabled) {
+        PaymentGatewayConfig cfg = findOwn(businessId, configId);
+        if (!darajaShopGated(cfg)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Shop approval applies to Daraja only.");
+        }
+        if (enabled) {
+            if (!cfg.isActive()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Activate Daraja first. The till takes it immediately; the shop needs a separate request.");
+            }
+            String current = DarajaStorefrontPolicy.normalize(cfg.getStorefrontApproval());
+            if (!DarajaStorefrontPolicy.APPROVED.equals(current)
+                    && !DarajaStorefrontPolicy.PENDING.equals(current)) {
+                cfg.setStorefrontApproval(DarajaStorefrontPolicy.PENDING);
+            }
+        } else {
+            cfg.setStorefrontApproval(DarajaStorefrontPolicy.OFF);
+        }
+        return toResponse(configRepository.save(cfg));
+    }
+
+    /** Super Admin approves or rejects a shop's request to take Daraja online. */
+    @Transactional
+    public GatewayConfigResponse reviewStorefront(String configId, String decision) {
+        PaymentGatewayConfig cfg = configRepository.findById(configId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "Gateway config not found: " + configId));
+        if (!darajaShopGated(cfg)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Shop approval applies to Daraja only.");
+        }
+        if (!cfg.isActive()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "The method is not active, so there is nothing to approve for the shop.");
+        }
+        String normalized = decision == null ? "" : decision.trim().toUpperCase();
+        if ("APPROVE".equals(normalized)) {
+            cfg.setStorefrontApproval(DarajaStorefrontPolicy.APPROVED);
+        } else if ("REJECT".equals(normalized)) {
+            cfg.setStorefrontApproval(DarajaStorefrontPolicy.REJECTED);
+        } else {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "decision must be APPROVE or REJECT");
+        }
+        return toResponse(configRepository.save(cfg));
     }
 
     // ── Helpers ───────────────────────────────────────────────────
@@ -436,8 +493,15 @@ public class PaymentGatewayConfigService {
                 cfg.getUpdatedAt(),
                 displayJson,
                 custodyProvider,
-                cfg.getTestErrorJson()
+                cfg.getTestErrorJson(),
+                DarajaStorefrontPolicy.normalize(cfg.getStorefrontApproval())
         );
+    }
+
+    private boolean darajaShopGated(PaymentGatewayConfig cfg) {
+        PlatformCustodySettlementService custody = custodySettlementService.getIfAvailable();
+        String provider = custody != null ? custody.activeProvider() : PlatformMpesaCustodyProviders.OFF;
+        return DarajaStorefrontPolicy.requiresApproval(cfg.getGatewayType(), provider);
     }
 
     private String toJson(Map<String, String> map) {

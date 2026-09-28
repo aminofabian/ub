@@ -8,7 +8,7 @@ package zelisline.ub.payments.domain;
  * TESTING → test connection in progress (transient)
  * TESTED  → test passed, ready for activation
  * ERROR   → test failed, error details stored
- * ACTIVE  → live on POS and storefront
+ * ACTIVE  → live on the till. Daraja on the public shop also needs approval.
  * </pre>
  *
  * <p>Stored as a {@code VARCHAR(16)} column in {@code payment_gateway_configs}.

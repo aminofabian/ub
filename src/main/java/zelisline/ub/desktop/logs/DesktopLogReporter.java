@@ -1,11 +1,9 @@
 package zelisline.ub.desktop.logs;
 
 import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.UUID;
 import java.util.zip.GZIPOutputStream;
 
@@ -41,10 +39,6 @@ public class DesktopLogReporter {
 
     private static final Logger log = LoggerFactory.getLogger(DesktopLogReporter.class);
 
-    /** Log files the shell/backend write into APP_DATA. */
-    private static final List<String> LOG_FILES =
-            List.of("kiosk.log", "backend.out.log", "backend.err.log", "mariadb.log");
-
     private final Path appData;
     private final String ingestUrl;
     private final int tailBytes;
@@ -52,6 +46,9 @@ public class DesktopLogReporter {
     private final int readTimeoutMs;
     private final String businessId;
     private final String appVersion;
+
+    /** Outcome of a manual "send logs to support" attempt. */
+    public record LogSendResult(boolean sent, String message) {}
 
     public DesktopLogReporter(
             @Value("${APP_DATA:${user.home}/.palmart}") String appDataDir,
@@ -78,17 +75,30 @@ public class DesktopLogReporter {
     }
 
     void reportOnce() {
+        attemptSend();
+    }
+
+    /**
+     * Manual trigger from Settings → Desktop → "Send logs to support". Same work
+     * as the scheduled run, but returns a human-readable outcome so the page can
+     * tell the operator what happened instead of failing silently.
+     */
+    public LogSendResult sendNow() {
+        return attemptSend();
+    }
+
+    private LogSendResult attemptSend() {
         try {
             String key = resolveIngestKey();
             if (key.isBlank()) {
                 log.debug("Desktop log reporting disabled — no ingest key configured.");
-                return;
+                return new LogSendResult(false, "Log sending is not set up on this till.");
             }
             String installId = resolveInstallId();
             byte[] bundle = buildBundle();
             if (bundle.length == 0) {
                 log.debug("Desktop log reporting skipped — no log files present.");
-                return;
+                return new LogSendResult(false, "There are no log files to send yet.");
             }
             var resp = Unirest.post(ingestUrl)
                     .header("X-Desktop-Log-Ingest-Key", key)
@@ -102,12 +112,16 @@ public class DesktopLogReporter {
             if (resp.isSuccess()) {
                 log.info("Desktop log bundle sent to {} ({} bytes, HTTP {})",
                         ingestUrl, bundle.length, resp.getStatus());
-            } else {
-                log.warn("Desktop log bundle rejected by {} (HTTP {}: {})",
-                        ingestUrl, resp.getStatus(), resp.getBody() == null ? "" : resp.getBody());
+                return new LogSendResult(true, "Logs sent to support (" + bundle.length + " bytes).");
             }
+            log.warn("Desktop log bundle rejected by {} (HTTP {}: {})",
+                    ingestUrl, resp.getStatus(), resp.getBody() == null ? "" : resp.getBody());
+            return new LogSendResult(false,
+                    "Support server rejected the logs (HTTP " + resp.getStatus() + ").");
         } catch (Exception e) {
             log.warn("Desktop log reporting failed (offline?): {}", e.getMessage());
+            return new LogSendResult(false,
+                    "Could not reach support — check the internet connection.");
         }
     }
 
@@ -149,12 +163,12 @@ public class DesktopLogReporter {
         java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
         boolean includedAny = false;
         try (GZIPOutputStream gz = new GZIPOutputStream(out)) {
-            for (String name : LOG_FILES) {
+            for (String name : DesktopLogFiles.NAMES) {
                 Path path = appData.resolve(name);
                 if (!Files.isReadable(path)) {
                     continue;
                 }
-                String tail = readTail(path, tailBytes);
+                String tail = DesktopLogFiles.readTail(path, tailBytes);
                 gz.write(("===== " + name + " =====\n").getBytes(StandardCharsets.UTF_8));
                 gz.write(tail.getBytes(StandardCharsets.UTF_8));
                 if (!tail.endsWith("\n")) {
@@ -164,16 +178,5 @@ public class DesktopLogReporter {
             }
         }
         return includedAny ? out.toByteArray() : new byte[0];
-    }
-
-    private static String readTail(Path path, int maxBytes) throws IOException {
-        try (RandomAccessFile raf = new RandomAccessFile(path.toFile(), "r")) {
-            long len = raf.length();
-            long start = Math.max(0, len - maxBytes);
-            byte[] buf = new byte[(int) (len - start)];
-            raf.seek(start);
-            raf.readFully(buf);
-            return new String(buf, StandardCharsets.UTF_8);
-        }
     }
 }

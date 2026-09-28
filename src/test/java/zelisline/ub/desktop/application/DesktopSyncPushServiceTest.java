@@ -3,6 +3,7 @@ package zelisline.ub.desktop.application;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -52,6 +53,7 @@ import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
 import zelisline.ub.suppliers.repository.SupplierContactRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
+import zelisline.ub.storefront.domain.WebOrder;
 
 /**
  * Desktop → cloud "up" sync: pending sales (including sales made in the
@@ -91,7 +93,7 @@ class DesktopSyncPushServiceTest {
     void setUp() {
         when(cloudSyncSession.load()).thenReturn(Optional.of(new CloudSyncSession.Session(
             CLOUD_ORIGIN, "cloud-biz", "access-token", "refresh-token",
-            "owner-id", List.of("staff-1"), Instant.EPOCH, null, null, null)));
+            "owner-id", List.of("staff-1"), Instant.EPOCH, null, null, null, null)));
         when(saleItemRepository.findBySaleIdOrderByLineIndexAsc(anyString())).thenReturn(List.of());
         when(salePaymentRepository.findBySaleIdOrderBySortOrderAsc(anyString())).thenReturn(List.of());
 
@@ -296,5 +298,88 @@ class DesktopSyncPushServiceTest {
         assertTrue(result.configured());
         assertEquals(0, result.salesPushed());
         assertNotNull(result);
+    }
+
+    private static WebOrder webOrder(String id) {
+        WebOrder o = new WebOrder();
+        o.setId(id);
+        o.setBusinessId(LOCAL_BUSINESS);
+        o.setChannel("online");
+        o.setCatalogBranchId("branch-1");
+        o.setStatus("paid");
+        o.setFulfillmentStatus("confirmed");
+        o.setCurrency("KES");
+        o.setGrandTotal(new BigDecimal("1500.00"));
+        o.setCustomerName("Jane");
+        o.setCustomerPhone("254700111222");
+        return o;
+    }
+
+    @Test
+    void stampsOnlyWebOrderConfirmationsTheCloudProcessed() {
+        WebOrder ok = webOrder("order-ok");
+        WebOrder retry = webOrder("order-retry");
+        when(webOrderRepository.findDirtyForDesktopSync(LOCAL_BUSINESS))
+            .thenReturn(new java.util.ArrayList<>(List.of(ok, retry)));
+
+        server.expect(requestTo(CLOUD_ORIGIN + "/api/v1/desktop/sync/web-orders"))
+            .andExpect(method(HttpMethod.POST))
+            .andExpect(header("Authorization", "Bearer access-token"))
+            .andRespond(withSuccess(
+                "{\"ordersIngested\":0,\"confirmationsApplied\":1,\"confirmationsSkipped\":0,"
+                    + "\"processedOrderIds\":[\"order-ok\"]}",
+                MediaType.APPLICATION_JSON));
+
+        SyncPushResult result = service.pushPending();
+
+        server.verify();
+        assertEquals(1, result.orderConfirmationsPushed());
+        assertNotNull(ok.getCloudSyncedAt());
+        // The un-acknowledged confirmation must stay dirty so the next flush retries it.
+        assertNull(retry.getCloudSyncedAt());
+        verify(webOrderRepository).saveAll(org.mockito.ArgumentMatchers.argThat(list -> {
+            java.util.List<WebOrder> stamped = castWebOrders(list);
+            return stamped.size() == 1 && "order-ok".equals(stamped.get(0).getId());
+        }));
+    }
+
+    @Test
+    void capsTheSalesBatchAndLeavesTheRemainderPending() {
+        Shift openShift = shift("shift-1", SalesConstants.SHIFT_STATUS_OPEN);
+        java.util.List<Sale> sales = new java.util.ArrayList<>();
+        for (int i = 0; i < 201; i++) {
+            sales.add(sale("sale-" + i, "shift-1", SalesConstants.SALE_STATUS_COMPLETED));
+        }
+        when(saleRepository.findByBusinessIdAndCloudSyncedAtIsNullOrderBySoldAtAsc(LOCAL_BUSINESS))
+            .thenReturn(sales);
+        when(shiftRepository.findByBusinessIdAndStatusAndCloudSyncedAtIsNullOrderByClosedAtAsc(
+                LOCAL_BUSINESS, SalesConstants.SHIFT_STATUS_CLOSED))
+            .thenReturn(List.of());
+        when(shiftRepository.findAllById(Set.of("shift-1"))).thenReturn(List.of(openShift));
+
+        server.expect(requestTo(CLOUD_ORIGIN + "/api/v1/desktop/sync/shifts"))
+            .andRespond(withSuccess(
+                "{\"shiftsIngested\":0,\"salesIngested\":200,\"salesSkipped\":0,\"suppliersIngested\":0}",
+                MediaType.APPLICATION_JSON));
+
+        service.pushPending();
+
+        server.verify();
+        // Only the first 200 are sent and stamped; the 201st stays pending for
+        // the next flush rather than riding in one enormous request.
+        verify(saleRepository).saveAll(org.mockito.ArgumentMatchers.argThat(list ->
+            castSales(list).size() == 200));
+        assertNotNull(sales.get(0).getCloudSyncedAt());
+        assertNull(sales.get(200).getCloudSyncedAt());
+    }
+
+    @SuppressWarnings("unchecked")
+    private static java.util.List<Sale> castSales(Object list) {
+        return (java.util.List<Sale>) list;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static java.util.List<WebOrder> castWebOrders(Object list) {
+        return (java.util.List<WebOrder>) list;
     }
 }

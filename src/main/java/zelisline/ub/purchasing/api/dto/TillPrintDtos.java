@@ -50,7 +50,8 @@ public final class TillPrintDtos {
             String id,
             String kind,
             String reference,
-            Instant createdAt
+            Instant createdAt,
+            TillPrintSlip slip
     ) {
     }
 

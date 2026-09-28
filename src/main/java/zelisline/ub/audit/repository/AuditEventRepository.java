@@ -48,6 +48,19 @@ public interface AuditEventRepository extends JpaRepository<AuditEvent, String> 
     );
 
     @Query("""
+            SELECT e FROM AuditEvent e
+            WHERE e.businessId = :businessId
+              AND (e.createdAt > :cursorAt OR (e.createdAt = :cursorAt AND e.id > :cursorId))
+            ORDER BY e.createdAt ASC, e.id ASC
+            """)
+    List<AuditEvent> findAfterCursor(
+            @Param("businessId") String businessId,
+            @Param("cursorAt") Instant cursorAt,
+            @Param("cursorId") String cursorId,
+            Pageable pageable
+    );
+
+    @Query("""
             SELECT e.severity, e.category, COUNT(e) FROM AuditEvent e
             WHERE e.businessId = :businessId
               AND (:branchId IS NULL OR e.branchId = :branchId)

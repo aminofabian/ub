@@ -26,8 +26,10 @@ import lombok.RequiredArgsConstructor;
  * Blocks mutating API calls when the desktop license is expired or invalid
  * (see {@code DESKTOP_INSTALLATION.md} §10).
  *
- * <p>GET/HEAD/OPTIONS always pass. Auth and license renewal stay writable so
- * the owner can sign in and paste a new key.
+ * <p>GET/HEAD/OPTIONS always pass. Auth, license renewal and install recovery
+ * stay writable so the owner can sign in, paste a new key, or re-point a wedged
+ * install without a valid license
+ * ({@code docs/scopes/DESKTOP_APP_AUDIT_SCOPE.md} §12).
  */
 @Component
 @Profile("desktop")
@@ -36,9 +38,22 @@ public class DesktopLicenseReadOnlyFilter extends OncePerRequestFilter {
 
     static final String PROBLEM_TYPE = "urn:problem:license-read-only";
 
+    /**
+     * Paths that stay writable while the license is read-only.
+     *
+     * <p>Auth + license renewal let the owner recover; the install-recovery
+     * endpoints ({@code setup/reset/connect/reconnect}) keep a wedged till
+     * reachable — an expired license must never strand it (§12). Those are
+     * already loopback-gated (setup/connect) or credential-gated (reconnect) by
+     * {@code DesktopWebConfig}, and ordinary writes stay blocked until a valid
+     * key is in place.
+     */
     private static final List<String> WRITE_WHITELIST_PREFIXES = List.of(
         "/api/v1/auth/",
-        "/api/v1/license"
+        "/api/v1/license",
+        "/api/v1/desktop/setup",
+        "/api/v1/desktop/connect",
+        "/api/v1/desktop/reconnect"
     );
 
     private final DesktopLicenseGuard licenseGuard;

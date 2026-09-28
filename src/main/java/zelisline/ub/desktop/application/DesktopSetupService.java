@@ -92,18 +92,18 @@ public class DesktopSetupService {
     }
 
     /**
-     * Cheap "should we route to /setup?" probe. Returns {@code true} when no
-     * {@code Business} row exists for {@code app.desktop.business-id} AND
-     * the {@code .initialized} marker file is absent.
+     * Cheap "should we route to /setup?" probe. Keyed off the live
+     * {@code Business} row, not the {@code .initialized} marker: a marker with
+     * no business (a first run killed between the file write and the commit)
+     * must route back to {@code /setup}, and a committed business with a
+     * missing marker (the file write failed, or an older build wrote it
+     * last) must stay on {@code /login}.
      */
     @Transactional(readOnly = true)
     public boolean isSetupRequired() {
         String id = getDesktopBusinessId();
         if (id.isEmpty()) {
             return true;
-        }
-        if (initializationService.isInitialized()) {
-            return false;
         }
         return businessRepository.findByIdAndDeletedAtIsNull(id).isEmpty();
     }
@@ -277,20 +277,44 @@ public class DesktopSetupService {
             tryOpenStarterShift(businessIdForShift, branchIdForShift, ownerIdForShift);
         }
 
-        // ── Filesystem artefacts ───────────────────────────────────────
-
-        try {
-            initializationService.completeInitialization(
-                saved.getId(),
-                request.hardwareTier(),
-                Instant.now()
-            );
-        } catch (IOException e) {
-            throw new ResponseStatusException(
-                HttpStatus.INTERNAL_SERVER_ERROR,
-                "Failed to write initialization files: " + e.getMessage(),
-                e
-            );
+        // ── Filesystem artefacts (after commit) ────────────────────────
+        //
+        // Writing the .initialized marker inside this @Transactional method
+        // was the wedge: if the commit then failed, the marker existed with no
+        // Business row, so isSetupRequired() returned false and the router sent
+        // the user to /login, where no owner could sign in. Run the file writes
+        // only once the rows are durable. A post-commit IO failure is logged
+        // rather than thrown: the shop is already usable and the marker is now
+        // only a routing hint.
+        final String businessIdForInit = saved.getId();
+        final String tierForInit = request.hardwareTier();
+        Runnable writeInitFiles = () -> {
+            try {
+                initializationService.completeInitialization(
+                    businessIdForInit,
+                    tierForInit,
+                    Instant.now()
+                );
+            } catch (IOException e) {
+                log.warn(
+                    "[DesktopSetup] setup committed but init files could not be written: {}",
+                    e.getMessage()
+                );
+            }
+        };
+        if (org.springframework.transaction.support.TransactionSynchronizationManager
+                .isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager
+                .registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            writeInitFiles.run();
+                        }
+                    }
+                );
+        } else {
+            writeInitFiles.run();
         }
 
         // ── License key placeholder ────────────────────────────────────

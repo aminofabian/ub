@@ -3,6 +3,8 @@ package zelisline.ub.sales.receipt;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -21,8 +23,44 @@ public final class ReceiptEscPosRenderer {
         0x1B, 0x70, 0x00, 0x19, (byte) 0xFA,
         0x1B, 0x70, 0x01, 0x19, (byte) 0xFA
     };
+    /** Minute-resolution stamp on the test slip — proves the paper is from this print. */
+    private static final DateTimeFormatter TEST_STAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
     private ReceiptEscPosRenderer() {
+    }
+
+    /**
+     * A short, self-contained slip for Settings → Desktop → "Print test receipt".
+     * Deliberately omits the cash-drawer pulse: a test print must not pop the
+     * drawer. The timestamp lets an operator tell a fresh print from an old slip
+     * still sitting in the printer.
+     */
+    public static byte[] renderTestSlip(int widthMm) {
+        int w = charWidth(widthMm);
+        List<String> out = new ArrayList<>();
+        out.add(center("PALMART KIOSK", w));
+        out.add(center("Printer test", w));
+        out.add(repeat('=', w));
+        out.add(center("If you can read this,", w));
+        out.add(center("the receipt printer works.", w));
+        out.add(repeat('=', w));
+        out.add(padLeft("Width: " + widthMm + " mm", w));
+        out.add(padLeft("Printed: " + LocalDateTime.now().format(TEST_STAMP), w));
+        out.add(repeat('=', w));
+        out.add(center("Thank you", w));
+
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            baos.write(INIT);
+            for (String line : out) {
+                baos.write((line + "\n").getBytes(StandardCharsets.US_ASCII));
+            }
+            baos.write(FEED_LINES);
+            baos.write(CUT);
+            return baos.toByteArray();
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to render ESC/POS test slip", e);
+        }
     }
 
     public static byte[] render(ReceiptSnapshot s, int widthMm) {

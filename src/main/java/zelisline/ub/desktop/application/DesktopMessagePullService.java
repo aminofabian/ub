@@ -50,6 +50,8 @@ public class DesktopMessagePullService {
 
     /** Page size for the pull (matches the cloud controller's cap). */
     private static final int PAGE_SIZE = 100;
+    /** Safety cap on pull pagination so a pathological cursor cannot loop forever. */
+    private static final int MAX_PULL_PAGES = 200;
 
     private final ContactMessageRepository messageRepository;
     private final ContactMessageReplyRepository replyRepository;
@@ -79,7 +81,13 @@ public class DesktopMessagePullService {
 
         int messages = 0;
         int replies = 0;
+        int pages = 0;
         while (true) {
+            if (++pages > MAX_PULL_PAGES) {
+                log.warn("[DesktopSync] message pull hit the {} page cap; the rest follows next flush",
+                    MAX_PULL_PAGES);
+                break;
+            }
             MessageSyncSnapshot snapshot = fetchMessages(client, mapping, cursor);
             List<MessageSyncSnapshot.MessageSyncData> batch = snapshot.messages();
             if (batch == null || batch.isEmpty()) {

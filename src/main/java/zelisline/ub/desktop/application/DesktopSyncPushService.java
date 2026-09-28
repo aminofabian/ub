@@ -2,6 +2,7 @@ package zelisline.ub.desktop.application;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -103,6 +104,15 @@ public class DesktopSyncPushService {
     @Value("${app.desktop.business-id:}")
     private String desktopBusinessId;
 
+    /**
+     * Cap on rows per up-stream request. A till offline for weeks would
+     * otherwise build one enormous body (gateway/body-size limits, memory);
+     * the scheduler's next flush pushes the remainder (WP-10).
+     */
+    private static final int SALES_BATCH_MAX = 200;
+    private static final int SUPPLIES_BATCH_MAX = 100;
+    private static final int WEB_ORDERS_BATCH_MAX = 200;
+
     public record SyncPushResult(
             int shiftsPushed, int salesPushed, int suppliesPushed,
             int orderConfirmationsPushed, boolean configured) {}
@@ -136,7 +146,10 @@ public class DesktopSyncPushService {
         List<Supplier> dirtySuppliers = supplierRepository.findDirtyForDesktopSync(localId);
 
         Set<String> shiftIds = new TreeSet<>();
-        pendingSales.forEach(s -> shiftIds.add(s.getShiftId()));
+        // Cap the batch so a long offline backlog is drained over several
+        // flushes instead of one enormous request.
+        List<Sale> batchSales = firstPage(pendingSales, SALES_BATCH_MAX);
+        batchSales.forEach(s -> shiftIds.add(s.getShiftId()));
         pendingClosedShifts.forEach(s -> shiftIds.add(s.getId()));
         if (shiftIds.isEmpty() && dirtyCustomers.isEmpty() && dirtySuppliers.isEmpty()) {
             int supplies = pushSupplies(localId, mapping);
@@ -144,22 +157,23 @@ public class DesktopSyncPushService {
             return new SyncPushResult(0, 0, supplies, confirmations, true);
         }
         log.info(
-            "[DesktopSync] pushing {} pending sale(s) in {} shift(s), {} customer(s) and {} supplier(s) to {}",
-            pendingSales.size(), shiftIds.size(), dirtyCustomers.size(), dirtySuppliers.size(), mapping.origin());
+            "[DesktopSync] pushing {} of {} pending sale(s) in {} shift(s), {} customer(s) and {} supplier(s) to {}",
+            batchSales.size(), pendingSales.size(), shiftIds.size(), dirtyCustomers.size(), dirtySuppliers.size(),
+            mapping.origin());
 
         Map<String, Shift> shiftsById = shiftRepository
             .findAllById(shiftIds)
             .stream()
             .collect(Collectors.toMap(Shift::getId, s -> s));
 
-        ShiftSyncRequest batch = buildBatch(pendingSales, shiftsById, dirtyCustomers, dirtySuppliers, mapping);
+        ShiftSyncRequest batch = buildBatch(batchSales, shiftsById, dirtyCustomers, dirtySuppliers, mapping);
 
         RestClient client = restClientBuilder.baseUrl(mapping.origin()).build();
         ShiftSyncAck ack = postBatch(client, mapping, batch);
 
         Instant syncedAt = Instant.now();
-        pendingSales.forEach(s -> s.setCloudSyncedAt(syncedAt));
-        saleRepository.saveAll(pendingSales);
+        batchSales.forEach(s -> s.setCloudSyncedAt(syncedAt));
+        saleRepository.saveAll(batchSales);
 
         // A closed shift is only fully uploaded once every one of its sales is
         // acknowledged; a shift with stragglers stays pending for the next run.
@@ -176,10 +190,11 @@ public class DesktopSyncPushService {
         supplierRepository.saveAll(dirtySuppliers);
 
         log.info(
-            "[DesktopSync] acknowledged: {} sale(s) new, {} skipped; marked {} sale(s), "
+            "[DesktopSync] acknowledged: {} sale(s) new, {} skipped; marked {} of {} sale(s), "
                 + "{} shift(s), {} customer(s) and {} supplier(s) synced",
             ack.salesIngested(),
             ack.salesSkipped(),
+            batchSales.size(),
             pendingSales.size(),
             closedToStamp.size(),
             dirtyCustomers.size(),
@@ -212,27 +227,50 @@ public class DesktopSyncPushService {
         if (dirtyOrders.isEmpty()) {
             return 0;
         }
+        // Cap the request; un-acknowledged orders stay dirty and are re-pushed.
+        List<WebOrder> batchOrders = firstPage(dirtyOrders, WEB_ORDERS_BATCH_MAX);
         log.info(
-            "[DesktopSync] pushing {} web order update(s) to {}",
-            dirtyOrders.size(), mapping.origin());
+            "[DesktopSync] pushing {} of {} web order update(s) to {}",
+            batchOrders.size(), dirtyOrders.size(), mapping.origin());
 
-        List<WebOrderSyncSnapshot.OrderData> data = dirtyOrders.stream()
+        List<WebOrderSyncSnapshot.OrderData> data = batchOrders.stream()
             .map(this::toWebOrderData)
             .toList();
 
         RestClient client = restClientBuilder.baseUrl(mapping.origin()).build();
         WebOrderSyncAck ack = postWebOrders(client, mapping, new WebOrderSyncSnapshot(data));
 
+        // Stamp only the confirmations the cloud reports as processed:
+        // applied, or permanently un-appliable. An order the cloud couldn't
+        // handle transiently is left dirty so the next flush retries it — the
+        // old "stamp everything" behavior silently dropped those.
         Instant syncedAt = Instant.now();
-        dirtyOrders.forEach(o -> o.setCloudSyncedAt(syncedAt));
-        webOrderRepository.saveAll(dirtyOrders);
+        List<String> processed = ack.processedOrderIds();
+        List<WebOrder> stamped;
+        if (processed == null) {
+            // Older cloud with no per-order result — keep the previous
+            // stamp-all behavior so we don't retry forever.
+            stamped = batchOrders;
+        } else {
+            Set<String> done = new HashSet<>(processed);
+            stamped = batchOrders.stream()
+                .filter(o -> done.contains(o.getId()))
+                .collect(Collectors.toList());
+        }
+        stamped.forEach(o -> o.setCloudSyncedAt(syncedAt));
+        webOrderRepository.saveAll(stamped);
 
         log.info(
-            "[DesktopSync] acknowledged: {} web order confirmation(s) applied, {} skipped",
+            "[DesktopSync] acknowledged: {} web order confirmation(s) applied, {} skipped, {} left to retry",
             ack.confirmationsApplied(),
-            ack.confirmationsSkipped()
+            ack.confirmationsSkipped(),
+            dirtyOrders.size() - stamped.size()
         );
         return ack.confirmationsApplied();
+    }
+
+    private static <T> List<T> firstPage(List<T> rows, int max) {
+        return rows.size() <= max ? rows : rows.subList(0, max);
     }
 
     /** Order + its lines (context for the cloud's fulfillment transition). */
@@ -546,11 +584,13 @@ public class DesktopSyncPushService {
         if (dirtySupplies.isEmpty()) {
             return 0;
         }
+        // Cap the request; the rest is pushed on the next flush.
+        List<RawPurchaseSession> batchSupplies = firstPage(dirtySupplies, SUPPLIES_BATCH_MAX);
         log.info(
-            "[DesktopSync] pushing {} supply session(s) to {}",
-            dirtySupplies.size(), mapping.origin());
+            "[DesktopSync] pushing {} of {} supply session(s) to {}",
+            batchSupplies.size(), dirtySupplies.size(), mapping.origin());
 
-        List<SupplySyncSnapshot.SupplyData> data = dirtySupplies.stream()
+        List<SupplySyncSnapshot.SupplyData> data = batchSupplies.stream()
             .map(this::toSupplyData)
             .toList();
 
@@ -558,8 +598,8 @@ public class DesktopSyncPushService {
         SupplySyncAck ack = postSupplies(client, mapping, new SupplySyncSnapshot(data));
 
         Instant syncedAt = Instant.now();
-        dirtySupplies.forEach(s -> s.setCloudSyncedAt(syncedAt));
-        rawPurchaseSessionRepository.saveAll(dirtySupplies);
+        batchSupplies.forEach(s -> s.setCloudSyncedAt(syncedAt));
+        rawPurchaseSessionRepository.saveAll(batchSupplies);
 
         log.info(
             "[DesktopSync] acknowledged: {} supply session(s) new, {} skipped",
@@ -753,7 +793,16 @@ public class DesktopSyncPushService {
     }
 
     private static boolean isUnauthorized(Exception e) {
-        return e.getMessage() != null
-            && (e.getMessage().contains("401") || e.getMessage().contains("Unauthorized"));
+        // Prefer the structural status over message matching — a differently
+        // wrapped 401 must still trigger a token refresh.
+        if (e instanceof org.springframework.web.client.RestClientResponseException r) {
+            return r.getStatusCode().value() == 401;
+        }
+        if (e instanceof org.springframework.web.server.ResponseStatusException rse) {
+            return rse.getStatusCode().value() == 401;
+        }
+        String message = e.getMessage();
+        return message != null
+            && (message.contains("401") || message.contains("Unauthorized"));
     }
 }

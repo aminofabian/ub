@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -35,13 +36,18 @@ import zelisline.ub.credits.domain.CustomerPhone;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
+import zelisline.ub.desktop.api.dto.AuditEventPushAck;
+import zelisline.ub.desktop.api.dto.AuditEventPushRequest;
+import zelisline.ub.desktop.api.dto.CloudCustomerSyncSnapshot;
 import zelisline.ub.desktop.api.dto.CloudSalesSnapshot;
+import zelisline.ub.desktop.api.dto.InventoryMovementSyncSnapshot;
 import zelisline.ub.desktop.api.dto.MasterDataSnapshot;
 import zelisline.ub.desktop.api.dto.MessageReplyPushAck;
 import zelisline.ub.desktop.api.dto.MessageReplyPushRequest;
 import zelisline.ub.desktop.api.dto.MessageSyncSnapshot;
 import zelisline.ub.desktop.api.dto.ShiftSyncAck;
 import zelisline.ub.desktop.api.dto.ShiftSyncRequest;
+import zelisline.ub.desktop.api.dto.StockReconcileSnapshot;
 import zelisline.ub.desktop.api.dto.SupplySyncAck;
 import zelisline.ub.desktop.api.dto.SupplySyncSnapshot;
 import zelisline.ub.desktop.api.dto.WebOrderSyncAck;
@@ -61,10 +67,12 @@ import zelisline.ub.pricing.domain.TaxRate;
 import zelisline.ub.pricing.repository.TaxRateRepository;
 import zelisline.ub.purchasing.domain.RawPurchaseLine;
 import zelisline.ub.purchasing.domain.RawPurchaseSession;
+import zelisline.ub.purchasing.domain.StockMovement;
 import zelisline.ub.purchasing.domain.SupplierInvoice;
 import zelisline.ub.purchasing.domain.SupplierInvoiceLine;
 import zelisline.ub.purchasing.repository.RawPurchaseLineRepository;
 import zelisline.ub.purchasing.repository.RawPurchaseSessionRepository;
+import zelisline.ub.purchasing.repository.StockMovementRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
 import zelisline.ub.sales.domain.Sale;
@@ -135,10 +143,23 @@ public class DesktopSyncController {
     private final SupplierInvoiceLineRepository supplierInvoiceLineRepository;
     private final WebOrderRepository webOrderRepository;
     private final WebOrderLineRepository webOrderLineRepository;
+    private final StockMovementRepository stockMovementRepository;
 
     private static final Logger log = LoggerFactory.getLogger(DesktopSyncController.class);
 
+    /**
+     * Full catalog + staff + settings snapshot for a till's first pull and
+     * periodic refresh.
+     *
+     * <p>This payload includes staff {@code passwordHash}/{@code pinHash} so
+     * the till can authenticate staff offline, so it is restricted to callers
+     * who can list users (owner/admin/manager). Without this a cashier token
+     * could download every staff hash for offline cracking. The till's own
+     * sync uses the owner session established at connect time, so the
+     * restriction does not affect normal sync.
+     */
     @GetMapping("/master-data")
+    @PreAuthorize("hasPermission(null, 'users.list')")
     public MasterDataSnapshot masterData(HttpServletRequest request) {
         String businessId = TenantRequestIds.resolveBusinessId(request);
         Business business = businessRepository
@@ -222,6 +243,66 @@ public class DesktopSyncController {
             b.getReceiptSettings(),
             b.isActive()
         );
+    }
+
+    /**
+     * Stock movements the cloud has recorded for this shop since the till's
+     * cursor — online-storefront sales, cloud purchases, stocktakes and manual
+     * adjustments. The till replays these onto its own count; because it is the
+     * source of truth for what it sold, it skips the movements it originated
+     * (see {@code DesktopSyncPullService.applyCloudMovement}).
+     */
+    @GetMapping("/inventory-movements")
+    public InventoryMovementSyncSnapshot inventoryMovements(
+            HttpServletRequest request,
+            @RequestParam("since") String since,
+            @RequestParam(value = "sinceId", required = false, defaultValue = "") String sinceId,
+            @RequestParam(value = "limit", required = false, defaultValue = "500") int limit) {
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        Instant sinceInstant;
+        try {
+            sinceInstant = Instant.parse(since);
+        } catch (RuntimeException e) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "since must be an ISO-8601 instant"
+            );
+        }
+        int size = Math.max(1, Math.min(limit, 1000));
+        List<StockMovement> rows = stockMovementRepository.findForDesktopSync(
+            businessId,
+            sinceInstant,
+            sinceId == null ? "" : sinceId,
+            PageRequest.of(0, size)
+        );
+        return new InventoryMovementSyncSnapshot(
+            rows.stream().map(DesktopSyncController::toMovementData).toList()
+        );
+    }
+
+    private static InventoryMovementSyncSnapshot.MovementData toMovementData(StockMovement m) {
+        return new InventoryMovementSyncSnapshot.MovementData(
+            m.getId(),
+            m.getItemId(),
+            m.getBranchId(),
+            m.getQuantityDelta(),
+            m.getMovementType(),
+            m.getReferenceType(),
+            m.getReferenceId(),
+            m.getCreatedAt()
+        );
+    }
+
+    /**
+     * One-time reconcile: adopt the till's authoritative stock on the cloud so
+     * a mirror that drifted before desktop stock sync existed is corrected.
+     */
+    @PostMapping("/stock-reconcile")
+    public int stockReconcile(
+            HttpServletRequest request,
+            @Valid @RequestBody StockReconcileSnapshot body) {
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return ingestService.reconcileStock(businessId, body);
     }
 
     private static MasterDataSnapshot.CategoryData toCategory(Category c) {
@@ -360,6 +441,21 @@ public class DesktopSyncController {
     }
 
     /**
+     * Ingest till-forwarded audit events into this shop's cloud audit log (the
+     * "up" direction of sync). Idempotent by event id; {@code businessId} comes
+     * from the authenticated session, never the payload — see
+     * {@link DesktopSyncIngestService#ingestAuditEvents}.
+     */
+    @PostMapping("/audit-events")
+    @PreAuthorize("hasPermission(null, 'audit.read')")
+    public AuditEventPushAck ingestAuditEvents(
+            @Valid @RequestBody AuditEventPushRequest request,
+            HttpServletRequest http) {
+        String businessId = TenantRequestIds.resolveBusinessId(http);
+        return ingestService.ingestAuditEvents(businessId, request);
+    }
+
+    /**
      * Ingest till-uploaded shifts (the "up" direction of sync). Idempotent —
      * see {@link DesktopSyncIngestService}.
      */
@@ -406,8 +502,72 @@ public class DesktopSyncController {
         List<CloudSalesSnapshot.CloudSaleData> data = sales.stream()
             .map(s -> toCloudSale(s, shifts.get(s.getShiftId())))
             .toList();
-        List<CloudSalesSnapshot.CloudCustomerData> customers = loadCloudCustomers(businessId);
+        // Only the customers this page's sales reference, so the payload no
+        // longer carries the whole directory every pull. Directory freshness
+        // now comes from the dedicated customer delta (GET /customers).
+        java.util.Set<String> customerIds = sales.stream()
+            .map(Sale::getCustomerId)
+            .filter(java.util.Objects::nonNull)
+            .collect(Collectors.toSet());
+        List<CloudSalesSnapshot.CloudCustomerData> customers =
+            loadCloudCustomers(businessId, customerIds);
         return new CloudSalesSnapshot(data, customers);
+    }
+
+    /**
+     * Cloud → till customer-directory delta: customers (with phones + live
+     * credit) changed at/after {@code since}, so a customer or credit edit with
+     * no accompanying sale still reaches the till.
+     */
+    @GetMapping("/customers")
+    public CloudCustomerSyncSnapshot cloudCustomers(
+            @RequestParam("since") String since,
+            @RequestParam(value = "limit", required = false, defaultValue = "500") int limit,
+            HttpServletRequest request) {
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        Instant cursor = parseCursor(since);
+        int size = Math.max(1, Math.min(limit, 1000));
+        List<Customer> customers = customerRepository.findChangedSince(
+            businessId, cursor, PageRequest.of(0, size));
+        List<String> ids = customers.stream().map(Customer::getId).toList();
+        Map<String, List<CustomerPhone>> phones = ids.isEmpty()
+            ? Map.of()
+            : customerPhoneRepository.findByCustomerIdIn(ids).stream()
+                .collect(Collectors.groupingBy(CustomerPhone::getCustomerId));
+        Map<String, CreditAccount> credit = ids.isEmpty()
+            ? Map.of()
+            : creditAccountRepository.findByCustomerIdIn(ids).stream()
+                .collect(Collectors.toMap(CreditAccount::getCustomerId, a -> a));
+        List<CloudSalesSnapshot.CloudCustomerData> data = customers.stream()
+            .map(c -> toCloudCustomer(c, phones.getOrDefault(c.getId(), List.of()), credit.get(c.getId())))
+            .toList();
+        return new CloudCustomerSyncSnapshot(data, customerActivityCursor(customers, phones, credit));
+    }
+
+    /** Newest activity across a customer page's row, phones and credit. */
+    private static Instant customerActivityCursor(
+            List<Customer> customers,
+            Map<String, List<CustomerPhone>> phones,
+            Map<String, CreditAccount> credit) {
+        Instant max = null;
+        for (Customer c : customers) {
+            max = later(max, c.getUpdatedAt());
+            for (CustomerPhone p : phones.getOrDefault(c.getId(), List.of())) {
+                max = later(max, p.getCreatedAt());
+            }
+            CreditAccount a = credit.get(c.getId());
+            if (a != null) {
+                max = later(max, a.getUpdatedAt());
+            }
+        }
+        return max;
+    }
+
+    private static Instant later(Instant current, Instant candidate) {
+        if (candidate == null) {
+            return current;
+        }
+        return current == null || candidate.isAfter(current) ? candidate : current;
     }
 
     /**
@@ -469,17 +629,19 @@ public class DesktopSyncController {
     }
 
     /** Live customer directory for the till: name/phones + current credit state. */
-    private List<CloudSalesSnapshot.CloudCustomerData> loadCloudCustomers(String businessId) {
-        List<Customer> customers = customerRepository.findByBusinessIdAndDeletedAtIsNull(businessId);
+    /** Customers referenced by a sales page (so each sale's FK resolves till-side). */
+    private List<CloudSalesSnapshot.CloudCustomerData> loadCloudCustomers(
+            String businessId, java.util.Collection<String> customerIds) {
+        if (customerIds == null || customerIds.isEmpty()) {
+            return List.of();
+        }
+        List<Customer> customers = customerRepository
+            .findByIdInAndBusinessIdAndDeletedAtIsNull(customerIds, businessId);
         List<String> ids = customers.stream().map(Customer::getId).toList();
-        Map<String, List<CustomerPhone>> phones = ids.isEmpty()
-            ? Map.of()
-            : customerPhoneRepository.findByCustomerIdIn(ids).stream()
-                .collect(Collectors.groupingBy(CustomerPhone::getCustomerId));
-        Map<String, CreditAccount> credit = ids.isEmpty()
-            ? Map.of()
-            : creditAccountRepository.findByCustomerIdIn(ids).stream()
-                .collect(Collectors.toMap(CreditAccount::getCustomerId, a -> a));
+        Map<String, List<CustomerPhone>> phones = customerPhoneRepository.findByCustomerIdIn(ids).stream()
+            .collect(Collectors.groupingBy(CustomerPhone::getCustomerId));
+        Map<String, CreditAccount> credit = creditAccountRepository.findByCustomerIdIn(ids).stream()
+            .collect(Collectors.toMap(CreditAccount::getCustomerId, a -> a));
         return customers.stream()
             .map(c -> toCloudCustomer(c, phones.getOrDefault(c.getId(), List.of()), credit.get(c.getId())))
             .toList();

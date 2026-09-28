@@ -124,7 +124,11 @@ public class TillPrintService {
     public List<TillPrintPendingResponse> listPending(String businessId, String userId) {
         return tillPrintJobRepository.findPending(businessId, userId, cutoff()).stream()
                 .map(job -> new TillPrintPendingResponse(
-                        job.getId(), job.getKind(), job.getReferenceNo(), job.getCreatedAt()))
+                        job.getId(),
+                        job.getKind(),
+                        job.getReferenceNo(),
+                        job.getCreatedAt(),
+                        readSlip(job.getPayloadJson())))
                 .toList();
     }
 

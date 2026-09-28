@@ -1,11 +1,13 @@
 package zelisline.ub.desktop.application;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -39,6 +41,9 @@ import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
+import zelisline.ub.desktop.api.dto.InventoryMovementSyncSnapshot;
+import zelisline.ub.desktop.api.dto.CloudCustomerSyncSnapshot;
+import zelisline.ub.purchasing.domain.StockMovement;
 import zelisline.ub.credits.domain.Customer;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
@@ -105,6 +110,9 @@ class DesktopSyncPullServiceTest {
         mock(zelisline.ub.storefront.repository.WebOrderRepository.class);
     private final zelisline.ub.storefront.repository.WebOrderLineRepository webOrderLineRepository =
         mock(zelisline.ub.storefront.repository.WebOrderLineRepository.class);
+    private final zelisline.ub.purchasing.repository.StockMovementRepository stockMovementRepository =
+        mock(zelisline.ub.purchasing.repository.StockMovementRepository.class);
+    private final DesktopStockCursor stockCursor = mock(DesktopStockCursor.class);
 
     private final RestClient.Builder restClientBuilder = RestClient.builder();
     private final ObjectMapper objectMapper = new ObjectMapper()
@@ -123,7 +131,7 @@ class DesktopSyncPullServiceTest {
 
         when(cloudSyncSession.load()).thenReturn(Optional.of(new CloudSyncSession.Session(
             CLOUD_ORIGIN, "cloud-biz", "access-token", "refresh-token",
-            "owner-id", List.of(STAFF_ID), null, null, null, null)));
+            "owner-id", List.of(STAFF_ID), null, null, null, null, null)));
         when(userRepository.findIdsByBusinessIdAndDeletedAtIsNull(LOCAL_BUSINESS))
             .thenReturn(List.of(STAFF_ID));
         when(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(STAFF_ID, LOCAL_BUSINESS))
@@ -146,7 +154,8 @@ class DesktopSyncPullServiceTest {
             supplierRepository, supplierContactRepository, customerRepository,
             customerPhoneRepository, creditAccountRepository, rawPurchaseSessionRepository,
             rawPurchaseLineRepository, supplierInvoiceRepository, supplierInvoiceLineRepository,
-            webOrderRepository, webOrderLineRepository, restClientBuilder);
+            webOrderRepository, webOrderLineRepository, restClientBuilder,
+            stockMovementRepository, stockCursor);
         ReflectionTestUtils.setField(service, "desktopBusinessId", LOCAL_BUSINESS);
 
         server = MockRestServiceServer.bindTo(restClientBuilder).build();
@@ -391,5 +400,105 @@ class DesktopSyncPullServiceTest {
         // The pulled sale keeps its customer reference (FK resolves after mirror).
         verify(saleRepository).save(org.mockito.ArgumentMatchers.argThat(sale ->
             "customer-1".equals(sale.getCustomerId())));
+    }
+
+    private static InventoryMovementSyncSnapshot.MovementData movement(
+            String id, String itemId, String delta, String referenceType, String referenceId) {
+        return new InventoryMovementSyncSnapshot.MovementData(
+            id, itemId, BRANCH_ID, new BigDecimal(delta), "sale",
+            referenceType, referenceId, Instant.now());
+    }
+
+    @Test
+    void appliesCloudOriginMovementToLocalStock() {
+        Item item = new Item();
+        item.setId("item-1");
+        item.setBusinessId(LOCAL_BUSINESS);
+        item.setCurrentStock(new BigDecimal("10"));
+        when(itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull("item-1", LOCAL_BUSINESS))
+            .thenReturn(Optional.of(item));
+
+        // A storefront sale the till never originated must land on its count.
+        boolean applied = service.applyCloudMovement(
+            LOCAL_BUSINESS, movement("mv-1", "item-1", "-2", "web_order", "order-1"));
+
+        assertTrue(applied);
+        assertEquals(0, item.getCurrentStock().compareTo(new BigDecimal("8")));
+        verify(stockMovementRepository).save(argThat((StockMovement sm) ->
+            "mv-1".equals(sm.getId()) && "From cloud (desktop sync)".equals(sm.getNotes())));
+    }
+
+    @Test
+    void skipsMovementTheTillOriginated() {
+        when(saleRepository.findByIdAndBusinessId("sale-9", LOCAL_BUSINESS))
+            .thenReturn(Optional.of(mock(zelisline.ub.sales.domain.Sale.class)));
+
+        // The till already deducted this sale locally — replaying the cloud's
+        // mirror of it would double-count.
+        boolean applied = service.applyCloudMovement(
+            LOCAL_BUSINESS, movement("mv-2", "item-1", "-2", "sale", "sale-9"));
+
+        assertFalse(applied);
+        verify(stockMovementRepository, never()).save(any());
+        verify(itemRepository, never()).save(any());
+    }
+
+    @Test
+    void skipsMovementAlreadyApplied() {
+        when(stockMovementRepository.existsById("mv-3")).thenReturn(true);
+
+        boolean applied = service.applyCloudMovement(
+            LOCAL_BUSINESS, movement("mv-3", "item-1", "-2", "web_order", "order-3"));
+
+        assertFalse(applied);
+        verify(stockMovementRepository, never()).save(any());
+    }
+
+    @Test
+    void skipsMovementForItemNotMirroredLocally() {
+        when(itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull("missing", LOCAL_BUSINESS))
+            .thenReturn(Optional.empty());
+
+        boolean applied = service.applyCloudMovement(
+            LOCAL_BUSINESS, movement("mv-4", "missing", "-2", "web_order", "order-4"));
+
+        assertFalse(applied);
+        verify(stockMovementRepository, never()).save(any());
+    }
+
+    @Test
+    void skipsDesktopReconcileMovement() {
+        // The till pushed this reconcile; replaying it would double-count.
+        boolean applied = service.applyCloudMovement(
+            LOCAL_BUSINESS, movement("mv-5", "item-1", "2", "desktop_reconcile", "run-1"));
+
+        assertFalse(applied);
+        verify(stockMovementRepository, never()).save(any());
+    }
+
+    @Test
+    void pullsCustomerDeltaAndAdvancesTheCursor() throws Exception {
+        CloudSalesSnapshot.CloudCustomerData customer = new CloudSalesSnapshot.CloudCustomerData(
+            "cust-1", "Jane", null, null, List.of(), null);
+        Instant next = Instant.parse("2026-08-20T10:00:00Z");
+        String json = objectMapper.writeValueAsString(
+            new CloudCustomerSyncSnapshot(List.of(customer), next));
+
+        server.expect(requestTo(CLOUD_ORIGIN
+                + "/api/v1/desktop/sync/customers?since=1970-01-01T00:00:00Z&limit=500"))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Authorization", "Bearer access-token"))
+            .andRespond(withSuccess(json, MediaType.APPLICATION_JSON));
+
+        int pulled = service.pullCustomers();
+
+        server.verify();
+        assertEquals(1, pulled);
+        // A customer edit with no accompanying sale now reaches the till...
+        verify(customerRepository).saveAndFlush(org.mockito.ArgumentMatchers.argThat(c ->
+            "cust-1".equals(c.getId())));
+        // ...and the cursor advances to the page's newest activity.
+        verify(cloudSyncSession).persistLastCustomersPullAt(
+            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(next));
     }
 }

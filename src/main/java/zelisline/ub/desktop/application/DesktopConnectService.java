@@ -403,7 +403,8 @@ public class DesktopConnectService {
                 previous == null ? null : previous.lastSalesPullAt(),
                 previous == null ? null : previous.lastMessagesPullAt(),
                 previous == null ? null : previous.lastSuppliesPullAt(),
-                previous == null ? null : previous.lastWebOrdersPullAt()
+                previous == null ? null : previous.lastWebOrdersPullAt(),
+                previous == null ? null : previous.lastCustomersPullAt()
             )
         );
         log.info("[DesktopConnect] reconnected business={} to cloud business={}", localId, cloudBusinessId);

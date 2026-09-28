@@ -38,6 +38,12 @@ public final class SalesConstants {
     public static final String STOCK_REFERENCE_TYPE_SALE_REFUND = "sale_refund";
     /** Guest/public web kiosk checkout — stock movements tie to {@code web_orders.id}. */
     public static final String STOCK_REFERENCE_TYPE_WEB_ORDER = "web_order";
+    /**
+     * Till→cloud one-time stock adoption: the till pushes its authoritative
+     * count and the cloud writes an adjustment to match. The till skips these
+     * on replay because it originated them (see DesktopSyncPullService).
+     */
+    public static final String STOCK_REFERENCE_TYPE_DESKTOP_RECONCILE = "desktop_reconcile";
 
     public static final String JOURNAL_SOURCE_SHIFT_CLOSE = "shift_close";
     public static final String JOURNAL_SOURCE_SALE = "sale";

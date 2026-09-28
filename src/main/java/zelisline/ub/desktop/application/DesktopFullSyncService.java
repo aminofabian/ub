@@ -29,6 +29,7 @@ public class DesktopFullSyncService {
     private final DesktopSyncPullService syncPullService;
     private final DesktopMessagePushService messagePushService;
     private final DesktopMessagePullService messagePullService;
+    private final DesktopAuditPushService auditPushService;
     private final DesktopSyncProgressService syncProgress;
 
     /** Guards against overlapping start races before the progress phase flips. */
@@ -101,26 +102,84 @@ public class DesktopFullSyncService {
 
     private void runFullSync() {
         try {
-            DesktopSyncPullService.PullResult pull = syncPullService.pullMasterData();
-            int pulled = syncPullService.pullCloudSales();
-            int suppliesPulled = syncPullService.pullSupplies();
-            int ordersPulled = syncPullService.pullWebOrders();
-            DesktopMessagePullService.MessagePullResult messagePull = messagePullService.pullMessages();
+            // One-time: adopt the till's authoritative stock on the cloud before
+            // replaying movements, so a mirror that drifted pre-fix is corrected
+            // and the delta isn't mistaken for a cloud-origin change.
+            if (!syncPullService.isStockReconciled()) {
+                try {
+                    int reconciled = syncPullService.reconcileStockToCloud();
+                    syncPullService.markStockReconciled();
+                    log.info(
+                        "[DesktopSync] one-time stock reconcile: {} item(s) adopted by the cloud",
+                        reconciled);
+                } catch (Exception e) {
+                    log.warn("[DesktopSync] stock reconcile deferred: {}", e.getMessage());
+                }
+            }
+            // Each stream is isolated so one failure doesn't skip the rest
+            // (WP-6): a wedged sales ingest no longer blocks supplies,
+            // confirmations or messages.
+            DesktopSyncPullService.PullResult pull = stream(
+                "master-data", syncPullService::pullMasterData, null);
+            int pulled = streamCount("cloud sales", syncPullService::pullCloudSales);
+            int suppliesPulled = streamCount("supplies", syncPullService::pullSupplies);
+            int ordersPulled = streamCount("web orders", syncPullService::pullWebOrders);
+            int movementsApplied = streamCount("stock movements", syncPullService::pullInventoryMovements);
+            int customersPulled = streamCount("customers", syncPullService::pullCustomers);
+            DesktopMessagePullService.MessagePullResult messagePull = stream(
+                "messages", messagePullService::pullMessages,
+                new DesktopMessagePullService.MessagePullResult(0, 0));
+
+            if (pull == null) {
+                syncProgress.failed(
+                    "Master data could not be refreshed — check the online-shop connection.");
+                return;
+            }
+
             syncProgress.uploadStarted();
-            DesktopSyncPushService.SyncPushResult push = syncPushService.pushPending();
-            DesktopMessagePushService.MessagePushResult messagePush = messagePushService.pushPendingReplies();
+            DesktopSyncPushService.SyncPushResult push = stream(
+                "push", syncPushService::pushPending,
+                new DesktopSyncPushService.SyncPushResult(0, 0, 0, 0, false));
+            DesktopMessagePushService.MessagePushResult messagePush = stream(
+                "message replies", messagePushService::pushPendingReplies,
+                new DesktopMessagePushService.MessagePushResult(0, false));
+            int auditsPushed = streamCount("audit events", auditPushService::pushPendingAudits);
+
             syncProgress.done(pull, push, messagePull, messagePush, suppliesPulled, ordersPulled);
             log.info(
                 "[DesktopSync] full sync finished: {} item(s) refreshed, {} cloud sale(s) pulled, "
-                    + "{} supply session(s) pulled, {} web order(s) pulled, {} sale(s) pushed, "
+                    + "{} supply session(s) pulled, {} web order(s) pulled, {} stock movement(s) applied, "
+                    + "{} customer(s) refreshed, {} sale(s) pushed, "
                     + "{} supply session(s) pushed, {} order confirmation(s) pushed, "
-                    + "{} message(s) + {} reply(ies) pulled, {} reply(ies) relayed",
-                pull.items(), pulled, suppliesPulled, ordersPulled, push.salesPushed(),
+                    + "{} message(s) + {} reply(ies) pulled, {} reply(ies) relayed, {} audit event(s) forwarded",
+                pull.items(), pulled, suppliesPulled, ordersPulled, movementsApplied, customersPulled,
+                push.salesPushed(),
                 push.suppliesPushed(), push.orderConfirmationsPushed(),
-                messagePull.messages(), messagePull.replies(), messagePush.repliesPushed());
+                messagePull.messages(), messagePull.replies(), messagePush.repliesPushed(),
+                auditsPushed);
         } catch (Exception e) {
             log.warn("[DesktopSync] full sync failed: {}", e.getMessage());
             syncProgress.failed(e.getMessage());
+        }
+    }
+
+    /** Run one pull stream, logging and swallowing its failure so the rest run. */
+    private int streamCount(String label, java.util.function.IntSupplier call) {
+        try {
+            return call.getAsInt();
+        } catch (Exception e) {
+            log.warn("[DesktopSync] full sync: {} failed: {}", label, e.getMessage());
+            return 0;
+        }
+    }
+
+    /** Run one stream, logging and swallowing its failure so the rest run. */
+    private <T> T stream(String label, java.util.function.Supplier<T> call, T fallback) {
+        try {
+            return call.get();
+        } catch (Exception e) {
+            log.warn("[DesktopSync] full sync: {} failed: {}", label, e.getMessage());
+            return fallback;
         }
     }
 }

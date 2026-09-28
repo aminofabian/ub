@@ -136,6 +136,38 @@ class ReceiptRendererTest {
     }
 
     @Test
+    void escPos_testSlip_hasStructureAndNoDrawerKick() {
+        byte[] bytes = ReceiptEscPosRenderer.renderTestSlip(58);
+        String text = new String(bytes, StandardCharsets.US_ASCII);
+
+        // Initialize, the operator-facing copy, then feed + partial cut.
+        assertThat(bytes).startsWith(new byte[]{0x1B, 0x40});
+        assertThat(text).contains("Printer test");
+        assertThat(text).contains("the receipt printer works.");
+        assertThat(bytes).endsWith(new byte[]{0x1B, 0x64, 0x08, 0x1D, 0x56, 0x01});
+        // A test print must not pop the cash drawer.
+        byte[] drawerKick = new byte[]{
+                0x1B, 0x70, 0x00, 0x19, (byte) 0xFA,
+                0x1B, 0x70, 0x01, 0x19, (byte) 0xFA
+        };
+        assertThat(containsSubsequence(bytes, drawerKick)).isFalse();
+    }
+
+    /** Contiguous byte-sequence search — AssertJ's {@code doesNotContain} is element-wise. */
+    private static boolean containsSubsequence(byte[] haystack, byte[] needle) {
+        outer:
+        for (int i = 0; i + needle.length <= haystack.length; i++) {
+            for (int j = 0; j < needle.length; j++) {
+                if (haystack[i + j] != needle[j]) {
+                    continue outer;
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
+    @Test
     void pdf_weighedLine_renders() {
         ReceiptSnapshot s = sampleSnapshot(List.of(
                 new ReceiptLineRow("Beef Mince", "0.347", "kg", "1200.00", "416.40")

@@ -1,14 +1,28 @@
 package zelisline.ub.desktop.application;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+import zelisline.ub.audit.domain.AuditEvent;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
+import zelisline.ub.audit.repository.AuditEventRepository;
+import zelisline.ub.desktop.api.dto.AuditEventPushAck;
+import zelisline.ub.desktop.api.dto.AuditEventPushRequest;
 import zelisline.ub.desktop.api.dto.ShiftSyncAck;
 import zelisline.ub.desktop.api.dto.ShiftSyncRequest;
+import zelisline.ub.desktop.api.dto.StockReconcileSnapshot;
 import zelisline.ub.desktop.api.dto.SupplySyncAck;
 import zelisline.ub.desktop.api.dto.SupplySyncSnapshot;
 import zelisline.ub.desktop.api.dto.WebOrderSyncAck;
@@ -23,6 +37,7 @@ import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.platform.realtime.RealtimeBridge;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.SaleItem;
+import zelisline.ub.sales.domain.SaleLineKinds;
 import zelisline.ub.sales.domain.SalePayment;
 import zelisline.ub.sales.domain.Shift;
 import zelisline.ub.sales.repository.SaleItemRepository;
@@ -44,6 +59,8 @@ import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
 import zelisline.ub.purchasing.repository.StockMovementRepository;
 import zelisline.ub.purchasing.PurchasingConstants;
+import zelisline.ub.sales.SalesConstants;
+import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.purchasing.domain.StockMovement;
 import zelisline.ub.storefront.application.WebOrderFulfillmentService;
 
@@ -86,6 +103,7 @@ public class DesktopSyncIngestService {
     private final StockMovementRepository stockMovementRepository;
     private final WebOrderFulfillmentService webOrderFulfillmentService;
     private final ApplicationEventPublisher eventPublisher;
+    private final AuditEventRepository auditEventRepository;
 
     @Transactional
     public ShiftSyncAck ingest(String businessId, ShiftSyncRequest request) {
@@ -156,6 +174,57 @@ public class DesktopSyncIngestService {
      * account carries the till's authoritative balance. A new cloud customer
      * gets the next sequential number so the cloud's numbering stays intact.
      */
+    /**
+     * Adopt the till's authoritative stock on the cloud (one-time reconcile).
+     * For each item whose cloud count differs, set it and append a
+     * {@code desktop_reconcile} adjustment movement so the change is auditable
+     * and the till — which originated it — skips it on replay.
+     */
+    @Transactional
+    public int reconcileStock(String businessId, StockReconcileSnapshot body) {
+        if (body == null || body.branchId() == null || body.branchId().isBlank()
+                || body.items() == null) {
+            return 0;
+        }
+        String referenceId = java.util.UUID.randomUUID().toString();
+        int changed = 0;
+        for (StockReconcileSnapshot.ItemStock row : body.items()) {
+            if (row.itemId() == null || row.currentStock() == null) {
+                continue;
+            }
+            var item = itemRepository
+                .findByIdAndBusinessIdAndDeletedAtIsNull(row.itemId(), businessId)
+                .orElse(null);
+            if (item == null) {
+                continue;
+            }
+            java.math.BigDecimal current = item.getCurrentStock() == null
+                ? java.math.BigDecimal.ZERO
+                : item.getCurrentStock();
+            java.math.BigDecimal delta = row.currentStock().subtract(current);
+            if (delta.signum() == 0) {
+                continue;
+            }
+            item.setCurrentStock(row.currentStock());
+            itemRepository.save(item);
+
+            StockMovement movement = new StockMovement();
+            movement.setBusinessId(businessId);
+            movement.setBranchId(body.branchId());
+            movement.setItemId(row.itemId());
+            movement.setBatchId(null);
+            movement.setMovementType(InventoryConstants.MOVEMENT_ADJUSTMENT);
+            movement.setReferenceType(SalesConstants.STOCK_REFERENCE_TYPE_DESKTOP_RECONCILE);
+            movement.setReferenceId(referenceId);
+            movement.setQuantityDelta(delta);
+            movement.setNotes("Stock adopted from till (desktop reconcile)");
+            stockMovementRepository.save(movement);
+            changed++;
+        }
+        log.info("[DesktopSync] stock reconcile from till: {} item(s) adjusted", changed);
+        return changed;
+    }
+
     private void upsertCustomer(String businessId, ShiftSyncRequest.CustomerData data) {
         Customer customer = customerRepository
             .findByIdAndBusinessIdAndDeletedAtIsNull(data.id(), businessId)
@@ -287,6 +356,110 @@ public class DesktopSyncIngestService {
      * endpoint), after the suppliers in the same push have been upserted so
      * the {@code supplier_id} FK resolves.
      */
+    /**
+     * Ingest till-forwarded audit events into the shop's cloud audit log. The
+     * till runs its own {@code audit_events} table; forwarding keeps the cloud's
+     * unified log complete for shops that also sell online.
+     *
+     * <p>Idempotent by event id (Uuids are globally unique) — an event already
+     * on the cloud is skipped, so a retry, or the till's cursor re-send of
+     * boundary rows, never duplicates. {@code businessId} is forced from the
+     * caller's session and the till's copy ignored, so a till can never write
+     * into another tenant's log. A row missing a required field (or carrying an
+     * unknown enum value) is skipped rather than failing the batch — a poisoned
+     * row would otherwise wedge the queue.
+     */
+    @Transactional
+    public AuditEventPushAck ingestAuditEvents(String businessId, AuditEventPushRequest request) {
+        List<AuditEventPushRequest.AuditEventData> events =
+            request == null || request.events() == null ? List.of() : request.events();
+        if (events.isEmpty()) {
+            return new AuditEventPushAck(0, 0);
+        }
+        List<String> ids = events.stream()
+            .filter(d -> d != null && d.id() != null && !d.id().isBlank())
+            .map(AuditEventPushRequest.AuditEventData::id)
+            .toList();
+        Set<String> seen = new HashSet<>();
+        if (!ids.isEmpty()) {
+            auditEventRepository.findAllById(ids).forEach(e -> seen.add(e.getId()));
+        }
+        int ingested = 0;
+        int skipped = 0;
+        for (AuditEventPushRequest.AuditEventData data : events) {
+            AuditEvent event = toAuditEvent(businessId, data);
+            if (event == null || !seen.add(event.getId())) {
+                skipped++;
+                continue;
+            }
+            auditEventRepository.save(event);
+            ingested++;
+        }
+        log.info(
+            "[DesktopSync] ingested {} till audit event(s), skipped {} duplicate/invalid",
+            ingested, skipped);
+        return new AuditEventPushAck(ingested, skipped);
+    }
+
+    /**
+     * Map a forwarded row to an entity, or {@code null} when it is not
+     * forwardable (missing id, or a required string/enum). Enum strings are
+     * parsed leniently so a value this cloud build doesn't know is skipped, not
+     * thrown.
+     */
+    private static AuditEvent toAuditEvent(
+            String businessId, AuditEventPushRequest.AuditEventData d) {
+        if (d == null || d.id() == null || d.id().isBlank()) {
+            return null;
+        }
+        String eventType = blankToNull(d.eventType());
+        AuditEventCategory category = parseEnum(AuditEventCategory.class, d.category());
+        AuditEventSeverity severity = parseEnum(AuditEventSeverity.class, d.severity());
+        AuditEventActorType actorType = parseEnum(AuditEventActorType.class, d.actorType());
+        if (eventType == null || category == null || severity == null || actorType == null) {
+            return null;
+        }
+        AuditEvent e = new AuditEvent();
+        e.setId(d.id());
+        // Forced from the authenticated session — never the till's copy.
+        e.setBusinessId(businessId);
+        e.setBranchId(blankToNull(d.branchId()));
+        e.setCategory(category);
+        e.setEventType(eventType);
+        e.setSeverity(severity);
+        e.setActorId(blankToNull(d.actorId()));
+        e.setActorType(actorType);
+        e.setActorName(blankToNull(d.actorName()));
+        e.setTargetType(blankToNull(d.targetType()));
+        e.setTargetId(blankToNull(d.targetId()));
+        e.setTargetLabel(blankToNull(d.targetLabel()));
+        e.setSessionId(blankToNull(d.sessionId()));
+        e.setCorrelationId(blankToNull(d.correlationId()));
+        e.setIpAddress(blankToNull(d.ipAddress()));
+        e.setUserAgent(blankToNull(d.userAgent()));
+        e.setSource(blankToNull(d.source()));
+        e.setTerminalId(blankToNull(d.terminalId()));
+        e.setShiftId(blankToNull(d.shiftId()));
+        e.setOldState(blankToNull(d.oldState()));
+        e.setNewState(blankToNull(d.newState()));
+        e.setDiff(blankToNull(d.diff()));
+        e.setReason(blankToNull(d.reason()));
+        e.setMetadata(blankToNull(d.metadata()));
+        e.setCreatedAt(d.createdAt());
+        return e;
+    }
+
+    private static <E extends Enum<E>> E parseEnum(Class<E> type, String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return Enum.valueOf(type, raw.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
     @Transactional
     public SupplySyncAck ingestSupplies(String businessId, SupplySyncSnapshot request) {
         int ingested = 0;
@@ -486,27 +659,48 @@ public class DesktopSyncIngestService {
      * same code path a web-side confirmation uses — so the customer's
      * "order confirmed" notification fires exactly once, from one writer.
      * Transitions the cloud can't apply (unknown order, cloud already ahead)
-     * are skipped, never fatal: the till stamps its markers either way so one
-     * bad order can't wedge the queue.
+     * are recorded as processed so the till stops retrying them; a transient
+     * failure fails the whole batch instead, so the till keeps the confirmation
+     * dirty and retries rather than losing it.
      */
     @Transactional
     public WebOrderSyncAck ingestWebOrders(String businessId, WebOrderSyncSnapshot request) {
         int applied = 0;
         int skipped = 0;
+        // Ids the till may mark synced: fully applied, plus permanently
+        // un-appliable ones. A transient failure is deliberately NOT listed.
+        List<String> processedOrderIds = new ArrayList<>();
         if (request.orders() != null) {
             for (WebOrderSyncSnapshot.OrderData data : request.orders()) {
+                if (data.id() == null || data.id().isBlank()) {
+                    continue;
+                }
                 if (data.fulfillmentStatus() == null || data.fulfillmentStatus().isBlank()) {
                     skipped++;
+                    processedOrderIds.add(data.id());
                     continue;
                 }
                 try {
                     webOrderFulfillmentService.advance(businessId, data.id(), data.fulfillmentStatus());
                     applied++;
-                } catch (Exception e) {
+                    processedOrderIds.add(data.id());
+                } catch (ResponseStatusException e) {
+                    // Permanent: the cloud can't apply this transition and never
+                    // will on a retry (unknown order, unpaid, illegal move).
                     log.info(
                         "[DesktopSync] could not apply till fulfillment '{}' for order {}: {}",
-                        data.fulfillmentStatus(), data.id(), e.getMessage());
+                        data.fulfillmentStatus(), data.id(), e.getReason());
                     skipped++;
+                    processedOrderIds.add(data.id());
+                } catch (Exception e) {
+                    // Transient: fail the whole batch so the till keeps the
+                    // confirmation dirty and retries, instead of dropping it.
+                    throw new ResponseStatusException(
+                        org.springframework.http.HttpStatus.BAD_GATEWAY,
+                        "Web-order fulfillment sync failed for order " + data.id()
+                            + ": " + e.getMessage(),
+                        e
+                    );
                 }
             }
         }
@@ -515,7 +709,7 @@ public class DesktopSyncIngestService {
             applied,
             skipped
         );
-        return new WebOrderSyncAck(0, applied, skipped);
+        return new WebOrderSyncAck(0, applied, skipped, processedOrderIds);
     }
 
     private void ingestShift(String businessId, ShiftSyncRequest.ShiftData data) {
@@ -587,7 +781,12 @@ public class DesktopSyncIngestService {
                     ? zelisline.ub.sales.domain.SaleLineKinds.ITEM
                     : itemData.lineKind());
                 item.setLineLabel(itemData.lineLabel());
-                item.setItemId(itemData.itemId());
+                // Only keep an item reference the cloud actually holds: the till
+                // can sell an item it created offline, which has no cloud row,
+                // and a raw id would trip fk_si_item and roll back the whole
+                // ingest batch. Mirrors the supply path (resolveKnownItem) and
+                // the pull path, which drops unmirrored item refs too.
+                item.setItemId(resolveKnownItem(businessId, itemData.itemId()));
                 // Till batches don't exist on the cloud — referencing one would
                 // trip fk_si_batch and roll back the whole ingest. The till
                 // already omits batch ids on upload; null defensively here too.
@@ -618,5 +817,79 @@ public class DesktopSyncIngestService {
                 salePaymentRepository.save(payment);
             }
         }
+
+        // ── Cloud stock mirror ─────────────────────────────────────────
+        // The till is the stock source of truth, but the cloud mirror must
+        // still track its sales so the online storefront doesn't oversell it
+        // (see docs/scopes/DESKTOP_APP_AUDIT_SCOPE.md §4.5). Mirror the simple,
+        // batch-free pattern the supply ingest already uses: till items hold no
+        // cloud batches and negative stock is allowed, so a till sale can never
+        // wedge the ingest batch. Skipped for voided sales.
+        if (data.voidedAt() == null && data.items() != null) {
+            for (ShiftSyncRequest.SaleItemData itemData : data.items()) {
+                String kind = itemData.lineKind() == null
+                    ? SaleLineKinds.ITEM
+                    : itemData.lineKind();
+                if (itemData.itemId() == null
+                        || itemData.quantity() == null
+                        || !SaleLineKinds.ITEM.equals(kind)) {
+                    continue;
+                }
+                applySaleStockDeduction(
+                    businessId,
+                    sale.getBranchId(),
+                    sale.getId(),
+                    itemData.itemId(),
+                    itemData.quantity(),
+                    itemData.unitCost(),
+                    sale.getSoldBy()
+                );
+            }
+        }
+    }
+
+    /**
+     * Decrement the cloud's denormalized {@code current_stock} and append a
+     * {@code sale} movement for a line the till already sold. Batch-free by
+     * design (till items hold no cloud batches) and negative stock is allowed,
+     * so a missing or stale cloud count can never reject the ingest batch. A
+     * no-op when the item isn't mirrored on the cloud.
+     */
+    private void applySaleStockDeduction(
+            String businessId,
+            String branchId,
+            String saleId,
+            String itemId,
+            java.math.BigDecimal quantity,
+            java.math.BigDecimal unitCost,
+            String soldBy) {
+        if (quantity.signum() <= 0) {
+            return;
+        }
+        var item = itemRepository
+            .findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
+            .orElse(null);
+        if (item == null) {
+            return;
+        }
+        java.math.BigDecimal base = item.getCurrentStock() == null
+            ? java.math.BigDecimal.ZERO
+            : item.getCurrentStock();
+        item.setCurrentStock(base.subtract(quantity));
+        itemRepository.save(item);
+
+        StockMovement movement = new StockMovement();
+        movement.setBusinessId(businessId);
+        movement.setBranchId(branchId);
+        movement.setItemId(itemId);
+        movement.setBatchId(null);
+        movement.setMovementType(InventoryConstants.MOVEMENT_SALE);
+        movement.setReferenceType(SalesConstants.STOCK_REFERENCE_TYPE_SALE);
+        movement.setReferenceId(saleId);
+        movement.setQuantityDelta(quantity.negate());
+        movement.setUnitCost(unitCost);
+        movement.setNotes("Till sale (desktop sync)");
+        movement.setCreatedBy(soldBy);
+        stockMovementRepository.save(movement);
     }
 }

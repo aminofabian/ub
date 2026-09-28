@@ -54,6 +54,16 @@ public final class AuditEventTypes {
     public static final String USER_DELETED = "user.deleted";
     public static final String USER_ACTIVATED = "user.activated";
     public static final String USER_ANONYMISED = "user.anonymised";
+    /**
+     * Desktop master pull replaced a differing local staff password with the
+     * cloud copy (the cloud owns passwords — WP-12).
+     */
+    public static final String STAFF_PASSWORD_OVERRIDDEN = "staff.password_overridden";
+    /**
+     * Desktop master pull kept a till-set staff PIN and did not apply a
+     * differing cloud copy (the till owns PINs — WP-12).
+     */
+    public static final String STAFF_PIN_KEPT_LOCAL = "staff.pin_kept_local";
 
     // Sales & payments
     public static final String SALE_COMPLETED = "sale.completed";

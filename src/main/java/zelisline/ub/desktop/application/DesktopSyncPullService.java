@@ -37,14 +37,20 @@ import zelisline.ub.desktop.api.dto.WebOrderSyncSnapshot;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.pricing.domain.TaxRate;
 import zelisline.ub.pricing.repository.TaxRateRepository;
+import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.domain.RawPurchaseLine;
 import zelisline.ub.purchasing.domain.RawPurchaseSession;
+import zelisline.ub.purchasing.domain.StockMovement;
 import zelisline.ub.purchasing.domain.SupplierInvoice;
 import zelisline.ub.purchasing.domain.SupplierInvoiceLine;
 import zelisline.ub.purchasing.repository.RawPurchaseLineRepository;
 import zelisline.ub.purchasing.repository.RawPurchaseSessionRepository;
+import zelisline.ub.purchasing.repository.StockMovementRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
+import zelisline.ub.desktop.api.dto.InventoryMovementSyncSnapshot;
+import zelisline.ub.desktop.api.dto.CloudCustomerSyncSnapshot;
+import zelisline.ub.desktop.api.dto.StockReconcileSnapshot;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.SaleItem;
@@ -92,6 +98,9 @@ public class DesktopSyncPullService {
 
     /** Page size used when downloading cloud sales (matches the controller). */
     private static final int SALES_PAGE_SIZE = 500;
+    private static final int MOVEMENTS_PAGE_SIZE = 500;
+    /** Safety cap on pull pagination so a pathological cursor cannot loop forever. */
+    private static final int MAX_PULL_PAGES = 200;
 
     private final BusinessRepository businessRepository;
     private final BranchRepository branchRepository;
@@ -121,6 +130,8 @@ public class DesktopSyncPullService {
     private final WebOrderRepository webOrderRepository;
     private final WebOrderLineRepository webOrderLineRepository;
     private final RestClient.Builder restClientBuilder;
+    private final StockMovementRepository stockMovementRepository;
+    private final DesktopStockCursor stockCursor;
 
     @Value("${app.desktop.business-id:}")
     private String desktopBusinessId;
@@ -209,7 +220,13 @@ public class DesktopSyncPullService {
         // to mirror; keep pulling until a page comes back short (the cursor
         // advances per page, so an interrupted run resumes where it left off).
         int total = 0;
+        int pages = 0;
         while (true) {
+            if (++pages > MAX_PULL_PAGES) {
+                log.warn("[DesktopSync] cloud-sales pull hit the {} page cap; the rest follows next flush",
+                    MAX_PULL_PAGES);
+                break;
+            }
             CloudSalesSnapshot snapshot = fetchSales(client, mapping, cursor);
             List<CloudSalesSnapshot.CloudSaleData> sales = snapshot.sales();
             if (sales == null || sales.isEmpty()) {
@@ -278,7 +295,13 @@ public class DesktopSyncPullService {
         RestClient client = restClientBuilder.baseUrl(mapping.origin()).build();
 
         int total = 0;
+        int pages = 0;
         while (true) {
+            if (++pages > MAX_PULL_PAGES) {
+                log.warn("[DesktopSync] supplies pull hit the {} page cap; the rest follows next flush",
+                    MAX_PULL_PAGES);
+                break;
+            }
             SupplySyncSnapshot snapshot = fetchSupplies(client, mapping, cursor);
             List<SupplySyncSnapshot.SupplyData> supplies = snapshot.supplies();
             if (supplies == null || supplies.isEmpty()) {
@@ -389,11 +412,16 @@ public class DesktopSyncPullService {
                 insertCloudSupply(localId, data);
                 inserted++;
             } catch (Exception e) {
-                log.warn(
-                    "[DesktopSync] skipped supply {} (supplier={}): {}",
-                    data.sessionId(),
-                    data.supplierId(),
-                    e.getMessage()
+                // Do NOT swallow: the caller advances the cursor to this page's
+                // max updatedAt, and the cloud query is `updatedAt >= cursor`,
+                // so a swallowed failure is never re-fetched — permanent silent
+                // loss. Failing the page rolls back this page's transaction and
+                // keeps the cursor, so the whole page is retried on the next
+                // flush — the same policy the sales pull already uses.
+                throw new IllegalStateException(
+                    "supply pull failed for session " + data.sessionId()
+                        + " (supplier=" + data.supplierId() + "): " + e.getMessage(),
+                    e
                 );
             }
         }
@@ -576,7 +604,13 @@ public class DesktopSyncPullService {
         RestClient client = restClientBuilder.baseUrl(mapping.origin()).build();
 
         int total = 0;
+        int pages = 0;
         while (true) {
+            if (++pages > MAX_PULL_PAGES) {
+                log.warn("[DesktopSync] web-orders pull hit the {} page cap; the rest follows next flush",
+                    MAX_PULL_PAGES);
+                break;
+            }
             WebOrderSyncSnapshot snapshot = fetchWebOrders(client, mapping, cursor);
             List<WebOrderSyncSnapshot.OrderData> orders = snapshot.orders();
             if (orders == null || orders.isEmpty()) {
@@ -1256,17 +1290,22 @@ public class DesktopSyncPullService {
         int items = 0;
         List<MasterDataSnapshot.ItemData> variantLinks = new ArrayList<>();
         for (MasterDataSnapshot.ItemData d : snapshot.items()) {
-            Item item = itemRepository
+            java.util.Optional<Item> existing = itemRepository
                 .findById(d.id())
-                .filter(row -> localId.equals(row.getBusinessId()))
-                .orElseGet(() -> {
-                    Item created = new Item();
-                    created.setId(d.id());
-                    created.setBusinessId(localId);
-                    return created;
-                });
+                .filter(row -> localId.equals(row.getBusinessId()));
+            // The cloud value is only a valid stock baseline for an item the
+            // till has never held (see applyItem). For items the till already
+            // knows, its own count wins — see "one stock, one ledger" in
+            // docs/scopes/DESKTOP_APP_AUDIT_SCOPE.md §4.5.
+            boolean brandNew = existing.isEmpty();
+            Item item = existing.orElseGet(() -> {
+                Item created = new Item();
+                created.setId(d.id());
+                created.setBusinessId(localId);
+                return created;
+            });
             item.setDeletedAt(null);
-            applyItem(item, d, fallbackItemTypeId, itemTypeIds);
+            applyItem(item, d, fallbackItemTypeId, itemTypeIds, brandNew);
             itemRepository.save(item);
             items++;
             syncProgress.applyProgress(items);
@@ -1597,11 +1636,349 @@ public class DesktopSyncPullService {
         c.setActive(d.active());
     }
 
-    private static void applyItem(
+    /**
+     * Apply a cloud snapshot to a local item.
+     *
+     * <p><b>Stock is deliberately not taken from the snapshot for items the
+     * till already knows.</b> The till decrements stock locally on every sale,
+     * and the cloud ingest does not (yet) post stock movements for till sales,
+     * so writing the cloud's value on each master pull would raise the local
+     * count back up after every sale — the inventory feedback loop in
+     * docs/scopes/DESKTOP_APP_AUDIT_SCOPE.md §4.5. {@code brandNew} is the one
+     * case where the cloud value is a valid baseline: an item the till has
+     * never held.
+     *
+     * <p>Consequence: a cloud-side stock edit to an <em>existing</em> item does
+     * not reach the till today. Propagating those edits needs the cloud ingest
+     * to post stock movements plus a movement/ledger replay on the pull —
+     * tracked as a follow-up in the audit scope, not solved by this method.
+     */
+    /**
+     * Pull the cloud customer-directory delta: customers (with phones + live
+     * credit) changed since the till's customer cursor, so a customer or credit
+     * edit with no accompanying sale still reaches the till (WP-11).
+     */
+    public int pullCustomers() {
+        String localId = desktopBusinessId == null ? "" : desktopBusinessId.trim();
+        CloudSyncSession.Session mapping = cloudSyncSession.load().orElse(null);
+        if (mapping == null || localId.isEmpty()) {
+            throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "This PC is not connected to an online shop yet"
+            );
+        }
+        java.time.Instant cursor = mapping.lastCustomersPullAt() != null
+            ? mapping.lastCustomersPullAt()
+            : java.time.Instant.EPOCH;
+        RestClient client = restClientBuilder.baseUrl(mapping.origin()).build();
+
+        int total = 0;
+        int pages = 0;
+        while (true) {
+            if (++pages > MAX_PULL_PAGES) {
+                log.warn("[DesktopSync] customer pull hit the {} page cap; the rest follows next flush",
+                    MAX_PULL_PAGES);
+                break;
+            }
+            CloudCustomerSyncSnapshot snapshot = fetchCustomers(client, mapping, cursor);
+            List<CloudSalesSnapshot.CloudCustomerData> customers = snapshot.customers();
+            if (customers == null || customers.isEmpty()) {
+                break;
+            }
+            Integer upserted = transactionTemplate.execute(status -> {
+                for (CloudSalesSnapshot.CloudCustomerData c : customers) {
+                    upsertCloudCustomer(localId, c);
+                }
+                return customers.size();
+            });
+            total += upserted == null ? 0 : upserted;
+
+            java.time.Instant next = snapshot.nextCursor();
+            if (next == null || !next.isAfter(cursor)) {
+                break; // no progress — stop rather than spin on the same page
+            }
+            cursor = next;
+            cloudSyncSession.persistLastCustomersPullAt(mapping, cursor);
+            if (customers.size() < SALES_PAGE_SIZE) {
+                break;
+            }
+        }
+        if (total > 0) {
+            log.info("[DesktopSync] customer delta: {} customer(s) refreshed from {}",
+                total, mapping.origin());
+        }
+        return total;
+    }
+
+    private CloudCustomerSyncSnapshot fetchCustomers(
+            RestClient client,
+            CloudSyncSession.Session mapping,
+            java.time.Instant since) {
+        try {
+            CloudCustomerSyncSnapshot snapshot = client
+                .get()
+                .uri(uriBuilder -> uriBuilder
+                    .path("/api/v1/desktop/sync/customers")
+                    .queryParam("since", since.toString())
+                    .queryParam("limit", SALES_PAGE_SIZE)
+                    .build())
+                .header("Authorization", "Bearer " + mapping.accessToken())
+                .header("X-Tenant-Id", mapping.cloudBusinessId())
+                .accept(MediaType.APPLICATION_JSON)
+                .retrieve()
+                .body(CloudCustomerSyncSnapshot.class);
+            return snapshot == null
+                ? new CloudCustomerSyncSnapshot(List.of(), null)
+                : snapshot;
+        } catch (Exception e) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_GATEWAY,
+                "Could not download customers (" + e.getMessage() + ")",
+                e
+            );
+        }
+    }
+
+    /**
+     * Replay cloud-origin stock movements onto the till: online-storefront
+     * sales, cloud purchases, stocktakes and manual adjustments. The till is
+     * the source of truth for what it sold, so movements it originated (a sale
+     * or a supply it already applied locally) are skipped. Idempotent: each
+     * applied movement is mirrored into the local {@code stock_movements} table
+     * under the cloud's id, so a re-run cannot double-count.
+     *
+     * <p>On the first run after this feature ships there is no cursor; it is
+     * seeded to now rather than replaying history the till already absorbed at
+     * connect (which would double-count).
+     */
+    public int pullInventoryMovements() {
+        String localId = desktopBusinessId == null ? "" : desktopBusinessId.trim();
+        CloudSyncSession.Session mapping = cloudSyncSession.load().orElse(null);
+        if (mapping == null || localId.isEmpty()) {
+            throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "This PC is not connected to an online shop yet"
+            );
+        }
+        RestClient client = restClientBuilder.baseUrl(mapping.origin()).build();
+
+        DesktopStockCursor.Cursor cursor = stockCursor.load().orElse(null);
+        if (cursor == null) {
+            stockCursor.save(new DesktopStockCursor.Cursor(java.time.Instant.now(), ""));
+            return 0;
+        }
+
+        int total = 0;
+        int pages = 0;
+        while (true) {
+            if (++pages > MAX_PULL_PAGES) {
+                log.warn("[DesktopSync] stock-movements pull hit the {} page cap; the rest follows next flush",
+                    MAX_PULL_PAGES);
+                break;
+            }
+            InventoryMovementSyncSnapshot snapshot =
+                fetchInventoryMovements(client, mapping, cursor);
+            List<InventoryMovementSyncSnapshot.MovementData> movements = snapshot.movements();
+            if (movements == null || movements.isEmpty()) {
+                break;
+            }
+            Integer applied = transactionTemplate.execute(status -> {
+                int n = 0;
+                for (InventoryMovementSyncSnapshot.MovementData m : movements) {
+                    if (applyCloudMovement(localId, m)) {
+                        n++;
+                    }
+                }
+                return n;
+            });
+            total += applied == null ? 0 : applied;
+
+            InventoryMovementSyncSnapshot.MovementData last = movements.get(movements.size() - 1);
+            cursor = new DesktopStockCursor.Cursor(last.createdAt(), last.id());
+            stockCursor.save(cursor);
+
+            if (movements.size() < MOVEMENTS_PAGE_SIZE) {
+                break;
+            }
+        }
+        if (total > 0) {
+            log.info("[DesktopSync] applied {} cloud stock movement(s) from {}",
+                total, mapping.origin());
+        }
+        return total;
+    }
+
+    private InventoryMovementSyncSnapshot fetchInventoryMovements(
+            RestClient client,
+            CloudSyncSession.Session mapping,
+            DesktopStockCursor.Cursor cursor) {
+        try {
+            InventoryMovementSyncSnapshot snapshot = client
+                .get()
+                .uri(uriBuilder -> uriBuilder
+                    .path("/api/v1/desktop/sync/inventory-movements")
+                    .queryParam("since", cursor.createdAt().toString())
+                    .queryParam("sinceId", cursor.id() == null ? "" : cursor.id())
+                    .queryParam("limit", MOVEMENTS_PAGE_SIZE)
+                    .build())
+                .header("Authorization", "Bearer " + mapping.accessToken())
+                .header("X-Tenant-Id", mapping.cloudBusinessId())
+                .retrieve()
+                .body(InventoryMovementSyncSnapshot.class);
+            return snapshot == null ? new InventoryMovementSyncSnapshot(List.of()) : snapshot;
+        } catch (Exception e) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_GATEWAY,
+                "Could not pull stock movements: " + e.getMessage(),
+                e
+            );
+        }
+    }
+
+    /**
+     * Apply one cloud movement to the local stock. Returns {@code true} when it
+     * changed something. No-ops (returns {@code false}) for movements the till
+     * originated, movements already applied (their id is already in the local
+     * table), and movements for items not mirrored locally.
+     */
+    boolean applyCloudMovement(String localId, InventoryMovementSyncSnapshot.MovementData m) {
+        if (isTillOrigin(localId, m)) {
+            return false;
+        }
+        if (m.id() != null && stockMovementRepository.existsById(m.id())) {
+            return false; // already applied on an earlier run
+        }
+        Item item = itemRepository
+            .findByIdAndBusinessIdAndDeletedAtIsNull(m.itemId(), localId)
+            .orElse(null);
+        if (item == null) {
+            // Item not mirrored (or deleted) on this till — nothing to adjust.
+            // Its count is seeded from the cloud if it is created here later.
+            return false;
+        }
+        if (m.quantityDelta() != null) {
+            BigDecimal base = item.getCurrentStock() == null
+                ? BigDecimal.ZERO
+                : item.getCurrentStock();
+            item.setCurrentStock(base.add(m.quantityDelta()));
+            itemRepository.save(item);
+        }
+
+        StockMovement mirror = new StockMovement();
+        mirror.setId(m.id());
+        mirror.setBusinessId(localId);
+        mirror.setBranchId(m.branchId());
+        mirror.setItemId(m.itemId());
+        mirror.setBatchId(null);
+        mirror.setMovementType(m.movementType());
+        mirror.setReferenceType(m.referenceType());
+        mirror.setReferenceId(m.referenceId());
+        mirror.setQuantityDelta(m.quantityDelta() == null ? BigDecimal.ZERO : m.quantityDelta());
+        mirror.setNotes("From cloud (desktop sync)");
+        stockMovementRepository.save(mirror);
+        return true;
+    }
+
+    /**
+     * True when the movement was created by this till, so replaying it would
+     * double-count: a sale the till already deducted locally, or a supply
+     * receipt it already applied locally.
+     */
+    private boolean isTillOrigin(String localId, InventoryMovementSyncSnapshot.MovementData m) {
+        String refId = m.referenceId();
+        if (refId == null || refId.isBlank() || m.referenceType() == null) {
+            return false;
+        }
+        if (SalesConstants.STOCK_REFERENCE_TYPE_SALE.equals(m.referenceType())) {
+            return saleRepository.findByIdAndBusinessId(refId, localId).isPresent();
+        }
+        if (PurchasingConstants.STOCK_REF_RAW_LINE.equals(m.referenceType())) {
+            return rawPurchaseLineRepository.existsById(refId);
+        }
+        // A reconcile the till pushed: it originated it, the cloud adopted it.
+        if (SalesConstants.STOCK_REFERENCE_TYPE_DESKTOP_RECONCILE.equals(m.referenceType())) {
+            return true;
+        }
+        return false;
+    }
+
+    /** True once the till's authoritative stock has been adopted by the cloud. */
+    public boolean isStockReconciled() {
+        return stockCursor.isReconciled();
+    }
+
+    public void markStockReconciled() {
+        stockCursor.markReconciled();
+    }
+
+    /**
+     * One-time reconcile: push the till's authoritative per-item stock to the
+     * cloud so a mirror that drifted before desktop stock sync existed is
+     * corrected (see {@link StockReconcileSnapshot}). Batched; returns how many
+     * items the cloud adjusted.
+     */
+    public int reconcileStockToCloud() {
+        String localId = desktopBusinessId == null ? "" : desktopBusinessId.trim();
+        CloudSyncSession.Session mapping = cloudSyncSession.load().orElse(null);
+        if (mapping == null || localId.isEmpty()) {
+            throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "This PC is not connected to an online shop yet"
+            );
+        }
+        Branch branch = branchRepository
+            .findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(localId)
+            .stream().findFirst().orElse(null);
+        if (branch == null) {
+            return 0;
+        }
+        List<Item> items = itemRepository.findByBusinessIdAndDeletedAtIsNull(localId);
+        if (items.isEmpty()) {
+            return 0;
+        }
+        RestClient client = restClientBuilder.baseUrl(mapping.origin()).build();
+        int adjusted = 0;
+        for (int i = 0; i < items.size(); i += MOVEMENTS_PAGE_SIZE) {
+            List<Item> chunk = items.subList(i, Math.min(i + MOVEMENTS_PAGE_SIZE, items.size()));
+            List<StockReconcileSnapshot.ItemStock> rows = chunk.stream()
+                .map(it -> new StockReconcileSnapshot.ItemStock(it.getId(), it.getCurrentStock()))
+                .toList();
+            adjusted += postReconcile(client, mapping, branch.getId(), rows);
+        }
+        return adjusted;
+    }
+
+    private int postReconcile(
+            RestClient client,
+            CloudSyncSession.Session mapping,
+            String branchId,
+            List<StockReconcileSnapshot.ItemStock> rows) {
+        try {
+            Integer adjusted = client
+                .post()
+                .uri("/api/v1/desktop/sync/stock-reconcile")
+                .header("Authorization", "Bearer " + mapping.accessToken())
+                .header("X-Tenant-Id", mapping.cloudBusinessId())
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .body(new StockReconcileSnapshot(branchId, rows))
+                .retrieve()
+                .body(Integer.class);
+            return adjusted == null ? 0 : adjusted;
+        } catch (Exception e) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_GATEWAY,
+                "Could not reconcile stock: " + e.getMessage(),
+                e
+            );
+        }
+    }
+
+    static void applyItem(
             Item i,
             MasterDataSnapshot.ItemData d,
             String fallbackItemTypeId,
-            java.util.Map<String, String> itemTypeIds) {
+            java.util.Map<String, String> itemTypeIds,
+            boolean brandNew) {
         i.setSku(d.sku());
         i.setBarcode(d.barcode());
         i.setPluCode(d.pluCode());
@@ -1610,7 +1987,10 @@ public class DesktopSyncPullService {
         i.setCategoryId(d.categoryId());
         i.setUnitType(d.unitType() == null ? "each" : d.unitType());
         i.setStocked(d.stocked());
-        i.setCurrentStock(d.currentStock() == null ? BigDecimal.ZERO : d.currentStock());
+        if (brandNew) {
+            i.setCurrentStock(
+                d.currentStock() == null ? BigDecimal.ZERO : d.currentStock());
+        }
         i.setPackagingUnitName(d.packagingUnitName());
         i.setPackagingUnitQty(d.packagingUnitQty());
         i.setBundlePrice(d.bundlePrice());

@@ -6,6 +6,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.sales.receipt.ReceiptEscPosRenderer;
 import zelisline.ub.sales.receipt.SaleReceiptService;
 import zelisline.ub.storefront.application.WebOrderReceiptService;
 
@@ -34,5 +35,25 @@ public class DesktopDeviceService {
 
     public void kickCashDrawer() {
         deviceBridge.openCashDrawer();
+    }
+
+    /** Settings → Desktop → "Print test receipt" — a short slip, no drawer kick. */
+    public void printTestSlip(int widthMm) {
+        deviceBridge.printEscPos(ReceiptEscPosRenderer.renderTestSlip(widthMm));
+    }
+
+    /** Whether the local device sidecar is reachable, for the printer status pill. */
+    public DeviceBridge.BridgeHealth deviceHealth() {
+        return deviceBridge.health();
+    }
+
+    /** Settings → Desktop → "Restart backend" — the shell reboots the stack. */
+    public void restartBackend() {
+        deviceBridge.restartBackend();
+    }
+
+    /** Settings → Desktop → "Open data folder" — opens APP_DATA in the file manager. */
+    public void openDataFolder() {
+        deviceBridge.openDataFolder();
     }
 }

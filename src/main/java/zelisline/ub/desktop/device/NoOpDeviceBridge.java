@@ -22,4 +22,19 @@ public class NoOpDeviceBridge implements DeviceBridge {
     public void openCashDrawer() {
         log.debug("device bridge disabled — drawer kick ignored");
     }
+
+    @Override
+    public void restartBackend() {
+        log.debug("device bridge disabled — restart request ignored");
+    }
+
+    @Override
+    public void openDataFolder() {
+        log.debug("device bridge disabled — open data folder ignored");
+    }
+
+    @Override
+    public BridgeHealth health() {
+        return new BridgeHealth(false, null, null, "Device bridge disabled");
+    }
 }

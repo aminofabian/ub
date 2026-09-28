@@ -1,6 +1,8 @@
 package zelisline.ub.configuration;
 
+import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
+import java.net.InetAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -17,8 +19,12 @@ import org.springframework.core.io.Resource;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.authorization.AuthorizationDecision;
+import org.springframework.security.authorization.AuthorizationManager;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.intercept.RequestAuthorizationContext;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
 import org.springframework.security.web.util.matcher.NegatedRequestMatcher;
 import org.springframework.security.web.util.matcher.OrRequestMatcher;
@@ -156,30 +162,41 @@ public class DesktopWebConfig implements WebMvcConfigurer {
     }
 
     /**
-     * Path patterns that the desktop chain permits even though they live under
-     * {@code /api/**}. The first-run wizard's setup endpoints (§9 of
-     * {@code DESKTOP_INSTALLATION.md}) must be reachable before any user exists,
-     * so the cloud chain's JWT filter would 401 every call.
-     *
-     * <p>The endpoints are idempotent on the service side ({@code 409} after
-     * setup completes), so leaving them open after first run is safe — there
-     * is no enumeration risk because the only data they expose is the
-     * configured {@code app.desktop.business-id}, which is per-install.
+     * Pre-auth {@code /api/**} endpoints the desktop chain permits from any
+     * device — they are polled before a user exists (the router, the login
+     * screen, the shell's license check) and none of them mutate state, so the
+     * cloud chain's JWT requirement would only break the first-run experience.
      */
     private static final List<String> DESKTOP_PUBLIC_API_PATTERNS = List.of(
-        "/api/v1/desktop/setup",
-        "/api/v1/desktop/setup/**",
-        // "Sign in with my online shop" — must be reachable before any local
-        // user exists, same as the setup wizard.
-        "/api/v1/desktop/connect",
+        // Read-only status probes polled by the router + login screen before
+        // any user exists. These do not mutate state, so they stay reachable
+        // from any device on the shop LAN (a second register needs to see the
+        // configured business id to render the login page).
+        "/api/v1/desktop/setup/status",
+        // License status is polled by the shell + frontend on every page load
+        // before a user logs in, so it must be unauthenticated.
+        "/api/v1/license/status",
         // Reconnect refreshes the cloud session when it has expired, so the
         // frontend sends it without an Authorization header (requiresAuth:
         // false). Without this exemption the cloud chain's /api/** require
         // auth and the reconnect POST 403s before reaching the controller.
         "/api/v1/desktop/reconnect",
-        // License status is polled by the shell + frontend on every page load
-        // before a user logs in, so it must be unauthenticated.
-        "/api/v1/license/status"
+        "/api/v1/desktop/reconnect/refresh"
+    );
+
+    /**
+     * Pre-auth endpoints that mutate the install or fetch cloud credentials.
+     * Reachable <em>only</em> from loopback: when LAN sharing is on the JVM
+     * binds {@code 0.0.0.0}, so without this a peer on the same Wi-Fi could
+     * factory-reset the till, re-provision it against an attacker's shop, or
+     * (via {@code connect}'s caller-supplied {@code origin}) turn it into an
+     * SSRF pivot. The first-run wizard and the "set up again" action both run
+     * on the till itself, so loopback is sufficient.
+     */
+    private static final List<String> DESKTOP_LOOPBACK_API_PATTERNS = List.of(
+        "/api/v1/desktop/setup",
+        "/api/v1/desktop/setup/reset",
+        "/api/v1/desktop/connect"
     );
 
     /**
@@ -190,7 +207,15 @@ public class DesktopWebConfig implements WebMvcConfigurer {
      */
     @Bean
     public RestClient.Builder restClientBuilder() {
-        return RestClient.builder();
+        // The sync client talks to a remote cloud that can half-open; with no
+        // timeouts a stalled connection blocks whichever thread called it (the
+        // scheduler, an @Async listener, or the full-sync worker) indefinitely.
+        // MockRestServiceServer overrides this factory in tests, so they are
+        // unaffected.
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(java.time.Duration.ofSeconds(10));
+        factory.setReadTimeout(java.time.Duration.ofSeconds(60));
+        return RestClient.builder().requestFactory(factory);
     }
 
     @Bean
@@ -216,17 +241,24 @@ public class DesktopWebConfig implements WebMvcConfigurer {
                 .map(RequestMatcher.class::cast)
                 .toList()
         );
-        // The shell stops the JVM with POST /actuator/shutdown (enabled in
-        // application-desktop.properties). It is loopback-only and callers
-        // can't spoof it, but it lives under /actuator/** so the cloud chain
-        // would 403 it — leaving Windows no clean shutdown path (the signal
-        // fallback is TerminateProcess, which can kill the JVM mid-Flyway
-        // migration). Permit the path here, desktop-only.
-        RequestMatcher actuatorShutdownMatcher = pp.matcher("/actuator/shutdown");
+        RequestMatcher desktopLoopbackApiMatcher = new OrRequestMatcher(
+            DESKTOP_LOOPBACK_API_PATTERNS.stream()
+                .map(pp::matcher)
+                .map(RequestMatcher.class::cast)
+                .toList()
+        );
+        // NOTE: /actuator/shutdown is deliberately NOT permitted by this
+        // chain. When LAN sharing is on the JVM binds 0.0.0.0, so a blanket
+        // permit here would let any host on the Wi-Fi kill the till. Leaving
+        // the path out of this (higher-precedence) chain lets the cloud
+        // chain's loopback-only rule apply instead:
+        //   POST /actuator/shutdown -> hasIpAddress('127.0.0.1') or ::1
+        // The shell's own shutdown POST targets 127.0.0.1, so it still passes;
+        // a remote caller now gets 403.
         RequestMatcher combined = new OrRequestMatcher(
             uiMatcher,
             desktopPublicApiMatcher,
-            actuatorShutdownMatcher
+            desktopLoopbackApiMatcher
         );
 
         http.securityMatcher(combined)
@@ -238,8 +270,46 @@ public class DesktopWebConfig implements WebMvcConfigurer {
             .httpBasic(AbstractHttpConfigurer::disable)
             .formLogin(AbstractHttpConfigurer::disable)
             .logout(AbstractHttpConfigurer::disable)
-            .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
+            .authorizeHttpRequests(auth ->
+                auth
+                    .requestMatchers(desktopLoopbackApiMatcher)
+                    .access(loopbackOnly())
+                    .anyRequest()
+                    .permitAll()
+            );
         return http.build();
+    }
+
+    /**
+     * Authorization rule that allows a request only when it arrived over the
+     * loopback interface. Used to keep the install-mutating pre-auth endpoints
+     * (setup / reset / connect) unreachable from the shop LAN.
+     */
+    private static AuthorizationManager<RequestAuthorizationContext> loopbackOnly() {
+        return (authentication, context) ->
+            new AuthorizationDecision(isLoopbackRequest(context.getRequest()));
+    }
+
+    /**
+     * True when {@code request}'s socket peer is the loopback address.
+     * Handles IPv4, IPv6 ({@code ::1}) and IPv4-mapped IPv6
+     * ({@code ::ffff:127.0.0.1}) forms. There is no reverse proxy in front of
+     * the bundled Tomcat, so {@code getRemoteAddr()} is the real peer.
+     */
+    static boolean isLoopbackRequest(HttpServletRequest request) {
+        String remote = request.getRemoteAddr();
+        if (remote == null || remote.isBlank()) {
+            return false;
+        }
+        String addr = remote;
+        if (addr.regionMatches(true, 0, "::ffff:", 0, 7)) {
+            addr = addr.substring(7);
+        }
+        try {
+            return InetAddress.getByName(addr).isLoopbackAddress();
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     @Override

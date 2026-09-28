@@ -1,5 +1,6 @@
 package zelisline.ub.purchasing.repository;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 
@@ -16,6 +17,26 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, St
             String businessId,
             String referenceType,
             String referenceId
+    );
+
+    /**
+     * Movements created after the till's cursor, in a stable
+     * {@code (createdAt, id)} order, for the desktop stock-movement replay.
+     * The {@code (createdAt, id)} tuple keeps paging exact when many movements
+     * share a timestamp.
+     */
+    @Query("""
+            SELECT m FROM StockMovement m
+             WHERE m.businessId = :businessId
+               AND (m.createdAt > :since
+                    OR (m.createdAt = :since AND m.id > :sinceId))
+             ORDER BY m.createdAt ASC, m.id ASC
+            """)
+    List<StockMovement> findForDesktopSync(
+            @Param("businessId") String businessId,
+            @Param("since") Instant since,
+            @Param("sinceId") String sinceId,
+            Pageable pageable
     );
 
     List<StockMovement> findByBatchIdAndMovementType(String batchId, String movementType);

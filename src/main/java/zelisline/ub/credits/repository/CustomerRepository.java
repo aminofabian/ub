@@ -47,6 +47,27 @@ public interface CustomerRepository extends JpaRepository<Customer, String> {
              order by c.updatedAt asc""")
     List<Customer> findDirtyForDesktopSync(@Param("businessId") String businessId);
 
+    /**
+     * Customers changed at/after {@code since} by any part of their record —
+     * the row, a phone, or the credit account — for the desktop customer
+     * delta. Ordered so paging is stable.
+     */
+    @Query("""
+            select c from Customer c
+             where c.businessId = :businessId
+               and c.deletedAt is null
+               and (c.updatedAt >= :since
+                    or exists (select 1 from CreditAccount a
+                                where a.customerId = c.id and a.updatedAt >= :since)
+                    or exists (select 1 from CustomerPhone p
+                                where p.customerId = c.id and p.createdAt >= :since))
+             order by c.updatedAt asc, c.id asc
+            """)
+    List<Customer> findChangedSince(
+            @Param("businessId") String businessId,
+            @Param("since") Instant since,
+            Pageable pageable);
+
     Optional<Customer> findByBusinessIdAndMpesaIdentityKeyAndDeletedAtIsNull(
             String businessId, String mpesaIdentityKey);
 

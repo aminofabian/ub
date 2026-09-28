@@ -3,12 +3,20 @@ package zelisline.ub.desktop.application;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.desktop.api.dto.MasterDataSnapshot;
 import zelisline.ub.identity.application.IdentityService;
 import zelisline.ub.identity.domain.Role;
@@ -43,6 +51,16 @@ public class DesktopStaffSyncService {
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final PasswordEncoder passwordEncoder;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
+
+    /**
+     * Last cloud PIN hash this till refused, keyed by user id. A persistent
+     * till-vs-cloud PIN divergence is logged when it first appears (or when the
+     * cloud value changes) rather than on every 30-minute master pull. In-memory
+     * only: a restart may re-emit once, which is acceptable.
+     */
+    private final ConcurrentHashMap<String, String> refusedCloudPins = new ConcurrentHashMap<>();
 
     /**
      * Upsert every cloud staff row. Existing users get identity + role refreshed
@@ -133,27 +151,124 @@ public class DesktopStaffSyncService {
     }
 
     /**
-     * Apply cloud password/PIN hashes. Hashes are bcrypt/argon strings from the
-     * cloud row — never re-encoded. Falls back to a generated password only when
-     * creating a row that has neither hash (satisfies chk_users_credentials).
+     * Apply cloud password/PIN hashes under the documented authority policy
+     * (docs/scopes/DESKTOP_APP_AUDIT_SCOPE.md §4.5, WP-12):
+     *
+     * <ul>
+     *   <li><b>Password — cloud wins.</b> The online shop owns passwords, so a
+     *       cloud hash always replaces the local one.</li>
+     *   <li><b>PIN — till wins.</b> A PIN set on this install (identifiable by a
+     *       present {@code pinEnc}, which is cleared whenever a PIN is mirrored
+     *       from the cloud) is never clobbered by the cloud copy — so "my PIN
+     *       change sticks" is true within the 30-minute sync window. A till that
+     *       has never had a local PIN adopts the cloud one.</li>
+     * </ul>
+     *
+     * Every genuine conflict is written to the unified audit log (STAFF
+     * category, source {@code desktop_sync}, severity WARN so it also surfaces
+     * in the failures view): the cloud password override once per divergence,
+     * and the till-kept PIN once per distinct cloud PIN rather than on every
+     * master pull. No credential hashes are logged.
+     *
+     * Hashes are bcrypt/argon strings from the cloud row — never re-encoded.
+     * Falls back to a generated password only when creating a row that has
+     * neither hash (satisfies chk_users_credentials).
      */
     private void applyCredentials(User user, MasterDataSnapshot.StaffData d, boolean created) {
         String passwordHash = blankToNull(d.passwordHash());
         String pinHash = blankToNull(d.pinHash());
         if (passwordHash != null) {
+            String localPassword = blankToNull(user.getPasswordHash());
+            if (localPassword != null && !localPassword.equals(passwordHash)) {
+                publishCredentialConflict(
+                    user,
+                    AuditEventTypes.STAFF_PASSWORD_OVERRIDDEN,
+                    AuditEventSeverity.WARN,
+                    "password",
+                    "cloud");
+            }
             user.setPasswordHash(passwordHash);
         }
         if (pinHash != null) {
-            user.setPinHash(pinHash);
-            // Cloud pinEnc uses a different encryption key — clear any stale
-            // local reveal ciphertext so admins re-set the PIN to view it.
-            user.setPinEnc(null);
+            if (hasTillSetPin(user)) {
+                // Local PIN is authoritative; leave it (and its reveal ciphertext)
+                // alone rather than overwriting with the cloud copy.
+                if (!pinHash.equals(user.getPinHash())) {
+                    if (!pinHash.equals(refusedCloudPins.put(user.getId(), pinHash))) {
+                        publishCredentialConflict(
+                            user,
+                            AuditEventTypes.STAFF_PIN_KEPT_LOCAL,
+                            AuditEventSeverity.WARN,
+                            "pin",
+                            "till");
+                    }
+                    if (log.isDebugEnabled()) {
+                        log.debug(
+                            "[DesktopSync] keeping till-set PIN for user {} ({}) — cloud PIN differs",
+                            user.getId(), user.getEmail());
+                    }
+                } else {
+                    // Cloud now agrees — drop the marker so a later divergence re-logs.
+                    refusedCloudPins.remove(user.getId());
+                }
+            } else {
+                user.setPinHash(pinHash);
+                // Cloud pinEnc uses a different encryption key — clear any stale
+                // local reveal ciphertext so admins re-set the PIN to view it.
+                user.setPinEnc(null);
+                refusedCloudPins.remove(user.getId());
+            }
         }
         if (created
                 && user.getPasswordHash() == null
                 && user.getPinHash() == null) {
             user.setPasswordHash(passwordEncoder.encode(generatePassword()));
         }
+    }
+
+    /**
+     * Record the outcome of a till-vs-cloud staff credential conflict (WP-12).
+     * Only which side won and for which credential is logged — never a hash.
+     */
+    private void publishCredentialConflict(
+            User user,
+            String eventType,
+            AuditEventSeverity severity,
+            String credential,
+            String authority) {
+        try {
+            auditEventPublisher.publish(auditEventBuilder.builder(
+                    AuditEventCategory.STAFF,
+                    eventType,
+                    severity)
+                .businessId(user.getBusinessId())
+                .actor(null, AuditEventActorType.SYSTEM)
+                .target("user", user.getId())
+                .targetLabel(user.getEmail())
+                .source("desktop_sync")
+                .reason("cloud".equals(authority)
+                    ? "Cloud credential applied over a differing local value"
+                    : "Till-set credential kept; the cloud copy was not applied")
+                .metadata(Map.of("credential", credential, "authority", authority))
+                .build());
+        } catch (RuntimeException e) {
+            // An audit failure must never break the staff sync.
+            log.warn(
+                "[DesktopSync] failed to publish staff credential audit event {}",
+                eventType, e);
+        }
+    }
+
+    /**
+     * A PIN was set on this till when both a hash and its reveal ciphertext are
+     * present — {@code applyPin} writes both, while mirroring a cloud PIN clears
+     * the ciphertext. Used as the "till wins for PIN" marker.
+     */
+    private static boolean hasTillSetPin(User user) {
+        return user.getPinHash() != null
+            && !user.getPinHash().isBlank()
+            && user.getPinEnc() != null
+            && !user.getPinEnc().isBlank();
     }
 
     private static String blankToNull(String value) {

@@ -5,10 +5,14 @@ import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -24,7 +28,10 @@ import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.domain.UserStatus;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.notifications.NotificationTypes;
+import zelisline.ub.notifications.application.NotificationService;
 import zelisline.ub.platform.realtime.RealtimeBridge;
+import zelisline.ub.platform.realtime.SessionRegistry;
 import zelisline.ub.purchasing.api.dto.TillPrintDtos.DispatchTillPrintRequest;
 import zelisline.ub.purchasing.api.dto.TillPrintDtos.DispatchTillPrintResponse;
 import zelisline.ub.purchasing.api.dto.TillPrintDtos.TillPrintCashierResponse;
@@ -32,12 +39,15 @@ import zelisline.ub.purchasing.api.dto.TillPrintDtos.TillPrintClaimResponse;
 import zelisline.ub.purchasing.api.dto.TillPrintDtos.TillPrintPendingResponse;
 import zelisline.ub.purchasing.api.dto.TillPrintDtos.TillPrintSlip;
 import zelisline.ub.purchasing.api.dto.TillPrintDtos.TillPrintSlipLine;
+import zelisline.ub.purchasing.api.dto.TillPrintDtos.TillPrintTargetStatus;
 import zelisline.ub.purchasing.domain.TillPrintJob;
 import zelisline.ub.purchasing.repository.TillPrintJobRepository;
 
 @Service
 @RequiredArgsConstructor
 public class TillPrintService {
+
+    private static final Logger log = LoggerFactory.getLogger(TillPrintService.class);
 
     public static final String KIND_ORDER = "order";
     public static final String KIND_RECEIPT = "receipt";
@@ -51,6 +61,8 @@ public class TillPrintService {
     private final RoleRepository roleRepository;
     private final TillPrintJobRepository tillPrintJobRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final NotificationService notificationService;
+    private final SessionRegistry sessionRegistry;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
@@ -94,14 +106,15 @@ public class TillPrintService {
         TillPrintSlip slip = sanitizeSlip(request.slip());
         String payload = writeSlip(slip);
         String branchId = blankToNull(request.branchId());
-        Set<String> allowed = new LinkedHashSet<>();
+        Map<String, String> names = new LinkedHashMap<>();
         for (TillPrintCashierResponse cashier : listCashiers(businessId, branchId)) {
-            allowed.add(cashier.id());
+            names.put(cashier.id(), cashier.name());
         }
 
         List<String> jobIds = new ArrayList<>();
+        List<TillPrintTargetStatus> tills = new ArrayList<>();
         for (String userId : targets) {
-            if (!allowed.contains(userId)) {
+            if (!names.containsKey(userId)) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_REQUEST, "That person is not a cashier on this branch");
             }
@@ -114,10 +127,45 @@ public class TillPrintService {
             job.setPayloadJson(payload);
             tillPrintJobRepository.save(job);
             jobIds.add(job.getId());
+            boolean online = !sessionRegistry.findSessionsByUser(businessId, userId).isEmpty();
+            tills.add(new TillPrintTargetStatus(userId, names.get(userId), online));
+            notifyTill(businessId, userId, job.getId(), kind, slip);
             eventPublisher.publishEvent(new RealtimeBridge.TillPrintRequestedEvent(
-                    businessId, userId, job.getId(), kind, slip.reference()));
+                    businessId, userId, job.getId(), kind, slip.reference(), payload));
         }
-        return new DispatchTillPrintResponse(jobIds);
+        return new DispatchTillPrintResponse(jobIds, tills);
+    }
+
+    private void notifyTill(
+            String businessId,
+            String userId,
+            String jobId,
+            String kind,
+            TillPrintSlip slip
+    ) {
+        String title = KIND_RECEIPT.equals(kind) ? "Print this receipt" : "Print this order";
+        String supplier = slip.supplierName() == null || slip.supplierName().isBlank()
+                ? ""
+                : " · " + slip.supplierName();
+        String body = slip.reference() + supplier;
+        var payload = new LinkedHashMap<String, String>();
+        payload.put("title", title);
+        payload.put("body", body);
+        payload.put("jobId", jobId);
+        payload.put("kind", kind);
+        payload.put("reference", slip.reference());
+        try {
+            notificationService.tryInsertDedupeForUser(
+                    businessId,
+                    userId,
+                    NotificationTypes.TILL_SLIP,
+                    "till.slip:" + jobId,
+                    "operational",
+                    "HIGH",
+                    objectMapper.writeValueAsString(payload));
+        } catch (Exception e) {
+            log.warn("Could not notify till user {} for job {}: {}", userId, jobId, e.getMessage());
+        }
     }
 
     @Transactional(readOnly = true)

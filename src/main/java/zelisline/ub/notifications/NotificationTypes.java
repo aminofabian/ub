@@ -35,6 +35,8 @@ public final class NotificationTypes {
     public static final String DRAWOUT_APPROVAL_REQUESTED = "drawout.approval_requested";
     public static final String DRAWOUT_RECORDED = "drawout.recorded";
     public static final String TILL_ACCESS_REQUESTED = "till.access_requested";
+    /** Purchase order or goods receipt aimed at one cashier till. */
+    public static final String TILL_SLIP = "till.slip";
 
     private NotificationTypes() {
     }

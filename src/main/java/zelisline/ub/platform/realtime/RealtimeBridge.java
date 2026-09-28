@@ -66,8 +66,11 @@ public class RealtimeBridge {
 
         String priority = resolveNotificationPriority(notification.getType());
 
-        // Skip push if target user is in quiet hours
-        if (targetUserId != null && preferenceService.isInQuietHours(businessId, targetUserId, "HIGH".equals(priority))) {
+        // A slip the order desk just sent must reach the till even during quiet hours.
+        boolean tillSlip = "till.slip".equals(notification.getType());
+        if (!tillSlip
+                && targetUserId != null
+                && preferenceService.isInQuietHours(businessId, targetUserId, "HIGH".equals(priority))) {
             log.debug("Notification suppressed (quiet hours): type={} user={}", notification.getType(), targetUserId);
             return;
         }
@@ -318,13 +321,14 @@ public class RealtimeBridge {
      * Push a purchase-order or goods-receipt slip to one cashier's open till.
      * Other tills never see the frame.
      */
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onTillPrintRequested(TillPrintRequestedEvent event) {
         String eventId = event.jobId();
         var dataMap = new LinkedHashMap<String, String>();
         dataMap.put("jobId", event.jobId());
         dataMap.put("kind", event.kind());
         dataMap.put("reference", event.reference() != null ? event.reference() : "");
+        dataMap.put("slipJson", event.slipJson() != null ? event.slipJson() : "");
         String payloadJson = toJson(dataMap);
         if (payloadJson == null) {
             return;
@@ -333,8 +337,13 @@ public class RealtimeBridge {
         for (String sid : sessionIds) {
             handler.sendFrame(sid, "till.print", eventId, "HIGH", Instant.now(), payloadJson);
         }
-        log.debug("Till print requested: job={} kind={} user={} sessions={}",
-                event.jobId(), event.kind(), event.userId(), sessionIds.size());
+        if (sessionIds.isEmpty()) {
+            log.info("Till print queued with no open session: job={} kind={} user={}",
+                    event.jobId(), event.kind(), event.userId());
+        } else {
+            log.info("Till print pushed: job={} kind={} user={} sessions={}",
+                    event.jobId(), event.kind(), event.userId(), sessionIds.size());
+        }
     }
 
     /**
@@ -772,7 +781,7 @@ public class RealtimeBridge {
             case "stock.low", "shift.variance_detected", "storefront.order.placed",
                  "storefront.order.paid", "approval.requested", "approval.resolved",
                  "order.received", "order.payment_received", "order.confirmed",
-                 "order.dispatched", "order.delivered" -> "HIGH";
+                 "order.dispatched", "order.delivered", "till.slip" -> "HIGH";
             case "payable.overdue", "receivable.overdue", "batch.expiring" -> "MEDIUM";
             case "credit_sale.reminder" -> "HIGH";
             case "export.completed" -> "LOW";
@@ -829,7 +838,7 @@ public class RealtimeBridge {
                  "onboarding.fill_shelf", "onboarding.sizes_right", "onboarding.money_loop",
                  "onboarding.first_sale", "onboarding.go_live", "onboarding.team_rhythm",
                  "onboarding.week_checkin", "onboarding.reengage", "onboarding.lookalike",
-                 "onboarding.close_shift", "onboarding.web_order" -> true;
+                 "onboarding.close_shift", "onboarding.web_order", "till.slip" -> true;
             default -> false;
         };
     }
@@ -855,6 +864,7 @@ public class RealtimeBridge {
             case "sales.daily_digest" -> "Daily sales summary";
             case "inventory.restock_digest" -> "Tonight's list";
             case "account.welcome" -> "Welcome to Kiosk!";
+            case "till.slip" -> "Print on this till";
             default -> type;
         };
     }
@@ -900,7 +910,12 @@ public class RealtimeBridge {
 
     /** Slip for one cashier till. {@code kind} is {@code order} or {@code receipt}. */
     public record TillPrintRequestedEvent(
-            String businessId, String userId, String jobId, String kind, String reference) {}
+            String businessId,
+            String userId,
+            String jobId,
+            String kind,
+            String reference,
+            String slipJson) {}
 
     /** Once-per-sale invalidate signal for dashboards (not cashier payment UX). */
     public record SaleCompletedEvent(

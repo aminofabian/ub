@@ -43,7 +43,10 @@ public final class TillPrintDtos {
     public record TillPrintCashierResponse(String id, String name) {
     }
 
-    public record DispatchTillPrintResponse(List<String> jobIds) {
+    public record TillPrintTargetStatus(String userId, String name, boolean online) {
+    }
+
+    public record DispatchTillPrintResponse(List<String> jobIds, List<TillPrintTargetStatus> tills) {
     }
 
     public record TillPrintPendingResponse(

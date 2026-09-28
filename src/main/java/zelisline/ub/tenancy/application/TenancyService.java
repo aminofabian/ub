@@ -1190,7 +1190,7 @@ public class TenancyService {
         );
         instructions.put(
             "note",
-            "Point DNS at Vercel, then click Verify. Apex may use A 76.76.21.21; www should CNAME to cname.vercel-dns.com."
+            "Add these where you bought the domain. Leave nameservers and mail records as they are, then choose Check connection."
         );
         return instructions;
     }

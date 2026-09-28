@@ -191,18 +191,28 @@ public class VercelProjectDomainClient {
         if (!challenges.isEmpty()) {
             instructions.put("challenges", challenges.stream().map(DnsChallenge::toMap).toList());
         }
-        // Recommended BYO records when Vercel is not yet the nameserver.
+        // Recommended BYO records when the registrar still hosts DNS.
+        // Apex: A on @ plus www CNAME. A subdomain only needs a CNAME on its label.
         List<Map<String, String>> recommended = new ArrayList<>();
-        recommended.add(Map.of(
-                "type", "CNAME",
-                "name", "www".equals(apexLabel(name)) ? "www" : name.contains(".") ? name.substring(0, name.indexOf('.')) : "@",
-                "value", "cname.vercel-dns.com"
-        ));
         if (isApex(name)) {
             recommended.add(Map.of(
                     "type", "A",
                     "name", "@",
                     "value", "76.76.21.21"
+            ));
+            recommended.add(Map.of(
+                    "type", "CNAME",
+                    "name", "www",
+                    "value", "cname.vercel-dns.com"
+            ));
+        } else {
+            String host = name != null && name.contains(".")
+                    ? name.substring(0, name.indexOf('.'))
+                    : "@";
+            recommended.add(Map.of(
+                    "type", "CNAME",
+                    "name", host,
+                    "value", "cname.vercel-dns.com"
             ));
         }
         instructions.put("recommendedRecords", recommended);
@@ -245,14 +255,6 @@ public class VercelProjectDomainClient {
             return parts.length == 3;
         }
         return parts.length == 2;
-    }
-
-    private static String apexLabel(String host) {
-        if (host == null) {
-            return "";
-        }
-        int i = host.indexOf('.');
-        return i < 0 ? host : host.substring(0, i);
     }
 
     private static String requireHost(String hostname) {

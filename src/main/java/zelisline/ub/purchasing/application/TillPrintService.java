@@ -154,6 +154,7 @@ public class TillPrintService {
         payload.put("jobId", jobId);
         payload.put("kind", kind);
         payload.put("reference", slip.reference());
+        payload.put("slipJson", writeSlip(slip));
         try {
             notificationService.tryInsertDedupeForUser(
                     businessId,

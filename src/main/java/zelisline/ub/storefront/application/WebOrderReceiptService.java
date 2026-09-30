@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.sales.receipt.ReceiptEscPosRenderer;
@@ -110,16 +111,38 @@ public class WebOrderReceiptService {
         Map<String, Item> itemMap = itemRepository.findAllById(itemIds).stream()
                 .filter(i -> businessId.equals(i.getBusinessId()))
                 .collect(Collectors.toMap(Item::getId, i -> i));
+        List<String> parentIds = itemMap.values().stream()
+                .map(Item::getVariantOfItemId)
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .toList();
+        Map<String, String> parentNameById = parentIds.isEmpty()
+                ? Map.of()
+                : itemRepository.findAllById(parentIds).stream()
+                        .filter(i -> businessId.equals(i.getBusinessId()))
+                        .filter(i -> i.getName() != null && !i.getName().isBlank())
+                        .collect(Collectors.toMap(Item::getId, Item::getName, (a, b) -> a));
 
         List<ReceiptLineRow> lines = new ArrayList<>();
         for (WebOrderLine ol : items) {
             Item it = itemMap.get(ol.getItemId());
-            String desc = ol.getItemName() != null && !ol.getItemName().isBlank()
-                    ? ol.getItemName()
-                    : (it != null ? it.getName() : "Item");
-            String variant = ol.getVariantName();
-            if (variant != null && !variant.isBlank()) {
-                desc = desc + " (" + variant + ")";
+            String desc;
+            if (it != null) {
+                String parentName = it.getVariantOfItemId() != null
+                        ? parentNameById.get(it.getVariantOfItemId())
+                        : null;
+                desc = ProductDisplayName.forVariant(it, parentName);
+                if (desc.isBlank()) {
+                    desc = it.getName() != null ? it.getName() : "Item";
+                }
+            } else if (ol.getItemName() != null && !ol.getItemName().isBlank()) {
+                // Snapshot from checkout — already composed for new orders; join for legacy rows.
+                desc = ProductDisplayName.join(ol.getItemName(), ol.getVariantName());
+                if (desc.isBlank()) {
+                    desc = ol.getItemName();
+                }
+            } else {
+                desc = "Item";
             }
             lines.add(new ReceiptLineRow(
                     desc,

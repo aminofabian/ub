@@ -47,8 +47,13 @@ public class KioskPayAccount {
     @Column(name = "fee_percent_override", precision = 6, scale = 3)
     private BigDecimal feePercentOverride;
 
+    /**
+     * Off by default. A newly activated account must explicitly opt in to
+     * collecting on the storefront — activating Kiosk Pay for the till must not
+     * silently expose it as a shopper payment option.
+     */
     @Column(name = "storefront_enabled", nullable = false)
-    private boolean storefrontEnabled = true;
+    private boolean storefrontEnabled = false;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

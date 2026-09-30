@@ -62,6 +62,20 @@ public final class ProductDisplayName {
         if (!option.isEmpty()) {
             return join(family, option);
         }
+        // Variant with no distinct option label: keep the denormalized stored title when it
+        // already carries more than the live family (legacy rows / partial edits), so sales
+        // lists do not collapse "CACTUS CT-PEARL/WHITE 6MM" to bare "CACTUS".
+        if (isVariant) {
+            String stored = normalize(item.getName());
+            if (!stored.isEmpty()
+                    && !stored.equalsIgnoreCase(family)
+                    && (family.isEmpty()
+                            || containsPhrase(
+                                    stored.toLowerCase(Locale.ROOT),
+                                    family.toLowerCase(Locale.ROOT)))) {
+                return stored;
+            }
+        }
         if (!needsSkuDisambiguation(item)) {
             return family;
         }

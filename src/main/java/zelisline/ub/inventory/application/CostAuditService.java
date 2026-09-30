@@ -19,6 +19,7 @@ import zelisline.ub.audit.application.AuditEventPublisher;
 import zelisline.ub.audit.domain.AuditEventActorType;
 import zelisline.ub.audit.domain.AuditEventCategory;
 import zelisline.ub.audit.domain.AuditEventSeverity;
+import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.inventory.api.dto.AdjustItemCostRequest;
@@ -88,7 +89,9 @@ public class CostAuditService {
         for (CostIssueRow row : rows) {
             CostIssueRowResponse mapped = buildRow(
                     row.getItemId(),
-                    composeDisplayName(row.getName(), row.getVariantName(), row.getSize()),
+                    ProductDisplayName.join(
+                            row.getName(),
+                            firstNonBlank(row.getVariantName(), row.getSize())),
                     row.getSku(),
                     row.getUnitType(),
                     row.getCurrentStock(),
@@ -179,7 +182,7 @@ public class CostAuditService {
         BigDecimal resolvedSell = pricingService.getCurrentOpenSellingPrice(businessId, itemId, brId);
         return buildRow(
                 item.getId(),
-                composeDisplayName(item.getName(), item.getVariantName(), item.getSize()),
+                ProductDisplayName.forItem(item),
                 item.getSku(),
                 item.getUnitType(),
                 item.getCurrentStock(),
@@ -337,27 +340,14 @@ public class CostAuditService {
         return marginPct;
     }
 
-    /**
-     * Combines a variant's parent name with its distinguishing descriptor (variant name, falling
-     * back to size) so the list reads "Amara Macademia 200ml" rather than just "Amara". Skips the
-     * suffix when the base name already contains it.
-     */
-    private static String composeDisplayName(String name, String variantName, String size) {
-        String base = blankToNull(name);
-        String suffix = blankToNull(variantName);
-        if (suffix == null) {
-            suffix = blankToNull(size);
+    private static String firstNonBlank(String a, String b) {
+        if (a != null && !a.isBlank()) {
+            return a.trim();
         }
-        if (base == null) {
-            return suffix == null ? "" : suffix;
+        if (b != null && !b.isBlank()) {
+            return b.trim();
         }
-        if (suffix == null) {
-            return base;
-        }
-        if (base.toLowerCase(java.util.Locale.ROOT).contains(suffix.toLowerCase(java.util.Locale.ROOT))) {
-            return base;
-        }
-        return base + " " + suffix;
+        return null;
     }
 
     private static BigDecimal scaleOrNull(BigDecimal value, int scale) {

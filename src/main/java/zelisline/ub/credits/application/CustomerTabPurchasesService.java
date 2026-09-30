@@ -21,6 +21,7 @@ import zelisline.ub.airtime.domain.AirtimeOrder;
 import zelisline.ub.airtime.domain.AirtimeOrderStatuses;
 import zelisline.ub.airtime.domain.AirtimeTenders;
 import zelisline.ub.airtime.repository.AirtimeOrderRepository;
+import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.credits.CreditTxnTypes;
@@ -130,11 +131,10 @@ public class CustomerTabPurchasesService {
         }
         Map<String, String> itemNames = new HashMap<>();
         if (!itemIds.isEmpty()) {
-            for (Item item : itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)) {
-                String name = item.getName() != null && !item.getName().isBlank()
-                        ? item.getName().trim()
-                        : "Item";
-                itemNames.put(item.getId(), name);
+            List<Item> items = itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId);
+            Map<String, String> parentNames = loadParentNames(businessId, items);
+            for (Item item : items) {
+                itemNames.put(item.getId(), shelfTitle(item, parentNames));
             }
         }
         List<String> names = new ArrayList<>();
@@ -265,10 +265,10 @@ public class CustomerTabPurchasesService {
         Map<String, String> itemSkus = new HashMap<>();
         Map<String, String> itemBarcodes = new HashMap<>();
         if (!itemIds.isEmpty()) {
-            for (Item item : itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)) {
-                itemNames.put(item.getId(), item.getName() != null && !item.getName().isBlank()
-                        ? item.getName().trim()
-                        : "Item");
+            List<Item> items = itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId);
+            Map<String, String> parentNames = loadParentNames(businessId, items);
+            for (Item item : items) {
+                itemNames.put(item.getId(), shelfTitle(item, parentNames));
                 if (item.getSku() != null && !item.getSku().isBlank()) {
                     itemSkus.put(item.getId(), item.getSku().trim());
                 }
@@ -384,5 +384,38 @@ public class CustomerTabPurchasesService {
             return BigDecimal.ZERO.setScale(QTY_SCALE, RoundingMode.HALF_UP);
         }
         return v.setScale(QTY_SCALE, RoundingMode.HALF_UP);
+    }
+
+    private Map<String, String> loadParentNames(String businessId, List<Item> items) {
+        Set<String> parentIds = new HashSet<>();
+        for (Item item : items) {
+            String parentId = item.getVariantOfItemId();
+            if (parentId != null && !parentId.isBlank()) {
+                parentIds.add(parentId);
+            }
+        }
+        Map<String, String> parentNames = new HashMap<>();
+        if (parentIds.isEmpty()) {
+            return parentNames;
+        }
+        for (Item parent : itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(parentIds, businessId)) {
+            if (parent.getName() != null && !parent.getName().isBlank()) {
+                parentNames.put(parent.getId(), parent.getName().trim());
+            }
+        }
+        return parentNames;
+    }
+
+    private static String shelfTitle(Item item, Map<String, String> parentNames) {
+        String parentName = null;
+        String parentId = item.getVariantOfItemId();
+        if (parentId != null && !parentId.isBlank()) {
+            parentName = parentNames.get(parentId);
+        }
+        String composed = ProductDisplayName.forVariant(item, parentName);
+        if (!composed.isBlank()) {
+            return composed;
+        }
+        return item.getName() != null && !item.getName().isBlank() ? item.getName().trim() : "Item";
     }
 }

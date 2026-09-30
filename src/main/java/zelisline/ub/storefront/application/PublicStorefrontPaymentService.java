@@ -429,6 +429,7 @@ public class PublicStorefrontPaymentService {
             boolean checkoutSuccess = GatewayCheckoutStatuses.SUCCESS.equals(checkout.getStatus());
             boolean checkoutFailed = GatewayCheckoutStatuses.FAILED.equals(checkout.getStatus());
             boolean checkoutPending = GatewayCheckoutStatuses.PENDING.equals(checkout.getStatus());
+            boolean checkoutCancelled = GatewayCheckoutStatuses.CANCELLED.equals(checkout.getStatus());
             checkoutId = checkout.getReference();
             paid = paid || checkoutSuccess;
             if (checkoutPending) {
@@ -443,8 +444,12 @@ public class PublicStorefrontPaymentService {
             } else if (checkoutSuccess) {
                 failed = false;
                 failureReason = null;
+            } else if (checkoutCancelled) {
+                // Shopper abandoned or cancelled the hosted page. The order stays
+                // payable, so clear any stale STK decline instead of reading failed.
+                failed = false;
+                failureReason = null;
             }
-            // CANCELLED: order stays payable — do not force failed=true
         }
 
         // Refresh order status in case verify marked it paid
@@ -461,6 +466,14 @@ public class PublicStorefrontPaymentService {
                     failed,
                     checkoutId,
                     failureReason);
+        }
+
+        // A confirmed payment wins over any stale failure left by an earlier
+        // attempt on the same order (e.g. a declined STK push, then a successful
+        // hosted checkout) — never report paid and failed together.
+        if (paid) {
+            failed = false;
+            failureReason = null;
         }
 
         return new PublicWebOrderPaymentStatusResponse(

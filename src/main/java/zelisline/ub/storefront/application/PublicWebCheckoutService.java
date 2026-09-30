@@ -18,6 +18,7 @@ import org.springframework.web.server.ResponseStatusException;
 import jakarta.servlet.http.HttpServletRequest;
 
 import zelisline.ub.catalog.application.PackageVariantStockResolver;
+import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.integrations.pickupmtaani.application.PickupMtaaniCheckoutService;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
@@ -184,8 +185,19 @@ public class PublicWebCheckoutService {
             WebOrderLine ol = new WebOrderLine();
             ol.setOrderId(order.getId());
             ol.setItemId(line.item().getId());
-            ol.setItemName(line.item().getName());
-            ol.setVariantName(blankToNull(line.item().getVariantName()));
+            Item item = line.item();
+            String parentName = null;
+            String parentId = item.getVariantOfItemId();
+            if (parentId != null && !parentId.isBlank()) {
+                parentName = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(parentId, businessId)
+                        .map(Item::getName)
+                        .orElse(null);
+            }
+            String composed = ProductDisplayName.forVariant(item, parentName);
+            ol.setItemName(composed.isBlank()
+                    ? (item.getName() != null ? item.getName() : "Item")
+                    : composed);
+            ol.setVariantName(blankToNull(item.getVariantName()));
             ol.setQuantity(line.quantity());
             ol.setUnitPrice(line.unitPrice());
             ol.setLineTotal(line.lineTotal());

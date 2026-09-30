@@ -121,4 +121,26 @@ class ProductDisplayNameTest {
                 "Festive Bread 400g White",
                 ProductDisplayName.forVariant(variant, "Festive Bread"));
     }
+
+    @Test
+    void forVariantKeepsComposedStoredNameWhenOptionMissing() {
+        Item variant = new Item();
+        variant.setName("CACTUS CT-PEARL/WHITE 6MM");
+        variant.setVariantOfItemId("parent-1");
+        variant.setSku("IMP-ignore");
+        assertEquals(
+                "CACTUS CT-PEARL/WHITE 6MM",
+                ProductDisplayName.forVariant(variant, "CACTUS"));
+    }
+
+    @Test
+    void forVariantJoinsParentAndVariantLikeReceipts() {
+        Item variant = new Item();
+        variant.setName("CACTUS");
+        variant.setVariantName("CT-PEARL/WHITE 6MM");
+        variant.setVariantOfItemId("parent-1");
+        assertEquals(
+                "CACTUS CT-PEARL/WHITE 6MM",
+                ProductDisplayName.forVariant(variant, "CACTUS"));
+    }
 }

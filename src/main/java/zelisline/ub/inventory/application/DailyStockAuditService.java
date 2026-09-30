@@ -11,7 +11,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -26,6 +25,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import zelisline.ub.catalog.application.ItemCatalogService;
+import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.CategoryRepository;
@@ -1206,42 +1206,18 @@ public class DailyStockAuditService {
     }
 
     /**
-     * Shelf label for audits: parent/base name plus pack size or variant option
-     * (e.g. "Kensalt 500g"), matching cost-audit / supplier-catalog display.
+     * Shelf label for audits: same family + option folding as receipts / catalog.
      */
     private static String itemDisplayName(Item item, String fallbackId) {
         if (item == null) {
             return fallbackId != null ? fallbackId : "";
         }
+        String composed = ProductDisplayName.forItem(item);
+        if (!composed.isBlank()) {
+            return composed;
+        }
         String base = blankToNull(item.getName());
-        if (base == null) {
-            base = "Item";
-        }
-        String suffix = blankToNull(item.getVariantName());
-        if (suffix != null && isGenericVariantLabel(suffix)) {
-            suffix = null;
-        }
-        if (suffix == null) {
-            suffix = blankToNull(item.getSize());
-        }
-        if (suffix == null) {
-            suffix = blankToNull(item.getPackagingUnitName());
-        }
-        if (suffix == null) {
-            return base;
-        }
-        if (base.toLowerCase(Locale.ROOT).contains(suffix.toLowerCase(Locale.ROOT))) {
-            return base;
-        }
-        return base + " " + suffix;
-    }
-
-    private static boolean isGenericVariantLabel(String variantName) {
-        String t = variantName.trim().toLowerCase(Locale.ROOT);
-        return t.equals("variant")
-                || t.equals("option")
-                || t.equals("variation")
-                || t.equals("default");
+        return base != null ? base : "Item";
     }
 
     private static String blankToNull(String value) {

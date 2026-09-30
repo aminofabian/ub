@@ -173,8 +173,10 @@ public class SalesIntelligenceService {
             SELECT sil.item_id,
                    i.name AS item_name,
                    i.variant_name AS variant_name,
+                   i.size AS item_size,
                    parent.name AS parent_name,
                    i.sku,
+                   i.sku AS item_sku,
                    COALESCE(SUM(sil.quantity), 0) AS qty_sold,
                    COALESCE(SUM(sil.line_total), 0) AS gross,
                    COALESCE(SUM(sil.profit), 0) AS profit_gross
@@ -188,7 +190,7 @@ public class SalesIntelligenceService {
                AND s.status IN (?, ?)
                AND s.sold_at >= ? AND s.sold_at < ?
                AND i.category_id = ?
-          GROUP BY sil.item_id, i.name, i.sku, i.variant_name, parent.name
+          GROUP BY sil.item_id, i.name, i.sku, i.variant_name, i.size, parent.name
             """;
 
     private static final String Q_ITEMS_REFUNDS = """
@@ -541,6 +543,7 @@ public class SalesIntelligenceService {
                    i.sku AS item_sku,
                    i.barcode AS item_barcode,
                    i.variant_name AS variant_name,
+                   i.size AS item_size,
                    parent.name AS parent_name,
                    sil.quantity,
                    sil.unit_price,
@@ -715,8 +718,10 @@ public class SalesIntelligenceService {
             SELECT sil.item_id,
                    i.name AS item_name,
                    i.variant_name AS variant_name,
+                   i.size AS item_size,
                    parent.name AS parent_name,
                    i.sku,
+                   i.sku AS item_sku,
                    COALESCE(SUM(sil.quantity), 0) AS qty_sold,
                    COALESCE(SUM(sil.line_total), 0) AS gross,
                    COALESCE(SUM(sil.profit), 0) AS profit_gross
@@ -732,7 +737,7 @@ public class SalesIntelligenceService {
                AND (? IS NULL OR i.category_id = ?)
                AND (? IS NULL OR s.branch_id = ?)
                AND (? IS NULL OR i.item_type_id = ?)
-          GROUP BY sil.item_id, i.name, i.sku, i.variant_name, parent.name
+          GROUP BY sil.item_id, i.name, i.sku, i.variant_name, i.size, parent.name
             """;
 
     private static final String Q_ITEMS_REFUNDS_FILTERED = """
@@ -2415,11 +2420,25 @@ public class SalesIntelligenceService {
         return value != null && !value.isBlank() ? value.trim() : null;
     }
 
-    /** Same family + option folding as PDF receipts so sales lists never drift. */
+    /**
+     * Same shelf title as POS receipts ({@link ProductDisplayName#forVariant}): parent + option
+     * (variant name / size / stored composed name), never a bare family or bare option alone.
+     */
     private static String composedItemName(java.sql.ResultSet rs) throws java.sql.SQLException {
-        return ProductDisplayName.join(
-                firstNonBlank(rs.getString("parent_name"), rs.getString("item_name")),
-                rs.getString("variant_name"));
+        Item item = new Item();
+        item.setName(rs.getString("item_name"));
+        item.setVariantName(rs.getString("variant_name"));
+        item.setSize(rs.getString("item_size"));
+        item.setSku(rs.getString("item_sku"));
+        String parentName = blankToNull(rs.getString("parent_name"));
+        if (parentName != null) {
+            item.setVariantOfItemId("parent");
+        }
+        String composed = ProductDisplayName.forVariant(item, parentName);
+        if (!composed.isBlank()) {
+            return composed;
+        }
+        return firstNonBlank(item.getName(), item.getVariantName());
     }
 
     private String composedItemName(Item item) {

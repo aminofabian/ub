@@ -329,16 +329,20 @@ public class DarajaPaymentGateway implements PaymentGateway {
     }
 
     /**
-     * Express AccountReference is alpha-numeric, max 12, and is rendered in the USSD
+     * Express AccountReference is alpha-numeric and is rendered in the USSD
      * prompt. Spaces, dashes and '#' from a tenant account number are stripped rather
      * than passed through, since Daraja answers those with 400.002.02.
+     * <p>
+     * The value is sent whole, never truncated: for a bank/paybill settlement the
+     * AccountReference <em>is</em> the destination account, so dropping the tail
+     * (e.g. a 14-digit account ending in zeros) would credit the wrong account.
      */
     static String accountReference(String raw) {
         String cleaned = raw == null ? "" : raw.replaceAll("[^A-Za-z0-9]", "");
         if (cleaned.isBlank()) {
             return "Kiosk";
         }
-        return truncate(cleaned, 12);
+        return cleaned;
     }
 
     static Map<String, Object> buildStkRequestBody(

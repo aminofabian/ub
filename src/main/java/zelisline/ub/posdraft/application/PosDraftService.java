@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.platform.realtime.RealtimeBridge;
@@ -640,7 +641,17 @@ public class PosDraftService {
 
     private void populateLineFromItem(PosDraftLine line, Item item) {
         line.setItemId(item.getId());
-        line.setItemName(item.getName());
+        String parentName = null;
+        String parentId = item.getVariantOfItemId();
+        if (parentId != null && !parentId.isBlank()) {
+            parentName = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(parentId, item.getBusinessId())
+                    .map(Item::getName)
+                    .orElse(null);
+        }
+        String composed = ProductDisplayName.forVariant(item, parentName);
+        line.setItemName(composed.isBlank()
+                ? (item.getName() != null ? item.getName() : "Item")
+                : composed);
         line.setItemBarcode(blankToNull(item.getBarcode()));
     }
 

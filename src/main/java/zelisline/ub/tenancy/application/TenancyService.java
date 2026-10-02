@@ -56,7 +56,7 @@ import zelisline.ub.tenancy.domain.DomainMapping;
 import zelisline.ub.tenancy.domain.DomainSource;
 import zelisline.ub.tenancy.domain.DomainStatus;
 import zelisline.ub.tenancy.domain.DomainZoneSource;
-import zelisline.ub.tenancy.integrations.vercel.VercelProjectDomainClient;
+import zelisline.ub.tenancy.integrations.storefront.StorefrontDomainProvider;
 import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
@@ -95,7 +95,7 @@ public class TenancyService {
     private final RegionDefaults regionDefaults;
     private final RegionCatalogAuditService regionCatalogAuditService;
     private final ReservedHostnameGuard reservedHostnameGuard;
-    private final VercelProjectDomainClient vercelProjectDomainClient;
+    private final StorefrontDomainProvider storefrontDomainProvider;
     private final ObjectMapper objectMapper;
     private final ObjectProvider<zelisline.ub.onboarding.progress.application.SetupProgressInvalidatePublisher>
             setupProgressInvalidate;
@@ -276,7 +276,7 @@ public class TenancyService {
         DomainMapping domain = new DomainMapping();
         domain.setBusinessId(businessId);
         domain.setDomain(normalized);
-        // Pending until Vercel verify (or ops activation). Host resolve ignores inactive.
+        // Pending until provider verify (or ops activation). Host resolve ignores inactive.
         domain.setActive(false);
         domain.setStatus(DomainStatus.PENDING);
         domain.setSource(DomainSource.MANUAL_CONNECT);
@@ -288,7 +288,7 @@ public class TenancyService {
         // Keep platform subdomain as default primary when present.
         domain.setPrimary(!hasExistingDomain);
 
-        applyVercelAttach(domain);
+        applyStorefrontAttach(domain);
         DomainMapping saved = domainMappingRepository.save(domain);
         return toResponse(saved);
     }
@@ -302,17 +302,18 @@ public class TenancyService {
         domain.setStatus(DomainStatus.VERIFYING);
         domain.setLastError(null);
 
-        if (!vercelProjectDomainClient.configured()) {
+        if (!storefrontDomainProvider.configured()) {
             domain.setStatus(DomainStatus.PENDING);
-            domain.setLastError("vercel_not_configured");
+            domain.setLastError(storefrontDomainProvider.id() + "_not_configured");
+            writeDnsInstructions(domain, storefrontDomainProvider.recommendedDnsInstructions(domain.getDomain()));
             domainMappingRepository.save(domain);
             throw new ResponseStatusException(
                 HttpStatus.SERVICE_UNAVAILABLE,
-                "Domain verification requires Vercel configuration"
+                "Domain verification requires " + storefrontDomainProvider.id() + " configuration"
             );
         }
 
-        var result = vercelProjectDomainClient.verifyDomain(domain.getDomain());
+        var result = storefrontDomainProvider.check(domain.getDomain());
         if (result.skipped()) {
             domain.setStatus(DomainStatus.PENDING);
             domain.setLastError(result.error());
@@ -322,23 +323,31 @@ public class TenancyService {
                 "Domain verification unavailable"
             );
         }
-        if (!result.ok()) {
+        if (result.outcome() == StorefrontDomainProvider.Outcome.FAILED || !result.ok()) {
             domain.setStatus(DomainStatus.FAILED);
             domain.setLastError(result.error());
             writeDnsInstructions(domain, result.dnsInstructions());
             domainMappingRepository.save(domain);
             throw new ResponseStatusException(
                 HttpStatus.BAD_GATEWAY,
-                "Vercel verification failed: " + result.error()
+                "Domain verification failed: " + result.error()
             );
         }
 
         writeDnsInstructions(domain, result.dnsInstructions());
-        if (result.verified()) {
+        if (result.outcome() == StorefrontDomainProvider.Outcome.VERIFIED || result.verified()) {
             activateVerified(domain);
+        } else if (result.outcome() == StorefrontDomainProvider.Outcome.AWAITING_CERTIFICATE) {
+            domain.setStatus(DomainStatus.VERIFYING);
+            domain.setActive(false);
+            domain.setLastError(null);
         } else {
+            // NOT_READY — DNS not pointing here yet.
             domain.setStatus(DomainStatus.PENDING);
             domain.setActive(false);
+            if (result.error() != null && !result.error().isBlank()) {
+                domain.setLastError(result.error());
+            }
         }
         return toResponse(domainMappingRepository.save(domain));
     }
@@ -353,8 +362,8 @@ public class TenancyService {
             );
         }
         if (domain.getSource() != DomainSource.PLATFORM_SUBDOMAIN
-                && vercelProjectDomainClient.configured()) {
-            vercelProjectDomainClient.removeDomain(domain.getDomain());
+                && storefrontDomainProvider.configured()) {
+            storefrontDomainProvider.detach(domain.getDomain());
         }
         // Vacate UNIQUE(domain) so the hostname can be reclaimed.
         domain.setDomain(vacateHostname(domain.getDomain(), domain.getId()));
@@ -1118,21 +1127,25 @@ public class TenancyService {
         return domain;
     }
 
-    private void applyVercelAttach(DomainMapping domain) {
-        Map<String, Object> fallback = defaultExternalDnsInstructions(domain.getDomain());
-        if (!vercelProjectDomainClient.configured()) {
+    private void applyStorefrontAttach(DomainMapping domain) {
+        Map<String, Object> fallback = storefrontDomainProvider.recommendedDnsInstructions(domain.getDomain());
+        if (!storefrontDomainProvider.configured()) {
             writeDnsInstructions(domain, fallback);
             return;
         }
-        var result = vercelProjectDomainClient.addDomain(domain.getDomain());
+        var result = storefrontDomainProvider.connect(domain.getDomain());
         if (result.skipped()) {
             writeDnsInstructions(domain, fallback);
             return;
         }
-        if (!result.ok()) {
+        if (result.outcome() == StorefrontDomainProvider.Outcome.FAILED || !result.ok()) {
             domain.setStatus(DomainStatus.FAILED);
             domain.setLastError(result.error());
-            writeDnsInstructions(domain, fallback);
+            writeDnsInstructions(
+                    domain,
+                    result.dnsInstructions() == null || result.dnsInstructions().isEmpty()
+                            ? fallback
+                            : result.dnsInstructions());
             return;
         }
         writeDnsInstructions(
@@ -1141,8 +1154,11 @@ public class TenancyService {
                 ? fallback
                 : result.dnsInstructions()
         );
-        if (result.verified()) {
+        if (result.outcome() == StorefrontDomainProvider.Outcome.VERIFIED || result.verified()) {
             activateVerified(domain);
+        } else if (result.outcome() == StorefrontDomainProvider.Outcome.AWAITING_CERTIFICATE) {
+            domain.setStatus(DomainStatus.VERIFYING);
+            domain.setActive(false);
         }
     }
 
@@ -1175,24 +1191,6 @@ public class TenancyService {
         } catch (Exception ex) {
             return null;
         }
-    }
-
-    private static Map<String, Object> defaultExternalDnsInstructions(String hostname) {
-        Map<String, Object> instructions = new LinkedHashMap<>();
-        instructions.put("provider", "external");
-        instructions.put("hostname", hostname);
-        instructions.put(
-            "recommendedRecords",
-            List.of(
-                Map.of("type", "CNAME", "name", "www", "value", "cname.vercel-dns.com"),
-                Map.of("type", "A", "name", "@", "value", "76.76.21.21")
-            )
-        );
-        instructions.put(
-            "note",
-            "Add these where you bought the domain. Leave nameservers and mail records as they are, then choose Check connection."
-        );
-        return instructions;
     }
 
     /** Soft-delete vacate so UNIQUE(domain) can be reclaimed (mirrors archived business slugs). */

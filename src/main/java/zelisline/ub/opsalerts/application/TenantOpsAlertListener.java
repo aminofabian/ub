@@ -141,7 +141,7 @@ public class TenantOpsAlertListener {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onCreditTabPaymentConfirmed(CreditTabPaymentConfirmationEvent event) {
         try {
-            log.info("Ops alert event credit_stk business={} intent={}", event.businessId(), event.intentId());
+            log.info("Ops alert event credit_stk business={} reference={}", event.businessId(), event.referenceId());
             String shop = dispatcher.shopName(event.businessId());
             String currency = dispatcher.currency(event.businessId());
             String customerName = resolveCustomerName(event.customerId(), event.businessId());
@@ -149,10 +149,12 @@ public class TenantOpsAlertListener {
                     + "Customer: " + customerName + "\n"
                     + "Paid: " + TenantOpsAlertDispatcher.formatMoney(event.amountPaid(), currency) + "\n"
                     + "Remaining tab: " + TenantOpsAlertDispatcher.formatMoney(event.balanceRemaining(), currency)
-                    + "\nVia: M-Pesa STK";
+                    + "\nVia: " + (event.paymentMethod() == null || event.paymentMethod().isBlank()
+                            ? "M-Pesa STK"
+                            : event.paymentMethod().trim());
             dispatcher.dispatch(event.businessId(), OpsAlertType.CREDIT_PAYMENT, message);
         } catch (Exception ex) {
-            log.warn("Ops alert credit STK payment failed intent={}", event.intentId(), ex);
+            log.warn("Ops alert credit STK payment failed reference={}", event.referenceId(), ex);
         }
     }
 

@@ -110,7 +110,7 @@ class SmsCreditServiceTest {
         assertThat(view.includedRemaining()).isEqualTo(18);
         assertThat(view.includedAllowance()).isEqualTo(30);
         assertThat(view.purchasedBalance()).isEqualTo(45);
-        assertThat(view.unitPriceKes()).isEqualByComparingTo("1.00");
+        assertThat(view.unitPriceKes()).isEqualByComparingTo(PlatformSmsCreditSettings.DEFAULT_UNIT_PRICE_KES);
         assertThat(view.lowBalance()).isFalse();
     }
 
@@ -163,7 +163,8 @@ class SmsCreditServiceTest {
                     SmsCreditsDepletedException e = (SmsCreditsDepletedException) ex;
                     assertThat(e.getAvailable()).isZero();
                     assertThat(e.getIncludedRemaining()).isZero();
-                    assertThat(e.getUnitPriceKes()).isEqualByComparingTo(BigDecimal.ONE);
+                    assertThat(e.getUnitPriceKes())
+                            .isEqualByComparingTo(PlatformSmsCreditSettings.DEFAULT_UNIT_PRICE_KES);
                 });
     }
 

@@ -18,7 +18,9 @@ public class CreditSaleReminderListener {
     private final CreditSaleReminderService creditSaleReminderService;
 
     @Async
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    // fallbackExecution: a credit-sale receipt must not vanish if the event is ever
+    // published outside a transaction — AFTER_COMMIT listeners silently drop those.
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onCreditSaleReminder(CreditSaleReminderEvent event) {
         try {
             creditSaleReminderService.dispatch(event);

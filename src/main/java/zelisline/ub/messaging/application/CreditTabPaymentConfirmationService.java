@@ -36,14 +36,14 @@ public class CreditTabPaymentConfirmationService {
         TenantMessagingConfig messaging = messagingSettingsService.resolveForTest(event.businessId());
         if (!messaging.secretsReadable()) {
             log.info(
-                    "Skip tab payment confirmation — messaging secrets unreadable intent={}",
-                    event.intentId());
+                    "Skip tab payment confirmation — messaging secrets unreadable reference={}",
+                    event.referenceId());
             return;
         }
         if (!messaging.smsConfigured() && !messaging.metaWhatsAppConfigured()) {
             log.info(
-                    "Skip tab payment confirmation — no SMS or WhatsApp configured intent={}",
-                    event.intentId());
+                    "Skip tab payment confirmation — no SMS or WhatsApp configured reference={}",
+                    event.referenceId());
             return;
         }
 
@@ -52,7 +52,7 @@ public class CreditTabPaymentConfirmationService {
             phoneDigits = resolvePrimaryPhoneDigits(event.customerId());
         }
         if (phoneDigits == null) {
-            log.info("Skip tab payment confirmation — no phone intent={}", event.intentId());
+            log.info("Skip tab payment confirmation — no phone reference={}", event.referenceId());
             return;
         }
 
@@ -74,14 +74,16 @@ public class CreditTabPaymentConfirmationService {
         String paymentUrl = remaining.signum() > 0
                 ? CustomerTabPaymentUrl.build(messaging.paymentAccountUrl(), phoneDigits)
                 : null;
-        String message = buildMessage(customerName, shopName, paid, remaining, currency, paymentUrl);
+        String message = buildMessage(
+                customerName, shopName, paid, remaining, currency, paymentUrl, event.paymentMethod());
 
         CustomerMessageDispatcher.DeliveryResult delivery =
                 customerMessageDispatcher.deliver(messaging, phoneDigits, message);
         log.info(
-                "credit_tab_payment_confirmation intent={} customer={} channel={} outcome={} detail={}",
-                event.intentId(),
+                "credit_tab_payment_confirmation reference={} customer={} method={} channel={} outcome={} detail={}",
+                event.referenceId(),
                 event.customerId(),
+                event.paymentMethod(),
                 delivery.channel(),
                 delivery.outcome(),
                 delivery.detail());
@@ -95,10 +97,25 @@ public class CreditTabPaymentConfirmationService {
             String currency,
             String paymentUrl
     ) {
+        return buildMessage(
+                customerName, shopName, amountPaid, balanceRemaining, currency, paymentUrl, null);
+    }
+
+    static String buildMessage(
+            String customerName,
+            String shopName,
+            BigDecimal amountPaid,
+            BigDecimal balanceRemaining,
+            String currency,
+            String paymentUrl,
+            String paymentMethod
+    ) {
         StringBuilder sb = new StringBuilder();
         String greeting = (customerName == null || customerName.isBlank()) ? "Hi" : "Hi " + customerName.trim();
         sb.append(greeting).append(",\n\n");
-        sb.append("We received your M-Pesa payment of ")
+        sb.append("We received your ")
+                .append(paymentPhrase(paymentMethod))
+                .append(" of ")
                 .append(formatMoney(amountPaid, currency))
                 .append(" at ")
                 .append(shopName)
@@ -115,6 +132,15 @@ public class CreditTabPaymentConfirmationService {
         }
         sb.append("\n\nThank you!");
         return sb.toString();
+    }
+
+    /** "payment" / "M-Pesa payment" / "cash payment" — safe to drop into a sentence. */
+    private static String paymentPhrase(String paymentMethod) {
+        if (paymentMethod == null || paymentMethod.isBlank()) {
+            return "payment";
+        }
+        String method = paymentMethod.trim();
+        return method.toLowerCase(Locale.ROOT).endsWith("payment") ? method : method + " payment";
     }
 
     private String resolvePrimaryPhoneDigits(String customerId) {

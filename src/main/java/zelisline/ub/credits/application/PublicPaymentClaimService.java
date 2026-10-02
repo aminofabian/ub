@@ -44,6 +44,7 @@ import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.credits.repository.PublicPaymentClaimRepository;
 import zelisline.ub.finance.domain.JournalEntry;
 import zelisline.ub.finance.repository.JournalEntryRepository;
+import zelisline.ub.messaging.application.CreditTabPaymentConfirmationEvent;
 import zelisline.ub.opsalerts.application.CreditPaymentOpsAlertEvent;
 import zelisline.ub.payments.application.InboundTillPaymentService;
 import zelisline.ub.sales.SalesConstants;
@@ -234,6 +235,8 @@ public class PublicPaymentClaimService {
                 amount,
                 remaining,
                 via));
+        publishTabPaymentConfirmation(
+                businessId, row.getId(), req.customerId(), amount, remaining, req.channel());
 
         return new RecordTabPaymentResponse(row.getId(), remaining.toPlainString());
     }
@@ -451,6 +454,7 @@ public class PublicPaymentClaimService {
         String via = CreditClaimChannels.CASH.equals(channel) ? "Cash (claim)" : "M-Pesa (claim)";
         eventPublisher.publishEvent(new CreditPaymentOpsAlertEvent(
                 businessId, customerId, customerName, pay, remaining, via));
+        publishTabPaymentConfirmation(businessId, claimId, customerId, pay, remaining, channel);
     }
 
     /** Idempotent: second reject is a silent no-op. */
@@ -473,6 +477,36 @@ public class PublicPaymentClaimService {
         row.setRejectionReason(trimOrNullLong(reasonRaw, 500));
         row.setUpdatedAt(Instant.now());
         publicPaymentClaimRepository.save(row);
+    }
+
+    /**
+     * Tells the customer their tab payment landed. The M-Pesa STK flow raises this event
+     * too; staff-recorded and claim-approved payments previously only raised the internal
+     * ops alert, so the customer was never messaged. Phone is left null so
+     * {@code CreditTabPaymentConfirmationService} resolves the primary number.
+     */
+    private void publishTabPaymentConfirmation(
+            String businessId,
+            String referenceId,
+            String customerId,
+            BigDecimal amountPaid,
+            BigDecimal balanceRemaining,
+            String channel
+    ) {
+        if (customerId == null || customerId.isBlank()) {
+            return;
+        }
+        String method = CreditClaimChannels.CASH.equals(channel)
+                ? CreditTabPaymentConfirmationEvent.METHOD_CASH
+                : CreditTabPaymentConfirmationEvent.METHOD_MPESA;
+        eventPublisher.publishEvent(new CreditTabPaymentConfirmationEvent(
+                businessId,
+                referenceId,
+                customerId,
+                amountPaid,
+                balanceRemaining,
+                null,
+                method));
     }
 
     private static void assertBusiness(PublicPaymentClaim row, String businessId) {

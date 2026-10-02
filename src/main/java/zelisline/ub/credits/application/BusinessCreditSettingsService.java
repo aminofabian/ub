@@ -55,7 +55,10 @@ public class BusinessCreditSettingsService {
     private BusinessCreditSettings insertDefaults(String businessId) {
         BusinessCreditSettings s = new BusinessCreditSettings();
         s.setBusinessId(businessId);
-        s.setCreditSaleReminderEnabled(false);
+        // New tenants start with credit/tab messaging on so customers are told when
+        // items go on the tab. Sends stay stubs until an SMS/WhatsApp provider is
+        // configured, so this costs nothing and costs a credit only once it can send.
+        s.setCreditSaleReminderEnabled(true);
         s.setWhatsappMetaGraphVersion("v25.0");
         s.setSmsProvider("none");
         s.setRemoteInvoiceStkAutoSettle(true);

@@ -22,7 +22,8 @@ public class PlatformSmsCreditSettings {
 
     public static final String SINGLETON_ID = "00000000-0000-0000-0000-000000000002";
 
-    public static final BigDecimal DEFAULT_UNIT_PRICE_KES = new BigDecimal("1.00");
+    /** Selling price per SMS/message. Palmart lists messages at KES 0.80 each. */
+    public static final BigDecimal DEFAULT_UNIT_PRICE_KES = new BigDecimal("0.80");
     public static final int DEFAULT_MIN_PURCHASE = 10;
     public static final int DEFAULT_MAX_PURCHASE = 500;
     public static final int DEFAULT_LOW_BALANCE_THRESHOLD = 5;

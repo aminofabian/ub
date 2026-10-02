@@ -1706,7 +1706,8 @@ public class GatewayStkPushService {
                         acc.getCustomerId(),
                         pay,
                         acc.getBalanceOwed(),
-                        phoneDigits));
+                        phoneDigits,
+                        CreditTabPaymentConfirmationEvent.METHOD_MPESA));
             }
 
             publishStkRealtime(push, true, "Tab payment received");

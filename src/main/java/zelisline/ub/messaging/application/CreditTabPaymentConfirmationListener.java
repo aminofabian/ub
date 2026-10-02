@@ -18,12 +18,14 @@ public class CreditTabPaymentConfirmationListener {
     private final CreditTabPaymentConfirmationService confirmationService;
 
     @Async
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    // fallbackExecution: never drop the confirmation silently if an event is ever
+    // published outside a transaction (the ops-alert listener already does this).
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onTabPaymentConfirmed(CreditTabPaymentConfirmationEvent event) {
         try {
             confirmationService.dispatch(event);
         } catch (Exception ex) {
-            log.warn("Tab payment confirmation SMS failed intent={}", event.intentId(), ex);
+            log.warn("Tab payment confirmation SMS failed reference={}", event.referenceId(), ex);
         }
     }
 }

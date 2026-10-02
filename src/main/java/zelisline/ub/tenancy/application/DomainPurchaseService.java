@@ -75,9 +75,11 @@ public class DomainPurchaseService {
     private final GatewayStkPushService gatewayStkPushService;
     private final ObjectMapper objectMapper;
     private final ApplicationEventPublisher eventPublisher;
+    private final zelisline.ub.tenancy.integrations.storefront.StorefrontDomainsProperties storefrontDomainsProperties;
 
     @Transactional(readOnly = true)
     public DomainSearchResponse search(String businessId, String rawQuery) {
+        requireBuyEnabled();
         requireBusiness(businessId);
         requireHostAfrica();
         String query = normalizeQuery(rawQuery);
@@ -117,6 +119,7 @@ public class DomainPurchaseService {
 
     @Transactional
     public DomainOrderResponse createOrder(String businessId, CreateDomainOrderRequest request) {
+        requireBuyEnabled();
         requireBusiness(businessId);
         requireHostAfrica();
         String fqdn = normalizeQuery(request == null ? null : request.fqdn());
@@ -905,6 +908,15 @@ public class DomainPurchaseService {
     private void requireHostAfrica() {
         if (!hostAfricaClient.configured()) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "HostAfrica is not configured");
+        }
+    }
+
+    private void requireBuyEnabled() {
+        if (!storefrontDomainsProperties.isBuyEnabled()) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Domain purchase is temporarily unavailable while we finish the Coolify move. Connect a domain you already own instead."
+            );
         }
     }
 

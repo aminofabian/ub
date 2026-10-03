@@ -47,7 +47,11 @@ class SuperAdminDesktopLicensesControllerTest {
         when(repo.save(any(DesktopLicenseIssue.class)))
             .thenAnswer(inv -> inv.getArgument(0));
         return new SuperAdminDesktopLicensesController(
-            new DesktopLicenseIssuer(privateKey), mail, repo, null, businessRepository);
+            issuance(new DesktopLicenseIssuer(privateKey)), repo, null);
+    }
+
+    private DesktopLicenseIssuanceService issuance(DesktopLicenseIssuer issuer) {
+        return new DesktopLicenseIssuanceService(issuer, mail, repo, businessRepository);
     }
 
     /** The shop's cloud subscription tier, as the issue flow would find it by name. */
@@ -212,7 +216,7 @@ class SuperAdminDesktopLicensesControllerTest {
             .thenAnswer(inv -> inv.getArgument(0));
         SuperAdminDesktopLicensesController unconfigured =
             new SuperAdminDesktopLicensesController(
-                new DesktopLicenseIssuer(""), mail, repo, null, businessRepository);
+                issuance(new DesktopLicenseIssuer("")), repo, null);
 
         ResponseStatusException ex = assertThrows(
             ResponseStatusException.class,

@@ -1,0 +1,37 @@
+# Push-to-deploy for the cloud API.
+#
+# Coolify builds this repo (Dockerfile build pack, branch `main`) and runs it.
+# On every push to `main` this workflow asks Coolify to redeploy, so merging to
+# main is enough to ship — no manual "Deploy" click in the Coolify UI.
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   COOLIFY_DEPLOY_WEBHOOK  http://<coolify-host>/api/v1/deploy?uuid=<app-uuid>
+#   COOLIFY_DEPLOY_TOKEN    Coolify API token with the `deploy` permission
+name: Deploy (Coolify)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Coolify deploy
+        env:
+          WEBHOOK: ${{ secrets.COOLIFY_DEPLOY_WEBHOOK }}
+          TOKEN: ${{ secrets.COOLIFY_DEPLOY_TOKEN }}
+        run: |
+          if [ -z "$WEBHOOK" ] || [ -z "$TOKEN" ]; then
+            echo "COOLIFY_DEPLOY_WEBHOOK / COOLIFY_DEPLOY_TOKEN are not set on this repo." >&2
+            exit 1
+          fi
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/json" \
+            "$WEBHOOK"

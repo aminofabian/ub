@@ -188,6 +188,11 @@ public class SecurityConfig {
                         // shared X-Desktop-Log-Ingest-Key checked inside the controller.
                         .requestMatchers(HttpMethod.POST, "/api/v1/platform/desktop-logs").permitAll()
 
+                        // Desktop installs check in here (Machine ID + shop name) so the
+                        // console can list them and issue activation keys; same shared
+                        // X-Desktop-Log-Ingest-Key, checked inside the controller.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/platform/desktop-installs").permitAll()
+
                         // Desktop tills poll this when online to learn the console's
                         // current license signing key — a public key, no auth needed.
                         .requestMatchers(HttpMethod.GET, "/api/v1/platform/desktop-license-public-key").permitAll()

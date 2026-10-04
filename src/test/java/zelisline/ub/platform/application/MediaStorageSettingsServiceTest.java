@@ -100,6 +100,33 @@ class MediaStorageSettingsServiceTest {
     }
 
     @Test
+    void addsHttpsToEndpointAndPublicUrlEnteredAsBareHosts() {
+        service.update(new UpdateMediaStorageSettingsRequest(
+                null, null, " acct.r2.cloudflarestorage.com/ ", "picshare-media", "key", "secret", "media.example.com"));
+
+        service.update(providerOnly("r2"));
+
+        assertThat(row.getR2Endpoint()).isEqualTo("https://acct.r2.cloudflarestorage.com");
+        assertThat(row.getR2PublicBaseUrl()).isEqualTo("https://media.example.com");
+        verify(probe).verify(new R2Connection("https://acct.r2.cloudflarestorage.com",
+                "picshare-media", "key", "secret", "https://media.example.com"));
+    }
+
+    @Test
+    void repairsBareHostsSavedBeforeTheyWereNormalised() {
+        service.update(fullR2(null));
+        row.setR2Endpoint("acct.r2.cloudflarestorage.com");
+        row.setR2PublicBaseUrl("media.example.com");
+
+        service.update(providerOnly("r2"));
+
+        assertThat(service.activeR2Connection()).get()
+                .extracting(R2Connection::endpoint, R2Connection::publicBaseUrl)
+                .containsExactly("https://acct.r2.cloudflarestorage.com", "https://media.example.com");
+        assertThat(service.r2PublicBaseUrl()).contains("https://media.example.com");
+    }
+
+    @Test
     void refusesToSwitchWhenSettingsAreIncomplete() {
         assertThatThrownBy(() -> service.update(providerOnly("r2")))
                 .isInstanceOf(ResponseStatusException.class)

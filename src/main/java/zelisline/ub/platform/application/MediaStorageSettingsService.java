@@ -35,6 +35,8 @@ import zelisline.ub.platform.repository.PlatformMediaStorageSettingsRepository;
 public class MediaStorageSettingsService implements ActiveR2ConnectionSource, R2PublicUrlSource {
 
     private static final Logger log = LoggerFactory.getLogger(MediaStorageSettingsService.class);
+    private static final String URL_SCHEME_SEPARATOR = "://";
+    private static final String DEFAULT_URL_SCHEME = "https" + URL_SCHEME_SEPARATOR;
 
     private final PlatformMediaStorageSettingsRepository repository;
     private final CredentialEncryptionService encryptionService;
@@ -78,14 +80,14 @@ public class MediaStorageSettingsService implements ActiveR2ConnectionSource, R2
     @Override
     @Transactional(readOnly = true)
     public Optional<String> r2PublicBaseUrl() {
-        return Optional.ofNullable(loadOrDefault().getR2PublicBaseUrl()).filter(url -> !url.isBlank());
+        return Optional.ofNullable(asBaseUrl(loadOrDefault().getR2PublicBaseUrl()));
     }
 
     private void applyR2Fields(PlatformMediaStorageSettings row, UpdateMediaStorageSettingsRequest body) {
         if (body.r2AccountId() != null) row.setR2AccountId(trimToNull(body.r2AccountId()));
-        if (body.r2Endpoint() != null) row.setR2Endpoint(trimTrailingSlash(trimToNull(body.r2Endpoint())));
+        if (body.r2Endpoint() != null) row.setR2Endpoint(asBaseUrl(body.r2Endpoint()));
         if (body.r2Bucket() != null) row.setR2Bucket(trimToNull(body.r2Bucket()));
-        if (body.r2PublicBaseUrl() != null) row.setR2PublicBaseUrl(trimTrailingSlash(trimToNull(body.r2PublicBaseUrl())));
+        if (body.r2PublicBaseUrl() != null) row.setR2PublicBaseUrl(asBaseUrl(body.r2PublicBaseUrl()));
         if (body.r2AccessKeyId() != null) row.setR2AccessKeyIdEnc(encryptOrClear(body.r2AccessKeyId()));
         if (body.r2SecretAccessKey() != null) row.setR2SecretAccessKeyEnc(encryptOrClear(body.r2SecretAccessKey()));
     }
@@ -100,22 +102,23 @@ public class MediaStorageSettingsService implements ActiveR2ConnectionSource, R2
     }
 
     private ConnectionRead readConnection(PlatformMediaStorageSettings row) {
-        String endpoint = row.getR2Endpoint() != null ? row.getR2Endpoint()
+        String endpoint = row.getR2Endpoint() != null ? asBaseUrl(row.getR2Endpoint())
                 : row.getR2AccountId() != null ? R2Connection.endpointForAccount(row.getR2AccountId()) : null;
+        String publicBaseUrl = asBaseUrl(row.getR2PublicBaseUrl());
         String accessKeyId = decryptOrNull(row.getR2AccessKeyIdEnc());
         String secret = decryptOrNull(row.getR2SecretAccessKeyEnc());
 
         List<String> problems = new ArrayList<>();
         if (endpoint == null) problems.add("account ID or endpoint is missing");
         if (row.getR2Bucket() == null) problems.add("bucket is missing");
-        if (row.getR2PublicBaseUrl() == null) problems.add("public base URL is missing");
+        if (publicBaseUrl == null) problems.add("public base URL is missing");
         if (accessKeyId == null) problems.add(secretProblem("access key ID", row.getR2AccessKeyIdEnc()));
         if (secret == null) problems.add(secretProblem("secret access key", row.getR2SecretAccessKeyEnc()));
         if (!problems.isEmpty()) {
             return new ConnectionRead(null, problems);
         }
         return new ConnectionRead(
-                new R2Connection(endpoint, row.getR2Bucket(), accessKeyId, secret, row.getR2PublicBaseUrl()),
+                new R2Connection(endpoint, row.getR2Bucket(), accessKeyId, secret, publicBaseUrl),
                 problems);
     }
 
@@ -181,8 +184,14 @@ public class MediaStorageSettingsService implements ActiveR2ConnectionSource, R2
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    private static String trimTrailingSlash(String value) {
-        return value == null ? null : value.replaceAll("/+$", "");
+    /** Admins often paste a bare host; the S3 client and public links both need an absolute URL. */
+    private static String asBaseUrl(String value) {
+        String trimmed = trimToNull(value);
+        if (trimmed == null) {
+            return null;
+        }
+        String withoutSlash = trimmed.replaceAll("/+$", "");
+        return withoutSlash.contains(URL_SCHEME_SEPARATOR) ? withoutSlash : DEFAULT_URL_SCHEME + withoutSlash;
     }
 
     private static String nullToEmpty(String value) {

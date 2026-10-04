@@ -1165,6 +1165,8 @@ public class ItemCatalogService {
             item.setPackageVariant(patch.packageVariant());
             if (patch.packageVariant()) {
                 item.setStocked(false);
+                // Pack and weighed are mutually exclusive.
+                item.setWeighed(false);
             }
         }
         if (patch.packagingUnitName() != null) {
@@ -1419,11 +1421,12 @@ public class ItemCatalogService {
         child.setCategoryId(resolveOptionalCategory(businessId, request.categoryId(), parent.getCategoryId()));
         child.setAisleId(resolveOptionalAisle(businessId, request.aisleId(), parent.getAisleId()));
         child.setUnitType(firstNonBlank(request.unitType(), parent.getUnitType()));
-        child.setWeighed(request.isWeighed() != null ? request.isWeighed() : parent.isWeighed());
         boolean packageVariant = Boolean.TRUE.equals(request.packageVariant());
         child.setPackageVariant(packageVariant);
         child.setSellable(request.isSellable() != null ? request.isSellable() : true);
         if (packageVariant) {
+            // Packs sell whole units from the parent pool — never by weight.
+            child.setWeighed(false);
             if (request.packagingUnitQty() == null || request.packagingUnitQty().signum() <= 0) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_REQUEST,
@@ -1445,6 +1448,7 @@ public class ItemCatalogService {
                 child.setBundleName(blankToNull(request.bundleName()));
             }
         } else {
+            child.setWeighed(request.isWeighed() != null ? request.isWeighed() : parent.isWeighed());
             child.setStocked(request.isStocked() != null ? request.isStocked() : parent.isStocked());
             child.setPackagingUnitName(parent.getPackagingUnitName());
             child.setPackagingUnitQty(parent.getPackagingUnitQty());
@@ -1470,6 +1474,7 @@ public class ItemCatalogService {
         child.setSize(firstNonBlank(request.size(), parent.getSize()));
         child.setWebPublished(true);
         syncVariantStoredDisplayName(child, parent.getName());
+        ItemWeightValidation.validate(child);
 
         try {
             itemRepository.save(child);

@@ -1678,8 +1678,12 @@ class SaleSlice2IT {
     void postSale_weighedQuantityOnPackageVariant_isRejected() throws Exception {
         openShift(new BigDecimal("100.00"));
         String parentId = createPackParent("60");
-        // Pathological data: a pack SKU also flagged weighed (e.g. created before the guard).
-        String variantId = createPackVariant(parentId, true, null);
+        // Pathological data: a pack SKU also flagged weighed (legacy rows before the guard).
+        String variantId = createPackVariant(parentId, false, null);
+        var pack = itemRepository.findById(variantId).orElseThrow();
+        pack.setWeighed(true);
+        pack.setUnitType("kg");
+        itemRepository.save(pack);
 
         String body = """
                 {"branchId":"%s","lines":[{"itemId":"%s","quantity":0.5,"unitPrice":100}],"payments":[{"method":"cash","amount":50}]}

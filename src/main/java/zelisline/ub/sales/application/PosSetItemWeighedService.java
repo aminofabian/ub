@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.api.dto.ItemResponse;
 import zelisline.ub.catalog.api.dto.PatchItemRequest;
 import zelisline.ub.catalog.application.ItemCatalogService;
+import zelisline.ub.catalog.application.ItemWeightValidation;
 import zelisline.ub.catalog.application.PackageVariantStockResolver;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
@@ -61,7 +62,8 @@ public class PosSetItemWeighedService {
             // multiply the kg by unitsPerSale, booking a spurious loss.
             Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(id, businessId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Item not found"));
-            if (item.isPackageVariant() || packageVariantStockResolver.sharesParentStock(item)) {
+            if (ItemWeightValidation.isPackSellSku(item)
+                    || packageVariantStockResolver.sharesParentStock(item)) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_REQUEST,
                         "This product sells as a pack. Mark the base product as weighed instead, or create a separate weighed SKU."

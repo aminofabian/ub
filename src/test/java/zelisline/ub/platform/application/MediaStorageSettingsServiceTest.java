@@ -113,6 +113,20 @@ class MediaStorageSettingsServiceTest {
     }
 
     @Test
+    void dropsTheBucketPathCloudflareAppendsToTheS3ApiUrl() {
+        service.update(new UpdateMediaStorageSettingsRequest(null, null,
+                "https://acct.r2.cloudflarestorage.com/picshare-media", "picshare-media", "key", "secret",
+                "https://media.example.com"));
+        assertThat(row.getR2Endpoint()).isEqualTo("https://acct.r2.cloudflarestorage.com");
+        row.setR2Endpoint("https://acct.r2.cloudflarestorage.com/picshare-media");
+
+        service.update(providerOnly("r2"));
+
+        verify(probe).verify(new R2Connection("https://acct.r2.cloudflarestorage.com",
+                "picshare-media", "key", "secret", "https://media.example.com"));
+    }
+
+    @Test
     void repairsBareHostsSavedBeforeTheyWereNormalised() {
         service.update(fullR2(null));
         row.setR2Endpoint("acct.r2.cloudflarestorage.com");

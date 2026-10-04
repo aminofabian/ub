@@ -191,6 +191,16 @@ class R2MediaStoreTest {
     }
 
     @Test
+    void verifyWritableNamesTheBucketAndEndpointWhenTheBucketIsMissing() {
+        when(client.putObject(any(PutObjectRequest.class), any(RequestBody.class)))
+                .thenThrow(S3Exception.builder().statusCode(404).build());
+
+        assertThatThrownBy(() -> store.verifyWritable())
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("\"picshare-media\" was not found at https://acct.r2.cloudflarestorage.com");
+    }
+
+    @Test
     void destroySwallowsStorageErrors() {
         when(client.deleteObject(any(DeleteObjectRequest.class)))
                 .thenThrow(S3Exception.builder().message("boom").build());

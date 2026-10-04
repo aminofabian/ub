@@ -85,7 +85,7 @@ public class MediaStorageSettingsService implements ActiveR2ConnectionSource, R2
 
     private void applyR2Fields(PlatformMediaStorageSettings row, UpdateMediaStorageSettingsRequest body) {
         if (body.r2AccountId() != null) row.setR2AccountId(trimToNull(body.r2AccountId()));
-        if (body.r2Endpoint() != null) row.setR2Endpoint(asBaseUrl(body.r2Endpoint()));
+        if (body.r2Endpoint() != null) row.setR2Endpoint(asEndpoint(body.r2Endpoint()));
         if (body.r2Bucket() != null) row.setR2Bucket(trimToNull(body.r2Bucket()));
         if (body.r2PublicBaseUrl() != null) row.setR2PublicBaseUrl(asBaseUrl(body.r2PublicBaseUrl()));
         if (body.r2AccessKeyId() != null) row.setR2AccessKeyIdEnc(encryptOrClear(body.r2AccessKeyId()));
@@ -102,7 +102,7 @@ public class MediaStorageSettingsService implements ActiveR2ConnectionSource, R2
     }
 
     private ConnectionRead readConnection(PlatformMediaStorageSettings row) {
-        String endpoint = row.getR2Endpoint() != null ? asBaseUrl(row.getR2Endpoint())
+        String endpoint = row.getR2Endpoint() != null ? asEndpoint(row.getR2Endpoint())
                 : row.getR2AccountId() != null ? R2Connection.endpointForAccount(row.getR2AccountId()) : null;
         String publicBaseUrl = asBaseUrl(row.getR2PublicBaseUrl());
         String accessKeyId = decryptOrNull(row.getR2AccessKeyIdEnc());
@@ -182,6 +182,20 @@ public class MediaStorageSettingsService implements ActiveR2ConnectionSource, R2
 
     private static String trimToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    /**
+     * Cloudflare shows the S3 API URL with the bucket appended ({@code https://acct.r2.cloudflarestorage.com/bucket});
+     * the client adds the bucket itself, so any path left on the endpoint makes every request a 404.
+     */
+    private static String asEndpoint(String value) {
+        String url = asBaseUrl(value);
+        if (url == null) {
+            return null;
+        }
+        int hostStart = url.indexOf(URL_SCHEME_SEPARATOR) + URL_SCHEME_SEPARATOR.length();
+        int pathStart = url.indexOf('/', hostStart);
+        return pathStart < 0 ? url : url.substring(0, pathStart);
     }
 
     /** Admins often paste a bare host; the S3 client and public links both need an absolute URL. */

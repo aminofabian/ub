@@ -24,6 +24,7 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 
 /**
  * Cloudflare R2 {@link MediaStore}, built from the super-admin's saved {@link R2Connection}
@@ -75,9 +76,19 @@ public class R2MediaStore implements MediaStore, AutoCloseable {
                     .bucket(connection.bucket()).key(key).contentType(PROBE_CONTENT_TYPE).build(),
                     RequestBody.fromBytes(body));
             client.deleteObject(DeleteObjectRequest.builder().bucket(connection.bucket()).key(key).build());
+        } catch (S3Exception e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, probeFailureMessage(e));
         } catch (SdkException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "R2 bucket is not writable: " + e.getMessage());
         }
+    }
+
+    private String probeFailureMessage(S3Exception e) {
+        if (e.statusCode() == HttpStatus.NOT_FOUND.value()) {
+            return "R2 bucket \"" + connection.bucket() + "\" was not found at " + connection.endpoint()
+                    + ". Check the bucket name, and that the endpoint is just https://<account-id>.r2.cloudflarestorage.com";
+        }
+        return "R2 bucket is not writable: " + e.getMessage();
     }
 
     @Override

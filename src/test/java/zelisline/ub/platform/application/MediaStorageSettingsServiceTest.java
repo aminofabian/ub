@@ -127,6 +127,19 @@ class MediaStorageSettingsServiceTest {
     }
 
     @Test
+    void ignoresANonR2EndpointAndDerivesItFromTheAccountId() {
+        service.update(new UpdateMediaStorageSettingsRequest(null, "acct", "someone@gmail.com",
+                "picshare-media", "key", "secret", "https://media.example.com"));
+        assertThat(row.getR2Endpoint()).isNull();
+        row.setR2Endpoint("someone@gmail.com");
+
+        service.update(providerOnly("r2"));
+
+        verify(probe).verify(new R2Connection("https://acct.r2.cloudflarestorage.com",
+                "picshare-media", "key", "secret", "https://media.example.com"));
+    }
+
+    @Test
     void repairsBareHostsSavedBeforeTheyWereNormalised() {
         service.update(fullR2(null));
         row.setR2Endpoint("acct.r2.cloudflarestorage.com");

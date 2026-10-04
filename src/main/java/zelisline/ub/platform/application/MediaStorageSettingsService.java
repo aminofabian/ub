@@ -37,6 +37,7 @@ public class MediaStorageSettingsService implements ActiveR2ConnectionSource, R2
     private static final Logger log = LoggerFactory.getLogger(MediaStorageSettingsService.class);
     private static final String URL_SCHEME_SEPARATOR = "://";
     private static final String DEFAULT_URL_SCHEME = "https" + URL_SCHEME_SEPARATOR;
+    private static final String R2_HOST_SUFFIX = ".r2.cloudflarestorage.com";
 
     private final PlatformMediaStorageSettingsRepository repository;
     private final CredentialEncryptionService encryptionService;
@@ -102,8 +103,8 @@ public class MediaStorageSettingsService implements ActiveR2ConnectionSource, R2
     }
 
     private ConnectionRead readConnection(PlatformMediaStorageSettings row) {
-        String endpoint = row.getR2Endpoint() != null ? asEndpoint(row.getR2Endpoint())
-                : row.getR2AccountId() != null ? R2Connection.endpointForAccount(row.getR2AccountId()) : null;
+        String endpoint = Optional.ofNullable(asEndpoint(row.getR2Endpoint()))
+                .orElseGet(() -> row.getR2AccountId() != null ? R2Connection.endpointForAccount(row.getR2AccountId()) : null);
         String publicBaseUrl = asBaseUrl(row.getR2PublicBaseUrl());
         String accessKeyId = decryptOrNull(row.getR2AccessKeyIdEnc());
         String secret = decryptOrNull(row.getR2SecretAccessKeyEnc());
@@ -187,6 +188,8 @@ public class MediaStorageSettingsService implements ActiveR2ConnectionSource, R2
     /**
      * Cloudflare shows the S3 API URL with the bucket appended ({@code https://acct.r2.cloudflarestorage.com/bucket});
      * the client adds the bucket itself, so any path left on the endpoint makes every request a 404.
+     * Anything that is not an R2 host (browsers autofill this optional field with an email) is
+     * discarded so the endpoint is derived from the account ID instead.
      */
     private static String asEndpoint(String value) {
         String url = asBaseUrl(value);
@@ -195,7 +198,10 @@ public class MediaStorageSettingsService implements ActiveR2ConnectionSource, R2
         }
         int hostStart = url.indexOf(URL_SCHEME_SEPARATOR) + URL_SCHEME_SEPARATOR.length();
         int pathStart = url.indexOf('/', hostStart);
-        return pathStart < 0 ? url : url.substring(0, pathStart);
+        String origin = pathStart < 0 ? url : url.substring(0, pathStart);
+        String host = origin.substring(hostStart);
+        boolean isR2Host = !host.contains("@") && host.endsWith(R2_HOST_SUFFIX);
+        return isR2Host ? origin : null;
     }
 
     /** Admins often paste a bare host; the S3 client and public links both need an absolute URL. */

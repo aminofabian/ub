@@ -37,12 +37,12 @@ class R2MediaStoreTest {
 
     @BeforeEach
     void setUp() {
-        R2Properties properties = new R2Properties();
-        properties.setBucket("picshare-media");
-        properties.setPublicBaseUrl("https://media.example.com/");
+        R2Connection connection = new R2Connection(
+                "https://acct.r2.cloudflarestorage.com", "picshare-media", "key", "secret",
+                "https://media.example.com");
         client = mock(S3Client.class);
         fetcher = mock(RemoteImageFetcher.class);
-        store = new R2MediaStore(properties, client, fetcher);
+        store = new R2MediaStore(connection, client, fetcher);
     }
 
     private static byte[] png(int width, int height) throws IOException {
@@ -128,6 +128,28 @@ class R2MediaStoreTest {
         verify(client, org.mockito.Mockito.times(2)).deleteObject(deletes.capture());
         assertThat(deletes.getAllValues()).extracting(DeleteObjectRequest::key)
                 .containsExactly("ub/biz/items/1/abc", "ub/biz/items/1/abc.jpg");
+    }
+
+    @Test
+    void verifyWritableWritesThenDeletesAProbe() {
+        store.verifyWritable();
+
+        var put = ArgumentCaptor.forClass(PutObjectRequest.class);
+        var delete = ArgumentCaptor.forClass(DeleteObjectRequest.class);
+        verify(client).putObject(put.capture(), any(RequestBody.class));
+        verify(client).deleteObject(delete.capture());
+        assertThat(put.getValue().key()).startsWith("_palmart-healthcheck/");
+        assertThat(delete.getValue().key()).isEqualTo(put.getValue().key());
+    }
+
+    @Test
+    void verifyWritableReportsTheProviderReason() {
+        when(client.putObject(any(PutObjectRequest.class), any(RequestBody.class)))
+                .thenThrow(S3Exception.builder().message("InvalidAccessKeyId").build());
+
+        assertThatThrownBy(() -> store.verifyWritable())
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("InvalidAccessKeyId");
     }
 
     @Test

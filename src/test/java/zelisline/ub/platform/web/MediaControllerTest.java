@@ -15,24 +15,31 @@ import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.Optional;
+
+import zelisline.ub.platform.media.ActiveR2ConnectionSource;
 import zelisline.ub.platform.media.CloudinarySignatureService;
 import zelisline.ub.platform.media.CloudinaryUploadResult;
 import zelisline.ub.platform.media.MediaStore;
-import zelisline.ub.platform.media.R2Properties;
+import zelisline.ub.platform.media.R2Connection;
 
 class MediaControllerTest {
 
+    private static final R2Connection R2 =
+            new R2Connection("https://e", "b", "k", "s", "https://media.example.com");
+
     private CloudinarySignatureService signatureService;
     private MediaStore mediaStore;
-    private R2Properties r2Properties;
+    private ActiveR2ConnectionSource r2Source;
     private MediaController controller;
 
     @BeforeEach
     void setUp() {
         signatureService = mock(CloudinarySignatureService.class);
         mediaStore = mock(MediaStore.class);
-        r2Properties = new R2Properties();
-        controller = new MediaController(signatureService, mediaStore, r2Properties);
+        r2Source = mock(ActiveR2ConnectionSource.class);
+        when(r2Source.activeR2Connection()).thenReturn(Optional.empty());
+        controller = new MediaController(signatureService, mediaStore, r2Source);
     }
 
     private static MediaController.CloudinarySignatureRequest request(String resourceType) {
@@ -53,7 +60,7 @@ class MediaControllerTest {
 
     @Test
     void routesImageUploadsThroughTheBackendWhenR2IsOn() {
-        r2Properties.setEnabled(true);
+        when(r2Source.activeR2Connection()).thenReturn(Optional.of(R2));
 
         var response = controller.generateSignature(request("image"));
 
@@ -65,7 +72,7 @@ class MediaControllerTest {
 
     @Test
     void keepsNonImageUploadsOnCloudinaryEvenWithR2On() {
-        r2Properties.setEnabled(true);
+        when(r2Source.activeR2Connection()).thenReturn(Optional.of(R2));
         when(signatureService.isConfigured()).thenReturn(true);
         when(signatureService.signUpload(anyString(), any())).thenReturn(
                 new CloudinarySignatureService.SignatureResult("cloud", "key", 1L, "sig", "ub/support/1", "auto"));

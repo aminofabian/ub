@@ -20,10 +20,10 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
+import zelisline.ub.platform.media.ActiveR2ConnectionSource;
 import zelisline.ub.platform.media.CloudinarySignatureService;
 import zelisline.ub.platform.media.CloudinaryUploadResult;
 import zelisline.ub.platform.media.MediaStore;
-import zelisline.ub.platform.media.R2Properties;
 
 @RestController
 @RequestMapping("/api/v1/media")
@@ -35,23 +35,23 @@ public class MediaController {
 
     private final CloudinarySignatureService signatureService;
     private final MediaStore mediaStore;
-    private final R2Properties r2Properties;
+    private final ActiveR2ConnectionSource r2Source;
 
     public MediaController(
-            CloudinarySignatureService signatureService, MediaStore mediaStore, R2Properties r2Properties) {
+            CloudinarySignatureService signatureService, MediaStore mediaStore, ActiveR2ConnectionSource r2Source) {
         this.signatureService = signatureService;
         this.mediaStore = mediaStore;
-        this.r2Properties = r2Properties;
+        this.r2Source = r2Source;
     }
 
     /**
-     * Browser upload handshake. With R2 enabled, image uploads answer {@code provider=r2} and the
+     * Browser upload handshake. With uploads switched to R2 in super-admin, image uploads answer {@code provider=r2} and the
      * client posts the file to {@link #upload}; {@code auto}/{@code raw} (support attachments)
      * stay on Cloudinary because the media store only accepts images.
      */
     @PostMapping("/cloudinary-signature")
     public CloudinarySignatureResponse generateSignature(@Valid @RequestBody CloudinarySignatureRequest request) {
-        if (r2Properties.isEnabled() && isImageResource(request.resourceType())) {
+        if (isImageResource(request.resourceType()) && r2Source.activeR2Connection().isPresent()) {
             return CloudinarySignatureResponse.viaBackend(request.folder().trim());
         }
         if (!signatureService.isConfigured()) {

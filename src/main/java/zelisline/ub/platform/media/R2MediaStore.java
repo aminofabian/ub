@@ -3,6 +3,7 @@ package zelisline.ub.platform.media;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -11,12 +12,7 @@ import javax.imageio.ImageIO;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.DisposableBean;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpStatus;
-import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -26,59 +22,61 @@ import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 /**
- * Cloudflare R2 {@link MediaStore}. Active when {@code app.media.r2.enabled=true}.
- *
- * <p>{@link Primary} so it wins injection while {@link CloudinaryImageService} stays up for
- * the browser-signed upload endpoints during the migration. Objects are stored at
- * {@code <folder>/<uuid>.<ext>}; that key is the persisted {@code publicId}. Cloudinary-only
- * fields ({@code phash}, colours, version) stay null, as with {@link LocalMediaStore}.
+ * Cloudflare R2 {@link MediaStore}, built from the super-admin's saved {@link R2Connection}
+ * by {@link RoutingMediaStore}. Objects are stored at {@code <folder>/<uuid>.<ext>}; that key
+ * is the persisted {@code publicId}. Cloudinary-only fields ({@code phash}, colours, version)
+ * stay null, as with {@link LocalMediaStore}.
  */
-@Service
-@Primary
-@ConditionalOnProperty(name = "app.media.r2.enabled", havingValue = "true")
-public class R2MediaStore implements MediaStore, DisposableBean {
+public class R2MediaStore implements MediaStore, AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(R2MediaStore.class);
     private static final int MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
     private static final String DEFAULT_FOLDER = "ub/misc";
     private static final String R2_REGION = "auto";
     private static final String IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
+    private static final String PROBE_FOLDER = "_palmart-healthcheck";
+    private static final String PROBE_CONTENT_TYPE = "text/plain";
 
-    private final R2Properties properties;
+    private final R2Connection connection;
     private final S3Client client;
     private final RemoteImageFetcher remoteFetcher;
     private final R2LegacyObjectRemover legacyRemover;
 
-    @Autowired
-    public R2MediaStore(R2Properties properties) {
-        this(properties, buildClient(properties), new RemoteImageFetcher(MAX_UPLOAD_BYTES));
-    }
-
-    R2MediaStore(R2Properties properties, S3Client client, RemoteImageFetcher remoteFetcher) {
-        this.properties = properties;
+    R2MediaStore(R2Connection connection, S3Client client, RemoteImageFetcher remoteFetcher) {
+        this.connection = connection;
         this.client = client;
         this.remoteFetcher = remoteFetcher;
-        this.legacyRemover = new R2LegacyObjectRemover(client, properties.getBucket());
-        log.info("[R2MediaStore] active. bucket={} publicBase={}",
-                properties.getBucket(), properties.resolvedPublicBaseUrl());
+        this.legacyRemover = new R2LegacyObjectRemover(client, connection.bucket());
     }
 
-    private static S3Client buildClient(R2Properties properties) {
-        var missing = properties.missingSettings();
-        if (!missing.isEmpty()) {
-            throw new IllegalStateException(
-                    "APP_MEDIA_R2_ENABLED=true but these are not set: " + String.join(", ", missing));
-        }
-        return S3Client.builder()
+    public static R2MediaStore open(R2Connection connection) {
+        S3Client client = S3Client.builder()
                 .region(Region.of(R2_REGION))
-                .endpointOverride(URI.create(properties.resolvedEndpoint()))
+                .endpointOverride(URI.create(connection.endpoint()))
                 .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(true).build())
-                .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(
-                        properties.getAccessKeyId().trim(), properties.getSecretAccessKey().trim())))
+                .credentialsProvider(StaticCredentialsProvider.create(
+                        AwsBasicCredentials.create(connection.accessKeyId(), connection.secretAccessKey())))
                 .build();
+        log.info("[R2MediaStore] opened bucket={} publicBase={}", connection.bucket(), connection.publicBaseUrl());
+        return new R2MediaStore(connection, client, new RemoteImageFetcher(MAX_UPLOAD_BYTES));
+    }
+
+    /** Writes then deletes a probe object; throws 400 with the provider's reason when the bucket is unusable. */
+    public void verifyWritable() {
+        String key = PROBE_FOLDER + "/" + UUID.randomUUID() + ".txt";
+        byte[] body = "ok".getBytes(StandardCharsets.UTF_8);
+        try {
+            client.putObject(PutObjectRequest.builder()
+                    .bucket(connection.bucket()).key(key).contentType(PROBE_CONTENT_TYPE).build(),
+                    RequestBody.fromBytes(body));
+            client.deleteObject(DeleteObjectRequest.builder().bucket(connection.bucket()).key(key).build());
+        } catch (SdkException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "R2 bucket is not writable: " + e.getMessage());
+        }
     }
 
     @Override
@@ -132,13 +130,13 @@ public class R2MediaStore implements MediaStore, DisposableBean {
     }
 
     @Override
-    public void destroy() {
+    public void close() {
         client.close();
     }
 
     private void putObject(String key, byte[] bytes, MediaFormat format) {
         PutObjectRequest request = PutObjectRequest.builder()
-                .bucket(properties.getBucket())
+                .bucket(connection.bucket())
                 .key(key)
                 .contentType(format.contentType())
                 .contentLength((long) bytes.length)
@@ -152,7 +150,7 @@ public class R2MediaStore implements MediaStore, DisposableBean {
     }
 
     private String publicUrl(String key) {
-        return properties.resolvedPublicBaseUrl() + "/" + key;
+        return connection.publicBaseUrl() + "/" + key;
     }
 
     private static void validateSize(byte[] fileBytes) {

@@ -7,10 +7,11 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 import zelisline.ub.integrations.backup.config.BackupProperties;
 import zelisline.ub.platform.media.CloudinaryProperties;
+import zelisline.ub.platform.media.R2Properties;
 
 @SpringBootApplication
 @EnableScheduling
-@EnableConfigurationProperties({CloudinaryProperties.class, BackupProperties.class})
+@EnableConfigurationProperties({CloudinaryProperties.class, R2Properties.class, BackupProperties.class})
 public class UbApplication {
 
     public static void main(String[] args) {

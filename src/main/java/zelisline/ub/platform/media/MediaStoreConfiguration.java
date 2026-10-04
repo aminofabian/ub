@@ -22,6 +22,7 @@ public class MediaStoreConfiguration {
     @Bean
     @ConditionalOnProperty(name = "app.media.cloudinary.enabled", havingValue = "false")
     @ConditionalOnProperty(name = "app.media.local.enabled", havingValue = "false", matchIfMissing = true)
+    @ConditionalOnProperty(name = "app.media.r2.enabled", havingValue = "false", matchIfMissing = true)
     public MediaStore noOpMediaStore() {
         return new MediaStore() {
             @Override

@@ -66,6 +66,15 @@ class MediaStorageSettingsServiceTest {
     }
 
     @Test
+    void exposesTheSavedPublicBaseUrlEvenWhileUploadsStayOnCloudinary() {
+        assertThat(service.r2PublicBaseUrl()).isEmpty();
+
+        service.update(fullR2(null));
+
+        assertThat(service.r2PublicBaseUrl()).contains("https://media.example.com");
+    }
+
+    @Test
     void savesR2KeysEncryptedWithoutSwitchingOrProbing() {
         var response = service.update(fullR2(null));
 

@@ -35,6 +35,7 @@ public class R2MediaStore implements MediaStore, AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(R2MediaStore.class);
     private static final int MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
+    private static final int MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024;
     private static final String DEFAULT_FOLDER = "ub/misc";
     private static final String R2_REGION = "auto";
     private static final String IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
@@ -103,9 +104,31 @@ public class R2MediaStore implements MediaStore, AutoCloseable {
         MediaFormat format = MediaFormat.detect(fileBytes).orElseThrow(() ->
                 new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported image format"));
         String key = normalizeFolder(folderPath) + "/" + UUID.randomUUID() + "." + format.extension();
-        putObject(key, fileBytes, format);
+        putObject(key, fileBytes, format.contentType(), null);
 
         Integer[] size = readPixelSize(fileBytes);
+        return new CloudinaryUploadResult(
+                key, publicUrl(key), size[0], size[1], (long) fileBytes.length,
+                format.extension(), format.contentType(), null, null, null);
+    }
+
+    /** Support attachment: stored under {@code <folder>/<uuid>.<ext>}; non-images download rather than render. */
+    public CloudinaryUploadResult uploadAttachment(byte[] fileBytes, String originalFilename, String folderPath) {
+        if (fileBytes == null || fileBytes.length == 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Empty attachment");
+        }
+        if (fileBytes.length > MAX_ATTACHMENT_BYTES) {
+            throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "Attachment exceeds size limit");
+        }
+        AttachmentFormat format = AttachmentFormat.detect(fileBytes, originalFilename).orElseThrow(() ->
+                new ResponseStatusException(HttpStatus.BAD_REQUEST, "Attachment type is not allowed"));
+        String key = normalizeFolder(folderPath) + "/" + UUID.randomUUID() + "." + format.extension();
+        String disposition = format.isImage() || format == AttachmentFormat.PDF
+                ? null
+                : AttachmentDisposition.download(originalFilename, format.extension());
+        putObject(key, fileBytes, format.contentType(), disposition);
+
+        Integer[] size = format.isImage() ? readPixelSize(fileBytes) : new Integer[] {null, null};
         return new CloudinaryUploadResult(
                 key, publicUrl(key), size[0], size[1], (long) fileBytes.length,
                 format.extension(), format.contentType(), null, null, null);
@@ -134,18 +157,19 @@ public class R2MediaStore implements MediaStore, AutoCloseable {
         client.close();
     }
 
-    private void putObject(String key, byte[] bytes, MediaFormat format) {
+    private void putObject(String key, byte[] bytes, String contentType, String contentDisposition) {
         PutObjectRequest request = PutObjectRequest.builder()
                 .bucket(connection.bucket())
                 .key(key)
-                .contentType(format.contentType())
+                .contentType(contentType)
+                .contentDisposition(contentDisposition)
                 .contentLength((long) bytes.length)
                 .cacheControl(IMMUTABLE_CACHE_CONTROL)
                 .build();
         try {
             client.putObject(request, RequestBody.fromBytes(bytes));
         } catch (SdkException e) {
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Could not store image in R2: " + e.getMessage());
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Could not store file in R2: " + e.getMessage());
         }
     }
 

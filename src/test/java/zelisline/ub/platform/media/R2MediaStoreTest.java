@@ -94,7 +94,45 @@ class R2MediaStoreTest {
 
         assertThatThrownBy(() -> store.uploadImageToFolder(png(1, 1), "x.png", "ub/misc"))
                 .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("Could not store image in R2");
+                .hasMessageContaining("Could not store file in R2");
+    }
+
+    @Test
+    void storesDocumentAttachmentsAsDownloadsUnderTheirOwnName() {
+        byte[] csv = "sku,qty\nA,1\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        CloudinaryUploadResult result = store.uploadAttachment(csv, "Stock \"list\".csv", "ub/support/t1");
+
+        var request = ArgumentCaptor.forClass(PutObjectRequest.class);
+        verify(client).putObject(request.capture(), any(RequestBody.class));
+        assertThat(request.getValue().key()).matches("ub/support/t1/[0-9a-f-]{36}\\.csv");
+        assertThat(request.getValue().contentType()).isEqualTo("text/csv");
+        assertThat(request.getValue().contentDisposition())
+                .isEqualTo("attachment; filename=\"Stock list.csv\"; filename*=UTF-8''Stock%20list.csv");
+        assertThat(result.secureUrl()).isEqualTo("https://media.example.com/" + result.publicId());
+        assertThat(result.width()).isNull();
+    }
+
+    @Test
+    void storesImageAttachmentsInlineWithPixelSize() throws IOException {
+        CloudinaryUploadResult result = store.uploadAttachment(png(5, 4), "shot.png", "ub/support/t1");
+
+        var request = ArgumentCaptor.forClass(PutObjectRequest.class);
+        verify(client).putObject(request.capture(), any(RequestBody.class));
+        assertThat(request.getValue().contentDisposition()).isNull();
+        assertThat(result.width()).isEqualTo(5);
+        assertThat(result.contentType()).isEqualTo("image/png");
+    }
+
+    @Test
+    void refusesDisallowedOrOversizedAttachments() {
+        assertThatThrownBy(() -> store.uploadAttachment("<html>".getBytes(), "page.html", "ub/support/t1"))
+                .hasMessageContaining("not allowed");
+        assertThatThrownBy(() -> store.uploadAttachment(new byte[15 * 1024 * 1024 + 1], "a.txt", "ub/support/t1"))
+                .hasMessageContaining("size limit");
+        assertThatThrownBy(() -> store.uploadAttachment(new byte[0], "a.txt", "ub/support/t1"))
+                .hasMessageContaining("Empty attachment");
+        verify(client, never()).putObject(any(PutObjectRequest.class), any(RequestBody.class));
     }
 
     @Test

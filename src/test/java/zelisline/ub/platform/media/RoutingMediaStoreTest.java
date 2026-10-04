@@ -102,6 +102,19 @@ class RoutingMediaStoreTest {
     }
 
     @Test
+    void sendsAttachmentsToR2OnlyWhileItIsActive() {
+        when(r2Source.activeR2Connection()).thenReturn(Optional.of(R2));
+        assertThat(routing.isActive()).isTrue();
+        routing.uploadAttachment(BYTES, "a.pdf", "ub/support/t");
+        verify(r2Store).uploadAttachment(BYTES, "a.pdf", "ub/support/t");
+
+        when(r2Source.activeR2Connection()).thenReturn(Optional.empty());
+        assertThat(routing.isActive()).isFalse();
+        assertThatThrownBy(() -> routing.uploadAttachment(BYTES, "a.pdf", "ub/support/t"))
+                .hasMessageContaining("not on R2");
+    }
+
+    @Test
     void failsClearlyWhenNoStoreIsAvailable() {
         when(r2Source.activeR2Connection()).thenReturn(Optional.empty());
         when(cloudinaryProvider.getIfAvailable()).thenReturn(null);

@@ -21,7 +21,7 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 @Primary
 @ConditionalOnProperty(name = "app.media.local.enabled", havingValue = "false", matchIfMissing = true)
-public class RoutingMediaStore implements MediaStore, DisposableBean {
+public class RoutingMediaStore implements MediaStore, AttachmentStore, DisposableBean {
 
     private final ActiveR2ConnectionSource r2Source;
     private final ObjectProvider<CloudinaryImageService> cloudinary;
@@ -86,6 +86,18 @@ public class RoutingMediaStore implements MediaStore, DisposableBean {
         if (fallback != null) {
             fallback.destroyImage(publicId);
         }
+    }
+
+    @Override
+    public boolean isActive() {
+        return r2Source.activeR2Connection().isPresent();
+    }
+
+    @Override
+    public CloudinaryUploadResult uploadAttachment(byte[] fileBytes, String originalFilename, String folderPath) {
+        R2Connection connection = r2Source.activeR2Connection().orElseThrow(() ->
+                new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Attachment storage is not on R2"));
+        return r2Store(connection).uploadAttachment(fileBytes, originalFilename, folderPath);
     }
 
     @Override

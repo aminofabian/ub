@@ -27,6 +27,8 @@ import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.domain.UserStatus;
 import zelisline.ub.identity.repository.SuperAdminRepository;
 import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.platform.domain.PlatformMediaStorageSettings;
+import zelisline.ub.platform.repository.PlatformMediaStorageSettingsRepository;
 import zelisline.ub.support.repository.SupportConversationRepository;
 import zelisline.ub.support.repository.SupportMessageRepository;
 import zelisline.ub.tenancy.domain.Business;
@@ -49,6 +51,7 @@ class SupportChatIT {
     private static final String SLUG_A = "support-shop-a";
     private static final String SLUG_B = "support-shop-b";
     private static final String ROLE_OWNER = "22222222-aaaa-bbbb-cccc-000000000001";
+    private static final String R2_PUBLIC_BASE = "https://media.example.com";
 
     @Autowired
     private MockMvc mockMvc;
@@ -77,6 +80,9 @@ class SupportChatIT {
     @Autowired
     private PasswordEncoder passwordEncoder;
 
+    @Autowired
+    private PlatformMediaStorageSettingsRepository mediaStorageSettingsRepository;
+
     @MockitoBean
     @SuppressWarnings("unused")
     private DomainMappingRepository domainMappingRepository;
@@ -91,6 +97,7 @@ class SupportChatIT {
         branchRepository.deleteAll();
         businessRepository.deleteAll();
         superAdminRepository.deleteAll();
+        mediaStorageSettingsRepository.deleteAll();
 
         seedShop(TENANT_A, SLUG_A);
         seedShop(TENANT_B, SLUG_B);
@@ -400,6 +407,46 @@ class SupportChatIT {
                         .param("guestId", "guest-b")
                         .header("X-Guest-Token", "whatever"))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void guestAttachmentsMayLiveInTheSavedR2BucketButNowhereElse() throws Exception {
+        PlatformMediaStorageSettings settings = new PlatformMediaStorageSettings();
+        settings.setId(PlatformMediaStorageSettings.SINGLETON_ID);
+        settings.setR2PublicBaseUrl(R2_PUBLIC_BASE);
+        mediaStorageSettingsRepository.save(settings);
+
+        MvcResult created = mockMvc.perform(post("/api/v1/public/support/threads")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"type":"VISITOR","guestId":"guest-files","body":"Sending a statement"}
+                                """))
+                .andExpect(status().isCreated())
+                .andReturn();
+        var thread = objectMapper.readTree(created.getResponse().getContentAsString());
+        String path = "/api/v1/public/support/threads/" + thread.path("conversation").get("id").asText() + "/messages";
+        String token = thread.get("token").asText();
+
+        mockMvc.perform(post(path)
+                        .contentType(APPLICATION_JSON)
+                        .content(attachmentMessage(R2_PUBLIC_BASE + "/ub/support/x/a.pdf"))
+                        .header("X-Guest-Id", "guest-files")
+                        .header("X-Guest-Token", token))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.attachment.url").value(R2_PUBLIC_BASE + "/ub/support/x/a.pdf"));
+
+        mockMvc.perform(post(path)
+                        .contentType(APPLICATION_JSON)
+                        .content(attachmentMessage("https://evil.example.com/a.pdf"))
+                        .header("X-Guest-Id", "guest-files")
+                        .header("X-Guest-Token", token))
+                .andExpect(status().isBadRequest());
+    }
+
+    private static String attachmentMessage(String url) {
+        return """
+                {"body":"","attachment":{"url":"%s","fileName":"a.pdf","contentType":"application/pdf","bytes":10}}
+                """.formatted(url);
     }
 
     // ── Storefront chat (buyer → tenant staff) ─────────────────────────────

@@ -22,6 +22,7 @@ import zelisline.ub.platform.media.ActiveR2ConnectionSource;
 import zelisline.ub.platform.media.MediaStorageProvider;
 import zelisline.ub.platform.media.R2BucketProbe;
 import zelisline.ub.platform.media.R2Connection;
+import zelisline.ub.platform.media.R2PublicUrlSource;
 import zelisline.ub.platform.repository.PlatformMediaStorageSettingsRepository;
 
 /**
@@ -31,7 +32,7 @@ import zelisline.ub.platform.repository.PlatformMediaStorageSettingsRepository;
  */
 @Service
 @RequiredArgsConstructor
-public class MediaStorageSettingsService implements ActiveR2ConnectionSource {
+public class MediaStorageSettingsService implements ActiveR2ConnectionSource, R2PublicUrlSource {
 
     private static final Logger log = LoggerFactory.getLogger(MediaStorageSettingsService.class);
 
@@ -72,6 +73,12 @@ public class MediaStorageSettingsService implements ActiveR2ConnectionSource {
             log.warn("Uploads are set to R2 but its settings are unusable ({}); using Cloudinary", read.problems());
         }
         return Optional.ofNullable(read.connection());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<String> r2PublicBaseUrl() {
+        return Optional.ofNullable(loadOrDefault().getR2PublicBaseUrl()).filter(url -> !url.isBlank());
     }
 
     private void applyR2Fields(PlatformMediaStorageSettings row, UpdateMediaStorageSettingsRequest body) {

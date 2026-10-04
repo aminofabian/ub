@@ -22,6 +22,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.platform.media.R2PublicUrlSource;
 import zelisline.ub.storefront.WebOrderCodes;
 import zelisline.ub.storefront.domain.WebOrder;
 import zelisline.ub.storefront.domain.WebOrderLine;
@@ -95,6 +96,7 @@ public class SupportService {
     private final GuestSupportTokenService guestTokens;
     private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
+    private final R2PublicUrlSource r2PublicUrls;
 
     public SupportService(
             SupportConversationRepository conversationRepository,
@@ -103,7 +105,8 @@ public class SupportService {
             UserRepository userRepository,
             GuestSupportTokenService guestTokens,
             ApplicationEventPublisher eventPublisher,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            R2PublicUrlSource r2PublicUrls
     ) {
         this.conversationRepository = conversationRepository;
         this.messageRepository = messageRepository;
@@ -112,6 +115,7 @@ public class SupportService {
         this.guestTokens = guestTokens;
         this.eventPublisher = eventPublisher;
         this.objectMapper = objectMapper;
+        this.r2PublicUrls = r2PublicUrls;
     }
 
     public Optional<SupportConversation> findByBusinessId(String businessId) {
@@ -1088,7 +1092,7 @@ public class SupportService {
         return body;
     }
 
-    private static SupportAttachmentDto normalizeAttachment(SupportAttachmentDto raw) {
+    private SupportAttachmentDto normalizeAttachment(SupportAttachmentDto raw) {
         if (raw == null) {
             return null;
         }
@@ -1096,8 +1100,8 @@ public class SupportService {
         if (url.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Attachment url is required");
         }
-        if (!isAllowedCloudinaryUrl(url)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Attachment must be a Cloudinary HTTPS URL");
+        if (!isAllowedCloudinaryUrl(url) && !isSavedR2Url(url)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Attachment must be an uploaded file URL");
         }
         if (url.length() > 1024) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Attachment url is too long");
@@ -1123,6 +1127,13 @@ public class SupportService {
         String lower = url.toLowerCase();
         return lower.startsWith("https://res.cloudinary.com/")
                 || (lower.startsWith("https://") && lower.contains(".cloudinary.com/"));
+    }
+
+    private boolean isSavedR2Url(String url) {
+        return r2PublicUrls.r2PublicBaseUrl()
+                .filter(base -> base.toLowerCase().startsWith("https://"))
+                .map(base -> url.startsWith(base + "/"))
+                .orElse(false);
     }
 
     private static boolean isAllowedAttachmentContentType(String contentType) {

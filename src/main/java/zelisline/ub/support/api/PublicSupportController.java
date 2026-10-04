@@ -1,9 +1,12 @@
 package zelisline.ub.support.api;
 
+import java.io.IOException;
 import java.util.Map;
 import java.util.Set;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -13,15 +16,20 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.platform.media.AttachmentStore;
 import zelisline.ub.platform.media.CloudinarySignatureService;
+import zelisline.ub.platform.media.CloudinaryUploadResult;
+import zelisline.ub.platform.web.MediaController;
 import zelisline.ub.platform.realtime.RealtimeScopes;
 import zelisline.ub.platform.realtime.RealtimeTicketController;
 import zelisline.ub.platform.realtime.RealtimeTicketService;
@@ -53,12 +61,17 @@ public class PublicSupportController {
     public static final String HEADER_GUEST_ID = "X-Guest-Id";
     public static final String HEADER_GUEST_TOKEN = "X-Guest-Token";
     public static final String HEADER_GUEST_PHONE = "X-Guest-Phone";
+    private static final String SUPPORT_FOLDER_PREFIX = "ub/support/";
+    private static final String PROVIDER_R2 = "r2";
+    private static final String PROVIDER_CLOUDINARY = "cloudinary";
+    private static final String RESOURCE_RAW = "raw";
 
     private final SupportService supportService;
     private final BusinessRepository businessRepository;
     private final RealtimeTicketService ticketService;
     private final RealtimeTicketController tenantTicketController;
     private final CloudinarySignatureService cloudinarySignatureService;
+    private final ObjectProvider<AttachmentStore> attachmentStore;
 
     @PostMapping("/threads")
     @ResponseStatus(HttpStatus.CREATED)
@@ -95,20 +108,30 @@ public class PublicSupportController {
         return supportService.sendGuestMessage(id, guestId, token, body);
     }
 
-    /** Signed Cloudinary upload for an authenticated guest thread (auto = images + docs). */
+    /**
+     * Upload handshake for a guest thread (auto = images + docs). With uploads on R2 the answer is
+     * {@code provider=r2} and the client posts the file to {@link #uploadAttachment}.
+     */
     @PostMapping("/threads/{id}/cloudinary-signature")
     public Map<String, Object> cloudinarySignature(
             @PathVariable String id,
             @RequestHeader(HEADER_GUEST_ID) String guestId,
             @RequestHeader(HEADER_GUEST_TOKEN) String token
     ) {
+        supportService.requireGuestThreadAccess(id, guestId, token);
+        String folder = supportFolder(id);
+        if (attachmentsOnR2()) {
+            return Map.of(
+                    "provider", PROVIDER_R2,
+                    "folder", folder,
+                    "resourceType", CloudinarySignatureService.RESOURCE_AUTO);
+        }
         if (!cloudinarySignatureService.isConfigured()) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Cloudinary is not configured on this server");
         }
-        supportService.requireGuestThreadAccess(id, guestId, token);
-        var result = cloudinarySignatureService.signUpload(
-                "ub/support/" + id.trim(), CloudinarySignatureService.RESOURCE_AUTO);
+        var result = cloudinarySignatureService.signUpload(folder, CloudinarySignatureService.RESOURCE_AUTO);
         return Map.of(
+                "provider", PROVIDER_CLOUDINARY,
                 "cloudName", result.cloudName(),
                 "apiKey", result.apiKey(),
                 "timestamp", result.timestamp(),
@@ -116,6 +139,41 @@ public class PublicSupportController {
                 "folder", result.folder() == null ? "" : result.folder(),
                 "resourceType", result.resourceType()
         );
+    }
+
+    /** Stores a guest's attachment in R2 under the thread's folder; response mirrors Cloudinary's upload JSON. */
+    @PostMapping(value = "/threads/{id}/attachments", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String, Object> uploadAttachment(
+            @PathVariable String id,
+            @RequestHeader(HEADER_GUEST_ID) String guestId,
+            @RequestHeader(HEADER_GUEST_TOKEN) String token,
+            @RequestPart("file") MultipartFile file
+    ) {
+        supportService.requireGuestThreadAccess(id, guestId, token);
+        if (!attachmentsOnR2()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Attachment storage is not configured");
+        }
+        CloudinaryUploadResult result = attachmentStore.getObject()
+                .uploadAttachment(readBytes(file), file.getOriginalFilename(), supportFolder(id));
+        return MediaController.toCloudinaryShape(result, RESOURCE_RAW);
+    }
+
+    private boolean attachmentsOnR2() {
+        AttachmentStore store = attachmentStore.getIfAvailable();
+        return store != null && store.isActive();
+    }
+
+    private static String supportFolder(String threadId) {
+        return SUPPORT_FOLDER_PREFIX + threadId.trim();
+    }
+
+    private static byte[] readBytes(MultipartFile file) {
+        try {
+            return file.getBytes();
+        } catch (IOException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Could not read uploaded file");
+        }
     }
 
     @PostMapping("/threads/{id}/read")

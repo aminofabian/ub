@@ -323,6 +323,29 @@ public class IdentityService {
     }
 
     /**
+     * Restores a suspended user to active so they can sign in again. Invited and
+     * locked accounts are left alone. Taking the seat back is subject to the plan limit.
+     */
+    @Transactional
+    public UserResponse reactivateUser(String businessId, String userId) {
+        User user = requireTenantUser(businessId, userId);
+        UserStatus previous = user.statusAsEnum();
+        if (previous == UserStatus.ACTIVE) {
+            Role role = roleRepository.findById(user.getRoleId()).orElse(null);
+            return toResponse(user, role);
+        }
+        if (previous != UserStatus.SUSPENDED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Only a suspended user can be reactivated");
+        }
+        assertStaffSeatAvailable(businessId, user.getRoleId());
+        user.setStatus(UserStatus.ACTIVE);
+        User saved = userRepository.save(user);
+        Role role = roleRepository.findById(saved.getRoleId()).orElse(null);
+        return toResponse(saved, role);
+    }
+
+    /**
      * Soft-deletes a tenant user so they disappear from the users directory and
      * payroll runs. Owner and admin accounts cannot be deleted. History rows that
      * reference {@code users.id} stay intact; the email is freed so the same

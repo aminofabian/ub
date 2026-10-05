@@ -244,6 +244,38 @@ class IdentityServiceTest {
         verify(userSessionRepository).revokeAllActiveForUser(eq(user.getId()), any(Instant.class));
     }
 
+    @Test
+    void reactivateRestoresSuspendedUser() {
+        User user = ownerUserOf(TENANT_A);
+        user.setRoleId(ROLE_CASHIER);
+        user.setStatus(UserStatus.SUSPENDED);
+        given(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(user.getId(), TENANT_A))
+                .willReturn(Optional.of(user));
+        given(roleRepository.findById(ROLE_CASHIER)).willReturn(Optional.of(cashierRole));
+        given(userRepository.save(any(User.class))).willAnswer(inv -> inv.getArgument(0));
+        given(permissionRepository.findPermissionKeysByRoleId(ROLE_CASHIER)).willReturn(List.of());
+
+        UserResponse response = identityService.reactivateUser(TENANT_A, user.getId());
+
+        assertThat(response.status()).isEqualTo("active");
+        assertThat(user.statusAsEnum()).isEqualTo(UserStatus.ACTIVE);
+    }
+
+    @Test
+    void reactivateRejectsInvitedUser() {
+        User user = ownerUserOf(TENANT_A);
+        user.setStatus(UserStatus.INVITED);
+        given(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(user.getId(), TENANT_A))
+                .willReturn(Optional.of(user));
+
+        ResponseStatusException ex = catchThrowableOfType(
+                () -> identityService.reactivateUser(TENANT_A, user.getId()),
+                ResponseStatusException.class);
+
+        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        verify(userRepository, never()).save(any());
+    }
+
     // ---------- deleteUser --------------------------------------------------
 
     @Test

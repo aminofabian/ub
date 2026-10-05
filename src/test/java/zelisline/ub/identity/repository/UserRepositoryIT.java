@@ -3,15 +3,20 @@ package zelisline.ub.identity.repository;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.Instant;
+import java.util.List;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Limit;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
 import zelisline.ub.identity.domain.User;
+import zelisline.ub.identity.domain.UserStatus;
 
 /**
  * Slice 2 invariant from {@code PHASE_1_PLAN.md} §2.4:
@@ -62,6 +67,22 @@ class UserRepositoryIT {
                 TENANT_A, "owner@example.com")).isTrue();
         assertThat(userRepository.existsByBusinessIdAndEmailAndDeletedAtIsNull(
                 TENANT_B, "owner@example.com")).isTrue();
+    }
+
+    @Test
+    void signInEligibleByEmailReturnsTheActiveShopWhenTheEmailIsOnSeveral() {
+        User invited = newUser(TENANT_A, "owner@example.com");
+        invited.setStatus(UserStatus.INVITED);
+        invited.setCreatedAt(Instant.parse("2020-01-01T00:00:00Z"));
+        User active = newUser(TENANT_B, "owner@example.com");
+        active.setCreatedAt(Instant.parse("2024-01-01T00:00:00Z"));
+        userRepository.saveAndFlush(invited);
+        userRepository.saveAndFlush(active);
+
+        List<User> found = userRepository.findSignInEligibleByEmail(
+                "owner@example.com", Limit.of(1));
+
+        assertThat(found).extracting(User::getBusinessId).containsExactly(TENANT_B);
     }
 
     @Test

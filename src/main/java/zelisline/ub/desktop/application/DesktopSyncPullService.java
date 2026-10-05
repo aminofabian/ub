@@ -1293,6 +1293,14 @@ public class DesktopSyncPullService {
             java.util.Optional<Item> existing = itemRepository
                 .findById(d.id())
                 .filter(row -> localId.equals(row.getBusinessId()));
+            if (existing.isEmpty() && d.sku() != null && !d.sku().isBlank()) {
+                // A local row may already own this SKU (leftover from a prior
+                // shop setup / earlier connect). uq_items_business_sku is
+                // business-wide and ignores deleted_at, so inserting a second
+                // row with the same SKU aborts the whole sync. Adopt the
+                // existing row — the till's own count wins.
+                existing = itemRepository.findByBusinessIdAndSku(localId, d.sku());
+            }
             // The cloud value is only a valid stock baseline for an item the
             // till has never held (see applyItem). For items the till already
             // knows, its own count wins — see "one stock, one ledger" in

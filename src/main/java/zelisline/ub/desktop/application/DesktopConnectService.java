@@ -631,12 +631,21 @@ public class DesktopConnectService {
             Item item = itemRepository
                 .findById(i.id())
                 .filter(row -> localId.equals(row.getBusinessId()))
-                .orElseGet(() -> {
-                    Item created = new Item();
-                    created.setId(i.id());
-                    created.setBusinessId(localId);
-                    return created;
-                });
+                .orElse(null);
+            if (item == null && i.sku() != null && !i.sku().isBlank()) {
+                // A local row may already own this SKU — a leftover from a prior
+                // shop setup or an earlier connect whose cloud ids changed.
+                // uq_items_business_sku is business-wide and ignores deleted_at,
+                // so inserting a second row with the same SKU would abort the
+                // whole seed ("Duplicate entry … for key 'uq_items_business_sku'").
+                // Adopt the existing row instead of inserting a duplicate.
+                item = itemRepository.findByBusinessIdAndSku(localId, i.sku()).orElse(null);
+            }
+            if (item == null) {
+                item = new Item();
+                item.setId(i.id());
+                item.setBusinessId(localId);
+            }
             item.setDeletedAt(null);
             item.setSku(i.sku());
             item.setBarcode(i.barcode());

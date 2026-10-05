@@ -6,6 +6,7 @@ import java.util.Locale;
 import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Limit;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,6 +38,8 @@ import zelisline.ub.identity.repository.UserRepository;
  */
 @Service
 public class PublicHostResolverService {
+
+    private static final Limit FIRST_MATCH = Limit.of(1);
 
     @Value("${app.tenancy.slug-domain-suffix:}")
     private String slugDomainSuffix;
@@ -90,9 +93,10 @@ public class PublicHostResolverService {
         if (email == null || email.isBlank()) {
             return Optional.empty();
         }
-        return userRepository.findFirstSignInEligibleByEmail(email.trim().toLowerCase())
-                .map(user -> businessRepository.findByIdAndDeletedAtIsNull(user.getBusinessId()))
-                .flatMap(opt -> opt)
+        String normalized = email.trim().toLowerCase(Locale.ROOT);
+        return userRepository.findSignInEligibleByEmail(normalized, FIRST_MATCH).stream()
+                .findFirst()
+                .flatMap(user -> businessRepository.findByIdAndDeletedAtIsNull(user.getBusinessId()))
                 .map(this::toResponse);
     }
 

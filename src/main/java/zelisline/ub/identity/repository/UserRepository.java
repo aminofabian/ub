@@ -5,6 +5,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Limit;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -99,6 +100,10 @@ public interface UserRepository extends JpaRepository<User, String> {
     /**
      * Landing "find my shop by email": prefer an active membership, else the
      * oldest invited signup so an unverified owner still reaches their host.
+     *
+     * <p>Pass {@link Limit#of(int)} — a {@code First} prefix on an annotated
+     * query is ignored, and an {@code Optional} result throws when the same
+     * email belongs to more than one shop.
      */
     @Query("""
         select u from User u
@@ -107,7 +112,7 @@ public interface UserRepository extends JpaRepository<User, String> {
            and u.status in ('active', 'invited')
          order by case when u.status = 'active' then 0 else 1 end, u.createdAt asc
         """)
-    Optional<User> findFirstSignInEligibleByEmail(@Param("email") String email);
+    List<User> findSignInEligibleByEmail(@Param("email") String email, Limit limit);
 
     /**
      * Active staff/buyer rows whose phone matches any of the normalized forms

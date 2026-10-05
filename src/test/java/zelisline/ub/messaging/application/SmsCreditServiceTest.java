@@ -115,6 +115,25 @@ class SmsCreditServiceTest {
     }
 
     @Test
+    void balanceViewIsZeroNotAnErrorWhenTierHasNoAllowanceRow() {
+        // A tenant with no credit account whose tier has no active allowance row
+        // (a tier added after V267, a renamed tier, or a null tier) used to unbox
+        // null here and 500 the header chip endpoint, GET /api/v1/sms-credits/balance.
+        // NB: Mockito returns 0 (not null) for an unstubbed Integer method, so the
+        // null has to be forced for this to exercise the real path.
+        when(accountRepository.findByBusinessId(BIZ)).thenReturn(Optional.empty());
+        when(businessRepository.findById(BIZ)).thenReturn(Optional.of(tieredBusiness("free")));
+        when(settingsService.resolveAllowance("free")).thenReturn(null);
+
+        SmsCreditBalanceResponse view = service.getBalanceView(BIZ);
+
+        assertThat(view.includedAllowance()).isZero();
+        assertThat(view.includedRemaining()).isZero();
+        assertThat(view.available()).isZero();
+        assertThat(view.lowBalance()).isTrue();
+    }
+
+    @Test
     void debitConsumesIncludedFirst() {
         stubAllowance(30);
         when(accountRepository.findForUpdate(BIZ)).thenReturn(Optional.of(account(12, 0)));

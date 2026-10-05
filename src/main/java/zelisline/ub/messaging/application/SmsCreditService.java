@@ -55,7 +55,9 @@ public class SmsCreditService {
     public SmsCreditBalanceResponse getBalanceView(String businessId) {
         PlatformSmsCreditSettings settings = settingsService.loadSingleton();
         BusinessSmsCreditAccount account = accountRepository.findByBusinessId(businessId).orElse(null);
-        int allowance = account != null ? allowanceFor(account, businessId) : tierAllowance(businessId);
+        int allowance = account != null
+                ? allowanceFor(account, businessId)
+                : tierAllowanceOrZero(businessId);
         int includedUsed = account != null ? account.getIncludedUsed() : 0;
         int purchased = account != null ? account.getPurchasedBalance() : 0;
         int includedRemaining = Math.max(0, allowance - includedUsed);
@@ -414,8 +416,19 @@ public class SmsCreditService {
         if (account.getIncludedOverride() != null) {
             return account.getIncludedOverride();
         }
-        Integer tierAllowance = tierAllowance(businessId);
-        return tierAllowance != null ? tierAllowance : 0;
+        return tierAllowanceOrZero(businessId);
+    }
+
+    /**
+     * Included allowance for the tenant's tier, or 0 when the tier has no active
+     * allowance row (a tier added after V267, a renamed tier, or a null tier).
+     *
+     * <p>Never returns null: the header chip calls the balance view on every page,
+     * so an unconfigured tier must read as "no included messages", not as a 500.
+     */
+    private int tierAllowanceOrZero(String businessId) {
+        Integer allowance = tierAllowance(businessId);
+        return allowance != null ? allowance : 0;
     }
 
     private Integer tierAllowance(String businessId) {

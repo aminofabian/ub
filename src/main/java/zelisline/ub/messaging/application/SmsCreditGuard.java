@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.messaging.config.MessagingProperties;
 import zelisline.ub.messaging.domain.SmsSendReason;
 
 /**
@@ -25,13 +26,17 @@ public class SmsCreditGuard {
 
     private final SmsCreditService creditService;
     private final SmsCreditSettingsService settingsService;
+    private final MessagingProperties messagingProperties;
 
     /**
-     * True when this send must be metered: tenant-scoped and the platform kill
-     * switch is on.
+     * True when this send must be metered: tenant-scoped, metering allowed on this
+     * install (off for the desktop SKU), and the platform kill switch is on.
      */
     public boolean meteringActive(String businessId) {
-        return businessId != null && !businessId.isBlank() && settingsService.isEnabled();
+        return businessId != null
+                && !businessId.isBlank()
+                && messagingProperties.credits().meteringEnabled()
+                && settingsService.isEnabled();
     }
 
     /** Pre-flight: throw 402 when the tenant has nothing left to spend. */

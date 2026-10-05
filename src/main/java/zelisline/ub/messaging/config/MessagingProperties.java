@@ -7,7 +7,8 @@ public record MessagingProperties(
         CreditSaleReminder creditSaleReminder,
         RapidApiWhatsApp rapidApiWhatsApp,
         MetaWhatsApp metaWhatsApp,
-        Sms sms
+        Sms sms,
+        Credits credits
 ) {
 
     public MessagingProperties {
@@ -26,6 +27,21 @@ public record MessagingProperties(
                     "", "", "Sozuri", "transactional", "https://sozuri.net/api/v1/messaging",
                     "", "", "", "https://sms.textsms.co.ke/api/services/sendsms/");
         }
+        if (credits == null) {
+            credits = new Credits(true);
+        }
+    }
+
+    /**
+     * SMS credit metering — a cloud billing concern (SMS_CREDITS_SCOPE.md).
+     *
+     * <p>Cloud installs meter every tenant SMS against a purchased balance. The
+     * desktop SKU ships its own database, has no way to buy credits, and its
+     * business row is tiered {@code desktop} with no allowance row — so metering
+     * there would block a shop's own customer SMS outright. It is switched off in
+     * {@code application-desktop.properties}.
+     */
+    public record Credits(boolean meteringEnabled) {
     }
 
     /** {@code paymentAccountUrl} is a site origin; customer phone path is appended per message. */

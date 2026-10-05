@@ -25,6 +25,7 @@ import zelisline.ub.audit.domain.AuditEventActorType;
 import zelisline.ub.audit.domain.AuditEventCategory;
 import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.messaging.api.dto.SmsCreditBalanceResponse;
+import zelisline.ub.messaging.config.MessagingProperties;
 import zelisline.ub.messaging.domain.BusinessSmsCreditAccount;
 import zelisline.ub.messaging.domain.PlatformSmsCreditSettings;
 import zelisline.ub.messaging.domain.SmsCreditLedgerEntry;
@@ -48,6 +49,7 @@ class SmsCreditServiceTest {
     private BusinessRepository businessRepository;
     @Mock
     private SmsCreditSettingsService settingsService;
+    private MessagingProperties messagingProperties;
     @Mock
     private AuditEventPublisher auditEventPublisher;
     @Mock
@@ -61,9 +63,11 @@ class SmsCreditServiceTest {
 
     @BeforeEach
     void setUp() {
+        // Defaults to metering on (cloud); the desktop profile flips it off.
+        messagingProperties = new MessagingProperties(null, null, null, null, null);
         service = new SmsCreditService(
                 accountRepository, ledgerRepository, businessRepository,
-                settingsService, auditEventPublisher, auditEventBuilder, eventPublisher);
+                settingsService, messagingProperties, auditEventPublisher, auditEventBuilder, eventPublisher);
         PlatformSmsCreditSettings settings = new PlatformSmsCreditSettings();
         settings.setId(PlatformSmsCreditSettings.SINGLETON_ID);
         settings.setEnabled(true);
@@ -131,6 +135,21 @@ class SmsCreditServiceTest {
         assertThat(view.includedRemaining()).isZero();
         assertThat(view.available()).isZero();
         assertThat(view.lowBalance()).isTrue();
+    }
+
+    @Test
+    void balanceViewReportsMeteringOffWhenTheInstallDoesNotMeter() {
+        // The desktop SKU sets app.messaging.credits.metering-enabled=false, so the
+        // header chip hides instead of showing a balance it can never top up.
+        service = new SmsCreditService(
+                accountRepository, ledgerRepository, businessRepository,
+                settingsService, new MessagingProperties(null, null, null, null, new MessagingProperties.Credits(false)),
+                auditEventPublisher, auditEventBuilder, eventPublisher);
+        when(accountRepository.findByBusinessId(BIZ)).thenReturn(Optional.of(account(0, 0)));
+
+        SmsCreditBalanceResponse view = service.getBalanceView(BIZ);
+
+        assertThat(view.meteringEnabled()).isFalse();
     }
 
     @Test

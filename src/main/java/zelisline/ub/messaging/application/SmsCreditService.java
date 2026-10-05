@@ -21,6 +21,7 @@ import zelisline.ub.audit.domain.AuditEventCategory;
 import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.messaging.api.dto.SmsCreditBalanceResponse;
 import zelisline.ub.messaging.api.dto.SmsCreditUsageResponse;
+import zelisline.ub.messaging.config.MessagingProperties;
 import zelisline.ub.messaging.domain.BusinessSmsCreditAccount;
 import zelisline.ub.messaging.domain.PlatformSmsCreditSettings;
 import zelisline.ub.messaging.domain.SmsCreditLedgerEntry;
@@ -45,6 +46,7 @@ public class SmsCreditService {
     private final SmsCreditLedgerRepository ledgerRepository;
     private final BusinessRepository businessRepository;
     private final SmsCreditSettingsService settingsService;
+    private final MessagingProperties messagingProperties;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
     private final org.springframework.context.ApplicationEventPublisher eventPublisher;
@@ -70,9 +72,18 @@ public class SmsCreditService {
                 cycleEndsAt(settings, account),
                 settings.getUnitPriceKes(),
                 available <= settings.getLowBalanceThreshold(),
-                settings.isEnabled(),
+                meteringEnabled(settings),
                 settings.getMinPurchaseCredits(),
                 settings.getMaxPurchaseCredits());
+    }
+
+    /**
+     * Effective metering: the platform kill switch, narrowed by the install's own
+     * capability. The desktop SKU turns this off, so its header chip stays hidden
+     * rather than showing a balance it can never top up.
+     */
+    private boolean meteringEnabled(PlatformSmsCreditSettings settings) {
+        return settings.isEnabled() && messagingProperties.credits().meteringEnabled();
     }
 
     /**

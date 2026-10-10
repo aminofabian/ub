@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.application.BusinessCreditMessagingSettingsService;
 import zelisline.ub.credits.domain.BusinessCreditSettings;
 import zelisline.ub.credits.repository.BusinessCreditSettingsRepository;
+import zelisline.ub.integrations.whatsapp.application.ChannelResolver;
 import zelisline.ub.messaging.domain.WhatsAppMessage;
 import zelisline.ub.storefront.WebOrderCodes;
 import zelisline.ub.storefront.application.WebOrderFulfillmentService;
@@ -49,6 +50,7 @@ public class WhatsAppOrderReplyService {
 
     private final BusinessRepository businessRepository;
     private final BusinessCreditSettingsRepository creditSettingsRepository;
+    private final ChannelResolver channelResolver;
     private final StorefrontSettingsService storefrontSettingsService;
     private final WebOrderRepository webOrderRepository;
     private final WebOrderFulfillmentService fulfillmentService;
@@ -124,15 +126,22 @@ public class WhatsAppOrderReplyService {
         return true;
     }
 
-    /** Indexed by Meta phone_number_id first; sender-scan fallback for shops on the shared platform number. */
+    /** Platform channel map (whatsapp_channel_route) first, then the legacy column; sender-scan fallback. */
     private Optional<Business> resolveBusiness(String phoneNumberId, String senderDigits) {
         if (phoneNumberId != null && !phoneNumberId.isBlank()) {
-            Optional<Business> viaPhoneId = creditSettingsRepository
-                    .findByWhatsappMetaPhoneNumberId(phoneNumberId.trim())
+            String trimmed = phoneNumberId.trim();
+            Optional<Business> viaRoute = channelResolver
+                    .businessIdForPhoneNumber(trimmed)
+                    .flatMap(businessRepository::findById);
+            if (viaRoute.isPresent()) {
+                return viaRoute;
+            }
+            Optional<Business> viaLegacy = creditSettingsRepository
+                    .findByWhatsappMetaPhoneNumberId(trimmed)
                     .map(BusinessCreditSettings::getBusinessId)
                     .flatMap(businessRepository::findById);
-            if (viaPhoneId.isPresent()) {
-                return viaPhoneId;
+            if (viaLegacy.isPresent()) {
+                return viaLegacy;
             }
         }
         // Fallback: the shop's checkout number matches the sender. Only reached for

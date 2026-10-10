@@ -58,6 +58,14 @@ public class BusinessCreditSettings {
     @Column(name = "whatsapp_meta_graph_version", nullable = false, length = 16)
     private String whatsappMetaGraphVersion = "v25.0";
 
+    /** Shop's own Meta app secret (Model B); enables their own-app inbound webhook verification. */
+    @Column(name = "whatsapp_meta_app_secret_enc", columnDefinition = "TEXT")
+    private String whatsappMetaAppSecretEnc;
+
+    /** Shop's own Meta webhook verify token (Model B). */
+    @Column(name = "whatsapp_meta_webhook_verify_token_enc", columnDefinition = "TEXT")
+    private String whatsappMetaWebhookVerifyTokenEnc;
+
     @Column(name = "sms_provider", nullable = false, length = 32)
     private String smsProvider = "none";
 

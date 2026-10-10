@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.api.dto.CreditSaleReminderSettingsResponse;
 import zelisline.ub.credits.api.dto.UpdateCreditSaleReminderSettingsRequest;
 import zelisline.ub.credits.domain.BusinessCreditSettings;
+import zelisline.ub.integrations.whatsapp.application.WhatsAppChannelRouteAdminService;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
 import zelisline.ub.messaging.config.MessagingProperties;
 import zelisline.ub.messaging.domain.SmsSendReason;
@@ -28,6 +29,7 @@ public class BusinessCreditMessagingSettingsService {
     private final CredentialEncryptionService encryptionService;
     private final MessagingProperties messagingProperties;
     private final PlatformIntegrationSettingsService platformIntegrationSettingsService;
+    private final WhatsAppChannelRouteAdminService channelRouteAdminService;
 
     @Value("${app.public.frontend-base-url:http://localhost:3000}")
     private String frontendBaseUrl;
@@ -232,14 +234,20 @@ public class BusinessCreditMessagingSettingsService {
                 smsProvider = "sozuri";
             }
         }
+        // D5: platform keys (super-admin) are authoritative; per-business columns are
+        // legacy fallbacks kept for shops not yet migrated (add-only; do not drop).
+        String platformMetaToken = trimToNull(platformMeta.accessToken());
         String tenantMetaToken = decryptOrNull(s.getWhatsappMetaAccessTokenEnc());
         String metaAccessToken;
         String metaAccessTokenSource;
-        if (tenantMetaToken != null && !tenantMetaToken.isBlank()) {
+        if (platformMetaToken != null) {
+            metaAccessToken = platformMetaToken;
+            metaAccessTokenSource = platformMeta.accessTokenSource();
+        } else if (tenantMetaToken != null && !tenantMetaToken.isBlank()) {
             metaAccessToken = tenantMetaToken.trim();
             metaAccessTokenSource = "tenant";
         } else {
-            metaAccessToken = trimToNull(platformMeta.accessToken());
+            metaAccessToken = null;
             metaAccessTokenSource = platformMeta.accessTokenSource();
         }
         TenantMessagingConfig tenant = new TenantMessagingConfig(
@@ -254,11 +262,11 @@ public class BusinessCreditMessagingSettingsService {
                 digitsOnly,
                 metaAccessToken,
                 firstNonBlank(
-                        trimToNull(s.getWhatsappMetaPhoneNumberId()),
-                        platformMeta.phoneNumberId()),
+                        platformMeta.phoneNumberId(),
+                        trimToNull(s.getWhatsappMetaPhoneNumberId())),
                 firstNonBlank(
-                        trimToNull(s.getWhatsappMetaGraphVersion()),
-                        platformMeta.graphVersion()),
+                        platformMeta.graphVersion(),
+                        trimToNull(s.getWhatsappMetaGraphVersion())),
                 metaAccessTokenSource,
                 smsProvider,
                 firstNonBlank(trimToNull(s.getSmsAfricasTalkingUsername()), env.sms().africasTalkingUsername()),
@@ -528,6 +536,12 @@ public class BusinessCreditMessagingSettingsService {
         if (body.whatsappMetaAccessToken() != null) {
             s.setWhatsappMetaAccessTokenEnc(encryptOrClear(body.whatsappMetaAccessToken()));
         }
+        if (body.whatsappMetaAppSecret() != null) {
+            s.setWhatsappMetaAppSecretEnc(encryptOrClear(body.whatsappMetaAppSecret()));
+        }
+        if (body.whatsappMetaWebhookVerifyToken() != null) {
+            s.setWhatsappMetaWebhookVerifyTokenEnc(encryptOrClear(body.whatsappMetaWebhookVerifyToken()));
+        }
         if (body.smsAfricasTalkingApiKey() != null) {
             s.setSmsAfricasTalkingApiKeyEnc(encryptOrClear(body.smsAfricasTalkingApiKey()));
         }
@@ -542,6 +556,21 @@ public class BusinessCreditMessagingSettingsService {
         }
 
         BusinessCreditSettings saved = businessCreditSettingsService.saveSettings(s);
+
+        // Adopt the shop's own Meta number as a channel route so super-admin needn't re-key it
+        // (no-op when blank, or when the number is already routed to a different shop). When the
+        // shop supplied its own access token the route rides their own Meta app (Model B).
+        channelRouteAdminService.adopt(
+                saved.getWhatsappMetaPhoneNumberId(),
+                businessId,
+                null,
+                new WhatsAppChannelRouteAdminService.RouteCredentials(
+                        saved.getWhatsappMetaAccessTokenEnc() != null,
+                        saved.getWhatsappMetaGraphVersion(),
+                        saved.getWhatsappMetaAccessTokenEnc(),
+                        saved.getWhatsappMetaAppSecretEnc(),
+                        saved.getWhatsappMetaWebhookVerifyTokenEnc()));
+
         return toResponse(saved, readSecrets(saved));
     }
 
@@ -584,6 +613,8 @@ public class BusinessCreditMessagingSettingsService {
                 firstNonBlank(trimToNull(s.getRapidapiPhoneField()), platformWa.phoneField()),
                 digitsOnly,
                 read.hasWhatsappToken,
+                hasEncrypted(s.getWhatsappMetaAppSecretEnc()),
+                hasEncrypted(s.getWhatsappMetaWebhookVerifyTokenEnc()),
                 read.hasSmsAtApiKey,
                 read.hasSmsSozuriApiKey || (platformSms.apiKey() != null && !platformSms.apiKey().isBlank()),
                 read.hasSmsTextsmsApiKey

@@ -93,6 +93,20 @@ public class PlatformIntegrationSettings {
     @Column(name = "whatsapp_meta_app_secret_enc", columnDefinition = "TEXT")
     private String whatsappMetaAppSecretEnc;
 
+    /**
+     * Console override for the inbound channel; {@code null} = inherit
+     * {@code app.integrations.whatsapp.enabled}. Set from Super Admin → Platform → WhatsApp numbers.
+     */
+    @Column(name = "whatsapp_channel_enabled")
+    private Boolean whatsappChannelEnabled;
+
+    /**
+     * Console override for the outbound drain; {@code null} = inherit
+     * {@code app.integrations.whatsapp.outbox.enabled}.
+     */
+    @Column(name = "whatsapp_outbox_enabled")
+    private Boolean whatsappOutboxEnabled;
+
     @Column(name = "google_oauth_enabled", nullable = false)
     private boolean googleOauthEnabled = false;
 

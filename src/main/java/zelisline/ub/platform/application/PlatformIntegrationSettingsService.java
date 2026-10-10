@@ -214,6 +214,32 @@ public class PlatformIntegrationSettingsService {
         return resolveMetaWhatsAppFromRow(row, secrets);
     }
 
+    /**
+     * Console-owned on/off overrides for the WhatsApp channel. {@code null} on either field means
+     * "not set" — callers fall back to the deployment flag. See
+     * {@code WhatsAppChannelSettingsService}.
+     */
+    public record ResolvedWhatsAppChannelConfig(Boolean inboundEnabled, Boolean outboundEnabled) {
+    }
+
+    @Transactional(readOnly = true)
+    public ResolvedWhatsAppChannelConfig resolveWhatsAppChannel() {
+        PlatformIntegrationSettings row = loadSingleton();
+        return new ResolvedWhatsAppChannelConfig(
+                row.getWhatsappChannelEnabled(), row.getWhatsappOutboxEnabled());
+    }
+
+    @Transactional
+    public ResolvedWhatsAppChannelConfig updateWhatsAppChannel(Boolean inboundEnabled, Boolean outboundEnabled) {
+        PlatformIntegrationSettings row = loadSingleton();
+        row.setWhatsappChannelEnabled(inboundEnabled);
+        row.setWhatsappOutboxEnabled(outboundEnabled);
+        row.setUpdatedAt(Instant.now());
+        PlatformIntegrationSettings saved = repository.save(row);
+        return new ResolvedWhatsAppChannelConfig(
+                saved.getWhatsappChannelEnabled(), saved.getWhatsappOutboxEnabled());
+    }
+
     @Transactional(readOnly = true)
     public ResolvedGoogleOauthConfig resolveGoogleOauth() {
         PlatformIntegrationSettings row = loadSingleton();

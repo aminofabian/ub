@@ -6,6 +6,8 @@ import jakarta.validation.constraints.NotNull;
 /**
  * @param rapidApiKey {@code null} = leave stored key unchanged; blank = clear.
  * @param whatsappMetaAccessToken {@code null} = unchanged; blank = clear.
+ * @param whatsappMetaAppSecret Shop's own Meta app secret (Model B); {@code null} = unchanged; blank = clear.
+ * @param whatsappMetaWebhookVerifyToken Shop's own Meta verify token (Model B); {@code null} = unchanged; blank = clear.
  * @param smsAfricasTalkingApiKey {@code null} = unchanged; blank = clear.
  * @param smsSozuriApiKey {@code null} = unchanged; blank = clear.
  * @param smsTextsmsApiKey {@code null} = unchanged; blank = clear.
@@ -21,6 +23,8 @@ public record UpdateCreditSaleReminderSettingsRequest(
         String whatsappMetaPhoneNumberId,
         String whatsappMetaAccessToken,
         String whatsappMetaGraphVersion,
+        String whatsappMetaAppSecret,
+        String whatsappMetaWebhookVerifyToken,
         String smsProvider,
         String smsAfricasTalkingUsername,
         String smsAfricasTalkingApiKey,

@@ -25,5 +25,7 @@ public enum StkPushContextType {
     /** Profit Pocket destination test (KES 1 Express to PartyB). */
     PROFIT_POCKET_TEST,
     /** Profit Pocket confirm — Express STK to owner destination PartyB. */
-    PROFIT_POCKET
+    PROFIT_POCKET,
+    /** Customer payment prompt sent from a WhatsApp conversation (M5). */
+    WHATSAPP_CHAT
 }

@@ -21,6 +21,8 @@ public record CreditSaleReminderSettingsResponse(
         String rapidApiPhoneField,
         boolean rapidApiPhoneDigitsOnly,
         boolean hasWhatsappMetaAccessToken,
+        boolean hasWhatsappMetaAppSecret,
+        boolean hasWhatsappMetaWebhookVerifyToken,
         boolean hasSmsAfricasTalkingApiKey,
         boolean hasSmsSozuriApiKey,
         boolean hasSmsTextsmsApiKey,

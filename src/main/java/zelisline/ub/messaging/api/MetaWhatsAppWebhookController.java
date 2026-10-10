@@ -13,10 +13,9 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.servlet.http.HttpServletRequest;
+import zelisline.ub.integrations.whatsapp.application.WhatsAppChannelCredentialsService;
 import zelisline.ub.messaging.application.WhatsAppInboundProcessor;
 import zelisline.ub.messaging.infrastructure.MetaWhatsAppWebhookSignatureVerifier;
-import zelisline.ub.platform.application.PlatformIntegrationSettingsService;
-import zelisline.ub.platform.application.ResolvedMetaWhatsAppConfig;
 
 /**
  * Meta WhatsApp Cloud API webhook endpoint.
@@ -34,14 +33,14 @@ public class MetaWhatsAppWebhookController {
     private static final Logger log = LoggerFactory.getLogger(MetaWhatsAppWebhookController.class);
     private static final String SIGNATURE_HEADER = "X-Hub-Signature-256";
 
-    private final PlatformIntegrationSettingsService platformIntegrationSettingsService;
+    private final WhatsAppChannelCredentialsService credentialsService;
     private final WhatsAppInboundProcessor whatsAppInboundProcessor;
 
     public MetaWhatsAppWebhookController(
-            PlatformIntegrationSettingsService platformIntegrationSettingsService,
+            WhatsAppChannelCredentialsService credentialsService,
             WhatsAppInboundProcessor whatsAppInboundProcessor
     ) {
-        this.platformIntegrationSettingsService = platformIntegrationSettingsService;
+        this.credentialsService = credentialsService;
         this.whatsAppInboundProcessor = whatsAppInboundProcessor;
     }
 
@@ -51,16 +50,14 @@ public class MetaWhatsAppWebhookController {
             @RequestParam(name = "hub.verify_token", required = false) String token,
             @RequestParam(name = "hub.challenge", required = false) String challenge
     ) {
-        ResolvedMetaWhatsAppConfig meta = platformIntegrationSettingsService.resolveMetaWhatsApp();
-        String configuredToken = meta.webhookVerifyToken();
-        if (configuredToken == null || configuredToken.isBlank()) {
-            log.warn("Meta WhatsApp webhook verify rejected: webhook verify token not set");
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Webhook verify token not configured");
-        }
         if (!"subscribe".equalsIgnoreCase(mode)) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Invalid hub.mode");
         }
-        if (!configuredToken.equals(token)) {
+        if (!credentialsService.hasAnyVerifyToken()) {
+            log.warn("Meta WhatsApp webhook verify rejected: webhook verify token not set");
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Webhook verify token not configured");
+        }
+        if (!credentialsService.matchesVerifyToken(token)) {
             log.warn("Meta WhatsApp webhook verify rejected: token mismatch");
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Invalid verify token");
         }
@@ -79,15 +76,14 @@ public class MetaWhatsAppWebhookController {
             return ResponseEntity.badRequest().body("Empty body");
         }
 
-        ResolvedMetaWhatsAppConfig meta = platformIntegrationSettingsService.resolveMetaWhatsApp();
-        String appSecret = meta.appSecret();
         String signature = request.getHeader(SIGNATURE_HEADER);
-        if (!MetaWhatsAppWebhookSignatureVerifier.verify(appSecret, rawBody, signature)) {
+        java.util.Set<String> appSecrets = credentialsService.candidateAppSecrets();
+        if (!MetaWhatsAppWebhookSignatureVerifier.verifyAny(appSecrets, rawBody, signature)) {
             log.warn("Meta WhatsApp webhook: invalid signature");
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Invalid signature");
         }
-        if (appSecret == null || appSecret.isBlank()) {
-            log.warn("Meta WhatsApp webhook: app secret not set — signature not verified");
+        if (appSecrets.isEmpty()) {
+            log.warn("Meta WhatsApp webhook: no app secret configured — signature not verified");
         }
 
         try {

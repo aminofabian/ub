@@ -9,6 +9,10 @@ import org.springframework.stereotype.Service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import zelisline.ub.crm.application.CrmDeliveryStatusService;
+import zelisline.ub.crm.application.InboundEnvelope;
+import zelisline.ub.crm.application.InboundIngest;
+import zelisline.ub.crm.application.StatusEnvelope;
 import zelisline.ub.messaging.domain.WhatsAppMessage;
 import zelisline.ub.messaging.domain.WhatsAppMessageType;
 import zelisline.ub.messaging.dto.MetaWebhookChange;
@@ -26,6 +30,11 @@ import zelisline.ub.messaging.dto.MetaWebhookValue;
  *
  * <p>Never throws — all errors are caught and logged so the webhook controller
  * can always return 200 OK to Meta (otherwise Meta retries indefinitely).
+ *
+ * <p>Also hands inbound messages to the CRM inbox ({@link InboundIngest}) and applies
+ * delivery-status callbacks ({@link CrmDeliveryStatusService}) behind the
+ * {@code app.integrations.whatsapp.enabled} flag; both are swallowed so they can never
+ * affect the webhook response to Meta.
  */
 @Service
 public class WhatsAppInboundProcessor {
@@ -34,10 +43,19 @@ public class WhatsAppInboundProcessor {
 
     private final ObjectMapper objectMapper;
     private final WhatsAppMessageRouter messageRouter;
+    private final InboundIngest inboundIngest;
+    private final CrmDeliveryStatusService deliveryStatusService;
 
-    public WhatsAppInboundProcessor(ObjectMapper objectMapper, WhatsAppMessageRouter messageRouter) {
+    public WhatsAppInboundProcessor(
+            ObjectMapper objectMapper,
+            WhatsAppMessageRouter messageRouter,
+            InboundIngest inboundIngest,
+            CrmDeliveryStatusService deliveryStatusService
+    ) {
         this.objectMapper = objectMapper;
         this.messageRouter = messageRouter;
+        this.inboundIngest = inboundIngest;
+        this.deliveryStatusService = deliveryStatusService;
     }
 
     /**
@@ -99,10 +117,32 @@ public class WhatsAppInboundProcessor {
                 );
 
                 messageRouter.route(domainMessage);
+                crmIngest(domainMessage, rawJson);
                 logMessageDetails(message, type, senderName);
             } catch (Exception ex) {
                 log.error("WhatsApp inbound: failed to process message id={}", message.id(), ex);
             }
+        }
+    }
+
+    /**
+     * Persist into the CRM inbox (M1). Gated inside {@link InboundIngest} by the feature
+     * flag; any failure is swallowed so the webhook still answers Meta with 200.
+     */
+    private void crmIngest(WhatsAppMessage domainMessage, String rawJson) {
+        try {
+            InboundEnvelope envelope = new InboundEnvelope(
+                    domainMessage.messageId(),
+                    domainMessage.phoneNumberId(),
+                    domainMessage.from(),
+                    domainMessage.senderName(),
+                    domainMessage.type() == null ? null : domainMessage.type().name().toLowerCase(),
+                    domainMessage.content(),
+                    domainMessage.receivedAt());
+            inboundIngest.ingest(envelope, rawJson);
+        } catch (Exception ex) {
+            log.warn("WhatsApp inbound: CRM ingest failed (continuing) id={}: {}",
+                    domainMessage.messageId(), ex.getMessage());
         }
     }
 
@@ -120,10 +160,52 @@ public class WhatsAppInboundProcessor {
                     log.debug("WhatsApp status conversation: id={} origin={}",
                         status.conversation().id(), status.conversation().origin().type());
                 }
+
+                crmStatus(status);
             } catch (Exception ex) {
                 log.error("WhatsApp inbound: failed to process status id={}", status.id(), ex);
             }
         }
+    }
+
+    /**
+     * Apply a delivery-status callback to the CRM (M1). Gated inside
+     * {@link CrmDeliveryStatusService}; failures are swallowed.
+     */
+    private void crmStatus(MetaWebhookStatus status) {
+        try {
+            deliveryStatusService.applyStatus(
+                    new StatusEnvelope(status.id(), status.status(), statusErrorDetail(status)));
+        } catch (Exception ex) {
+            log.warn("WhatsApp inbound: CRM status update failed (continuing) id={}: {}",
+                    status.id(), ex.getMessage());
+        }
+    }
+
+    /** Human-readable detail from Meta's {@code errors[]}, for {@code crm_message.failure_reason}. */
+    private static String statusErrorDetail(MetaWebhookStatus status) {
+        if (status.errors() == null || status.errors().isEmpty()) {
+            return null;
+        }
+        MetaWebhookError error = status.errors().get(0);
+        StringBuilder sb = new StringBuilder();
+        if (error.title() != null && !error.title().isBlank()) {
+            sb.append(error.title());
+        }
+        if (error.message() != null && !error.message().isBlank()) {
+            if (sb.length() > 0) {
+                sb.append(": ");
+            }
+            sb.append(error.message());
+        }
+        if (error.errorData() != null && error.errorData().details() != null
+                && !error.errorData().details().isBlank()) {
+            if (sb.length() > 0) {
+                sb.append(" — ");
+            }
+            sb.append(error.errorData().details());
+        }
+        return sb.length() == 0 ? null : sb.toString();
     }
 
     private void processErrors(MetaWebhookValue value) {

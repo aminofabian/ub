@@ -47,7 +47,7 @@ public class MetaWhatsAppNumberResolver {
         this.platformIntegrationSettingsService = platformIntegrationSettingsService;
     }
 
-    public record Resolved(String phoneNumberId, String displayNumber) {
+    public record Resolved(String phoneNumberId, String displayNumber, String wabaId) {
     }
 
     /**
@@ -76,7 +76,7 @@ public class MetaWhatsAppNumberResolver {
         for (Resolved candidate : listNumbers(base, version, wabaId, accessToken)) {
             String candidateDigits = normalize(candidate.displayNumber());
             if (digits.equals(candidateDigits)) {
-                return new Resolved(candidate.phoneNumberId(), candidateDigits);
+                return new Resolved(candidate.phoneNumberId(), candidateDigits, wabaId);
             }
         }
         throw badRequest(

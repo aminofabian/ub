@@ -11,6 +11,7 @@ import zelisline.ub.credits.api.dto.CreditSaleReminderSettingsResponse;
 import zelisline.ub.credits.api.dto.UpdateCreditSaleReminderSettingsRequest;
 import zelisline.ub.credits.domain.BusinessCreditSettings;
 import zelisline.ub.integrations.whatsapp.application.MetaWhatsAppNumberResolver;
+import zelisline.ub.integrations.whatsapp.application.MetaWhatsAppWabaProvisioner;
 import zelisline.ub.integrations.whatsapp.application.WhatsAppChannelRouteAdminService;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
 import zelisline.ub.messaging.config.MessagingProperties;
@@ -32,6 +33,7 @@ public class BusinessCreditMessagingSettingsService {
     private final PlatformIntegrationSettingsService platformIntegrationSettingsService;
     private final WhatsAppChannelRouteAdminService channelRouteAdminService;
     private final MetaWhatsAppNumberResolver whatsappNumberResolver;
+    private final MetaWhatsAppWabaProvisioner whatsappProvisioner;
 
     @Value("${app.public.frontend-base-url:http://localhost:3000}")
     private String frontendBaseUrl;
@@ -588,6 +590,17 @@ public class BusinessCreditMessagingSettingsService {
                 return;
             }
             MetaWhatsAppNumberResolver.Resolved resolved = whatsappNumberResolver.resolve(typed);
+            // Wire the Meta side automatically: subscribe the app to the WABA (inbound) and register
+            // the number (Cloud API). Subscribing is what makes webhooks arrive, so a failure here is
+            // surfaced rather than swallowed.
+            MetaWhatsAppWabaProvisioner.Outcome subscribed =
+                    whatsappProvisioner.ensureSubscribed(resolved.wabaId());
+            if (!subscribed.ok()) {
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                        "Resolved the number, but couldn't enable it on the Palmart WhatsApp account: "
+                                + subscribed.detail());
+            }
+            whatsappProvisioner.ensureRegistered(resolved.phoneNumberId());
             s.setWhatsappMetaPhoneNumberId(resolved.phoneNumberId());
             s.setWhatsappMetaDisplayNumber(resolved.displayNumber());
             return;

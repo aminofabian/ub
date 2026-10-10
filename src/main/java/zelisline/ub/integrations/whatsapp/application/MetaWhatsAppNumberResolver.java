@@ -50,6 +50,19 @@ public class MetaWhatsAppNumberResolver {
     public record Resolved(String phoneNumberId, String displayNumber, String wabaId) {
     }
 
+    /** The platform WABA id, derived from the configured platform phone number; null when unset. */
+    public String resolvePlatformWabaId() {
+        ResolvedMetaWhatsAppConfig config = platformIntegrationSettingsService.resolveMetaWhatsApp();
+        String accessToken = trimToNull(config.accessToken());
+        String platformPhoneNumberId = trimToNull(config.phoneNumberId());
+        if (accessToken == null || platformPhoneNumberId == null) {
+            return null;
+        }
+        String version = firstNonBlank(config.graphVersion(), DEFAULT_GRAPH_VERSION);
+        String base = firstNonBlank(graphBaseUrl, DEFAULT_GRAPH_BASE_URL);
+        return fetchWabaId(base, version, platformPhoneNumberId, accessToken);
+    }
+
     /**
      * @param input what the shop typed — {@code +254 712…}, {@code 0712…}, {@code 254712…}, or a raw
      *              Meta phone_number_id they saved before
@@ -73,7 +86,7 @@ public class MetaWhatsAppNumberResolver {
         if (wabaId == null) {
             throw badRequest("Could not read the Palmart WhatsApp account — contact support.");
         }
-        for (Resolved candidate : listNumbers(base, version, wabaId, accessToken)) {
+        for (Candidate candidate : listNumbers(base, version, wabaId, accessToken)) {
             String candidateDigits = normalize(candidate.displayNumber());
             if (digits.equals(candidateDigits)) {
                 return new Resolved(candidate.phoneNumberId(), candidateDigits, wabaId);
@@ -92,16 +105,19 @@ public class MetaWhatsAppNumberResolver {
         return node == null ? null : text(node.path("whatsapp_business_account"), "id");
     }
 
-    private List<Resolved> listNumbers(String base, String version, String wabaId, String accessToken) {
+    private record Candidate(String phoneNumberId, String displayNumber) {
+    }
+
+    private List<Candidate> listNumbers(String base, String version, String wabaId, String accessToken) {
         String url = base + "/" + version + "/" + encode(wabaId)
                 + "/phone_numbers?fields=id,display_phone_number&limit=200";
         JsonNode root = get(url, accessToken);
-        List<Resolved> out = new ArrayList<>();
+        List<Candidate> out = new ArrayList<>();
         if (root != null) {
             for (JsonNode node : root.path("data")) {
                 String id = text(node, "id");
                 if (id != null) {
-                    out.add(new Resolved(id, text(node, "display_phone_number")));
+                    out.add(new Candidate(id, text(node, "display_phone_number")));
                 }
             }
         }

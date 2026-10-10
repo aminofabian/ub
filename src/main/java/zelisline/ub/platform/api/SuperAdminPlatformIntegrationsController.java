@@ -1,5 +1,6 @@
 package zelisline.ub.platform.api;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.springframework.http.ResponseEntity;
@@ -17,6 +18,8 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
 import zelisline.ub.integrations.whatsapp.application.MetaWhatsAppAppSecretVerifier;
+import zelisline.ub.integrations.whatsapp.application.MetaWhatsAppNumberResolver;
+import zelisline.ub.integrations.whatsapp.application.MetaWhatsAppWabaProvisioner;
 import zelisline.ub.platform.api.dto.PlatformIntegrationsResponse;
 import zelisline.ub.platform.api.dto.PlatformWhatsAppAppSecretDtos.AddAppSecretRequest;
 import zelisline.ub.platform.api.dto.PlatformWhatsAppAppSecretDtos.AppSecretRow;
@@ -35,6 +38,8 @@ public class SuperAdminPlatformIntegrationsController {
     private final PlatformIntegrationSettingsService platformIntegrationSettingsService;
     private final MetaWhatsAppAppSecretVerifier metaWhatsAppAppSecretVerifier;
     private final PlatformWhatsAppAppSecretService platformWhatsAppAppSecretService;
+    private final MetaWhatsAppNumberResolver metaWhatsAppNumberResolver;
+    private final MetaWhatsAppWabaProvisioner metaWhatsAppWabaProvisioner;
 
     @GetMapping
     public PlatformIntegrationsResponse get() {
@@ -90,5 +95,41 @@ public class SuperAdminPlatformIntegrationsController {
     public ResponseEntity<Void> deleteMetaAppSecret(@PathVariable String id) {
         platformWhatsAppAppSecretService.delete(id);
         return ResponseEntity.noContent().build();
+    }
+
+    public record ProvisionResponse(boolean ok, String wabaId, List<String> steps) {
+    }
+
+    /**
+     * Enables the platform app on the WABA without waiting for a tenant to add a number: subscribes
+     * the app to the WABA (so webhooks arrive) and registers the platform number when a registration
+     * PIN is configured. Idempotent — safe to re-run.
+     */
+    @PostMapping("/meta-whatsapp/provision")
+    public ProvisionResponse provisionMetaWhatsApp() {
+        String wabaId = metaWhatsAppNumberResolver.resolvePlatformWabaId();
+        if (wabaId == null) {
+            return new ProvisionResponse(false, null,
+                    List.of("Platform WhatsApp isn't configured (access token + phone number ID)."));
+        }
+        List<String> steps = new ArrayList<>();
+        MetaWhatsAppWabaProvisioner.Outcome subscribed = metaWhatsAppWabaProvisioner.ensureSubscribed(wabaId);
+        steps.add((subscribed.ok() ? "ok — " : "failed — ") + subscribed.detail());
+        String platformPhoneNumberId =
+                trimToNull(platformIntegrationSettingsService.resolveMetaWhatsApp().phoneNumberId());
+        if (platformPhoneNumberId != null) {
+            MetaWhatsAppWabaProvisioner.Outcome registered =
+                    metaWhatsAppWabaProvisioner.ensureRegistered(platformPhoneNumberId);
+            steps.add((registered.ok() ? "ok — " : "failed — ") + registered.detail());
+        }
+        return new ProvisionResponse(subscribed.ok(), wabaId, steps);
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 }

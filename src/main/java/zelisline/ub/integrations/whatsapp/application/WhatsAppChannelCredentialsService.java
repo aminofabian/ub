@@ -13,6 +13,7 @@ import zelisline.ub.integrations.whatsapp.domain.WhatsAppChannelRoute;
 import zelisline.ub.integrations.whatsapp.repository.WhatsAppChannelRouteRepository;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
 import zelisline.ub.platform.application.PlatformIntegrationSettingsService;
+import zelisline.ub.platform.application.PlatformWhatsAppAppSecretService;
 import zelisline.ub.platform.application.ResolvedMetaWhatsAppConfig;
 
 /**
@@ -29,6 +30,7 @@ public class WhatsAppChannelCredentialsService {
 
     private final WhatsAppChannelRouteRepository routeRepository;
     private final PlatformIntegrationSettingsService platformIntegrationSettingsService;
+    private final PlatformWhatsAppAppSecretService platformWhatsAppAppSecretService;
     private final CredentialEncryptionService encryptionService;
 
     /** Resolved credentials for one outbound send. */
@@ -98,6 +100,9 @@ public class WhatsAppChannelCredentialsService {
         String platform = platformIntegrationSettingsService.resolveMetaWhatsApp().appSecret();
         if (notBlank(platform)) {
             out.add(new CandidateAppSecret("platform", platform.trim()));
+        }
+        for (PlatformWhatsAppAppSecretService.LabeledSecret extra : platformWhatsAppAppSecretService.labeledSecrets()) {
+            out.add(new CandidateAppSecret(extra.source(), extra.secret()));
         }
         for (WhatsAppChannelRoute route : routeRepository.findByOwnCredentialsTrue()) {
             String secret = decrypt(route.getAppSecretEnc());

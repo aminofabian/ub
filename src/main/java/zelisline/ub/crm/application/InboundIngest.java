@@ -59,7 +59,14 @@ public class InboundIngest {
      */
     @Transactional
     public void ingest(InboundEnvelope envelope, String rawJson) {
-        if (!channelSettings.inboundEnabled() || envelope == null) {
+        if (envelope == null) {
+            return;
+        }
+        if (!channelSettings.inboundEnabled()) {
+            // Without this the message would vanish with no trace anywhere — the operator only
+            // sees a 200 on /webhooks/whatsapp and an empty inbox.
+            log.info("CRM ingest skipped: WhatsApp inbound channel is disabled (phone_number_id={})",
+                    envelope.phoneNumberId());
             return;
         }
         if (envelope.wamid() != null && webhookEventRepository.existsByWamid(envelope.wamid())) {

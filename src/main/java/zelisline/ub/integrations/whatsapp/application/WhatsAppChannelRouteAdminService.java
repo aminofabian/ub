@@ -5,6 +5,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -34,9 +36,13 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
 @RequiredArgsConstructor
 public class WhatsAppChannelRouteAdminService {
 
+    private static final Logger log = LoggerFactory.getLogger(WhatsAppChannelRouteAdminService.class);
+
     private final WhatsAppChannelRouteRepository routeRepository;
     private final BusinessRepository businessRepository;
     private final PlatformIntegrationSettingsService platformIntegrationSettingsService;
+    private final MetaWhatsAppNumberResolver metaWhatsAppNumberResolver;
+    private final MetaWhatsAppWabaProvisioner metaWhatsAppWabaProvisioner;
 
     @Transactional(readOnly = true)
     public NumbersResponse getForSuperAdmin() {
@@ -66,7 +72,17 @@ public class WhatsAppChannelRouteAdminService {
         route.setDisplayNumber(trimToNull(body.displayNumber()));
         route.setLabel(trimToNull(body.label()));
         route.setUpdatedAt(Instant.now());
-        return toRow(routeRepository.save(route), business.getName());
+        WhatsAppChannelRoute saved = routeRepository.save(route);
+        if (!saved.isOwnCredentials()) {
+            // Routing a platform-app number should also make the app receive its webhooks; without
+            // this, messages arrive at Meta but never deliver (inbound stays empty). Idempotent.
+            String wabaId = metaWhatsAppNumberResolver.resolvePlatformWabaId();
+            MetaWhatsAppWabaProvisioner.Outcome subscribed = metaWhatsAppWabaProvisioner.ensureSubscribed(wabaId);
+            if (!subscribed.ok()) {
+                log.warn("WhatsApp route {} saved but app subscription failed: {}", pnid, subscribed.detail());
+            }
+        }
+        return toRow(saved, business.getName());
     }
 
     /**

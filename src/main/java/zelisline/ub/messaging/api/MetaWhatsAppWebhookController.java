@@ -16,6 +16,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import zelisline.ub.integrations.whatsapp.application.WhatsAppChannelCredentialsService;
 import zelisline.ub.messaging.application.WhatsAppInboundProcessor;
 import zelisline.ub.messaging.infrastructure.MetaWhatsAppWebhookSignatureVerifier;
+import zelisline.ub.platform.logs.PlatformRequestLogErrorCapture;
 
 /**
  * Meta WhatsApp Cloud API webhook endpoint.
@@ -82,8 +83,20 @@ public class MetaWhatsAppWebhookController {
         String signature = request.getHeader(SIGNATURE_HEADER);
         java.util.Set<String> appSecrets = credentialsService.candidateAppSecrets();
         if (!MetaWhatsAppWebhookSignatureVerifier.verifyAny(appSecrets, rawBody, signature)) {
-            log.warn("Meta WhatsApp webhook: invalid signature (header={}, secretsTried={}, bodyBytes={})",
-                    signature == null ? "absent" : "present", appSecrets.size(), rawBody.length);
+            boolean headerAbsent = signature == null || signature.isBlank();
+            String fingerprints = String.join(", ", credentialsService.candidateAppSecretFingerprints());
+            String reason = headerAbsent
+                    ? "Missing X-Hub-Signature-256 header — Meta did not sign this request, or a proxy stripped the header."
+                    : "Signature mismatch: none of the " + appSecrets.size()
+                            + " configured app secret(s) match X-Hub-Signature-256 (" + rawBody.length
+                            + "-byte body). The request is signed by the app that owns this WABA — store that app's "
+                            + "secret as the platform app secret, or on the number's own-credentials route. "
+                            + "Configured: " + (fingerprints.isBlank() ? "none" : fingerprints) + ".";
+            log.warn("Meta WhatsApp webhook rejected ({}, secretsTried={}, bodyBytes={}, configured=[{}])",
+                    headerAbsent ? "signature header absent" : "signature mismatch",
+                    appSecrets.size(), rawBody.length, fingerprints);
+            // Surface the reason on the Super Admin → Platform → Logs row (else it reads "Forbidden").
+            PlatformRequestLogErrorCapture.captureDetail("Meta WhatsApp webhook rejected", reason);
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Invalid signature");
         }
         if (appSecrets.isEmpty()) {

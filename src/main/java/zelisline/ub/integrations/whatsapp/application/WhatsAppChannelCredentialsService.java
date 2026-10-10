@@ -64,15 +64,48 @@ public class WhatsAppChannelCredentialsService {
         return null;
     }
 
+    /** A configured app secret and where it came from — for verification and support logs. */
+    public record CandidateAppSecret(String source, String secret) {
+    }
+
     /** Every app secret that may have signed an inbound webhook: platform + own-credentials routes. */
     @Transactional(readOnly = true)
     public Set<String> candidateAppSecrets() {
         Set<String> secrets = new LinkedHashSet<>();
-        addIfPresent(secrets, platformIntegrationSettingsService.resolveMetaWhatsApp().appSecret());
-        for (WhatsAppChannelRoute route : routeRepository.findByOwnCredentialsTrue()) {
-            addIfPresent(secrets, decrypt(route.getAppSecretEnc()));
+        for (CandidateAppSecret candidate : candidateAppSecretList()) {
+            secrets.add(candidate.secret());
         }
         return secrets;
+    }
+
+    /**
+     * Fingerprints ({@code source:…last4}) of the configured app secrets. Safe for logs, so a
+     * signature mismatch can be compared against the Meta dashboard without leaking a secret.
+     */
+    @Transactional(readOnly = true)
+    public java.util.List<String> candidateAppSecretFingerprints() {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        for (CandidateAppSecret candidate : candidateAppSecretList()) {
+            String secret = candidate.secret();
+            out.add(candidate.source()
+                    + (secret.length() <= 4 ? ":****" : ":…" + secret.substring(secret.length() - 4)));
+        }
+        return out;
+    }
+
+    private java.util.List<CandidateAppSecret> candidateAppSecretList() {
+        java.util.List<CandidateAppSecret> out = new java.util.ArrayList<>();
+        String platform = platformIntegrationSettingsService.resolveMetaWhatsApp().appSecret();
+        if (notBlank(platform)) {
+            out.add(new CandidateAppSecret("platform", platform.trim()));
+        }
+        for (WhatsAppChannelRoute route : routeRepository.findByOwnCredentialsTrue()) {
+            String secret = decrypt(route.getAppSecretEnc());
+            if (notBlank(secret)) {
+                out.add(new CandidateAppSecret("route:" + route.getPhoneNumberId(), secret.trim()));
+            }
+        }
+        return out;
     }
 
     /** True when {@code presented} matches the platform verify token or any own-credentials route. */
@@ -110,12 +143,6 @@ public class WhatsAppChannelCredentialsService {
         } catch (Exception ex) {
             log.warn("WhatsApp route credential decrypt failed: {}", ex.getMessage());
             return null;
-        }
-    }
-
-    private static void addIfPresent(Set<String> set, String value) {
-        if (notBlank(value)) {
-            set.add(value.trim());
         }
     }
 

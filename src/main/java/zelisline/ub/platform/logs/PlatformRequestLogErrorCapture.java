@@ -71,6 +71,25 @@ public final class PlatformRequestLogErrorCapture {
         }
     }
 
+    /**
+     * Record a failure reason for a controller that returns a non-2xx without throwing (e.g. a
+     * webhook that rejects an invalid signature). Without this the platform request log can only
+     * fall back to the generic HTTP reason phrase ("Forbidden"), which is not actionable.
+     */
+    public static void captureDetail(String title, String detail) {
+        RequestAttributes attrs = RequestContextHolder.getRequestAttributes();
+        if (!(attrs instanceof ServletRequestAttributes servletAttrs)) {
+            return;
+        }
+        HttpServletRequest request = servletAttrs.getRequest();
+        if (title != null && !title.isBlank()) {
+            request.setAttribute(ATTR_TITLE, clip(title, 255));
+        }
+        if (detail != null && !detail.isBlank()) {
+            request.setAttribute(ATTR_DETAIL, clip(detail, MAX_DETAIL));
+        }
+    }
+
     public static void capture(ProblemDetail problem, Throwable ex) {
         RequestAttributes attrs = RequestContextHolder.getRequestAttributes();
         if (!(attrs instanceof ServletRequestAttributes servletAttrs)) {

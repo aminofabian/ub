@@ -5,6 +5,7 @@ public record CreditSaleReminderSettingsResponse(
         String paymentAccountUrl,
         String suggestedPaymentAccountUrl,
         String whatsappMetaPhoneNumberId,
+        String whatsappMetaDisplayNumber,
         String whatsappMetaGraphVersion,
         String smsProvider,
         String smsAfricasTalkingUsername,

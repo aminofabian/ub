@@ -21,6 +21,8 @@ public record UpdateCreditSaleReminderSettingsRequest(
         String rapidApiPhoneField,
         Boolean rapidApiPhoneDigitsOnly,
         String whatsappMetaPhoneNumberId,
+        /** Plain WhatsApp number to resolve against the platform WABA; preferred over the raw id. */
+        String whatsappMetaDisplayNumber,
         String whatsappMetaAccessToken,
         String whatsappMetaGraphVersion,
         String whatsappMetaAppSecret,

@@ -55,6 +55,10 @@ public class BusinessCreditSettings {
     @Column(name = "whatsapp_meta_phone_number_id", length = 64)
     private String whatsappMetaPhoneNumberId;
 
+    /** The plain WhatsApp number the shop typed; resolved to {@link #whatsappMetaPhoneNumberId}. */
+    @Column(name = "whatsapp_meta_display_number", length = 32)
+    private String whatsappMetaDisplayNumber;
+
     @Column(name = "whatsapp_meta_graph_version", nullable = false, length = 16)
     private String whatsappMetaGraphVersion = "v25.0";
 

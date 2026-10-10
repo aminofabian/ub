@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.api.dto.CreditSaleReminderSettingsResponse;
 import zelisline.ub.credits.api.dto.UpdateCreditSaleReminderSettingsRequest;
 import zelisline.ub.credits.domain.BusinessCreditSettings;
+import zelisline.ub.integrations.whatsapp.application.MetaWhatsAppNumberResolver;
 import zelisline.ub.integrations.whatsapp.application.WhatsAppChannelRouteAdminService;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
 import zelisline.ub.messaging.config.MessagingProperties;
@@ -30,6 +31,7 @@ public class BusinessCreditMessagingSettingsService {
     private final MessagingProperties messagingProperties;
     private final PlatformIntegrationSettingsService platformIntegrationSettingsService;
     private final WhatsAppChannelRouteAdminService channelRouteAdminService;
+    private final MetaWhatsAppNumberResolver whatsappNumberResolver;
 
     @Value("${app.public.frontend-base-url:http://localhost:3000}")
     private String frontendBaseUrl;
@@ -495,7 +497,7 @@ public class BusinessCreditMessagingSettingsService {
         BusinessCreditSettings s = businessCreditSettingsService.resolveForBusiness(businessId);
         s.setCreditSaleReminderEnabled(body.enabled());
         s.setCreditSaleReminderPaymentUrl(body.paymentAccountUrl().trim());
-        s.setWhatsappMetaPhoneNumberId(blankToNull(body.whatsappMetaPhoneNumberId()));
+        applyWhatsAppNumber(s, body);
         s.setWhatsappMetaGraphVersion(
                 body.whatsappMetaGraphVersion() == null || body.whatsappMetaGraphVersion().isBlank()
                         ? "v25.0"
@@ -574,6 +576,27 @@ public class BusinessCreditMessagingSettingsService {
         return toResponse(saved, readSecrets(saved));
     }
 
+    /**
+     * A shop types its plain WhatsApp number; resolve it to the Meta {@code phone_number_id} the
+     * platform WABA owns. Re-resolves only when the number changed, so an unrelated settings save
+     * can't fail because Meta is briefly unreachable. Legacy clients that send the raw id still work.
+     */
+    private void applyWhatsAppNumber(BusinessCreditSettings s, UpdateCreditSaleReminderSettingsRequest body) {
+        String typed = trimToNull(body.whatsappMetaDisplayNumber());
+        if (typed != null) {
+            if (typed.equals(trimToNull(s.getWhatsappMetaDisplayNumber()))) {
+                return;
+            }
+            MetaWhatsAppNumberResolver.Resolved resolved = whatsappNumberResolver.resolve(typed);
+            s.setWhatsappMetaPhoneNumberId(resolved.phoneNumberId());
+            s.setWhatsappMetaDisplayNumber(resolved.displayNumber());
+            return;
+        }
+        if (body.whatsappMetaPhoneNumberId() != null) {
+            s.setWhatsappMetaPhoneNumberId(blankToNull(body.whatsappMetaPhoneNumberId()));
+        }
+    }
+
     private CreditSaleReminderSettingsResponse toResponse(BusinessCreditSettings s, SecretRead read) {
         String defaultUrl = defaultPaymentUrl();
         ResolvedRapidApiWhatsappConfig platformWa =
@@ -591,6 +614,7 @@ public class BusinessCreditMessagingSettingsService {
                 firstNonBlank(trimToNull(s.getCreditSaleReminderPaymentUrl()), defaultUrl),
                 defaultUrl,
                 trimToNull(s.getWhatsappMetaPhoneNumberId()),
+                trimToNull(s.getWhatsappMetaDisplayNumber()),
                 firstNonBlank(trimToNull(s.getWhatsappMetaGraphVersion()), "v25.0"),
                 firstNonBlank(trimToNull(s.getSmsProvider()), platformSms.provider(), "none"),
                 trimToNull(s.getSmsAfricasTalkingUsername()),

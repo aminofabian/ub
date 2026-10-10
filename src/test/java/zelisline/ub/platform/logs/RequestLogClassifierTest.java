@@ -31,6 +31,12 @@ class RequestLogClassifierTest {
     }
 
     @Test
+    void metaWhatsAppWebhookHasItsOwnBucket() {
+        assertThat(classifier.classify("/webhooks/whatsapp"))
+                .isEqualTo(RequestLogCategory.WHATSAPP);
+    }
+
+    @Test
     void cashierAndFallbackBuckets() {
         assertThat(classifier.classify("/api/v1/sales")).isEqualTo(RequestLogCategory.CASHIER);
         assertThat(classifier.classify("/api/v1/products")).isEqualTo(RequestLogCategory.OTHER);

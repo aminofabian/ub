@@ -14,6 +14,8 @@ public enum RequestLogCategory {
     AIRTIME,
     /** KPLC prepaid token purchases / meter management. */
     KPLC,
+    /** Meta WhatsApp Cloud API webhook — inbound messages + delivery status. */
+    WHATSAPP,
     /** Everything else — catalog, inventory, auth, super-admin ops, … */
     OTHER
 }

@@ -1,6 +1,6 @@
 package zelisline.ub.messaging.api;
 
-import java.io.BufferedReader;
+import java.nio.charset.StandardCharsets;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -70,43 +70,41 @@ public class MetaWhatsAppWebhookController {
 
     @PostMapping
     public ResponseEntity<String> receiveEvent(HttpServletRequest request) {
-        String rawBody = readBody(request);
-        if (rawBody == null || rawBody.isBlank()) {
+        byte[] rawBody = readRawBody(request);
+        if (rawBody == null || rawBody.length == 0) {
             log.warn("Meta WhatsApp webhook: empty body");
             return ResponseEntity.badRequest().body("Empty body");
         }
 
+        // Verify the HMAC over the exact bytes Meta signed. Re-serialising the body (reading it
+        // line by line, trimming, re-encoding) can silently change the bytes and turn a valid
+        // signature into a 403, so the raw bytes are what is verified here.
         String signature = request.getHeader(SIGNATURE_HEADER);
         java.util.Set<String> appSecrets = credentialsService.candidateAppSecrets();
         if (!MetaWhatsAppWebhookSignatureVerifier.verifyAny(appSecrets, rawBody, signature)) {
-            log.warn("Meta WhatsApp webhook: invalid signature");
+            log.warn("Meta WhatsApp webhook: invalid signature (header={}, secretsTried={}, bodyBytes={})",
+                    signature == null ? "absent" : "present", appSecrets.size(), rawBody.length);
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Invalid signature");
         }
         if (appSecrets.isEmpty()) {
             log.warn("Meta WhatsApp webhook: no app secret configured — signature not verified");
         }
 
+        String body = new String(rawBody, StandardCharsets.UTF_8);
         try {
-            whatsAppInboundProcessor.process(rawBody);
+            whatsAppInboundProcessor.process(body);
         } catch (Exception ex) {
             log.error("Meta WhatsApp webhook: processor threw exception (still returning 200)", ex);
         }
 
-        log.debug("Meta WhatsApp webhook payload: {}", truncate(rawBody));
-        log.info("Meta WhatsApp webhook received ({} bytes)", rawBody.length());
+        log.debug("Meta WhatsApp webhook payload: {}", truncate(body));
+        log.info("Meta WhatsApp webhook received ({} bytes)", rawBody.length);
         return ResponseEntity.ok("EVENT_RECEIVED");
     }
 
-    private static String readBody(HttpServletRequest request) {
+    private static byte[] readRawBody(HttpServletRequest request) {
         try {
-            StringBuilder sb = new StringBuilder();
-            BufferedReader reader = request.getReader();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line).append("\n");
-            }
-            String body = sb.toString().trim();
-            return body.isEmpty() ? null : body;
+            return request.getInputStream().readAllBytes();
         } catch (Exception ex) {
             log.error("Meta WhatsApp webhook: failed to read body", ex);
             return null;

@@ -19,6 +19,9 @@ public class RequestLogClassifier {
             return RequestLogCategory.OTHER;
         }
         String p = path.toLowerCase();
+        if (p.contains("/webhooks/whatsapp")) {
+            return RequestLogCategory.WHATSAPP;
+        }
         if (p.contains("/airtime")) {
             return RequestLogCategory.AIRTIME;
         }

@@ -53,6 +53,12 @@ public class SuperAdminPlatformIntegrationsController {
                 result.status().name(),
                 result.usedCandidate(),
                 result.configuredSecretPresent(),
-                result.detail());
+                result.configuredSecretFingerprint(),
+                result.detail(),
+                result.wabaId(),
+                result.wabaName(),
+                result.subscribedApps().stream()
+                        .map(app -> new VerifyMetaWhatsAppAppSecretResponse.SubscribedApp(app.id(), app.name()))
+                        .toList());
     }
 }

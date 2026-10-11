@@ -151,6 +151,39 @@ public class CrmAutomationService {
         }
     }
 
+    /**
+     * Evaluate active {@code SHOP_EVENT} rules for a shop event (e.g. {@code ORDER_PLACED}) and run
+     * the ones whose configured event matches. Same best-effort contract as
+     * {@link #runInboundTriggers}: a failing rule is logged and never propagates, so a web order
+     * or its notification is never blocked by an automation. See {@code WebOrderLifecycleEvent}.
+     */
+    @Transactional
+    public void runShopEventTriggers(
+            String businessId, String conversationId, String contactId, String eventName) {
+        if (eventName == null || eventName.isBlank()) {
+            return;
+        }
+        List<CrmAutomation> rules = automationRepository
+                .findByBusinessIdAndTriggerTypeAndActiveTrue(businessId, CrmAutomation.TRIGGER_SHOP_EVENT);
+        for (CrmAutomation rule : rules) {
+            if (!shopEventMatches(rule, eventName)) {
+                continue;
+            }
+            try {
+                execute(businessId, rule, conversationId, contactId, eventName);
+            } catch (Exception ex) {
+                log.warn("CRM automation {} failed for business {} on {}: {}",
+                        rule.getId(), businessId, eventName, ex.getMessage());
+            }
+        }
+    }
+
+    private boolean shopEventMatches(CrmAutomation rule, String eventName) {
+        JsonNode config = readConfig(rule.getTriggerConfig());
+        String configured = text(config, "event");
+        return configured != null && configured.equalsIgnoreCase(eventName);
+    }
+
     private void evaluate(
             String businessId,
             String triggerType,

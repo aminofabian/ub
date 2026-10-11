@@ -11,9 +11,9 @@ import org.springframework.web.server.ResponseStatusException;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import zelisline.ub.integrations.pickupmtaani.application.PickupMtaaniCheckoutService;
 import zelisline.ub.integrations.pickupmtaani.application.PickupMtaaniBookingService;
 import zelisline.ub.notifications.application.NotificationOutboxService;
-import zelisline.ub.storefront.WebOrderChannels;
 import zelisline.ub.storefront.WebOrderFulfillmentStatuses;
 import zelisline.ub.storefront.WebOrderStatuses;
 import zelisline.ub.storefront.api.dto.WebOrderDetailResponse;
@@ -34,6 +34,7 @@ public class WebOrderFulfillmentService {
     private final WhatsAppOrderExpiryService expiryService;
     private final PickupMtaaniBookingService pickupMtaaniBookingService;
     private final WebOrderShipmentRepository webOrderShipmentRepository;
+    private final WebOrderCustomerMessageService webOrderCustomerMessageService;
 
     @Value("${app.storefront.web-orders.auto-confirm-on-paid:false}")
     private boolean autoConfirmOnPaid;
@@ -58,8 +59,7 @@ public class WebOrderFulfillmentService {
         WebOrder order = webOrderRepository
                 .findByIdAndBusinessId(orderId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found"));
-        if (!WebOrderStatuses.PAID.equals(order.getStatus())
-                && !WebOrderChannels.WHATSAPP.equals(order.getChannel())) {
+        if (!WebOrderStatuses.PAID.equals(order.getStatus())) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "Fulfillment updates require a paid order");
@@ -81,6 +81,7 @@ public class WebOrderFulfillmentService {
         order.setFulfillmentStatus(normalized);
         webOrderRepository.save(order);
         enqueueNotification(order, normalized);
+        scheduleCustomerNotice(order.getBusinessId(), order.getId(), normalized, doorstep(order));
         if (WebOrderFulfillmentStatuses.DISPATCHED.equals(normalized)) {
             schedulePickupBooking(order.getBusinessId(), order.getId());
         }
@@ -185,11 +186,37 @@ public class WebOrderFulfillmentService {
         if (order.getFulfillmentStatus() != null && !order.getFulfillmentStatus().isBlank()) {
             return order.getFulfillmentStatus().trim();
         }
-        if (WebOrderStatuses.PAID.equals(order.getStatus())
-                || WebOrderChannels.WHATSAPP.equals(order.getChannel())) {
+        if (WebOrderStatuses.PAID.equals(order.getStatus())) {
             return WebOrderFulfillmentStatuses.AWAITING_CONFIRMATION;
         }
         return "";
+    }
+
+    private boolean doorstep(WebOrder order) {
+        return webOrderShipmentRepository
+                .findByWebOrderIdAndBusinessId(order.getId(), order.getBusinessId())
+                .map(shipment -> PickupMtaaniCheckoutService.MODE_DOORSTEP.equalsIgnoreCase(shipment.getMode()))
+                .orElse(false);
+    }
+
+    private void scheduleCustomerNotice(
+            String businessId,
+            String orderId,
+            String fulfillmentStatus,
+            boolean doorstep
+    ) {
+        Runnable send = () -> webOrderCustomerMessageService.sendStatusNotice(
+                businessId, orderId, fulfillmentStatus, doorstep);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    send.run();
+                }
+            });
+            return;
+        }
+        send.run();
     }
 
     private static boolean isAllowedTransition(String current, String target) {

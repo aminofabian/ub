@@ -199,7 +199,7 @@ class WebOrdersAdminIT {
     }
 
     @Test
-    void fulfillment_advanceOnWhatsAppPendingOrder() throws Exception {
+    void fulfillment_whatsAppPendingStillRequiresPayment() throws Exception {
         WebOrder wa = webOrderRepository.findById(orderId).orElseThrow();
         wa.setChannel(WebOrderChannels.WHATSAPP);
         wa.setStatus(WebOrderStatuses.PENDING_PAYMENT);
@@ -213,8 +213,7 @@ class WebOrdersAdminIT {
                                 .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_ID)
                                 .contentType("application/json")
                                 .content("{\"fulfillmentStatus\":\"confirmed\"}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.fulfillmentStatus").value("confirmed"));
+                .andExpect(status().isConflict());
     }
 
     @Test

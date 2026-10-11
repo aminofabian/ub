@@ -21,12 +21,17 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
+import zelisline.ub.storefront.api.dto.SendWebOrderMessageRequest;
 import zelisline.ub.storefront.api.dto.UpdateWebOrderFulfillmentRequest;
 import zelisline.ub.storefront.api.dto.WebOrderDetailResponse;
+import zelisline.ub.storefront.api.dto.WebOrderMessageResponse;
+import zelisline.ub.storefront.api.dto.WebOrderStkPushResponse;
 import zelisline.ub.storefront.api.dto.WebOrderPickupTicketClaimResponse;
 import zelisline.ub.storefront.api.dto.WebOrderSummaryResponse;
 import zelisline.ub.storefront.application.WebOrderAdminService;
+import zelisline.ub.storefront.application.WebOrderCustomerMessageService;
 import zelisline.ub.storefront.application.WebOrderFulfillmentService;
+import zelisline.ub.storefront.application.WebOrderPaymentService;
 import zelisline.ub.storefront.application.WebOrderReceiptService;
 import zelisline.ub.integrations.pickupmtaani.application.PickupMtaaniBookingService;
 import zelisline.ub.integrations.pickupmtaani.application.PickupMtaaniPoller;
@@ -40,6 +45,8 @@ public class WebOrdersController {
 
     private final WebOrderAdminService webOrderAdminService;
     private final WebOrderFulfillmentService webOrderFulfillmentService;
+    private final WebOrderPaymentService webOrderPaymentService;
+    private final WebOrderCustomerMessageService webOrderCustomerMessageService;
     private final WebOrderReceiptService webOrderReceiptService;
     private final PickupMtaaniBookingService pickupMtaaniBookingService;
     private final PickupMtaaniPoller pickupMtaaniPoller;
@@ -113,6 +120,58 @@ public class WebOrdersController {
                 TenantRequestIds.resolveBusinessId(request),
                 orderId.trim(),
                 body.fulfillmentStatus());
+    }
+
+    /**
+     * Merchant records that payment was received off-platform (cash on pickup,
+     * send-money, till) — the missing lever that let a {@code pending_payment}
+     * order be voided but never fulfilled.
+     */
+    @PostMapping("/{orderId}/payment/mark-paid")
+    @PreAuthorize("hasPermission(null, 'storefront.orders.read')")
+    public WebOrderDetailResponse markPaid(
+            @PathVariable String orderId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return webOrderPaymentService.recordManualPayment(
+                TenantRequestIds.resolveBusinessId(request),
+                orderId.trim());
+    }
+
+    /**
+     * Send an M-Pesa prompt for this order. The push is registered as
+     * {@code WEB_ORDER}, so a successful PIN marks the order paid.
+     */
+    @PostMapping("/{orderId}/payment/stk")
+    @PreAuthorize("hasPermission(null, 'storefront.orders.read')")
+    public WebOrderStkPushResponse requestStk(
+            @PathVariable String orderId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return webOrderPaymentService.requestMerchantStk(
+                TenantRequestIds.resolveBusinessId(request),
+                orderId.trim());
+    }
+
+    /**
+     * Merchant-initiated customer message (payment nudge or free text). WhatsApp
+     * first, SMS fallback; works for every channel, not only WhatsApp orders.
+     */
+    @PostMapping("/{orderId}/message")
+    @PreAuthorize("hasPermission(null, 'storefront.orders.read')")
+    public WebOrderMessageResponse message(
+            @PathVariable String orderId,
+            @Valid @RequestBody SendWebOrderMessageRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return webOrderCustomerMessageService.send(
+                TenantRequestIds.resolveBusinessId(request),
+                orderId.trim(),
+                body.kind(),
+                body.text());
     }
 
     @PostMapping("/{orderId}/void")

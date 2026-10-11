@@ -1,6 +1,7 @@
 package zelisline.ub.storefront.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -11,9 +12,11 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.web.server.ResponseStatusException;
 
 import zelisline.ub.integrations.pickupmtaani.application.PickupMtaaniBookingService;
 import zelisline.ub.notifications.application.NotificationOutboxService;
+import zelisline.ub.storefront.WebOrderChannels;
 import zelisline.ub.storefront.WebOrderFulfillmentStatuses;
 import zelisline.ub.storefront.WebOrderStatuses;
 import zelisline.ub.storefront.domain.WebOrder;
@@ -32,10 +35,13 @@ class WebOrderFulfillmentServiceTest {
     private final WhatsAppOrderExpiryService expiryService = mock(WhatsAppOrderExpiryService.class);
     private final PickupMtaaniBookingService pickupMtaaniBookingService = mock(PickupMtaaniBookingService.class);
     private final WebOrderShipmentRepository webOrderShipmentRepository = mock(WebOrderShipmentRepository.class);
+    private final WebOrderCustomerMessageService webOrderCustomerMessageService =
+            mock(WebOrderCustomerMessageService.class);
 
     private final WebOrderFulfillmentService service = new WebOrderFulfillmentService(
             webOrderRepository, webOrderAdminService, notificationOutboxService,
-            expiryService, pickupMtaaniBookingService, webOrderShipmentRepository);
+            expiryService, pickupMtaaniBookingService, webOrderShipmentRepository,
+            webOrderCustomerMessageService);
 
     private WebOrder order;
 
@@ -56,6 +62,18 @@ class WebOrderFulfillmentServiceTest {
         service.advance(BUSINESS_ID, ORDER_ID, WebOrderFulfillmentStatuses.DISPATCHED);
 
         verify(pickupMtaaniBookingService).bookOnDispatchIfEnabled(BUSINESS_ID, ORDER_ID);
+    }
+
+    @Test
+    void advance_unpaidWhatsApp_requiresPayment() {
+        order.setStatus(WebOrderStatuses.PENDING_PAYMENT);
+        order.setChannel(WebOrderChannels.WHATSAPP);
+        order.setFulfillmentStatus(WebOrderFulfillmentStatuses.AWAITING_CONFIRMATION);
+
+        assertThatThrownBy(() -> service.advance(
+                BUSINESS_ID, ORDER_ID, WebOrderFulfillmentStatuses.CONFIRMED))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("paid order");
     }
 
     @Test

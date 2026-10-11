@@ -27,6 +27,11 @@ public class CrmAutomation {
     public static final String TRIGGER_KEYWORD = "KEYWORD_MATCH";
     /** The contact's first-ever inbound message on this shop's WhatsApp. */
     public static final String TRIGGER_FIRST_INBOUND = "FIRST_INBOUND_MESSAGE";
+    /**
+     * A shop event on the notification stream (see {@code WebOrderLifecycleEvent}), e.g. a web
+     * order being placed or paid. Configured as {@code {"event":"ORDER_PLACED"}}.
+     */
+    public static final String TRIGGER_SHOP_EVENT = "SHOP_EVENT";
 
     @Id
     @Column(name = "id", nullable = false, length = 36)

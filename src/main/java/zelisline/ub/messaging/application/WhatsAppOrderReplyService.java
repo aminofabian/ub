@@ -122,6 +122,9 @@ public class WhatsAppOrderReplyService {
         } catch (Exception ex) {
             log.warn("WhatsApp reply: could not advance order {} to {} ({}): {}",
                     order.getId(), target, cmd.command(), ex.getMessage());
+            if (ex.getMessage() != null && ex.getMessage().contains("paid order")) {
+                replyUnpaid(business, senderDigits, order);
+            }
         }
         return true;
     }
@@ -209,6 +212,19 @@ public class WhatsAppOrderReplyService {
             customerMessageDispatcher.deliverDirect(cfg, toDigits, body);
         } catch (Exception ex) {
             log.debug("WhatsApp reply ack failed (non-fatal): {}", ex.getMessage());
+        }
+    }
+
+    private void replyUnpaid(Business business, String toDigits, WebOrder order) {
+        try {
+            TenantMessagingConfig cfg = messagingSettingsService.resolveForDispatch(business.getId());
+            String code = WebOrderCodes.code(order.getId());
+            customerMessageDispatcher.deliverDirect(
+                    cfg,
+                    toDigits,
+                    "Order " + code + " is still unpaid. Collect payment before you confirm it.");
+        } catch (Exception ex) {
+            log.debug("WhatsApp unpaid reply failed (non-fatal): {}", ex.getMessage());
         }
     }
 }

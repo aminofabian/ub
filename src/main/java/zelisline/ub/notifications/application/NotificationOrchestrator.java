@@ -7,6 +7,7 @@ import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -15,6 +16,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.notifications.NotificationTypes;
+import zelisline.ub.storefront.WebOrderCodes;
 import zelisline.ub.storefront.domain.WebOrder;
 
 @Service
@@ -31,6 +33,7 @@ public class NotificationOrchestrator {
     private final ShopperRecipientResolver shopperRecipientResolver;
     private final NotificationPolicyEngine policyEngine;
     private final ObjectMapper objectMapper;
+    private final ApplicationEventPublisher eventPublisher;
 
     public void onWebOrderPlaced(WebOrder order) {
         processWebOrderPlaced(order);
@@ -50,6 +53,7 @@ public class NotificationOrchestrator {
                         NotificationTypes.ORDER_RECEIVED,
                         "order_received:" + order.getId(),
                         vars));
+        publishLifecycle(order, WebOrderLifecycleEvent.ORDER_PLACED);
     }
 
     public void processWebOrderPaid(WebOrder order) {
@@ -62,18 +66,39 @@ public class NotificationOrchestrator {
                         NotificationTypes.ORDER_PAYMENT_RECEIVED,
                         "order_paid:" + order.getId(),
                         vars));
+        publishLifecycle(order, WebOrderLifecycleEvent.ORDER_PAID);
     }
 
     public void processWebOrderConfirmed(WebOrder order) {
         notifyShopperFulfillment(order, NotificationTypes.ORDER_CONFIRMED, "order_confirmed:" + order.getId());
+        publishLifecycle(order, WebOrderLifecycleEvent.ORDER_CONFIRMED);
     }
 
     public void processWebOrderDispatched(WebOrder order) {
         notifyShopperFulfillment(order, NotificationTypes.ORDER_DISPATCHED, "order_dispatched:" + order.getId());
+        publishLifecycle(order, WebOrderLifecycleEvent.ORDER_DISPATCHED);
     }
 
     public void processWebOrderDelivered(WebOrder order) {
         notifyShopperFulfillment(order, NotificationTypes.ORDER_DELIVERED, "order_delivered:" + order.getId());
+        publishLifecycle(order, WebOrderLifecycleEvent.ORDER_DELIVERED);
+    }
+
+    /**
+     * Emit the shop event for CRM automation. Published from the one method every
+     * web-order notification passes through, so both the outbox and the synchronous
+     * path feed automations identically.
+     */
+    private void publishLifecycle(WebOrder order, String eventName) {
+        eventPublisher.publishEvent(new WebOrderLifecycleEvent(
+                order.getBusinessId(),
+                eventName,
+                order.getId(),
+                WebOrderCodes.code(order.getId()),
+                order.getCustomerName(),
+                order.getCustomerPhone(),
+                order.getCurrency(),
+                order.getGrandTotal()));
     }
 
     private void notifyShopperFulfillment(WebOrder order, String type, String dedupeKey) {

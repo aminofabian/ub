@@ -16,6 +16,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -159,6 +160,31 @@ class IdentityServiceTest {
 
         assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void createUserInviteSavesWithoutAPasswordHash() {
+        given(userRepository.existsByBusinessIdAndEmailAndDeletedAtIsNull(TENANT_A, "invitee@example.com"))
+                .willReturn(false);
+        given(roleRepository.findByIdAndDeletedAtIsNull(ROLE_ADMIN)).willReturn(Optional.of(adminRole));
+        given(userRepository.save(any(User.class))).willAnswer(inv -> {
+            User saved = inv.getArgument(0);
+            saved.setId("user-invite");
+            return saved;
+        });
+        given(permissionRepository.findPermissionKeysByRoleId(ROLE_ADMIN)).willReturn(List.of());
+
+        UserResponse response = identityService.createUser(TENANT_A, new CreateUserRequest(
+                "invitee@example.com", "Invitee", null, ROLE_ADMIN, null, "invited",
+                null, null, true, null
+        ));
+
+        assertThat(response.status()).isEqualTo(UserStatus.INVITED.wire());
+        ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(saved.capture());
+        assertThat(saved.getValue().getPasswordHash()).isNull();
+        assertThat(saved.getValue().getPinHash()).isNull();
+        verify(passwordEncoder, never()).encode(anyString());
     }
 
     // ---------- cross-tenant -----------------------------------------------

@@ -270,6 +270,20 @@ public class GlobalExceptionHandler {
                     "Inventory rows still reference this supply batch. Refresh and retry delete.");
             return problem(body, HttpStatus.CONFLICT);
         }
+        if (flat.contains("chk_users_credentials")) {
+            ProblemDetail body = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
+            body.setTitle("Invalid data");
+            body.setType(URI.create(PROBLEM_BASE + "missing-credentials"));
+            body.setDetail("A password or PIN is required before this account can be saved");
+            return problem(body, HttpStatus.BAD_REQUEST);
+        }
+        if (flat.contains("uq_users_business_email")) {
+            ProblemDetail body = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+            body.setTitle("Conflict");
+            body.setType(URI.create(PROBLEM_BASE + "duplicate-user-email"));
+            body.setDetail("A user with this email already exists in this tenant");
+            return problem(body, HttpStatus.CONFLICT);
+        }
         ProblemDetail body = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
         body.setTitle("Invalid data");
         body.setType(URI.create(PROBLEM_BASE + "data-integrity"));

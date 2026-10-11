@@ -493,7 +493,7 @@ public class RouteGuideCatalog {
                     "Users",
                     "Invite staff, assign roles and branches, and manage sign-in credentials.",
                     List.of(
-                            "Invite user sends an email invite or sets a PIN directly.",
+                            "Add user sets a password, sends an email invite, or sets a PIN directly.",
                             "Filters: status (Active, Invited, Suspended, Locked), role, and branch.",
                             "Role and branch change inline; departments apply to grocery clerks.",
                             "Owners reset passwords, view PINs, sign users out, and deactivate."),

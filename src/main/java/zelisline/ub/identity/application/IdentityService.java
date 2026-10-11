@@ -107,15 +107,6 @@ public class IdentityService {
         }
 
         boolean invite = Boolean.TRUE.equals(request.sendInvite());
-        boolean hasPassword = request.password() != null && !request.password().isBlank();
-        boolean hasPin = request.pin() != null && !request.pin().isBlank();
-        if (!invite && !hasPassword && !hasPin) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Either a password, a PIN, or an email invitation must be provided");
-        }
-
-        // Invited users have no credentials yet — they stay INVITED (login blocked)
-        // until they accept the email invite and set their own password.
         UserStatus status = parseStatus(request.status(), invite ? UserStatus.INVITED : UserStatus.ACTIVE);
 
         String joinPayMode = blankToNull(request.joinPayMode());
@@ -135,13 +126,7 @@ public class IdentityService {
         user.setPhone(blankToNull(request.phone()));
         user.setRoleId(role.getId());
         user.setStatus(status);
-
-        if (request.password() != null && !request.password().isBlank()) {
-            user.setPasswordHash(passwordEncoder.encode(request.password()));
-        }
-        if (request.pin() != null && !request.pin().isBlank()) {
-            applyPin(user, businessId, request.pin().trim());
-        }
+        applyCreateCredentials(user, businessId, request, invite);
 
         User saved = userRepository.save(user);
         if (joinPayMode != null) {
@@ -751,6 +736,32 @@ public class IdentityService {
                 role.isSystem(),
                 grants
         );
+    }
+
+    /**
+     * Password, PIN, or invite. An invite with neither credential is stored
+     * with both hashes null — {@code chk_users_credentials_v3} allows that
+     * while status is {@code invited}. Login stays blocked until they set a
+     * password from the invite link.
+     */
+    private void applyCreateCredentials(
+            User user,
+            String businessId,
+            CreateUserRequest request,
+            boolean invite
+    ) {
+        boolean hasPassword = request.password() != null && !request.password().isBlank();
+        boolean hasPin = request.pin() != null && !request.pin().isBlank();
+        if (!invite && !hasPassword && !hasPin) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Either a password, a PIN, or an email invitation must be provided");
+        }
+        if (hasPassword) {
+            user.setPasswordHash(passwordEncoder.encode(request.password()));
+        }
+        if (hasPin) {
+            applyPin(user, businessId, request.pin().trim());
+        }
     }
 
     private void applyPin(User user, String businessId, String pin) {

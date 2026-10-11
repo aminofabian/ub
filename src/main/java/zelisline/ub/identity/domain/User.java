@@ -17,9 +17,9 @@ import lombok.Setter;
 /**
  * Tenant user (PHASE_1_PLAN.md §2.1).
  *
- * <p>Email uniqueness is per-tenant, not platform-wide. Either {@code passwordHash}
- * or {@code pinHash} (or both) must be present — enforced by a CHECK constraint
- * at the schema level.
+ * <p>Email uniqueness is per-tenant, not platform-wide. A password hash, a PIN
+ * hash, or invited status (no credential yet) must be present — enforced by
+ * {@code chk_users_credentials_v3}.
  */
 @Getter
 @Setter

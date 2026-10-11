@@ -5,8 +5,6 @@ import java.time.Instant;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
@@ -67,10 +65,11 @@ public class WebOrderPaymentService {
         order.setPaidAt(Instant.now());
         webOrderRepository.save(order);
 
-        // Reuse the exact paid path (fulfilment handoff + customer/staff notification).
+        // Reuse the exact paid path. The customer "payment received" message is sent by
+        // WebOrderCustomerNoticeListener off this order's paid event, so every paid path
+        // (gateway webhook and this one) messages the shopper exactly once.
         webOrderFulfillmentService.onOrderPaid(order);
         notificationOutboxService.enqueueWebOrderPaid(order);
-        scheduleNotice(businessId, orderId, "payment_received");
 
         return webOrderAdminService.getOrder(businessId, orderId);
     }
@@ -129,19 +128,5 @@ public class WebOrderPaymentService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "A cancelled order cannot be paid");
         }
         return order;
-    }
-
-    private void scheduleNotice(String businessId, String orderId, String notice) {
-        Runnable send = () -> webOrderCustomerMessageService.sendStatusNotice(businessId, orderId, notice, false);
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            send.run();
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                send.run();
-            }
-        });
     }
 }

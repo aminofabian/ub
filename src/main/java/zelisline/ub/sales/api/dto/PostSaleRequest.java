@@ -21,6 +21,12 @@ public record PostSaleRequest(
          * Cash handed over by the customer (full cash sales). Used for receipt
          * "Received" / "Change". Must be &gt;= grand total when set.
          */
-        @PositiveOrZero BigDecimal cashReceived
+        @PositiveOrZero BigDecimal cashReceived,
+        /**
+         * Admin override: let this one sale oversell items whose stock is exhausted. The caller
+         * must hold {@code inventory.write}; the flag is ignored (and the sale rejected as usual)
+         * otherwise. {@code null}/false = normal stock rules.
+         */
+        Boolean allowOutOfStock
 ) {
 }

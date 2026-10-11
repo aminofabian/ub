@@ -24,6 +24,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
+import zelisline.ub.platform.security.CurrentUserPermissions;
 import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.sales.api.dto.AdjustSalePaymentsRequest;
 import zelisline.ub.sales.api.dto.PostRefundRequest;
@@ -58,6 +59,7 @@ public class SalesController {
     private final BranchResolutionService branchResolutionService;
     private final VariableWeightBarcodeService variableWeightBarcodeService;
     private final PosTopProductsService posTopProductsService;
+    private final CurrentUserPermissions currentUserPermissions;
 
     /**
      * Server-aggregated top sellers for the POS catalog. Ranks items by units
@@ -116,6 +118,11 @@ public class SalesController {
         TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String validatedBranch = branchResolutionService.requireBranchForLockedRole(
                 principal.roleId(), principal.branchId(), body.branchId());
+        // Overselling is an admin override — enforced here, not just hidden in the UI.
+        boolean allowOutOfStock = Boolean.TRUE.equals(body.allowOutOfStock());
+        if (allowOutOfStock) {
+            currentUserPermissions.require("inventory.write");
+        }
         // Replace request branch with validated one
         PostSaleRequest safe = new PostSaleRequest(
                 validatedBranch,
@@ -123,7 +130,8 @@ public class SalesController {
                 body.payments(),
                 body.clientSoldAt(),
                 body.customerId(),
-                body.cashReceived());
+                body.cashReceived(),
+                allowOutOfStock);
         var out = saleService.createSale(
                 TenantRequestIds.resolveBusinessId(request),
                 idempotencyKey,

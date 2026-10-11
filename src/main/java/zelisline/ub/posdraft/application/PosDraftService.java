@@ -401,6 +401,7 @@ public class PosDraftService {
                 request.payments(),
                 request.clientSoldAt(),
                 customerId,
+                null,
                 null
         );
 

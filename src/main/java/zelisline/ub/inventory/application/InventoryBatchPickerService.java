@@ -196,12 +196,34 @@ public class InventoryBatchPickerService {
             String movementType,
             String userId
     ) {
+        return pickAndApplyPhysicalDecrement(
+                businessId, itemId, branchId, quantity, referenceType, referenceId, movementType, userId, false);
+    }
+
+    /**
+     * @param forceAllowNegativeStock admin-approved one-off oversell: treat this call as if the
+     *     tenant had "allow selling when out of stock" on, regardless of the setting. The caller
+     *     (a sale with an {@code allowOutOfStock} override) is responsible for the permission check.
+     */
+    @Transactional
+    public List<BatchAllocationLine> pickAndApplyPhysicalDecrement(
+            String businessId,
+            String itemId,
+            String branchId,
+            BigDecimal quantity,
+            String referenceType,
+            String referenceId,
+            String movementType,
+            String userId,
+            boolean forceAllowNegativeStock
+    ) {
         requireBranch(businessId, branchId);
         Item catalogItem = packageVariantStockResolver.requireSellableItem(businessId, itemId);
         StockPickResolution pick = packageVariantStockResolver.resolvePick(businessId, itemId, quantity);
         Item item = requireStockedItem(businessId, pick.stockItemId());
         entityManager.lock(item, LockModeType.PESSIMISTIC_WRITE);
-        boolean allowNegativeStock = allowNegativeStockForSale(businessId, movementType);
+        boolean allowNegativeStock = forceAllowNegativeStock
+                || allowNegativeStockForSale(businessId, movementType);
         List<InventoryBatch> locked = lockActiveBatchesForPool(
                 businessId, branchId, catalogItem);
         List<InventoryBatch> working = new ArrayList<>(locked);

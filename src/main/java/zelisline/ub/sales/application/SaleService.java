@@ -606,7 +606,8 @@ public class SaleService {
                     SalesConstants.STOCK_REFERENCE_TYPE_SALE,
                     saleId,
                     InventoryConstants.MOVEMENT_SALE,
-                    userId
+                    userId,
+                    Boolean.TRUE.equals(req.allowOutOfStock())
             );
             EffectiveLinePricing pricing = linePricing.get(lineIndex);
             Item sold = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(line.itemId(), businessId)

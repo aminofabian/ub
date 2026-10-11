@@ -229,6 +229,29 @@ public class UsersController {
         return deactivated;
     }
 
+    @PostMapping("/{userId}/reactivate")
+    @PreAuthorize("hasPermission(null, 'users.deactivate')")
+    public UserResponse reactivateUser(@PathVariable String userId, HttpServletRequest request) {
+        CurrentTenantUser.require(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String actorId = CurrentTenantUser.auditActorId(request);
+        UserResponse before = identityService.getUser(businessId, userId);
+        UserResponse reactivated = identityService.reactivateUser(businessId, userId);
+        auditEventPublisher.publish(auditEventBuilder.builder(AuditEventCategory.STAFF, AuditEventTypes.USER_ACTIVATED, AuditEventSeverity.INFO)
+                .businessId(businessId)
+                .branchId(reactivated.branchId())
+                .actor(actorId, AuditEventActorType.USER)
+                .target("user", reactivated.id())
+                .targetLabel(reactivated.email())
+                .ipAddress(clientIp(request))
+                .userAgent(request.getHeader("User-Agent"))
+                .source("web_admin")
+                .oldState(map("status", before.status()))
+                .newState(map("status", reactivated.status()))
+                .build());
+        return reactivated;
+    }
+
     /**
      * Soft-deletes the user (gone from directory + payroll). Owner and admin
      * accounts are rejected by the service.
